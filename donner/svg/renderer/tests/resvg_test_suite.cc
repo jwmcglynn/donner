@@ -928,8 +928,30 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-textPath",
         {
+            // Custom goldens: font advance drift vs resvg reference images
+            {"e-textPath-001.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-001.png")},
+            {"e-textPath-002.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-002.png")},
+            {"e-textPath-003.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-003.png")},
+            {"e-textPath-004.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-004.png")},
+            {"e-textPath-005.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-005.png")},
             {"e-textPath-007.svg", Params::Skip()},  // Not impl: method=stretch
             {"e-textPath-008.svg", Params::Skip()},  // Not impl: spacing=auto
+            {"e-textPath-009.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-009.png")},
+            {"e-textPath-010.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-010.png")},
             {"e-textPath-016.svg", Params::Skip()},  // Not impl: link to rect (SVG 2)
             {"e-textPath-021.svg", Params::Skip()},  // Deferred: writing-mode=tb on textPath
             {"e-textPath-030.svg", Params::Skip()},  // Deferred: vertical + circular path

@@ -540,6 +540,9 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
     double chunkEndPos = 0.0;
     bool foundFirst = false;
     for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+      if (runs[ri].onPath) {
+        continue;  // On-path runs already have text-anchor applied along the path.
+      }
       const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
       const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
       for (size_t gi = gStart; gi < gEnd; ++gi) {
@@ -569,6 +572,9 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
     }
 
     for (size_t ri = chunk.runIndex; ri <= std::min(endRunIdx, runs.size() - 1); ++ri) {
+      if (runs[ri].onPath) {
+        continue;  // On-path runs already have text-anchor applied along the path.
+      }
       const size_t gStart = (ri == chunk.runIndex) ? chunk.glyphIndex : 0;
       const size_t gEnd = (ri == endRunIdx) ? endGlyphIdx : runs[ri].glyphs.size();
       for (size_t gi = gStart; gi < gEnd; ++gi) {
@@ -1160,6 +1166,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.yPosition = penY + sg.yOffset;
           glyph.xAdvance = sg.xAdvance;
           glyph.yAdvance = sg.yAdvance;
+          glyph.xKern = sg.xKern;
           glyph.fontSizeScale = sg.fontSizeScale;
           glyph.cluster = sg.cluster;
 
@@ -1230,9 +1237,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     if (span.pathSpline && !run.glyphs.empty()) {
       const auto& pathSpline = *span.pathSpline;
 
-      // Compute total text advance (including inter-glyph letter-spacing) for text-anchor.
+      // Compute total text advance (including kerning and inter-glyph letter-spacing) for
+      // text-anchor. For the simple backend, xKern holds per-glyph kerning that was applied to
+      // penX during flat layout but must be re-applied here for path positioning.
       double totalAdvance = 0.0;
       for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+        if (gi > 0) {
+          totalAdvance += run.glyphs[gi].xKern;
+        }
         totalAdvance += run.glyphs[gi].xAdvance;
         if (gi + 1 < run.glyphs.size()) {
           totalAdvance += span.letterSpacingPx;
@@ -1282,6 +1294,10 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       double advanceAccum = 0.0;
       for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
         auto& g = run.glyphs[gi];
+        // Apply within-run kerning before this glyph (not for first glyph).
+        if (gi > 0) {
+          advanceAccum += g.xKern;
+        }
         // Sample the path at the center of this glyph's advance width.
         const double glyphMid = startOffset + advanceAccum + g.xAdvance * 0.5;
         const auto sample = pathSpline.pointAtArcLength(glyphMid);
@@ -1334,6 +1350,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       if (span.visibility != Visibility::Visible) {
         run.glyphs.clear();
       }
+
+      // Mark this run as on-path so applyTextAnchor skips it.
+      run.onPath = true;
 
       // Path-based text handles text-anchor above; skip the post-loop adjustment.
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});

@@ -174,15 +174,23 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   }
 }
 
-Entity findApplicableTextPathEntity(Registry& registry, Entity entity) {
+/// Find the textPath entity that applies to the given entity.
+/// Sets \p outInvalidNesting to true if the entity is inside a nested (invalid) textPath
+/// whose content should be hidden.
+Entity findApplicableTextPathEntity(Registry& registry, Entity entity, bool& outInvalidNesting) {
+  outInvalidNesting = false;
   Entity current = entity;
   while (current != entt::null) {
     if (registry.any_of<TextPathComponent>(current)) {
-      if (const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-          tree && tree->parent() != entt::null &&
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+      if (tree && tree->parent() != entt::null &&
           registry.any_of<TextRootComponent>(tree->parent())) {
         return current;
       }
+      // Found a textPath but it's not a direct child of <text> — invalid nesting.
+      // Content inside should be hidden per SVG spec.
+      outInvalidNesting = true;
+      return entt::null;
     }
 
     const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
@@ -304,7 +312,9 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     span.sourceEntity = handle.entity();
 
-    const Entity textPathEntity = findApplicableTextPathEntity(registry, handle.entity());
+    bool invalidTextPathNesting = false;
+    const Entity textPathEntity =
+        findApplicableTextPathEntity(registry, handle.entity(), invalidTextPathNesting);
     if (textPathEntity != entt::null) {
       const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
       resolveTextPath(registry, textPath, span, outWarnings);
@@ -314,6 +324,9 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       } else {
         span.textPathSourceEntity = textPathEntity;
       }
+    } else if (invalidTextPathNesting) {
+      // Content inside a nested (invalid) textPath — hide glyphs.
+      span.textPathFailed = true;
     }
 
     computed.spans.push_back(span);
