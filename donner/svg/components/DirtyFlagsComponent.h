@@ -60,6 +60,10 @@ struct RenderTreeState {
   /// True if the render tree needs a full rebuild (structure changed, canvas resized, etc.).
   bool needsFullRebuild = true;
 
+  /// True if styles must be recomputed for the whole tree because selector dependencies may be
+  /// non-local (for example class/id/attribute changes or tree mutations).
+  bool needsFullStyleRecompute = true;
+
   /// True if the render tree has been built at least once.
   bool hasBeenBuilt = false;
 };

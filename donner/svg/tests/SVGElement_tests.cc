@@ -12,6 +12,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -558,6 +559,7 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   auto& renderState = doc.registry().ctx().get<components::RenderTreeState>();
   renderState.hasBeenBuilt = true;
   renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
 
   auto* siblingComputed =
       sibling->entityHandle().try_get<components::ComputedStyleComponent>();
@@ -568,7 +570,11 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
       PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))),
       css::Specificity::Override());
 
-  target->setAttribute("opacity", "0.5");
+  target->entityHandle().get_or_emplace<components::StyleComponent>().properties.opacity.set(
+      0.5, css::Specificity::Override());
+  components::StyleSystem().invalidateComputed(target->entityHandle());
+  target->entityHandle().get_or_emplace<components::DirtyFlagsComponent>().mark(
+      components::DirtyFlagsComponent::Style);
 
   styleSystem.computeAllStyles(doc.registry(), nullptr);
 
@@ -583,6 +589,53 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   ASSERT_TRUE(siblingComputed->properties.has_value());
   EXPECT_EQ(siblingComputed->properties->fill.getRequired(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))));
+}
+
+TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .trigger + rect { fill: blue; }
+      </style>
+      <rect id="first" class="trigger" width="10" height="10" />
+      <rect id="second" width="10" height="10" />
+    </svg>
+  )");
+
+  auto first = doc.querySelector("#first");
+  auto second = doc.querySelector("#second");
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+
+  components::StyleSystem styleSystem;
+  styleSystem.computeAllStyles(doc.registry(), nullptr);
+
+  if (!doc.registry().ctx().contains<components::RenderTreeState>()) {
+    doc.registry().ctx().emplace<components::RenderTreeState>();
+  }
+  auto& renderState = doc.registry().ctx().get<components::RenderTreeState>();
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+
+  const auto* initialComputed =
+      second->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(initialComputed, nullptr);
+  ASSERT_TRUE(initialComputed->properties.has_value());
+  EXPECT_EQ(initialComputed->properties->fill.getRequired(),
+            PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
+
+  first->setClassName("");
+  EXPECT_TRUE(renderState.needsFullStyleRecompute);
+
+  styleSystem.computeAllStyles(doc.registry(), nullptr);
+
+  const auto* updatedComputed =
+      second->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(updatedComputed, nullptr);
+  ASSERT_TRUE(updatedComputed->properties.has_value());
+  EXPECT_EQ(updatedComputed->properties->fill.getRequired(),
+            PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0))));
 }
 
 TEST_F(SVGElementTests, Attributes) {

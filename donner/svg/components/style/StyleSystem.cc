@@ -201,9 +201,11 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings) {
   const auto* renderState = registry.ctx().find<RenderTreeState>();
   const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
+  const bool needsFullStyleRecompute =
+      renderState != nullptr && renderState->needsFullStyleRecompute;
   const bool hasDirtyEntities = !registry.view<DirtyFlagsComponent>().empty();
 
-  if (hasBeenBuilt && hasDirtyEntities) {
+  if (hasBeenBuilt && hasDirtyEntities && !needsFullStyleRecompute) {
     for (auto entity : registry.view<DirtyFlagsComponent>()) {
       const auto& dirty = registry.get<DirtyFlagsComponent>(entity);
       if (!dirty.test(DirtyFlagsComponent::Style)) {
@@ -221,6 +223,10 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* 
     }
 
     return;
+  }
+
+  if (hasBeenBuilt && needsFullStyleRecompute) {
+    registry.clear<ComputedStyleComponent>();
   }
 
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating

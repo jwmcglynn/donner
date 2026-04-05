@@ -576,11 +576,13 @@ void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
                                               const ResolvedPaintServer& stroke) {
   initialContextFill_ = fill;
   initialContextStroke_ = stroke;
+  getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
 void RenderingContext::clearInitialContextPaint() {
   initialContextFill_.reset();
   initialContextStroke_.reset();
+  getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
 void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
@@ -608,6 +610,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
   // Clear all dirty flags after full recomputation.
   registry_.clear<DirtyFlagsComponent>();
   renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
 }
 
@@ -667,7 +670,9 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
 void RenderingContext::invalidateRenderTree() {
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
-  getRenderTreeState(registry_).needsFullRebuild = true;
+  auto& renderState = getRenderTreeState(registry_);
+  renderState.needsFullRebuild = true;
+  renderState.needsFullStyleRecompute = true;
 }
 
 // 1. Setup shadow trees
