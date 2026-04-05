@@ -210,16 +210,8 @@ void SVGElement::setStyle(std::string_view style) {
 }
 
 void SVGElement::updateStyle(std::string_view style) {
-  auto& styleComponent = handle_.get_or_emplace<components::StyleComponent>();
-  styleComponent.updateStyle(style);
+  components::StyleSystem().updateStyle(handle_, style);
 
-  auto& attributes = handle_.get_or_emplace<donner::components::AttributesComponent>();
-  const std::string mergedStyle = styleComponent.properties.mergeStyleAttribute(
-      attributes.getAttribute(xml::XMLQualifiedNameRef("style")).value_or(""), style);
-  attributes.setAttribute(*handle_.registry(), xml::XMLQualifiedName("style"),
-                          RcString(mergedStyle));
-
-  components::StyleSystem().invalidateComputed(handle_);
   markNeedsFullStyleRecompute(handle_);
   invalidateComputedStyleForDescendants(handle_);
 

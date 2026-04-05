@@ -2,6 +2,8 @@
 /// @file
 
 #include <ostream>
+#include <span>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -52,6 +54,11 @@ struct Declaration {
   bool operator==(const Declaration& other) const = default;
 
   /**
+   * Serialize this declaration back to its CSS text representation, e.g. `fill: red`.
+   */
+  std::string toCssText() const;
+
+  /**
    * Output a human-readable representation of the declaration to a stream.
    *
    * @param os Output stream.
@@ -100,5 +107,17 @@ struct DeclarationOrAtRule {
     return os;
   }
 };
+
+/**
+ * Merge two sets of CSS declarations, where \p updates override declarations in \p existing that
+ * have the same property name (case-insensitive). Unrelated existing declarations are preserved.
+ * Duplicate property names within \p updates are deduplicated, keeping the last occurrence.
+ *
+ * @param existing Existing declarations.
+ * @param updates Updated declarations to apply.
+ * @return Merged style string with declarations separated by "; ".
+ */
+std::string mergeStyleDeclarations(std::span<const Declaration> existing,
+                                   std::span<const Declaration> updates);
 
 }  // namespace donner::css

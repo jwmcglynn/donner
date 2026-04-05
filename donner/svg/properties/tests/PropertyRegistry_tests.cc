@@ -314,58 +314,5 @@ TEST(PropertyRegistry, Stroke) {
   }
 }
 
-TEST(PropertyRegistry, MergeStyleAttributeEmptyInputs) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute("", ""), "");
-  EXPECT_EQ(registry.mergeStyleAttribute("", "stroke: green"), "stroke: green");
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red", ""), "fill: red");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributeAddsNewProperty) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red; opacity: 0.8", "visibility: hidden"),
-            "fill: red; opacity: 0.8; visibility: hidden");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributeOverridesExistingProperty) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red; stroke: blue; opacity: 0.8",
-                                         "stroke: green; visibility: hidden"),
-            "fill: red; opacity: 0.8; stroke: green; visibility: hidden");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributeOverridesAllDuplicateExistingProperties) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(
-      registry.mergeStyleAttribute("stroke: blue; fill: red; stroke: orange", "stroke: green"),
-      "fill: red; stroke: green");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributeKeepsLastUpdatedDuplicateProperty) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red", "stroke: blue; stroke: green"),
-            "fill: red; stroke: green");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributeNormalizesSpacingAndSeparators) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute(" fill: red ; opacity: 0.8", " visibility: hidden "),
-            "fill: red; opacity: 0.8; visibility: hidden");
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red", "stroke: green"), "fill: red; stroke: green");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributePreservesUnparseableSegments) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red; bad segment", "stroke: green"),
-            "fill: red; bad segment; stroke: green");
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red", "not-a-valid-css-declaration"),
-            "fill: red; not-a-valid-css-declaration");
-}
-
-TEST(PropertyRegistry, MergeStyleAttributeHandlesCaseInsensitivePropertyNames) {
-  const PropertyRegistry registry;
-  EXPECT_EQ(registry.mergeStyleAttribute("fill: red; STROKE: blue", "stroke: green"),
-            "fill: red; stroke: green");
-}
 
 }  // namespace donner::svg

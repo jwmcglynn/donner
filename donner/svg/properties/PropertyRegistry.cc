@@ -1,12 +1,9 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 
 #include <array>
-#include <cctype>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "donner/base/CompileTimeMap.h"
@@ -1086,110 +1083,6 @@ void PropertyRegistry::parseStyle(std::string_view str) {
   for (const auto& declaration : declarations) {
     std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
   }
-}
-
-std::string PropertyRegistry::mergeStyleAttribute(std::string_view existingStyle,
-                                                  std::string_view updateStyle) const {
-  struct ParsedDeclaration {
-    std::optional<std::string> name;
-    std::string declarationText;
-  };
-
-  auto trim = [](std::string_view str) -> std::string_view {
-    const size_t first = str.find_first_not_of(" \t\n\r\f");
-    if (first == std::string_view::npos) {
-      return "";
-    }
-
-    const size_t last = str.find_last_not_of(" \t\n\r\f");
-    return str.substr(first, last - first + 1);
-  };
-
-  auto parseStyleDeclarations = [&trim](std::string_view style) {
-    auto normalizePropertyName = [](std::string_view name) {
-      std::string normalizedName(name);
-      for (char& ch : normalizedName) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-      }
-      return normalizedName;
-    };
-
-    std::vector<ParsedDeclaration> declarations;
-    size_t start = 0;
-    while (start <= style.size()) {
-      const size_t end = style.find(';', start);
-      const std::string_view segment =
-          end == std::string_view::npos ? style.substr(start) : style.substr(start, end - start);
-      const std::string_view trimmedSegment = trim(segment);
-      if (!trimmedSegment.empty()) {
-        ParsedDeclaration parsedDeclaration;
-        parsedDeclaration.declarationText = std::string(trimmedSegment);
-
-        const std::vector<css::Declaration> parsed = css::CSS::ParseStyleAttribute(trimmedSegment);
-        if (parsed.size() == 1) {
-          parsedDeclaration.name = normalizePropertyName(parsed.front().name);
-        }
-
-        declarations.push_back(std::move(parsedDeclaration));
-      }
-
-      if (end == std::string_view::npos) {
-        break;
-      }
-
-      start = end + 1;
-    }
-
-    return declarations;
-  };
-
-  std::vector<ParsedDeclaration> existingDeclarations = parseStyleDeclarations(existingStyle);
-  std::vector<ParsedDeclaration> updateDeclarations = parseStyleDeclarations(updateStyle);
-
-  std::unordered_map<std::string, size_t> updateIndexByName;
-  updateIndexByName.reserve(updateDeclarations.size());
-  for (size_t i = 0; i < updateDeclarations.size(); ++i) {
-    if (updateDeclarations[i].name) {
-      updateIndexByName[*updateDeclarations[i].name] = i;
-    }
-  }
-
-  std::vector<ParsedDeclaration> mergedDeclarations;
-  mergedDeclarations.reserve(existingDeclarations.size() + updateDeclarations.size());
-  for (auto& declaration : existingDeclarations) {
-    if (declaration.name && updateIndexByName.contains(*declaration.name)) {
-      continue;
-    }
-
-    mergedDeclarations.push_back(std::move(declaration));
-  }
-
-  std::unordered_map<std::string, size_t> mergedUpdateIndexByName;
-  mergedUpdateIndexByName.reserve(updateDeclarations.size());
-  for (auto& declaration : updateDeclarations) {
-    if (!declaration.name) {
-      mergedDeclarations.push_back(std::move(declaration));
-      continue;
-    }
-
-    const auto it = mergedUpdateIndexByName.find(*declaration.name);
-    if (it == mergedUpdateIndexByName.end()) {
-      mergedUpdateIndexByName[*declaration.name] = mergedDeclarations.size();
-      mergedDeclarations.push_back(std::move(declaration));
-    } else {
-      mergedDeclarations[it->second] = std::move(declaration);
-    }
-  }
-
-  std::string mergedStyle;
-  for (size_t i = 0; i < mergedDeclarations.size(); ++i) {
-    if (i > 0) {
-      mergedStyle += "; ";
-    }
-    mergedStyle += mergedDeclarations[i].declarationText;
-  }
-
-  return mergedStyle;
 }
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
