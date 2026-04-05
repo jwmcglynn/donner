@@ -110,9 +110,9 @@ def _donner_transitioned_executable_impl(ctx):
         ),
     ]
 
-donner_transitioned_executable = rule(
+donner_transitioned_test = rule(
     implementation = _donner_transitioned_executable_impl,
-    executable = True,
+    test = True,
     attrs = {
         "dep": attr.label(
             mandatory = True,
