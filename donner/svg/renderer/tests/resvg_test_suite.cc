@@ -536,8 +536,7 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feGaussianBlur",
         {
             {"e-feGaussianBlur-002.svg",
-             Params::WithThreshold(0.1f)},  // Test only requires not crashing; differences in
-                                            // behavior for clamping sigma
+             Params::RenderOnly()},  // Extreme sigma=1000; output is implementation-defined
             {"e-feGaussianBlur-012.svg", Params::WithThreshold(0.03f)},  // Minor AA differences
         })),
     TestNameFromFilename);
@@ -603,20 +602,15 @@ INSTANTIATE_TEST_SUITE_P(FePointLight, ImageComparisonTestFixture,
                                   Params::WithThreshold(0.1f, 120)},  // Minor shading differences
                              })),
                          TestNameFromFilename);
-// Specular lighting: algorithm differences vs resvg.
-// Float pipeline + light coordinate scaling fixed most tests to 0 diffs at 0.1f
-// threshold. specularExponent out-of-range handling: <1 skips primitive (transparent),
-// >128 clamps to 128.
 INSTANTIATE_TEST_SUITE_P(
     FeSpecularLighting, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix(
         "e-feSpecularLighting",
         {
-            {"e-feSpecularLighting-002.svg", Params::WithThreshold(0.1f)},  // 2717px at 0.01f
-            {"e-feSpecularLighting-004.svg",
-             Params::WithThreshold(0.1f, 58000)},  // resvg golden bug: R=0 channel
-                                                   // (BGRA issue in resvg ~v0.9.x)
-            {"e-feSpecularLighting-005.svg", Params::WithThreshold(0.1f)},  // 1466px at 0.01f
+            {"e-feSpecularLighting-002.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-feSpecularLighting-002.png")},  // resvg golden
+                                                                                 // bug: black center
         })),
     TestNameFromFilename);
 

@@ -1697,12 +1697,21 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                   SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
               return true;
             }
+            // specularExponent ≤ 0 produces transparent output (matching resvg behavior).
+            if (primitive.specularExponent <= 0.0) {
+              result = SkImageFilters::Shader(
+                  SkShaders::Color(SkColor4f{0, 0, 0, 0}, nullptr));
+              skipLinearRGBPostWrap = true;
+              return true;
+            }
             const auto& light = *primitive.light;
             const auto lightRgba = primitive.lightingColor.asRGBA();
             const SkColor lightColor = toLinearColor(toSkia(lightRgba), nodeUsesLinearRGB);
             const SkScalar surfaceScale = static_cast<SkScalar>(primitive.surfaceScale);
             const SkScalar ks = static_cast<SkScalar>(primitive.specularConstant);
-            const SkScalar shininess = static_cast<SkScalar>(primitive.specularExponent);
+            // Clamp specularExponent to max 128 (matching resvg behavior).
+            const SkScalar shininess = static_cast<SkScalar>(
+                std::min(primitive.specularExponent, 128.0));
 
             // Resolve light coordinates: OBB maps x/y through bbox, z scales by bboxH.
             double userX = light.x, userY = light.y, userZ = light.z;

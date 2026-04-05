@@ -644,6 +644,11 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
   }
 
+  if (params.renderOnly) {
+    std::cout << "RENDER-ONLY (comparison skipped)\n";
+    return;
+  }
+
   auto maybeGoldenImage = RendererImageTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
 
