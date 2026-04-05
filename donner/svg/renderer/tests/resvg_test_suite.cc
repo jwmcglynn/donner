@@ -960,6 +960,9 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-textPath-013.svg",
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-013.png")},
+            {"e-textPath-014.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-014.png")},
             {"e-textPath-015.svg",
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-015.png")},
@@ -974,6 +977,12 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-textPath-022.svg",
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-022.png")},
+            {"e-textPath-023.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-023.png")},
+            {"e-textPath-025.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-025.png")},
             {"e-textPath-026.svg",
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-026.png")},

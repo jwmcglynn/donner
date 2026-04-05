@@ -1274,10 +1274,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         startOffset +=
             span.dxList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
       }
-      if (!span.dyList.empty() && span.dyList[0].has_value()) {
-        startOffset +=
-            span.dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
-      }
       startOffset += anchorShift;
 
       // Compute perpendicular baseline offset (dominant-baseline + per-span baseline-shift).
@@ -1289,6 +1285,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
                              ? prevTextPathPerpShift
                              : -defaultY;
       (void)hasExplicitPathY;
+      // dy[0] adjusts perpendicular to the path (not along it).
+      if (!span.dyList.empty() && span.dyList[0].has_value()) {
+        perpShift -=
+            span.dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+      }
 
       // Reposition each glyph at the midpoint of its advance along the path.
       double advanceAccum = 0.0;
@@ -1333,8 +1334,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
       const auto endSample = pathSpline.pointAtArcLength(pathSpline.pathLength());
       if (endSample.valid) {
+        // Resume pen position at the path endpoint, adjusted for the perpendicular
+        // baseline shift so subsequent flat text aligns with the path's visual end.
         currentPenX = endSample.point.x;
         currentPenY = endSample.point.y;
+        if (perpShift != 0.0) {
+          currentPenX += std::sin(endSample.angle) * perpShift;
+          currentPenY -= std::cos(endSample.angle) * perpShift;
+        }
         haveCurrentPosition = true;
       } else {
         currentPenX = 0.0;

@@ -352,7 +352,7 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
   EXPECT_THAT(nonEmptyHasSource, testing::ElementsAre(true, true, true, true, true, true, true));
 }
 
-TEST_F(TextSystemTest, NestedTextPathUsesNearestValidOuterTextPath) {
+TEST_F(TextSystemTest, NestedTextPathContentIsHidden) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
          viewBox="0 0 200 200">
@@ -374,6 +374,8 @@ TEST_F(TextSystemTest, NestedTextPathUsesNearestValidOuterTextPath) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
+  // Per SVG spec, nested <textPath> is invalid. The outer textPath content should be
+  // on the path, but the nested textPath content should be hidden entirely.
   std::vector<const ComputedTextComponent::TextSpan*> nonEmptySpans;
   for (const auto& span : computed->spans) {
     if (!span.text.empty()) {
@@ -382,15 +384,17 @@ TEST_F(TextSystemTest, NestedTextPathUsesNearestValidOuterTextPath) {
   }
 
   ASSERT_THAT(nonEmptySpans, testing::SizeIs(testing::Ge(2)));
+  // First span "Some long text" should be on path1.
   ASSERT_TRUE(nonEmptySpans[0]->pathSpline.has_value());
-  ASSERT_TRUE(nonEmptySpans[1]->pathSpline.has_value());
-
-  const auto outerStart = nonEmptySpans[0]->pathSpline->pointAtArcLength(0.0);
-  const auto nestedStart = nonEmptySpans[1]->pathSpline->pointAtArcLength(0.0);
-  ASSERT_TRUE(outerStart.valid);
-  ASSERT_TRUE(nestedStart.valid);
-  EXPECT_NEAR(outerStart.point.x, nestedStart.point.x, 1e-6);
-  EXPECT_NEAR(outerStart.point.y, nestedStart.point.y, 1e-6);
+  // Nested textPath content "Ignored nested path" should be hidden.
+  bool foundNested = false;
+  for (const auto& span : computed->spans) {
+    if (span.text.str().find("Ignored") != std::string::npos) {
+      EXPECT_TRUE(span.hidden) << "Nested textPath content should be hidden";
+      foundNested = true;
+    }
+  }
+  EXPECT_TRUE(foundNested) << "Should have found the nested textPath content span";
 }
 
 TEST_F(TextSystemTest, TextPathTspanChildrenProduceSeparatePathSpans) {

@@ -106,9 +106,6 @@ that exceed the default threshold. The rendering is functionally correct.
 | Test | Pixels | Issue |
 |------|--------|-------|
 | 012 | 4949 | Mixed children (2): incorrect inline position resumption between multiple textPath/tspan siblings |
-| 014 | 5615 | `<textPath x="20" y="40">` — x/y attributes applied when spec says ignore them |
-| 023 | 2771 | `dx`/`dy` on tspan within textPath not applied as along-path/perpendicular offsets |
-| 025 | 3818 | Invalid textPath (no href) content still contributes advance width instead of being fully dropped |
 
 ### Skipped Tests
 
@@ -141,10 +138,6 @@ that exceed the default threshold. The rendering is functionally correct.
 
 ### Bug Fixes (v1 blockers)
 - [ ] **012**: Fix inline position resumption between multiple textPath/tspan siblings.
-- [ ] **014**: Ignore x/y attributes on `<textPath>` elements (spec violation).
-- [ ] **023**: Apply `dx`/`dy` on tspan children as along-path / perpendicular offsets.
-- [ ] **025**: Fully drop content from invalid textPath (no href) — currently contributes
-  advance width causing extra spacing.
 
 ### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.

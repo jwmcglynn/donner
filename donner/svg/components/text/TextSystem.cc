@@ -232,7 +232,11 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     span.text = spanText;
     span.start = 0;
     span.end = static_cast<std::size_t>(spanText.size());
-    span.startsNewChunk = applyElementPositioning && (!pos.x.empty() || !pos.y.empty());
+    // Per SVG spec, <textPath> does not support x/y/dx/dy/rotate attributes.
+    // Only apply element positioning for non-textPath elements.
+    const bool isTextPath = handle.all_of<TextPathComponent>();
+    const bool applyPositioning = applyElementPositioning && !isTextPath;
+    span.startsNewChunk = applyPositioning && (!pos.x.empty() || !pos.y.empty());
 
     const size_t charCount = countUtf16CodeUnits(spanText);
     const size_t listSize = std::max(charCount, size_t(1));
@@ -244,7 +248,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     auto findAncestorValue = [&](size_t ci, const auto& getList) -> std::optional<Lengthd> {
       const auto& elemList = getList(pos);
-      if (applyElementPositioning && ci < elemList.size()) {
+      if (applyPositioning && ci < elemList.size()) {
         return elemList[ci];
       }
 
@@ -285,7 +289,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       span.dyList[ci] = findAncestorValue(ci, getDy);
     }
 
-    if (applyElementPositioning && !pos.rotateDegrees.empty()) {
+    if (applyPositioning && !pos.rotateDegrees.empty()) {
       span.rotateList.assign(pos.rotateDegrees.begin(), pos.rotateDegrees.end());
     } else if (!positioningComponent.rotateDegrees.empty()) {
       for (size_t ci = 0; ci < charCount; ++ci) {
@@ -359,6 +363,24 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       auto* style = handle.try_get<ComputedStyleComponent>();
       if (style && style->properties && style->properties->display.getRequired() == Display::None) {
         isHidden = true;
+      }
+    }
+
+    // An invalid textPath (empty href, or nested inside another textPath) should hide its
+    // content entirely so that whitespace collapsing treats it as absent.
+    if (!isHidden) {
+      const auto* textPathComp = handle.try_get<TextPathComponent>();
+      if (textPathComp) {
+        if (textPathComp->href.empty()) {
+          isHidden = true;
+        } else {
+          // Check if this textPath is nested (not a direct child of <text>).
+          const auto* tree = handle.try_get<donner::components::TreeComponent>();
+          if (!tree || tree->parent() == entt::null ||
+              !registry.any_of<TextRootComponent>(tree->parent())) {
+            isHidden = true;
+          }
+        }
       }
     }
 
