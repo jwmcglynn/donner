@@ -10,7 +10,7 @@
 
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/renderer/RendererSkia.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -114,6 +114,55 @@ struct AsciiImage {
 class RendererTestUtils {
 public:
   /**
+   * Returns true when the active test renderer backend is tiny-skia.
+   */
+  static bool isTinySkiaBackend() { return ActiveRendererBackend() == RendererBackend::TinySkia; }
+
+  /**
+   * Convert a snapshot bitmap to ASCII art, mapping grayscale intensity to ten glyph levels.
+   *
+   * @param snapshot Renderer snapshot in RGBA format.
+   * @return ASCII art with one newline-terminated row per image row.
+   */
+  static std::string snapshotToAscii(const RendererBitmap& snapshot) {
+    if (snapshot.empty() || snapshot.rowBytes == 0) {
+      return "";
+    }
+
+    static constexpr std::string_view kGrayscaleTable = ".,:-=+*#%@";
+    const std::size_t width = static_cast<std::size_t>(snapshot.dimensions.x);
+    const std::size_t height = static_cast<std::size_t>(snapshot.dimensions.y);
+    const std::size_t requiredRowBytes = width * 4u;
+    if (snapshot.rowBytes < requiredRowBytes) {
+      return "";
+    }
+    if (snapshot.pixels.size() < snapshot.rowBytes * height) {
+      return "";
+    }
+
+    std::string asciiArt;
+    asciiArt.reserve(width * height + height);
+
+    for (std::size_t y = 0; y < height; ++y) {
+      const std::size_t rowStart = y * snapshot.rowBytes;
+      for (std::size_t x = 0; x < width; ++x) {
+        const std::size_t pixelIndex = rowStart + x * 4u;
+        const uint8_t r = snapshot.pixels[pixelIndex];
+        const uint8_t g = snapshot.pixels[pixelIndex + 1];
+        const uint8_t b = snapshot.pixels[pixelIndex + 2];
+        const uint8_t intensity = static_cast<uint8_t>(
+            (static_cast<uint32_t>(r) + static_cast<uint32_t>(g) + static_cast<uint32_t>(b)) / 3u);
+        const std::size_t tableIndex =
+            static_cast<std::size_t>(intensity) * (kGrayscaleTable.size() - 1u) / 255u;
+        asciiArt.push_back(kGrayscaleTable[tableIndex]);
+      }
+      asciiArt.push_back('\n');
+    }
+
+    return asciiArt;
+  }
+
+  /**
    * Render the given SVG fragment into ASCII art. The generated image is of the given size, and has
    * a black background.
    *
@@ -153,11 +202,8 @@ public:
    * @param document SVG document to render, of max size 64x64.
    */
   static AsciiImage renderToAsciiImage(SVGDocument document) {
-    RendererSkia renderer;
-    renderer.setAntialias(false);
-
     AsciiImage result;
-    result.generated = renderer.drawIntoAscii(document);
+    result.generated = snapshotToAscii(RenderDocumentWithActiveBackendForAscii(document));
     return result;
   }
 };

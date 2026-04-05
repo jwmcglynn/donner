@@ -24,8 +24,7 @@ enum class RendererBackend {
 enum class RendererBackendFeature : uint32_t {
   Text = 0,
   FilterEffects = 1,
-  AsciiSnapshot = 2,
-  SkpDebug = 3,
+  SkpDebug = 2,
 };
 
 /**
@@ -63,7 +62,6 @@ inline std::string_view RendererBackendFeatureName(RendererBackendFeature featur
   switch (feature) {
     case RendererBackendFeature::Text: return "text rendering";
     case RendererBackendFeature::FilterEffects: return "filter effects";
-    case RendererBackendFeature::AsciiSnapshot: return "ASCII snapshots";
     case RendererBackendFeature::SkpDebug: return "SkPicture debug capture";
   }
 
@@ -100,6 +98,16 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature);
  * @return Snapshot of the rendered document.
  */
 RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose = false);
+
+/**
+ * @brief Renders a document with the active backend for ASCII snapshots.
+ *
+ * Implementations disable anti-aliasing so legacy ASCII goldens remain stable.
+ *
+ * @param document The document to render.
+ * @return Snapshot of the rendered document.
+ */
+RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document);
 
 /**
  * @brief Writes a `.skp` debug file for the active backend when supported.
