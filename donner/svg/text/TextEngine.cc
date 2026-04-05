@@ -1332,27 +1332,34 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         }
       }
 
-      // Resume pen at the arc length where text actually ended on the path.
-      // Use the raw path point (without perpShift) so the next flat span can
-      // apply its own baseline shift cleanly via the defaultY mechanism.
-      const double textEndArcLength = startOffset + advanceAccum;
-      const auto endSample = pathSpline.pointAtArcLength(textEndArcLength);
-      if (endSample.valid) {
-        currentPenX = endSample.point.x;
-        currentPenY = endSample.point.y;
+      // Resume pen at the visual end of the last glyph on the path. This position
+      // includes perpShift (baseline), so the next flat span continues from where
+      // text visually ended. Set prevDefaultY = defaultY so the undo/reapply in the
+      // next span's penY calculation cancels out (preserving the glyph-end y position).
+      if (!run.glyphs.empty() && run.glyphs.back().glyphIndex != 0) {
+        const auto& lastG = run.glyphs.back();
+        // Sample the path at the last glyph's arc-length to get the tangent angle.
+        const double lastArc = startOffset + advanceAccum - lastG.xAdvance * 0.5;
+        const auto lastSample = pathSpline.pointAtArcLength(lastArc);
+        const double angle = lastSample.valid ? lastSample.angle : 0.0;
+        // Advance from the glyph origin (which was shifted back by halfAdv) by the
+        // full advance along the tangent to reach the glyph's visual end.
+        currentPenX = lastG.xPosition + lastG.xAdvance * std::cos(angle);
+        currentPenY = lastG.yPosition + lastG.xAdvance * std::sin(angle);
       } else {
-        // Text extended past the path — use geometric endpoint.
-        const auto pathEnd = pathSpline.pointAtArcLength(pathSpline.pathLength());
-        if (pathEnd.valid) {
-          currentPenX = pathEnd.point.x;
-          currentPenY = pathEnd.point.y;
+        // No visible glyphs — use raw path point at text-end arc length.
+        const double textEndArc = startOffset + advanceAccum;
+        const auto endSample = pathSpline.pointAtArcLength(textEndArc);
+        if (endSample.valid) {
+          currentPenX = endSample.point.x;
+          currentPenY = endSample.point.y;
         } else {
           currentPenX = 0.0;
           currentPenY = 0.0;
         }
       }
       haveCurrentPosition = true;
-      prevDefaultY = 0.0;
+      prevDefaultY = defaultY;
       prevTextPathSource = span.textPathSourceEntity;
       prevTextPathEndOffset = startOffset + advanceAccum;
       prevTextPathPerpShift = perpShift;

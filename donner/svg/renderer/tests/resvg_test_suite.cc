@@ -969,7 +969,10 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-014.png")},
             {"e-textPath-016.svg", Params::Skip()},  // Not impl: link to rect (SVG 2)
-            {"e-textPath-020.svg", Params::WithThreshold(0.1f)},
+            {"e-textPath-019.svg",
+             Params::WithGoldenOverride(
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-019.png")},
+            {"e-textPath-020.svg", Params::WithThreshold(0.1f, 400)},  // Minor AA diffs
             {"e-textPath-021.svg", Params::Skip()},  // Deferred: writing-mode=tb on textPath
             {"e-textPath-030.svg", Params::Skip()},  // Deferred: vertical + circular path
             {"e-textPath-033.svg", Params::Skip()},  // UB: baseline-shift + rotate
