@@ -71,9 +71,9 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
     "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
+    "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
     "third_party/stb",
     "pixelmatch-cpp17",
-    "donner/benchmarks",
 }
 
 # Individual targets to skip entirely from CMake generation.
