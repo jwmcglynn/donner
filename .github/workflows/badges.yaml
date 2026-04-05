@@ -32,7 +32,7 @@ jobs:
           done <<< "$output"
 
       - name: Create Lines-of-Code-Badge
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.8.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 91f7f490a72af9c06506c8176729d218
@@ -42,7 +42,7 @@ jobs:
           color: lightgrey
 
       - name: Create Test-Lines-of-Code-Badge
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.8.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 91f7f490a72af9c06506c8176729d218
@@ -52,7 +52,7 @@ jobs:
           color: blue
 
       - name: Create Comments-Badge
-        uses: schneegans/dynamic-badges-action@v1.7.0
+        uses: schneegans/dynamic-badges-action@v1.8.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
           gistID: 91f7f490a72af9c06506c8176729d218
