@@ -968,7 +968,7 @@ def generate_all_packages() -> None:
                     )
                 if cmake_name == "donner_svg_renderer_tiny_skia_filter_deps":
                     f.write(
-                        f"target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps {scope} tiny_skia)\n"
+                        f"target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps {scope} tiny_skia_filter)\n"
                     )
                 if cmake_name == "donner_svg_renderer_skia_deps":
                     f.write(
