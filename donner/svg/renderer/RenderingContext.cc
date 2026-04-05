@@ -336,20 +336,25 @@ public:
                         RecursionGuard guard, int layer = 0) {
     bool hasAnyChildren = false;
     bool encounteredInvalidReference = false;
-    const auto appendClipPathFromEntity = [&](EntityHandle entity) {
+    const auto appendClipPathFromEntity = [&](EntityHandle entity, bool enforceVisibility) {
       if (encounteredInvalidReference) {
         return;
       }
 
-      const auto* clipPathData = entity.try_get<components::ComputedPathComponent>();
+      // Shadow entities (from <use>) store data on the light entity but styles on the shadow.
+      const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
+      const EntityHandle dataEntity =
+          shadowEntity ? EntityHandle(registry_, shadowEntity->lightEntity) : entity;
+
+      const auto* clipPathData = dataEntity.try_get<components::ComputedPathComponent>();
       const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
       if (!clipPathData || !computedStyle) {
         return;
       }
 
       const auto& style = computedStyle->properties.value();
-      if (style.visibility.getRequired() != Visibility::Visible ||
-          style.display.getRequired() == Display::None) {
+      if (enforceVisibility && (style.visibility.getRequired() != Visibility::Visible ||
+                                style.display.getRequired() == Display::None)) {
         return;
       }
 
@@ -390,8 +395,33 @@ public:
       }
     }
 
-    donner::components::ForAllChildren(
-        clipPathHandle, [&](EntityHandle child) { appendClipPathFromEntity(child); });
+    donner::components::ForAllChildren(clipPathHandle, [&](EntityHandle child) {
+      appendClipPathFromEntity(child, true);
+
+      const auto* typeComponent = child.try_get<ElementTypeComponent>();
+      if (!typeComponent || typeComponent->type() != ElementType::Use) {
+        return;
+      }
+
+      const auto* useStyle = child.try_get<components::ComputedStyleComponent>();
+      if (!useStyle) {
+        return;
+      }
+
+      const auto& useProperties = useStyle->properties.value();
+      if (useProperties.visibility.getRequired() != Visibility::Visible ||
+          useProperties.display.getRequired() == Display::None) {
+        return;
+      }
+
+      if (const auto* computedShadow = child.try_get<ComputedShadowTreeComponent>();
+          computedShadow && computedShadow->mainBranch) {
+        const Entity shadowRoot = computedShadow->mainBranch->shadowRoot();
+        if (shadowRoot != entt::null) {
+          appendClipPathFromEntity(EntityHandle(registry_, shadowRoot), false);
+        }
+      }
+    });
 
     if (encounteredInvalidReference) {
       return false;
