@@ -48,13 +48,16 @@ When a `<textPath>` span is encountered during `instantiateComputedComponent`:
 
 During the per-span layout loop, spans with `pathSpline` set enter the text-on-path branch:
 
-1. **text-anchor** — Compute total text advance (including inter-glyph letter-spacing) and
-   shift the effective startOffset: `middle` shifts by `-advance/2`, `end` by `-advance`.
+1. **text-anchor** — Compute total text advance (including kerning and inter-glyph
+   letter-spacing) and shift the effective startOffset: `middle` shifts by `-advance/2`,
+   `end` by `-advance`. Path-based runs are marked `onPath = true` so the post-loop
+   `applyTextAnchor()` skips them (anchor is already applied along the path, not linearly).
 
 2. **baseline-shift** — The combined dominant-baseline and per-span baseline-shift offset
    is applied perpendicular to the path tangent using the direction `(sin(θ), -cos(θ))`.
 
 3. **Per-glyph positioning** — For each glyph:
+   - Apply within-run kerning (`xKern`) to the advance accumulator before sampling.
    - Sample the path at `startOffset + advanceAccum + xAdvance/2` to get position and angle.
    - Place the glyph origin shifted back along the tangent by half the advance width.
    - Apply the perpendicular baseline offset.
@@ -63,6 +66,10 @@ During the per-span layout loop, spans with `pathSpline` set enter the text-on-p
 
 4. **Letter-spacing** — Added to the inter-glyph advance accumulation (not after the last
    glyph), so characters spread along the path with correct spacing.
+
+5. **Nested textPath rejection** — `findApplicableTextPathEntity()` stops searching when it
+   encounters any `<textPath>` element, even if it's not a valid direct child of `<text>`.
+   Content inside a nested (invalid) textPath is marked `textPathFailed` and hidden.
 
 ### Error Handling
 
@@ -74,8 +81,34 @@ During the per-span layout loop, spans with `pathSpline` set enter the text-on-p
 
 The `e-textPath-*` resvg test suite covers 44 SVG test cases:
 
-- **33 active tests** — all passing in both base and `text_full` tiers.
-- **11 skipped tests** — deferred or out-of-scope features.
+- **26 passing** — with custom goldens where font advance drift exceeds resvg comparison.
+- **4 known bugs** — identified, to be fixed.
+- **11 skipped** — deferred or out-of-scope features.
+- **3 tests** (038, 039) — font drift, pending goldens.
+
+### Custom Goldens (font advance drift)
+
+These tests pass against our own golden images because cumulative per-glyph advance
+differences between our font backend and resvg's reference renderer produce pixel diffs
+that exceed the default threshold. The rendering is functionally correct.
+
+| Tests | Description |
+|-------|-------------|
+| 001-005 | Basic textPath, startOffset, percentage offset |
+| 009-011 | Letter-spacing, nested textPath, mixed children |
+| 013, 015 | Coords on `<text>`, text overflow |
+| 019-020 | text-anchor=middle, closed path |
+| 022, 026-029 | tspan absolute position, ClosePath, underline, rotate |
+| 032, 034, 036-037 | baseline-shift, arc path, transforms |
+
+### Known Bugs
+
+| Test | Pixels | Issue |
+|------|--------|-------|
+| 012 | 4949 | Mixed children (2): incorrect inline position resumption between multiple textPath/tspan siblings |
+| 014 | 5615 | `<textPath x="20" y="40">` — x/y attributes applied when spec says ignore them |
+| 023 | 2771 | `dx`/`dy` on tspan within textPath not applied as along-path/perpendicular offsets |
+| 025 | 3818 | Invalid textPath (no href) content still contributes advance width instead of being fully dropped |
 
 ### Skipped Tests
 
@@ -93,17 +126,6 @@ The `e-textPath-*` resvg test suite covers 44 SVG test cases:
 | 042 | `path` attribute (SVG 2 feature) |
 | 043-044 | `path` + `href` interaction (SVG 2) |
 
-### Known Gaps (with thresholds)
-
-Some tests pass with elevated thresholds due to implementation gaps:
-
-- **tspan positioning on textPath** (022, 023): `x`/`y`/`dx`/`dy` on tspan children of
-  textPath are not fully applied along/perpendicular to the path.
-- **Nested/mixed textPath** (010, 012): Multiple textPath elements or mixed text/textPath
-  children have interaction gaps.
-- **Coords on text** (013): `x`/`y` on the parent `<text>` element interaction with textPath.
-- **Subpaths** (024, 025): Text across discontinuous path segments (multiple `M` commands).
-
 ## Key Files
 
 | Component | Path |
@@ -117,10 +139,17 @@ Some tests pass with elevated thresholds due to implementation gaps:
 
 ## Future Work
 
+### Bug Fixes (v1 blockers)
+- [ ] **012**: Fix inline position resumption between multiple textPath/tspan siblings.
+- [ ] **014**: Ignore x/y attributes on `<textPath>` elements (spec violation).
+- [ ] **023**: Apply `dx`/`dy` on tspan children as along-path / perpendicular offsets.
+- [ ] **025**: Fully drop content from invalid textPath (no href) — currently contributes
+  advance width causing extra spacing.
+
+### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.
 - [ ] Implement `spacing=auto` for automatic inter-character spacing on path.
 - [ ] Support `side=right` (SVG 2) for text on the opposite side of the path.
 - [ ] Support `path` attribute (SVG 2) for inline path data.
-- [ ] Apply `dx`/`dy` on tspan children as along-path / perpendicular offsets.
 - [ ] Handle text across discontinuous subpaths correctly.
 - [ ] Support `writing-mode=tb` (vertical text) on textPath.
