@@ -11,5 +11,5 @@ skia-rs = { path = "../testing-tools/skia-rs", optional = true }
 raqote = { version = "0.8", default-features = false, optional = true }
 # Do not upgrade, because 0.9 uses proc-macros now and it's too slow to compile.
 # And it should not affect the performance anyway, since we are using the system library anyway.
-cairo-rs = { version = "0.8", default-features = false, optional = true }
+cairo-rs = { version = "0.22", default-features = false, optional = true }
 png = "0.18"
