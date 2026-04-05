@@ -961,13 +961,16 @@ INSTANTIATE_TEST_SUITE_P(
                                                                                     // advance diffs
             {"e-textPath-010.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-010.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-010.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-013.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-013.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-013.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-014.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-014.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-014.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-016.svg", Params::Skip()},  // Not impl: link to rect (SVG 2)
             {"e-textPath-019.svg",
              Params::WithGoldenOverride(
@@ -976,36 +979,47 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-textPath-021.svg", Params::Skip()},  // Deferred: writing-mode=tb on textPath
             {"e-textPath-022.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-022.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-022.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-023.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-023.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-023.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-026.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-026.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-026.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-027.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-027.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-027.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-028.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-028.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-028.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-029.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-029.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-029.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-030.svg", Params::Skip()},  // Deferred: vertical + circular path
             {"e-textPath-032.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-032.png")},
-            {"e-textPath-033.svg", Params::Skip()},  // UB: baseline-shift + rotate
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-032.png")},  // Minor char
+                                                                                    // advance diffs
+            {"e-textPath-033.svg", Params::Skip()},                // UB: baseline-shift + rotate
+            {"e-textPath-034.svg", Params::WithThreshold(0.05f)},  // AA artifacts
             {"e-textPath-035.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-035.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-035.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-036.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-036.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-036.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-037.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-037.png")},
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-037.png")},  // Minor char
+                                                                                    // advance diffs
             {"e-textPath-040.svg", Params::Skip()},  // Not impl: filter on textPath
             {"e-textPath-041.svg", Params::Skip()},  // Not impl: side=right (SVG 2)
             {"e-textPath-042.svg", Params::Skip()},  // Not impl: path attr (SVG 2)
