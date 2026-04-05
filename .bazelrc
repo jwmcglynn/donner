@@ -139,3 +139,6 @@ build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
 
 # Outputs test failures from failing tests instead just linking to test.log.
 test --test_output=errors
+
+# Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
+run --test_sharding_strategy=disabled
