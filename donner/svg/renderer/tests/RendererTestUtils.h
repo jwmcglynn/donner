@@ -147,13 +147,20 @@ public:
       const std::size_t rowStart = y * snapshot.rowBytes;
       for (std::size_t x = 0; x < width; ++x) {
         const std::size_t pixelIndex = rowStart + x * 4u;
-        const uint8_t r = snapshot.pixels[pixelIndex];
-        const uint8_t g = snapshot.pixels[pixelIndex + 1];
-        const uint8_t b = snapshot.pixels[pixelIndex + 2];
-        const uint8_t intensity = static_cast<uint8_t>(
-            (static_cast<uint32_t>(r) + static_cast<uint32_t>(g) + static_cast<uint32_t>(b)) / 3u);
-        const std::size_t tableIndex =
-            static_cast<std::size_t>(intensity) * (kGrayscaleTable.size() - 1u) / 255u;
+        const uint32_t r = snapshot.pixels[pixelIndex];
+        const uint32_t g = snapshot.pixels[pixelIndex + 1];
+        const uint32_t b = snapshot.pixels[pixelIndex + 2];
+        const uint32_t a = snapshot.pixels[pixelIndex + 3];
+        // Composite against black (premultiply by alpha) then convert to grayscale, matching the
+        // legacy Skia path which rendered into kGray_8/kOpaque.
+        const uint8_t intensity =
+            static_cast<uint8_t>(((r + g + b) * a / 255u) / 3u);
+        // Use the same bucketing as the old Skia drawIntoAscii: pixel / (256 / tableSize).
+        std::size_t tableIndex = static_cast<std::size_t>(intensity) /
+                                 (256u / kGrayscaleTable.size());
+        if (tableIndex >= kGrayscaleTable.size()) {
+          tableIndex = kGrayscaleTable.size() - 1u;
+        }
         asciiArt.push_back(kGrayscaleTable[tableIndex]);
       }
       asciiArt.push_back('\n');
