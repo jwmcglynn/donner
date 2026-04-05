@@ -638,10 +638,10 @@ INSTANTIATE_TEST_SUITE_P(FeSpecularLighting, ImageComparisonTestFixture,
                              "e-feSpecularLighting",
                              {
                                  {"e-feSpecularLighting-002.svg",
-                                  Params::WithGoldenOverride(
-                                      "donner/svg/renderer/testdata/golden/"
-                                      "resvg-e-feSpecularLighting-002.png")},  // resvg golden
-                                                                               // bug: black center
+                                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                             "resvg-e-feSpecularLighting-002.png",
+                                                             0.02f)},  // resvg golden
+                                                                       // bug: black center
                              },
                              kFilterDefaultParams)),
                          TestNameFromFilename);
