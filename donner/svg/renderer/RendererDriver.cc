@@ -195,7 +195,7 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
     params.strokeParams = toStrokeParams(registry, instance, style);
   }
 
-  params.fontFamilies = properties.fontFamily.getRequiredRef();
+  params.fontFamilies = properties.fontFamily.getRequired();
   params.fontSize = properties.fontSize.getRequired();
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   params.fontMetrics = FontMetrics();
