@@ -429,7 +429,7 @@ void RendererSkia::pushClip(const ResolvedClip& clip) {
       Op(targetPath, skPath, kUnion_SkPathOp, &targetPath);
     }
 
-    currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, true);
+    currentCanvas_->clipPath(fullPath, SkClipOp::kIntersect, antialias_);
   }
 
   ++clipDepth_;

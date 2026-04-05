@@ -116,13 +116,15 @@ TEST(SVGTextElementTests, TextContentMultipleNodes) {
 
 // Simple rendering test for a single-letter <text> element
 TEST(SVGTextElementViewportTests, SimpleLetter) {
-  if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
-    GTEST_SKIP() << "Active renderer does not support text rendering";
+  if (RendererTestUtils::IsTinySkiaBackend()) {
+    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
+  // Render a single character 'I' in white on black background
+  // Create a full SVG document for rendering
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 16 16">
-      <text x="5" y="12" font-family="fallback-font" font-size="12px" fill="black">T</text>
+      <text x="5" y="12" font-family="fallback-font" font-size="12px" fill="white">T</text>
     </svg>
   )-",
                                        kExperimentalOptions);
@@ -150,13 +152,13 @@ TEST(SVGTextElementViewportTests, SimpleLetter) {
 // Verify that a <text> element with multiple <tspan> children generates multiple
 // computed text spans.
 TEST(SVGTextElementViewportTests, MultipleTSpansComputed) {
-  if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
-    GTEST_SKIP() << "Active renderer does not support text rendering";
+  if (RendererTestUtils::IsTinySkiaBackend()) {
+    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
   }
 
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 16 16">
-      <text id="root" x="0" y="12" font-family="fallback-font" font-size="12px" fill="black">
+      <text id="root" x="0" y="12" font-family="fallback-font" font-size="12px" fill="white">
         <tspan>A</tspan><tspan dx="8">B</tspan>
       </text>
     </svg>
