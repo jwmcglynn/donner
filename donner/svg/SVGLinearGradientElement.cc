@@ -15,18 +15,22 @@ SVGLinearGradientElement SVGLinearGradientElement::CreateOn(EntityHandle handle)
 }
 
 void SVGLinearGradientElement::setX1(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::LinearGradientComponent>().x1 = value;
 }
 
 void SVGLinearGradientElement::setY1(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::LinearGradientComponent>().y1 = value;
 }
 
 void SVGLinearGradientElement::setX2(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::LinearGradientComponent>().x2 = value;
 }
 
 void SVGLinearGradientElement::setY2(std::optional<Lengthd> value) {
+  invalidate();
   handle_.get<components::LinearGradientComponent>().y2 = value;
 }
 

@@ -4,6 +4,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/StopComponent.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 
@@ -61,6 +62,7 @@ double SVGStopElement::computedStopOpacity() const {
 
 void SVGStopElement::invalidate() const {
   handle_.remove<components::ComputedStopComponent>();
+  components::RenderingContext(*handle_.registry()).invalidateRenderTree();
 }
 
 }  // namespace donner::svg

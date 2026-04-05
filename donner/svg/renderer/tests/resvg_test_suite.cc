@@ -226,7 +226,6 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold,
                                    200)},            // Bug: nested clip-path support with tiny-skia
             {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
-            {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
             {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
         })),
     TestNameFromFilename);

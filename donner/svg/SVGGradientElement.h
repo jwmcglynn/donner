@@ -34,6 +34,9 @@ protected:
    */
   explicit SVGGradientElement(EntityHandle handle);
 
+  /// Invalidates cached gradient-derived state after a DOM mutation.
+  void invalidate() const;
+
 public:
   /// Returns true if the given element type can be cast to \ref SVGGradientElement.
   static constexpr bool IsBaseOf(ElementType type) {

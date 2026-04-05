@@ -4,6 +4,7 @@
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -40,6 +41,14 @@
 namespace donner::svg::components {
 
 namespace {
+
+/// Get or create the RenderTreeState in the registry context.
+RenderTreeState& getRenderTreeState(Registry& registry) {
+  if (!registry.ctx().contains<RenderTreeState>()) {
+    registry.ctx().emplace<RenderTreeState>();
+  }
+  return registry.ctx().get<RenderTreeState>();
+}
 
 /**
  * The current value of the context-fill and context-stroke paint servers, based on the rules
@@ -335,6 +344,49 @@ public:
                         std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
                         RecursionGuard guard, int layer = 0) {
     bool hasAnyChildren = false;
+    bool encounteredInvalidReference = false;
+    const auto appendClipPathFromEntity = [&](EntityHandle entity, bool enforceVisibility) {
+      if (encounteredInvalidReference) {
+        return;
+      }
+
+      // Shadow entities (from <use>) store data on the light entity but styles on the shadow.
+      const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
+      const EntityHandle dataEntity =
+          shadowEntity ? EntityHandle(registry_, shadowEntity->lightEntity) : entity;
+
+      const auto* clipPathData = dataEntity.try_get<components::ComputedPathComponent>();
+      const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
+      if (!clipPathData || !computedStyle) {
+        return;
+      }
+
+      const auto& style = computedStyle->properties.value();
+      if (enforceVisibility && (style.visibility.getRequired() != Visibility::Visible ||
+                                style.display.getRequired() == Display::None)) {
+        return;
+      }
+
+      // Check to see if this element has its own clip paths set.
+      if (style.clipPath.get()) {
+        if (auto resolved = resolveClipPath(entity, style.clipPath.getRequired());
+            resolved.valid()) {
+          if (!guard.hasRecursion(resolved.reference.handle)) {
+            if (!collectClipPaths(resolved.reference.handle, clipPaths,
+                                  guard.with(resolved.reference.handle), layer + 1)) {
+              encounteredInvalidReference = true;
+              return;
+            }
+          }
+        }
+      }
+
+      hasAnyChildren = true;
+
+      const Transformd entityFromParent = LayoutSystem().getEntityFromWorldTransform(entity);
+      const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
+      clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
+    };
 
     // Check for clip-path on the <clipPath> itself
     if (const auto* computedStyle = clipPathHandle.try_get<components::ComputedStyleComponent>()) {
@@ -353,37 +405,36 @@ public:
     }
 
     donner::components::ForAllChildren(clipPathHandle, [&](EntityHandle child) {
-      if (const auto* clipPathData = child.try_get<components::ComputedPathComponent>()) {
-        if (const auto* computedStyle = child.try_get<components::ComputedStyleComponent>()) {
-          const auto& style = computedStyle->properties.value();
-          if (style.visibility.getRequired() != Visibility::Visible ||
-              style.display.getRequired() == Display::None) {
-            return;
-          }
+      appendClipPathFromEntity(child, true);
 
-          // Check to see if this element has its own clip paths set.
-          if (style.clipPath.get()) {
-            if (auto resolved = resolveClipPath(child, style.clipPath.getRequired());
-                resolved.valid()) {
-              if (!guard.hasRecursion(resolved.reference.handle)) {
-                if (!collectClipPaths(resolved.reference.handle, clipPaths,
-                                      guard.with(resolved.reference.handle), layer + 1)) {
-                  // Invalid clip-path reference.
-                  return;
-                }
-              }
-            }
-          }
+      const auto* typeComponent = child.try_get<ElementTypeComponent>();
+      if (!typeComponent || typeComponent->type() != ElementType::Use) {
+        return;
+      }
 
-          hasAnyChildren = true;
+      const auto* useStyle = child.try_get<components::ComputedStyleComponent>();
+      if (!useStyle) {
+        return;
+      }
 
-          const Transformd entityFromParent = LayoutSystem().getEntityFromWorldTransform(child);
+      const auto& useProperties = useStyle->properties.value();
+      if (useProperties.visibility.getRequired() != Visibility::Visible ||
+          useProperties.display.getRequired() == Display::None) {
+        return;
+      }
 
-          const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
-          clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
+      if (const auto* computedShadow = child.try_get<ComputedShadowTreeComponent>();
+          computedShadow && computedShadow->mainBranch) {
+        const Entity shadowRoot = computedShadow->mainBranch->shadowRoot();
+        if (shadowRoot != entt::null) {
+          appendClipPathFromEntity(EntityHandle(registry_, shadowRoot), false);
         }
       }
     });
+
+    if (encounteredInvalidReference) {
+      return false;
+    }
 
     return hasAnyChildren;
   }
@@ -567,17 +618,28 @@ void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
                                               const ResolvedPaintServer& stroke) {
   initialContextFill_ = fill;
   initialContextStroke_ = stroke;
+  getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
 void RenderingContext::clearInitialContextPaint() {
   initialContextFill_.reset();
   initialContextStroke_.reset();
+  getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
 void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
-  // TODO(jwmcglynn): Support partial invalidation, where we only recompute the subtree that has
-  // changed.
-  // Call ShadowTreeSystem::teardown() to destroy any existing shadow trees.
+  auto& renderState = getRenderTreeState(registry_);
+  const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
+
+  // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
+  // is required, skip all recomputation.
+  if (renderState.hasBeenBuilt && !renderState.needsFullRebuild && !hasDirtyEntities) {
+    return;
+  }
+
+  // Full rebuild path: tear down shadow trees and recompute everything.
+  // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
+  // instead of the full tree.
   for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
     auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
     createShadowTreeSystem().teardown(registry_, shadow);
@@ -586,6 +648,12 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
   createComputedComponents(outWarnings);
   instantiateRenderTreeWithPrecomputedTree(verbose);
+
+  // Clear all dirty flags after full recomputation.
+  registry_.clear<DirtyFlagsComponent>();
+  renderState.needsFullRebuild = false;
+  renderState.needsFullStyleRecompute = false;
+  renderState.hasBeenBuilt = true;
 }
 
 Entity RenderingContext::findIntersecting(const Vector2d& point) {
@@ -644,6 +712,9 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
 void RenderingContext::invalidateRenderTree() {
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
+  auto& renderState = getRenderTreeState(registry_);
+  renderState.needsFullRebuild = true;
+  renderState.needsFullStyleRecompute = true;
 }
 
 // 1. Setup shadow trees

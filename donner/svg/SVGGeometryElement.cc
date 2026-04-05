@@ -1,5 +1,6 @@
 #include "donner/svg/SVGGeometryElement.h"
 
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
@@ -46,6 +47,8 @@ std::optional<Boxd> SVGGeometryElement::worldBounds() const {
 
 void SVGGeometryElement::invalidate() {
   handle_.remove<components::ComputedPathComponent>();
+  handle_.get_or_emplace<components::DirtyFlagsComponent>().mark(
+      components::DirtyFlagsComponent::Shape | components::DirtyFlagsComponent::RenderInstance);
 }
 
 }  // namespace donner::svg
