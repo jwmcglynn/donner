@@ -25,6 +25,62 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
   return result;
 }
 
+std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
+    std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
+    const Transformd& deviceFromImage, std::optional<Boxd> userSubregion,
+    std::optional<Transformd> filterFromDevice, int outputWidth, int outputHeight) {
+  std::vector<std::uint8_t> output(static_cast<std::size_t>(outputWidth * outputHeight * 4), 0);
+  if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
+    return output;
+  }
+
+  if (NearZero(deviceFromImage.determinant(), 1e-12)) {
+    return output;
+  }
+
+  (void)userSubregion;
+  (void)filterFromDevice;
+
+  const Transformd imageFromDevice = deviceFromImage.inverse();
+
+  auto sampleSource = [&](int x, int y, int channel) -> float {
+    x = std::clamp(x, 0, sourceWidth - 1);
+    y = std::clamp(y, 0, sourceHeight - 1);
+    return premultipliedPixels[static_cast<std::size_t>((y * sourceWidth + x) * 4 + channel)] /
+           255.0f;
+  };
+
+  for (int y = 0; y < outputHeight; ++y) {
+    for (int x = 0; x < outputWidth; ++x) {
+      const Vector2d devicePoint(static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5);
+      const Vector2d imagePoint = imageFromDevice.transformPosition(devicePoint);
+      const double sourceX = imagePoint.x - 0.5;
+      const double sourceY = imagePoint.y - 0.5;
+      const int x0 = static_cast<int>(std::floor(sourceX));
+      const int y0 = static_cast<int>(std::floor(sourceY));
+      if (x0 + 1 < 0 || x0 >= sourceWidth || y0 + 1 < 0 || y0 >= sourceHeight) {
+        continue;
+      }
+
+      const float fx = static_cast<float>(sourceX - x0);
+      const float fy = static_cast<float>(sourceY - y0);
+      const std::size_t outIndex = static_cast<std::size_t>((y * outputWidth + x) * 4);
+      for (int channel = 0; channel < 4; ++channel) {
+        const float s00 = sampleSource(x0, y0, channel);
+        const float s10 = sampleSource(x0 + 1, y0, channel);
+        const float s01 = sampleSource(x0, y0 + 1, channel);
+        const float s11 = sampleSource(x0 + 1, y0 + 1, channel);
+        const float top = s00 + (s10 - s00) * fx;
+        const float bottom = s01 + (s11 - s01) * fx;
+        const float value = std::clamp(top + (bottom - top) * fy, 0.0f, 1.0f);
+        output[outIndex + channel] = static_cast<std::uint8_t>(std::round(value * 255.0f));
+      }
+    }
+  }
+
+  return output;
+}
+
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transformd& deviceFromFilter,
                               const std::optional<Boxd>& filterRegion,
@@ -512,18 +568,43 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
             gp::Image image;
             if (!primitive.imageData.empty() && primitive.imageWidth > 0 &&
                 primitive.imageHeight > 0) {
-              image.pixels = PremultiplyRgba(primitive.imageData);
-              image.width = primitive.imageWidth;
-              image.height = primitive.imageHeight;
+              const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
 
               if (primitive.isFragmentReference) {
+                image.pixels = premultiplied;
+                image.width = primitive.imageWidth;
+                image.height = primitive.imageHeight;
                 // Fragment references are rendered in the same coordinate space as the filter
                 // pixmap. Place the image at (0,0) with 1:1 pixel mapping — no
                 // preserveAspectRatio scaling needed.
                 image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0,
                     static_cast<double>(primitive.imageWidth),
                     static_cast<double>(primitive.imageHeight)};
+              } else if (graph.filterFromDevice.has_value()) {
+                const Boxd imageBox =
+                    Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+                const Boxd userSubregion = graphNode.userSpaceSubregion.has_value()
+                                               ? Boxd::FromXYWH(graphNode.userSpaceSubregion->x,
+                                                                graphNode.userSpaceSubregion->y,
+                                                                graphNode.userSpaceSubregion->w,
+                                                                graphNode.userSpaceSubregion->h)
+                                               : filterRegion.value_or(primitiveUnitsBounds);
+                const Transformd filterFromImage =
+                    primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion,
+                                                                                     imageBox);
+                const Transformd deviceFromImage = filterFromImage * deviceFromFilter;
+
+                image.pixels = RasterizeTransformedImagePremultiplied(
+                    premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
+                    userSubregion, deviceFromFilter.inverse(), w, h);
+                image.width = w;
+                image.height = h;
+                image.targetRect = tiny_skia::filter::PixelRect{
+                    0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
               } else {
+                image.pixels = premultiplied;
+                image.width = primitive.imageWidth;
+                image.height = primitive.imageHeight;
                 double regionX = 0.0;
                 double regionY = 0.0;
                 double regionW = w;

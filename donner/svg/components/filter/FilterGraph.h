@@ -1,13 +1,14 @@
 #pragma once
 /// @file
 
-#include <any>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
@@ -257,10 +258,9 @@ struct Image {
   int imageWidth = 0;   ///< Width of loaded image in pixels.
   int imageHeight = 0;  ///< Height of loaded image in pixels.
 
-  /// Non-owning pointer to an SVG sub-document (`std::any` containing `SVGDocument`), set when
-  /// the feImage href references an external SVG file. The renderer pre-renders this to pixel data
-  /// before filter execution. Owned by \ref SubDocumentCache.
-  std::any* svgSubDocument = nullptr;
+  /// Shared handle to an external SVG sub-document. The renderer pre-renders this to pixel data
+  /// before filter execution.
+  std::shared_ptr<Registry> svgSubDocument;
 
   /// Fragment ID for same-document element references (e.g., href="#rect1" stores "rect1").
   /// The renderer resolves this to pixel data before filter execution.

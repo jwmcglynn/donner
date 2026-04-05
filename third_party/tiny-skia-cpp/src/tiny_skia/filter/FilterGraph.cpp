@@ -668,6 +668,13 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
               for (int dy = 0; dy < h; ++dy) {
                 for (int dx = 0; dx < w; ++dx) {
+                  const double pixelCenterX = static_cast<double>(dx) + 0.5;
+                  const double pixelCenterY = static_cast<double>(dy) + 0.5;
+                  if (pixelCenterX < tx || pixelCenterX >= tx + tw ||
+                      pixelCenterY < ty || pixelCenterY >= ty + th) {
+                    continue;
+                  }
+
                   const double srcXf = (static_cast<double>(dx) + 0.5 - tx) * invScaleX - 0.5;
                   const double srcYf = (static_cast<double>(dy) + 0.5 - ty) * invScaleY - 0.5;
 

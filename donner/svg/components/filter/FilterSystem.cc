@@ -592,6 +592,9 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         prim.imageData = loaded->image->data;
         prim.imageWidth = loaded->image->width;
         prim.imageHeight = loaded->image->height;
+      } else if (const auto* svgLoaded = registry.try_get<LoadedSVGImageComponent>(cur);
+                 svgLoaded && svgLoaded->subDocument) {
+        prim.svgSubDocument = svgLoaded->subDocument;
       } else if (const std::string_view hrefView(feImage->href);
                  !hrefView.empty() && hrefView[0] == '#') {
         // Same-document fragment reference — store the fragment ID for the renderer to resolve.

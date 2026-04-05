@@ -10,6 +10,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -229,6 +230,36 @@ TEST_F(FilterSystemTest, FeDropShadow) {
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+}
+
+TEST_F(FilterSystemTest, FeImageUsesLoadedSvgSubDocument) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <filter id="f">
+          <feImage id="img" href="external.svg"/>
+        </filter>
+      </defs>
+    </svg>
+  )");
+
+  auto imageElement = document.querySelector("#img");
+  ASSERT_TRUE(imageElement.has_value());
+  imageElement->entityHandle().emplace<LoadedSVGImageComponent>(std::make_shared<Registry>());
+
+  StyleSystem().computeAllStyles(document.registry(), nullptr);
+  filterSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+
+  auto filterElement = document.querySelector("#f");
+  ASSERT_TRUE(filterElement.has_value());
+  auto* computed = filterElement->entityHandle().try_get<ComputedFilterComponent>();
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
+
+  auto* imageNode = std::get_if<filter_primitive::Image>(&computed->filterGraph.nodes[0].primitive);
+  ASSERT_THAT(imageNode, NotNull());
+  EXPECT_TRUE(imageNode->svgSubDocument);
+  EXPECT_THAT(imageNode->imageData, IsEmpty());
 }
 
 // --- feMorphology ---

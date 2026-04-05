@@ -571,7 +571,9 @@ INSTANTIATE_TEST_SUITE_P(
         "e-feImage",
         {
             {"e-feImage-001.svg", Params::Skip()},  // External file reference (no ResourceLoader)
-            {"e-feImage-002.svg", Params::Skip()},  // External SVG reference
+            {"e-feImage-002.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-feImage-002.png")},  // We render higher quality
             {"e-feImage-003.svg",
              Params::WithThreshold(0.05f, 100)},  // Bilinear interpolation + sRGB↔linear roundtrip
             {"e-feImage-004.svg",
@@ -601,7 +603,7 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feImage-024.svg",
              Params::WithThreshold(kDefaultThreshold, 22000)},  // Chained feImage fragment refs
         },
-        kFilterDefaultParams)),
+        Params::WithThreshold(0.05f))),  // Many tests have bilinear interpolation differences
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FeMerge, ImageComparisonTestFixture,

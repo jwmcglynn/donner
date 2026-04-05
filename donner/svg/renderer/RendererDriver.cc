@@ -292,6 +292,42 @@ double lengthToPixels(const Lengthd& length, const Boxd& viewBox, const FontMetr
   return length.toPixels(viewBox, fontMetrics);
 }
 
+std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
+                                                 const components::FilterNode& node) {
+  const Boxd defaultSubregion =
+      filterGraph.filterRegion.value_or(Boxd::FromXYWH(0.0, 0.0, 1.0, 1.0));
+  const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                     filterGraph.elementBoundingBox.has_value();
+  const Boxd referenceBox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
+
+  auto resolveSize = [&](const std::optional<Lengthd>& len, Lengthd::Extent extent) -> double {
+    if (!len.has_value()) {
+      return extent == Lengthd::Extent::X ? defaultSubregion.width() : defaultSubregion.height();
+    }
+
+    const double refSize =
+        extent == Lengthd::Extent::X ? referenceBox.width() : referenceBox.height();
+    if (isOBB && len->unit == Lengthd::Unit::None) {
+      return len->value * refSize;
+    }
+    if (len->unit == Lengthd::Unit::Percent) {
+      return refSize * len->value / 100.0;
+    }
+    return len->toPixels(referenceBox, FontMetrics(), extent);
+  };
+
+  const double widthUser = resolveSize(node.width, Lengthd::Extent::X);
+  const double heightUser = resolveSize(node.height, Lengthd::Extent::Y);
+  if (widthUser <= 0.0 || heightUser <= 0.0) {
+    return std::nullopt;
+  }
+
+  const double scaleX = filterGraph.userToPixelScale.x > 0.0 ? filterGraph.userToPixelScale.x : 1.0;
+  const double scaleY = filterGraph.userToPixelScale.y > 0.0 ? filterGraph.userToPixelScale.y : 1.0;
+  return Vector2i(std::max(1, static_cast<int>(std::ceil(widthUser * scaleX))),
+                  std::max(1, static_cast<int>(std::ceil(heightUser * scaleY))));
+}
+
 std::optional<components::FilterGraph> resolveFilterGraph(
     Registry& registry, const components::ResolvedFilterEffect& filter, css::RGBA currentColor,
     const Boxd& viewBox, const FontMetrics& fontMetrics) {
@@ -1832,11 +1868,9 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
       continue;
     }
 
-    // Cast the type-erased sub-document pointer.
-    auto* subDoc = std::any_cast<SVGDocument>(imageNode->svgSubDocument);
-    if (!subDoc) {
-      continue;
-    }
+    SVGDocument subDoc = SVGDocument::CreateFromHandle(imageNode->svgSubDocument);
+    const std::optional<Vector2i> renderSize = resolveFeImageRenderSize(filterGraph, node);
+    const Vector2i targetSize = renderSize.value_or(subDoc.canvasSize());
 
     // Create an independent offscreen renderer to render the sub-document.
     auto offscreen = renderer_.createOffscreenInstance();
@@ -1847,14 +1881,19 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
       continue;
     }
 
-    // Render the sub-document into the offscreen renderer.
-    // draw() handles prepareDocumentForRendering, beginFrame, traverse, and endFrame internally.
+    RenderViewport viewport;
+    viewport.size = Vector2d(targetSize.x, targetSize.y);
+    viewport.devicePixelRatio = 1.0;
+    offscreen->beginFrame(viewport);
+
     RendererDriver subDriver(*offscreen, verbose_);
-    subDriver.draw(*subDoc);
+    subDriver.renderingSize_ = targetSize;
+    subDriver.drawSubDocument(subDoc, Boxd::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
+                              imageNode->preserveAspectRatio, 1.0, Transformd());
+    offscreen->endFrame();
 
     // Determine the rendered size from the sub-document's canvas size.
-    const Vector2i subDocSize = subDoc->canvasSize();
-    if (subDocSize.x <= 0 || subDocSize.y <= 0) {
+    if (targetSize.x <= 0 || targetSize.y <= 0) {
       continue;
     }
 
@@ -1878,7 +1917,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
     }
 
     // Clear the sub-document pointer since we've now rendered to pixels.
-    imageNode->svgSubDocument = nullptr;
+    imageNode->svgSubDocument.reset();
   }
 }
 

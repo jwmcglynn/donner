@@ -185,6 +185,61 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
   return result;
 }
 
+std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
+    std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
+    const Transformd& deviceFromImage, const Boxd& userSubregion,
+    const Transformd& filterFromDevice, int outputWidth, int outputHeight) {
+  std::vector<std::uint8_t> output(static_cast<std::size_t>(outputWidth * outputHeight * 4), 0);
+  if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
+    return output;
+  }
+
+  if (NearZero(deviceFromImage.determinant(), 1e-12)) {
+    return output;
+  }
+
+  (void)userSubregion;
+  (void)filterFromDevice;
+
+  const Transformd imageFromDevice = deviceFromImage.inverse();
+  auto sampleSource = [&](int x, int y, int channel) -> float {
+    x = std::clamp(x, 0, sourceWidth - 1);
+    y = std::clamp(y, 0, sourceHeight - 1);
+    return premultipliedPixels[static_cast<std::size_t>((y * sourceWidth + x) * 4 + channel)] /
+           255.0f;
+  };
+
+  for (int y = 0; y < outputHeight; ++y) {
+    for (int x = 0; x < outputWidth; ++x) {
+      const Vector2d devicePoint(static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5);
+      const Vector2d imagePoint = imageFromDevice.transformPosition(devicePoint);
+      const double sourceX = imagePoint.x - 0.5;
+      const double sourceY = imagePoint.y - 0.5;
+      const int x0 = static_cast<int>(std::floor(sourceX));
+      const int y0 = static_cast<int>(std::floor(sourceY));
+      if (x0 + 1 < 0 || x0 >= sourceWidth || y0 + 1 < 0 || y0 >= sourceHeight) {
+        continue;
+      }
+
+      const float fx = static_cast<float>(sourceX - x0);
+      const float fy = static_cast<float>(sourceY - y0);
+      const std::size_t outIndex = static_cast<std::size_t>((y * outputWidth + x) * 4);
+      for (int channel = 0; channel < 4; ++channel) {
+        const float s00 = sampleSource(x0, y0, channel);
+        const float s10 = sampleSource(x0 + 1, y0, channel);
+        const float s01 = sampleSource(x0, y0 + 1, channel);
+        const float s11 = sampleSource(x0 + 1, y0 + 1, channel);
+        const float top = s00 + (s10 - s00) * fx;
+        const float bottom = s01 + (s11 - s01) * fx;
+        const float value = std::clamp(top + (bottom - top) * fy, 0.0f, 1.0f);
+        output[outIndex + channel] = static_cast<std::uint8_t>(std::round(value * 255.0f));
+      }
+    }
+  }
+
+  return output;
+}
+
 void applyClipToCanvas(SkCanvas* canvas, const ResolvedClip& clip) {
   if (clip.clipRect.has_value()) {
     canvas->clipRect(toSkia(*clip.clipRect));
@@ -1928,6 +1983,35 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               // Fragment references: place at (0,0) with 1:1 mapping.
               result = SkImageFilters::Image(
                   std::move(skImage),
+                  SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
+              return true;
+            }
+
+            const bool hasShear = !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                                  !NearZero(deviceFromFilter.data[2], 1e-6);
+            if (hasShear) {
+              const Boxd userSubregion = resolveNodeSubregion(node);
+              const Boxd imageBox =
+                  Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+              const Transformd filterFromImage =
+                  primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion,
+                                                                                   imageBox);
+              const Transformd deviceFromImage = filterFromImage * deviceFromFilter;
+              const std::vector<std::uint8_t> rasterized = RasterizeTransformedImagePremultiplied(
+                  premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
+                  userSubregion, deviceFromFilter.inverse(), sourceWidth, sourceHeight);
+              const SkImageInfo rasterizedInfo =
+                  SkImageInfo::Make(sourceWidth, sourceHeight, kRGBA_8888_SkColorType,
+                                    kPremul_SkAlphaType);
+              const SkPixmap rasterizedPixmap(
+                  rasterizedInfo, rasterized.data(), static_cast<size_t>(sourceWidth) * 4);
+              sk_sp<SkImage> rasterizedImage = SkImages::RasterFromPixmapCopy(rasterizedPixmap);
+              if (!rasterizedImage) {
+                return false;
+              }
+
+              result = SkImageFilters::Image(
+                  std::move(rasterizedImage),
                   SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
               return true;
             }

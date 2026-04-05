@@ -338,6 +338,14 @@ TEST_F(RendererTests, SVG2_e_use_005) {
                           "donner/svg/renderer/testdata/golden/svg2-e-use-005.png");
 }
 
+TEST_F(RendererTests, FeImageExternalSvg) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  this->compareWithGoldenAndResources(
+      "donner/svg/renderer/testdata/feimage-external-svg.svg",
+      "donner/svg/renderer/testdata/golden/feimage-external-svg.png", options);
+}
+
 TEST_F(RendererTests, Edzample) {
   this->compareWithGolden("donner/svg/renderer/testdata/Edzample_Anim3.svg",
                           "donner/svg/renderer/testdata/golden/Edzample_Anim3.png",
