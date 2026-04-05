@@ -36,10 +36,6 @@ TEST(SVGRadialGradientElementTests, Cast) {
 }
 
 TEST(SVGRadialGradientElementTests, RenderingDefaults) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <radialGradient id="a">
           <stop offset="0%" stop-color="white" />
@@ -49,30 +45,26 @@ TEST(SVGRadialGradientElementTests, RenderingDefaults) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ................
-        .....,,,,,,.....
-        ...,,::--::,,...
-        ..,::-====-::,..
-        ..,:-=++++=-:,..
-        .,:-=+****+=-:,.
-        .,:=+*#%%#*+=:,.
-        .,-=+*%@@%*+=-,.
-        .,-=+*%@@%*+=-,.
-        .,:=+*#%%#*+=:,.
-        .,:-=+****+=-:,.
-        ..,:-=++++=-:,..
-        ..,::-====-::,..
-        ...,,::--::,,...
-        .....,,,,,,.....
-        ................
+        @@@@@@@@@@@@@@@@
+        @@@@@%%%%%%@@@@@
+        @@@%%##**##%%@@@
+        @@%##*++++*##%@@
+        @@%#*+====+*#%@@
+        @%#*+=::::=+*#%@
+        @%#+=:-,,-:=+#%@
+        @%*+=:,..,:=+*%@
+        @%*+=:,..,:=+*%@
+        @%#+=:-,,-:=+#%@
+        @%#*+=::::=+*#%@
+        @@%#*+====+*#%@@
+        @@%##*++++*##%@@
+        @@@%%##**##%%@@@
+        @@@@@%%%%%%@@@@@
+        @@@@@@@@@@@@@@@@
         )"));
 }
 
 TEST(SVGRadialGradientElementTests, GradientCoordinates) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(
         <radialGradient id="a" cx="42.5%" cy="62.5%" r="87.5%" fx="62.5%" fy="42.5%" fr="12.5%">
@@ -93,22 +85,22 @@ TEST(SVGRadialGradientElementTests, GradientCoordinates) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ::--===+++==--:,
-        --==+++****++=-:
-        -==++**####**+=-
-        ==+**##%%%%%#*+=
-        =++*##%@@@@@%#*=
-        =+**#%%@@@@@@#*+
-        ++*##%@@@@@@@%#+
-        ++*##%@@@@@@@%#*
-        ++*##%@@@@@@@%#*
-        ++*##%%@@@@@%##*
-        ++**##%%%@@%%#*+
-        =++**##%%%%%#**+
-        =++***######**+=
-        ==++****##***++=
-        -==+++*****+++=-
-        --==++++++++==--
+        ##**+++===++**#%
+        **++===::::==+*#
+        *++==::----::=+*
+        ++=::--,,,,,-:=+
+        +==:--,.....,-:+
+        +=::-,,......-:=
+        ==:--,.......,-=
+        ==:--,.......,-:
+        ==:--,.......,-:
+        ==:--,,.....,--:
+        ==::--,,,..,,-:=
+        +==::--,,,,,-::=
+        +==:::------::=+
+        ++==::::--:::==+
+        *++===:::::===+*
+        **++========++**
         )"));
   }
 
@@ -122,22 +114,22 @@ TEST(SVGRadialGradientElementTests, GradientCoordinates) {
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ::--=======--:,,
-        --==++++++==--:,
-        -==++*****++==-:
-        =++**#####**+==-
-        =+**#%%%%%##*+=-
-        +**#%%@@@@%#**+=
-        +*##%@@@@@@%#*+=
-        +*#%%@@@@@@%#*+=
-        +*#%@@@@@@@%#*++
-        +*#%%@@@@@@%#*++
-        +*##%@@@@@%%#*+=
-        +**#%%%@@%%##*+=
-        ++*###%%%%##*++=
-        =+**#######**+==
-        =++*********+==-
-        ==++++***+++==--
+        ##**+++++++**#%%
+        **++======++**#%
+        *++==:::::==++*#
+        +==::-----::=++*
+        +=::-,,,,,--:=+*
+        =::-,,....,-::=+
+        =:--,......,-:=+
+        =:-,,......,-:=+
+        =:-,.......,-:==
+        =:-,,......,-:==
+        =:--,.....,,-:=+
+        =::-,,,..,,--:=+
+        ==:---,,,,--:==+
+        +=::-------::=++
+        +==:::::::::=++*
+        ++====:::===++**
         )"));
   }
 }
@@ -153,11 +145,8 @@ TEST(SVGRadialGradientElementTests, GradientUnitsObjectBoundingBox) {
       R"(<radialGradient gradientUnits="objectBoundingBox" />")");
   EXPECT_THAT(gradient->gradientUnits(), testing::Eq(GradientUnits::ObjectBoundingBox));
 }
-TEST(SVGRadialGradientElementTests, GradientUnitsRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
 
+TEST(SVGRadialGradientElementTests, GradientUnitsRendering) {
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(
         <radialGradient id="a" gradientUnits="userSpaceOnUse" cx="10" cy="10" r="8" fx="8" fx="8" fr="4">
@@ -172,22 +161,22 @@ TEST(SVGRadialGradientElementTests, GradientUnitsRendering) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ................
-        ................
-        ................
-        ......:-........
-        .....-=+........
-        ....-*#%........
-        ...:*@@@........
-        ...=%@@@........
-        ........@@@@%#+-
-        ........@@@@@#+=
-        ........@@@@@#+=
-        ........@@@@%#+-
-        ........@@@@%*+-
-        ........@@@%#+=:
-        ........%%#*+=-,
-        ........**++=:,.
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@#*........
+        @@@@@*+=........
+        @@@@*:-,........
+        @@@#:...........
+        @@@+,...........
+        ............,-=*
+        .............-=+
+        .............-=+
+        ............,-=*
+        ............,:=*
+        ...........,-=+#
+        ........,,-:=+*%
+        ........::==+#%@
         )"));
   }
 
@@ -199,31 +188,27 @@ TEST(SVGRadialGradientElementTests, GradientUnitsRendering) {
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
-        ................
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        @@@@@@@@........
+        ........@@@@@@@@
+        ........@@@@@@@@
+        ........@@@@@@@@
+        ........@@@@@@@@
+        ........@@@@@@@@
+        ........@@@@@@@@
+        ........@@@@@@@@
+        ........@@@@@@@@
         )"));
   }
 }
 
 TEST(SVGRadialGradientElementTests, RenderingTransform) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(
         <radialGradient id="a" gradientTransform="translate(0.5 0.5) rotate(45) scale(1 2) translate(-0.5 -0.5)">
@@ -237,22 +222,22 @@ TEST(SVGRadialGradientElementTests, RenderingTransform) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ......,::--===--
-        ....,,:--======-
-        ...,::-==+++++==
-        ..,::-=++****+==
-        .,::-=+**###*+==
-        .,:-=+*##%##*+=-
-        ,:-=+*#%%%%#*+=-
-        :-=+*#%@@%#*+=-:
-        :-=+*#%@@%#*+=-:
-        -=+*#%%%%#*+=-:,
-        -=+*##%##*+=-:,.
-        ==+*###**+=-::,.
-        ==+****++=-::,..
-        ==+++++==-::,...
-        -======--:,,....
-        --===--::,......
+        @@@@@@%##**+++**
+        @@@@%%#**++++++*
+        @@@%##*++=====++
+        @@%##*+==::::=++
+        @%##*+=::---:=++
+        @%#*+=:--,--:=+*
+        %#*+=:-,,,,-:=+*
+        #*+=:-,..,-:=+*#
+        #*+=:-,..,-:=+*#
+        *+=:-,,,,-:=+*#%
+        *+=:--,--:=+*#%@
+        ++=:---::=+*##%@
+        ++=::::==+*##%@@
+        ++=====++*##%@@@
+        *++++++**#%%@@@@
+        **+++**##%@@@@@@
         )"));
   }
 
@@ -262,22 +247,22 @@ TEST(SVGRadialGradientElementTests, RenderingTransform) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        ................
-        .....,,,,,,.....
-        ...,,::--::,,...
-        ..,::-====-::,..
-        ..,:-=++++=-:,..
-        .,:-=+****+=-:,.
-        .,:=+*#%%#*+=:,.
-        .,-=+*%@@%*+=-,.
-        .,-=+*%@@%*+=-,.
-        .,:=+*#%%#*+=:,.
-        .,:-=+****+=-:,.
-        ..,:-=++++=-:,..
-        ..,::-====-::,..
-        ...,,::--::,,...
-        .....,,,,,,.....
-        ................
+        @@@@@@@@@@@@@@@@
+        @@@@@%%%%%%@@@@@
+        @@@%%##**##%%@@@
+        @@%##*++++*##%@@
+        @@%#*+====+*#%@@
+        @%#*+=::::=+*#%@
+        @%#+=:-,,-:=+#%@
+        @%*+=:,..,:=+*%@
+        @%*+=:,..,:=+*%@
+        @%#+=:-,,-:=+#%@
+        @%#*+=::::=+*#%@
+        @@%#*+====+*#%@@
+        @@%##*++++*##%@@
+        @@@%%##**##%%@@@
+        @@@@@%%%%%%@@@@@
+        @@@@@@@@@@@@@@@@
         )"));
   }
 }
@@ -301,10 +286,6 @@ TEST(SVGRadialGradientElementTests, SpreadMethodRepeat) {
 }
 
 TEST(SVGRadialGradientElementTests, SpreadMethodRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(
         <radialGradient id="a" spreadMethod="pad" cx="42.5%" cy="62.5%" r="87.5%" fx="62.5%" fy="42.5%" fr="25%">
@@ -318,22 +299,22 @@ TEST(SVGRadialGradientElementTests, SpreadMethodRendering) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        :-==++******+=-:
-        -=++**##%%%#*+=-
-        =++*##%@@@@@%#*=
-        =+*##%@@@@@@@%#+
-        +**#%@@@@@@@@@%*
-        +*#%%@@@@@@@@@@#
-        +*#%@@@@@@@@@@@#
-        +*#%@@@@@@@@@@@#
-        +*#%%@@@@@@@@@@#
-        +*#%%@@@@@@@@@%#
-        +*##%%@@@@@@@@%#
-        +**##%%@@@@@@%#*
-        ++**##%%%%%%%#**
-        =++**###%%%##**+
-        ==++**######**+=
-        -==++*******++==
+        #*++==::::::=+*#
+        *+==::--,,,-:=+*
+        +==:--,.....,-:+
+        +=:--,.......,-=
+        =::-,.........,:
+        =:-,,..........-
+        =:-,...........-
+        =:-,...........-
+        =:-,,..........-
+        =:-,,.........,-
+        =:--,,........,-
+        =::--,,......,-:
+        ==::--,,,,,,,-::
+        +==::---,,,--::=
+        ++==::------::=+
+        *++==:::::::==++
         )"));
   }
 
@@ -345,22 +326,22 @@ TEST(SVGRadialGradientElementTests, SpreadMethodRendering) {
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
     EXPECT_TRUE(generatedAscii.matches(R"(
-        :-==++******+=-:
-        -=++**##%%%#*+=-
-        =++*##%@@@@@%#*=
-        =+*##%@@@@@@@%#+
-        +**#%@@@%%##@@%*
-        +*#%%@@@%#**%@@#
-        +*#%@@@@%###%@@#
-        +*#%@@@@%%##%@@#
-        +*#%%@@@@%%%@@@#
-        +*#%%@@@@@@@@@%#
-        +*##%%@@@@@@@@%#
-        +**##%%@@@@@@%#*
-        ++**##%%%%%%%#**
-        =++**###%%%##**+
-        ==++**######**+=
-        -==++*******++==
+        #*++==::::::=+*#
+        *+==::--,,,-:=+*
+        +==:--,.....,-:+
+        +=:--,.......,-=
+        =::-,...,,--..,:
+        =:-,,...,-::,..-
+        =:-,....,---,..-
+        =:-,....,,--,..-
+        =:-,,....,,,...-
+        =:-,,.........,-
+        =:--,,........,-
+        =::--,,......,-:
+        ==::--,,,,,,,-::
+        +==::---,,,--::=
+        ++==::------::=+
+        *++==:::::::==++
         )"));
   }
 
@@ -372,22 +353,22 @@ TEST(SVGRadialGradientElementTests, SpreadMethodRendering) {
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
     EXPECT_TRUE(generatedAscii.matches(R"(
-        :-==++******+=-:
-        -=++**##%%%#*+=-
-        =++*##%@@@@@%#*=
-        =+*##%@@..,.@%#+
-        +**#%@@.,:::,@%*
-        +*#%%@.,,:--:.@#
-        +*#%@@.,,:--:.@#
-        +*#%@@.,,:::,.@#
-        +*#%%@..,,,,,.@#
-        +*#%%@@...,..@%#
-        +*##%%@@....@@%#
-        +**##%%@@@@@@%#*
-        ++**##%%%%%%%#**
-        =++**###%%%##**+
-        ==++**######**+=
-        -==++*******++==
+        #*++==::::::=+*#
+        *+==::--,,,-:=+*
+        +==:--,.....,-:+
+        +=:--,..@@%@.,-=
+        =::-,..@%###%.,:
+        =:-,,.@%%#**#@.-
+        =:-,..@%%#**#@.-
+        =:-,..@%%###%@.-
+        =:-,,.@@%%%%%@.-
+        =:-,,..@@@%@@.,-
+        =:--,,..@@@@..,-
+        =::--,,......,-:
+        ==::--,,,,,,,-::
+        +==::---,,,--::=
+        ++==::------::=+
+        *++==:::::::==++
         )"));
   }
 }
@@ -399,10 +380,6 @@ TEST(SVGRadialGradientElementTests, HrefSimple) {
 }
 
 TEST(SVGRadialGradientElementTests, HrefInheritanceChildrenXYRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(
         <radialGradient id="gradient" href="#refGradient" />
@@ -422,31 +399,27 @@ TEST(SVGRadialGradientElementTests, HrefInheritanceChildrenXYRendering) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        #%###*++=-::,...
-        %%%%#**+=-::,...
-        @@@%##*+=--:,...
-        @@@%##*+=--:,...
-        %@%%#**+=--:,...
-        %%%##*++=-::,...
-        ####**+==-:,,...
-        *****++=--:,....
-        +++++==--:,,....
-        +++===--::,.....
-        ====---::,,.....
-        -----:::,,......
-        ::::::,,........
-        ,:,,,,,.........
-        ,,,,............
-        ................
+        -,---:==+*##%@@@
+        ,,,,-::=+*##%@@@
+        ...,--:=+**#%@@@
+        ...,--:=+**#%@@@
+        ,.,,-::=+**#%@@@
+        ,,,--:==+*##%@@@
+        ----::=++*#%%@@@
+        :::::==+**#%@@@@
+        =====++**#%%@@@@
+        ===+++**##%@@@@@
+        ++++***##%%@@@@@
+        *****###%%@@@@@@
+        ######%%@@@@@@@@
+        %#%%%%%@@@@@@@@@
+        %%%%@@@@@@@@@@@@
+        @@@@@@@@@@@@@@@@
         )"));
   }
 }
 
 TEST(SVGRadialGradientElementTests, HrefInheritanceSharedParamsRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   ParsedFragment<SVGRadialGradientElement> fragment =
       instantiateSubtreeElementAs<SVGRadialGradientElement>(R"-(
         <radialGradient id="gradient" href="#refGradient" gradientUnits="userSpaceOnUse"
@@ -471,22 +444,22 @@ TEST(SVGRadialGradientElementTests, HrefInheritanceSharedParamsRendering) {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
 
     EXPECT_TRUE(generatedAscii.matches(R"(
-        #*+==-:,..@%##*+
-        #*+==-:,..@%##*+
-        #*+==-:,..@%##*+
-        **+=--:,.@@%##*+
-        *++=-::,.@@%#**+
-        ++==-:,,.@@%#*++
-        +==-::,..@%%#*++
-        ==--:,,.@@%##*+=
-        ---:,,..@%%#**+=
-        -::,,..@@%##*+==
-        ::,,..@@%%#**+=-
-        ,,,..@@%%#**+==-
-        ,...@@%%##*++=--
-        ..@@@%%##*++==-:
-        @@@%%%##*++==-::
-        %%%%##**++==--:,
+        -:=++*#%@@.,--:=
+        -:=++*#%@@.,--:=
+        -:=++*#%@@.,--:=
+        ::=+**#%@..,--:=
+        :==+*##%@..,-::=
+        ==++*#%%@..,-:==
+        =++*##%@@.,,-:==
+        ++**#%%@..,--:=+
+        ***#%%@@.,,-::=+
+        *##%%@@..,--:=++
+        ##%%@@..,,-::=+*
+        %%%@@..,,-::=++*
+        %@@@..,,--:==+**
+        @@...,,--:==++*#
+        ...,,,--:==++*##
+        ,,,,--::==++**#%
         )"));
   }
 }

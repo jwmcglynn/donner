@@ -187,7 +187,7 @@ TEST(SVGEllipseElementTests, ComputedValuesOverrideAttributes) {
 /// Verify that an ellipse element is rendered as expected.
 TEST(SVGEllipseElementTests, Rendering) {
   ParsedFragment<SVGEllipseElement> fragment = instantiateSubtreeElementAs<SVGEllipseElement>(R"(
-    <ellipse id="e" cx="8" cy="8" rx="6" ry="4" fill="white" />
+    <ellipse id="e" cx="8" cy="8" rx="6" ry="4" fill="black" />
   )");
 
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
@@ -212,21 +212,17 @@ TEST(SVGEllipseElementTests, Rendering) {
 }
 
 /// Verify that an ellipse element with stroke only is rendered as expected.
-/// (This test uses an ellipse with no fill and a white stroke.)
+/// (This test uses an ellipse with no fill and a black stroke.)
 TEST(SVGEllipseElementTests, RenderingStroke) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   ParsedFragment<SVGEllipseElement> fragment = instantiateSubtreeElementAs<SVGEllipseElement>(R"(
-    <ellipse cx="8" cy="8" rx="4" ry="8" fill="none" stroke="white" stroke-width="1" />
+    <ellipse cx="8" cy="8" rx="4" ry="8" fill="none" stroke="black" stroke-width="1" />
   )");
 
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);
   EXPECT_TRUE(generatedAscii.matches(R"(
       ......@@@@......
       .....@....@.....
-      .....@....@.....
+      .....@.....@....
       ....@......@....
       ....@......@....
       ....@......@....
@@ -237,7 +233,7 @@ TEST(SVGEllipseElementTests, RenderingStroke) {
       ....@......@....
       ....@......@....
       ....@......@....
-      .....@....@.....
+      ....@......@....
       .....@....@.....
       ......@@@@......
   )"));
@@ -247,7 +243,7 @@ TEST(SVGEllipseElementTests, RenderingStroke) {
 /// (This test applies a translation and a rotation to the ellipse.)
 TEST(SVGEllipseElementTests, RenderingTransform) {
   ParsedFragment<SVGEllipseElement> fragment = instantiateSubtreeElementAs<SVGEllipseElement>(R"-(
-    <ellipse cx="8" cy="8" rx="2" ry="6" fill="white" transform="translate(8 8) rotate(45) translate(-8 -8)" />
+    <ellipse cx="8" cy="8" rx="2" ry="6" fill="black" transform="translate(8 8) rotate(45) translate(-8 -8)" />
     )-");
 
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);

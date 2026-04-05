@@ -129,7 +129,7 @@ public:
       return "";
     }
 
-    static constexpr std::string_view kGrayscaleTable = ".,:-=+*#%@";
+    static constexpr std::string_view kGrayscaleTable = "@%#*+=:-,.";  // Dense→sparse: black→white
     const std::size_t width = static_cast<std::size_t>(snapshot.dimensions.x);
     const std::size_t height = static_cast<std::size_t>(snapshot.dimensions.y);
     const std::size_t requiredRowBytes = width * 4u;
@@ -151,10 +151,12 @@ public:
         const uint32_t g = snapshot.pixels[pixelIndex + 1];
         const uint32_t b = snapshot.pixels[pixelIndex + 2];
         const uint32_t a = snapshot.pixels[pixelIndex + 3];
-        // Composite against black (premultiply by alpha) then convert to grayscale, matching the
-        // legacy Skia path which rendered into kGray_8/kOpaque.
-        const uint8_t intensity =
-            static_cast<uint8_t>(((r + g + b) * a / 255u) / 3u);
+        // Composite against white then convert to grayscale.  Transparent areas become white
+        // (intensity 255) so that the sparse '.' character represents the background.
+        const uint8_t intensity = static_cast<uint8_t>(
+            ((r * a + 255u * (255u - a)) / 255u + (g * a + 255u * (255u - a)) / 255u +
+             (b * a + 255u * (255u - a)) / 255u) /
+            3u);
         // Use the same bucketing as the old Skia drawIntoAscii: pixel / (256 / tableSize).
         std::size_t tableIndex = static_cast<std::size_t>(intensity) /
                                  (256u / kGrayscaleTable.size());

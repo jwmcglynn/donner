@@ -113,7 +113,7 @@ TEST(SVGSymbolElementViewportTests, Simple) {
     <svg viewBox="0 0 16 16">
       <defs>
         <symbol id="sq">
-          <rect width="4" height="4" fill="white"/>
+          <rect width="4" height="4" fill="black"/>
         </symbol>
       </defs>
       <use href="#sq"/>
@@ -152,7 +152,7 @@ TEST(SVGSymbolElementViewportTests, NoViewBox_UseExpandsViewport_NoScaling) {
     <svg viewBox="0 0 16 16">
       <defs>
         <symbol id="sq" width="4" height="4">
-          <rect width="4" height="4" fill="white"/>
+          <rect width="4" height="4" fill="black"/>
         </symbol>
       </defs>
       <use href="#sq" x="4" y="4" width="8" height="8"/>
@@ -189,7 +189,7 @@ TEST(SVGSymbolElementViewportTests, UseProvidesSize_AutoSymbolSize) {
       <defs>
         <!-- 4×4 viewBox, but no explicit width/height on the symbol -->
         <symbol id="sq" viewBox="0 0 4 4">
-          <rect width="4" height="4" fill="white"/>
+          <rect width="4" height="4" fill="black"/>
         </symbol>
       </defs>
       <!-- <use> dictates an 8×8 viewport -->
@@ -227,7 +227,7 @@ TEST(SVGSymbolElementViewportTests, SymbolSizeNoUseSize) {
       <defs>
         <symbol id="sq" viewBox="0 0 6 6"
                 width="6" height="6">
-          <rect width="6" height="6" fill="white"/>
+          <rect width="6" height="6" fill="black"/>
         </symbol>
       </defs>
       <!-- No width/height on <use>; the 6×6 viewport from
@@ -266,7 +266,7 @@ TEST(SVGSymbolElementViewportTests, UseOverridesSymbolSize) {
       <defs>
         <symbol id="sq" viewBox="0 0 4 4"
                 width="4" height="4">
-          <rect width="4" height="4" fill="white"/>
+          <rect width="4" height="4" fill="black"/>
         </symbol>
       </defs>
       <!-- Override to 8×8, placed at (2,2) -->
@@ -306,7 +306,7 @@ TEST(SVGSymbolElementViewportTests, AdditiveXY) {
         <!-- 4×4 square anchored at (1,1) in the symbol itself -->
         <symbol id="sq" viewBox="0 0 4 4" x="1" y="1"
                 width="4" height="4">
-          <rect width="4" height="4" fill="white"/>
+          <rect width="4" height="4" fill="black"/>
         </symbol>
       </defs>
       <!-- Additional offset (5,6) -->
@@ -346,7 +346,7 @@ TEST(SVGSymbolElementRenderingTests, DefaultReferencePoint) {
         <symbol id="square" viewBox="0 0 4 4"
                 width="4" height="4"
                 refX="0" refY="0">
-          <rect width="4" height="4" fill="white"/>
+          <rect width="4" height="4" fill="black"/>
         </symbol>
       </defs>
       <use href="#square" x="8" y="8" width="4" height="4"/>
@@ -386,7 +386,7 @@ TEST(SVGSymbolElementRenderingTests, CustomReferencePoint) {
         <symbol id="square" viewBox="0 0 6 6"
                 width="6" height="6"
                 refX="3" refY="3" style="overflow: visible">
-          <rect width="6" height="6" fill="white"/>
+          <rect width="6" height="6" fill="black"/>
         </symbol>
       </defs>
       <use href="#square" x="8" y="8" width="6" height="6"/>

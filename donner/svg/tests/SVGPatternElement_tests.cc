@@ -52,10 +52,6 @@ TEST(SVGPatternElementTests, PatternContentUnits) {
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" width="1" height="1">
           <circle r="4" cx="4" cy="4" fill="lime" />
@@ -64,14 +60,14 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ..####..........
-        .######.........
-        ########........
-        ########........
-        ########........
-        ########........
-        .######.........
-        ..####..........
+        ..:**:..........
+        .******.........
+        :******:........
+        ********........
+        ********........
+        =******:........
+        .******.........
+        ..:**:..........
         ................
         ................
         ................
@@ -84,10 +80,6 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" width="0.5" height="0.5">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -96,18 +88,18 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ####....####....
-        ####....####....
-        ####....####....
-        ####....####....
+        ****....****....
+        ****....****....
+        ****....****....
+        ****....****....
         ................
         ................
         ................
         ................
-        ####....####....
-        ####....####....
-        ####....####....
-        ####....####....
+        ****....****....
+        ****....****....
+        ****....****....
+        ****....****....
         ................
         ................
         ................
@@ -116,10 +108,6 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxTiledWithXYRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" x="0.125" y="0.25" width="0.5" height="0.5">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -132,26 +120,22 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxTiledWithXYRendering) {
         ................
         ................
         ................
-        ..####....####..
-        ..####....####..
-        ..####....####..
-        ..####....####..
+        ..****....****..
+        ..****....****..
+        ..****....****..
+        ..****....****..
         ................
         ................
         ................
         ................
-        ..####....####..
-        ..####....####..
-        ..####....####..
-        ..####....####..
+        ..****....****..
+        ..****....****..
+        ..****....****..
+        ..****....****..
         )"));
 }
 
 TEST(SVGPatternElementTests, UserSpaceOnUseRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -161,30 +145,26 @@ TEST(SVGPatternElementTests, UserSpaceOnUseRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ####....####....
-        ####....####....
-        ####....####....
-        ####....####....
-        ....++++....++++
-        ....++++....++++
-        ....++++....++++
-        ....++++....++++
-        ####....####....
-        ####....####....
-        ####....####....
-        ####....####....
-        ....++++....++++
-        ....++++....++++
-        ....++++....++++
-        ....++++....++++
+        ****....****....
+        ****....****....
+        ****....****....
+        ****....****....
+        ....====....====
+        ....====....====
+        ....====....====
+        ....====....====
+        ****....****....
+        ****....****....
+        ****....****....
+        ****....****....
+        ....====....====
+        ....====....====
+        ....====....====
+        ....====....====
         )"));
 }
 
 TEST(SVGPatternElementTests, UserSpaceOnUseWithXYRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" x="2" y="2" width="6" height="6">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -194,30 +174,26 @@ TEST(SVGPatternElementTests, UserSpaceOnUseWithXYRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ++....++....++..
-        ++....++....++..
-        ..####..####..##
-        ..####..####..##
-        ..####..####..##
-        ..####..####..##
-        ++....++....++..
-        ++....++....++..
-        ..####..####..##
-        ..####..####..##
-        ..####..####..##
-        ..####..####..##
-        ++....++....++..
-        ++....++....++..
-        ..####..####..##
-        ..####..####..##
+        ==....==....==..
+        ==....==....==..
+        ..****..****..**
+        ..****..****..**
+        ..****..****..**
+        ..****..****..**
+        ==....==....==..
+        ==....==....==..
+        ..****..****..**
+        ..****..****..**
+        ..****..****..**
+        ..****..****..**
+        ==....==....==..
+        ==....==....==..
+        ..****..****..**
+        ..****..****..**
         )"));
 }
 
 TEST(SVGPatternElementTests, PatternContentObjectBoundingBoxRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternContentUnits="objectBoundingBox" width="0.5" height="0.5">
           <rect x="0" y="0" width="0.25" height="0.25" fill="lime" />
@@ -227,20 +203,20 @@ TEST(SVGPatternElementTests, PatternContentObjectBoundingBoxRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ####....####....
-        ####....####....
-        ##++++..##++++..
-        ##++++..##++++..
-        ..++++....++++..
-        ..++++....++++..
+        ****....****....
+        ****....****....
+        **====..**====..
+        **====..**====..
+        ..====....====..
+        ..====....====..
         ................
         ................
-        ####....####....
-        ####....####....
-        ##++++..##++++..
-        ##++++..##++++..
-        ..++++....++++..
-        ..++++....++++..
+        ****....****....
+        ****....****....
+        **====..**====..
+        **====..**====..
+        ..====....====..
+        ..====....====..
         ................
         ................
         )"));
@@ -251,10 +227,6 @@ TEST(SVGPatternElementTests, PatternContentObjectBoundingBoxRendering) {
  * tile rect with x/y.
  */
 TEST(SVGPatternElementTests, UnitsNonDefaultWithXYRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" patternContentUnits="objectBoundingBox" x="4" y="4" width="4" height="4">
           <rect x="0" y="0" width="0.25" height="0.25" fill="lime" />
@@ -264,22 +236,22 @@ TEST(SVGPatternElementTests, UnitsNonDefaultWithXYRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ################
-        ################
-        ##++##++##++##++
-        ##++##++##++##++
-        ################
-        ################
-        ##++##++##++##++
-        ##++##++##++##++
-        ################
-        ################
-        ##++##++##++##++
-        ##++##++##++##++
-        ################
-        ################
-        ##++##++##++##++
-        ##++##++##++##++
+        ****************
+        ****************
+        **==**==**==**==
+        **==**==**==**==
+        ****************
+        ****************
+        **==**==**==**==
+        **==**==**==**==
+        ****************
+        ****************
+        **==**==**==**==
+        **==**==**==**==
+        ****************
+        ****************
+        **==**==**==**==
+        **==**==**==**==
         )"));
 }
 
@@ -295,10 +267,6 @@ TEST(SVGPatternElementTests, PatternTransform) {
 }
 
 TEST(SVGPatternElementTests, PatternTransformRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" width="0.5" height="0.5" patternTransform="skewX(45) scale(2)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -308,30 +276,26 @@ TEST(SVGPatternElementTests, PatternTransformRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        -#######-.......
-        .-#######-......
-        ..-#######-.....
-        ...-#######-....
-        ....-#######-...
-        .....-#######-..
-        ......-#######-.
-        .......-#######-
-        :-------::::::::
-        .:+++++++:......
-        ..:+++++++:.....
-        ...:+++++++:....
-        ....:+++++++:...
-        .....:+++++++:..
-        ......:+++++++:.
-        .......:+++++++:
+        .********.......
+        ..********......
+        ...,*******=....
+        .....********...
+        ......:*******-.
+        ........********
+        *,.......+******
+        ***........*****
+        ....========....
+        ......=======:..
+        .......========.
+        -.......-=======
+        ==........======
+        ===,.......:====
+        =====........===
+        ======........==
         )"));
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" x="0.125" y="0.25" width="0.5" height="0.5" patternTransform="rotate(45) scale(2 1)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -341,29 +305,25 @@ TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        :....+,....:####
-        +:..+##,....:##-
-        ++:+####,....:-.
-        +=,-#####,...:-.
-        =,..-#####,.:++-
-        ,....-#####:++++
-        +.....-###-.-+++
-        #+.....-#-...-++
-        ##+.....-.....-+
-        ###+...:+:.....-
-        ####+.:+++:.....
-        +####-=++++:....
-        .+##-.,=++++:..:
-        ..+-...,=++++::#
-        ..:,....,=+++--#
-        .:++,....,=+-..-
+        ..-...***..,**:=
+        =.*=..=**...*-.=
+        =-**...***..,..:
+        =.**=..=**..:...
+        -.***...***.=:..
+        ...**=..=**:==..
+        ,..***...**.==:.
+        *...**=..=-.===.
+        *,..***......==:
+        **...**=.:...===
+        **,..***.==...==
+        ***...**-==...==
+        ,**,..**.===...=
+        .***...-.,==...=
+        .,**,.....===...
+        ..***.:=..,==...
         )"));
 }
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="skewX(45) scale(2)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -373,30 +333,26 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        -#######-.......
-        .-#######-......
-        ..-#######-.....
-        ...-#######-....
-        ....-#######-...
-        .....-#######-..
-        ......-#######-.
-        .......-#######-
-        :-------::::::::
-        .:+++++++:......
-        ..:+++++++:.....
-        ...:+++++++:....
-        ....:+++++++:...
-        .....:+++++++:..
-        ......:+++++++:.
-        .......:+++++++:
+        .********.......
+        ..********......
+        ...,*******=....
+        .....********...
+        ......:*******-.
+        ........********
+        *,.......+******
+        ***........*****
+        ....========....
+        ......=======:..
+        .......========.
+        -.......-=======
+        ==........======
+        ===,.......:====
+        =====........===
+        ======........==
         )"));
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" patternUnits="userSpaceOnUse" x="2" y="2" width="8" height="8" patternTransform="skewX(45) scale(2)">
           <rect x="0" y="0" width="4" height="4" fill="lime" />
@@ -406,22 +362,22 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ++++:.......:+++
-        +++++:.......:++
-        ++++++:.......:+
-        +++++++:.......:
-        -.......-#######
-        #-.......-######
-        ##-.......-#####
-        ###-.......-####
-        ####-.......-###
-        #####-.......-##
-        ######-.......-#
-        #######-.......-
-        :::::::::-------
-        +:.......:++++++
-        ++:.......:+++++
-        +++:.......:++++
+        ===........=====
+        ====,.......:===
+        ======........==
+        =======........=
+        *........*******
+        **........******
+        ***=.......,****
+        *****........***
+        ******-.......:*
+        ********........
+        .+*******,......
+        ...********.....
+        ====........====
+        =====:........==
+        =======........=
+        -=======-.......
         )"));
 }
 
@@ -457,26 +413,22 @@ TEST(SVGPatternElementTests, PatternRecursionOnChild) {
  * Self-recursive still renders and should not crash.
  */
 TEST(SVGPatternElementTests, PatternRecursionHref) {
-  if (RendererTestUtils::IsTinySkiaBackend()) {
-    GTEST_SKIP() << "Tiny-Skia ASCII rendering differs from Skia golden snapshots";
-  }
-
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" width="1" height="1" xlink:href="#a">
-          <circle r="4" cx="4" cy="4" fill="white" />
+          <circle r="4" cx="4" cy="4" fill="black" />
         </pattern>
         <rect width="16" height="16" fill="url(#a)" />
         )-");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
-        ..@@@@..........
+        ..=@@=..........
         .@@@@@@.........
+        =@@@@@@=........
         @@@@@@@@........
         @@@@@@@@........
-        @@@@@@@@........
-        @@@@@@@@........
+        #@@@@@@=........
         .@@@@@@.........
-        ..@@@@..........
+        ..=@@=..........
         ................
         ................
         ................

@@ -7,7 +7,7 @@ namespace {
 
 TEST(RendererAsciiTests, RectAscii) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
-        <rect width="8" height="8" fill="white" />
+        <rect width="8" height="8" fill="black" />
         )");
 
   EXPECT_TRUE(generatedAscii.matches(R"(
