@@ -10,7 +10,7 @@
 
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/renderer/RendererSkia.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -22,40 +22,27 @@ struct AsciiImage {
   std::string generated;  //!< ASCII art of generated image, with lines separated by `\n`
 
   /**
-   * Compare the rendered ASCII image to a golden ASCII string, and output the image differences if
-   * any.
-   *
-   * Example:
-   * ```
-   * const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"(
-   *       <rect width="8" height="8" fill="white" />
-   *       )");
-   *
-   * EXPECT_TRUE(generatedAscii.matches(R"(
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       @@@@@@@@........
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       ................
-   *       )"));
-   * ```
-   *
-   * @param golden The golden ASCII image to compare the rendered output to, which should be a
-   * multiline string, whitespaces and the first newlines are removed.
-   * @return true if the image matches.
+   * Compare the rendered ASCII image to a golden ASCII string.
    */
-  bool matches(std::string_view golden) const {
+  bool matches(std::string_view golden) const { return matchesImpl(golden, true); }
+
+  /**
+   * Try matching against the primary golden, falling back to an alternate if the active backend
+   * differs.  Use this when Skia and tiny-skia produce structurally different output (e.g. pattern
+   * sampling or curve rasterization differences).
+   *
+   * @param golden Primary golden (typically tiny-skia output).
+   * @param alternateGolden Fallback golden (typically Skia output).
+   */
+  bool matchesOneOf(std::string_view golden, std::string_view alternateGolden) const {
+    if (matchesImpl(golden, false)) {
+      return true;
+    }
+    return matchesImpl(alternateGolden, true);
+  }
+
+private:
+  bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {
     // Remove spaces and newlines at the beginning of the golden image.
     while (!golden.empty() && (std::isspace(golden.front()) || golden.front() == '\n')) {
       golden.remove_prefix(1);
@@ -82,9 +69,11 @@ struct AsciiImage {
 
       if (genLine != goldLine) {
         hasDifferences = true;
-        diffStream << "Line " << lineNum << ":\n";
-        diffStream << "Generated: " << genLine << "\n";
-        diffStream << "Expected:  " << goldLine << "\n\n";
+        if (emitDiagnostics) {
+          diffStream << "Line " << lineNum << ":\n";
+          diffStream << "Generated: " << genLine << "\n";
+          diffStream << "Expected:  " << goldLine << "\n\n";
+        }
       }
 
       if (genEnd != generated.end()) {
@@ -99,7 +88,7 @@ struct AsciiImage {
       ++lineNum;
     }
 
-    if (hasDifferences) {
+    if (hasDifferences && emitDiagnostics) {
       std::cerr << "ASCII outputs differ:\n" << diffStream.str();
       std::cerr << "\nGenerated image:\n--------\n" << generated << "--------\n";
     }
@@ -113,6 +102,64 @@ struct AsciiImage {
  */
 class RendererTestUtils {
 public:
+  /**
+   * Returns true when the active test renderer backend is tiny-skia.
+   */
+  static bool IsTinySkiaBackend() { return ActiveRendererBackend() == RendererBackend::TinySkia; }
+
+  /**
+   * Convert a snapshot bitmap to ASCII art, mapping grayscale intensity to ten glyph levels.
+   *
+   * @param snapshot Renderer snapshot in RGBA format.
+   * @return ASCII art with one newline-terminated row per image row.
+   */
+  static std::string snapshotToAscii(const RendererBitmap& snapshot) {
+    if (snapshot.empty() || snapshot.rowBytes == 0) {
+      return "";
+    }
+
+    static constexpr std::string_view kGrayscaleTable = "@%#*+=:-,.";  // Dense→sparse: black→white
+    const std::size_t width = static_cast<std::size_t>(snapshot.dimensions.x);
+    const std::size_t height = static_cast<std::size_t>(snapshot.dimensions.y);
+    const std::size_t requiredRowBytes = width * 4u;
+    if (snapshot.rowBytes < requiredRowBytes) {
+      return "";
+    }
+    if (snapshot.pixels.size() < snapshot.rowBytes * height) {
+      return "";
+    }
+
+    std::string asciiArt;
+    asciiArt.reserve(width * height + height);
+
+    for (std::size_t y = 0; y < height; ++y) {
+      const std::size_t rowStart = y * snapshot.rowBytes;
+      for (std::size_t x = 0; x < width; ++x) {
+        const std::size_t pixelIndex = rowStart + x * 4u;
+        const uint32_t r = snapshot.pixels[pixelIndex];
+        const uint32_t g = snapshot.pixels[pixelIndex + 1];
+        const uint32_t b = snapshot.pixels[pixelIndex + 2];
+        const uint32_t a = snapshot.pixels[pixelIndex + 3];
+        // Composite against white then convert to grayscale.  Transparent areas become white
+        // (intensity 255) so that the sparse '.' character represents the background.
+        const uint8_t intensity = static_cast<uint8_t>(
+            ((r * a + 255u * (255u - a)) / 255u + (g * a + 255u * (255u - a)) / 255u +
+             (b * a + 255u * (255u - a)) / 255u) /
+            3u);
+        // Use the same bucketing as the old Skia drawIntoAscii: pixel / (256 / tableSize).
+        std::size_t tableIndex = static_cast<std::size_t>(intensity) /
+                                 (256u / kGrayscaleTable.size());
+        if (tableIndex >= kGrayscaleTable.size()) {
+          tableIndex = kGrayscaleTable.size() - 1u;
+        }
+        asciiArt.push_back(kGrayscaleTable[tableIndex]);
+      }
+      asciiArt.push_back('\n');
+    }
+
+    return asciiArt;
+  }
+
   /**
    * Render the given SVG fragment into ASCII art. The generated image is of the given size, and has
    * a black background.
@@ -153,11 +200,8 @@ public:
    * @param document SVG document to render, of max size 64x64.
    */
   static AsciiImage renderToAsciiImage(SVGDocument document) {
-    RendererSkia renderer;
-    renderer.setAntialias(false);
-
     AsciiImage result;
-    result.generated = renderer.drawIntoAscii(document);
+    result.generated = snapshotToAscii(RenderDocumentWithActiveBackendForAscii(document));
     return result;
   }
 };

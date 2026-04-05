@@ -1,41 +1,27 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "renderer_backend_compatible_with")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_test(
     name = "svg_tests",
     srcs = [
         "ElementStyle_tests.cc",
-        "SVGDocument_tests.cc",
-        "SVGElement_tests.cc",
-        "SVGFilterElement_tests.cc",
-        "SVGPathElement_tests.cc",
-        "SVGRectElement_tests.cc",
-        "SVGTSpanElement_tests.cc",
-    ],
-    deps = [
-        ":parser_test_utils",
-        "//donner/base:base_test_utils",
-        "//donner/svg",
-        "//donner/svg/core/tests:core_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "svg_renderer_ascii_tests",
-    srcs = [
         "SVGCircleElement_tests.cc",
         "SVGClipPathElement_tests.cc",
         "SVGDefsElement_tests.cc",
+        "SVGDocument_tests.cc",
+        "SVGElement_tests.cc",
         "SVGEllipseElement_tests.cc",
+        "SVGFilterElement_tests.cc",
         "SVGLinearGradientElement_tests.cc",
         "SVGMarkerElement_tests.cc",
         "SVGMaskElement_tests.cc",
+        "SVGPathElement_tests.cc",
         "SVGPatternElement_tests.cc",
         "SVGRadialGradientElement_tests.cc",
+        "SVGRectElement_tests.cc",
         "SVGSymbolElement_tests.cc",
+        "SVGTSpanElement_tests.cc",
         "SVGTextElement_tests.cc",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":parser_test_utils",
         "//donner/base:base_test_utils",

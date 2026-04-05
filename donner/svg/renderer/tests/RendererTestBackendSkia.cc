@@ -19,7 +19,6 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
     case RendererBackendFeature::Text:
     case RendererBackendFeature::FilterEffects:
-    case RendererBackendFeature::AsciiSnapshot:
     case RendererBackendFeature::SkpDebug: return true;
   }
 
@@ -28,6 +27,13 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
 
 RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
   RendererSkia renderer(verbose);
+  renderer.draw(document);
+  return renderer.takeSnapshot();
+}
+
+RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
+  RendererSkia renderer;
+  renderer.setAntialias(false);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }

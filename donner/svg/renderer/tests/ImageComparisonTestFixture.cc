@@ -278,7 +278,6 @@ std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFe
   constexpr RendererBackendFeature kFeatures[] = {
       RendererBackendFeature::Text,
       RendererBackendFeature::FilterEffects,
-      RendererBackendFeature::AsciiSnapshot,
       RendererBackendFeature::SkpDebug,
   };
 
