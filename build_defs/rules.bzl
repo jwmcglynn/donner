@@ -62,6 +62,70 @@ def renderer_backend_compatible_with(backends):
     conditions["//conditions:default"] = ["@platforms//:incompatible"]
     return select(conditions)
 
+def _renderer_backend_transition_impl(settings, attr):
+    if settings["//build_defs:disable_backend_test_transition"]:
+        return {
+            "//donner/svg/renderer:renderer_backend": settings[
+                "//donner/svg/renderer:renderer_backend"
+            ],
+        }
+
+    return {
+        "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
+    }
+
+_renderer_backend_transition = transition(
+    implementation = _renderer_backend_transition_impl,
+    inputs = [
+        "//build_defs:disable_backend_test_transition",
+        "//donner/svg/renderer:renderer_backend",
+    ],
+    outputs = ["//donner/svg/renderer:renderer_backend"],
+)
+
+def _donner_transitioned_executable_impl(ctx):
+    dep_target = ctx.attr.dep
+    if type(dep_target) == "list":
+        if len(dep_target) != 1:
+            fail("dep transition produced {} targets, expected 1".format(len(dep_target)))
+        dep_target = dep_target[0]
+
+    dep_default_info = dep_target[DefaultInfo]
+    files_to_run = dep_default_info.files_to_run
+    if files_to_run == None or files_to_run.executable == None:
+        fail("dep must be an executable target: {}".format(dep_target.label))
+
+    executable = ctx.actions.declare_file(ctx.label.name)
+    ctx.actions.symlink(
+        output = executable,
+        target_file = files_to_run.executable,
+        is_executable = True,
+    )
+
+    return [
+        DefaultInfo(
+            executable = executable,
+            files = depset([executable], transitive = [dep_default_info.files]),
+            runfiles = dep_default_info.default_runfiles,
+        ),
+    ]
+
+donner_transitioned_test = rule(
+    implementation = _donner_transitioned_executable_impl,
+    test = True,
+    attrs = {
+        "dep": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = _renderer_backend_transition,
+        ),
+        "renderer_backend": attr.string(
+            mandatory = True,
+            values = ["skia", "tiny_skia"],
+        ),
+    },
+)
+
 def donner_cc_binary(name, linkopts = [], **kwargs):
     """
     Create a cc_binary with donner-specific defaults including LLVM 21 workaround.

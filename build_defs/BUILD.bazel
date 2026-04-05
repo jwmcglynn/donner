@@ -1,8 +1,13 @@
-load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 
 string_flag(
     name = "llvm_latest",
     build_setting_default = "0",
+)
+
+bool_flag(
+    name = "disable_backend_test_transition",
+    build_setting_default = False,
 )
 
 config_setting(

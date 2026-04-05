@@ -11,6 +11,7 @@
 ##   --config=asan              - Build with address sanitizer.
 ##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
 ##   --config=clang-tidy        - Build with clang-tidy checks.
+##   --config=dev               - Disable renderer backend test transitions.
 ##
 
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
@@ -49,6 +50,7 @@ build:latest_llvm --copt=-Wno-nrvo
 # Renderer backend selection
 common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
+common:dev --//build_defs:disable_backend_test_transition=true
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
