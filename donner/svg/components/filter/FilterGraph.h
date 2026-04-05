@@ -270,6 +270,11 @@ struct Image {
   /// are rendered in the SVG's user-space coordinate system and should be placed at 1:1 in the
   /// filter pixmap without preserveAspectRatio scaling.
   bool isFragmentReference = false;
+
+  /// The filter region top-left in user-space coordinates, used by fragment references to apply
+  /// a device-space post-translation that positions the fragment content at the filter primitive
+  /// subregion origin. Set by the renderer driver during pre-rendering.
+  Vector2d fragmentRegionTopLeft;
 };
 
 /// Parameters for \c feDisplacementMap.

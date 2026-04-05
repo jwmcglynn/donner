@@ -66,7 +66,8 @@ Filters are a high-impact gap for v1.0. Most real-world SVG artwork uses at leas
 - Skia backend still routes most graphs through the shared CPU executor
 - Skia native `saveLayer` blur is currently restricted to no-crop cases; transformed blur chains use
   the shared local-raster executor instead
-- `feImage` fragment references (`href="#elementId"`) render through 8-bit intermediate buffer, causing edge-pixel differences (~9K px for simple rects, ~34K px for transforms/chaining) vs resvg's direct float rendering
+- `feImage` fragment references (`href="#elementId"`) render through 8-bit intermediate buffer, causing edge-pixel differences vs resvg's direct float rendering
+- `feImage` external image subregion placement under host rotation (`e-feImage-011`, 2548 px edge misalignment)
 - Light coordinate scaling: z and surfaceScale interaction at non-1:1 pixel density causes minor diffs for some spot light configurations (~3K pixels for cone-boundary cases)
 - Invalid named result fallback: resolved — now falls back to previous result per SVG spec
 - Filter + clip-path rendering order: resolved — clip-path now correctly clips the filter output,
@@ -885,6 +886,43 @@ supporting both `objectBoundingBox` and `userSpaceOnUse` `primitiveUnits` modes.
 This primitive is handled in the renderer layer (not the tiny-skia-cpp filter library) because it
 requires access to the SVG document and image loading infrastructure.
 
+###### Fragment reference coordinate system
+
+Per the SVG spec ([Filter Effects §15.4](https://drafts.fxtf.org/filter-effects/#feImageElement)),
+a same-document fragment reference is rendered with the filter primitive subregion as its viewport.
+The referenced element's coordinates are interpreted in the subregion's coordinate system, where
+`(0,0)` corresponds to the subregion's top-left corner.
+
+The correct transform chain for rendering a fragment element is:
+
+1. Apply the element's own `transform` attribute to its content (in element-local space)
+2. Translate by `subregion.topLeft` (positioning in user space, AFTER the element transform)
+3. Apply the viewBox scale to device pixels
+
+Mathematically: `devicePos = viewBoxScale(elementTransform(P) + subregion.topLeft)`
+= `entityFromWorldTransform(P) + viewBoxScale * subregion.topLeft`
+
+This is a device-space **post-translation** by `viewBoxScale * subregion.topLeft`.
+
+**Bug (fixed 2026-04-05):** The original implementation applied the subregion offset as a
+**pre-translation** in user space: `Translate(subregion.topLeft) * entityFromWorldTransform`.
+For pure scale transforms this is equivalent (translation commutes with scale), so axis-aligned
+tests passed. But for skew/rotation, pre-translation changes the element's shape:
+`skewX(θ)(P + offset) ≠ skewX(θ)(P) + offset` because skew adds `offset.y * tan(θ)` to the
+x-component. This caused 4 test failures:
+
+| Test | Description | Pixel diff | Issue |
+|------|-------------|-----------|-------|
+| `e-feImage-011` | Data URI on rotated host rect | 2,548 | Rotation on host affects subregion mapping |
+| `e-feImage-019` | Fragment with `skewX(50)` | 34,014 | Pre-translate corrupts parallelogram shape |
+| `e-feImage-021` | Host has `skewX(50) translate(-90)` | 26,021 | Host transform + pre-translate = wrong position |
+| `e-feImage-024` | Chained feImage filters | 21,696 | Nested filter region offsets compound errors |
+
+**Fix:** Render the fragment at its natural position (no `layerBaseTransform_` offset), then apply
+a device-space offset via `SkImageFilters::Offset` in `applyFilterPrimitive`. The offset is
+`userToPixelScale * filterRegion.topLeft`, computed from the `FilterGraph::userToPixelScale` and
+`FilterGraph::filterRegion` fields available during filter DAG construction.
+
 ##### feDisplacementMap
 
 **Algorithm:** Spatially displaces pixels from `in` using channel values from `in2` as a
@@ -1117,7 +1155,7 @@ CSS filter functions (`blur()`, `brightness()`, etc.) cover common use cases and
 
 ## Future Work
 
-- [ ] `feImage` rotated subregion sizing — `e-feImage-011.svg` has filter region mismatch with rotation transform
+- [x] `feImage` fragment reference coordinate system fix — pre-translate offset was incorrect for skew/rotation transforms on both the referenced element and host element (`e-feImage-019`, `e-feImage-021`, `e-feImage-024`); replaced with device-space post-translation (simple case) and `RasterizeTransformedImagePremultiplied` (host transform with shear)
 - [ ] `feImage` fragment precision: render directly into float filter buffer instead of 8-bit intermediate to eliminate edge-pixel differences
 - [ ] `BackgroundImage` / `BackgroundAlpha` standard inputs via CSS isolation groups
 - [ ] GPU-accelerated filter execution for large filter regions

@@ -38,10 +38,10 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
     return output;
   }
 
+  const Transformd imageFromDevice = deviceFromImage.inverse();
+
   (void)userSubregion;
   (void)filterFromDevice;
-
-  const Transformd imageFromDevice = deviceFromImage.inverse();
 
   auto sampleSource = [&](int x, int y, int channel) -> float {
     x = std::clamp(x, 0, sourceWidth - 1);
@@ -56,11 +56,16 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
       const Vector2d imagePoint = imageFromDevice.transformPosition(devicePoint);
       const double sourceX = imagePoint.x - 0.5;
       const double sourceY = imagePoint.y - 0.5;
-      const int x0 = static_cast<int>(std::floor(sourceX));
-      const int y0 = static_cast<int>(std::floor(sourceY));
-      if (x0 + 1 < 0 || x0 >= sourceWidth || y0 + 1 < 0 || y0 >= sourceHeight) {
+      // Skip pixels whose sample center falls outside the source image. This prevents
+      // edge-clamped bilinear sampling from extending the image beyond its placement
+      // rectangle (important for feImage with preserveAspectRatio where the image doesn't
+      // fill the full subregion).
+      if (sourceX < -0.5 || sourceX >= sourceWidth - 0.5 ||
+          sourceY < -0.5 || sourceY >= sourceHeight - 0.5) {
         continue;
       }
+      const int x0 = static_cast<int>(std::floor(sourceX));
+      const int y0 = static_cast<int>(std::floor(sourceY));
 
       const float fx = static_cast<float>(sourceX - x0);
       const float fy = static_cast<float>(sourceY - y0);
@@ -570,14 +575,44 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                 primitive.imageHeight > 0) {
               const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
 
-              if (primitive.isFragmentReference) {
+              if (primitive.isFragmentReference && graph.filterFromDevice.has_value()) {
+                // Fragment references with host transform (skew/rotation): rasterize the fragment
+                // image through the combined transform that maps from fragment pixel coordinates
+                // to device pixel coordinates, including the host's transform and filter region
+                // offset.
+                //
+                // The transform chain is:
+                //   fragment pixel → (÷ viewBoxScale) → document user space
+                //   → (+ filterRegion.topLeft) → host user space
+                //   → (× deviceFromFilter) → device pixels
+                const Transformd viewBoxScaleInv = Transformd::Scale(
+                    NearZero(filterGraph.userToPixelScale.x, 1e-12) ? 1.0
+                        : 1.0 / filterGraph.userToPixelScale.x,
+                    NearZero(filterGraph.userToPixelScale.y, 1e-12) ? 1.0
+                        : 1.0 / filterGraph.userToPixelScale.y);
+                const Transformd regionOffset = Transformd::Translate(
+                    primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
+                const Transformd deviceFromFragment =
+                    viewBoxScaleInv * regionOffset * deviceFromFilter;
+
+                image.pixels = RasterizeTransformedImagePremultiplied(
+                    premultiplied, primitive.imageWidth, primitive.imageHeight,
+                    deviceFromFragment, std::nullopt, std::nullopt, w, h);
+                image.width = w;
+                image.height = h;
+                image.targetRect = tiny_skia::filter::PixelRect{
+                    0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
+              } else if (primitive.isFragmentReference) {
                 image.pixels = premultiplied;
                 image.width = primitive.imageWidth;
                 image.height = primitive.imageHeight;
-                // Fragment references are rendered in the same coordinate space as the filter
-                // pixmap. Place the image at (0,0) with 1:1 pixel mapping — no
-                // preserveAspectRatio scaling needed.
-                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0,
+                // Fragment references without host transform: apply a simple device-space
+                // post-translation to position content at the filter region origin.
+                const double deviceOffsetX =
+                    primitive.fragmentRegionTopLeft.x * filterGraph.userToPixelScale.x;
+                const double deviceOffsetY =
+                    primitive.fragmentRegionTopLeft.y * filterGraph.userToPixelScale.y;
+                image.targetRect = tiny_skia::filter::PixelRect{deviceOffsetX, deviceOffsetY,
                     static_cast<double>(primitive.imageWidth),
                     static_cast<double>(primitive.imageHeight)};
               } else if (graph.filterFromDevice.has_value()) {

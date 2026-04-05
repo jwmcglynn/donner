@@ -1980,10 +1980,22 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
                                                   static_cast<SkScalar>(primitive.imageHeight));
 
             if (primitive.isFragmentReference) {
-              // Fragment references: place at (0,0) with 1:1 mapping.
-              result = SkImageFilters::Image(
+              // Fragment references: rendered at natural document positions, then offset by the
+              // filter region origin in device pixels. The offset is a post-translation (applied
+              // after the element's transform) so it doesn't interact with skew/rotation.
+              const double deviceOffsetX =
+                  primitive.fragmentRegionTopLeft.x * filterGraph.userToPixelScale.x;
+              const double deviceOffsetY =
+                  primitive.fragmentRegionTopLeft.y * filterGraph.userToPixelScale.y;
+              sk_sp<SkImageFilter> imageFilter = SkImageFilters::Image(
                   std::move(skImage),
                   SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNearest));
+              if (!NearZero(deviceOffsetX, 0.5) || !NearZero(deviceOffsetY, 0.5)) {
+                imageFilter = SkImageFilters::Offset(
+                    static_cast<SkScalar>(deviceOffsetX), static_cast<SkScalar>(deviceOffsetY),
+                    std::move(imageFilter));
+              }
+              result = std::move(imageFilter);
               return true;
             }
 

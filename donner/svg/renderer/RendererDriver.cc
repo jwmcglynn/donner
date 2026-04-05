@@ -2001,13 +2001,14 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
 
-    // Offset the fragment rendering so its coordinates align with the filter pixel space.
-    // The filter graph executor places the fragment image at (0,0). Without offset, the
-    // fragment renders at absolute canvas coordinates, but the filter expects coordinates
-    // relative to the filter region's origin.
+    // The fragment is rendered at its natural position in the document coordinate system
+    // (no layerBaseTransform_ offset). The filter pipeline applies a device-space post-translation
+    // via SkImageFilters::Offset to position the content at the filter region origin. This is
+    // correct for all transforms (skew, rotation, etc.) because the offset doesn't interact with
+    // the element's transform — it's applied after the element is fully rendered.
     if (filterRegion.has_value()) {
-      subDriver.layerBaseTransform_ =
-          Transformd::Translate(filterRegion->topLeft.x, filterRegion->topLeft.y);
+      imageNode->fragmentRegionTopLeft =
+          Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
     }
 
     {
