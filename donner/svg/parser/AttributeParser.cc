@@ -1375,6 +1375,70 @@ std::optional<ParseError> ParseAttribute<SVGFEMergeNodeElement>(SVGParserContext
 #endif
 
 template <>
+std::optional<ParseError> ParseAttribute<SVGFilterElement>(SVGParserContext& context,
+                                                           SVGFilterElement element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("filterUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setFilterUnits(FilterUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setFilterUnits(FilterUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid filterUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else if (name == XMLQualifiedNameRef("primitiveUnits")) {
+    if (value == "userSpaceOnUse") {
+      element.setPrimitiveUnits(PrimitiveUnits::UserSpaceOnUse);
+    } else if (value == "objectBoundingBox") {
+      element.setPrimitiveUnits(PrimitiveUnits::ObjectBoundingBox);
+    } else {
+      ParseError err;
+      err.reason = "Invalid primitiveUnits value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
+std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserContext& context,
+                                                                   SVGFEGaussianBlurElement element,
+                                                                   const XMLQualifiedNameRef& name,
+                                                                   std::string_view value) {
+  if (ParseXYWidthHeight(context, element, name, value)) {
+    return std::nullopt;
+  } else if (name == XMLQualifiedNameRef("stdDeviation")) {
+    const auto maybeNumber2d = Number2dParser::Parse(value);
+    if (maybeNumber2d.hasResult()) {
+      const Number2dParser::Result number2d = maybeNumber2d.result();
+      if (number2d.consumedChars == value.size()) {
+        element.setStdDeviation(number2d.numberX, number2d.numberY);
+      } else {
+        ParseError err;
+        err.reason = "Unexpected additional data in stdDeviation, '" + std::string(value) + "'";
+        context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+      }
+    } else {
+      ParseError err;
+      err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
+      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+template <>
 std::optional<ParseError> ParseAttribute<SVGImageElement>(SVGParserContext& context,
                                                           SVGImageElement element,
                                                           const XMLQualifiedNameRef& name,

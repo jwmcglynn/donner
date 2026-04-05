@@ -58,8 +58,8 @@ TEST_F(FilterSystemTest, GaussianBlur) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_FALSE(computed->filterGraph.empty());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_FALSE(computed->effectChain.empty());
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feFlood ---
@@ -79,7 +79,7 @@ TEST_F(FilterSystemTest, FeFlood) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feOffset ---
@@ -99,7 +99,7 @@ TEST_F(FilterSystemTest, FeOffset) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feComposite ---
@@ -120,7 +120,7 @@ TEST_F(FilterSystemTest, FeComposite) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
+  EXPECT_THAT(computed->effectChain, SizeIs(2));
 }
 
 // --- feColorMatrix ---
@@ -140,7 +140,7 @@ TEST_F(FilterSystemTest, FeColorMatrix) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feBlend ---
@@ -161,7 +161,7 @@ TEST_F(FilterSystemTest, FeBlend) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
+  EXPECT_THAT(computed->effectChain, SizeIs(2));
 }
 
 // --- feComponentTransfer ---
@@ -184,7 +184,7 @@ TEST_F(FilterSystemTest, FeComponentTransfer) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feMerge ---
@@ -208,7 +208,7 @@ TEST_F(FilterSystemTest, FeMerge) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
+  EXPECT_THAT(computed->effectChain, SizeIs(2));
 }
 
 // --- feDropShadow ---
@@ -228,7 +228,7 @@ TEST_F(FilterSystemTest, FeDropShadow) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feMorphology ---
@@ -248,7 +248,7 @@ TEST_F(FilterSystemTest, FeMorphology) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feTurbulence ---
@@ -268,7 +268,7 @@ TEST_F(FilterSystemTest, FeTurbulence) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feTile ---
@@ -288,7 +288,7 @@ TEST_F(FilterSystemTest, FeTile) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feConvolveMatrix ---
@@ -308,7 +308,7 @@ TEST_F(FilterSystemTest, FeConvolveMatrix) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feDisplacementMap ---
@@ -329,7 +329,7 @@ TEST_F(FilterSystemTest, FeDisplacementMap) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
+  EXPECT_THAT(computed->effectChain, SizeIs(2));
 }
 
 // --- feDiffuseLighting ---
@@ -351,7 +351,7 @@ TEST_F(FilterSystemTest, FeDiffuseLighting) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- feSpecularLighting ---
@@ -373,7 +373,7 @@ TEST_F(FilterSystemTest, FeSpecularLighting) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+  EXPECT_THAT(computed->effectChain, SizeIs(1));
 }
 
 // --- Empty filter ---
@@ -415,7 +415,7 @@ TEST_F(FilterSystemTest, FilterChainMultiplePrimitives) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(3));
+  EXPECT_THAT(computed->effectChain, SizeIs(3));
 }
 
 // --- Filter attributes ---

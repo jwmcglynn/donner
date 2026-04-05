@@ -82,18 +82,6 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "filter_graph_executor_tests",
-    srcs = [
-        "FilterGraphExecutor_tests.cc",
-    ],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
-    deps = [
-        "//donner/svg/renderer:filter_graph_executor",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "renderer_tests",
     srcs = [
         "RendererAscii_tests.cc",

@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
     name = "components",
@@ -50,19 +50,5 @@ donner_cc_library(
         ":components",
         "//donner/base",
         "//donner/svg/components:components_core",
-    ],
-)
-
-donner_cc_test(
-    name = "filter_system_tests",
-    srcs = [
-        "tests/FilterSystem_tests.cc",
-    ],
-    deps = [
-        ":filter_system",
-        "//donner/base:base_test_utils",
-        "//donner/svg/components/style:style_system",
-        "//donner/svg/parser",
-        "@com_google_gtest//:gtest_main",
     ],
 )

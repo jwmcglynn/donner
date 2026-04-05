@@ -9,6 +9,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::Eq;
@@ -57,7 +58,7 @@ TEST_F(ShadowTreeSystemTest, UseElementReferencesRect) {
 
   // Verify the use element has a ShadowTreeComponent
   auto& registry = document.registry();
-  auto entity = useElement->entity();
+  auto entity = useElement->entityHandle().entity();
   EXPECT_TRUE(registry.all_of<ShadowTreeComponent>(entity));
 
   auto& shadowTree = registry.get<ShadowTreeComponent>(entity);
@@ -124,8 +125,12 @@ TEST_F(ShadowTreeSystemTest, MultipleUsesOfSameTarget) {
     </svg>
   )");
 
-  auto uses = document.querySelectorAll("use");
-  EXPECT_EQ(uses.size(), 3u);
+  size_t useCount = 0;
+  for (auto view = document.registry().view<ShadowTreeComponent>(); auto entity : view) {
+    (void)entity;
+    ++useCount;
+  }
+  EXPECT_EQ(useCount, 3u);
 }
 
 // --- <use> with nonexistent href ---
@@ -154,7 +159,7 @@ TEST_F(ShadowTreeSystemTest, TeardownCleansShadowEntities) {
   )");
 
   auto& registry = document.registry();
-  auto useEntity = document.querySelector("#u")->entity();
+  auto useEntity = document.querySelector("#u")->entityHandle().entity();
 
   // If a ComputedShadowTreeComponent exists, tear it down.
   auto* computed = registry.try_get<ComputedShadowTreeComponent>(useEntity);
@@ -178,9 +183,8 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMainBranch) {
     </svg>
   )");
 
-  auto& registry = document.registry();
   auto hostEntity = document.querySelector("#host")->entityHandle();
-  auto targetEntity = document.querySelector("#target")->entity();
+  auto targetEntity = document.querySelector("#target")->entityHandle().entity();
 
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
@@ -204,7 +208,6 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceSelfRecursionWarns) {
     </svg>
   )");
 
-  auto& registry = document.registry();
   auto hostEntity = document.querySelector("#host")->entityHandle();
 
   ComputedShadowTreeComponent shadow;
@@ -251,9 +254,8 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceParentRecursionWarns) {
     </svg>
   )");
 
-  auto& registry = document.registry();
   auto childEntity = document.querySelector("#child")->entityHandle();
-  auto parentEntity = document.querySelector("#parent")->entity();
+  auto parentEntity = document.querySelector("#parent")->entityHandle().entity();
 
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
@@ -278,9 +280,8 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenBranchReturnsIndex) {
     </svg>
   )");
 
-  auto& registry = document.registry();
   auto hostEntity = document.querySelector("#host")->entityHandle();
-  auto targetEntity = document.querySelector("#target")->entity();
+  auto targetEntity = document.querySelector("#target")->entityHandle().entity();
 
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
@@ -301,7 +302,7 @@ TEST_F(ShadowTreeSystemTest, ComputedShadowTreeComponentAccessors) {
   ComputedShadowTreeComponent shadow;
 
   // Default state: no branches.
-  EXPECT_EQ(shadow.mainLightRoot(), entt::null);
+  EXPECT_EQ(shadow.mainLightRoot(), donner::Entity(entt::null));
   EXPECT_EQ(shadow.offscreenShadowCount(), 0u);
   EXPECT_FALSE(shadow.findOffscreenShadow(ShadowBranchType::OffscreenFill).has_value());
 }

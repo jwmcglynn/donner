@@ -181,7 +181,7 @@ TEST(SVGStopElementTest, SetStopColor) {
   auto frag = instantiateSubtreeElementAs<SVGStopElement>(R"(<stop />)");
   frag->setStopColor(css::Color(css::RGBA(255, 0, 0, 255)));
   auto color = frag->stopColor();
-  EXPECT_TRUE(color.hasValue());
+  EXPECT_EQ(color, css::Color(css::RGBA(255, 0, 0, 255)));
 }
 
 TEST(SVGStopElementTest, SetStopOpacity) {
