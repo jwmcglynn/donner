@@ -314,4 +314,5 @@ TEST(PropertyRegistry, Stroke) {
   }
 }
 
+
 }  // namespace donner::svg

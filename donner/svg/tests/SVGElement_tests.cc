@@ -12,10 +12,11 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
-#include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 using testing::ElementsAre;
 using testing::ElementsAreArray;
@@ -926,8 +927,6 @@ TEST_F(SVGElementTests, EntityHandle) {
   EXPECT_EQ(handle, handle2);
 }
 
-#if 0
-// TODO: This needs support for updating the style attribute
 TEST_F(SVGElementTests, UpdateStyle) {
   // This tests setting an initial style, then updating only part of it.
   auto element = create();
@@ -947,10 +946,137 @@ TEST_F(SVGElementTests, UpdateStyle) {
   RcString styleString = maybeStyle.value();
   EXPECT_THAT(styleString, testing::HasSubstr("fill: red"));
   EXPECT_THAT(styleString, testing::HasSubstr("stroke: green"));
+  EXPECT_THAT(styleString, testing::Not(testing::HasSubstr("stroke: blue")));
   EXPECT_THAT(styleString, testing::HasSubstr("opacity: 0.8"));
   EXPECT_THAT(styleString, testing::HasSubstr("visibility: hidden"));
 }
-#endif
+
+// Verify that the merged style attribute string, when reparsed into a fresh PropertyRegistry,
+// produces property values that match what you'd get from applying both existing + update to
+// a PropertyRegistry via parseStyle (the additive path).
+TEST_F(SVGElementTests, UpdateStyleMergedStringMatchesPropertyRegistry) {
+  auto element = create();
+  element.setStyle("fill: red; stroke: blue; opacity: 0.8");
+  element.updateStyle("stroke: green; visibility: hidden");
+
+  // Get the merged style string from the attribute.
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  // Parse the merged style string into a fresh PropertyRegistry.
+  PropertyRegistry fromMergedString;
+  fromMergedString.parseStyle(maybeStyle.value());
+
+  // Build the expected registry by applying existing then update (additive).
+  PropertyRegistry expected;
+  expected.parseStyle("fill: red; stroke: blue; opacity: 0.8");
+  expected.parseStyle("stroke: green; visibility: hidden");
+
+  // Compare individual properties.
+  EXPECT_EQ(fromMergedString.fill.get(), expected.fill.get());
+  EXPECT_EQ(fromMergedString.stroke.get(), expected.stroke.get());
+  EXPECT_EQ(fromMergedString.opacity.get(), expected.opacity.get());
+  EXPECT_EQ(fromMergedString.visibility.get(), expected.visibility.get());
+}
+
+TEST_F(SVGElementTests, UpdateStyleMergedStringMatchesRegistryColorOverride) {
+  auto element = create();
+  element.setStyle("fill: #ff0000; stroke-width: 2px");
+  element.updateStyle("fill: rgb(0, 128, 0); stroke-opacity: 0.5");
+
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  PropertyRegistry fromMergedString;
+  fromMergedString.parseStyle(maybeStyle.value());
+
+  PropertyRegistry expected;
+  expected.parseStyle("fill: #ff0000; stroke-width: 2px");
+  expected.parseStyle("fill: rgb(0, 128, 0); stroke-opacity: 0.5");
+
+  EXPECT_EQ(fromMergedString.fill.get(), expected.fill.get());
+  EXPECT_EQ(fromMergedString.strokeWidth.get(), expected.strokeWidth.get());
+  EXPECT_EQ(fromMergedString.strokeOpacity.get(), expected.strokeOpacity.get());
+}
+
+TEST_F(SVGElementTests, UpdateStyleMergedStringMatchesRegistryAllOverridden) {
+  auto element = create();
+  element.setStyle("fill: red; stroke: blue");
+  element.updateStyle("fill: green; stroke: orange");
+
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  PropertyRegistry fromMergedString;
+  fromMergedString.parseStyle(maybeStyle.value());
+
+  PropertyRegistry expected;
+  expected.parseStyle("fill: red; stroke: blue");
+  expected.parseStyle("fill: green; stroke: orange");
+
+  EXPECT_EQ(fromMergedString.fill.get(), expected.fill.get());
+  EXPECT_EQ(fromMergedString.stroke.get(), expected.stroke.get());
+}
+
+TEST_F(SVGElementTests, UpdateStyleMergedStringMatchesRegistryNoOverlap) {
+  auto element = create();
+  element.setStyle("fill: red");
+  element.updateStyle("stroke: blue");
+
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  PropertyRegistry fromMergedString;
+  fromMergedString.parseStyle(maybeStyle.value());
+
+  PropertyRegistry expected;
+  expected.parseStyle("fill: red");
+  expected.parseStyle("stroke: blue");
+
+  EXPECT_EQ(fromMergedString.fill.get(), expected.fill.get());
+  EXPECT_EQ(fromMergedString.stroke.get(), expected.stroke.get());
+}
+
+TEST_F(SVGElementTests, UpdateStyleMultipleSequentialUpdates) {
+  auto element = create();
+  element.setStyle("fill: red; stroke: blue; opacity: 0.5");
+  element.updateStyle("stroke: green");
+  element.updateStyle("opacity: 1.0; visibility: hidden");
+
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  PropertyRegistry fromMergedString;
+  fromMergedString.parseStyle(maybeStyle.value());
+
+  PropertyRegistry expected;
+  expected.parseStyle("fill: red; stroke: blue; opacity: 0.5");
+  expected.parseStyle("stroke: green");
+  expected.parseStyle("opacity: 1.0; visibility: hidden");
+
+  EXPECT_EQ(fromMergedString.fill.get(), expected.fill.get());
+  EXPECT_EQ(fromMergedString.stroke.get(), expected.stroke.get());
+  EXPECT_EQ(fromMergedString.opacity.get(), expected.opacity.get());
+  EXPECT_EQ(fromMergedString.visibility.get(), expected.visibility.get());
+}
+
+TEST_F(SVGElementTests, UpdateStyleFromEmptyBase) {
+  auto element = create();
+  // No setStyle — start with nothing.
+  element.updateStyle("fill: red; stroke: blue");
+
+  auto maybeStyle = element.getAttribute("style");
+  ASSERT_TRUE(maybeStyle.has_value());
+
+  PropertyRegistry fromMergedString;
+  fromMergedString.parseStyle(maybeStyle.value());
+
+  PropertyRegistry expected;
+  expected.parseStyle("fill: red; stroke: blue");
+
+  EXPECT_EQ(fromMergedString.fill.get(), expected.fill.get());
+  EXPECT_EQ(fromMergedString.stroke.get(), expected.stroke.get());
+}
 
 TEST_F(SVGElementTests, FindMatchingAttributes) {
   // create() is an Unknown element, but that’s fine for testing generic XML attributes

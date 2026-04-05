@@ -4,6 +4,8 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/css/CSS.h"
+#include "donner/css/Declaration.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -134,6 +136,30 @@ const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
   computePropertiesInto(handle, computedStyle, outWarnings);
   return computedStyle;
+}
+
+void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
+  // Update the PropertyRegistry with the new declarations.
+  auto& styleComponent = handle.get_or_emplace<StyleComponent>();
+  styleComponent.updateStyle(style);
+
+  // Merge the new style string with the existing style attribute.
+  auto& attributes =
+      handle.get_or_emplace<donner::components::AttributesComponent>();
+  const std::string_view existingStyle =
+      attributes.getAttribute(xml::XMLQualifiedNameRef("style")).value_or("");
+
+  const std::vector<css::Declaration> existingDeclarations =
+      css::CSS::ParseStyleAttribute(existingStyle);
+  const std::vector<css::Declaration> updateDeclarations =
+      css::CSS::ParseStyleAttribute(style);
+  const std::string mergedStyle =
+      css::mergeStyleDeclarations(existingDeclarations, updateDeclarations);
+
+  attributes.setAttribute(*handle.registry(), xml::XMLQualifiedName("style"),
+                          RcString(mergedStyle));
+
+  invalidateComputed(handle);
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,

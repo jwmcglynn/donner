@@ -2,6 +2,7 @@
 /// @file
 
 #include <iostream>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -44,6 +45,11 @@ struct Function {
   bool operator==(const Function& other) const;
 
   /**
+   * Serialize this function back to its CSS text representation, e.g. `rgb(255, 0, 0)`.
+   */
+  std::string toCssText() const;
+
+  /**
    * Output a human-readable representation of the function to a stream.
    *
    * @param os Output stream.
@@ -83,6 +89,11 @@ struct SimpleBlock {
 
   /// Equality operator.
   bool operator==(const SimpleBlock& other) const;
+
+  /**
+   * Serialize this simple block back to its CSS text representation, e.g. `[href]`.
+   */
+  std::string toCssText() const;
 
   /**
    * Output a human-readable representation of the simple block to a stream.
@@ -242,6 +253,14 @@ struct ComponentValue {
   T&& get() && {
     return std::move(std::get<T>(value));
   }
+
+  /**
+   * Serialize this component value back to its CSS text representation.
+   *
+   * Unlike \ref operator<< which outputs a debug representation, this produces valid CSS text
+   * that can be parsed back.
+   */
+  std::string toCssText() const;
 
   /**
    * Get the offset of this component value in the original source. For \ref Function and \ref

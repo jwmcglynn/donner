@@ -3,6 +3,7 @@
 
 #include <optional>
 #include <ostream>
+#include <string>
 #include <variant>
 
 #include "donner/base/FileOffset.h"
@@ -951,6 +952,68 @@ struct Token {
       case indexOf<CloseCurlyBracket>(): return true;
       default: return false;
     }
+  }
+
+  /**
+   * Serialize this token back to its CSS text representation.
+   *
+   * Unlike \ref operator<< which outputs a debug representation, this produces valid CSS text
+   * that can be parsed back. For example, an `Ident("red")` token produces `"red"`, a
+   * `Number(0.8)` produces `"0.8"`, etc.
+   */
+  std::string toCssText() const {
+    return visit([](auto&& t) -> std::string {
+      using T = std::remove_cvref_t<decltype(t)>;
+
+      if constexpr (std::is_same_v<T, Ident>) {
+        return std::string(t.value);
+      } else if constexpr (std::is_same_v<T, Function>) {
+        return std::string(t.name) + "(";
+      } else if constexpr (std::is_same_v<T, AtKeyword>) {
+        return "@" + std::string(t.value);
+      } else if constexpr (std::is_same_v<T, Hash>) {
+        return "#" + std::string(t.name);
+      } else if constexpr (std::is_same_v<T, String>) {
+        return "\"" + std::string(t.value) + "\"";
+      } else if constexpr (std::is_same_v<T, Url>) {
+        return "url(" + std::string(t.value) + ")";
+      } else if constexpr (std::is_same_v<T, Delim>) {
+        return std::string(1, t.value);
+      } else if constexpr (std::is_same_v<T, Number>) {
+        return std::string(t.valueString);
+      } else if constexpr (std::is_same_v<T, Percentage>) {
+        return std::string(t.valueString) + "%";
+      } else if constexpr (std::is_same_v<T, Dimension>) {
+        return std::string(t.valueString) + std::string(t.suffixString);
+      } else if constexpr (std::is_same_v<T, Whitespace>) {
+        return " ";
+      } else if constexpr (std::is_same_v<T, CDO>) {
+        return "<!--";
+      } else if constexpr (std::is_same_v<T, CDC>) {
+        return "-->";
+      } else if constexpr (std::is_same_v<T, Colon>) {
+        return ":";
+      } else if constexpr (std::is_same_v<T, Semicolon>) {
+        return ";";
+      } else if constexpr (std::is_same_v<T, Comma>) {
+        return ",";
+      } else if constexpr (std::is_same_v<T, SquareBracket>) {
+        return "[";
+      } else if constexpr (std::is_same_v<T, Parenthesis>) {
+        return "(";
+      } else if constexpr (std::is_same_v<T, CurlyBracket>) {
+        return "{";
+      } else if constexpr (std::is_same_v<T, CloseSquareBracket>) {
+        return "]";
+      } else if constexpr (std::is_same_v<T, CloseParenthesis>) {
+        return ")";
+      } else if constexpr (std::is_same_v<T, CloseCurlyBracket>) {
+        return "}";
+      } else {
+        // BadString, BadUrl, ErrorToken, EofToken
+        return "";
+      }
+    });
   }
 
   /// Equality operator.

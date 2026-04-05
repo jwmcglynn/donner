@@ -4,14 +4,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/SmallVector.h"
 #include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TransformOrigin.h"
-#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/parser/CssTransformParser.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 #include "donner/svg/parser/TransformParser.h"
@@ -635,7 +636,9 @@ constexpr auto kValidPresentationAttributes =
 using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
                                                       const parser::PropertyParseFnParams& params);
 
-constexpr auto kProperties = makeCompileTimeMap(std::to_array<std::pair<std::string_view, PropertyParseFn>>(
+constexpr auto kProperties =
+    makeCompileTimeMap(
+        std::to_array<std::pair<std::string_view, PropertyParseFn>>(
             {
                 {"color",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

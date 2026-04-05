@@ -43,6 +43,17 @@ public:
                         std::vector<ParseError>* outWarnings);
 
   /**
+   * Update the style attribute on an element, merging new declarations with existing ones.
+   *
+   * Declarations in \p style override existing declarations with the same property name.
+   * The merged result is written back to the `style` attribute and the PropertyRegistry is updated.
+   *
+   * @param handle Entity handle to update.
+   * @param style CSS style string to merge, e.g. "fill: red; opacity: 0.5".
+   */
+  void updateStyle(EntityHandle handle, std::string_view style);
+
+  /**
    * Invalidate the computed style for a given entity.
    *
    * @param handle Entity handle to invalidate

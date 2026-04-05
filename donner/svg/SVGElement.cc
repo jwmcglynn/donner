@@ -210,13 +210,8 @@ void SVGElement::setStyle(std::string_view style) {
 }
 
 void SVGElement::updateStyle(std::string_view style) {
-  handle_.get_or_emplace<components::StyleComponent>().updateStyle(style);
+  components::StyleSystem().updateStyle(handle_, style);
 
-  // TODO(jwmcglynn): Update the style attribute too
-  // handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
-  //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
-
-  components::StyleSystem().invalidateComputed(handle_);
   markNeedsFullStyleRecompute(handle_);
   invalidateComputedStyleForDescendants(handle_);
 
@@ -249,8 +244,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   if (!trySetResult.result()) {
     // Try element-specific presentation attributes (cx, cy, r, rx, ry, d, etc.).
-    parser::PropertyParseFnParams params =
-        parser::PropertyParseFnParams::CreateForAttribute(value);
+    parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
     trySetResult = parser::ParsePresentationAttribute(type(), handle_, actualName, params);
   }
 
