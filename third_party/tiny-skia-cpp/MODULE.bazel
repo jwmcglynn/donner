@@ -5,7 +5,7 @@ module(name = "tiny-skia-cpp")
 ###############################################################################
 
 bazel_dep(name = "rules_cc", version = "0.2.17")
-bazel_dep(name = "rules_shell", version = "0.3.0")
+bazel_dep(name = "rules_shell", version = "0.7.1")
 bazel_dep(name = "googletest", version = "1.14.0")
 bazel_dep(name = "google_benchmark", version = "1.9.5")
 bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3")
