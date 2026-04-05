@@ -393,6 +393,17 @@ public:
         return;
       }
 
+      const auto* useStyle = child.try_get<components::ComputedStyleComponent>();
+      if (!useStyle) {
+        return;
+      }
+
+      const auto& useProperties = useStyle->properties.value();
+      if (useProperties.visibility.getRequired() != Visibility::Visible ||
+          useProperties.display.getRequired() == Display::None) {
+        return;
+      }
+
       if (const auto* computedShadow = child.try_get<ComputedShadowTreeComponent>();
           computedShadow && computedShadow->mainBranch) {
         for (const Entity shadowEntity : computedShadow->mainBranch->shadowEntities) {
