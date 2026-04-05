@@ -1,6 +1,6 @@
 # Design: Incremental Invalidation
 
-**Status:** Design
+**Status:** Partially implemented (`incremental-invalidation-initial`)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-13
 **Tracking:** v0.5 milestone ([ProjectRoadmap](ProjectRoadmap.md))
@@ -13,13 +13,30 @@ and their dependents are recomputed. The system tracks dirty state at five level
 layout, shape, paint, and render instances — and propagates invalidation through the dependency
 graph so that each `instantiateRenderTree()` call does minimal work.
 
+## Current Status
+
+The `incremental-invalidation-initial` branch implements the first, intentionally narrow slice of
+this design:
+
+- `DirtyFlagsComponent` and `RenderTreeState` exist.
+- DOM mutation hooks mark entities dirty for style, shape, transform, and render-instance work.
+- `SVGGeometryElement::invalidate()` marks geometry dirty instead of only dropping cached paths.
+- `RenderingContext::instantiateRenderTree()` has a fast path that skips recomputation when
+  nothing is dirty and no rebuild is required.
+- When any entity is dirty, the current implementation still falls back to full recomputation.
+
+The following work is explicitly not included in this branch:
+
+- Per-system selective recomputation inside `StyleSystem`, `LayoutSystem`, `ShapeSystem`,
+  `PaintSystem`, and `FilterSystem`.
+- Composited renderer integration.
+- Spatial index / `SpatialGrid` incremental maintenance.
+
 ## Goals
 
 - DOM mutations that affect a single element should not trigger full-document recomputation.
 - Style inheritance invalidation should cascade to descendants but not siblings or ancestors.
 - Layout invalidation (transforms, viewBox, size) should cascade only to the affected subtree.
-- The composited rendering layer system should receive fine-grained dirty notifications,
-  allowing per-layer re-rasterization without full document re-render.
 - Maintain pixel-perfect correctness: incremental output must match full recomputation output.
 
 ## Non-Goals
@@ -28,7 +45,9 @@ graph so that each `instantiateRenderTree()` call does minimal work.
 - Concurrent/parallel style resolution across subtrees.
 - CSS selector index (inverted index from property → matching elements). This is a future
   optimization for stylesheet-level changes.
-- Animation-specific optimizations beyond what the composited renderer already provides.
+- Animation-specific optimizations beyond basic dirty-flag propagation.
+- Spatial index integration. Updating `SpatialGrid` incrementally is explicitly deferred to a
+  follow-up change after the initial invalidation hooks and render-tree fast path land.
 
 ## Background
 
@@ -67,10 +86,6 @@ The codebase already has per-system invalidation methods, but they're incomplete
 | `LayoutSystem::invalidate(handle)` | Clears cached viewBox/transforms | Doesn't cascade to descendants |
 | `SVGGeometryElement::invalidate()` | Removes `ComputedPathComponent` | Doesn't invalidate paint/render |
 | `RenderingContext::invalidateRenderTree()` | Clears ALL render instances | Nuclear option — no granularity |
-
-The composited renderer (`CompositedRenderer`) already has fine-grained layer dirty tracking
-via `markEntityDirty(Entity)`, `markLayerDirty(uint32_t)`, and `invalidateAnimatedLayers()`.
-This design connects DOM mutations to that existing layer system.
 
 ### Dependency Graph
 
@@ -379,11 +394,6 @@ void SVGElement::appendChild(SVGElement child) {
 void SVGElement::markDirty(uint16_t flags) {
   auto& dirty = handle_.get_or_emplace<DirtyFlagsComponent>();
   dirty.flags |= flags;
-
-  // Notify composited renderer if present
-  if (auto* compositor = registry_.ctx().find<CompositedRenderer*>()) {
-    (*compositor)->markEntityDirty(handle_.entity());
-  }
 }
 
 /// Propagate Style dirty to all descendants (for inherited property changes).
@@ -405,35 +415,9 @@ void SVGElement::propagateWorldTransformDirtyToDescendants() {
 }
 ```
 
-### Integration with Composited Renderer
-
-The composited renderer already tracks per-layer dirty state. The incremental invalidation
-system feeds into it naturally:
-
-```
-DOM mutation
-  └─→ markDirty(flags) on affected entities
-        └─→ CompositedRenderer::markEntityDirty(entity)
-              └─→ LayerMembershipComponent → layer ID
-                    └─→ layer.dirty = true
-
-Next render:
-  └─→ createComputedComponents() — only recomputes dirty entities
-  └─→ CompositedRenderer::renderFrame()
-        └─→ rasterizeLayer() — only dirty layers
-        └─→ composeLayers() — all layers (fast blit)
-```
-
-This means a single-element style change results in:
-1. Recompute style for ~1 entity (or N descendants if inherited)
-2. Re-rasterize ~1 layer
-3. Compose all layers (cheap)
-
-vs. today's: recompute everything, re-rasterize everything.
-
 ### Spatial Index Updates
 
-The spatial grid (`SpatialGrid` in the interactivity system) needs updating when
+The upcoming spatial grid (`SpatialGrid` in the interactivity system) needs updating when
 element geometry or transforms change. Elements with `WorldTransform` or `Shape` dirty
 flags need their spatial grid entries updated:
 
@@ -446,6 +430,10 @@ for (auto [entity, dirty] : dirtyView.each()) {
 }
 ```
 
+This integration is not included in the initial `incremental-invalidation-initial` branch.
+That branch is intentionally limited to DOM mutation dirty flags and the render-tree fast path.
+Spatial index maintenance remains follow-up work.
+
 This is `O(k)` where k is the number of changed entities, vs. the current `O(n)` full
 rebuild.
 
@@ -455,39 +443,48 @@ rebuild.
 
 Add the `DirtyFlagsComponent` and wire it into mutation entry points.
 
-- [ ] Create `DirtyFlagsComponent` in `donner/svg/components/`
-- [ ] Add `markDirty()` helper to `SVGElement`
-- [ ] Wire `setAttribute()`, `setStyle()`, `updateStyle()`, `trySetPresentationAttribute()`
-  to set appropriate dirty flags
-- [ ] Wire tree mutations (`appendChild`, `removeChild`, `insertBefore`, `replaceChild`)
-  to set `fullRebuildRequired_`
-- [ ] Wire `SVGGeometryElement::invalidate()` to set `Shape` dirty
-- [ ] Tests: verify dirty flags are set correctly for each mutation type
+- [x] Create `DirtyFlagsComponent` in `donner/svg/components/`
+- [x] Use presence of `DirtyFlagsComponent` as the dirty-entity canary
+- [x] Add `markDirty()` helper to `SVGElement`
+- [x] Wire `setStyle()`, `updateStyle()`, `setClassName()`, and
+  `trySetPresentationAttribute()` to set appropriate dirty flags
+- [x] Wire tree mutations (`appendChild`, `removeChild`, `insertBefore`, `replaceChild`, `remove`)
+  to mark affected entities dirty
+- [x] Wire `SVGGeometryElement::invalidate()` to set `Shape` dirty
+- [x] Clear all `DirtyFlagsComponent` instances after a successful full recomputation
+- [x] Dedicated dirty-flag unit tests for the implemented mutation types
 
-**No behavior change yet** — `createComputedComponents()` still does full recomputation
-but the flags are being tracked.
+Phase 1 is implemented in the initial branch, but tree mutations currently cause a conservative
+full recomputation on the next render rather than a narrowly-scoped structural rebuild.
 
 ### Phase 2: Dirty Propagation
 
 Implement cascading invalidation for inherited properties and transforms.
 
-- [ ] `propagateStyleDirtyToDescendants()` — walk tree, set `Style` dirty on descendants
-- [ ] `propagateWorldTransformDirtyToDescendants()` — walk tree, set `WorldTransform` dirty
-- [ ] Property inheritance classification — build a table of which CSS properties are
-  inherited vs. non-inherited, used to decide whether to cascade
-- [ ] Tests: verify propagation reaches correct descendants, stops at correct boundaries
+- [x] Descendant propagation helper exists and is used by the initial mutation hooks
+- [x] Split propagation into property-aware style vs world-transform-specific helpers
+- [x] Property inheritance classification for supported presentation attributes, used to decide
+  whether `trySetPresentationAttribute()` cascades invalidation
+- [x] Tests: verify propagation reaches correct descendants for inherited vs non-inherited
+  presentation attributes
+- [x] Current branch scope complete for supported presentation attributes
 
 ### Phase 3: Selective Style Recomputation
 
 Modify `StyleSystem` to skip clean entities.
 
-- [ ] `StyleSystem::computeAllStyles()` checks `DirtyFlagsComponent::Style` and skips
-  entities without it
-- [ ] First-render path: when no `DirtyFlagsComponent` exists (first render), compute
-  all styles (backwards compatible)
-- [ ] Tests: verify that after a single-element style change, only that element (and
-  inheriting descendants) are recomputed
-- [ ] Correctness test: full recomputation output == incremental output (pixel-perfect)
+- [x] Rendering fast path: if no entity has `DirtyFlagsComponent` and no full rebuild is required,
+  skip recomputation entirely
+- [x] `StyleSystem::computeAllStyles()` checks `DirtyFlagsComponent::Style` and skips
+  entities without it after the first full build
+- [x] First-render state tracking via `RenderTreeState`
+- [x] Tests: verify that after a single-element style change, only that element (and
+  inheriting descendants) are recomputed in the style pass
+- [x] Correctness test: incremental style invalidation output matches a fresh full render for the
+  same final DOM state
+
+At this point the style stage has a selective path, but the rest of `createComputedComponents()`
+still falls back to whole-tree recomputation once anything is dirty.
 
 ### Phase 4: Selective Layout and Transform Recomputation
 
@@ -509,19 +506,12 @@ Complete the incremental pipeline for remaining systems.
 - [ ] Render instance update only for RenderInstance-dirty entities
 - [ ] End-to-end test: DOM mutation → incremental recompute → render → pixel-perfect match
 
-### Phase 6: Composited Renderer Integration
-
-Connect incremental invalidation to the layer system.
-
-- [ ] `markDirty()` automatically calls `CompositedRenderer::markEntityDirty()` when
-  a compositor is active
-- [ ] Verify: single-element mutation → single dirty layer → single layer re-rasterization
-- [ ] Performance benchmark: measure speedup for single-element mutation in 100/500/1000
-  element documents
-
-### Phase 7: Spatial Index Incremental Updates
+### Phase 6: Spatial Index Incremental Updates
 
 Update the spatial grid incrementally instead of rebuilding.
+
+This phase is out of scope for the initial branch created from this design. It should land as a
+separate follow-up once the core invalidation flow is in place and validated.
 
 - [ ] After shape/transform recomputation, update only changed entities in the spatial grid
 - [ ] Tests: hit testing remains correct after incremental updates
@@ -605,7 +595,6 @@ For the common case (k=1, N=1000): ~1000x reduction in style/layout/paint work.
 - **Dirty flag unit tests**: Each mutation type sets the correct flags and propagates
   correctly.
 - **No-change fast path**: Verify that rendering without any mutation skips all recomputation.
-- **Composited integration tests**: Single-element mutation → single dirty layer.
 - **Performance benchmarks**: Measure per-frame time for incremental vs. full recomputation
   across document sizes (100, 500, 1000 elements).
 

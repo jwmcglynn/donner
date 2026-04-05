@@ -1139,6 +1139,26 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   return false;
 }
 
+bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
+  if (StringUtils::EqualsLowercase(name, std::string_view("transform"))) {
+    return false;
+  }
+
+  PropertyRegistry registry;
+  const auto properties = registry.allProperties();
+  bool inherited = false;
+
+  forEachProperty<0, numProperties()>([&properties, name, &inherited](auto i) {
+    const auto& property = std::get<i.value>(properties);
+    using PropertyType = std::decay_t<decltype(property)>;
+    if (property.name == name) {
+      inherited = PropertyType::kCascadeMode != PropertyCascade::None;
+    }
+  });
+
+  return inherited;
+}
+
 std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
   os << "PropertyRegistry {\n";
 

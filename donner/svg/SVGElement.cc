@@ -43,15 +43,61 @@ void markDirty(EntityHandle handle, uint16_t flags) {
   handle.get_or_emplace<components::DirtyFlagsComponent>().mark(flags);
 }
 
-/// Propagate dirty flags to all descendants of the given entity (not including the entity itself).
-void propagateDirtyToDescendants(EntityHandle handle, uint16_t flags) {
+void invalidateComputedStyle(EntityHandle handle) {
+  components::StyleSystem().invalidateComputed(handle);
+}
+
+void invalidateComputedStyleForDescendants(EntityHandle handle) {
   auto& tree = handle.get<donner::components::TreeComponent>();
   Registry& registry = *handle.registry();
   for (entt::entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
     donner::components::ForAllChildrenRecursive(
-        EntityHandle(registry, child),
-        [flags](EntityHandle desc) { markDirty(desc, flags); });
+        EntityHandle(registry, child), [](EntityHandle desc) { invalidateComputedStyle(desc); });
+  }
+}
+
+/// Propagate style-related dirty flags to all descendants of the given entity.
+void propagateStyleDirtyToDescendants(EntityHandle handle) {
+  auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (entt::entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    donner::components::ForAllChildrenRecursive(
+        EntityHandle(registry, child), [](EntityHandle desc) {
+          markDirty(desc,
+                    components::DirtyFlagsComponent::Style |
+                        components::DirtyFlagsComponent::Paint |
+                        components::DirtyFlagsComponent::RenderInstance);
+        });
+  }
+}
+
+/// Propagate world-transform-related dirty flags to all descendants of the given entity.
+void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
+  auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (entt::entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    donner::components::ForAllChildrenRecursive(
+        EntityHandle(registry, child), [](EntityHandle desc) {
+          markDirty(desc,
+                    components::DirtyFlagsComponent::WorldTransform |
+                        components::DirtyFlagsComponent::RenderInstance);
+        });
+  }
+}
+
+/// Mark an entity and all of its descendants with the given dirty flags.
+void markDirtySubtree(EntityHandle handle, uint16_t flags) {
+  markDirty(handle, flags);
+
+  auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (entt::entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    donner::components::ForAllChildrenRecursive(
+        EntityHandle(registry, child), [flags](EntityHandle desc) { markDirty(desc, flags); });
   }
 }
 
@@ -123,11 +169,10 @@ void SVGElement::setClassName(std::string_view name) {
       *handle_.registry(), xml::XMLQualifiedName("class"), RcString(name));
 
   // Class changes affect CSS selector matching, which can change any inherited property.
+  invalidateComputedStyle(handle_);
+  invalidateComputedStyleForDescendants(handle_);
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
-  propagateDirtyToDescendants(handle_,
-                              components::DirtyFlagsComponent::Style |
-                                  components::DirtyFlagsComponent::Paint |
-                                  components::DirtyFlagsComponent::RenderInstance);
+  propagateStyleDirtyToDescendants(handle_);
 }
 
 void SVGElement::setStyle(std::string_view style) {
@@ -137,12 +182,10 @@ void SVGElement::setStyle(std::string_view style) {
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
   components::StyleSystem().invalidateAll(handle_);
+  invalidateComputedStyleForDescendants(handle_);
 
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
-  propagateDirtyToDescendants(handle_,
-                              components::DirtyFlagsComponent::Style |
-                                  components::DirtyFlagsComponent::Paint |
-                                  components::DirtyFlagsComponent::RenderInstance);
+  propagateStyleDirtyToDescendants(handle_);
 }
 
 void SVGElement::updateStyle(std::string_view style) {
@@ -153,12 +196,10 @@ void SVGElement::updateStyle(std::string_view style) {
   //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
   components::StyleSystem().invalidateComputed(handle_);
+  invalidateComputedStyleForDescendants(handle_);
 
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
-  propagateDirtyToDescendants(handle_,
-                              components::DirtyFlagsComponent::Style |
-                                  components::DirtyFlagsComponent::Paint |
-                                  components::DirtyFlagsComponent::RenderInstance);
+  propagateStyleDirtyToDescendants(handle_);
 }
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
@@ -201,14 +242,17 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
       markDirty(handle_, components::DirtyFlagsComponent::Transform |
                               components::DirtyFlagsComponent::WorldTransform |
                               components::DirtyFlagsComponent::RenderInstance);
-      propagateDirtyToDescendants(handle_,
-                                  components::DirtyFlagsComponent::WorldTransform |
-                                      components::DirtyFlagsComponent::RenderInstance);
+      propagateWorldTransformDirtyToDescendants(handle_);
     } else {
       // For CSS properties (fill, stroke, opacity, etc.) and element-specific attributes
       // (cx, cy, r, d, etc.), mark style cascade + shape dirty.
+      invalidateComputedStyle(handle_);
       markDirty(handle_, components::DirtyFlagsComponent::StyleCascade |
                               components::DirtyFlagsComponent::Shape);
+      if (PropertyRegistry::isPresentationAttributeInherited(actualName)) {
+        invalidateComputedStyleForDescendants(handle_);
+        propagateStyleDirtyToDescendants(handle_);
+      }
     }
     return true;
   }
@@ -270,9 +314,7 @@ void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
     // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.
     if (name.namespacePrefix.empty()) {
-      [[maybe_unused]] auto trySetResult =
-          handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
-              handle_, name.name, "initial");
+      [[maybe_unused]] auto trySetResult = trySetPresentationAttribute(name.name, "initial");
     }
     // Ignore return result, since it's fine if the attribute doesn't exist.
   }
@@ -339,21 +381,21 @@ void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElemen
       referenceNode ? referenceNode->handle_.entity() : entt::null);
   // Tree structure change: mark inserted subtree and parent for full recomputation.
   markDirty(handle_, components::DirtyFlagsComponent::All);
-  markDirty(newNode.handle_, components::DirtyFlagsComponent::All);
+  markDirtySubtree(newNode.handle_, components::DirtyFlagsComponent::All);
 }
 
 void SVGElement::appendChild(const SVGElement& child) {
   handle_.get<donner::components::TreeComponent>().appendChild(registry(),
                                                                child.entityHandle().entity());
   markDirty(handle_, components::DirtyFlagsComponent::All);
-  markDirty(child.handle_, components::DirtyFlagsComponent::All);
+  markDirtySubtree(child.handle_, components::DirtyFlagsComponent::All);
 }
 
 void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldChild) {
   handle_.get<donner::components::TreeComponent>().replaceChild(
       registry(), newChild.handle_.entity(), oldChild.entityHandle().entity());
   markDirty(handle_, components::DirtyFlagsComponent::All);
-  markDirty(newChild.handle_, components::DirtyFlagsComponent::All);
+  markDirtySubtree(newChild.handle_, components::DirtyFlagsComponent::All);
 }
 
 void SVGElement::removeChild(const SVGElement& child) {

@@ -5,6 +5,7 @@
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ClassComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
@@ -198,6 +199,30 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 }
 
 void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings) {
+  const auto* renderState = registry.ctx().find<RenderTreeState>();
+  const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
+  const bool hasDirtyEntities = !registry.view<DirtyFlagsComponent>().empty();
+
+  if (hasBeenBuilt && hasDirtyEntities) {
+    for (auto entity : registry.view<DirtyFlagsComponent>()) {
+      const auto& dirty = registry.get<DirtyFlagsComponent>(entity);
+      if (!dirty.test(DirtyFlagsComponent::Style)) {
+        continue;
+      }
+
+      std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
+      computeStyle(EntityHandle(registry, entity), outWarnings);
+    }
+
+    ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
+    for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+      auto [stylesheet] = view.get(stylesheetEntity);
+      resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
+    }
+
+    return;
+  }
+
   // Create placeholder ComputedStyleComponents for all elements in the range, since creating
   // computed style components also creates the parents, and we can't modify the component list
   // while iterating it.

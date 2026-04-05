@@ -11,6 +11,9 @@
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::ElementsAre;
@@ -248,12 +251,338 @@ TEST_F(SVGElementTests, ClassName) {
   EXPECT_EQ(element.className(), "abcd");
 }
 
+TEST_F(SVGElementTests, ClassNameMarksStyleCascadeDirty) {
+  auto element = create();
+  element.setClassName("test");
+
+  const auto* dirty = element.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(dirty, nullptr);
+  EXPECT_TRUE(dirty->test(components::DirtyFlagsComponent::StyleCascade));
+}
+
 TEST_F(SVGElementTests, Style) {
   auto element = create();
   EXPECT_THAT(element.getAttribute("style"), testing::Eq(std::nullopt));
 
   element.setStyle("color: red");
   EXPECT_THAT(element.getAttribute("style"), testing::Optional(RcString("color: red")));
+}
+
+TEST_F(SVGElementTests, UpdateStyleMarksStyleCascadeDirty) {
+  auto element = create();
+  element.setStyle("fill: red");
+  element.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  element.updateStyle("stroke: blue");
+
+  const auto* dirty = element.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(dirty, nullptr);
+  EXPECT_TRUE(dirty->test(components::DirtyFlagsComponent::StyleCascade));
+}
+
+TEST_F(SVGElementTests, StyleDirtyPropagatesToDescendants) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->setStyle("fill: red");
+
+  const auto* parentDirty =
+      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
+
+  const auto* childDirty =
+      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Paint));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, TransformDirtyPropagatesWorldTransformToDescendants) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->setAttribute("transform", "translate(10 20)");
+
+  const auto* parentDirty =
+      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::Transform));
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::WorldTransform));
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  const auto* childDirty =
+      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_FALSE(childDirty->test(components::DirtyFlagsComponent::Transform));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::WorldTransform));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, InheritedPresentationAttributePropagatesToDescendants) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->setAttribute("fill", "red");
+
+  const auto* parentDirty =
+      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
+
+  const auto* childDirty =
+      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Paint));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, NonInheritedPresentationAttributeDoesNotPropagateToDescendants) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->setAttribute("opacity", "0.5");
+
+  const auto* parentDirty =
+      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
+
+  EXPECT_EQ(child->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, RemovingInheritedPresentationAttributePropagatesToDescendants) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent" fill="blue">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->removeAttribute("fill");
+
+  const auto* parentDirty =
+      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
+
+  const auto* childDirty =
+      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Paint));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, RemovingTransformPropagatesWorldTransformToDescendants) {
+  auto doc = parseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent" transform="translate(10 20)">
+        <rect id="child" width="10" height="10" />
+      </g>
+      <rect id="sibling" width="10" height="10" />
+    </svg>
+  )svg");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  doc.registry().clear<components::DirtyFlagsComponent>();
+  parent->removeAttribute("transform");
+
+  const auto* parentDirty =
+      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::Transform));
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::WorldTransform));
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  const auto* childDirty =
+      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_FALSE(childDirty->test(components::DirtyFlagsComponent::Transform));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::WorldTransform));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::RenderInstance));
+
+  EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, GeometryPresentationAttributeMarksShapeDirty) {
+  auto rect = createRect();
+  rect.setAttribute("x", "10");
+
+  const auto* dirty = rect.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(dirty, nullptr);
+  EXPECT_TRUE(dirty->test(components::DirtyFlagsComponent::Shape));
+  EXPECT_TRUE(dirty->test(components::DirtyFlagsComponent::StyleCascade));
+}
+
+TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent" fill="blue">
+        <rect id="child" width="10" height="10" />
+      </g>
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+
+  components::StyleSystem styleSystem;
+  styleSystem.computeAllStyles(doc.registry(), nullptr);
+
+  const auto* initialComputed =
+      child->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(initialComputed, nullptr);
+  ASSERT_TRUE(initialComputed->properties.has_value());
+  EXPECT_EQ(initialComputed->properties->fill.getRequired(),
+            PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
+
+  parent->setAttribute("fill", "red");
+
+  EXPECT_EQ(child->entityHandle().try_get<components::ComputedStyleComponent>(), nullptr);
+
+  styleSystem.computeAllStyles(doc.registry(), nullptr);
+
+  const auto* updatedComputed =
+      child->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(updatedComputed, nullptr);
+  ASSERT_TRUE(updatedComputed->properties.has_value());
+  EXPECT_EQ(updatedComputed->properties->fill.getRequired(),
+            PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0))));
+}
+
+TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" fill="red" />
+      <rect id="sibling" width="10" height="10" fill="blue" />
+    </svg>
+  )");
+
+  auto target = doc.querySelector("#target");
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(sibling.has_value());
+
+  components::StyleSystem styleSystem;
+  styleSystem.computeAllStyles(doc.registry(), nullptr);
+
+  if (!doc.registry().ctx().contains<components::RenderTreeState>()) {
+    doc.registry().ctx().emplace<components::RenderTreeState>();
+  }
+  auto& renderState = doc.registry().ctx().get<components::RenderTreeState>();
+  renderState.hasBeenBuilt = true;
+  renderState.needsFullRebuild = false;
+
+  auto* siblingComputed =
+      sibling->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(siblingComputed, nullptr);
+  ASSERT_TRUE(siblingComputed->properties.has_value());
+
+  siblingComputed->properties->fill.set(
+      PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))),
+      css::Specificity::Override());
+
+  target->setAttribute("opacity", "0.5");
+
+  styleSystem.computeAllStyles(doc.registry(), nullptr);
+
+  const auto* targetComputed =
+      target->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(targetComputed, nullptr);
+  ASSERT_TRUE(targetComputed->properties.has_value());
+  EXPECT_DOUBLE_EQ(targetComputed->properties->opacity.getRequired(), 0.5);
+
+  siblingComputed = sibling->entityHandle().try_get<components::ComputedStyleComponent>();
+  ASSERT_NE(siblingComputed, nullptr);
+  ASSERT_TRUE(siblingComputed->properties.has_value());
+  EXPECT_EQ(siblingComputed->properties->fill.getRequired(),
+            PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))));
 }
 
 TEST_F(SVGElementTests, Attributes) {
@@ -268,6 +597,105 @@ TEST_F(SVGElementTests, Attributes) {
   element.removeAttribute("foo");
   EXPECT_THAT(element.getAttribute("foo"), testing::Eq(std::nullopt));
   EXPECT_FALSE(element.hasAttribute("foo"));
+}
+
+TEST_F(SVGElementTests, AppendChildMarksParentAndChildDirty) {
+  auto parent = create();
+  auto child = create();
+
+  parent.appendChild(child);
+
+  const auto* parentDirty = parent.entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* childDirty = child.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  ASSERT_NE(childDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::All));
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGElementTests, AppendChildMarksInsertedSubtreeDirty) {
+  auto parent = create();
+  auto child = create();
+  auto grandchild = create();
+  child.appendChild(grandchild);
+
+  child.entityHandle().remove<components::DirtyFlagsComponent>();
+  grandchild.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  parent.appendChild(child);
+
+  const auto* childDirty = child.entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* grandchildDirty =
+      grandchild.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(childDirty, nullptr);
+  ASSERT_NE(grandchildDirty, nullptr);
+  EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::All));
+  EXPECT_TRUE(grandchildDirty->test(components::DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGElementTests, InsertBeforeMarksParentAndInsertedChildDirty) {
+  auto parent = create();
+  auto first = create();
+  auto inserted = create();
+  parent.appendChild(first);
+  parent.entityHandle().remove<components::DirtyFlagsComponent>();
+  first.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  parent.insertBefore(inserted, first);
+
+  const auto* parentDirty = parent.entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* insertedDirty = inserted.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  ASSERT_NE(insertedDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::All));
+  EXPECT_TRUE(insertedDirty->test(components::DirtyFlagsComponent::All));
+  EXPECT_EQ(first.entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
+}
+
+TEST_F(SVGElementTests, ReplaceChildMarksParentAndReplacementDirty) {
+  auto parent = create();
+  auto oldChild = create();
+  auto newChild = create();
+  parent.appendChild(oldChild);
+  parent.entityHandle().remove<components::DirtyFlagsComponent>();
+  oldChild.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  parent.replaceChild(newChild, oldChild);
+
+  const auto* parentDirty = parent.entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* newChildDirty = newChild.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  ASSERT_NE(newChildDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::All));
+  EXPECT_TRUE(newChildDirty->test(components::DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGElementTests, RemoveChildMarksParentDirty) {
+  auto parent = create();
+  auto child = create();
+  parent.appendChild(child);
+  parent.entityHandle().remove<components::DirtyFlagsComponent>();
+  child.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  parent.removeChild(child);
+
+  const auto* parentDirty = parent.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGElementTests, RemoveMarksParentDirty) {
+  auto parent = create();
+  auto child = create();
+  parent.appendChild(child);
+  parent.entityHandle().remove<components::DirtyFlagsComponent>();
+  child.entityHandle().remove<components::DirtyFlagsComponent>();
+
+  child.remove();
+
+  const auto* parentDirty = parent.entityHandle().try_get<components::DirtyFlagsComponent>();
+  ASSERT_NE(parentDirty, nullptr);
+  EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::All));
 }
 
 TEST_F(SVGElementTests, TrySetPresentationAttribute) {

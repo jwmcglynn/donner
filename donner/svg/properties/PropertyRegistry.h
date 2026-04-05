@@ -392,6 +392,17 @@ public:
                                                EntityHandle handle = EntityHandle());
 
   /**
+   * Returns true if a presentation attribute participates in inheritance.
+   *
+   * This uses the underlying property cascade metadata instead of a hand-maintained list in DOM
+   * mutation code.
+   *
+   * @param name Presentation attribute name.
+   * @return True if the property inherits to descendants.
+   */
+  static bool isPresentationAttributeInherited(std::string_view name);
+
+  /**
    * Ostream output operator, for debugging which outputs a human-readable representation of all of
    * the properties.
    *
