@@ -1,7 +1,12 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_library",
+    "donner_cc_test",
+    "donner_transitioned_test",
+)
 
 donner_cc_test(
-    name = "svg_tests",
+    name = "svg_tests_impl",
     srcs = [
         "ElementStyle_tests.cc",
         "SVGCircleElement_tests.cc",
@@ -22,6 +27,7 @@ donner_cc_test(
         "SVGTSpanElement_tests.cc",
         "SVGTextElement_tests.cc",
     ],
+    tags = ["manual"],
     deps = [
         ":parser_test_utils",
         "//donner/base:base_test_utils",
@@ -30,6 +36,26 @@ donner_cc_test(
         "//donner/svg/renderer/tests:renderer_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_transitioned_test(
+    name = "svg_tests_tiny_skia",
+    dep = ":svg_tests_impl",
+    renderer_backend = "tiny_skia",
+    testonly = 1,
+)
+
+donner_transitioned_test(
+    name = "svg_tests_skia",
+    dep = ":svg_tests_impl",
+    renderer_backend = "skia",
+    testonly = 1,
+)
+
+alias(
+    name = "svg_tests",
+    actual = ":svg_tests_tiny_skia",
+    testonly = 1,
 )
 
 donner_cc_library(

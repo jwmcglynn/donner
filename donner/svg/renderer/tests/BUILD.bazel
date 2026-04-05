@@ -86,6 +86,7 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
+    tags = ["manual"],
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
@@ -116,14 +117,35 @@ alias(
 )
 
 donner_cc_test(
-    name = "renderer_public_api_tests",
+    name = "renderer_public_api_tests_impl",
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
+    tags = ["manual"],
     deps = [
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_transitioned_test(
+    name = "renderer_public_api_tests_tiny_skia",
+    dep = ":renderer_public_api_tests_impl",
+    renderer_backend = "tiny_skia",
+    testonly = 1,
+)
+
+donner_transitioned_test(
+    name = "renderer_public_api_tests_skia",
+    dep = ":renderer_public_api_tests_impl",
+    renderer_backend = "skia",
+    testonly = 1,
+)
+
+alias(
+    name = "renderer_public_api_tests",
+    actual = ":renderer_public_api_tests_tiny_skia",
+    testonly = 1,
 )
 
 donner_cc_test(
@@ -162,6 +184,7 @@ donner_cc_test(
         "@resvg-test-suite//:svg",
     ],
     shard_count = 16,
+    tags = ["manual"],
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
