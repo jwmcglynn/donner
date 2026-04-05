@@ -20,6 +20,7 @@
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
@@ -34,6 +35,7 @@
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/graph/RecursionGuard.h"
+#include "donner/svg/graph/Reference.h"
 
 namespace donner::svg::components {
 
@@ -85,8 +87,9 @@ bool IsValidMarker(EntityHandle handle) {
 
 class RenderingContextImpl {
 public:
-  explicit RenderingContextImpl(Registry& registry, bool verbose)
-      : registry_(registry), verbose_(verbose) {
+  explicit RenderingContextImpl(Registry& registry, bool verbose,
+                                const ContextPaintServers& initialContext = {})
+      : registry_(registry), verbose_(verbose), contextPaintServers_(initialContext) {
     // Get the LayoutSystem from the registry context if available
     LayoutSystem* layoutSystem = nullptr;
     if (registry_.ctx().contains<LayoutSystem*>()) {
@@ -560,6 +563,17 @@ void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranch
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
 
+void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
+                                              const ResolvedPaintServer& stroke) {
+  initialContextFill_ = fill;
+  initialContextStroke_ = stroke;
+}
+
+void RenderingContext::clearInitialContextPaint() {
+  initialContextFill_.reset();
+  initialContextStroke_.reset();
+}
+
 void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
   // TODO(jwmcglynn): Support partial invalidation, where we only recompute the subtree that has
   // changed.
@@ -653,12 +667,24 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
           EntityHandle(registry_, entity), shadow, ShadowBranchType::Main, targetEntity.value(),
           shadowTreeComponent.mainHref().value(), outWarnings);
 
-    } else if (shadowTreeComponent.mainHref() && outWarnings) {
-      // We had a main href but it failed to resolve.
-      ParseError err;
-      err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
-                   shadowTreeComponent.mainHref().value_or("") + "'";
-      outWarnings->emplace_back(std::move(err));
+    } else if (shadowTreeComponent.mainHref()) {
+      // Same-document resolution failed. Check if this is an external reference.
+      const Reference ref(shadowTreeComponent.mainHref().value());
+      if (ref.isExternal()) {
+        // Load the external SVG document via ResourceManagerContext.
+        auto& resourceManager = registry_.ctx().get<ResourceManagerContext>();
+        const RcString docUrl(ref.documentUrl());
+        auto subDoc = resourceManager.loadExternalSVG(docUrl, outWarnings);
+        if (subDoc) {
+          registry_.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
+                                                             RcString(ref.fragment()));
+        }
+      } else if (outWarnings) {
+        ParseError err;
+        err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
+                     shadowTreeComponent.mainHref().value_or("") + "'";
+        outWarnings->emplace_back(std::move(err));
+      }
     }
   }
 
@@ -748,7 +774,16 @@ void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {
 
   const Entity rootEntity = registry_.ctx().get<SVGDocumentContext>().rootEntity;
 
-  RenderingContextImpl impl(registry_, verbose);
+  // Build initial context paint servers if set.
+  ContextPaintServers initialContext;
+  if (initialContextFill_.has_value()) {
+    initialContext.contextFill = *initialContextFill_;
+  }
+  if (initialContextStroke_.has_value()) {
+    initialContext.contextStroke = *initialContextStroke_;
+  }
+
+  RenderingContextImpl impl(registry_, verbose, initialContext);
   impl.traverseTree(rootEntity);
 
   registry_.sort<RenderingInstanceComponent>(

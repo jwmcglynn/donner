@@ -12,17 +12,25 @@ using testing::Field;
 
 namespace {
 
-/// A simple in-process resource loader for testing.
+/// A simple in-process resource loader for testing. Returns dummy data for known URLs.
 class InProcResourceLoader : public ResourceLoaderInterface {
 public:
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
-    if (url == "test.txt") {
-      return std::vector<uint8_t>{'t', 'e', 's', 't'};
+    for (const auto& knownUrl : knownUrls_) {
+      if (url == knownUrl) {
+        return std::vector<uint8_t>{'t', 'e', 's', 't'};
+      }
     }
 
     return ResourceLoaderError::NotFound;
   }
+
+  /// Add a URL that this loader will recognize and return dummy data for.
+  void addKnownUrl(std::string url) { knownUrls_.push_back(std::move(url)); }
+
+private:
+  std::vector<std::string> knownUrls_{"test.txt"};
 };
 
 /// A helper matcher that extracts the alternative T from a std::variant.
@@ -114,6 +122,87 @@ TEST(UrlLoader, FetchDataUrlInvalidBase64) {
   auto result = urlLoader.fromUri("data:image/png;base64,!!!!");
 
   EXPECT_THAT(result, VariantWith<UrlLoaderError>(UrlLoaderError::InvalidDataUrl));
+}
+
+/// @test that MIME type is detected from .svg file extension.
+TEST(UrlLoader, DetectsSvgMimeType) {
+  InProcResourceLoader loader;
+  loader.addKnownUrl("icon.svg");
+  UrlLoader urlLoader(loader);
+  auto result = urlLoader.fromUri("icon.svg");
+
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+}
+
+/// @test that MIME type is detected from .svgz file extension.
+TEST(UrlLoader, DetectsSvgzMimeType) {
+  InProcResourceLoader loader;
+  loader.addKnownUrl("icon.svgz");
+  UrlLoader urlLoader(loader);
+  auto result = urlLoader.fromUri("icon.svgz");
+
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+}
+
+/// @test that MIME type is detected from .png file extension.
+TEST(UrlLoader, DetectsPngMimeType) {
+  InProcResourceLoader loader;
+  loader.addKnownUrl("image.png");
+  UrlLoader urlLoader(loader);
+  auto result = urlLoader.fromUri("image.png");
+
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/png"))));
+}
+
+/// @test that MIME type is detected from .jpg file extension.
+TEST(UrlLoader, DetectsJpegMimeType) {
+  InProcResourceLoader loader;
+  loader.addKnownUrl("photo.jpg");
+  UrlLoader urlLoader(loader);
+  auto result = urlLoader.fromUri("photo.jpg");
+
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/jpeg"))));
+}
+
+/// @test that MIME type detection is case-insensitive.
+TEST(UrlLoader, MimeTypeDetectionCaseInsensitive) {
+  InProcResourceLoader loader;
+  loader.addKnownUrl("icon.SVG");
+  UrlLoader urlLoader(loader);
+  auto result = urlLoader.fromUri("icon.SVG");
+
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+}
+
+/// @test that MIME type detection ignores query strings and fragments in external URLs.
+TEST(UrlLoader, MimeTypeDetectionIgnoresQueryAndFragment) {
+  InProcResourceLoader loader;
+  loader.addKnownUrl("icon.svg?v=2");
+  loader.addKnownUrl("icon.svg#element");
+  UrlLoader urlLoader(loader);
+
+  auto result1 = urlLoader.fromUri("icon.svg?v=2");
+  EXPECT_THAT(result1,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+
+  auto result2 = urlLoader.fromUri("icon.svg#element");
+  EXPECT_THAT(result2,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+}
+
+/// @test that unknown file extensions produce an empty MIME type.
+TEST(UrlLoader, UnknownExtensionEmptyMimeType) {
+  InProcResourceLoader loader;
+  UrlLoader urlLoader(loader);
+  auto result = urlLoader.fromUri("test.txt");
+
+  EXPECT_THAT(result,
+              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq(""))));
 }
 
 }  // namespace donner::svg

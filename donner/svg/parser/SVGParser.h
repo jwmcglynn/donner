@@ -7,7 +7,6 @@
 #include "donner/base/ParseResult.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::parser {
 
@@ -84,12 +83,12 @@ public:
    * @param source Input buffer containing the SVG XML document. Will not be modified.
    * @param[out] outWarnings If non-null, append warnings encountered to this vector.
    * @param options Options to modify the parsing behavior.
-   * @param resourceLoader Resource loader to use for loading external resources.
+   * @param settings Document settings, including the resource loader and processing mode.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseSVG(
       std::string_view source, std::vector<ParseError>* outWarnings = nullptr, Options options = {},
-      std::unique_ptr<ResourceLoaderInterface> resourceLoader = nullptr) noexcept;
+      SVGDocument::Settings settings = {}) noexcept;
 
   /**
    * Parses an SVG XML document from an XML document tree.
@@ -97,13 +96,12 @@ public:
    * @param xmlDocument XML document to parse.
    * @param[out] outWarnings If non-null, append warnings encountered to this vector.
    * @param options Options to modify the parsing behavior.
-   * @param resourceLoader Resource loader to use for loading external resources.
+   * @param settings Document settings, including the resource loader and processing mode.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseXMLDocument(
       xml::XMLDocument&& xmlDocument, std::vector<ParseError>* outWarnings = nullptr,
-      Options options = {},
-      std::unique_ptr<ResourceLoaderInterface> resourceLoader = nullptr) noexcept;
+      Options options = {}, SVGDocument::Settings settings = {}) noexcept;
 };
 
 }  // namespace donner::svg::parser

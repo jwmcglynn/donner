@@ -334,9 +334,33 @@ public:
   }
 };
 
-ParseResult<SVGDocument> SVGParser::ParseSVG(
-    std::string_view source, std::vector<ParseError>* outWarnings, SVGParser::Options options,
-    std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
+ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
+                                             std::vector<ParseError>* outWarnings,
+                                             SVGParser::Options options,
+                                             SVGDocument::Settings settings) noexcept {
+  // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
+  // (sub-documents cannot load their own sub-documents).
+  if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
+    settings.svgParseCallback =
+        [](const std::vector<uint8_t>& svgContent,
+           std::vector<ParseError>* warnings) -> std::optional<SVGDocumentHandle> {
+      SVGDocument::Settings subSettings;
+      subSettings.processingMode = ProcessingMode::SecureStatic;
+      // No resource loader — secure mode sub-documents cannot load external resources.
+
+      const std::string_view subSource(reinterpret_cast<const char*>(svgContent.data()),
+                                       svgContent.size());
+      auto result = SVGParser::ParseSVG(subSource, warnings, Options(), std::move(subSettings));
+      if (result.hasError()) {
+        if (warnings) {
+          warnings->emplace_back(result.error());
+        }
+        return std::nullopt;
+      }
+      return result.result().handle();
+    };
+  }
+
   xml::XMLParser::Options xmlOptions;
   if (options.enableExperimental) {
     xmlOptions.parseCustomEntities = true;
@@ -360,9 +384,6 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
     return std::move(maybeDocument.error());
   }
 
-  SVGDocument::Settings settings;
-  settings.resourceLoader = std::move(resourceLoader);
-
   xml::XMLDocument xmlDocument(maybeDocument.result());
 
   SVGParserContext context(source, outWarnings, options);
@@ -381,12 +402,10 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(
   }
 }
 
-ParseResult<SVGDocument> SVGParser::ParseXMLDocument(
-    xml::XMLDocument&& xmlDocument, std::vector<ParseError>* outWarnings,
-    SVGParser::Options options, std::unique_ptr<ResourceLoaderInterface> resourceLoader) noexcept {
-  SVGDocument::Settings settings;
-  settings.resourceLoader = std::move(resourceLoader);
-
+ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
+                                                     std::vector<ParseError>* outWarnings,
+                                                     SVGParser::Options options,
+                                                     SVGDocument::Settings settings) noexcept {
   SVGParserContext context(std::string_view(), outWarnings, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
   if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {

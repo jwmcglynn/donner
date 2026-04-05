@@ -1,0 +1,13 @@
+load("//build_defs:rules.bzl", "donner_cc_test")
+
+donner_cc_test(
+    name = "sub_document_cache_tests",
+    srcs = [
+        "SubDocumentCache_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

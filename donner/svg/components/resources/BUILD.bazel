@@ -10,6 +10,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/svg:svg_document_handle",
         "//donner/svg/properties:property_parsing",
         "//donner/svg/resources:image_resource",
     ],
@@ -26,9 +27,11 @@ donner_cc_library(
     name = "resource_manager_context",
     srcs = [
         "ResourceManagerContext.cc",
+        "SubDocumentCache.cc",
     ],
     hdrs = [
         "ResourceManagerContext.h",
+        "SubDocumentCache.h",
     ],
     visibility = [
         "//donner/svg/components:__subpackages__",
@@ -37,6 +40,7 @@ donner_cc_library(
         ":components",
         ":font_resource",
         "//donner/css:core",
+        "//donner/svg:svg_document_handle",
         "//donner/svg/resources:font_loader",
         "//donner/svg/resources:image_loader",
         "//donner/svg/resources:resource_loader_interface",

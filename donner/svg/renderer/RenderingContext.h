@@ -1,11 +1,13 @@
 #pragma once
 /// @file
 
+#include <optional>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseError.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 
 namespace donner::svg::components {
 
@@ -40,6 +42,23 @@ public:
    */
   void invalidateRenderTree();
 
+  /**
+   * Set initial context-fill and context-stroke values for sub-document rendering.
+   * When a `<use>` element references an external SVG, the `<use>` element's resolved fill
+   * and stroke become the initial context-fill/context-stroke in the sub-document.
+   *
+   * @param fill Initial context-fill value.
+   * @param stroke Initial context-stroke value.
+   */
+  void setInitialContextPaint(const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke);
+
+  /**
+   * Clear previously set context-fill and context-stroke values.
+   * Call after rendering a sub-document to prevent stale context paint from leaking to subsequent
+   * renders of the same cached sub-document handle.
+   */
+  void clearInitialContextPaint();
+
 private:
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
@@ -58,6 +77,11 @@ private:
 private:
   /// Reference to the registry containing the render tree.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
+
+  /// Initial context-fill value for sub-document rendering.
+  std::optional<ResolvedPaintServer> initialContextFill_;
+  /// Initial context-stroke value for sub-document rendering.
+  std::optional<ResolvedPaintServer> initialContextStroke_;
 };
 
 }  // namespace donner::svg::components

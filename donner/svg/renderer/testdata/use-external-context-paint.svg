@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="200" height="200" viewBox="0 0 200 200">
+  <rect width="200" height="200" fill="#eeeeee"/>
+
+  <!-- The <use> element's fill (#cc4444 red) and stroke (#4488cc blue)
+       should be accessible as context-fill and context-stroke in the external SVG. -->
+  <use href="external-context-paint.svg" x="50" y="50"
+       fill="#cc4444" stroke="#4488cc"/>
+</svg>

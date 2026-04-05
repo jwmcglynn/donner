@@ -1,6 +1,19 @@
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
+    name = "svg_document_handle",
+    hdrs = [
+        "SVGDocumentHandle.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "svg_core",
     srcs = [
         "DonnerController.cc",
@@ -46,6 +59,7 @@ donner_cc_library(
         "SVGClipPathElement.h",
         "SVGDefsElement.h",
         "SVGDocument.h",
+        "SVGDocumentHandle.h",
         "SVGElement.h",
         "SVGEllipseElement.h",
         "SVGFEGaussianBlurElement.h",

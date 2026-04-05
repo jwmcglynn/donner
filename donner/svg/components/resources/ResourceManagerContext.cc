@@ -3,6 +3,7 @@
 #include "donner/base/ParseError.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/resources/FontLoader.h"
 #include "donner/svg/resources/ImageLoader.h"
 #include "donner/svg/resources/NullResourceLoader.h"
@@ -12,6 +13,12 @@ namespace donner::svg::components {
 ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
 
 void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings) {
+  // In SecureStatic mode, sub-documents are not allowed to load external resources (SVG2 §2.7.1).
+  if (processingMode_ == ProcessingMode::SecureStatic ||
+      processingMode_ == ProcessingMode::SecureAnimated) {
+    return;
+  }
+
   auto imageView = registry_.view<ImageComponent>();
   const bool hasResourcesToLoad = !imageView.empty() || !fontFacesToLoad_.empty();
 
@@ -29,8 +36,9 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
 
   // Iterate over all ImageComponents and load them.
   for (auto view = imageView; auto entity : view) {
-    // For now, skip the entity if there is already a LoadedImageComponent.
-    if (registry_.all_of<LoadedImageComponent>(entity)) {
+    // Skip entities that already have a loaded image or SVG sub-document.
+    if (registry_.all_of<LoadedImageComponent>(entity) ||
+        registry_.all_of<LoadedSVGImageComponent>(entity)) {
       continue;
     }
 
@@ -38,19 +46,46 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
 
     ImageLoader imageLoader(loader);
 
-    auto maybeImageData = imageLoader.fromUri(image.href);
-    if (std::holds_alternative<UrlLoaderError>(maybeImageData)) {
+    auto imageResult = imageLoader.fromUri(image.href);
+    if (std::holds_alternative<UrlLoaderError>(imageResult)) {
       if (outWarnings) {
         ParseError err;
-        err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeImageData)));
+        err.reason = std::string(ToString(std::get<UrlLoaderError>(imageResult)));
 
         outWarnings->emplace_back(err);
       }
 
       // Create an empty LoadedImageComponent to prevent loading again.
       registry_.emplace<LoadedImageComponent>(entity);
+    } else if (std::holds_alternative<SvgImageContent>(imageResult)) {
+      if (!svgParseCallback_) {
+        // No SVG parser available — skip.
+        if (outWarnings) {
+          ParseError err;
+          err.reason = "SVG image references require an SVG parse callback";
+          outWarnings->emplace_back(err);
+        }
+        registry_.emplace<LoadedImageComponent>(entity);
+        continue;
+      }
+
+      auto& svgContent = std::get<SvgImageContent>(imageResult);
+
+      // Get or create the SubDocumentCache on this registry.
+      if (!registry_.ctx().contains<SubDocumentCache>()) {
+        registry_.ctx().emplace<SubDocumentCache>();
+      }
+      auto& cache = registry_.ctx().get<SubDocumentCache>();
+
+      auto subDoc = cache.getOrParse(image.href, svgContent.data, svgParseCallback_, outWarnings);
+      if (subDoc) {
+        registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*subDoc));
+      } else {
+        // Parse failed — create an empty LoadedImageComponent to prevent retrying.
+        registry_.emplace<LoadedImageComponent>(entity);
+      }
     } else {
-      registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(maybeImageData));
+      registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(imageResult));
     }
   }
 
@@ -98,6 +133,61 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
   fontFacesToLoad_.clear();
 }
 
+std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
+    const RcString& url, std::vector<ParseError>* outWarnings) {
+  // In secure modes, external resource loading is disabled.
+  if (processingMode_ == ProcessingMode::SecureStatic ||
+      processingMode_ == ProcessingMode::SecureAnimated) {
+    return std::nullopt;
+  }
+
+  if (!loader_) {
+    if (outWarnings) {
+      ParseError err;
+      err.reason = "Could not load external SVG, no ResourceLoader provided";
+      outWarnings->emplace_back(err);
+    }
+    return std::nullopt;
+  }
+
+  if (!svgParseCallback_) {
+    if (outWarnings) {
+      ParseError err;
+      err.reason = "External SVG references require an SVG parse callback";
+      outWarnings->emplace_back(err);
+    }
+    return std::nullopt;
+  }
+
+  // Get or create the SubDocumentCache.
+  if (!registry_.ctx().contains<SubDocumentCache>()) {
+    registry_.ctx().emplace<SubDocumentCache>();
+  }
+  auto& cache = registry_.ctx().get<SubDocumentCache>();
+
+  // Check if already cached.
+  if (auto cached = cache.get(url)) {
+    return cached;
+  }
+
+  // Fetch the file content.
+  auto fetchResult = loader_->fetchExternalResource(std::string_view(url));
+  if (std::holds_alternative<ResourceLoaderError>(fetchResult)) {
+    if (outWarnings) {
+      ParseError err;
+      const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
+      err.reason =
+          std::string("Failed to load external SVG '") + std::string(url) + "': " +
+          (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
+      outWarnings->emplace_back(err);
+    }
+    return std::nullopt;
+  }
+
+  auto& data = std::get<std::vector<uint8_t>>(fetchResult);
+  return cache.getOrParse(url, data, svgParseCallback_, outWarnings);
+}
+
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
   fontFacesToLoad_.insert(fontFacesToLoad_.end(), fontFaces.begin(), fontFaces.end());
 }
@@ -127,17 +217,14 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
       loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
   ImageLoader imageLoader(loader);
 
-  auto maybeImageData = imageLoader.fromUri(image->href);
-  if (std::holds_alternative<UrlLoaderError>(maybeImageData)) {
-    // TODO(jwm): Plumb loading error out.
-    // Until a warning is plumbed, avoid creating an empty LoadedImageComponent (like in
-    // loadResources). This will avoid silent failures as this will be reattempted in loadResources,
-    // but this may result in duplicate image load attempts which is not ideal.
-    return nullptr;
-  } else {
-    return &registry_.emplace<LoadedImageComponent>(entity,
-                                                    std::get<ImageResource>(maybeImageData));
+  auto imageResult = imageLoader.fromUri(image->href);
+  if (std::holds_alternative<ImageResource>(imageResult)) {
+    return &registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(imageResult));
   }
+
+  // TODO(jwm): Plumb loading error out, and handle SvgImageContent once sub-document
+  // rendering is implemented.
+  return nullptr;
 }
 
 }  // namespace donner::svg::components

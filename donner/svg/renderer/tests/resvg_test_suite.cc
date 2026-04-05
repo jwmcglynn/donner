@@ -252,25 +252,11 @@ INSTANTIATE_TEST_SUITE_P(
     Image, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-image",
                                 {
-                                    {"e-image-003.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-006.svg", Params::Skip()},  // Not impl: .svgz image
-                                    {"e-image-007.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-008.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-017.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-018.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-019.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-020.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-021.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-022.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-023.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-024.svg", Params::Skip()},  // Not impl: .svg imageg
-                                    {"e-image-029.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-030.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-031.svg", Params::Skip()},  // Not impl: .svg image
+                                    {"e-image-029.svg", Params::Skip()},  // UB: missing dimensions
+                                    {"e-image-030.svg", Params::Skip()},  // UB: missing width
+                                    {"e-image-031.svg", Params::Skip()},  // UB: missing height
                                     {"e-image-032.svg", Params::Skip()},  // UB: Float size
-                                    {"e-image-033.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-034.svg", Params::Skip()},  // Not impl: .svg image
-                                    {"e-image-039.svg", Params::Skip()},  // Not impl: .svg image
                                     {"e-image-040.svg", Params::Skip()},  // Not impl: External URLs
                                     {"e-image-041.svg", Params::Skip()},  // Not impl: External URLs
                                 },

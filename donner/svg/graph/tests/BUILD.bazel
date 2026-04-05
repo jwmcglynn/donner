@@ -1,0 +1,12 @@
+load("//build_defs:rules.bzl", "donner_cc_test")
+
+donner_cc_test(
+    name = "reference_tests",
+    srcs = [
+        "Reference_tests.cc",
+    ],
+    deps = [
+        "//donner/svg/graph",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

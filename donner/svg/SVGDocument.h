@@ -1,8 +1,13 @@
 #pragma once
 /// @file
 
+#include <functional>
+
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseError.h"
+#include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/core/ProcessingMode.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
@@ -31,11 +36,9 @@ class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement
  */
 class SVGDocument {
 public:
-  /// Document settings which configure the document behavior.
-  struct Settings {
-    /// Resource loader to use for loading external resources.
-    std::unique_ptr<ResourceLoaderInterface> resourceLoader;
-  };
+  struct Settings;
+  using SvgParseCallback = std::function<std::optional<SVGDocumentHandle>(
+      const std::vector<uint8_t>& svgContent, std::vector<ParseError>* outWarnings)>;
 
 private:
   friend class SVGElement;
@@ -57,6 +60,9 @@ private:
                        EntityHandle ontoEntityHandle);
 
 public:
+  /// Constructor to create an empty SVGDocument with default settings.
+  SVGDocument();
+
   /**
    * Constructor to create an empty SVGDocument.
    *
@@ -64,12 +70,29 @@ public:
    *
    * @param settings Settings to configure the document.
    */
-  explicit SVGDocument(Settings settings = Settings());
+  explicit SVGDocument(Settings settings);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   const Registry& registry() const { return *registry_; }
+  /**
+   * Get the internal shared document handle used by this value facade.
+   *
+   * @return Shared document-state handle backing this \ref SVGDocument.
+   */
+  SVGDocumentHandle handle() const { return registry_; }
+
+  /**
+   * Rehydrate an \ref SVGDocument facade from an internal shared document handle.
+   *
+   * @param handle Shared document-state handle to wrap.
+   * @return A new \ref SVGDocument facade referencing the same underlying document state.
+   */
+  static SVGDocument CreateFromHandle(SVGDocumentHandle handle) {
+    return SVGDocument(std::move(handle));
+  }
+
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;
 
@@ -140,6 +163,18 @@ public:
 private:
   /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
+};
+
+/// Document settings which configure the document behavior.
+struct SVGDocument::Settings {
+  /// Resource loader to use for loading external resources.
+  std::unique_ptr<ResourceLoaderInterface> resourceLoader;
+
+  /// Processing mode for this document. Defaults to \ref ProcessingMode::DynamicInteractive.
+  ProcessingMode processingMode = ProcessingMode::DynamicInteractive;
+
+  /// Callback to parse SVG content into sub-documents.
+  SvgParseCallback svgParseCallback;
 };
 
 }  // namespace donner::svg

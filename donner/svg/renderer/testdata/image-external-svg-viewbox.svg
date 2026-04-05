@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="300" height="200" viewBox="0 0 300 200">
+  <!-- Background -->
+  <rect width="300" height="200" fill="#eeeeee"/>
+
+  <!-- External SVG scaled into a non-square rectangle (tests viewBox mapping) -->
+  <image href="external-shapes.svg" x="10" y="10" width="280" height="80"/>
+
+  <!-- Same SVG in a tall narrow area -->
+  <image href="external-shapes.svg" x="100" y="100" width="80" height="90"/>
+</svg>
