@@ -48,7 +48,7 @@ jobs:
           python3 tools/filter_coverage.py --input $(bazelisk info output_path)/_coverage/_coverage_report.dat --output ./filtered_report.dat
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./filtered_report.dat
