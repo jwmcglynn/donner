@@ -291,4 +291,38 @@ TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
       )"));
 }
 
+/**
+ * Verify that a clipPath can reference a shape via a direct <use> child.
+ */
+TEST(SVGClipPathElementTests, RenderingUseChild) {
+  const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
+        <defs>
+          <rect id="shapeRef" x="8" y="0" width="8" height="16" />
+        </defs>
+        <clipPath id="clipUse">
+          <use href="#shapeRef" />
+        </clipPath>
+        <rect width="16" height="16" clip-path="url(#clipUse)" fill="white" />
+        )-");
+
+  EXPECT_TRUE(generatedAscii.matches(R"(
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      ........@@@@@@@@
+      )"));
+}
+
 }  // namespace donner::svg
