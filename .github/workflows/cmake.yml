@@ -10,6 +10,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         backend: [tiny_skia, skia]
     steps:
@@ -21,6 +22,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
 
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            cmake-deps-linux-${{ matrix.backend }}-
+
       - name: Build with CMake (${{ matrix.backend }})
         run: |
           python3 tools/cmake/gen_cmakelists.py
@@ -30,10 +39,20 @@ jobs:
   macos:
     runs-on: macos-15
     strategy:
+      fail-fast: false
       matrix:
         backend: [tiny_skia, skia]
     steps:
       - uses: actions/checkout@v6
+
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            cmake-deps-macos-${{ matrix.backend }}-
+
       - name: Build with CMake (${{ matrix.backend }})
         run: |
           python3 tools/cmake/gen_cmakelists.py
