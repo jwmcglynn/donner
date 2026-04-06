@@ -51,17 +51,20 @@ No backward compatibility with the existing `ParseError` API is required.
 
 ## Implementation Plan
 
-- [ ] **Milestone 1: Introduce base diagnostics model in `donner/base`**
-  - [ ] Add `SourceRange` with half-open `[start, end)` semantics and parent-offset remapping.
-  - [ ] Add `ParseDiagnostic` value type with severity, reason, range.
-  - [ ] Add `ParseWarningSink` with no-op and collecting implementations, lazy-format API.
-  - [ ] Update `ParseResult<T>` to use `ParseDiagnostic` instead of `ParseError`.
-  - [ ] Update `ParseResultTestUtils.h` matchers for the new types.
-  - [ ] Delete `ParseError.h` / `ParseError.cc`.
-  - [ ] Unit tests for `SourceRange` math, `ParseDiagnostic` invariants, sink behavior.
+- [x] **Milestone 1: Introduce base diagnostics model in `donner/base`**
+  - [x] Add `SourceRange` with half-open `[start, end)` semantics (renamed from `FileOffsetRange`
+    in `FileOffset.h`).
+  - [x] Add `ParseDiagnostic` value type with severity, reason, range.
+  - [x] Add `ParseWarningSink` with no-op and collecting implementations, lazy-format API.
+  - [x] Add `RcString::fromFormat` using C++20 `std::format`.
+  - [x] Update `ParseResult<T>` to use `ParseDiagnostic` instead of `ParseError`.
+  - [x] Update `ParseResultTestUtils.h` matchers for the new types.
+  - [x] Migrate all `ParseError` references across the entire codebase (~95 files).
+  - [x] Delete `ParseError.h` / `ParseError.cc`.
+  - [x] Unit tests for `ParseDiagnostic` invariants and `ParseWarningSink` behavior.
 - [ ] **Milestone 2: Range-correctness migration for parsers**
-  - [ ] Update `ParserBase` to produce `ParseDiagnostic` with ranges.
-  - [ ] Migrate `NumberParser`, `IntegerParser`, `LengthParser`.
+  - [ ] Update `ParserBase` to track end offsets and produce `SourceRange` with both start and end.
+  - [ ] Migrate `NumberParser`, `IntegerParser`, `LengthParser` to emit accurate ranges.
   - [ ] Migrate `PathParser` (key test case: partial results with accurate ranges).
   - [ ] Migrate `TransformParser`, `ViewBoxParser`, `AngleParser`.
   - [ ] Migrate `LengthPercentageParser`, `PreserveAspectRatioParser`, `Number2dParser`,
@@ -69,14 +72,11 @@ No backward compatibility with the existing `ParseError` API is required.
   - [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (remove `DataUrlParserError` enum).
   - [ ] Add range-accuracy tests for each parser.
 - [ ] **Milestone 3: Warning plumbing migration**
-  - [ ] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of `std::vector<ParseError>*`.
-  - [ ] Migrate `AttributeParser` to use `ParseDiagnostic`.
-  - [ ] Migrate `SVGParser` public API: replace `std::vector<ParseError>* outWarnings` with
+  - [ ] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of
+    `std::vector<ParseDiagnostic>*`.
+  - [ ] Migrate `SVGParser` public API: replace `std::vector<ParseDiagnostic>* outWarnings` with
     `ParseWarningSink&`.
   - [ ] Standardize subparser remapping with `SourceRange`-aware composition helpers.
-  - [ ] Migrate `XMLParser` to produce `ParseDiagnostic`.
-  - [ ] Migrate CSS `ColorParser`, `SelectorParser` to produce `ParseDiagnostic`.
-  - [ ] Bridge CSS tokenizer `ErrorToken` to `ParseDiagnostic` at parser boundary.
   - [ ] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
   - [ ] Add range-accuracy tests for CSS/XML parsers.
 - [ ] **Milestone 4: Diagnostic rendering utilities**
@@ -90,11 +90,11 @@ No backward compatibility with the existing `ParseError` API is required.
 
 ```
 donner/base/
-  FileOffset.h          (unchanged - keep FileOffset)
-  SourceRange.h         (NEW - replaces SourceRange, half-open [start, end))
+  FileOffset.h          (MODIFIED - FileOffset unchanged, FileOffsetRange renamed to SourceRange)
   ParseDiagnostic.h     (NEW - replaces ParseError.h)
-  ParseWarningSink.h    (NEW - replaces std::vector<ParseError>*)
+  ParseWarningSink.h    (NEW - replaces std::vector<ParseDiagnostic>*)
   ParseResult.h         (MODIFIED - uses ParseDiagnostic)
+  RcString.h            (MODIFIED - added fromFormat using std::format)
 ```
 
 ### High-level data flow

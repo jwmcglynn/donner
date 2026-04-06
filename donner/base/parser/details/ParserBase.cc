@@ -52,6 +52,14 @@ FileOffset ParserBase::currentOffset(int index) const {
   return FileOffset::Offset(consumedChars() + index);
 }
 
+SourceRange ParserBase::currentRange(int startIndex, int endIndex) const {
+  return {currentOffset(startIndex), currentOffset(endIndex)};
+}
+
+SourceRange ParserBase::rangeFrom(size_t startOffset) const {
+  return {FileOffset::Offset(startOffset), currentOffset()};
+}
+
 size_t ParserBase::consumedChars() const {
   return remaining_.data() - str_.data();
 }
