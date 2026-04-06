@@ -64,11 +64,11 @@ The plan is split into two phases: a **local-first scaffold** you can run immedi
 
 ### Phase 2: Automation and reporting
 
-- [ ] Milestone 4: Crash detection and issue filing
-  - [ ] Parse libFuzzer crash output to extract crash files, stack traces, and signal info
-  - [ ] Deduplicate crashes by stack trace signature (top N frames)
-  - [ ] File GitHub Issues via `gh` CLI with crash details, repro input (attached), and labels
-  - [ ] Optionally send notifications (email, Slack webhook, or similar)
+- [x] Milestone 4: Crash detection and issue filing
+  - [x] Parse libFuzzer crash output to extract crash files, stack traces, and signal info
+  - [x] Deduplicate crashes by stack trace signature (top N frames)
+  - [x] File GitHub Issues via `gh` CLI with crash details, repro input (attached), and labels
+  - [x] Optionally send notifications (email, Slack webhook, or similar)
 - [ ] Milestone 5: Trigger mechanism
   - [ ] Create `tools/fuzzing/trigger_fuzz.sh` with rate-limiting and commit-tracking logic
   - [ ] Create systemd timer + service unit (fires every 30 min, enforces 2-hour minimum
