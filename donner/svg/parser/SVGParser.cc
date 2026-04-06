@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/base/encoding/Decompress.h"
 #include "donner/base/xml/XMLDocument.h"
@@ -374,7 +375,7 @@ public:
 };
 
 ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
-                                             std::vector<ParseDiagnostic>* outWarnings,
+                                             ParseWarningSink& warningSink,
                                              SVGParser::Options options,
                                              SVGDocument::Settings settings) noexcept {
   // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
@@ -382,7 +383,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
   if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
     settings.svgParseCallback =
         [](const std::vector<uint8_t>& svgContent,
-           std::vector<ParseDiagnostic>* warnings) -> std::optional<SVGDocumentHandle> {
+           ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
       SVGDocument::Settings subSettings;
       subSettings.processingMode = ProcessingMode::SecureStatic;
       // No resource loader — secure mode sub-documents cannot load external resources.
@@ -391,9 +392,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
                                        svgContent.size());
       auto result = SVGParser::ParseSVG(subSource, warnings, Options(), std::move(subSettings));
       if (result.hasError()) {
-        if (warnings) {
-          warnings->emplace_back(result.error());
-        }
+        warnings.add(ParseDiagnostic(result.error()));
         return std::nullopt;
       }
       return result.result().handle();
@@ -423,7 +422,34 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
 
   xml::XMLDocument xmlDocument(maybeDocument.result());
 
-  SVGParserContext context(source, outWarnings, options);
+  SVGParserContext context(source, warningSink, options);
+  SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
+  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
+    return std::move(error.value());
+  }
+
+  if (auto maybeDocument = parser.document()) {
+    return std::move(maybeDocument.value());
+  } else {
+    ParseDiagnostic err;
+    err.reason = "No SVG element found in document";
+    err.range.start = FileOffset::Offset(0);
+    return err;
+  }
+}
+
+ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
+                                             SVGParser::Options options,
+                                             SVGDocument::Settings settings) noexcept {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  return ParseSVG(source, disabled, options, std::move(settings));
+}
+
+ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
+                                                     ParseWarningSink& warningSink,
+                                                     SVGParser::Options options,
+                                                     SVGDocument::Settings settings) noexcept {
+  SVGParserContext context(std::string_view(), warningSink, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
   if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
     return std::move(error.value());
@@ -440,23 +466,10 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
 }
 
 ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
-                                                     std::vector<ParseDiagnostic>* outWarnings,
                                                      SVGParser::Options options,
                                                      SVGDocument::Settings settings) noexcept {
-  SVGParserContext context(std::string_view(), outWarnings, options);
-  SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
-  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
-    return std::move(error.value());
-  }
-
-  if (auto maybeDocument = parser.document()) {
-    return std::move(maybeDocument.value());
-  } else {
-    ParseDiagnostic err;
-    err.reason = "No SVG element found in document";
-    err.range.start = FileOffset::Offset(0);
-    return err;
-  }
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  return ParseXMLDocument(std::move(xmlDocument), disabled, options, std::move(settings));
 }
 
 }  // namespace donner::svg::parser

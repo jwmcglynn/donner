@@ -1,9 +1,8 @@
 #pragma once
 
-#include <vector>
-
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/parser/LineOffsets.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -37,12 +36,12 @@ public:
    * Construct a new context for the given input string.
    *
    * @param input Input string.
-   * @param warningsStorage Storage for warnings, may be \c nullptr to disable warnings.
+   * @param warningSink Sink to collect warnings encountered during parsing.
    * @param options Options for parsing.
    */
-  SVGParserContext(std::string_view input, std::vector<ParseDiagnostic>* warningsStorage,
+  SVGParserContext(std::string_view input, ParseWarningSink& warningSink,
                    const SVGParser::Options& options)
-      : input_(input), lineOffsets_(input), warnings_(warningsStorage), options_(options) {}
+      : input_(input), lineOffsets_(input), warningSink_(warningSink), options_(options) {}
 
   /// Get the parser options.
   const SVGParser::Options& options() const { return options_; }
@@ -82,9 +81,7 @@ public:
    * @param warning Warning to add.
    */
   void addWarning(ParseDiagnostic&& warning) {
-    if (warnings_) {
-      warnings_->emplace_back(std::move(warning));
-    }
+    warningSink_.add(std::move(warning));
   }
 
   /**
@@ -167,8 +164,8 @@ private:
   /// Offsets of the start of each line in the input string.
   donner::parser::LineOffsets lineOffsets_;
 
-  /// Storage for warnings, may be \c nullptr to disable warnings.
-  std::vector<ParseDiagnostic>* warnings_;
+  /// Sink to collect warnings encountered during parsing.
+  ParseWarningSink& warningSink_;
 
   /// Options for parsing.
   SVGParser::Options options_;
