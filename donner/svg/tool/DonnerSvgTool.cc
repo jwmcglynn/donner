@@ -22,7 +22,9 @@
 #include <vector>
 
 #include "donner/base/Box.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/DiagnosticRenderer.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"
@@ -250,7 +252,8 @@ std::optional<std::string> ReadFile(std::string_view filename) {
 /** Parse SVG data into an SVGDocument. */
 std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::string& fileData,
                                          std::ostream& out, std::ostream& err) {
-  std::vector<donner::ParseError> warnings;
+  ParseWarningSink warningSink =
+      options.quiet ? ParseWarningSink::Disabled() : ParseWarningSink();
   parser::SVGParser::Options parserOptions;
   parserOptions.enableExperimental = options.experimental;
 
@@ -258,18 +261,17 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
   settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
       std::filesystem::current_path(), options.inputFile);
 
-  auto result = parser::SVGParser::ParseSVG(fileData, options.quiet ? nullptr : &warnings,
-                                            parserOptions, std::move(settings));
+  auto result = parser::SVGParser::ParseSVG(fileData, warningSink, parserOptions,
+                                            std::move(settings));
   if (result.hasError()) {
     err << "Parse error: " << result.error() << "\n";
     return std::nullopt;
   }
 
-  if (!options.quiet && !warnings.empty()) {
+  if (!options.quiet && warningSink.hasWarnings()) {
     out << "Parse warnings:\n";
-    for (const ParseError& warning : warnings) {
-      out << "  - " << warning << "\n";
-    }
+    out << DiagnosticRenderer::formatAll(fileData, warningSink,
+                                        {.colorize = true, .filename = options.inputFile});
   }
 
   return std::move(result.result());

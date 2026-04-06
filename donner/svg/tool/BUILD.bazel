@@ -33,6 +33,7 @@ donner_cc_library(
     visibility = ["//visibility:private"],
     deps = [
         ":donner_svg_tool_utils",
+        "//donner/base:diagnostic_renderer",
         "//donner/svg",
         "//donner/svg/renderer",
         "//donner/svg/renderer:terminal_image_viewer",
