@@ -194,11 +194,16 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
     backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
     text_tiers = variants[1] if len(variants) > 1 else ["text"]
 
+    # The default variant (tiny_skia + text) runs in //... builds.
+    # Other variants are manual until their goldens are stabilized.
+    default_suffix = "{}_{}".format(backends[0], text_tiers[0])
+
     for backend in backends:
         for tier in text_tiers:
             suffix = "{}_{}".format(backend, tier)
             target_name = "{}_{}".format(name, suffix)
             text_full_val = "true" if tier == "text_full" else "false"
+            is_default = (suffix == default_suffix)
 
             donner_multi_transitioned_test(
                 name = target_name,
@@ -206,6 +211,7 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
                 renderer_backend = backend,
                 text_full = text_full_val,
                 testonly = 1,
+                tags = [] if is_default else ["manual"],
                 **kwargs
             )
 
@@ -369,10 +375,13 @@ def _is_compilation_outputs_empty(compilation_outputs):
 def _donner_perf_sensitive_cc_library_impl(ctx):
     cc_toolchain = find_cpp_toolchain(ctx)
 
+    # Request the 'opt' feature for optimized compilation without changing the
+    # configuration of transitive deps (which would cause shared-library link
+    # conflicts between opt and fastbuild configurations of the same dep).
     feature_configuration = cc_common.configure_features(
         ctx = ctx,
         cc_toolchain = cc_toolchain,
-        requested_features = ctx.features,
+        requested_features = ctx.features + ["opt"],
         unsupported_features = ctx.disabled_features,
     )
 

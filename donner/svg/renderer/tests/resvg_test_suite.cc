@@ -118,6 +118,14 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
                                     {"a-fill-027.svg",
                                      Params::Skip()},  // Not impl: Fallback with icc-color
+                                    // Text fill tests: Skia's native glyph rendering produces
+                                    // different outlines than stb_truetype, causing pixel diffs.
+                                    {"a-fill-031.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 500)},
+                                    {"a-fill-032.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 500)},
+                                    {"a-fill-033.svg",
+                                     Params::WithThreshold(kDefaultThreshold, 2100)},
                                 })),
     TestNameFromFilename);
 

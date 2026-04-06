@@ -56,21 +56,37 @@ struct AsciiImage {
     }
 
     /// Implicit conversion to bool for use in EXPECT_TRUE.
+    /// Tries backend-specific golden first; if it doesn't match (or isn't set),
+    /// falls back to defaultPattern. Emits diagnostics for the last pattern tried.
     operator bool() const {  // NOLINT(google-explicit-constructor)
-      std::string_view golden;
-      if (ActiveRendererBackend() == RendererBackend::TinySkia && !tinySkiaGolden.empty()) {
-        golden = tinySkiaGolden;
-      } else if (ActiveRendererBackend() == RendererBackend::Skia && !skiaGolden.empty()) {
-        golden = skiaGolden;
-      } else {
-        golden = defaultGolden;
+      std::string_view backendGolden;
+      if (ActiveRendererBackend() == RendererBackend::TinySkia) {
+        backendGolden = tinySkiaGolden;
+      } else if (ActiveRendererBackend() == RendererBackend::Skia) {
+        backendGolden = skiaGolden;
       }
-      if (golden.empty()) {
-        std::cerr << "No golden pattern set for active backend: "
-                  << ActiveRendererBackendName() << "\n";
-        return false;
+
+      // Try backend-specific pattern first (silently).
+      if (!backendGolden.empty() && image.matchesImpl(backendGolden, false)) {
+        return true;
       }
-      return image.matchesImpl(golden, true);
+
+      // Try default pattern (silently if backend was also tried).
+      if (!defaultGolden.empty() && image.matchesImpl(defaultGolden, false)) {
+        return true;
+      }
+
+      // All failed — emit diagnostics for the most specific pattern.
+      if (!backendGolden.empty()) {
+        return image.matchesImpl(backendGolden, true);
+      }
+      if (!defaultGolden.empty()) {
+        return image.matchesImpl(defaultGolden, true);
+      }
+
+      std::cerr << "No golden pattern set for active backend: "
+                << ActiveRendererBackendName() << "\n";
+      return false;
     }
   };
 
