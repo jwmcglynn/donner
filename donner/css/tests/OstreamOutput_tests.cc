@@ -61,15 +61,13 @@ TEST(AnbValueTest, OstreamOutput) {
 
 /// @test Ostream output \c operator<< for \ref ClassSelector.
 TEST(ClassSelectorTest, OstreamOutput) {
-  ClassSelector selector;
-  selector.name = "highlight";
+  ClassSelector selector(RcString("highlight"));
   EXPECT_THAT(selector, ToStringIs("ClassSelector(highlight)"));
 }
 
 /// @test Ostream output \c operator<< for \ref IdSelector.
 TEST(IdSelectorTest, OstreamOutput) {
-  IdSelector selector;
-  selector.name = "main-content";
+  IdSelector selector(RcString("main-content"));
   EXPECT_THAT(selector, ToStringIs("IdSelector(main-content)"));
 }
 

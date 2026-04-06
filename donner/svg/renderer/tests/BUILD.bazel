@@ -4,7 +4,6 @@ load(
     "donner_cc_test",
     "donner_transitioned_test",
     "renderer_backend_compatible_with",
-    "renderer_backend_compatible_with",
 )
 
 donner_cc_library(
@@ -204,19 +203,6 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/tests:parser_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "rendering_context_tests",
-    srcs = [
-        "RenderingContext_tests.cc",
-    ],
-    deps = [
-        "//donner/base:base_test_utils",
-        "//donner/svg/parser",
-        "//donner/svg/renderer:rendering_context",
         "@com_google_gtest//:gtest_main",
     ],
 )

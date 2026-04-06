@@ -658,7 +658,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
   // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
   // is required, skip all recomputation.
-  if (renderState.hasBeenBuilt && renderState.hasComputedComponents &&
+  if (renderState.hasBeenBuilt && !renderState.needsFullStyleRecompute &&
       !renderState.needsFullRebuild && !hasDirtyEntities) {
     return;
   }
@@ -666,7 +666,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
   ensureComputedComponents(outWarnings);
   instantiateRenderTreeWithPrecomputedTree(verbose);
 
-  renderState.hasComputedComponents = true;
+  renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
 }
 
@@ -674,7 +674,7 @@ void RenderingContext::ensureComputedComponents(std::vector<ParseError>* outWarn
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 
-  if (renderState.hasComputedComponents && !renderState.needsFullRebuild && !hasDirtyEntities) {
+  if (!renderState.needsFullStyleRecompute && !renderState.needsFullRebuild && !hasDirtyEntities) {
     return;
   }
 

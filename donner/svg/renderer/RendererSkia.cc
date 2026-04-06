@@ -829,7 +829,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
             const SkRect srcRect = SkRect::MakeWH(static_cast<SkScalar>(primitive.imageWidth),
                                                   static_cast<SkScalar>(primitive.imageHeight));
 
-            if (primitive.isFragmentReference) {
+            if (!primitive.href.empty() && std::string_view(primitive.href).front() == '#') {
               // Fragment references: place at (0,0) with 1:1 mapping.
               result = SkImageFilters::Image(
                   std::move(skImage),
@@ -1489,13 +1489,42 @@ void RendererSkia::popFilterLayer() {
   currentCanvas_ = state.parentCanvas;
 }
 
-void RendererSkia::pushIsolatedLayer(double opacity) {
+namespace {
+
+SkBlendMode toSkBlendMode(MixBlendMode mode) {
+  switch (mode) {
+    case MixBlendMode::Normal: return SkBlendMode::kSrcOver;
+    case MixBlendMode::Multiply: return SkBlendMode::kMultiply;
+    case MixBlendMode::Screen: return SkBlendMode::kScreen;
+    case MixBlendMode::Overlay: return SkBlendMode::kOverlay;
+    case MixBlendMode::Darken: return SkBlendMode::kDarken;
+    case MixBlendMode::Lighten: return SkBlendMode::kLighten;
+    case MixBlendMode::ColorDodge: return SkBlendMode::kColorDodge;
+    case MixBlendMode::ColorBurn: return SkBlendMode::kColorBurn;
+    case MixBlendMode::HardLight: return SkBlendMode::kHardLight;
+    case MixBlendMode::SoftLight: return SkBlendMode::kSoftLight;
+    case MixBlendMode::Difference: return SkBlendMode::kDifference;
+    case MixBlendMode::Exclusion: return SkBlendMode::kExclusion;
+    case MixBlendMode::Hue: return SkBlendMode::kHue;
+    case MixBlendMode::Saturation: return SkBlendMode::kSaturation;
+    case MixBlendMode::Color: return SkBlendMode::kColor;
+    case MixBlendMode::Luminosity: return SkBlendMode::kLuminosity;
+  }
+  UTILS_UNREACHABLE();
+}
+
+}  // namespace
+
+void RendererSkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   if (currentCanvas_ == nullptr) {
     return;
   }
 
   SkPaint layerPaint;
   layerPaint.setAlphaf(NarrowToFloat(opacity));
+  if (blendMode != MixBlendMode::Normal) {
+    layerPaint.setBlendMode(toSkBlendMode(blendMode));
+  }
   currentCanvas_->saveLayer(nullptr, &layerPaint);
 }
 

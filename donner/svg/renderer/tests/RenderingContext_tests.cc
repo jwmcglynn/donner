@@ -134,7 +134,7 @@ TEST_F(RenderingContextTest, GetWorldBoundsRect) {
 
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
-  auto bounds = ctx.getWorldBounds(element->entity());
+  auto bounds = ctx.getWorldBounds(element->entityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
   EXPECT_NEAR(bounds->topLeft.y, 20.0, 1.0);
@@ -183,7 +183,7 @@ TEST_F(RenderingContextTest, GroupedElements) {
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, nullptr);
 
-  auto bounds = ctx.getWorldBounds(document.querySelector("#r")->entity());
+  auto bounds = ctx.getWorldBounds(document.querySelector("#r")->entityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, 50.0, 1.0);
   EXPECT_NEAR(bounds->topLeft.y, 50.0, 1.0);

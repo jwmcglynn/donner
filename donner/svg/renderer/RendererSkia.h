@@ -96,7 +96,7 @@ public:
   /**
    * Pushes an isolated compositing layer with the given opacity.
    */
-  void pushIsolatedLayer(double opacity) override;
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override;
 
   /**
    * Pops the most recent isolated layer.
