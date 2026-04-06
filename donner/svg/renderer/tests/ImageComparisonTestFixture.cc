@@ -562,8 +562,7 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
         *resourceDir, std::filesystem::path(filename));
   }
 
-  auto maybeResult = parser::SVGParser::ParseSVG(fileData, /*outWarnings=*/nullptr, options,
-                                                 std::move(settings));
+  auto maybeResult = parser::SVGParser::ParseSVG(fileData, options, std::move(settings));
   EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
   if (maybeResult.hasError()) {
     return SVGDocument();

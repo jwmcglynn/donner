@@ -68,7 +68,7 @@ protected:
     parser::SVGParser::Options options;
     options.parseAsInlineSVG = true;
 
-    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
+    auto maybeResult = parser::SVGParser::ParseSVG(input, options);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }

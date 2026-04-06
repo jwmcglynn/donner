@@ -19,7 +19,7 @@ SVGDocument ParseSVG(std::string_view input) {
   parser::SVGParser::Options options;
   options.disableUserAttributes = false;
 
-  auto maybeResult = parser::SVGParser::ParseSVG(input, /*outWarnings=*/nullptr, options);
+  auto maybeResult = parser::SVGParser::ParseSVG(input, options);
   EXPECT_THAT(maybeResult, NoParseError());
   return std::move(maybeResult).result();
 }
