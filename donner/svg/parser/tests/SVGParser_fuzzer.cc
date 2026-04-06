@@ -13,7 +13,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   SVGParser::Options options;
   options.disableUserAttributes = false;
 
-  auto result2 = SVGParser::ParseSVG(buffer, nullptr, options);
+  auto result2 = SVGParser::ParseSVG(buffer, options);
   (void)result2;
 
   return 0;

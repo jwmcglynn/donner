@@ -44,7 +44,7 @@ protected:
     fileData.resize(fileLength);
     file.read(fileData.data(), fileLength);
 
-    auto maybeResult = parser::SVGParser::ParseSVG(fileData, nullptr, options);
+    auto maybeResult = parser::SVGParser::ParseSVG(fileData, options);
     EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
     if (maybeResult.hasError()) {
       return SVGDocument();
@@ -85,7 +85,7 @@ protected:
         std::make_unique<SandboxedFileResourceLoader>(resourceDir, filePath);
 
     auto maybeResult =
-        parser::SVGParser::ParseSVG(fileData, nullptr, options, std::move(settings));
+        parser::SVGParser::ParseSVG(fileData, options, std::move(settings));
     EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
     if (maybeResult.hasError()) {
       return SVGDocument();

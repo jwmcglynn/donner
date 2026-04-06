@@ -71,7 +71,7 @@ TEST(SVGParser, WithoutNamespaceInline) {
   options.parseAsInlineSVG = true;
 
   ParseWarningSink warnings;
-  EXPECT_THAT(SVGParser::ParseSVG(simpleXml, &warnings, options), NoParseError());
+  EXPECT_THAT(SVGParser::ParseSVG(simpleXml, warnings, options), NoParseError());
 
   EXPECT_THAT(warnings.warnings(), ElementsAre());
 }

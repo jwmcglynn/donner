@@ -18,8 +18,8 @@ namespace donner {
  * ```
  * std::string_view svgSource("<svg>...</svg>");
  *
- * std::vector<ParseDiagnostic> warnings;
- * auto maybeResult = SVGParser::ParseSVG(svgSource, &warnings);
+ * ParseWarningSink warnings;
+ * auto maybeResult = SVGParser::ParseSVG(svgSource, warnings);
  *
  * if (maybeResult.hasError()) {
  *   const auto& e = maybeResult.error();
@@ -29,9 +29,9 @@ namespace donner {
  *
  * std::cout << "Parsed successfully.\n";
  *
- * if (!warnings.empty()) {
+ * if (warnings.hasWarnings()) {
  *   std::cout << "Warnings:\n";
- *   for (auto& w : warnings) {
+ *   for (auto& w : warnings.warnings()) {
  *     std::cout << "  " << w << "\n";
  *  }
  * }
