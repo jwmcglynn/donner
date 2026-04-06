@@ -74,15 +74,13 @@ SKIPPED_PACKAGES = {
     "donner/benchmarks",
 }
 
-# Individual targets to skip (require optional deps like HarfBuzz/FreeType).
-SKIPPED_TARGETS = {
-    "//donner/svg/text:text_backend_full",  # Requires FreeType + HarfBuzz (text_full tier)
-    "//donner/svg/renderer/tests:text_backend_tests",  # Tests text_backend_full
-}
+# Individual targets to skip entirely from CMake generation.
+SKIPPED_TARGETS: Set[str] = set()
 
 # Helper constants for CMake condition strings.
 _SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
 _TINY_SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "tiny_skia"'
+_TEXT_FULL = "DONNER_TEXT_FULL"
 
 # Maps CMake target name → CMake condition expression.
 # Targets in this map are wrapped in if(<condition>) … endif().
@@ -112,6 +110,9 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
     "donner_base_fonts_woff2_parser_tests": "DONNER_TEXT_WOFF2",
     "woff2dec": "DONNER_TEXT_WOFF2",
     "stb_truetype": "DONNER_TEXT",
+    # Text full tier (FreeType + HarfBuzz)
+    "donner_svg_text_text_backend_full": _TEXT_FULL,
+    "donner_svg_renderer_tests_text_backend_tests": _TEXT_FULL,
 }
 
 # Deps that may not exist depending on CMake options. When these appear in a
@@ -132,6 +133,7 @@ OPTIONAL_DEPS: Set[str] = {
     "donner_svg_renderer_skia_deps_unconfigured",
     "donner_third_party_skia_user_config_user_config",
     "donner_svg_renderer_tests_renderer_test_utils",
+    "donner_svg_text_text_backend_full",
 }
 
 # Sources that must be conditionally compiled. Maps cmake target name → dict of
@@ -155,6 +157,22 @@ CONDITIONAL_DEFINES: List[Tuple[str, str, List[str], str]] = [
     ("donner_svg_renderer_renderer_tiny_skia", "DONNER_TEXT", ["DONNER_TEXT_ENABLED"], "PUBLIC"),
     ("donner_svg_resources_font_manager", "DONNER_TEXT_WOFF2", ["DONNER_TEXT_WOFF2_ENABLED"], "PUBLIC"),
     ("donner_svg_resources_font_manager_tests", "DONNER_TEXT_WOFF2", ["DONNER_TEXT_WOFF2_ENABLED"], "PRIVATE"),
+    ("donner_svg_text_text_engine", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
+    ("donner_svg_renderer_rendering_context", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
+    ("donner_svg_renderer_renderer_skia", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
+]
+
+# Extra link deps to inject for specific CMake targets.
+# (cmake_target, condition, link_expression)
+EXTRA_LINK_DEPS: List[Tuple[str, str, str]] = [
+    ("donner_svg_text_text_backend_full", _TEXT_FULL,
+     "${FREETYPE_LIBRARIES} ${HARFBUZZ_LIBRARIES}"),
+]
+
+# Extra include dirs to inject for specific CMake targets.
+EXTRA_INCLUDE_DIRS: List[Tuple[str, str, str]] = [
+    ("donner_svg_text_text_backend_full", _TEXT_FULL,
+     "${FREETYPE_INCLUDE_DIRS} ${HARFBUZZ_INCLUDE_DIRS}"),
 ]
 
 #
@@ -423,6 +441,7 @@ def generate_root() -> None:
         f.write("set(DONNER_RENDERER_BACKEND \"tiny_skia\" CACHE STRING\n")
         f.write("    \"Renderer backend: 'tiny_skia' (default) or 'skia'\")\n")
         f.write("option(DONNER_TEXT \"Enable text rendering (stb_truetype)\" ON)\n")
+        f.write("option(DONNER_TEXT_FULL \"Enable full text rendering: FreeType + HarfBuzz\" OFF)\n")
         f.write("option(DONNER_TEXT_WOFF2 \"Enable WOFF2 font support (requires DONNER_TEXT)\" ON)\n")
         f.write("option(DONNER_FILTERS \"Enable SVG filter effects\" ON)\n\n")
 
@@ -433,6 +452,9 @@ def generate_root() -> None:
         f.write("endif()\n")
         f.write("if(DONNER_TEXT_WOFF2 AND NOT DONNER_TEXT)\n")
         f.write("  message(FATAL_ERROR \"DONNER_TEXT_WOFF2 requires DONNER_TEXT to be ON\")\n")
+        f.write("endif()\n")
+        f.write("if(DONNER_TEXT_FULL AND NOT DONNER_TEXT)\n")
+        f.write("  message(FATAL_ERROR \"DONNER_TEXT_FULL requires DONNER_TEXT to be ON\")\n")
         f.write("endif()\n\n")
 
         f.write("set(BUILD_GMOCK ON CACHE BOOL \"\" FORCE)\n\n")
@@ -560,6 +582,13 @@ def generate_root() -> None:
         # woff2 uses include_directories() which isn't transitive; fix it.
         f.write("target_include_directories(woff2dec PUBLIC ${woff2_SOURCE_DIR}/include)\n")
         f.write("endif() # DONNER_TEXT_WOFF2\n\n")
+
+        # ── FreeType + HarfBuzz (only when text_full is enabled) ──────────
+        f.write(f"if({_TEXT_FULL})\n")
+        f.write("find_package(PkgConfig REQUIRED)\n")
+        f.write("pkg_check_modules(FREETYPE REQUIRED freetype2)\n")
+        f.write("pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)\n")
+        f.write("endif() # DONNER_TEXT_FULL\n\n")
 
         # Optional test enable switch
         f.write("\n")
@@ -908,6 +937,15 @@ def generate_all_packages() -> None:
                             "DONNER_USE_FREETYPE)\n"
                         )
 
+                # Extra link deps (e.g. system FreeType/HarfBuzz for text_backend_full)
+                for extra_target, extra_cond, extra_libs in EXTRA_LINK_DEPS:
+                    if extra_target == cmake_name:
+                        f.write(f"target_link_libraries({cmake_name} PUBLIC {extra_libs})\n")
+
+                for extra_target, extra_cond, extra_dirs in EXTRA_INCLUDE_DIRS:
+                    if extra_target == cmake_name:
+                        f.write(f"target_include_directories({cmake_name} PUBLIC {extra_dirs})\n")
+
                 # Close conditional block
                 if condition:
                     f.write(f"endif() # {condition}\n")
@@ -955,6 +993,7 @@ def main() -> None:
     print("  -DDONNER_RENDERER_BACKEND=tiny_skia  (default)")
     print("  -DDONNER_RENDERER_BACKEND=skia")
     print("  -DDONNER_TEXT=OFF                     Disable text rendering")
+    print("  -DDONNER_TEXT_FULL=ON                 Enable FreeType + HarfBuzz shaping")
     print("  -DDONNER_TEXT_WOFF2=OFF               Disable WOFF2 support")
     print("  -DDONNER_FILTERS=OFF                  Disable filter effects")
 
