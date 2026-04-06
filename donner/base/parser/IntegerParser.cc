@@ -39,7 +39,7 @@ ParseResult<IntegerParser::Result> IntegerParser::Parse(std::string_view str) {
     if (digit >= 10) {
       if (i == 0) {
         return ParseDiagnostic::Error("Unexpected character parsing integer",
-                                      FileOffset::Offset(0));
+                                      SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)});
       }
 
       Result result;
@@ -50,14 +50,17 @@ ParseResult<IntegerParser::Result> IntegerParser::Parse(std::string_view str) {
 
     // Detect overflow
     if (number > kMaxDecimal || (number == kMaxDecimal && digit > kMaxDecimalDigit)) {
-      return ParseDiagnostic::Error("Integer overflow", FileOffset::Offset(i));
+      return ParseDiagnostic::Error("Integer overflow",
+                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(i + 1)});
     }
 
     number = number * 10 + digit;
   }
 
   if (str.empty()) {
-    return ParseDiagnostic::Error("Unexpected end of string", FileOffset::Offset(0));
+    return ParseDiagnostic::Error(
+        "Unexpected end of string",
+        SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
   }
 
   Result result;
@@ -76,7 +79,7 @@ ParseResult<IntegerParser::Result> IntegerParser::ParseHex(std::string_view str)
     if (digit == 0xFF) {
       if (i == 0) {
         return ParseDiagnostic::Error("Unexpected character parsing hex integer",
-                                      FileOffset::Offset(0));
+                                      SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)});
       }
 
       Result result;
@@ -87,14 +90,17 @@ ParseResult<IntegerParser::Result> IntegerParser::ParseHex(std::string_view str)
 
     // Detect overflow
     if (number > kMaxHex || (number == kMaxHex && digit > kMaxHexDigit)) {
-      return ParseDiagnostic::Error("Integer overflow", FileOffset::Offset(i));
+      return ParseDiagnostic::Error("Integer overflow",
+                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(i + 1)});
     }
 
     number = number * 16 + digit;
   }
 
   if (str.empty()) {
-    return ParseDiagnostic::Error("Unexpected end of string", FileOffset::Offset(0));
+    return ParseDiagnostic::Error(
+        "Unexpected end of string",
+        SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
   }
 
   Result result;

@@ -49,7 +49,7 @@ public:
       if (command.token != Token::MoveTo) {
         ParseDiagnostic err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
-        err.range.start = sourceOffset;
+        err.range = rangeFrom(sourceOffset.offset.value());
         return ParseResult(std::move(spline_), std::move(err));
       }
 
@@ -139,6 +139,15 @@ private:
 
   FileOffset currentOffset() { return FileOffset::Offset(remaining_.data() - d_.data()); }
 
+  SourceRange currentRange(int startIndex, int endIndex) {
+    const size_t base = remaining_.data() - d_.data();
+    return {FileOffset::Offset(base + startIndex), FileOffset::Offset(base + endIndex)};
+  }
+
+  SourceRange rangeFrom(size_t startOffset) {
+    return {FileOffset::Offset(startOffset), currentOffset()};
+  }
+
   std::optional<TokenCommand> peekCommand() {
     assert(!remaining_.empty());
 
@@ -175,7 +184,7 @@ private:
     if (!maybeCommand) {
       ParseDiagnostic err;
       err.reason = std::string("Unexpected token '") + remaining_[0] + "' in path data";
-      err.range.start = currentOffset();
+      err.range = currentRange(0, 1);
       return err;
     }
 
@@ -227,7 +236,7 @@ private:
       } else {
         ParseDiagnostic err;
         err.reason = "Unexpected character when parsing flag, expected '1' or '0'";
-        err.range.start = currentOffset();
+        err.range = currentRange(0, 1);
         return err;
       }
 
@@ -236,7 +245,7 @@ private:
     } else {
       ParseDiagnostic err;
       err.reason = "Unexpected end of string when parsing flag";
-      err.range.start = currentOffset();
+      err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
       return err;
     }
   }
@@ -268,12 +277,12 @@ private:
         if (!remaining_.empty() && peekCommand().has_value()) {
           ParseDiagnostic err;
           err.reason = "Unexpected ',' before command";
-          err.range.start = commaOffset;
+          err.range = {commaOffset, FileOffset::Offset(commaOffset.offset.value() + 1)};
           return err;
         } else if (remaining_.empty()) {
           ParseDiagnostic err;
           err.reason = "Unexpected ',' at end of string";
-          err.range.start = commaOffset;
+          err.range = {commaOffset, FileOffset::Offset(commaOffset.offset.value() + 1)};
           return err;
         }
       }
@@ -446,7 +455,7 @@ private:
     } else {
       ParseDiagnostic err;
       err.reason = "Expected command";
-      err.range.start = currentOffset();
+      err.range = currentRange(0, 1);
       return err;
     }
 
