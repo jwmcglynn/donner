@@ -2159,6 +2159,40 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
             currentCanvas_->drawPath(skPath, *spanStrokePaint);
           }
         }
+      } else if (isBitmapFont && run.font) {
+        // Bitmap font (color emoji): draw each glyph as an image.
+        for (const auto& glyph : run.glyphs) {
+          if (glyph.glyphIndex == 0) {
+            continue;
+          }
+
+          auto bitmap = textEngine.bitmapGlyph(run.font, glyph.glyphIndex, glyphScale);
+          if (!bitmap) {
+            continue;
+          }
+
+          // Premultiply alpha for Skia.
+          std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
+          SkImageInfo info = SkImageInfo::MakeN32Premul(bitmap->width, bitmap->height);
+          sk_sp<SkImage> skImage = SkImages::RasterFromPixmapCopy(
+              SkPixmap(info, premul.data(), static_cast<size_t>(bitmap->width) * 4));
+          if (!skImage) {
+            continue;
+          }
+
+          const double targetX = glyph.xPosition + bitmap->bearingX;
+          const double targetY = glyph.yPosition - bitmap->bearingY;
+          const double targetW =
+              static_cast<double>(bitmap->width) * bitmap->scale * glyph.stretchScaleX;
+          const double targetH =
+              static_cast<double>(bitmap->height) * bitmap->scale * glyph.stretchScaleY;
+
+          SkRect dstRect = SkRect::MakeXYWH(NarrowToFloat(targetX), NarrowToFloat(targetY),
+                                             NarrowToFloat(targetW), NarrowToFloat(targetH));
+          SkPaint imgPaint;
+          imgPaint.setAntiAlias(antialias_);
+          currentCanvas_->drawImageRect(skImage, dstRect, SkSamplingOptions(), &imgPaint);
+        }
       } else {
         const auto glyphCount = static_cast<int>(run.glyphs.size());
         std::vector<SkGlyphID> skGlyphs(run.glyphs.size());

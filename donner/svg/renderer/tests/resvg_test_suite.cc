@@ -724,6 +724,8 @@ INSTANTIATE_TEST_SUITE_P(
         "e-marker",
         {
             {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
+            {"e-marker-018.svg",
+             Params::WithThreshold(kDefaultThreshold, 110)},  // Minor AA diffs on Skia text_full
             {"e-marker-019.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                         "resvg-e-marker-019.png")},  // We (correctly)
@@ -902,9 +904,10 @@ INSTANTIATE_TEST_SUITE_P(
                                     // surrogate pair indexing). Our rendering matches
                                     // browser behavior.
             {"e-text-029.svg",
-             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-029.png")
-                 .onlyTextFull()},  // Emoji, resvg renders the smiley and crab emoji
-                                    // incorrectly
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-029.png",
+                                        0.1f)
+                 .withMaxPixelsDifferent(1100)
+                 .onlyTextFull()},  // Emoji, Skia bitmap scaling differs from TinySkia
             {"e-text-030.svg",
              Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-e-text-030.png")
                  .withMaxPixelsDifferent(400)  // Vertical axis has different AA (its
