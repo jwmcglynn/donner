@@ -35,7 +35,7 @@ void ExpectParseFailure(std::string_view str,
       EXPECT_EQ(error->reason, expectedReason.value());
     }
     if (expectedOffset) {
-      EXPECT_EQ(error->location.offset, expectedOffset.value());
+      EXPECT_EQ(error->range.start.offset, expectedOffset.value());
     }
   }
 }

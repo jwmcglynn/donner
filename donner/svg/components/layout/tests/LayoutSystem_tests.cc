@@ -38,7 +38,8 @@ TEST_F(LayoutSystemTest, ViewportRootWithComputedComponents) {
     </svg>
   )");
 
-  layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.rootEntityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
 }
@@ -61,7 +62,8 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
     </svg>
   )");
 
-  layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
@@ -84,7 +86,8 @@ TEST_F(LayoutSystemTest, ViewportPatternWithComputedComponents) {
     </svg>
   )");
 
-  layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }

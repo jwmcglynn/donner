@@ -336,9 +336,9 @@ TEST(TransformParser, RangeUnexpectedFunction) {
 }
 
 TEST(TransformParser, RangeExpectedCloseParen) {
-  // "matrix(1, 2, 3, 4, 5, 6, 7)" => after parsing 6 numbers, '7' is unexpected.
-  // The 7 is at offset 25 (after "matrix(1, 2, 3, 4, 5, 6, ") => [25,26).
-  EXPECT_THAT(TransformParser::Parse("matrix(1, 2, 3, 4, 5, 6, 7)"), ParseErrorRange(25, 26));
+  // "matrix(1, 2, 3, 4, 5, 6, 7)" => after parsing 6 numbers, the comma at offset 23 is
+  // unexpected (expected ')').
+  EXPECT_THAT(TransformParser::Parse("matrix(1, 2, 3, 4, 5, 6, 7)"), ParseErrorRange(23, 24));
 }
 
 TEST(TransformParser, RangeExpectedOpenParen) {

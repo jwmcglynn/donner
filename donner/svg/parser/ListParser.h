@@ -74,7 +74,8 @@ public:
       if (value[i] == ',') {
         if (expectItem) {
           // Found a comma when an item was expected (e.g., ", item" at start, or "item1,,item2")
-          return ParseDiagnostic{"Unexpected comma, expected list item", FileOffset::Offset(i)};
+          return ParseDiagnostic::Error("Unexpected comma, expected list item",
+                                        FileOffset::Offset(i));
         }
 
         i++;                // Consume comma
@@ -107,7 +108,8 @@ public:
     if (expectItem && processedNonWhitespace) {
       // This means we had a trailing comma after processing something.
       // The error occurred just before the end, where the comma was.
-      return ParseDiagnostic{"Unexpected trailing comma", FileOffset::Offset(i > 0 ? i - 1 : 0)};
+      return ParseDiagnostic::Error("Unexpected trailing comma",
+                                    FileOffset::Offset(i > 0 ? i - 1 : 0));
     }
 
     return std::nullopt;  // Success

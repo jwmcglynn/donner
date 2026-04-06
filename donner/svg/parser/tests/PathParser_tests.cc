@@ -721,8 +721,8 @@ TEST(PathParser, RangeUnexpectedToken) {
 }
 
 TEST(PathParser, RangeInvalidFlag) {
-  // "M0,0 a150,150 0 a" => the flag 'a' is at offset 17 => [17,18).
-  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a"), ParseErrorRange(17, 18));
+  // "M0,0 a150,150 0 a" => the flag 'a' is at offset 16 => [16,17).
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a"), ParseErrorRange(16, 17));
   // "M0,0 a150,150 0 2" => '2' at offset 16 => [16,17).
   EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2"), ParseErrorRange(16, 17));
 }
@@ -733,8 +733,8 @@ TEST(PathParser, RangeEndOfStringFlag) {
 }
 
 TEST(PathParser, RangeTrailingComma) {
-  // "M1,1 h1," => comma at offset 8 => [8,9).
-  EXPECT_THAT(PathParser::Parse("M1,1 h1,"), ParseErrorRange(8, 9));
+  // "M1,1 h1," => comma at offset 7 => [7,8).
+  EXPECT_THAT(PathParser::Parse("M1,1 h1,"), ParseErrorRange(7, 8));
 }
 
 }  // namespace donner::svg::parser

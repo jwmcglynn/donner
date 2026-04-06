@@ -163,9 +163,9 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
       } else if (value == "http://www.w3.org/1999/xlink") {
         // Allow xlink.
       } else {
-        SourceRange range;
+        SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
         if (auto maybeRange = context.getAttributeLocation(node, attributeName)) {
-          range.start = maybeRange->start;
+          range = *maybeRange;
         }
 
         context.addWarning(ParseDiagnostic::Warning(

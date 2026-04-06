@@ -1,5 +1,6 @@
 #include "donner/svg/SVGStopElement.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
@@ -49,14 +50,16 @@ double SVGStopElement::stopOpacity() const {
 }
 
 css::Color SVGStopElement::computedStopColor() const {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
-      handle_, handle_.get_or_emplace<components::StopComponent>(), nullptr);
+      handle_, handle_.get_or_emplace<components::StopComponent>(), disabledSink);
   return computed.properties.stopColor.getRequired();
 }
 
 double SVGStopElement::computedStopOpacity() const {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
-      handle_, handle_.get_or_emplace<components::StopComponent>(), nullptr);
+      handle_, handle_.get_or_emplace<components::StopComponent>(), disabledSink);
   return computed.properties.stopOpacity.getRequired();
 }
 

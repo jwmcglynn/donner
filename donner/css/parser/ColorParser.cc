@@ -324,7 +324,7 @@ public:
         return dimension.value * 360.0;
       } else {
         return ParseDiagnostic::Error(
-            "Angle has unexpected dimension '" + dimension.suffixString + "'",
+            RcString("Angle has unexpected dimension '" + dimension.suffixString + "'"),
             angleToken.offset());
       }
     }

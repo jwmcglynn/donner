@@ -77,17 +77,17 @@ TEST(DiagnosticRenderer, MultiLineSource) {
   //                                0123456 789...
   // Line 1: "<svg>" (0..5)
   // Line 2: "  <rect x=\"abc\" />" (6..24)
-  // Error at "abc" which starts at offset 16
+  // Error at "abc" which starts at offset 17 (after the opening quote)
   auto diag = ParseDiagnostic::Error("Invalid number",
-                                     SourceRange{FileOffset::Offset(16), FileOffset::Offset(19)});
+                                     SourceRange{FileOffset::Offset(17), FileOffset::Offset(20)});
 
   std::string result = DiagnosticRenderer::format(source, diag);
   EXPECT_EQ(result,
             "error: Invalid number\n"
-            "  --> 2:10\n"
+            "  --> 2:12\n"
             "  |\n"
             " 2 |   <rect x=\"abc\" />\n"
-            "  |          ^~~\n");
+            "  |            ^~~\n");
 }
 
 TEST(DiagnosticRenderer, PointRange) {
