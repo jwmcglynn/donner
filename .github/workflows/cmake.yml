@@ -1,9 +1,10 @@
 name: CMake Build
 
-# Temporarily disabled: Skia CMake builds fail due to chromium.googlesource.com
-# rate limiting (HTTP 403/429). Re-enable once Skia's CMake deps are stabilized.
 on:
-  workflow_dispatch:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: [main]
 
 jobs:
   linux:
