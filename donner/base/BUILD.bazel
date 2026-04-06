@@ -4,12 +4,10 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "base",
     srcs = [
-        "DiagnosticRenderer.cc",
         "ParseDiagnostic.cc",
     ],
     hdrs = [
         "Box.h",
-        "DiagnosticRenderer.h",
         "ChunkedString.h",
         "CompileTimeMap.h",
         "EcsRegistry.h",
@@ -33,6 +31,21 @@ donner_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "@entt",
+    ],
+)
+
+donner_cc_library(
+    name = "diagnostic_renderer",
+    srcs = [
+        "DiagnosticRenderer.cc",
+    ],
+    hdrs = [
+        "DiagnosticRenderer.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        "//donner/base/parser:line_offsets",
     ],
 )
 
@@ -100,6 +113,7 @@ donner_cc_test(
     deps = [
         ":base",
         ":base_test_utils",
+        ":diagnostic_renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )

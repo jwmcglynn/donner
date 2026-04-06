@@ -163,13 +163,13 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
       } else if (value == "http://www.w3.org/1999/xlink") {
         // Allow xlink.
       } else {
-        ParseDiagnostic err;
-        err.reason = "Unexpected namespace '" + value.value() + "'";
+        SourceRange range;
         if (auto maybeRange = context.getAttributeLocation(node, attributeName)) {
-          err.range.start = maybeRange->start;
+          range.start = maybeRange->start;
         }
 
-        context.addWarning(std::move(err));
+        context.addWarning(ParseDiagnostic::Warning(
+            "Unexpected namespace '" + value.value() + "'", range));
       }
     }
   }

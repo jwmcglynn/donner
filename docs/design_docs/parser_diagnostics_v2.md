@@ -318,7 +318,7 @@ subparsers (which operate on substrings) back to the original input coordinates.
   `ParseDiagnostic` is slightly larger than the old `ParseError` (adds severity + range end),
   but this only matters on error paths.
 - **LineOffsets reuse**: `DiagnosticRenderer::formatAll()` computes `LineOffsets` once and
-  shares it across all diagnostics via the private `formatWithLineOffsets()` method.
+  shares it across all diagnostics via a file-local `formatWithLineOffsets()` helper.
 
 ### Design decisions
 

@@ -44,18 +44,10 @@ int lineNumberWidth(size_t lineNumber) {
   return width;
 }
 
-}  // namespace
-
-std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagnostic& diag,
-                                       const Options& options) {
-  parser::LineOffsets lineOffsets(source);
-  return formatWithLineOffsets(source, lineOffsets, diag, options);
-}
-
-std::string DiagnosticRenderer::formatWithLineOffsets(std::string_view source,
-                                                      const parser::LineOffsets& lineOffsets,
-                                                      const ParseDiagnostic& diag,
-                                                      const Options& options) {
+/// Format a single diagnostic using pre-computed LineOffsets.
+std::string formatWithLineOffsets(std::string_view source, const parser::LineOffsets& lineOffsets,
+                                  const ParseDiagnostic& diag,
+                                  const DiagnosticRenderer::Options& options) {
   std::ostringstream out;
 
   const bool color = options.colorize;
@@ -165,6 +157,14 @@ std::string DiagnosticRenderer::formatWithLineOffsets(std::string_view source,
   out << "\n";
 
   return out.str();
+}
+
+}  // namespace
+
+std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagnostic& diag,
+                                       const Options& options) {
+  parser::LineOffsets lineOffsets(source);
+  return formatWithLineOffsets(source, lineOffsets, diag, options);
 }
 
 std::string DiagnosticRenderer::formatAll(std::string_view source, const ParseWarningSink& sink,
