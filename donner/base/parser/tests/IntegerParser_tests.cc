@@ -121,4 +121,30 @@ TEST(IntegerParser, HexNoPrefix) {
   EXPECT_THAT(IntegerParser::ParseHex("0X2"), ParseResultIs(Result{0, 1}));
 }
 
+// ---------------------------------------------------------------------------
+// Range-accuracy tests: verify that error SourceRanges cover the right span.
+// ---------------------------------------------------------------------------
+
+TEST(IntegerParser, RangeEmpty) {
+  EXPECT_THAT(IntegerParser::Parse(""), ParseErrorEndOfString());
+  EXPECT_THAT(IntegerParser::ParseHex(""), ParseErrorEndOfString());
+}
+
+TEST(IntegerParser, RangeUnexpectedCharacter) {
+  // First char is non-digit => range [0,1).
+  EXPECT_THAT(IntegerParser::Parse("+0"), ParseErrorRange(0, 1));
+  EXPECT_THAT(IntegerParser::Parse("-0"), ParseErrorRange(0, 1));
+  EXPECT_THAT(IntegerParser::Parse("."), ParseErrorRange(0, 1));
+  EXPECT_THAT(IntegerParser::ParseHex("+0"), ParseErrorRange(0, 1));
+  EXPECT_THAT(IntegerParser::ParseHex("-0"), ParseErrorRange(0, 1));
+  EXPECT_THAT(IntegerParser::ParseHex("."), ParseErrorRange(0, 1));
+}
+
+TEST(IntegerParser, RangeOverflow) {
+  // Overflow after 10 digits: "4294967296" => range [0,10).
+  EXPECT_THAT(IntegerParser::Parse("4294967296"), ParseErrorRange(0, 10));
+  // Hex overflow: "100000000" (9 hex digits) => range [0,9).
+  EXPECT_THAT(IntegerParser::ParseHex("100000000"), ParseErrorRange(0, 9));
+}
+
 }  // namespace donner::parser

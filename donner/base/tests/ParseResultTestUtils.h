@@ -139,6 +139,65 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
 }
 
 /**
+ * Given a ParseResult, matches if it contains an error whose range covers
+ * [startOffset, endOffset). Works with ParseResult<T>, ParseDiagnostic, or
+ * optional<ParseDiagnostic>.
+ *
+ * Usage:
+ * @code
+ * EXPECT_THAT(result, ParseErrorRange(0, 3));  // error spans bytes [0,3)
+ * @endcode
+ *
+ * @param startOffsetMatcher Matcher for the start offset of the error range.
+ * @param endOffsetMatcher Matcher for the end offset of the error range.
+ */
+MATCHER_P2(ParseErrorRange, startOffsetMatcher, endOffsetMatcher,
+           std::string("parse error range is [") + testing::PrintToString(startOffsetMatcher) +
+               ", " + testing::PrintToString(endOffsetMatcher) + ")") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+
+  const auto matchRange = [&](const SourceRange& range) -> bool {
+    if (!range.start.offset.has_value()) {
+      *result_listener << "start offset is EndOfString (no offset)";
+      return false;
+    }
+    if (!range.end.offset.has_value()) {
+      *result_listener << "end offset is EndOfString (no offset)";
+      return false;
+    }
+    bool startOk =
+        testing::ExplainMatchResult(startOffsetMatcher, range.start.offset.value(), result_listener);
+    if (!startOk) {
+      *result_listener << " (start offset mismatch)";
+      return false;
+    }
+    bool endOk =
+        testing::ExplainMatchResult(endOffsetMatcher, range.end.offset.value(), result_listener);
+    if (!endOk) {
+      *result_listener << " (end offset mismatch)";
+      return false;
+    }
+    return true;
+  };
+
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
+    return matchRange(arg.range);
+  } else if constexpr (details::IsOptionalLike<ArgType>) {
+    if (!arg.has_value()) {
+      *result_listener << "which has no error";
+      return false;
+    }
+    return matchRange(arg.value().range);
+  } else {
+    if (!arg.hasError()) {
+      *result_listener << "which has no error";
+      return false;
+    }
+    return matchRange(arg.error().range);
+  }
+}
+
+/**
  * Matches if a ParseResult contains an error at the end of the string.
  */
 MATCHER(ParseErrorEndOfString, "") {

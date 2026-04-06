@@ -71,4 +71,34 @@ TEST(PreserveAspectRatioParser, InvalidMeetOrSlice) {
               ParseErrorIs("Invalid meetOrSlice: 'badtoken'"));
 }
 
+// ---------------------------------------------------------------------------
+// Range-accuracy tests: verify that error SourceRanges cover the right span.
+// ---------------------------------------------------------------------------
+
+TEST(PreserveAspectRatioParser, RangeEmptyAlign) {
+  // "" => empty align => EndOfString.
+  EXPECT_THAT(PreserveAspectRatioParser::Parse(""), ParseErrorEndOfString());
+  // " " => after skipping whitespace, remaining is empty => EndOfString.
+  EXPECT_THAT(PreserveAspectRatioParser::Parse(" "), ParseErrorEndOfString());
+}
+
+TEST(PreserveAspectRatioParser, RangeInvalidAlign) {
+  // "invalid" => rangeFrom(0) to consumed 7 => [0,7).
+  EXPECT_THAT(PreserveAspectRatioParser::Parse("invalid"), ParseErrorRange(0, 7));
+  // "noneslice" => rangeFrom(0) to consumed 9 => [0,9).
+  EXPECT_THAT(PreserveAspectRatioParser::Parse("noneslice"), ParseErrorRange(0, 9));
+}
+
+TEST(PreserveAspectRatioParser, RangeInvalidMeetOrSlice) {
+  // "none badtoken" => "none" consumed (4 chars), skip whitespace (1), "badtoken" starts at 5.
+  // rangeFrom(5) to consumed 13 => [5,13).
+  EXPECT_THAT(PreserveAspectRatioParser::Parse("none badtoken"), ParseErrorRange(5, 13));
+}
+
+TEST(PreserveAspectRatioParser, RangeEndOfAttribute) {
+  // "none slice " => after parsing "slice" (10 chars), remaining is " ".
+  // currentRange(0,1) = [10,11).
+  EXPECT_THAT(PreserveAspectRatioParser::Parse("none slice "), ParseErrorRange(10, 11));
+}
+
 }  // namespace donner::svg::parser
