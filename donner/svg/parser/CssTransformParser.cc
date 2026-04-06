@@ -238,7 +238,7 @@ public:
     } else {
       ParseDiagnostic err;
       err.reason = "Expected a function, found unexpected token";
-      err.range.start = parser_.sourceOffset();
+      err.range = {parser_.sourceOffset(), parser_.sourceOffset()};
       return err;
     }
 
@@ -255,7 +255,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Expected only one parameter";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
@@ -272,7 +272,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Expected only one parameter";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
@@ -290,7 +290,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Expected only one parameter";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
@@ -307,7 +307,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'matrix'";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
@@ -333,7 +333,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Expected a comma";
-        err.range.start = subparser.sourceOffset();
+        err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
         return err;
       }
 
@@ -350,7 +350,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'translate'";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
@@ -375,7 +375,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Expected a comma";
-        err.range.start = subparser.sourceOffset();
+        err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
         return err;
       }
 
@@ -392,7 +392,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'scale'";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
@@ -417,7 +417,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Expected a comma";
-        err.range.start = subparser.sourceOffset();
+        err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
         return err;
       }
 
@@ -434,7 +434,7 @@ public:
     if (!subparser.isEOF()) {
       ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'skew'";
-      err.range.start = subparser.sourceOffset();
+      err.range = {subparser.sourceOffset(), subparser.sourceOffset()};
       return err;
     }
 
