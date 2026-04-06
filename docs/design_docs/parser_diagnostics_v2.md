@@ -43,12 +43,6 @@ No backward compatibility with the existing `ParseError` API is required.
 - Redesigning non-parser error types outside ParseResult/ParseError flows (e.g.
   `ResourceLoaderError`, `UrlLoaderError`).
 
-## Next Steps
-
-1. Land base types (`SourceRange`, `ParseDiagnostic`, `ParseWarningSink`) in `donner/base`.
-2. Migrate one parser vertical end-to-end (`PathParser` + `SVGParserContext`) as a proving path.
-3. Implement the diagnostic renderer and verify it produces readable output.
-
 ## Implementation Plan
 
 - [x] **Milestone 1: Introduce base diagnostics model in `donner/base`**
@@ -97,11 +91,12 @@ No backward compatibility with the existing `ParseError` API is required.
 
 ```
 donner/base/
-  FileOffset.h          (MODIFIED - FileOffset unchanged, FileOffsetRange renamed to SourceRange)
+  FileOffset.h          (MODIFIED - FileOffset unchanged, SourceRange added replacing FileOffsetRange)
   ParseDiagnostic.h     (NEW - replaces ParseError.h)
   ParseWarningSink.h    (NEW - replaces std::vector<ParseDiagnostic>*)
   ParseResult.h         (MODIFIED - uses ParseDiagnostic)
   RcString.h            (MODIFIED - added fromFormat using std::format)
+  DiagnosticRenderer.h  (NEW - console rendering with source context)
 ```
 
 ### High-level data flow
@@ -131,44 +126,30 @@ flowchart TD
 
 #### `SourceRange`
 
+`SourceRange` lives in `donner/base/FileOffset.h` alongside `FileOffset`. It is a simple struct
+with no factory methods---ranges are constructed directly:
+
 ```cpp
-// donner/base/SourceRange.h
+// donner/base/FileOffset.h
 namespace donner {
 
 /**
- * Half-open source range [start, end) representing a span of characters in a parsed input.
- *
- * Both endpoints carry optional line metadata for multi-line inputs. Supports parent-offset
- * remapping for subparser composition.
+ * Holds a selection range for a region in the source text, as a half-open interval [start, end).
  */
 struct SourceRange {
   FileOffset start;  ///< Start of the range (inclusive).
   FileOffset end;    ///< End of the range (exclusive).
-
-  /// Create a range from a start offset and a length.
-  static SourceRange OffsetAndLength(size_t offset, size_t length);
-
-  /// Create a range covering a single character at the given offset.
-  static SourceRange AtOffset(size_t offset);
-
-  /// Create a zero-length insertion point at the given offset.
-  static SourceRange Point(FileOffset location);
-
-  /// Remap this range into absolute coordinates given a parent parser's origin offset.
-  [[nodiscard]] SourceRange addParentOffset(FileOffset parentOffset) const;
-
-  /// Equality operator.
-  bool operator==(const SourceRange&) const = default;
-
-  /// Ostream output.
-  friend std::ostream& operator<<(std::ostream& os, const SourceRange& range);
 };
 
 }  // namespace donner
 ```
 
-This replaces `SourceRange` with clearer half-open semantics and the `addParentOffset`
-remapping that currently lives in ad-hoc code scattered across `SVGParserContext` and `FileOffset`.
+Ranges are constructed directly, e.g.:
+```cpp
+SourceRange{FileOffset::Offset(startPos), FileOffset::Offset(endPos)}
+```
+
+Subparser offset remapping is done per-field via `FileOffset::addParentOffset()`.
 
 #### `ParseDiagnostic`
 
@@ -400,23 +381,22 @@ private:
 
 ### SVGParser Public API
 
+All parser entry points require an explicit `ParseWarningSink&` parameter---there are no
+convenience overloads that silently discard warnings. This makes warning collection explicit at
+every call site.
+
 ```cpp
 class SVGParser {
 public:
-  // Primary API: caller provides a warning sink.
   static ParseResult<SVGDocument> ParseSVG(
       std::string_view source,
       ParseWarningSink& warningSink,
       Options options = {},
       SVGDocument::Settings settings = {}) noexcept;
-
-  // Convenience: warnings are discarded.
-  static ParseResult<SVGDocument> ParseSVG(
-      std::string_view source,
-      Options options = {},
-      SVGDocument::Settings settings = {}) noexcept;
 };
 ```
+
+Similarly, `StylesheetParser::Parse` and `CSS::ParseStylesheet` require `ParseWarningSink&`.
 
 ### Diagnostic Renderer
 
@@ -427,36 +407,47 @@ namespace donner {
 class DiagnosticRenderer {
 public:
   struct Options {
-    int contextLines = 1;         ///< Context lines before/after the diagnostic.
+    std::string_view filename;    ///< Optional filename for the header (e.g. "test.svg").
     bool colorize = false;        ///< Enable ANSI color codes.
-    std::string_view filename;    ///< Optional filename for the header.
   };
 
   /// Format a single diagnostic against source text.
   static std::string format(std::string_view source, const ParseDiagnostic& diag,
-                            const Options& options = {});
+                            const Options& options);
+  static std::string format(std::string_view source, const ParseDiagnostic& diag);
 
   /// Format all warnings in a sink against source text.
   static std::string formatAll(std::string_view source, const ParseWarningSink& sink,
-                               const Options& options = {});
+                               const Options& options);
+  static std::string formatAll(std::string_view source, const ParseWarningSink& sink);
+
+private:
+  /// Reuses a pre-computed LineOffsets to avoid redundant construction in formatAll().
+  static std::string formatWithLineOffsets(std::string_view source,
+                                           const parser::LineOffsets& lineOffsets,
+                                           const ParseDiagnostic& diag, const Options& options);
 };
 
 }  // namespace donner
 ```
 
+Note: Default arguments (`Options options = {}`) caused a GCC error with aggregate default member
+initializers, so separate overloads are used instead.
+
 Renderer behavior:
 - **Single-line range**: caret at start + tildes for span width.
 - **Zero-length (point)**: caret at insertion point.
-- **Multi-line span**: first/last line emphasis with bounded context.
-- **Resilient fallback**: best-effort output if source text is unavailable or range is malformed.
+- **No offset (EndOfString)**: only the severity label and message are shown, no source context.
+- **Resilient fallback**: best-effort output if the offset is past end-of-source.
 
 Example output:
 
 ```text
 warning: Invalid paint server value
-  --> line 4, col 12
-4 | <path fill="url(#)"/>
-  |             ^~~~~~
+  --> 4:12
+   |
+ 4 | <path fill="url(#)"/>
+   |             ^~~~~~
 ```
 
 ### Migration Pattern for Parsers
@@ -469,7 +460,7 @@ return ParseError{RcString("Unexpected character"), FileOffset::Offset(pos)};
 **After (return error):**
 ```cpp
 return ParseDiagnostic::Error("Unexpected character",
-    SourceRange::OffsetAndLength(pos, 1));
+    SourceRange{FileOffset::Offset(startPos), FileOffset::Offset(endPos)});
 ```
 
 **Before (emit warning):**
@@ -491,7 +482,7 @@ context.warningSink().add([&] {
 
 | Type | Header | Role |
 |------|--------|------|
-| `SourceRange` | `donner/base/SourceRange.h` | Half-open `[start, end)` source span |
+| `SourceRange` | `donner/base/FileOffset.h` | Half-open `[start, end)` source span |
 | `ParseDiagnostic` | `donner/base/ParseDiagnostic.h` | Shared diagnostic value type |
 | `DiagnosticSeverity` | `donner/base/ParseDiagnostic.h` | Error vs Warning enum |
 | `ParseWarningSink` | `donner/base/ParseWarningSink.h` | Warning collector/sink |
@@ -504,8 +495,10 @@ context.warningSink().add([&] {
 | Type | Replacement |
 |------|-------------|
 | `ParseError` | `ParseDiagnostic` |
-| `SourceRange` | `SourceRange` |
-| `DataUrlParserError` | `ParseDiagnostic` returned via `ParseResult` |
+| `FileOffsetRange` | `SourceRange` (in `FileOffset.h`) |
+
+Note: `DataUrlParserError` migration was deferred (uses `std::variant<Result, DataUrlParserError>`
+touching `UrlLoader`, too much scope for this phase).
 
 ## Performance
 
@@ -550,28 +543,25 @@ flowchart LR
 
 ### Parser tests
 
-Every parser gets range-accuracy tests. Example pattern:
+Every parser gets range-accuracy tests using the `ParseErrorRange` matcher:
 
 ```cpp
-TEST(PathParser, ErrorRangeAccuracy) {
-  auto result = PathParser::Parse("M 100 100 h 2!");
+TEST(PathParser, RangeInvalidFlag) {
+  auto result = PathParser::Parse("M 0,0 a 1 1 0 2 0 1 1");
   ASSERT_THAT(result, AllOf(
-      ParseErrorIs("Failed to parse number: Unexpected character"),
-      DiagnosticRangeIs(SourceRange::OffsetAndLength(13, 1))));
+      ParseErrorIs("Failed to parse arc flag, expected '0' or '1'"),
+      ParseErrorRange(Optional(13u), Optional(14u))));
 }
 ```
 
-New test matchers:
+Key test matchers (in `ParseResultTestUtils.h`):
 
 ```cpp
-// Matches a ParseDiagnostic by message.
+// Matches a ParseResult that has an error with the given message.
 MATCHER_P(ParseErrorIs, messageMatcher, "");
 
-// Matches the source range of a diagnostic.
-MATCHER_P(DiagnosticRangeIs, expectedRange, "");
-
-// Matches severity of a diagnostic.
-MATCHER_P(DiagnosticSeverityIs, expectedSeverity, "");
+// Matches the source range offsets on a ParseResult error.
+MATCHER_P2(ParseErrorRange, startOffsetMatcher, endOffsetMatcher, "");
 ```
 
 ### Golden/snapshot tests
@@ -579,10 +569,14 @@ MATCHER_P(DiagnosticSeverityIs, expectedSeverity, "");
 Renderer output is tested with inline golden strings to catch formatting regressions:
 
 ```cpp
-TEST(DiagnosticRenderer, SingleLineRange) {
-  auto diag = ParseDiagnostic::Error("Unexpected character",
-                                      SourceRange::OffsetAndLength(24, 1));
-  EXPECT_EQ(DiagnosticRenderer::format(source, diag, {.filename = "test.svg"}),
+TEST(DiagnosticRenderer, SingleCharError) {
+  const std::string_view source = R"(<path d="M 100 100 h 2!" />)";
+  auto diag = ParseDiagnostic::Error(
+      "Unexpected character",
+      SourceRange{FileOffset::Offset(24), FileOffset::Offset(25)});
+  DiagnosticRenderer::Options options;
+  options.filename = "test.svg";
+  EXPECT_EQ(DiagnosticRenderer::format(source, diag, options),
             "error: Unexpected character\n"
             "  --> test.svg:1:25\n"
             "   |\n"
@@ -630,24 +624,28 @@ TEST(DiagnosticRenderer, SingleLineRange) {
 - Cons: hidden state, poor testability, unsafe in concurrent scenarios.
 - **Rejected**.
 
-## Open Questions
+## Resolved Questions
 
-1. **Should `SourceRange` replace `SourceRange` globally?** `SourceRange` is currently used
-   in `XMLNode::getAttributeLocation`. We could either rename it or keep both and convert at
-   boundaries.
+1. **`SourceRange` location**: `SourceRange` was added directly to `donner/base/FileOffset.h`
+   alongside `FileOffset`, replacing the old `FileOffsetRange`. No separate header needed.
 
-2. **Should the renderer live in `donner/base` or a separate utility library?** It depends on
-   whether non-parser code (e.g. CLI tools) needs it. Recommendation: `donner/base` for now since
-   it only depends on base types.
+2. **Renderer location**: `DiagnosticRenderer` lives in `donner/base/` since it only depends on
+   base types (`ParseDiagnostic`, `ParseWarningSink`, `LineOffsets`).
 
-3. **Default truncation limits for renderer output?** Need to decide on max source-excerpt width
-   and max reason length for logging paths.
+3. **No convenience overloads**: All parser entry points (`SVGParser::ParseSVG`,
+   `StylesheetParser::Parse`, `CSS::ParseStylesheet`) require an explicit `ParseWarningSink&`.
+   This was chosen over convenience overloads to make warning collection visible at every call site.
+
+4. **Truncation limits**: Not implemented in this phase. The renderer outputs full source lines
+   without truncation. Can be added later if needed for logging paths.
 
 ## Future Work
 
+- [ ] Migrate `DataUrlParserError` to `ParseDiagnostic` (deferred: touches `UrlLoader` scope).
+- [ ] Range-accuracy tests for CSS/XML parsers.
 - [ ] Structured error codes for programmatic error handling.
 - [ ] Fixit suggestions ("did you mean ...?").
 - [ ] Multi-line range rendering in the renderer.
+- [ ] Source line truncation for very long lines in renderer output.
 - [ ] LSP-compatible diagnostic output (JSON) for editor integration.
 - [ ] Machine-readable diagnostic serialization for CI tooling.
-- [ ] Parser feature metrics (warning/error counts by parser type).
