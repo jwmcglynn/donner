@@ -161,9 +161,10 @@ TEST(SVGParser, Warning) {
 
   // TODO: Add another test to verify warnings from SVGParser and not during render-tree
   // instantiation.
-  ParseWarningSink warnings;
-  auto documentResult = SVGParser::ParseSVG(simpleXml);
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto documentResult = SVGParser::ParseSVG(simpleXml, disabled);
   ASSERT_THAT(documentResult, NoParseError());
+  ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(documentResult.result(), /*verbose*/ false, warnings);
   // TODO: Map this offset back to absolute values (2, 24)
   EXPECT_THAT(warnings.warnings(),

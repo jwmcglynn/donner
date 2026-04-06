@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -12,7 +13,8 @@ namespace donner::svg::components {
 class LayoutSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    auto maybeResult = parser::SVGParser::ParseSVG(input, disabled);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }

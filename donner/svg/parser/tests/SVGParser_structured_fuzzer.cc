@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
@@ -186,7 +187,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   BuildXMLTree(document, root, provider);
 
   // Pass the constructed document to the SVG parser
-  auto result = donner::svg::parser::SVGParser::ParseXMLDocument(std::move(document));
+  donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
+  auto result = donner::svg::parser::SVGParser::ParseXMLDocument(std::move(document), disabled);
   (void)result;  // Suppress unused variable warning
 
   return 0;

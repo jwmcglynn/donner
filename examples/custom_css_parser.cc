@@ -12,6 +12,7 @@
 
 #include <iostream>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/element/tests/FakeElement.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Specificity.h"
@@ -21,6 +22,7 @@ using donner::FakeElement;
 
 int main(int argc, char* argv[]) {
   //! [parse_stylesheet]
+  donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
   Stylesheet stylesheet = CSS::ParseStylesheet(R"(
     g {
       fill: black;
@@ -38,7 +40,7 @@ int main(int argc, char* argv[]) {
     g > :nth-child(2n of path) {
       fill: green;
     }
-  )");
+  )", disabled);
 
   std::cout << "Parsed stylesheet:\n" << stylesheet << "\n";
   //! [parse_stylesheet]

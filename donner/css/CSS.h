@@ -19,7 +19,8 @@
  * To get started, parse a Stylesheet using \ref CSS::ParseStylesheet, and then use the returned
  * \ref Stylesheet object to match against a DOM tree:
  * ```
- * auto stylesheet = CSS::ParseStylesheet("svg { fill: red; }");
+ * ParseWarningSink warnings;
+ * auto stylesheet = CSS::ParseStylesheet("svg { fill: red; }", warnings);
  * for (const css::SelectorRule& rule : stylesheet.rules()) {
  *   if (css::SelectorMatchResult match = rule.selector.matches(domNode)) {
  *     applyDeclaration(rule.declarations, match.specificity);

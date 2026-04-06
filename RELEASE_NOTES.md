@@ -88,7 +88,8 @@ Included in the release are:
 - An embeddable C++ API that allows rendering and manulating SVGs.
 
 ```cpp
-ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData);
+ParseWarningSink warnings;
+ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, warnings);
 if (maybeDocument.hasError()) {
   std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
   std::abort();
