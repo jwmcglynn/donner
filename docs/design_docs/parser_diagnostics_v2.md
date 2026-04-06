@@ -1,6 +1,6 @@
 # Design: Parser Diagnostics v2 {#ParserDiagnosticsV2}
 
-**Status:** Design
+**Status:** Implemented
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-05
 **Issue:** https://github.com/jwmcglynn/donner/issues/442
@@ -85,10 +85,11 @@ No backward compatibility with the existing `ParseError` API is required.
     (`ParseWarningSink::mergeFromSubparser`).
   - [x] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
   - [ ] Add range-accuracy tests for CSS/XML parsers.
-- [ ] **Milestone 4: Diagnostic rendering utilities**
-  - [ ] Implement `DiagnosticRenderer` for single-line and multi-line source highlights.
-  - [ ] Add severity labels (error/warning) and optional filename prefixes.
-  - [ ] Add golden/snapshot tests for renderer output.
+- [x] **Milestone 4: Diagnostic rendering utilities**
+  - [x] Implement `DiagnosticRenderer` for single-line and multi-line source highlights.
+  - [x] Add severity labels (error/warning) and optional filename prefixes.
+  - [x] Add golden/snapshot tests for renderer output.
+  - [x] Support ANSI colorized output.
 
 ## Proposed Architecture
 
