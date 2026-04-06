@@ -30,7 +30,7 @@ TEST(ParseDiagnostic, Output) {
       ParseDiagnostic::Error("Test reason",
                              FileOffset::OffsetWithLineInfo(3, FileOffset::LineInfo(1, 2)));
 
-  EXPECT_EQ((std::ostringstream() << err).str(), "Parse error at 1:2: Test reason");
+  EXPECT_EQ((std::ostringstream() << err).str(), "error at 1:2: Test reason");
 }
 
 }  // namespace donner::parser

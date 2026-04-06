@@ -116,14 +116,14 @@ TEST(ParseResultTestUtils, PrintTo) {
     return ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
   }();
   EXPECT_EQ(testing::PrintToString(withError),
-            "ParseResult { error: Parse error at 0:0: Test error please ignore }");
+            "ParseResult { error: error at 0:0: Test error please ignore }");
 
   ParseResult<int> withBoth = []() -> ParseResult<int> {
     auto error = ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
     return ParseResult<int>(42, std::move(error));
   }();
   EXPECT_EQ(testing::PrintToString(withBoth),
-            "ParseResult { result: 42 error: Parse error at 0:0: Test error please ignore }");
+            "ParseResult { result: 42 error: error at 0:0: Test error please ignore }");
 }
 
 TEST(ParseResultTestUtils, ErrorMatchers) {
