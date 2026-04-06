@@ -77,7 +77,7 @@ public:
 
     ParseDiagnostic err;
     err.reason = "Not enough parameters";
-    err.range.start = FileOffset::EndOfString();
+    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
     return err;
   }
 
@@ -88,7 +88,7 @@ public:
         if (!tryConsumeToken<css::Token::Comma>()) {
           ParseDiagnostic err;
           err.reason = isEOF() ? "Not enough parameters" : "Expected a comma";
-          err.range.start = sourceOffset();
+          err.range = {sourceOffset(), sourceOffset()};
           return err;
         }
         skipWhitespace();
@@ -118,7 +118,7 @@ public:
 
     ParseDiagnostic err;
     err.reason = "Not enough parameters";
-    err.range.start = FileOffset::EndOfString();
+    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
     return err;
   }
 
@@ -135,7 +135,7 @@ public:
 
     ParseDiagnostic err;
     err.reason = "Not enough parameters";
-    err.range.start = FileOffset::EndOfString();
+    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
     return err;
   }
 
@@ -232,7 +232,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Unexpected function '" + name + "'";
-        err.range.start = parser_.sourceOffset();
+        err.range = {parser_.sourceOffset(), parser_.sourceOffset()};
         return err;
       }
     } else {
