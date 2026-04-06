@@ -74,8 +74,10 @@ SKIPPED_PACKAGES = {
     "donner/benchmarks",
 }
 
-# Individual targets to skip (require optional deps like HarfBuzz).
-SKIPPED_TARGETS = set()
+# Individual targets to skip (require optional deps like HarfBuzz/FreeType).
+SKIPPED_TARGETS = {
+    "//donner/svg/text:text_backend_full",  # Requires FreeType + HarfBuzz (text_full tier)
+}
 
 # Helper constants for CMake condition strings.
 _SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
