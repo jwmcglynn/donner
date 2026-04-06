@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -19,7 +20,8 @@ SVGDocument ParseSVG(std::string_view input) {
   parser::SVGParser::Options options;
   options.disableUserAttributes = false;
 
-  auto maybeResult = parser::SVGParser::ParseSVG(input, options);
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto maybeResult = parser::SVGParser::ParseSVG(input, disabled, options);
   EXPECT_THAT(maybeResult, NoParseError());
   return std::move(maybeResult).result();
 }

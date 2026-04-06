@@ -5,6 +5,7 @@
 
 #include <deque>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
@@ -68,7 +69,8 @@ protected:
     parser::SVGParser::Options options;
     options.parseAsInlineSVG = true;
 
-    auto maybeResult = parser::SVGParser::ParseSVG(input, options);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    auto maybeResult = parser::SVGParser::ParseSVG(input, disabled, options);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
