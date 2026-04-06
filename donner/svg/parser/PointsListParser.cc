@@ -35,7 +35,7 @@ public:
         if (remaining_.starts_with(',')) {
           ParseDiagnostic err;
           err.reason = "Extra ',' before coordinate";
-          err.range.start = currentOffset();
+          err.range = currentRange(0, 1);
           return err;
         }
       }

@@ -70,7 +70,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Expected a number";
-        err.range.start = components_.front().sourceOffset();
+        err.range = {components_.front().sourceOffset(), components_.front().sourceOffset()};
         return err;
       }
     }

@@ -48,6 +48,7 @@ public:
     skipWhitespace();
 
     if (!remaining_.empty()) {
+      const size_t meetOrSliceStart = consumedChars();
       const std::string_view meetOrSlice = readToken();
       if (meetOrSlice == "meet") {
         result.meetOrSlice = PreserveAspectRatio::MeetOrSlice::Meet;
@@ -56,14 +57,14 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Invalid meetOrSlice: '" + std::string(meetOrSlice) + "'";
-        err.range.start = currentOffset();
+        err.range = rangeFrom(meetOrSliceStart);
         return err;
       }
 
       if (!remaining_.empty()) {
         ParseDiagnostic err;
         err.reason = "End of attribute expected";
-        err.range.start = currentOffset();
+        err.range = currentRange(0, 1);
         return err;
       }
     }
