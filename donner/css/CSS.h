@@ -44,9 +44,6 @@ public:
    */
   static Stylesheet ParseStylesheet(std::string_view str, ParseWarningSink& warningSink);
 
-  /// Convenience overload that discards warnings.
-  static Stylesheet ParseStylesheet(std::string_view str);
-
   /**
    * Parse a `style=""` attribute into a list of \ref Declaration.
    *

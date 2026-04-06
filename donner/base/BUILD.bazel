@@ -4,10 +4,12 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "base",
     srcs = [
+        "DiagnosticRenderer.cc",
         "ParseDiagnostic.cc",
     ],
     hdrs = [
         "Box.h",
+        "DiagnosticRenderer.h",
         "ChunkedString.h",
         "CompileTimeMap.h",
         "EcsRegistry.h",
@@ -71,6 +73,7 @@ donner_cc_test(
     name = "base_tests",
     srcs = [
         "tests/BaseTestUtils_tests.cc",
+        "tests/DiagnosticRenderer_tests.cc",
         "tests/Box_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",

@@ -22,9 +22,6 @@ public:
    * @return Parsed stylesheet.
    */
   static Stylesheet Parse(std::string_view str, ParseWarningSink& warningSink);
-
-  /// Convenience overload that discards warnings.
-  static Stylesheet Parse(std::string_view str);
 };
 
 }  // namespace donner::css::parser

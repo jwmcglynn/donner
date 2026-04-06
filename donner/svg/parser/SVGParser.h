@@ -95,18 +95,6 @@ public:
       SVGDocument::Settings settings = {}) noexcept;
 
   /**
-   * Parses an SVG XML document from a string, discarding any warnings.
-   *
-   * @param source Input buffer containing the SVG XML document. Will not be modified.
-   * @param options Options to modify the parsing behavior.
-   * @param settings Document settings, including the resource loader and processing mode.
-   * @return Parsed SVGDocument, or an error if a fatal error is encountered.
-   */
-  static ParseResult<SVGDocument> ParseSVG(
-      std::string_view source, Options options = {},
-      SVGDocument::Settings settings = {}) noexcept;
-
-  /**
    * Parses an SVG XML document from an XML document tree.
    *
    * @param xmlDocument XML document to parse.
@@ -119,17 +107,6 @@ public:
       xml::XMLDocument&& xmlDocument, ParseWarningSink& warningSink,
       Options options = {}, SVGDocument::Settings settings = {}) noexcept;
 
-  /**
-   * Parses an SVG XML document from an XML document tree, discarding any warnings.
-   *
-   * @param xmlDocument XML document to parse.
-   * @param options Options to modify the parsing behavior.
-   * @param settings Document settings, including the resource loader and processing mode.
-   * @return Parsed SVGDocument, or an error if a fatal error is encountered.
-   */
-  static ParseResult<SVGDocument> ParseXMLDocument(
-      xml::XMLDocument&& xmlDocument,
-      Options options = {}, SVGDocument::Settings settings = {}) noexcept;
 };
 
 }  // namespace donner::svg::parser

@@ -21,14 +21,6 @@ public:
   static void prepareDocumentForRendering(SVGDocument& document, bool verbose,
                                           ParseWarningSink& warningSink);
 
-  /**
-   * Prepare the document for rendering, instantiating computed components and the rendering tree.
-   * Warnings are discarded.
-   *
-   * @param document Document to prepare.
-   * @param verbose If true, enable verbose logging.
-   */
-  static void prepareDocumentForRendering(SVGDocument& document, bool verbose);
 };
 
 }  // namespace donner::svg

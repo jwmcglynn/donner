@@ -10,11 +10,6 @@ Stylesheet CSS::ParseStylesheet(std::string_view str, ParseWarningSink& warningS
   return parser::StylesheetParser::Parse(str, warningSink);
 }
 
-Stylesheet CSS::ParseStylesheet(std::string_view str) {
-  ParseWarningSink disabled = ParseWarningSink::Disabled();
-  return parser::StylesheetParser::Parse(str, disabled);
-}
-
 std::vector<Declaration> CSS::ParseStyleAttribute(std::string_view str) {
   return parser::DeclarationListParser::ParseOnlyDeclarations(str);
 }

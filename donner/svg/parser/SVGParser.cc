@@ -438,13 +438,6 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
   }
 }
 
-ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
-                                             SVGParser::Options options,
-                                             SVGDocument::Settings settings) noexcept {
-  ParseWarningSink disabled = ParseWarningSink::Disabled();
-  return ParseSVG(source, disabled, options, std::move(settings));
-}
-
 ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
                                                      ParseWarningSink& warningSink,
                                                      SVGParser::Options options,
@@ -463,13 +456,6 @@ ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocum
     err.range.start = FileOffset::Offset(0);
     return err;
   }
-}
-
-ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
-                                                     SVGParser::Options options,
-                                                     SVGDocument::Settings settings) noexcept {
-  ParseWarningSink disabled = ParseWarningSink::Disabled();
-  return ParseXMLDocument(std::move(xmlDocument), disabled, options, std::move(settings));
 }
 
 }  // namespace donner::svg::parser

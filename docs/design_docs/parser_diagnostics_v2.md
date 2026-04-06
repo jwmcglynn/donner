@@ -81,8 +81,9 @@ No backward compatibility with the existing `ParseError` API is required.
     `FilterSystem`, `TextSystem`, `ShadowTreeSystem`), resources (`SubDocumentCache`,
     `ResourceManagerContext`), rendering (`RenderingContext`, `RendererUtils`), and all
     callers/tests/tools/examples.
-  - [ ] Standardize subparser remapping with `SourceRange`-aware composition helpers.
-  - [ ] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
+  - [x] Standardize subparser remapping with `SourceRange`-aware composition helpers
+    (`ParseWarningSink::mergeFromSubparser`).
+  - [x] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
   - [ ] Add range-accuracy tests for CSS/XML parsers.
 - [ ] **Milestone 4: Diagnostic rendering utilities**
   - [ ] Implement `DiagnosticRenderer` for single-line and multi-line source highlights.

@@ -195,9 +195,4 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
   return Stylesheet(std::move(selectorRules), std::move(fontFaces));
 }
 
-Stylesheet StylesheetParser::Parse(std::string_view str) {
-  ParseWarningSink disabled = ParseWarningSink::Disabled();
-  return Parse(str, disabled);
-}
-
 }  // namespace donner::css::parser

@@ -16,9 +16,4 @@ void RendererUtils::prepareDocumentForRendering(SVGDocument& document, bool verb
   registry.ctx().get<components::RenderingContext>().instantiateRenderTree(verbose, warningSink);
 }
 
-void RendererUtils::prepareDocumentForRendering(SVGDocument& document, bool verbose) {
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  prepareDocumentForRendering(document, verbose, disabledSink);
-}
-
 }  // namespace donner::svg
