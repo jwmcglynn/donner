@@ -675,7 +675,7 @@ TEST_F(XMLParserTests, EntitiesCustomErrors) {
   EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]", optionsCustomEntities()),
               ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
   EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY ]>", optionsCustomEntities()),
-              ParseErrorIs("Expected quoted string in entity decl"));
+              ParseErrorIs("Expected entity name"));
   EXPECT_THAT(XMLParser::Parse("<!DOCTYPE test[<!ENTITY\0]"sv, optionsCustomEntities()),
               ParseErrorIs("Unterminated <!ENTITY declaration in DOCTYPE"));
 
@@ -715,7 +715,7 @@ TEST_F(XMLParserTests, EntitiesCustomErrors) {
                   "''><!ENTITY a ''>]>"
                   "<a></a>",
                   optionsCustomEntities()),
-              ParseErrorIs("Expected '>' at end of entity declaration"));
+              ParseErrorIs("Expected entity name"));
 }
 
 TEST_F(XMLParserTests, EntitiesExternalSecurity) {
@@ -884,6 +884,106 @@ TEST_F(XMLParserTests, ParseQualifiedNameErrors) {
               AllOf(ParseErrorIs("Invalid closing tag name: Expected local part of name after ':', "
                                  "found invalid character"),
                     ParseErrorPos(1, 13)));
+}
+
+// Tests for XML-conforming Name validation per XML 1.0 productions [4], [4a], [5].
+// NameStartChar ::= ":" | [A-Z] | "_" | [a-z] | [#xC0-#xD6] | ...
+// NameChar ::= NameStartChar | "-" | "." | [0-9] | #xB7 | [#x0300-#x036F] | [#x203F-#x2040]
+// Name ::= NameStartChar (NameChar)*
+
+TEST_F(XMLParserTests, NameStartCharRejectsDigit) {
+  // Names cannot start with a digit
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<1tag />)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, NameStartCharRejectsHyphen) {
+  // Names cannot start with a hyphen (NameChar but not NameStartChar)
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<-tag />)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, NameStartCharRejectsDot) {
+  // Names cannot start with a dot (NameChar but not NameStartChar)
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<.tag />)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, NameCharAllowsDigitHyphenDot) {
+  // Digits, hyphens, and dots are valid NameChar (after the start)
+  auto maybeNode = parseAndGetFirstNode(R"(<tag-1.2 />)");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("tag-1.2"));
+}
+
+TEST_F(XMLParserTests, NameStartCharAllowsUnderscore) {
+  auto maybeNode = parseAndGetFirstNode(R"(<_tag />)");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("_tag"));
+}
+
+TEST_F(XMLParserTests, NameRejectsSpecialChars) {
+  // Characters like @, #, $, %, etc. are not valid in names
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<@tag />)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<#tag />)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+  EXPECT_THAT(
+      XMLParser::Parse(R"(<$tag />)"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, NameAllowsUnicodeLetters) {
+  // Unicode letters in the NameStartChar range should be accepted
+  // \xC3\xA9 = U+00E9 (é), in range [#xC0-#xD6] | [#xD8-#xF6] | [#xF8-#x2FF]
+  auto maybeNode = parseAndGetFirstNode("<\xC3\xA9l\xC3\xA9ment />");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("\xC3\xA9l\xC3\xA9ment"));
+}
+
+TEST_F(XMLParserTests, NameAllowsCJKCharacters) {
+  // U+4E2D = 中 (CJK), in range [#x3001-#xD7FF]
+  // UTF-8: \xE4\xB8\xAD
+  auto maybeNode = parseAndGetFirstNode("<\xE4\xB8\xAD\xE6\x96\x87 />");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("\xE4\xB8\xAD\xE6\x96\x87"));
+}
+
+TEST_F(XMLParserTests, NameRejectsInvalidUnicodeRange) {
+  // U+00D7 (×, multiplication sign) is NOT in NameStartChar ranges
+  // (it's between [#xC0-#xD6] and [#xD8-#xF6])
+  // UTF-8: \xC3\x97
+  EXPECT_THAT(
+      XMLParser::Parse("<\xC3\x97tag />"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, NameCharAllowsMiddleDotB7) {
+  // U+00B7 (·, middle dot) is valid as NameChar but not NameStartChar
+  // UTF-8: \xC2\xB7
+  auto maybeNode = parseAndGetFirstNode("<tag\xC2\xB7name />");
+  ASSERT_TRUE(maybeNode.has_value());
+  EXPECT_THAT(maybeNode->tagName(), Eq("tag\xC2\xB7name"));
+}
+
+TEST_F(XMLParserTests, NameStartCharRejectsMiddleDotB7) {
+  // U+00B7 is only valid as NameChar, not NameStartChar
+  EXPECT_THAT(
+      XMLParser::Parse("<\xC2\xB7tag />"),
+      ParseErrorIs("Invalid element name: Expected qualified name, found invalid character"));
+}
+
+TEST_F(XMLParserTests, AttributeNameConformance) {
+  // Attribute names follow the same Name rules
+  EXPECT_THAT(XMLParser::Parse(R"(<node 1attr="value" />)"),
+              ParseErrorIs("Node not closed with '>' or '/>'"));
+  EXPECT_THAT(XMLParser::Parse(R"(<node -attr="value" />)"),
+              ParseErrorIs("Node not closed with '>' or '/>'"));
 }
 
 TEST_F(XMLParserTests, GetAttributeLocationBasic) {

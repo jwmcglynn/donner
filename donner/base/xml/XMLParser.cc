@@ -86,18 +86,60 @@ struct ParsedAttribute {
   RcStringOrRef value;
 };
 
-/// Detects qualified name characters, e.g. element or attribute names, which may contain a colon
-/// if they have a namespace prefix
-struct NamePredicate {
-  /// Valid names (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0` `'` `"`)
-  static constexpr std::array<unsigned char, 256> kLookupName = BuildLookupTable([](char ch) {
-    return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
-             ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == '\'' ||
-             ch == '"');
-  });
+/// Returns true if the Unicode codepoint is a valid NameStartChar per XML 1.0 production [4].
+/// @see https://www.w3.org/TR/xml/#NT-NameStartChar
+///
+/// NameStartChar ::= ":" | [A-Z] | "_" | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] | [#xF8-#x2FF] |
+///                   [#x370-#x37D] | [#x37F-#x1FFF] | [#x200C-#x200D] | [#x2070-#x218F] |
+///                   [#x2C00-#x2FEF] | [#x3001-#xD7FF] | [#xF900-#xFDCF] | [#xFDF0-#xFFFD] |
+///                   [#x10000-#xEFFFF]
+bool IsNameStartChar(char32_t ch) {
+  // clang-format off
+  return ch == ':' ||
+         (ch >= 'A' && ch <= 'Z') ||
+         ch == '_' ||
+         (ch >= 'a' && ch <= 'z') ||
+         (ch >= 0xC0 && ch <= 0xD6) ||
+         (ch >= 0xD8 && ch <= 0xF6) ||
+         (ch >= 0xF8 && ch <= 0x2FF) ||
+         (ch >= 0x370 && ch <= 0x37D) ||
+         (ch >= 0x37F && ch <= 0x1FFF) ||
+         (ch >= 0x200C && ch <= 0x200D) ||
+         (ch >= 0x2070 && ch <= 0x218F) ||
+         (ch >= 0x2C00 && ch <= 0x2FEF) ||
+         (ch >= 0x3001 && ch <= 0xD7FF) ||
+         (ch >= 0xF900 && ch <= 0xFDCF) ||
+         (ch >= 0xFDF0 && ch <= 0xFFFD) ||
+         (ch >= 0x10000 && ch <= 0xEFFFF);
+  // clang-format on
+}
 
-  static unsigned char test(char ch) { return kLookupName[static_cast<unsigned char>(ch)]; }
-};
+/// Returns true if the Unicode codepoint is a valid NameChar per XML 1.0 production [4a].
+/// @see https://www.w3.org/TR/xml/#NT-NameChar
+///
+/// NameChar ::= NameStartChar | "-" | "." | [0-9] | #xB7 | [#x0300-#x036F] | [#x203F-#x2040]
+bool IsNameChar(char32_t ch) {
+  // clang-format off
+  return IsNameStartChar(ch) ||
+         ch == '-' ||
+         ch == '.' ||
+         (ch >= '0' && ch <= '9') ||
+         ch == 0xB7 ||
+         (ch >= 0x0300 && ch <= 0x036F) ||
+         (ch >= 0x203F && ch <= 0x2040);
+  // clang-format on
+}
+
+/// Returns true if the ASCII character (< 0x80) is a valid NameStartChar, excluding ':'.
+/// Used as a fast path for single-byte characters; ':' is handled separately for namespace parsing.
+bool IsAsciiNameStartCharNoColon(char ch) {
+  return (ch >= 'A' && ch <= 'Z') || ch == '_' || (ch >= 'a' && ch <= 'z');
+}
+
+/// Returns true if the ASCII character (< 0x80) is a valid NameChar, excluding ':'.
+bool IsAsciiNameCharNoColon(char ch) {
+  return IsAsciiNameStartCharNoColon(ch) || ch == '-' || ch == '.' || (ch >= '0' && ch <= '9');
+}
 
 /// Detects digits for numeric entities (0-9, a-f, A-F)
 struct DigitsPredicate {
@@ -107,20 +149,6 @@ struct DigitsPredicate {
   });
 
   static unsigned char test(char ch) { return kLookupDigits[static_cast<unsigned char>(ch)]; }
-};
-
-/// Detects attribute name characters without ':', which may be a namespace prefix or local name
-struct NameNoColonPredicate {
-  /// Name without colon (anything but space `\n` `\r` `\t` `/` `<` `>` `=` `?` `!` `\0`
-  /// `:`, `'`, `"`)
-  static constexpr std::array<unsigned char, 256> kLookupNameNoColon =
-      BuildLookupTable([](char ch) {
-        return !(ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' || ch == '/' || ch == '<' ||
-                 ch == '>' || ch == '=' || ch == '?' || ch == '!' || ch == '\0' || ch == ':' ||
-                 ch == '\'' || ch == '"');
-      });
-
-  static unsigned char test(char ch) { return kLookupNameNoColon[static_cast<unsigned char>(ch)]; }
 };
 
 /// Detects text data between nodes, e.g. between <tag> and </tag>, including entities (anything
@@ -438,6 +466,189 @@ private:
   }
 
   /**
+   * Decode a UTF-8 codepoint from a ChunkedString starting at position \p pos.
+   *
+   * @param sourceString The source string.
+   * @param pos The byte position to start decoding from.
+   * @return A tuple of (codepoint, byte_length). Returns (replacementChar, 1) on invalid UTF-8.
+   */
+  static std::tuple<char32_t, int> decodeCodepointAt(const ChunkedString& sourceString,
+                                                     size_t pos) {
+    const char leadingByte = sourceString[pos];
+    const int seqLen = Utf8::SequenceLength(leadingByte);
+    if (seqLen == 0 || pos + seqLen > sourceString.size()) {
+      return {Utf8::kUnicodeReplacementCharacter, 1};
+    }
+
+    // Validate continuation bytes and decode
+    char32_t codepoint = 0;
+    switch (seqLen) {
+      case 1: codepoint = static_cast<uint8_t>(leadingByte); break;
+      case 2:
+        if ((sourceString[pos + 1] & 0b11000000) != 0b10000000) {
+          return {Utf8::kUnicodeReplacementCharacter, 1};
+        }
+        codepoint = ((static_cast<uint8_t>(leadingByte) & 0b00011111) << 6) |
+                    (static_cast<uint8_t>(sourceString[pos + 1]) & 0b00111111);
+        if (codepoint < 0x80) {
+          return {Utf8::kUnicodeReplacementCharacter, 1};  // Overlong
+        }
+        break;
+      case 3:
+        for (int j = 1; j < 3; ++j) {
+          if ((sourceString[pos + j] & 0b11000000) != 0b10000000) {
+            return {Utf8::kUnicodeReplacementCharacter, 1};
+          }
+        }
+        codepoint = ((static_cast<uint8_t>(leadingByte) & 0b00001111) << 12) |
+                    ((static_cast<uint8_t>(sourceString[pos + 1]) & 0b00111111) << 6) |
+                    (static_cast<uint8_t>(sourceString[pos + 2]) & 0b00111111);
+        if (codepoint < 0x800) {
+          return {Utf8::kUnicodeReplacementCharacter, 1};  // Overlong
+        }
+        break;
+      case 4:
+        for (int j = 1; j < 4; ++j) {
+          if ((sourceString[pos + j] & 0b11000000) != 0b10000000) {
+            return {Utf8::kUnicodeReplacementCharacter, 1};
+          }
+        }
+        codepoint = ((static_cast<uint8_t>(leadingByte) & 0b00000111) << 18) |
+                    ((static_cast<uint8_t>(sourceString[pos + 1]) & 0b00111111) << 12) |
+                    ((static_cast<uint8_t>(sourceString[pos + 2]) & 0b00111111) << 6) |
+                    (static_cast<uint8_t>(sourceString[pos + 3]) & 0b00111111);
+        if (codepoint < 0x10000) {
+          return {Utf8::kUnicodeReplacementCharacter, 1};  // Overlong
+        }
+        break;
+      default: return {Utf8::kUnicodeReplacementCharacter, 1};
+    }
+
+    if (!Utf8::IsValidCodepoint(codepoint)) {
+      return {Utf8::kUnicodeReplacementCharacter, 1};
+    }
+
+    return {codepoint, seqLen};
+  }
+
+  /**
+   * Consume an XML Name token per XML 1.0 productions [4], [4a], [5], excluding ':'.
+   * The colon is excluded so that namespace prefix parsing can handle it separately.
+   *
+   * Name ::= NameStartChar (NameChar)*
+   *
+   * @param sourceString The input to consume from.
+   * @return The consumed name substring (empty if the first character is not a NameStartChar).
+   */
+  static ChunkedString consumeName(ChunkedString& sourceString) {
+    const size_t len = sourceString.size();
+    if (len == 0) {
+      return sourceString.substr(0, 0);
+    }
+
+    size_t i = 0;
+
+    // Check NameStartChar (first character)
+    {
+      const char firstByte = sourceString[0];
+      const uint8_t ub = static_cast<uint8_t>(firstByte);
+      if (ub < 0x80) {
+        // ASCII fast path
+        if (!IsAsciiNameStartCharNoColon(firstByte)) {
+          return sourceString.substr(0, 0);
+        }
+        i = 1;
+      } else {
+        // Multi-byte UTF-8
+        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, 0);
+        // ':' is handled by the caller, so use IsNameStartChar but skip the ':' case
+        // (IsNameStartChar includes ':', but we exclude it here since it's ASCII and handled above)
+        if (!IsNameStartChar(codepoint)) {
+          return sourceString.substr(0, 0);
+        }
+        i = seqLen;
+      }
+    }
+
+    // Consume NameChar* (subsequent characters)
+    while (i < len) {
+      const char byte = sourceString[i];
+      const uint8_t ub = static_cast<uint8_t>(byte);
+      if (ub < 0x80) {
+        // ASCII fast path
+        if (!IsAsciiNameCharNoColon(byte)) {
+          break;
+        }
+        ++i;
+      } else {
+        // Multi-byte UTF-8
+        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, i);
+        if (!IsNameChar(codepoint)) {
+          break;
+        }
+        i += seqLen;
+      }
+    }
+
+    const ChunkedString result = sourceString.substr(0, i);
+    sourceString.remove_prefix(i);
+    return result;
+  }
+
+  /**
+   * Consume an XML Name token that may include ':' (used for PI target names).
+   * Unlike consumeName(), this allows ':' as both NameStartChar and NameChar per the XML spec.
+   */
+  static ChunkedString consumeNameAllowColon(ChunkedString& sourceString) {
+    const size_t len = sourceString.size();
+    if (len == 0) {
+      return sourceString.substr(0, 0);
+    }
+
+    size_t i = 0;
+
+    // Check NameStartChar (first character), including ':'
+    {
+      const char firstByte = sourceString[0];
+      const uint8_t ub = static_cast<uint8_t>(firstByte);
+      if (ub < 0x80) {
+        if (!IsAsciiNameStartCharNoColon(firstByte) && firstByte != ':') {
+          return sourceString.substr(0, 0);
+        }
+        i = 1;
+      } else {
+        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, 0);
+        if (!IsNameStartChar(codepoint)) {
+          return sourceString.substr(0, 0);
+        }
+        i = seqLen;
+      }
+    }
+
+    // Consume NameChar* (subsequent characters), including ':'
+    while (i < len) {
+      const char byte = sourceString[i];
+      const uint8_t ub = static_cast<uint8_t>(byte);
+      if (ub < 0x80) {
+        if (!IsAsciiNameCharNoColon(byte) && byte != ':') {
+          break;
+        }
+        ++i;
+      } else {
+        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, i);
+        if (!IsNameChar(codepoint)) {
+          break;
+        }
+        i += seqLen;
+      }
+    }
+
+    const ChunkedString result = sourceString.substr(0, i);
+    sourceString.remove_prefix(i);
+    return result;
+  }
+
+  /**
    * Attempt to parse a built-in or numeric entity. If we successfully parse one, we append the
    * decoded text (e.g. "<") to `out` and return true. Otherwise, we return false.
    *
@@ -574,11 +785,42 @@ private:
 
       // 3. If it's not built-in or numeric => custom entity => expand
       {
-        const bool nameStartIndex = 1;  // Index 0 is the entity prefix, '&' or '%'
-        size_t entPos = nameStartIndex;
-        while (entPos < sourceString.size() && NameNoColonPredicate::test(sourceString[entPos]) &&
-               sourceString[entPos] != ';') {
-          entPos++;
+        // Index 0 is the entity prefix, '&' or '%'. Parse entity name starting at index 1.
+        size_t entPos = 1;
+        // Check NameStartChar for the first character of the entity name.
+        bool validEntityName = false;
+        if (entPos < sourceString.size() && sourceString[entPos] != ';') {
+          const uint8_t firstByte = static_cast<uint8_t>(sourceString[entPos]);
+          if (firstByte < 0x80) {
+            validEntityName = IsAsciiNameStartCharNoColon(static_cast<char>(firstByte));
+            if (validEntityName) {
+              ++entPos;
+            }
+          } else {
+            auto [codepoint, seqLen] = decodeCodepointAt(sourceString, entPos);
+            validEntityName = IsNameStartChar(codepoint);
+            if (validEntityName) {
+              entPos += seqLen;
+            }
+          }
+        }
+        // Consume NameChar* for subsequent characters.
+        if (validEntityName) {
+          while (entPos < sourceString.size() && sourceString[entPos] != ';') {
+            const uint8_t ub = static_cast<uint8_t>(sourceString[entPos]);
+            if (ub < 0x80) {
+              if (!IsAsciiNameCharNoColon(static_cast<char>(ub))) {
+                break;
+              }
+              ++entPos;
+            } else {
+              auto [codepoint, seqLen] = decodeCodepointAt(sourceString, entPos);
+              if (!IsNameChar(codepoint)) {
+                break;
+              }
+              entPos += seqLen;
+            }
+          }
         }
 
         if (entPos >= sourceString.size() || sourceString[entPos] != ';') {
@@ -828,8 +1070,8 @@ private:
 
   // Parse PI nodes, e.g. `<?php ... ?>`
   ParseResult<std::optional<XMLNode>> parseProcessingInstructions(FileOffset startOffset) {
-    // Extract PI target name
-    const ChunkedString piName = consumeMatching<NamePredicate>(remaining_);
+    // Extract PI target name (PI targets are full Names, which include ':')
+    const ChunkedString piName = consumeNameAllowColon(remaining_);
     if (piName.empty()) {
       return createParseError("PI target does not begin with a name, e.g. '<?tag'");
     }
@@ -924,7 +1166,7 @@ private:
     }
 
     // Parse entity name
-    ChunkedString entityName = consumeMatching<NameNoColonPredicate>(decl);
+    ChunkedString entityName = consumeName(decl);
     if (entityName.empty()) {
       return createParseError("Expected entity name");
     }
@@ -1072,14 +1314,14 @@ private:
   }
 
   ParseResult<XMLQualifiedNameRef> consumeQualifiedName() {
-    const ChunkedString name = consumeMatching<NameNoColonPredicate>(remaining_);
+    const ChunkedString name = consumeName(remaining_);
     if (name.empty()) {
       return createParseError("Expected qualified name, found invalid character");
     }
 
     if (tryConsume(remaining_, ":")) {
       // Namespace prefix found
-      const ChunkedString localName = consumeMatching<NameNoColonPredicate>(remaining_);
+      const ChunkedString localName = consumeName(remaining_);
       if (localName.empty()) {
         return createParseError("Expected local part of name after ':', found invalid character");
       }
@@ -1175,9 +1417,17 @@ private:
    * @returns nullopt if none found.
    */
   ParseResult<std::optional<ParsedAttribute>> parseNextAttribute() {
-    if (!NameNoColonPredicate::test(peek(remaining_).value_or('\0'))) {
-      // No more attributes to parse.
-      return std::optional<ParsedAttribute>(std::nullopt);
+    {
+      const char nextCh = peek(remaining_).value_or('\0');
+      const uint8_t ub = static_cast<uint8_t>(nextCh);
+      // Quick check: is the next character a possible NameStartChar?
+      // For ASCII, check directly. For multi-byte UTF-8 (>= 0x80), the lead byte starts a
+      // multi-byte sequence which could be a valid NameStartChar — let consumeQualifiedName handle
+      // full validation.
+      if (ub < 0x80 && !IsAsciiNameStartCharNoColon(nextCh)) {
+        // No more attributes to parse.
+        return std::optional<ParsedAttribute>(std::nullopt);
+      }
     }
 
     auto maybeName = consumeQualifiedName();
