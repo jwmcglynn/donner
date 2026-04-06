@@ -278,12 +278,10 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
 /** Apply optional width/height overrides. */
 void ApplyCanvasSize(const CliOptions& options, SVGDocument* document) {
   UTILS_RELEASE_ASSERT(document);
-  if (options.width > 0 && options.height > 0) {
-    document->setCanvasSize(options.width, options.height);
-  } else if (options.width > 0) {
-    document->setCanvasSize(options.width, options.width);
-  } else if (options.height > 0) {
-    document->setCanvasSize(options.height, options.height);
+  if (options.width > 0 || options.height > 0) {
+    const Vector2i current = document->canvasSize();
+    document->setCanvasSize(options.width > 0 ? options.width : current.x,
+                            options.height > 0 ? options.height : current.y);
   }
 }
 
