@@ -206,6 +206,7 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
                 renderer_backend = backend,
                 text_full = text_full_val,
                 testonly = 1,
+                tags = ["manual"],
                 **kwargs
             )
 

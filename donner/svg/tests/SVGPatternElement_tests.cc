@@ -76,7 +76,7 @@ TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
         ................
         ................
         ................
-        )""));
+        )"));
 }
 
 TEST(SVGPatternElementTests, ObjectBoundingBoxTiledRendering) {
@@ -292,7 +292,7 @@ TEST(SVGPatternElementTests, PatternTransformRendering) {
         ===,.......:====
         =====........===
         ======........==
-        )""));
+        )"));
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
@@ -321,7 +321,7 @@ TEST(SVGPatternElementTests, PatternTransformWithXYRendering) {
         .***...-.,==...=
         .,**,.....===...
         ..***.:=..,==...
-        )""));
+        )"));
 }
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
@@ -349,7 +349,7 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsRendering) {
         ===,.......:====
         =====........===
         ======........==
-        )""));
+        )"));
 }
 
 TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
@@ -378,7 +378,7 @@ TEST(SVGPatternElementTests, PatternTransformWithPatternUnitsAndXYRendering) {
         =====:........==
         =======........=
         -=======-.......
-        )""));
+        )"));
 }
 
 TEST(SVGPatternElementTests, PatternRecursionOnChild) {
@@ -437,7 +437,7 @@ TEST(SVGPatternElementTests, PatternRecursionHref) {
         ................
         ................
         ................
-        )""));
+        )"));
 }
 
 // TODO viewBox/preserveAspectRatio
