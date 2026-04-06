@@ -62,7 +62,10 @@ struct SVGState {
   void loadSVG(const std::string& source) {
     document = SVGDocument();
 
-    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(source);
+    SVGParser::Options options;
+    options.enableExperimental = true;  // Enable experimental features like <text> element.
+
+    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(source, options);
     if (maybeDocument.hasError()) {
       lastError = maybeDocument.error();
       valid = false;

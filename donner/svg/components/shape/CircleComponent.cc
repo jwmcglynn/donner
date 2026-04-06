@@ -51,7 +51,7 @@ constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
 ComputedCircleComponent::ComputedCircleComponent(
     const CircleProperties& inputProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<ParseDiagnostic>* outWarnings)
+    ParseWarningSink& warningSink)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const CirclePresentationAttributeParseFn* parseFn =
@@ -61,8 +61,8 @@ ComputedCircleComponent::ComputedCircleComponent(
           (*parseFn)(properties, parser::PropertyParseFnParams::Create(
                          property.declaration, property.specificity,
                          parser::PropertyParseBehavior::AllowUserUnits));
-      if (maybeError && outWarnings) {
-        outWarnings->emplace_back(std::move(maybeError.value()));
+      if (maybeError) {
+        warningSink.add(std::move(maybeError.value()));
       }
     }
   }

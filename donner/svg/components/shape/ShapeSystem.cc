@@ -2,6 +2,7 @@
 
 #include <concepts>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -215,8 +216,9 @@ std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
 
 bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
                                      FillRule fillRule) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     return computedPath->spline.isInside(point, fillRule);
   }
 
@@ -225,8 +227,9 @@ bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
 
 bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& point,
                                        double strokeWidth) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     return computedPath->spline.isOnPath(point, strokeWidth);
   }
 
@@ -243,8 +246,9 @@ std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
     }
   }
 
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     overallBounds = computedPath->transformedBounds(
         LayoutSystem().getEntityFromWorldTransform(handle) * worldFromTarget);
   }
@@ -258,8 +262,9 @@ std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
           }
         }
 
+        ParseWarningSink disabledSink = ParseWarningSink::Disabled();
         if (ComputedPathComponent* computedPath =
-                createComputedPathIfShape(child, FontMetrics(), nullptr)) {
+                createComputedPathIfShape(child, FontMetrics(), disabledSink)) {
           const Boxd bounds = computedPath->transformedBounds(
               LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget);
           overallBounds = overallBounds ? Boxd::Union(overallBounds.value(), bounds) : bounds;
@@ -345,9 +350,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
         [](const parser::PropertyParseFnParams& params) { return ParseD(params.components()); },
         &actualD);
     if (maybeError) {
-      if (warningSink) {
-        warningSink->emplace_back(std::move(maybeError.value()));
-      }
+      warningSink.add(std::move(maybeError.value()));
       return nullptr;
     }
   }
@@ -358,9 +361,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     auto maybePath = parser::PathParser::Parse(actualD.get().value());
     if (maybePath.hasError()) {
       // Propagate warnings, which may be set on success too.
-      if (warningSink) {
-        warningSink->emplace_back(std::move(maybePath.error()));
-      }
+      warningSink.add(std::move(maybePath.error()));
     }
 
     if (maybePath.hasResult() && !maybePath.result().empty()) {

@@ -1,6 +1,7 @@
 #include "donner/svg/components/style/StyleSystem.h"
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -132,9 +133,9 @@ private:
 }  // namespace
 
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
-                                                        std::vector<ParseDiagnostic>* outWarnings) {
+                                                        ParseWarningSink& warningSink) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
-  computePropertiesInto(handle, computedStyle, outWarnings);
+  computePropertiesInto(handle, computedStyle, warningSink);
   return computedStyle;
 }
 
@@ -163,7 +164,7 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                                        std::vector<ParseDiagnostic>* outWarnings) {
+                                        ParseWarningSink& warningSink) {
   if (computedStyle.properties) {
     return;  // Already computed.
   }
@@ -196,9 +197,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
 
         for (const auto& declaration : rule.declarations) {
           if (auto error = properties.parseProperty(declaration, specificity)) {
-            if (outWarnings) {
-              outWarnings->push_back(std::move(error.value()));
-            }
+            warningSink.add(std::move(error.value()));
           }
         }
       }
@@ -209,7 +208,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   if (parent != entt::null) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, outWarnings);
+    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink);
 
     // <pattern> elements can't inherit 'fill' or 'stroke' or it creates recursion in the shadow
     // tree.
@@ -258,7 +257,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 }
 
-void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseDiagnostic>* outWarnings) {
+void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink) {
   const auto* renderState = registry.ctx().find<RenderTreeState>();
   const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
   const bool needsFullStyleRecompute =
@@ -273,7 +272,7 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseDiagnost
       }
 
       std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
-      computeStyle(EntityHandle(registry, entity), outWarnings);
+      computeStyle(EntityHandle(registry, entity), warningSink);
     }
 
     ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
@@ -299,7 +298,7 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseDiagnost
 
   // Compute the styles for all elements.
   for (auto entity : view) {
-    computeStyle(EntityHandle(registry, entity), outWarnings);
+    computeStyle(EntityHandle(registry, entity), warningSink);
   }
 
   ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
@@ -311,9 +310,9 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseDiagnost
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
-                                   std::vector<ParseDiagnostic>* outWarnings) {
+                                   ParseWarningSink& warningSink) {
   for (Entity entity : entities) {
-    computeStyle(EntityHandle(registry, entity), outWarnings);
+    computeStyle(EntityHandle(registry, entity), warningSink);
   }
 }
 

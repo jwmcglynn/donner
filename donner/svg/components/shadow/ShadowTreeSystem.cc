@@ -1,5 +1,6 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -65,7 +66,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
                                                          ComputedShadowTreeComponent& shadow,
                                                          ShadowBranchType branchType,
                                                          Entity lightTarget, const RcString& href,
-                                                         std::vector<ParseDiagnostic>* outWarnings) {
+                                                         ParseWarningSink& warningSink) {
   assert((!shadow.mainBranch || branchType != ShadowBranchType::Main) &&
          "Only one main branch is allowed.");
 
@@ -74,12 +75,10 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
   storage.lightTarget = lightTarget;
 
   if (lightTarget == entity) {
-    if (outWarnings) {
-      ParseDiagnostic err;
-      err.reason =
-          std::string("Shadow tree recursion detected, element references itself: '" + href + '"');
-      outWarnings->emplace_back(std::move(err));
-    }
+    ParseDiagnostic err;
+    err.reason =
+        std::string("Shadow tree recursion detected, element references itself: '" + href + '"');
+    warningSink.add(std::move(err));
 
     return std::nullopt;
   }
@@ -91,12 +90,10 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
   }
 
   if (shadowHostParents.count(lightTarget)) {
-    if (outWarnings) {
-      ParseDiagnostic err;
-      err.reason = std::string(
-          "Shadow tree recursion detected, element directly references parent: '" + href + '"');
-      outWarnings->emplace_back(std::move(err));
-    }
+    ParseDiagnostic err;
+    err.reason = std::string(
+        "Shadow tree recursion detected, element directly references parent: '" + href + '"');
+    warningSink.add(std::move(err));
 
     return std::nullopt;
   }
@@ -105,7 +102,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
 
   RecursionGuard guard;
   Entity shadowEntity = createShadowAndChildren(registry, branchType, storage, guard, entity,
-                                                lightTarget, shadowHostParents, outWarnings);
+                                                lightTarget, shadowHostParents, warningSink);
 
   if (shadowEntity != entt::null) {
     registry.emplace<ShadowTreeRootComponent>(shadowEntity, entity);
@@ -115,7 +112,8 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
   if (branchType == ShadowBranchType::Main && sizedElementHandler_) {
     // Use the provided sized element handler callback to process sized elements
     // This avoids a direct dependency on the LayoutSystem
-    sizedElementHandler_(registry, shadowEntity, entity, lightTarget, branchType, nullptr);
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    sizedElementHandler_(registry, shadowEntity, entity, lightTarget, branchType, disabledSink);
   }
 
   if (branchType == ShadowBranchType::Main) {
@@ -157,27 +155,23 @@ Entity ShadowTreeSystem::createShadowAndChildren(
     Registry& registry, ShadowBranchType branchType,
     ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard, Entity shadowParent,
     Entity lightTarget, const std::set<Entity>& shadowHostParents,
-    std::vector<ParseDiagnostic>* outWarnings) {
-  auto validateNoRecursion = [&guard, &shadowHostParents, outWarnings](
+    ParseWarningSink& warningSink) {
+  auto validateNoRecursion = [&guard, &shadowHostParents, &warningSink](
                                  const RcString& href, Entity targetEntity) -> bool {
     if (shadowHostParents.count(targetEntity)) {
-      if (outWarnings) {
-        ParseDiagnostic err;
-        err.reason = std::string(
-            "Shadow tree indirect recursion detected, element "
-            "references a shadow host parent: '" +
-            href + "'");
-        outWarnings->emplace_back(std::move(err));
-      }
+      ParseDiagnostic err;
+      err.reason = std::string(
+          "Shadow tree indirect recursion detected, element "
+          "references a shadow host parent: '" +
+          href + "'");
+      warningSink.add(std::move(err));
 
       return false;
     } else if (guard.hasRecursion(targetEntity)) {
-      if (outWarnings) {
-        ParseDiagnostic err;
-        err.reason =
-            std::string("Shadow tree recursion detected, ignoring shadow tree for '" + href + '"');
-        outWarnings->emplace_back(std::move(err));
-      }
+      ParseDiagnostic err;
+      err.reason =
+          std::string("Shadow tree recursion detected, ignoring shadow tree for '" + href + '"');
+      warningSink.add(std::move(err));
 
       return false;
     }
@@ -210,14 +204,15 @@ Entity ShadowTreeSystem::createShadowAndChildren(
       RecursionGuard childGuard = guard.with(targetEntity.value());
       const Entity nestedShadowEntity =
           createShadowAndChildren(registry, branchType, storage, childGuard, shadow,
-                                  targetEntity->handle, shadowHostParents, outWarnings);
+                                  targetEntity->handle, shadowHostParents, warningSink);
 
       // Handle sized element inheritance for <use> -> <symbol> shadow trees
       if (branchType == ShadowBranchType::Main && sizedElementHandler_) {
         // Use the provided sized element handler callback to process sized elements
         // This avoids a direct dependency on the LayoutSystem
+        ParseWarningSink disabledSink = ParseWarningSink::Disabled();
         sizedElementHandler_(registry, nestedShadowEntity, EntityHandle(registry, lightTarget),
-                             targetEntity.value(), branchType, nullptr);
+                             targetEntity.value(), branchType, disabledSink);
       }
 
       // Set the sourceEntity as the element in the light tree (i.e. the original <use>)
@@ -226,11 +221,11 @@ Entity ShadowTreeSystem::createShadowAndChildren(
       }
 
       return shadow;
-    } else if (outWarnings) {
+    } else {
       ParseDiagnostic err;
       err.reason = std::string("Failed to find target entity for nested shadow tree '") +
                    nestedShadow->mainHref().value_or("") + "'";
-      outWarnings->emplace_back(std::move(err));
+      warningSink.add(std::move(err));
       return entt::null;
     }
   } else {
@@ -242,7 +237,7 @@ Entity ShadowTreeSystem::createShadowAndChildren(
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
       RecursionGuard childGuard = guard.with(child);
       std::ignore = createShadowAndChildren(registry, branchType, storage, guard, shadow, child,
-                                            shadowHostParents, outWarnings);
+                                            shadowHostParents, warningSink);
     }
 
     return shadow;

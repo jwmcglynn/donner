@@ -1,6 +1,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
@@ -12,7 +13,7 @@ namespace donner::svg::components {
 
 ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
 
-void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarnings) {
+void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   // In SecureStatic mode, sub-documents are not allowed to load external resources (SVG2 §2.7.1).
   if (processingMode_ == ProcessingMode::SecureStatic ||
       processingMode_ == ProcessingMode::SecureAnimated) {
@@ -27,11 +28,9 @@ void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarn
       loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
 
   if (!loader_ && hasResourcesToLoad) {
-    if (outWarnings) {
-      ParseDiagnostic err;
-      err.reason = "Could not load external resources, no ResourceLoader provided";
-      outWarnings->emplace_back(err);
-    }
+    ParseDiagnostic err;
+    err.reason = "Could not load external resources, no ResourceLoader provided";
+    warningSink.add(std::move(err));
   }
 
   // Iterate over all ImageComponents and load them.
@@ -48,23 +47,18 @@ void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarn
 
     auto imageResult = imageLoader.fromUri(image.href);
     if (std::holds_alternative<UrlLoaderError>(imageResult)) {
-      if (outWarnings) {
-        ParseDiagnostic err;
-        err.reason = std::string(ToString(std::get<UrlLoaderError>(imageResult)));
-
-        outWarnings->emplace_back(err);
-      }
+      ParseDiagnostic err;
+      err.reason = std::string(ToString(std::get<UrlLoaderError>(imageResult)));
+      warningSink.add(std::move(err));
 
       // Create an empty LoadedImageComponent to prevent loading again.
       registry_.emplace<LoadedImageComponent>(entity);
     } else if (std::holds_alternative<SvgImageContent>(imageResult)) {
       if (!svgParseCallback_) {
         // No SVG parser available — skip.
-        if (outWarnings) {
-          ParseDiagnostic err;
-          err.reason = "SVG image references require an SVG parse callback";
-          outWarnings->emplace_back(err);
-        }
+        ParseDiagnostic err;
+        err.reason = "SVG image references require an SVG parse callback";
+        warningSink.add(std::move(err));
         registry_.emplace<LoadedImageComponent>(entity);
         continue;
       }
@@ -77,7 +71,7 @@ void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarn
       }
       auto& cache = registry_.ctx().get<SubDocumentCache>();
 
-      auto subDoc = cache.getOrParse(image.href, svgContent.data, svgParseCallback_, outWarnings);
+      auto subDoc = cache.getOrParse(image.href, svgContent.data, svgParseCallback_, warningSink);
       if (subDoc) {
         registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*subDoc));
       } else {
@@ -97,12 +91,9 @@ void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarn
         auto maybeFontData = fontLoader.fromUri(std::get<RcString>(source.payload));
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
-          if (outWarnings) {
-            ParseDiagnostic err;
-            err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
-
-            outWarnings->emplace_back(err);
-          }
+          ParseDiagnostic err;
+          err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
+          warningSink.add(std::move(err));
         } else {
           loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
         }
@@ -112,21 +103,16 @@ void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarn
         auto maybeFontData = fontLoader.fromData(*dataPtr);
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
-          if (outWarnings) {
-            ParseDiagnostic err;
-            err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
-
-            outWarnings->emplace_back(err);
-          }
+          ParseDiagnostic err;
+          err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
+          warningSink.add(std::move(err));
         } else {
           loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
         }
       } else {
-        if (outWarnings) {
-          ParseDiagnostic err;
-          err.reason = "Unsupported font face source kind";
-          outWarnings->emplace_back(err);
-        }
+        ParseDiagnostic err;
+        err.reason = "Unsupported font face source kind";
+        warningSink.add(std::move(err));
         continue;
       }
     }
@@ -136,7 +122,7 @@ void ResourceManagerContext::loadResources(std::vector<ParseDiagnostic>* outWarn
 }
 
 std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
-    const RcString& url, std::vector<ParseDiagnostic>* outWarnings) {
+    const RcString& url, ParseWarningSink& warningSink) {
   // In secure modes, external resource loading is disabled.
   if (processingMode_ == ProcessingMode::SecureStatic ||
       processingMode_ == ProcessingMode::SecureAnimated) {
@@ -144,20 +130,16 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   }
 
   if (!loader_) {
-    if (outWarnings) {
-      ParseDiagnostic err;
-      err.reason = "Could not load external SVG, no ResourceLoader provided";
-      outWarnings->emplace_back(err);
-    }
+    ParseDiagnostic err;
+    err.reason = "Could not load external SVG, no ResourceLoader provided";
+    warningSink.add(std::move(err));
     return std::nullopt;
   }
 
   if (!svgParseCallback_) {
-    if (outWarnings) {
-      ParseDiagnostic err;
-      err.reason = "External SVG references require an SVG parse callback";
-      outWarnings->emplace_back(err);
-    }
+    ParseDiagnostic err;
+    err.reason = "External SVG references require an SVG parse callback";
+    warningSink.add(std::move(err));
     return std::nullopt;
   }
 
@@ -175,19 +157,17 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   // Fetch the file content.
   auto fetchResult = loader_->fetchExternalResource(std::string_view(url));
   if (std::holds_alternative<ResourceLoaderError>(fetchResult)) {
-    if (outWarnings) {
-      ParseDiagnostic err;
-      const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
-      err.reason =
-          std::string("Failed to load external SVG '") + std::string(url) + "': " +
-          (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
-      outWarnings->emplace_back(err);
-    }
+    ParseDiagnostic err;
+    const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
+    err.reason =
+        std::string("Failed to load external SVG '") + std::string(url) + "': " +
+        (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
+    warningSink.add(std::move(err));
     return std::nullopt;
   }
 
   auto& data = std::get<std::vector<uint8_t>>(fetchResult);
-  return cache.getOrParse(url, data, svgParseCallback_, outWarnings);
+  return cache.getOrParse(url, data, svgParseCallback_, warningSink);
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {

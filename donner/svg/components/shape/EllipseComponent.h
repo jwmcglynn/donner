@@ -3,6 +3,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"
 #include "donner/svg/properties/RxRyProperties.h"  // IWYU pragma: keep, defines CalculateRadiusMaybeAuto
@@ -68,7 +69,7 @@ struct ComputedEllipseComponent {
    */
   ComputedEllipseComponent(const EllipseProperties& inputProperties,
                            const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                           std::vector<ParseDiagnostic>* outWarnings);
+                           ParseWarningSink& warningSink);
 
   /// The computed properties for the ellipse.
   EllipseProperties properties;

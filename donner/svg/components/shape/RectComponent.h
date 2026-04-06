@@ -6,6 +6,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/properties/Property.h"
 #include "donner/svg/properties/PropertyParsing.h"
 #include "donner/svg/properties/RxRyProperties.h"
@@ -79,7 +80,7 @@ struct ComputedRectComponent {
    */
   ComputedRectComponent(const RectProperties& inputProperties,
                         const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                        std::vector<ParseDiagnostic>* outWarnings);
+                        ParseWarningSink& warningSink);
 
   /// The computed properties for the rectangle.
   RectProperties properties;

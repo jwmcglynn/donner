@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 
 namespace donner::svg {
@@ -15,10 +16,19 @@ public:
    *
    * @param document Document to prepare.
    * @param verbose If true, enable verbose logging.
-   * @param outWarnings If non-null, warnings will be added to this vector.
+   * @param warningSink Sink to collect warnings.
    */
   static void prepareDocumentForRendering(SVGDocument& document, bool verbose,
-                                          std::vector<ParseDiagnostic>* outWarnings = nullptr);
+                                          ParseWarningSink& warningSink);
+
+  /**
+   * Prepare the document for rendering, instantiating computed components and the rendering tree.
+   * Warnings are discarded.
+   *
+   * @param document Document to prepare.
+   * @param verbose If true, enable verbose logging.
+   */
+  static void prepareDocumentForRendering(SVGDocument& document, bool verbose);
 };
 
 }  // namespace donner::svg

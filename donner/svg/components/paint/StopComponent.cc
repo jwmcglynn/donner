@@ -60,7 +60,7 @@ ParseResult<bool> ParseStopPresentationAttributeImpl(std::string_view name,
 ComputedStopComponent::ComputedStopComponent(
     const StopProperties& inputProperties, const ComputedStyleComponent& style,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<ParseDiagnostic>* outWarnings)
+    ParseWarningSink& warningSink)
     : properties(inputProperties) {
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
     const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
@@ -68,8 +68,8 @@ ComputedStopComponent::ComputedStopComponent(
         parser::PropertyParseBehavior::AllowUserUnits);
 
     auto result = ParseStopPresentationAttributeImpl(name, params, properties);
-    if (result.hasError() && outWarnings) {
-      outWarnings->emplace_back(std::move(result.error()));
+    if (result.hasError()) {
+      warningSink.add(std::move(result.error()));
     }
   }
 

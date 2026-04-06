@@ -9,6 +9,7 @@
 #include "donner/base/Length.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -673,11 +674,11 @@ RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose)
     : renderer_(renderer), verbose_(verbose) {}
 
 void RendererDriver::draw(SVGDocument& document) {
-  std::vector<ParseDiagnostic> warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
-  if (!warnings.empty()) {
-    for (const ParseDiagnostic& warning : warnings) {
+  if (warnings.hasWarnings()) {
+    for (const ParseDiagnostic& warning : warnings.warnings()) {
       std::cerr << warning << '\n';
     }
   }

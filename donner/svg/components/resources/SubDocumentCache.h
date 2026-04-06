@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/svg/SVGDocumentHandle.h"
 
@@ -31,7 +32,7 @@ public:
    * failure.
    */
   using ParseCallback = std::function<std::optional<SVGDocumentHandle>(
-      const std::vector<uint8_t>& svgContent, std::vector<ParseDiagnostic>* outWarnings)>;
+      const std::vector<uint8_t>& svgContent, ParseWarningSink& warningSink)>;
 
   /// Constructor.
   SubDocumentCache() = default;
@@ -53,13 +54,13 @@ public:
    * @param resolvedUrl The resolved URL used as the cache key.
    * @param svgContent Raw SVG document bytes to parse if not already cached.
    * @param parseCallback Callback to parse SVG content into a document.
-   * @param outWarnings If non-null, append parse warnings to this vector.
+   * @param warningSink Sink to collect parse warnings.
    * @return Cached document-state handle, or `std::nullopt` on failure.
    */
   std::optional<SVGDocumentHandle> getOrParse(const RcString& resolvedUrl,
                                               const std::vector<uint8_t>& svgContent,
                                               const ParseCallback& parseCallback,
-                                              std::vector<ParseDiagnostic>* outWarnings);
+                                              ParseWarningSink& warningSink);
 
   /**
    * Get a previously cached sub-document by URL.

@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -47,8 +48,8 @@ int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  std::vector<donner::ParseDiagnostic> warnings;
-  auto maybeResult = donner::svg::parser::SVGParser::ParseSVG(fileData, &warnings);
+  donner::ParseWarningSink warnings;
+  auto maybeResult = donner::svg::parser::SVGParser::ParseSVG(fileData, warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
     std::cerr << "Parse Error " << e << "\n";
@@ -57,9 +58,9 @@ int main(int argc, char* argv[]) {
 
   std::cout << "Parsed successfully.\n";
 
-  if (!warnings.empty()) {
+  if (warnings.hasWarnings()) {
     std::cout << "Warnings:\n";
-    for (auto& w : warnings) {
+    for (auto& w : warnings.warnings()) {
       std::cout << "  " << w << "\n";
     }
   }
