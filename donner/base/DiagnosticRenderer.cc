@@ -13,37 +13,28 @@ namespace {
 /// ANSI escape codes for colorized output.
 struct AnsiColors {
   static constexpr const char* kReset = "\033[0m";
-  static constexpr const char* kBold = "\033[1m";
-  static constexpr const char* kRed = "\033[31m";
-  static constexpr const char* kYellow = "\033[33m";
-  static constexpr const char* kCyan = "\033[36m";
   static constexpr const char* kBoldRed = "\033[1;31m";
   static constexpr const char* kBoldYellow = "\033[1;33m";
-  static constexpr const char* kBoldCyan = "\033[1;36m";
   static constexpr const char* kBoldWhite = "\033[1;37m";
-  static constexpr const char* kBlue = "\033[34m";
   static constexpr const char* kBoldBlue = "\033[1;34m";
 };
 
-/// Get the line containing the given offset in the source text.
-/// Returns {line_start_offset, line_content}.
-std::pair<size_t, std::string_view> getLineContent(std::string_view source, size_t offset) {
-  // Find the start of the line.
-  size_t lineStart = offset;
-  while (lineStart > 0 && source[lineStart - 1] != '\n') {
-    --lineStart;
-  }
+/// Get the content of the line at the given line number (1-indexed), using LineOffsets for proper
+/// newline handling (\n, \r, \r\n).
+std::string_view getLineContent(std::string_view source, const parser::LineOffsets& lineOffsets,
+                                size_t line) {
+  const size_t lineStart = lineOffsets.lineOffset(line);
 
-  // Find the end of the line.
-  size_t lineEnd = offset;
-  while (lineEnd < source.size() && source[lineEnd] != '\n') {
+  // Find the end of the line — look for any newline character.
+  size_t lineEnd = lineStart;
+  while (lineEnd < source.size() && source[lineEnd] != '\n' && source[lineEnd] != '\r') {
     ++lineEnd;
   }
 
-  return {lineStart, source.substr(lineStart, lineEnd - lineStart)};
+  return source.substr(lineStart, lineEnd - lineStart);
 }
 
-/// Format the width of a line number for alignment.
+/// Compute the number of decimal digits needed to display a line number.
 int lineNumberWidth(size_t lineNumber) {
   int width = 1;
   while (lineNumber >= 10) {
@@ -57,22 +48,24 @@ int lineNumberWidth(size_t lineNumber) {
 
 std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagnostic& diag,
                                        const Options& options) {
+  parser::LineOffsets lineOffsets(source);
+  return formatWithLineOffsets(source, lineOffsets, diag, options);
+}
+
+std::string DiagnosticRenderer::formatWithLineOffsets(std::string_view source,
+                                                      const parser::LineOffsets& lineOffsets,
+                                                      const ParseDiagnostic& diag,
+                                                      const Options& options) {
   std::ostringstream out;
 
   const bool color = options.colorize;
 
   // Severity label.
-  if (diag.severity == DiagnosticSeverity::Error) {
-    if (color) {
-      out << AnsiColors::kBoldRed;
-    }
-    out << "error";
-  } else {
-    if (color) {
-      out << AnsiColors::kBoldYellow;
-    }
-    out << "warning";
+  if (color) {
+    out << (diag.severity == DiagnosticSeverity::Error ? AnsiColors::kBoldRed
+                                                       : AnsiColors::kBoldYellow);
   }
+  out << (diag.severity == DiagnosticSeverity::Error ? "error" : "warning");
   if (color) {
     out << AnsiColors::kBoldWhite;
   }
@@ -89,13 +82,10 @@ std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagn
 
   const size_t startOffset = diag.range.start.offset.value();
 
-  // Clamp startOffset to source bounds.
   if (startOffset > source.size()) {
     return out.str();
   }
 
-  // Compute line info.
-  parser::LineOffsets lineOffsets(source);
   const size_t line = lineOffsets.offsetToLine(startOffset);
   const size_t lineStartOffset = lineOffsets.lineOffset(line);
   const size_t column = startOffset - lineStartOffset;
@@ -113,9 +103,7 @@ std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagn
   }
   out << line << ":" << (column + 1) << "\n";
 
-  // Get the source line.
-  auto [lineStart, lineContent] = getLineContent(source, startOffset);
-
+  const std::string_view lineContent = getLineContent(source, lineOffsets, line);
   const int numWidth = lineNumberWidth(line);
 
   // Empty gutter line.
@@ -147,16 +135,14 @@ std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagn
     out << AnsiColors::kReset;
   }
 
-  // Spaces to reach the column.
   out << std::string(column, ' ');
 
-  // Compute span width.
-  size_t spanWidth = 1;  // Default: single caret.
+  // Compute span width, clamped to the current line.
+  size_t spanWidth = 1;
   if (diag.range.end.offset.has_value()) {
     const size_t endOffset = diag.range.end.offset.value();
     if (endOffset > startOffset) {
-      // Clamp to same line.
-      const size_t lineEndOffset = lineStart + lineContent.size();
+      const size_t lineEndOffset = lineStartOffset + lineContent.size();
       const size_t clampedEnd = std::min(endOffset, lineEndOffset);
       if (clampedEnd > startOffset) {
         spanWidth = clampedEnd - startOffset;
@@ -166,11 +152,8 @@ std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagn
 
   // Draw caret + tildes.
   if (color) {
-    if (diag.severity == DiagnosticSeverity::Error) {
-      out << AnsiColors::kBoldRed;
-    } else {
-      out << AnsiColors::kBoldYellow;
-    }
+    out << (diag.severity == DiagnosticSeverity::Error ? AnsiColors::kBoldRed
+                                                       : AnsiColors::kBoldYellow);
   }
   out << "^";
   if (spanWidth > 1) {
@@ -186,9 +169,10 @@ std::string DiagnosticRenderer::format(std::string_view source, const ParseDiagn
 
 std::string DiagnosticRenderer::formatAll(std::string_view source, const ParseWarningSink& sink,
                                           const Options& options) {
+  parser::LineOffsets lineOffsets(source);
   std::string result;
   for (const auto& diag : sink.warnings()) {
-    result += format(source, diag, options);
+    result += formatWithLineOffsets(source, lineOffsets, diag, options);
   }
   return result;
 }

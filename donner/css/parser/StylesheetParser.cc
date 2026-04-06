@@ -65,7 +65,7 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
     if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
       auto selectorResult = SelectorParser::ParseComponents(qualifiedRule->prelude);
       if (selectorResult.hasError()) {
-        warningSink.add(ParseDiagnostic(selectorResult.error()));
+        warningSink.add(std::move(selectorResult.error()));
         continue;
       }
 

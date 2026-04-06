@@ -6,6 +6,7 @@
 
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/parser/LineOffsets.h"
 
 namespace donner {
 
@@ -75,6 +76,12 @@ public:
   static std::string formatAll(std::string_view source, const ParseWarningSink& sink) {
     return formatAll(source, sink, Options{});
   }
+
+private:
+  /// Internal implementation that reuses a pre-computed LineOffsets.
+  static std::string formatWithLineOffsets(std::string_view source,
+                                           const parser::LineOffsets& lineOffsets,
+                                           const ParseDiagnostic& diag, const Options& options);
 };
 
 }  // namespace donner

@@ -87,6 +87,7 @@ public:
    */
   void mergeFromSubparser(ParseWarningSink&& other, FileOffset parentOffset) {
     if (enabled_) {
+      warnings_.reserve(warnings_.size() + other.warnings_.size());
       for (auto& warning : other.warnings_) {
         warning.range.start = warning.range.start.addParentOffset(parentOffset);
         warning.range.end = warning.range.end.addParentOffset(parentOffset);
