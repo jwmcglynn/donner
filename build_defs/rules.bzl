@@ -65,9 +65,7 @@ def renderer_backend_compatible_with(backends):
 def _renderer_backend_transition_impl(settings, attr):
     if settings["//build_defs:disable_backend_test_transition"]:
         return {
-            "//donner/svg/renderer:renderer_backend": settings[
-                "//donner/svg/renderer:renderer_backend"
-            ],
+            "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
         }
 
     return {
@@ -129,12 +127,8 @@ donner_transitioned_cc_test = rule(
 def _multi_transition_impl(settings, attr):
     if settings["//build_defs:disable_backend_test_transition"]:
         return {
-            "//donner/svg/renderer:renderer_backend": settings[
-                "//donner/svg/renderer:renderer_backend"
-            ],
-            "//donner/svg/renderer:text_full": settings[
-                "//donner/svg/renderer:text_full"
-            ],
+            "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
+            "//donner/svg/renderer:text_full": settings["//donner/svg/renderer:text_full"],
         }
 
     return {
@@ -194,16 +188,11 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
     backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
     text_tiers = variants[1] if len(variants) > 1 else ["text"]
 
-    # The default variant (tiny_skia + text) runs in //... builds.
-    # Other variants are manual until their goldens are stabilized.
-    default_suffix = "{}_{}".format(backends[0], text_tiers[0])
-
     for backend in backends:
         for tier in text_tiers:
             suffix = "{}_{}".format(backend, tier)
             target_name = "{}_{}".format(name, suffix)
             text_full_val = "true" if tier == "text_full" else "false"
-            is_default = (suffix == default_suffix)
 
             donner_multi_transitioned_test(
                 name = target_name,
@@ -211,7 +200,6 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
                 renderer_backend = backend,
                 text_full = text_full_val,
                 testonly = 1,
-                tags = [] if is_default else ["manual"],
                 **kwargs
             )
 
