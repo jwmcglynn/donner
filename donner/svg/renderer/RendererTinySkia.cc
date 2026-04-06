@@ -1501,6 +1501,15 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           paint.unpremulStore = surfaceStack_.empty();
           paint.shader = std::move(*shader);
           spanFillPaint = paint;
+        } else if (patternFillPaint_.has_value()) {
+          tiny_skia::Paint paint = makeBasePaint(antialias_);
+          paint.unpremulStore = surfaceStack_.empty();
+          paint.shader = tiny_skia::Pattern(
+              patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
+              tiny_skia::FilterQuality::Bilinear,
+              NarrowToFloat(spanFillOpacity * static_cast<float>(span.opacity)),
+              toTinyTransform(patternFillPaint_->targetFromPattern));
+          spanFillPaint = paint;
         } else if (ref->fallback.has_value()) {
           spanFillPaint = makeSolidPaint(
               css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
@@ -1529,6 +1538,15 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.unpremulStore = surfaceStack_.empty();
             paint.shader = std::move(*shader);
+            spanStrokePaint = paint;
+          } else if (patternStrokePaint_.has_value()) {
+            tiny_skia::Paint paint = makeBasePaint(antialias_);
+            paint.unpremulStore = surfaceStack_.empty();
+            paint.shader = tiny_skia::Pattern(
+                patternStrokePaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
+                tiny_skia::FilterQuality::Bilinear,
+                NarrowToFloat(spanStrokeOpacity * static_cast<float>(span.opacity)),
+                toTinyTransform(patternStrokePaint_->targetFromPattern));
             spanStrokePaint = paint;
           } else if (ref->fallback.has_value()) {
             spanStrokePaint = makeSolidPaint(

@@ -206,7 +206,6 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
                 renderer_backend = backend,
                 text_full = text_full_val,
                 testonly = 1,
-                tags = ["manual"],
                 **kwargs
             )
 
@@ -423,7 +422,7 @@ _donner_perf_sensitive_cc_library = rule(
     attrs = {
         "srcs": attr.label_list(allow_files = [".c", ".cc", ".cpp", ".h"]),
         "hdrs": attr.label_list(allow_files = [".h"]),
-        "deps": attr.label_list(cfg = _force_opt_transition),
+        "deps": attr.label_list(),
         "includes": attr.string_list(default = []),  # Optional includes
         "defines": attr.string_list(default = []),  # Optional defines
         "local_defines": attr.string_list(default = []),  # Optional defines
