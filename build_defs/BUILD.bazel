@@ -10,6 +10,16 @@ bool_flag(
     build_setting_default = False,
 )
 
+# When true, perf-sensitive libraries (e.g. skia_deps) will NOT force their
+# deps to opt mode.  Useful when the forced transition causes link conflicts
+# (e.g. zlib appearing in both opt and fastbuild configurations).
+# Set with --//build_defs:disable_perf_opt_transition=true
+bool_flag(
+    name = "disable_perf_opt_transition",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "fuzzers_enabled",
     flag_values = {

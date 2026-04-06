@@ -345,6 +345,19 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         **kwargs
     )
 
+def _force_opt_transition_impl(settings, _attr):
+    if settings["//build_defs:disable_perf_opt_transition"]:
+        return {}
+    return {
+        "//command_line_option:compilation_mode": "opt",
+    }
+
+_force_opt_transition = transition(
+    implementation = _force_opt_transition_impl,
+    inputs = ["//build_defs:disable_perf_opt_transition"],
+    outputs = ["//command_line_option:compilation_mode"],
+)
+
 def _is_compilation_outputs_empty(compilation_outputs):
     return (len(compilation_outputs.pic_objects) == 0 and
             len(compilation_outputs.objects) == 0)
@@ -352,9 +365,8 @@ def _is_compilation_outputs_empty(compilation_outputs):
 def _donner_perf_sensitive_cc_library_impl(ctx):
     cc_toolchain = find_cpp_toolchain(ctx)
 
-    # Request the 'opt' feature for optimized compilation without changing the
-    # configuration of transitive deps (which would cause shared-library link
-    # conflicts between opt and fastbuild configurations of the same dep).
+    # Request the 'opt' feature so that this library's own sources are always
+    # compiled with optimizations, even when deps are not transitioned.
     feature_configuration = cc_common.configure_features(
         ctx = ctx,
         cc_toolchain = cc_toolchain,
@@ -408,7 +420,7 @@ _donner_perf_sensitive_cc_library = rule(
     attrs = {
         "srcs": attr.label_list(allow_files = [".c", ".cc", ".cpp", ".h"]),
         "hdrs": attr.label_list(allow_files = [".h"]),
-        "deps": attr.label_list(),
+        "deps": attr.label_list(cfg = _force_opt_transition),
         "includes": attr.string_list(default = []),  # Optional includes
         "defines": attr.string_list(default = []),  # Optional defines
         "local_defines": attr.string_list(default = []),  # Optional defines

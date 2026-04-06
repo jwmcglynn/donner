@@ -51,6 +51,9 @@ build:latest_llvm --copt=-Wno-nrvo
 common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 common:dev --//build_defs:disable_backend_test_transition=true
+# Disable forced opt compilation of perf-sensitive deps (Skia, etc.) to avoid
+# cross-configuration link conflicts.  Use: --config=no-perf-opt
+common:no-perf-opt --//build_defs:disable_perf_opt_transition=true
 
 # Filter effects
 common:no-filters --//donner/svg/renderer:filters=false
@@ -84,13 +87,6 @@ build:macos-binary-size --copt=-gline-tables-only
 build:macos-binary-size --linkopt=-dead_strip
 
 build --config=libc++ --config=c++20
-
-# Always optimise performance-critical external dependencies (Skia, zlib) even
-# in fastbuild/debug modes.  Using per_file_copt avoids the cross-configuration
-# link conflicts that _force_opt_transition caused while still keeping hot paths
-# fast during interactive development.
-build --per_file_copt=external/skia/.*\.cpp$,external/skia/.*\.cc$@-O2
-build --per_file_copt=external/zlib/.*\.c$@-O2
 
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
