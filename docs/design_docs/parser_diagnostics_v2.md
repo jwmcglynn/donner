@@ -234,7 +234,7 @@ namespace donner {
  * // The lambda is only invoked if the sink is enabled---no formatting overhead when disabled.
  * sink.add([&] {
  *   return ParseDiagnostic::Warning(
- *       RcString::fromFormat("Unknown attribute '%s'", name.c_str()), range);
+ *       RcString::fromFormat("Unknown attribute '{}'", std::string_view(name)), range);
  * });
  * @endcode
  */
@@ -295,7 +295,7 @@ formatting:
 ```cpp
 // OLD: caller must remember to check, easy to forget
 if (warnings_) {
-  warnings_->push_back(ParseError{RcString::fromFormat("Bad '%s'", name), offset});
+  warnings_->push_back(ParseError{RcString("Bad '" + name + "'"), offset});
 }
 ```
 
@@ -303,7 +303,8 @@ With `ParseWarningSink`, the zero-cost behavior is implicit:
 ```cpp
 // NEW: formatting is automatically skipped when disabled
 sink.add([&] {
-  return ParseDiagnostic::Warning(RcString::fromFormat("Bad '%s'", name), range);
+  return ParseDiagnostic::Warning(
+      RcString::fromFormat("Bad '{}'", std::string_view(name)), range);
 });
 ```
 
@@ -466,14 +467,14 @@ return ParseDiagnostic::Error("Unexpected character",
 
 **Before (emit warning):**
 ```cpp
-context.addWarning(ParseError{RcString::fromFormat("Bad '%s'", name), offset});
+context.addWarning(ParseError{RcString("Bad '" + name + "'"), offset});
 ```
 
 **After (emit warning, lazy):**
 ```cpp
 context.warningSink().add([&] {
   return ParseDiagnostic::Warning(
-      RcString::fromFormat("Bad '%s'", name), range);
+      RcString::fromFormat("Bad '{}'", std::string_view(name)), range);
 });
 ```
 
