@@ -331,3 +331,18 @@ subparsers (which operate on substrings) back to the original input coordinates.
   methods rather than `Options options = {}` default arguments because GCC rejects default
   member initializers in aggregates used as default function arguments before the class is
   complete.
+
+## Not Yet Completed
+
+- [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (currently uses
+  `std::variant<Result, DataUrlParserError>` touching `UrlLoader`; deferred due to scope).
+- [ ] Range-accuracy tests for CSS/XML parsers.
+
+## Future Work
+
+- [ ] Structured error codes for programmatic error handling.
+- [ ] Fixit suggestions ("did you mean ...?").
+- [ ] Multi-line range rendering in the diagnostic renderer.
+- [ ] Source line truncation for very long lines in renderer output.
+- [ ] LSP-compatible diagnostic output (JSON) for editor integration.
+- [ ] Machine-readable diagnostic serialization for CI tooling.
