@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -150,6 +152,12 @@ struct SVGState {
 
 int main(int argc, char** argv) {
   donner::InstallFailureSignalHandler();
+
+  // When launched via `bazel run`, change to the user's original working
+  // directory so that relative paths resolve naturally.
+  if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
+    std::filesystem::current_path(bwd);
+  }
 
   if (argc != 2) {
     std::cerr << "Usage: svg_viewer <filename>" << std::endl;

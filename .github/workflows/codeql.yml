@@ -76,7 +76,7 @@ jobs:
       - if: matrix.build-mode == 'manual'
         shell: bash
         run: |
-          bazel build --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/renderer:renderer_tool
+          bazel build --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/tool
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

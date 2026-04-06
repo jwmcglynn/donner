@@ -26,16 +26,16 @@ fi
 bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/parser:svg_parser_tool.stripped
 cp -f bazel-bin/donner/svg/parser/svg_parser_tool build-binary-size/svg_parser_tool
 
-bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/renderer:renderer_tool.stripped
-cp -f bazel-bin/donner/svg/renderer/renderer_tool build-binary-size/renderer_tool
+bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/tool:donner-svg.stripped
+cp -f bazel-bin/donner/svg/tool/donner-svg build-binary-size/donner-svg
 
-# Print human-readable binary size of svg_parser_tool.stripped and renderer_tool.stripped
+# Print human-readable binary size of svg_parser_tool.stripped and donner-svg.stripped
 echo '```'
 echo "Total binary size of svg_parser_tool"
 du -h build-binary-size/svg_parser_tool
 echo ""
-echo "Total binary size of renderer_tool"
-du -h build-binary-size/renderer_tool
+echo "Total binary size of donner-svg"
+du -h build-binary-size/donner-svg
 echo '```'
 echo ""
 

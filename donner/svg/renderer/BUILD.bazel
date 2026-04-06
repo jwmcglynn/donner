@@ -210,13 +210,3 @@ donner_cc_library(
         "//conditions:default": [":renderer_skia"],
     }),
 )
-
-donner_cc_binary(
-    name = "renderer_tool",
-    srcs = ["renderer_tool.cc"],
-    deps = [
-        ":renderer",
-        "//donner/base:failure_signal_handler",
-        "//donner/svg/parser",
-    ],
-)

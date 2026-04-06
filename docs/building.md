@@ -177,5 +177,5 @@ Donner builds everything from source, and particularly the skia dependency is la
 The Editor is an early prototype and hasn't made it to the tree. The Editor is built on the same foundation as the experimental svg_viewer in the tree. Run it with an opt build for the best experience:
 
 ```sh
-bazel run -c opt --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- donner_icon.svg
+bazel run -c opt //experimental/viewer:svg_viewer -- donner_icon.svg
 ```
