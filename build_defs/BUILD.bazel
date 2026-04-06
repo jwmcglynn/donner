@@ -1,4 +1,5 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
+load("//build_defs:banned_deps.bzl", "banned_deps_test")
 
 string_flag(
     name = "llvm_latest",
@@ -20,12 +21,16 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
-sh_test(
+banned_deps_test(
     name = "check_banned_deps_test",
-    srcs = ["check_banned_deps.sh"],
-    # local = True so the test can access the full workspace source tree
-    # (BUILD files live outside the runfiles sandbox).
-    local = True,
+    allowed = [
+        "//third_party:zlib",
+        "//third_party:freetype",
+    ],
+    banned = [
+        "@zlib",
+        "@freetype",
+    ],
 )
 
 config_setting(
