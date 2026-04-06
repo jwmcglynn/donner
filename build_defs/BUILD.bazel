@@ -41,6 +41,15 @@ banned_deps_test(
         "@skia//:fontmgr_fontconfig_freetype",
         "@skia//:fontmgr_empty_freetype",
     ],
+    # genquery requires concrete labels, not target patterns. These top-level
+    # targets cover the main dependency tree.
+    scope = [
+        "//:donner",
+        "//donner/svg/tool:donner-svg",
+        "//examples:svg_to_png",
+        "//third_party:zlib",
+        "//third_party:freetype",
+    ],
 )
 
 config_setting(
