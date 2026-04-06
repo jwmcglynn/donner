@@ -86,7 +86,6 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    tags = ["manual"],
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
@@ -121,7 +120,6 @@ donner_cc_test(
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
-    tags = ["manual"],
     deps = [
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
@@ -184,7 +182,6 @@ donner_cc_test(
         "@resvg-test-suite//:svg",
     ],
     shard_count = 16,
-    tags = ["manual"],
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
