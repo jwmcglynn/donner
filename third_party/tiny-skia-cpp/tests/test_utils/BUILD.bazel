@@ -10,7 +10,7 @@ cc_library(
     hdrs = ["PngDecoder.h"],
     copts = ["-std=c++20"],
     includes = ["."],
-    deps = ["@zlib"],
+    deps = ["//third_party:zlib"],
 )
 
 cc_library(
@@ -25,7 +25,7 @@ cc_library(
         "//src:tiny_skia_lib",
         "@googletest//:gtest",
         "@pixelmatch-cpp17",
-        "@zlib",
+        "//third_party:zlib",
     ],
 )
 

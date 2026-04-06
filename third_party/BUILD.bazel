@@ -1,3 +1,5 @@
+load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
+
 exports_files(
     # buildifier: keep sorted
     [
@@ -5,4 +7,22 @@ exports_files(
         "BUILD.css-parsing-tests",
         "BUILD.stb",
     ],
+)
+
+# Perf-sensitive wrappers for external deps that are shared between the Skia
+# rendering pipeline (built in opt via _force_opt_transition) and the rest of
+# the project.  By routing ALL usages through these wrappers the dep is always
+# in the same (opt) configuration, eliminating cross-configuration link
+# conflicts.
+
+donner_perf_sensitive_cc_library(
+    name = "zlib",
+    visibility = ["//visibility:public"],
+    deps = ["@zlib"],
+)
+
+donner_perf_sensitive_cc_library(
+    name = "freetype",
+    visibility = ["//visibility:public"],
+    deps = ["@freetype"],
 )
