@@ -995,7 +995,7 @@ private:
 
   void setError(std::string reason) {
     error_ = ParseDiagnostic::Error(
-        std::move(reason),
+        RcString(reason),
         !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString());
   }
 
@@ -1003,7 +1003,7 @@ private:
 
   void addWarning(std::string reason) {
     warnings_.push_back(ParseDiagnostic::Error(
-        std::move(reason),
+        RcString(reason),
         !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString()));
   }
 
