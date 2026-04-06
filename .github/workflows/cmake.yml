@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [tiny_skia, skia]
+        # Skia CMake temporarily disabled: chromium.googlesource.com rate limits
+        # git-sync-deps fetches (HTTP 403/429). Re-enable once stabilized.
+        backend: [tiny_skia]
     steps:
       - uses: actions/checkout@v6
 
@@ -41,7 +43,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [tiny_skia, skia]
+        # Skia CMake temporarily disabled: chromium.googlesource.com rate limits
+        # git-sync-deps fetches (HTTP 403/429). Re-enable once stabilized.
+        backend: [tiny_skia]
     steps:
       - uses: actions/checkout@v6
 
