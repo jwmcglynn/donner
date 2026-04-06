@@ -89,7 +89,7 @@ bazel_dep(name = "brotli", version = "1.2.0")
 new_git_repository(
     name = "woff2",
     build_file = "//third_party:BUILD.woff2",
-    commit = "1bccf208bca986e53a647dfe4811322adb06ecf8",
+    commit = "1f184d05566b3e25827a1f8e68eb82b9ccf54f3b",
     remote = "https://github.com/google/woff2.git",
 )
 
