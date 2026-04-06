@@ -20,6 +20,14 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+sh_test(
+    name = "check_banned_deps_test",
+    srcs = ["check_banned_deps.sh"],
+    # local = True so the test can access the full workspace source tree
+    # (BUILD files live outside the runfiles sandbox).
+    local = True,
+)
+
 config_setting(
     name = "fuzzers_enabled",
     flag_values = {
