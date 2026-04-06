@@ -62,15 +62,16 @@ No backward compatibility with the existing `ParseError` API is required.
   - [x] Migrate all `ParseError` references across the entire codebase (~95 files).
   - [x] Delete `ParseError.h` / `ParseError.cc`.
   - [x] Unit tests for `ParseDiagnostic` invariants and `ParseWarningSink` behavior.
-- [ ] **Milestone 2: Range-correctness migration for parsers**
-  - [ ] Update `ParserBase` to track end offsets and produce `SourceRange` with both start and end.
-  - [ ] Migrate `NumberParser`, `IntegerParser`, `LengthParser` to emit accurate ranges.
-  - [ ] Migrate `PathParser` (key test case: partial results with accurate ranges).
-  - [ ] Migrate `TransformParser`, `ViewBoxParser`, `AngleParser`.
-  - [ ] Migrate `LengthPercentageParser`, `PreserveAspectRatioParser`, `Number2dParser`,
+- [x] **Milestone 2: Range-correctness migration for parsers**
+  - [x] Update `ParserBase` to track end offsets and produce `SourceRange` with both start and end.
+  - [x] Migrate `NumberParser`, `IntegerParser`, `LengthParser` to emit accurate ranges.
+  - [x] Migrate `PathParser` (key test case: partial results with accurate ranges).
+  - [x] Migrate `TransformParser`, `ViewBoxParser`, `AngleParser`.
+  - [x] Migrate `LengthPercentageParser`, `PreserveAspectRatioParser`, `Number2dParser`,
     `PointsListParser`, `CssTransformParser`, `ListParser`.
   - [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (remove `DataUrlParserError` enum).
-  - [ ] Add range-accuracy tests for each parser.
+    (Deferred: uses `std::variant<Result, DataUrlParserError>` touching UrlLoader, too much scope.)
+  - [x] Add range-accuracy tests for each parser.
 - [ ] **Milestone 3: Warning plumbing migration**
   - [ ] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of
     `std::vector<ParseDiagnostic>*`.
