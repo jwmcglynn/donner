@@ -72,11 +72,15 @@ No backward compatibility with the existing `ParseError` API is required.
   - [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (remove `DataUrlParserError` enum).
     (Deferred: uses `std::variant<Result, DataUrlParserError>` touching UrlLoader, too much scope.)
   - [x] Add range-accuracy tests for each parser.
-- [ ] **Milestone 3: Warning plumbing migration**
-  - [ ] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of
+- [x] **Milestone 3: Warning plumbing migration**
+  - [x] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of
     `std::vector<ParseDiagnostic>*`.
-  - [ ] Migrate `SVGParser` public API: replace `std::vector<ParseDiagnostic>* outWarnings` with
-    `ParseWarningSink&`.
+  - [x] Migrate `SVGParser` public API: replace `std::vector<ParseDiagnostic>* outWarnings` with
+    `ParseWarningSink&` (with convenience overloads).
+  - [x] Migrate all systems (`ShapeSystem`, `StyleSystem`, `PaintSystem`, `LayoutSystem`,
+    `FilterSystem`, `TextSystem`, `ShadowTreeSystem`), resources (`SubDocumentCache`,
+    `ResourceManagerContext`), rendering (`RenderingContext`, `RendererUtils`), and all
+    callers/tests/tools/examples.
   - [ ] Standardize subparser remapping with `SourceRange`-aware composition helpers.
   - [ ] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
   - [ ] Add range-accuracy tests for CSS/XML parsers.
