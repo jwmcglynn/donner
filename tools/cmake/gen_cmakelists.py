@@ -77,6 +77,7 @@ SKIPPED_PACKAGES = {
 # Individual targets to skip (require optional deps like HarfBuzz/FreeType).
 SKIPPED_TARGETS = {
     "//donner/svg/text:text_backend_full",  # Requires FreeType + HarfBuzz (text_full tier)
+    "//donner/svg/renderer/tests:text_backend_tests",  # Tests text_backend_full
 }
 
 # Helper constants for CMake condition strings.
