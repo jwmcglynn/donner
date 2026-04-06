@@ -912,6 +912,8 @@ def generate_all_packages() -> None:
                 _TINY_SKIA_DEPS = {
                     "donner_svg_renderer_renderer_tiny_skia",
                     "donner_svg_renderer_filter_graph_executor",
+                    "donner_svg_renderer_tiny_skia_deps",
+                    "donner_svg_renderer_tiny_skia_filter_deps",
                     "tiny_skia",
                 }
                 _ALL_BACKEND_DEPS = _SKIA_DEPS | _TINY_SKIA_DEPS
