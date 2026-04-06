@@ -169,7 +169,7 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
         }
 
         context.addWarning(ParseDiagnostic::Warning(
-            "Unexpected namespace '" + value.value() + "'", range));
+            RcString("Unexpected namespace '" + value.value() + "'"), range));
       }
     }
   }

@@ -40,7 +40,7 @@ public:
       return result;
     } else {
       return ParseDiagnostic::Error(
-          "Unexpected EOF when parsing function '" + functionName_ + "'", lastOffset_);
+          RcString("Unexpected EOF when parsing function '" + functionName_ + "'"), lastOffset_);
     }
   }
 
@@ -56,7 +56,7 @@ public:
       return resultToken.get<TokenType>();
     } else {
       return ParseDiagnostic::Error(
-          "Unexpected token when parsing function '" + functionName_ + "'", resultToken.offset());
+          RcString("Unexpected token when parsing function '" + functionName_ + "'"), resultToken.offset());
     }
   }
 
@@ -74,7 +74,7 @@ public:
   std::optional<ParseDiagnostic> requireComma() {
     if (!trySkipComma()) {
       return ParseDiagnostic::Error(
-          "Missing comma when parsing function '" + functionName_ + "'", lastOffset_);
+          RcString("Missing comma when parsing function '" + functionName_ + "'"), lastOffset_);
     }
 
     return std::nullopt;
@@ -92,13 +92,13 @@ public:
     }
 
     return ParseDiagnostic::Error(
-        "Missing delimiter for alpha when parsing function '" + functionName_ + "'", lastOffset_);
+        RcString("Missing delimiter for alpha when parsing function '" + functionName_ + "'"), lastOffset_);
   }
 
   std::optional<ParseDiagnostic> requireEOF() {
     if (!isEOF()) {
       return ParseDiagnostic::Error(
-          "Additional tokens when parsing function '" + functionName_ + "'", lastOffset_);
+          RcString("Additional tokens when parsing function '" + functionName_ + "'"), lastOffset_);
     }
 
     return std::nullopt;
@@ -125,7 +125,7 @@ private:
 
       } else {
         next_ = ParseDiagnostic::Error(
-            "Unexpected token when parsing function '" + functionName_ + "'",
+            RcString("Unexpected token when parsing function '" + functionName_ + "'"),
             component.sourceOffset());
         break;
       }
@@ -168,7 +168,7 @@ public:
         if (auto color = Color::ByName(name)) {
           return color.value();
         } else {
-          return ParseDiagnostic::Error("Invalid color '" + name + "'", token.offset());
+          return ParseDiagnostic::Error(RcString("Invalid color '" + name + "'"), token.offset());
         }
 
       } else {
@@ -193,7 +193,7 @@ public:
       } else if (name.equalsLowercase("device-cmyk")) {
         return parseDeviceCmyk(name, f.values);
       } else {
-        return ParseDiagnostic::Error("Unsupported color function '" + name + "'",
+        return ParseDiagnostic::Error(RcString("Unsupported color function '" + name + "'"),
                                      f.sourceOffset);
       }
 
@@ -206,7 +206,7 @@ public:
   ParseResult<Color> parseHash(std::string_view value) {
     if (!std::all_of(value.begin(), value.end(),
                      [](unsigned char ch) { return std::isxdigit(ch); })) {
-      return ParseDiagnostic::Error("'#" + std::string(value) + "' is not a hex number",
+      return ParseDiagnostic::Error(RcString("'#" + std::string(value) + "' is not a hex number"),
                                     FileOffset::Offset(0));
     }
 
@@ -229,7 +229,7 @@ public:
                         fromHex(value[4]) * 16 + fromHex(value[5]),  //
                         fromHex(value[6]) * 16 + fromHex(value[7])));
     } else {
-      return ParseDiagnostic::Error("'#" + std::string(value) + "' is not a color",
+      return ParseDiagnostic::Error(RcString("'#" + std::string(value) + "' is not a color"),
                                     FileOffset::Offset(0));
     }
   }
@@ -607,7 +607,8 @@ public:
 
 private:
   ParseDiagnostic unexpectedTokenError(const RcString& functionName, const Token& token) {
-    return ParseDiagnostic::Error("Unexpected token when parsing function '" + functionName + "'", token.offset());
+    return ParseDiagnostic::Error(
+        RcString("Unexpected token when parsing function '" + functionName + "'"), token.offset());
   }
 
   static RGBA hwbToRgb(double hue, double white, double black) {

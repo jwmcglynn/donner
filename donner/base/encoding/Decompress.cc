@@ -43,8 +43,8 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
     if (ret != Z_STREAM_END) {
       inflateEnd(&stream);
       return ParseDiagnostic::Error(
-          std::string("Failed to decompress zlib data: ") +
-              (stream.msg ? stream.msg : "Unknown error"),
+          RcString(std::string("Failed to decompress zlib data: ") +
+                   (stream.msg ? stream.msg : "Unknown error")),
           FileOffset::Offset(0));
     }
 
@@ -71,8 +71,8 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
       if (ret != Z_OK) {
         inflateEnd(&stream);
         return ParseDiagnostic::Error(
-            std::string("Failed to decompress gzip data: ") +
-                (stream.msg ? stream.msg : "Unknown error"),
+            RcString(std::string("Failed to decompress gzip data: ") +
+                     (stream.msg ? stream.msg : "Unknown error")),
             FileOffset::Offset(0));
       }
     }

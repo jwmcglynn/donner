@@ -1238,8 +1238,9 @@ private:
     // Extract element name
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
-      return ParseDiagnostic::Error("Invalid element name: " + maybeName.error().reason,
-                                    maybeName.error().range.start);
+      return ParseDiagnostic::Error(
+          RcString("Invalid element name: " + maybeName.error().reason),
+          maybeName.error().range.start);
     }
 
     // Create element node
@@ -1377,7 +1378,7 @@ private:
           auto maybeClosingName = consumeQualifiedName();
           if (maybeClosingName.hasError()) {
             return ParseDiagnostic::Error(
-                "Invalid closing tag name: " + maybeClosingName.error().reason,
+                RcString("Invalid closing tag name: " + maybeClosingName.error().reason),
                 maybeClosingName.error().range.start);
           }
 
@@ -1440,8 +1441,9 @@ private:
 
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
-      return ParseDiagnostic::Error("Invalid attribute name: " + maybeName.error().reason,
-                                    maybeName.error().range.start);
+      return ParseDiagnostic::Error(
+          RcString("Invalid attribute name: " + maybeName.error().reason),
+          maybeName.error().range.start);
     }
 
     const XMLQualifiedNameRef& name = maybeName.result();
