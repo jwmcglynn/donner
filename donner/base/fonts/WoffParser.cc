@@ -138,18 +138,14 @@ struct TableRecord {
 
 ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
   if (bytes.size() < 44) {
-    ParseError err;
-    err.reason = "WOFF data too short";
-    return err;
+    return ParseDiagnostic::Error("WOFF data too short", FileOffset::Offset(0));
   }
 
   const uint8_t* p = bytes.data();
   const uint32_t signature = ReadBE32(p);
   p += 4;
   if (signature != 0x774F4646) {  // 'wOFF'
-    ParseError err;
-    err.reason = "Invalid WOFF signature";
-    return err;
+    return ParseDiagnostic::Error("Invalid WOFF signature", FileOffset::Offset(0));
   }
 
   WoffFont font;
@@ -182,15 +178,11 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
   (void)privLength;
 
   if (length != bytes.size()) {
-    ParseError err;
-    err.reason = "WOFF length mismatch";
-    return err;
+    return ParseDiagnostic::Error("WOFF length mismatch", FileOffset::Offset(0));
   }
 
   if (44 + numTables * 20 > bytes.size()) {
-    ParseError err;
-    err.reason = "Truncated WOFF table directory";
-    return err;
+    return ParseDiagnostic::Error("Truncated WOFF table directory", FileOffset::Offset(0));
   }
 
   std::vector<TableRecord> records;
@@ -209,9 +201,7 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
     rec.checksum = ReadBE32(dir);
     dir += 4;
     if (rec.offset > bytes.size() || rec.compLength > bytes.size() - rec.offset) {
-      ParseError err;
-      err.reason = "Table outside of data";
-      return err;
+      return ParseDiagnostic::Error("Table outside of data", FileOffset::Offset(0));
     }
     records.push_back(rec);
   }
@@ -219,9 +209,7 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
   font.tables.reserve(numTables);
   for (const auto& rec : records) {
     if (rec.origLength > kMaxTableSize) {
-      ParseError err;
-      err.reason = "Table size is too large";
-      return err;
+      return ParseDiagnostic::Error("Table size is too large", FileOffset::Offset(0));
     }
 
     std::vector<uint8_t> table;

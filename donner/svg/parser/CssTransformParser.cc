@@ -68,27 +68,27 @@ public:
         components_ = components_.subspan(1);
         return number->value;
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Expected a number";
-        err.location = components_.front().sourceOffset();
+        err.range.start = components_.front().sourceOffset();
         return err;
       }
     }
 
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Not enough parameters";
-    err.location = FileOffset::EndOfString();
+    err.range.start = FileOffset::EndOfString();
     return err;
   }
 
-  std::optional<ParseError> readNumbers(std::span<double> resultStorage) {
+  std::optional<ParseDiagnostic> readNumbers(std::span<double> resultStorage) {
     for (size_t i = 0; i < resultStorage.size(); ++i) {
       if (i != 0) {
         skipWhitespace();
         if (!tryConsumeToken<css::Token::Comma>()) {
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = isEOF() ? "Not enough parameters" : "Expected a comma";
-          err.location = sourceOffset();
+          err.range.start = sourceOffset();
           return err;
         }
         skipWhitespace();
@@ -116,9 +116,9 @@ public:
       return result.result();
     }
 
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Not enough parameters";
-    err.location = FileOffset::EndOfString();
+    err.range.start = FileOffset::EndOfString();
     return err;
   }
 
@@ -133,9 +133,9 @@ public:
       return result.result();
     }
 
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Not enough parameters";
-    err.location = FileOffset::EndOfString();
+    err.range.start = FileOffset::EndOfString();
     return err;
   }
 
@@ -167,7 +167,7 @@ public:
     return std::move(transform_);
   }
 
-  std::optional<ParseError> parseFunction() {
+  std::optional<ParseDiagnostic> parseFunction() {
     if (const auto* function = parser_.tryConsume<css::Function>()) {
       const RcString& name = function->name;
       ComponentValueParser subparser(function->values);
@@ -230,15 +230,15 @@ public:
 
         transform_.appendTransform(Transformd::SkewY(result.result()));
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Unexpected function '" + name + "'";
-        err.location = parser_.sourceOffset();
+        err.range.start = parser_.sourceOffset();
         return err;
       }
     } else {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected a function, found unexpected token";
-      err.location = parser_.sourceOffset();
+      err.range.start = parser_.sourceOffset();
       return err;
     }
 
@@ -253,9 +253,9 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected only one parameter";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 
@@ -270,9 +270,9 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected only one parameter";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 
@@ -288,16 +288,16 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected only one parameter";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 
     return maybeAngle;
   }
 
-  std::optional<ParseError> parseMatrix(ComponentValueParser& subparser) {
+  std::optional<ParseDiagnostic> parseMatrix(ComponentValueParser& subparser) {
     Transformd t(Transformd::uninitialized);
     if (auto error = subparser.readNumbers(t.data)) {
       return std::move(error.value());
@@ -305,9 +305,9 @@ public:
 
     subparser.skipWhitespace();
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'matrix'";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 
@@ -315,7 +315,7 @@ public:
     return std::nullopt;
   }
 
-  std::optional<ParseError> parseTranslate(ComponentValueParser& subparser) {
+  std::optional<ParseDiagnostic> parseTranslate(ComponentValueParser& subparser) {
     // Accept either 1 or 2 lengths.
     auto maybeTx = subparser.readLengthPercentage();
     if (maybeTx.hasError()) {
@@ -331,9 +331,9 @@ public:
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Expected a comma";
-        err.location = subparser.sourceOffset();
+        err.range.start = subparser.sourceOffset();
         return err;
       }
 
@@ -348,16 +348,16 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'translate'";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 
     return std::nullopt;
   }
 
-  std::optional<ParseError> parseScale(ComponentValueParser& subparser) {
+  std::optional<ParseDiagnostic> parseScale(ComponentValueParser& subparser) {
     // Accept either 1 or 2 numbers.
     auto maybeSx = subparser.readNumber();
     if (maybeSx.hasError()) {
@@ -373,9 +373,9 @@ public:
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Expected a comma";
-        err.location = subparser.sourceOffset();
+        err.range.start = subparser.sourceOffset();
         return err;
       }
 
@@ -390,16 +390,16 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'scale'";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 
     return std::nullopt;
   }
 
-  std::optional<ParseError> parseSkew(ComponentValueParser& subparser) {
+  std::optional<ParseDiagnostic> parseSkew(ComponentValueParser& subparser) {
     // Accept either 1 or 2 angles.
     auto maybeAlpha = subparser.readAngle(AngleParseOptions::AllowBareZero);
     if (maybeAlpha.hasError()) {
@@ -415,9 +415,9 @@ public:
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Expected a comma";
-        err.location = subparser.sourceOffset();
+        err.range.start = subparser.sourceOffset();
         return err;
       }
 
@@ -432,9 +432,9 @@ public:
     subparser.skipWhitespace();
 
     if (!subparser.isEOF()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected parameters when parsing 'skew'";
-      err.location = subparser.sourceOffset();
+      err.range.start = subparser.sourceOffset();
       return err;
     }
 

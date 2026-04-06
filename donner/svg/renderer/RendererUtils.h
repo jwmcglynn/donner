@@ -18,7 +18,7 @@ public:
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
   static void prepareDocumentForRendering(SVGDocument& document, bool verbose,
-                                          std::vector<ParseError>* outWarnings = nullptr);
+                                          std::vector<ParseDiagnostic>* outWarnings = nullptr);
 };
 
 }  // namespace donner::svg

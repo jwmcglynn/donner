@@ -94,7 +94,7 @@ private:
  * @param destination The property to set the value on.
  */
 template <typename T, PropertyCascade kCascade, typename ParseCallbackFn>
-std::optional<ParseError> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
+std::optional<ParseDiagnostic> Parse(const PropertyParseFnParams& params, ParseCallbackFn callbackFn,
                                 Property<T, kCascade>* destination) {
   if (destination->hasValue() && params.specificity < destination->specificity) {
     // Existing specificity is higher than the new one, so we don't need to parse.

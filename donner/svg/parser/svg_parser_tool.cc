@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
   fileData.resize(fileLength);
   file.read(fileData.data(), fileLength);
 
-  std::vector<donner::ParseError> warnings;
+  std::vector<donner::ParseDiagnostic> warnings;
   auto maybeResult = donner::svg::parser::SVGParser::ParseSVG(fileData, &warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();

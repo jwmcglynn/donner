@@ -18,7 +18,7 @@ namespace donner {
  * ```
  * std::string_view svgSource("<svg>...</svg>");
  *
- * std::vector<ParseError> warnings;
+ * std::vector<ParseDiagnostic> warnings;
  * auto maybeResult = SVGParser::ParseSVG(svgSource, &warnings);
  *
  * if (maybeResult.hasError()) {

@@ -6,7 +6,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 
@@ -29,7 +29,7 @@ public:
    * @param verbose If true, enable verbose logging.
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings);
+  void instantiateRenderTree(bool verbose, std::vector<ParseDiagnostic>* outWarnings);
 
   /**
    * Create all computed components needed for text/layout/style queries without instantiating
@@ -120,7 +120,7 @@ private:
    *
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void createComputedComponents(std::vector<ParseError>* outWarnings);
+  void createComputedComponents(std::vector<ParseDiagnostic>* outWarnings);
 
   /**
    * Creates all rendering instances for the document, the final step before it can be rendered.

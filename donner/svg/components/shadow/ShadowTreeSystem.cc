@@ -65,7 +65,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
                                                          ComputedShadowTreeComponent& shadow,
                                                          ShadowBranchType branchType,
                                                          Entity lightTarget, const RcString& href,
-                                                         std::vector<ParseError>* outWarnings) {
+                                                         std::vector<ParseDiagnostic>* outWarnings) {
   assert((!shadow.mainBranch || branchType != ShadowBranchType::Main) &&
          "Only one main branch is allowed.");
 
@@ -75,7 +75,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
 
   if (lightTarget == entity) {
     if (outWarnings) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason =
           std::string("Shadow tree recursion detected, element references itself: '" + href + '"');
       outWarnings->emplace_back(std::move(err));
@@ -92,7 +92,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
 
   if (shadowHostParents.count(lightTarget)) {
     if (outWarnings) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = std::string(
           "Shadow tree recursion detected, element directly references parent: '" + href + '"');
       outWarnings->emplace_back(std::move(err));
@@ -157,12 +157,12 @@ Entity ShadowTreeSystem::createShadowAndChildren(
     Registry& registry, ShadowBranchType branchType,
     ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard, Entity shadowParent,
     Entity lightTarget, const std::set<Entity>& shadowHostParents,
-    std::vector<ParseError>* outWarnings) {
+    std::vector<ParseDiagnostic>* outWarnings) {
   auto validateNoRecursion = [&guard, &shadowHostParents, outWarnings](
                                  const RcString& href, Entity targetEntity) -> bool {
     if (shadowHostParents.count(targetEntity)) {
       if (outWarnings) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = std::string(
             "Shadow tree indirect recursion detected, element "
             "references a shadow host parent: '" +
@@ -173,7 +173,7 @@ Entity ShadowTreeSystem::createShadowAndChildren(
       return false;
     } else if (guard.hasRecursion(targetEntity)) {
       if (outWarnings) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason =
             std::string("Shadow tree recursion detected, ignoring shadow tree for '" + href + '"');
         outWarnings->emplace_back(std::move(err));
@@ -227,7 +227,7 @@ Entity ShadowTreeSystem::createShadowAndChildren(
 
       return shadow;
     } else if (outWarnings) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = std::string("Failed to find target entity for nested shadow tree '") +
                    nestedShadow->mainHref().value_or("") + "'";
       outWarnings->emplace_back(std::move(err));

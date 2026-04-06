@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
 
@@ -24,7 +24,7 @@ public:
    * @param outWarnings If non-null, a vector to store any warnings that occur during the
    * instantiation.
    */
-  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseDiagnostic>* outWarnings);
 
   /**
    * Instantiate computed text spans for a specific text root.
@@ -32,7 +32,7 @@ public:
    * @param handle Text root handle.
    * @param outWarnings If non-null, warnings are appended here.
    */
-  void instantiateComputedComponent(EntityHandle handle, std::vector<ParseError>* outWarnings);
+  void instantiateComputedComponent(EntityHandle handle, std::vector<ParseDiagnostic>* outWarnings);
 };
 
 }  // namespace donner::svg::components

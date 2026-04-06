@@ -4,7 +4,7 @@ namespace donner::svg::components {
 
 std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
     const RcString& resolvedUrl, const std::vector<uint8_t>& svgContent,
-    const ParseCallback& parseCallback, std::vector<ParseError>* outWarnings) {
+    const ParseCallback& parseCallback, std::vector<ParseDiagnostic>* outWarnings) {
   // Check cache first.
   if (auto it = cache_.find(resolvedUrl); it != cache_.end()) {
     return it->second;
@@ -13,7 +13,7 @@ std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
   // Detect circular references.
   if (loading_.contains(resolvedUrl)) {
     if (outWarnings) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Circular SVG sub-document reference detected: " + std::string(resolvedUrl);
       outWarnings->emplace_back(err);
     }

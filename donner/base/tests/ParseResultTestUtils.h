@@ -65,12 +65,12 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher,
   std::string actualReason;
   bool hasError = false;
 
-  // Case 1: arg is already a ParseError.
-  if constexpr (std::is_same_v<ArgType, ParseError>) {
+  // Case 1: arg is already a ParseDiagnostic.
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
     actualReason = arg.reason;
     hasError = true;
   }
-  // Case 2: arg is an optional-like container of ParseError.
+  // Case 2: arg is an optional-like container of ParseDiagnostic.
   else if constexpr (details::IsOptionalLike<ArgType>) {
     if (arg.has_value()) {
       actualReason = arg.value().reason;
@@ -124,8 +124,8 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
     }
   };
 
-  if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return matchFileOffset(arg.location);
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
+    return matchFileOffset(arg.range.start);
   } else if constexpr (std::is_same_v<ArgType, FileOffset>) {
     return matchFileOffset(arg);
   } else {
@@ -134,7 +134,7 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
       return false;
     }
 
-    return matchFileOffset(arg.error().location);
+    return matchFileOffset(arg.error().range.start);
   }
 }
 

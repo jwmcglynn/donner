@@ -77,7 +77,7 @@ struct ContextPaintServers {
 ShadowTreeSystem createShadowTreeSystem() {
   return ShadowTreeSystem([](Registry& registry, Entity shadowEntity, EntityHandle useEntity,
                              Entity symbolEntity, ShadowBranchType branchType,
-                             std::vector<ParseError>* outWarnings) -> bool {
+                             std::vector<ParseDiagnostic>* outWarnings) -> bool {
     // Only create shadow sized element components for the main branch
     if (branchType != ShadowBranchType::Main) {
       return false;
@@ -616,7 +616,7 @@ private:
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                const PaintServer& paint, std::vector<ParseError>* outWarnings) {
+                                const PaintServer& paint, std::vector<ParseDiagnostic>* outWarnings) {
   if (paint.is<PaintServer::ElementReference>()) {
     const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
 
@@ -630,7 +630,7 @@ void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchT
 }
 
 void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Reference& reference,
-                               std::vector<ParseError>* outWarnings) {
+                               std::vector<ParseDiagnostic>* outWarnings) {
   if (auto resolvedRef = reference.resolve(registry);
       resolvedRef && resolvedRef->handle.all_of<MaskComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
@@ -639,7 +639,7 @@ void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Referenc
 }
 
 void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                 const Reference& reference, std::vector<ParseError>* outWarnings) {
+                                 const Reference& reference, std::vector<ParseDiagnostic>* outWarnings) {
   if (auto resolvedRef = reference.resolve(registry);
       resolvedRef && resolvedRef->handle.all_of<MarkerComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
@@ -692,7 +692,7 @@ void RenderingContext::clearInitialContextPaint() {
   getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
-void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
+void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseDiagnostic>* outWarnings) {
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 
@@ -879,7 +879,7 @@ void RenderingContext::invalidateRenderTree() {
 // 6. Decompose shapes to paths
 // 7. Resolve fill and stroke references (paints)
 // 8. Resolve filter references
-void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
+void RenderingContext::createComputedComponents(std::vector<ParseDiagnostic>* outWarnings) {
   // Evaluate conditional components which may create shadow trees.
   PaintSystem().createShadowTrees(registry_, outWarnings);
 
@@ -905,7 +905,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
                                                              RcString(ref.fragment()));
         }
       } else if (outWarnings) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
                      shadowTreeComponent.mainHref().value_or("") + "'";
         outWarnings->emplace_back(std::move(err));
@@ -987,7 +987,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
         }
       } else if (outWarnings) {
         // We had a href but it failed to resolve.
-        ParseError err;
+        ParseDiagnostic err;
         err.reason =
             std::string("Warning: Failed to resolve offscreen shadow tree target with href '") +
             ref.href + "'";

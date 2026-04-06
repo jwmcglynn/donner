@@ -4,7 +4,7 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "base",
     srcs = [
-        "ParseError.cc",
+        "ParseDiagnostic.cc",
     ],
     hdrs = [
         "Box.h",
@@ -15,8 +15,9 @@ donner_cc_library(
         "Length.h",
         "MathUtils.h",
         "OptionalRef.h",
-        "ParseError.h",
+        "ParseDiagnostic.h",
         "ParseResult.h",
+        "ParseWarningSink.h",
         "RcString.h",
         "RcStringOrRef.h",
         "RelativeLengthMetrics.h",

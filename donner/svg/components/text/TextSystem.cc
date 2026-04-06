@@ -99,7 +99,7 @@ void removeTrailingSpace(RcString& text) {
 }
 
 void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
-                     ComputedTextComponent::TextSpan& span, std::vector<ParseError>* outWarnings) {
+                     ComputedTextComponent::TextSpan& span, std::vector<ParseDiagnostic>* outWarnings) {
   if (textPath.href.empty()) {
     return;
   }
@@ -206,7 +206,7 @@ Entity findApplicableTextPathEntity(Registry& registry, Entity entity, bool& out
 }  // namespace
 
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
-                                                  std::vector<ParseError>* outWarnings) {
+                                                  std::vector<ParseDiagnostic>* outWarnings) {
   auto view = registry.view<TextRootComponent, TextComponent, TextPositioningComponent>();
   for (auto entity : view) {
     instantiateComputedComponent(EntityHandle(registry, entity), outWarnings);
@@ -214,7 +214,7 @@ void TextSystem::instantiateAllComputedComponents(Registry& registry,
 }
 
 void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
-                                              std::vector<ParseError>* outWarnings) {
+                                              std::vector<ParseDiagnostic>* outWarnings) {
   Registry& registry = *rootHandle.registry();
   UTILS_RELEASE_ASSERT(
       (rootHandle.all_of<TextRootComponent, TextComponent, TextPositioningComponent>()));

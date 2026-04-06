@@ -38,7 +38,7 @@ static constexpr int kDefaultHeight = 512;
 // The maximum size supported for a rendered image.
 static constexpr int kMaxDimension = 8192;
 
-using SizedElementPresentationAttributeParseFn = std::optional<ParseError> (*)(
+using SizedElementPresentationAttributeParseFn = std::optional<ParseDiagnostic> (*)(
     SizedElementProperties& properties, const parser::PropertyParseFnParams& params);
 
 constexpr std::array<std::pair<std::string_view, SizedElementPresentationAttributeParseFn>, 4>
@@ -97,7 +97,7 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
 
 void ApplyUnparsedProperties(SizedElementProperties& properties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                             std::vector<ParseError>* outWarnings) {
+                             std::vector<ParseDiagnostic>* outWarnings) {
   for (const auto& [name, property] : unparsedProperties) {
     const SizedElementPresentationAttributeParseFn* parseFn =
         kProperties.find(static_cast<std::string_view>(name));
@@ -475,7 +475,7 @@ Transformd LayoutSystem::elementContentFromViewBoxTransform(
 }
 
 void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
-                                                    std::vector<ParseError>* outWarnings) {
+                                                    std::vector<ParseDiagnostic>* outWarnings) {
   for (auto view = registry.view<SizedElementComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [component, style] = view.get(entity);
@@ -523,7 +523,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
 Boxd LayoutSystem::computeSizeProperties(
     EntityHandle entity, const SizedElementProperties& sizeProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewBox,
-    FontMetrics fontMetrics, std::vector<ParseError>* outWarnings) {
+    FontMetrics fontMetrics, std::vector<ParseDiagnostic>* outWarnings) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
 
   ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, outWarnings);
@@ -534,7 +534,7 @@ Boxd LayoutSystem::computeSizeProperties(
 // information.
 const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementComponentWithStyle(
     EntityHandle entity, const ComputedStyleComponent& style, FontMetrics fontMetrics,
-    std::vector<ParseError>* outWarnings) {
+    std::vector<ParseDiagnostic>* outWarnings) {
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Entity parent = entity.get<donner::components::TreeComponent>().parent();
@@ -549,7 +549,7 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
 
 const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
     EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
-    std::vector<ParseError>* outWarnings) {
+    std::vector<ParseDiagnostic>* outWarnings) {
   std::optional<TransformComponent> shadowTransform;
   EntityHandle lightEntity = handle;
   if (const auto* shadowComponent = lightEntity.try_get<ShadowEntityComponent>()) {
@@ -802,7 +802,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
 bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,
                                                      EntityHandle useEntity, Entity symbolEntity,
                                                      ShadowBranchType branchType,
-                                                     std::vector<ParseError>* outWarnings) {
+                                                     std::vector<ParseDiagnostic>* outWarnings) {
   // TODO: Plumb FontMetrics
   FontMetrics fontMetrics;
 

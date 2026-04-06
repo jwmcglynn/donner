@@ -23,7 +23,7 @@ SVGDocument instantiateSubtree(std::string_view str, const parser::SVGParser::Op
   fileData.insert(fileData.end(), str.begin(), str.end());
   fileData.insert(fileData.end(), kSuffix.begin(), kSuffix.end());
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   auto maybeResult = parser::SVGParser::ParseSVG(fileData, &warnings, options);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();

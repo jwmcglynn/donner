@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/FontResource.h"
@@ -31,7 +31,7 @@ public:
    *
    * @param outWarnings If non-null, warnings will be added to this vector.
    */
-  void loadResources(std::vector<ParseError>* outWarnings);
+  void loadResources(std::vector<ParseDiagnostic>* outWarnings);
 
   /**
    * Set the user-supplied \ref ResourceLoaderInterface which handles loading URLs and returning
@@ -72,7 +72,7 @@ public:
    * @return Parsed document handle, or `std::nullopt` on failure.
    */
   std::optional<SVGDocumentHandle> loadExternalSVG(const RcString& url,
-                                                   std::vector<ParseError>* outWarnings);
+                                                   std::vector<ParseDiagnostic>* outWarnings);
 
   /**
    * Get the size of an image resource for an entity, if it has one and successfully loaded.

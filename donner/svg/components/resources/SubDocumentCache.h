@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/svg/SVGDocumentHandle.h"
 
@@ -31,7 +31,7 @@ public:
    * failure.
    */
   using ParseCallback = std::function<std::optional<SVGDocumentHandle>(
-      const std::vector<uint8_t>& svgContent, std::vector<ParseError>* outWarnings)>;
+      const std::vector<uint8_t>& svgContent, std::vector<ParseDiagnostic>* outWarnings)>;
 
   /// Constructor.
   SubDocumentCache() = default;
@@ -59,7 +59,7 @@ public:
   std::optional<SVGDocumentHandle> getOrParse(const RcString& resolvedUrl,
                                               const std::vector<uint8_t>& svgContent,
                                               const ParseCallback& parseCallback,
-                                              std::vector<ParseError>* outWarnings);
+                                              std::vector<ParseDiagnostic>* outWarnings);
 
   /**
    * Get a previously cached sub-document by URL.

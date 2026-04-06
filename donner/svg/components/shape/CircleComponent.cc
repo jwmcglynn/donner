@@ -10,7 +10,7 @@ namespace donner::svg::components {
 
 namespace {
 
-using CirclePresentationAttributeParseFn = std::optional<ParseError> (*)(
+using CirclePresentationAttributeParseFn = std::optional<ParseDiagnostic> (*)(
     CircleProperties& properties, const parser::PropertyParseFnParams& params);
 
 constexpr std::array<std::pair<std::string_view, CirclePresentationAttributeParseFn>, 3>
@@ -51,7 +51,7 @@ constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
 ComputedCircleComponent::ComputedCircleComponent(
     const CircleProperties& inputProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<ParseError>* outWarnings)
+    std::vector<ParseDiagnostic>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const CirclePresentationAttributeParseFn* parseFn =

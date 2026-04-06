@@ -90,7 +90,7 @@ public:
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseSVG(
-      std::string_view source, std::vector<ParseError>* outWarnings = nullptr, Options options = {},
+      std::string_view source, std::vector<ParseDiagnostic>* outWarnings = nullptr, Options options = {},
       SVGDocument::Settings settings = {}) noexcept;
 
   /**
@@ -103,7 +103,7 @@ public:
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
   static ParseResult<SVGDocument> ParseXMLDocument(
-      xml::XMLDocument&& xmlDocument, std::vector<ParseError>* outWarnings = nullptr,
+      xml::XMLDocument&& xmlDocument, std::vector<ParseDiagnostic>* outWarnings = nullptr,
       Options options = {}, SVGDocument::Settings settings = {}) noexcept;
 };
 

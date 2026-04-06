@@ -33,9 +33,9 @@ public:
 
         // To provide better error messages, detect an extraneous comma here.
         if (remaining_.starts_with(',')) {
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = "Extra ',' before coordinate";
-          err.location = currentOffset();
+          err.range.start = currentOffset();
           return err;
         }
       }
@@ -59,7 +59,7 @@ public:
   }
 
 private:
-  ParseResult<std::vector<Vector2d>> resultAndError(ParseError&& error) {
+  ParseResult<std::vector<Vector2d>> resultAndError(ParseDiagnostic&& error) {
     return ParseResult<std::vector<Vector2d>>(std::move(points_), std::move(error));
   }
 

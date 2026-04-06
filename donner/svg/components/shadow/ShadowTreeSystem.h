@@ -4,7 +4,7 @@
 #include <functional>
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
@@ -30,7 +30,7 @@ namespace donner::svg::components {
  */
 using ShadowSizedElementHandler = std::function<bool(
     Registry& registry, Entity shadowEntity, EntityHandle useEntity, Entity symbolEntity,
-    ShadowBranchType branchType, std::vector<ParseError>* outWarnings)>;
+    ShadowBranchType branchType, std::vector<ParseDiagnostic>* outWarnings)>;
 
 /**
  * Instantiates shadow trees for elements that are not part of the main render graph, such as
@@ -80,7 +80,7 @@ public:
   std::optional<size_t> populateInstance(EntityHandle entity, ComputedShadowTreeComponent& shadow,
                                          ShadowBranchType branchType, Entity lightTarget,
                                          const RcString& href,
-                                         std::vector<ParseError>* outWarnings);
+                                         std::vector<ParseDiagnostic>* outWarnings);
 
 private:
   Entity createShadowEntity(Registry& registry, ShadowBranchType branchType,
@@ -91,7 +91,7 @@ private:
                                  ComputedShadowTreeComponent::BranchStorage& storage,
                                  RecursionGuard& guard, Entity shadowParent, Entity lightTarget,
                                  const std::set<Entity>& shadowHostParents,
-                                 std::vector<ParseError>* outWarnings);
+                                 std::vector<ParseDiagnostic>* outWarnings);
 
 private:
   /// Callback for sized element processing, may be nullptr

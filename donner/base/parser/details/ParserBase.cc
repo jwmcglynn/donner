@@ -58,16 +58,15 @@ size_t ParserBase::consumedChars() const {
 
 ParseResult<double> ParserBase::readNumber() {
   if (remaining_.empty()) {
-    ParseError err;
-    err.reason = "Failed to parse number: Unexpected end of string";
-    err.location = currentOffset();
-    return err;
+    return ParseDiagnostic::Error("Failed to parse number: Unexpected end of string",
+                                  currentOffset());
   }
 
   auto maybeResult = NumberParser::Parse(remaining_);
   if (maybeResult.hasError()) {
-    ParseError err = std::move(maybeResult.error());
-    err.location = err.location.addParentOffset(currentOffset());
+    ParseDiagnostic err = std::move(maybeResult.error());
+    err.range.start = err.range.start.addParentOffset(currentOffset());
+    err.range.end = err.range.end.addParentOffset(currentOffset());
     return err;
   }
 
@@ -76,7 +75,7 @@ ParseResult<double> ParserBase::readNumber() {
   return result.number;
 }
 
-std::optional<ParseError> ParserBase::readNumbers(std::span<double> resultStorage) {
+std::optional<ParseDiagnostic> ParserBase::readNumbers(std::span<double> resultStorage) {
   for (size_t i = 0; i < resultStorage.size(); ++i) {
     if (i != 0) {
       ParserBase::skipCommaWhitespace();

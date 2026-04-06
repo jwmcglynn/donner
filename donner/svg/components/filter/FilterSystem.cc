@@ -634,7 +634,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
 }
 
 void FilterSystem::instantiateAllComputedComponents(Registry& registry,
-                                                    std::vector<ParseError>* outWarnings) {
+                                                    std::vector<ParseDiagnostic>* outWarnings) {
   for (auto entity : registry.view<FilterComponent>()) {
     createComputedFilter(EntityHandle(registry, entity), registry.get<FilterComponent>(entity),
                          outWarnings);

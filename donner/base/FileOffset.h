@@ -144,11 +144,11 @@ private:
 };
 
 /**
- * Holds a selection range for a region in the source text.
+ * Holds a selection range for a region in the source text, as a half-open interval `[start, end)`.
  */
-struct FileOffsetRange {
-  FileOffset start;  ///< Start offset.
-  FileOffset end;    ///< End offset.
+struct SourceRange {
+  FileOffset start;  ///< Start of the range (inclusive).
+  FileOffset end;    ///< End of the range (exclusive).
 };
 
 }  // namespace donner

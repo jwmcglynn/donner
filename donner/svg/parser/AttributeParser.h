@@ -19,7 +19,7 @@ public:
    * @param name The name of the attribute, as specified in the document's XML.
    * @param value The value of the attribute.
    */
-  static std::optional<ParseError> ParseAndSetAttribute(SVGParserContext& context,
+  static std::optional<ParseDiagnostic> ParseAndSetAttribute(SVGParserContext& context,
                                                         SVGElement& element,
                                                         const xml::XMLQualifiedNameRef& name,
                                                         std::string_view value) noexcept;

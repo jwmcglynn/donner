@@ -72,7 +72,7 @@ protected:
    * @param resultStorage Location where the numbers will be stored, the number of parameters is
    *   based on the size of the span.
    */
-  std::optional<ParseError> readNumbers(std::span<double> resultStorage);
+  std::optional<ParseDiagnostic> readNumbers(std::span<double> resultStorage);
 
   /// The original string.
   const std::string_view str_;  // NOLINT: Protected visibility for inheriting parsers to use.

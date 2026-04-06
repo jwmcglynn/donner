@@ -84,10 +84,7 @@ public:
     const double number = maybeNumber.result();
     if (remaining_.empty() || isWhitespace(remaining_[0])) {
       if (unitRequired(number)) {
-        ParseError err;
-        err.reason = "Unit expected";
-        err.location = currentOffset();
-        return err;
+        return ParseDiagnostic::Error("Unit expected", currentOffset());
       }
 
       result.length.value = number;
@@ -103,20 +100,14 @@ public:
       result.length.unit = maybeUnit.value();
 
       if (options_.limitUnitToPercentage && result.length.unit != Lengthd::Unit::Percent) {
-        ParseError err;
-        err.reason = "Unexpected unit, expected percentage";
-        err.location = currentOffset();
-        return err;
+        return ParseDiagnostic::Error("Unexpected unit, expected percentage", currentOffset());
       }
 
       return result;
     }
 
     if (unitRequired(number)) {
-      ParseError err;
-      err.reason = "Invalid unit";
-      err.location = currentOffset();
-      return err;
+      return ParseDiagnostic::Error("Invalid unit", currentOffset());
     } else {
       result.length.value = number;
       result.consumedChars = consumedChars();

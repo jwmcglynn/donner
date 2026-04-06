@@ -132,7 +132,7 @@ private:
 }  // namespace
 
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
-                                                        std::vector<ParseError>* outWarnings) {
+                                                        std::vector<ParseDiagnostic>* outWarnings) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
   computePropertiesInto(handle, computedStyle, outWarnings);
   return computedStyle;
@@ -163,7 +163,7 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                                        std::vector<ParseError>* outWarnings) {
+                                        std::vector<ParseDiagnostic>* outWarnings) {
   if (computedStyle.properties) {
     return;  // Already computed.
   }
@@ -258,7 +258,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 }
 
-void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* outWarnings) {
+void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseDiagnostic>* outWarnings) {
   const auto* renderState = registry.ctx().find<RenderTreeState>();
   const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
   const bool needsFullStyleRecompute =
@@ -311,7 +311,7 @@ void StyleSystem::computeAllStyles(Registry& registry, std::vector<ParseError>* 
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
-                                   std::vector<ParseError>* outWarnings) {
+                                   std::vector<ParseDiagnostic>* outWarnings) {
   for (Entity entity : entities) {
     computeStyle(EntityHandle(registry, entity), outWarnings);
   }

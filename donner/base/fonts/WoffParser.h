@@ -18,7 +18,7 @@ namespace donner::fonts {
  * @see https://www.w3.org/TR/WOFF/ for the WOFF specification.
  *
  * @param bytes The WOFF file data as a byte span.
- * @return A ParseResult containing the parsed WoffFont on success, or a ParseError on failure.
+ * @return A ParseResult containing the parsed WoffFont on success, or a ParseDiagnostic on failure.
  */
 class WoffParser {
 public:
@@ -26,7 +26,7 @@ public:
    * Parse the given WOFF data.
    *
    * @param bytes The WOFF file data as a byte span.
-   * @return A ParseResult containing the parsed WoffFont on success, or a ParseError on failure.
+   * @return A ParseResult containing the parsed WoffFont on success, or a ParseDiagnostic on failure.
    */
   static ParseResult<WoffFont> Parse(std::span<const uint8_t> bytes);
 };

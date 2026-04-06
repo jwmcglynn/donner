@@ -91,7 +91,7 @@ No backward compatibility with the existing `ParseError` API is required.
 ```
 donner/base/
   FileOffset.h          (unchanged - keep FileOffset)
-  SourceRange.h         (NEW - replaces FileOffsetRange, half-open [start, end))
+  SourceRange.h         (NEW - replaces SourceRange, half-open [start, end))
   ParseDiagnostic.h     (NEW - replaces ParseError.h)
   ParseWarningSink.h    (NEW - replaces std::vector<ParseError>*)
   ParseResult.h         (MODIFIED - uses ParseDiagnostic)
@@ -160,7 +160,7 @@ struct SourceRange {
 }  // namespace donner
 ```
 
-This replaces `FileOffsetRange` with clearer half-open semantics and the `addParentOffset`
+This replaces `SourceRange` with clearer half-open semantics and the `addParentOffset`
 remapping that currently lives in ad-hoc code scattered across `SVGParserContext` and `FileOffset`.
 
 #### `ParseDiagnostic`
@@ -497,7 +497,7 @@ context.warningSink().add([&] {
 | Type | Replacement |
 |------|-------------|
 | `ParseError` | `ParseDiagnostic` |
-| `FileOffsetRange` | `SourceRange` |
+| `SourceRange` | `SourceRange` |
 | `DataUrlParserError` | `ParseDiagnostic` returned via `ParseResult` |
 
 ## Performance
@@ -625,7 +625,7 @@ TEST(DiagnosticRenderer, SingleLineRange) {
 
 ## Open Questions
 
-1. **Should `SourceRange` replace `FileOffsetRange` globally?** `FileOffsetRange` is currently used
+1. **Should `SourceRange` replace `SourceRange` globally?** `SourceRange` is currently used
    in `XMLNode::getAttributeLocation`. We could either rename it or keep both and convert at
    boundaries.
 

@@ -3,7 +3,7 @@
 
 #include <optional>
 
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Utils.h"
 
 namespace donner {
@@ -29,18 +29,18 @@ public:
   /**
    * Construct from an error.
    */
-  /* implicit */ ParseResult(ParseError&& error) : error_(std::move(error)) {}
+  /* implicit */ ParseResult(ParseDiagnostic&& error) : error_(std::move(error)) {}
 
   /**
    * Construct from an error by value.
    */
-  /* implicit */ ParseResult(const ParseError& error) : error_(error) {}
+  /* implicit */ ParseResult(const ParseDiagnostic& error) : error_(error) {}
 
   /**
    * Return a result, but also an error. Used in the case where partial parse results may be
    * returned.
    */
-  ParseResult(T&& result, ParseError&& error)
+  ParseResult(T&& result, ParseDiagnostic&& error)
       : result_(std::move(result)), error_(std::move(error)) {}
 
   /**
@@ -78,7 +78,7 @@ public:
    *
    * @pre There is a valid error, i.e. \ref hasError() returns true.
    */
-  ParseError& error() & {
+  ParseDiagnostic& error() & {
     UTILS_RELEASE_ASSERT(hasError());
     return error_.value();
   }
@@ -88,7 +88,7 @@ public:
    *
    * @pre There is a valid error, i.e. \ref hasError() returns true.
    */
-  ParseError&& error() && {
+  ParseDiagnostic&& error() && {
     UTILS_RELEASE_ASSERT(hasError());
     return std::move(error_.value());
   }
@@ -98,7 +98,7 @@ public:
    *
    * @pre There is a valid error, i.e. \ref hasError() returns true.
    */
-  const ParseError& error() const& {
+  const ParseDiagnostic& error() const& {
     UTILS_RELEASE_ASSERT(hasError());
     return error_.value();
   }
@@ -145,7 +145,7 @@ public:
 
 private:
   std::optional<T> result_;
-  std::optional<ParseError> error_;
+  std::optional<ParseDiagnostic> error_;
 };
 
 }  // namespace donner

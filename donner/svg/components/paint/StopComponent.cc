@@ -7,7 +7,7 @@ namespace donner::svg::components {
 
 namespace {
 
-std::optional<ParseError> ParseStopColor(StopProperties& properties,
+std::optional<ParseDiagnostic> ParseStopColor(StopProperties& properties,
                                          const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
@@ -17,7 +17,7 @@ std::optional<ParseError> ParseStopColor(StopProperties& properties,
       &properties.stopColor);
 }
 
-std::optional<ParseError> ParseStopOpacity(StopProperties& properties,
+std::optional<ParseDiagnostic> ParseStopOpacity(StopProperties& properties,
                                            const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
@@ -60,7 +60,7 @@ ParseResult<bool> ParseStopPresentationAttributeImpl(std::string_view name,
 ComputedStopComponent::ComputedStopComponent(
     const StopProperties& inputProperties, const ComputedStyleComponent& style,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<ParseError>* outWarnings)
+    std::vector<ParseDiagnostic>* outWarnings)
     : properties(inputProperties) {
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
     const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(

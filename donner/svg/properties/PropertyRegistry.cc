@@ -53,9 +53,9 @@ ParseResult<double> ParseNumber(std::span<const css::ComponentValue> components)
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid number";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -99,9 +99,9 @@ ParseResult<Display> ParseDisplay(std::span<const css::ComponentValue> component
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid display value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -121,9 +121,9 @@ ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> com
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid text-anchor value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -146,17 +146,17 @@ ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentVa
 
   for (const auto& component : components) {
     if (component.tryGetToken<css::Token::Comma>()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Invalid text-decoration value";
-      err.location = component.sourceOffset();
+      err.range.start = component.sourceOffset();
       return err;
     }
 
     if (const auto* delim = component.tryGetToken<css::Token::Delim>()) {
       if (delim->value == ',') {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Invalid text-decoration value";
-        err.location = component.sourceOffset();
+        err.range.start = component.sourceOffset();
         return err;
       }
     }
@@ -179,9 +179,9 @@ ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentVa
   }
 
   if (result == TextDecoration::None && !components.empty()) {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Invalid text-decoration value";
-    err.location = components.front().sourceOffset();
+    err.range.start = components.front().sourceOffset();
     return err;
   }
 
@@ -217,9 +217,9 @@ ParseResult<DominantBaseline> ParseDominantBaseline(
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid dominant-baseline value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -282,9 +282,9 @@ ParseResult<WritingMode> ParseWritingMode(std::span<const css::ComponentValue> c
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid writing-mode value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -346,9 +346,9 @@ ParseResult<Visibility> ParseVisibility(std::span<const css::ComponentValue> com
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid display value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -370,15 +370,15 @@ ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> compone
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid overflow value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
 ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Invalid paint server value";
     return err;
   }
@@ -401,10 +401,10 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
 
       if (result) {
         if (components.size() > 1) {
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = "Unexpected tokens after paint server value";
-          err.location = token.offset();
-          err.location.offset.value() += name.size();
+          err.range.start = token.offset();
+          err.range.start.offset.value() += name.size();
           return err;
         }
 
@@ -435,9 +435,9 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
           return PaintServer(PaintServer::ElementReference(url.value, colorResult.result()));
         } else {
           // Invalid paint.
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = "Invalid paint server url, failed to parse fallback";
-          err.location = components[i].sourceOffset();
+          err.range.start = components[i].sourceOffset();
           return err;
         }
       }
@@ -454,9 +454,9 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
     return PaintServer(PaintServer::Solid(colorResult.result()));
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid paint server";
-  err.location = firstComponent.sourceOffset();
+  err.range.start = firstComponent.sourceOffset();
   return err;
 }
 
@@ -474,9 +474,9 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid fill rule";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -517,9 +517,9 @@ ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> compone
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid clip-rule value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -539,9 +539,9 @@ ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValu
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid linecap";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -565,9 +565,9 @@ ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentVa
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid linejoin";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -581,9 +581,9 @@ ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::Component
           TrySkipToken<css::Token::Comma>(components) || components.empty()) {
         TrySkipToken<css::Token::Whitespace>(components);
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Unexpected tokens after dasharray value";
-        err.location =
+        err.range.start =
             !components.empty() ? components.front().sourceOffset() : FileOffset::EndOfString();
         return err;
       }
@@ -596,9 +596,9 @@ ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::Component
     const css::ComponentValue& component = components.front();
     if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Invalid unit on length";
-        err.location = component.sourceOffset();
+        err.range.start = component.sourceOffset();
         return err;
       } else {
         result.emplace_back(dimension->value, dimension->suffixUnit.value());
@@ -608,9 +608,9 @@ ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::Component
     } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
       result.emplace_back(number->value, Lengthd::Unit::None);
     } else {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected token in dasharray";
-      err.location = component.sourceOffset();
+      err.range.start = component.sourceOffset();
       return err;
     }
 
@@ -659,9 +659,9 @@ ParseResult<TransformOrigin> ParseTransformOrigin(std::span<const css::Component
     components = components.subspan(1);
 
     if (!SkipWhitespace(components)) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected token in transform-origin";
-      err.location =
+      err.range.start =
           components.empty() ? FileOffset::EndOfString() : components.front().sourceOffset();
 
       return err;
@@ -679,9 +679,9 @@ ParseResult<TransformOrigin> ParseTransformOrigin(std::span<const css::Component
     SkipWhitespace(components);
 
     if (!components.empty()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected token in transform-origin";
-      err.location = components.front().sourceOffset();
+      err.range.start = components.front().sourceOffset();
       return err;
     }
   }
@@ -692,7 +692,7 @@ ParseResult<TransformOrigin> ParseTransformOrigin(std::span<const css::Component
 ParseResult<Reference> ParseReference(std::string_view tag,
                                       std::span<const css::ComponentValue> components) {
   if (components.empty()) {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = std::string("Empty ") + std::string(tag) + " value";
     return err;
   }
@@ -706,9 +706,9 @@ ParseResult<Reference> ParseReference(std::string_view tag,
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid url reference";
-  err.location = firstComponent.sourceOffset();
+  err.range.start = firstComponent.sourceOffset();
   return err;
 }
 
@@ -750,9 +750,9 @@ ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> v
     return percentage->value / 100.0;
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Expected number or percentage";
-  err.location = arg.sourceOffset();
+  err.range.start = arg.sourceOffset();
   return err;
 }
 
@@ -772,9 +772,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     const auto& arg = remaining.front();
     if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Invalid unit on blur length";
-        err.location = arg.sourceOffset();
+        err.range.start = arg.sourceOffset();
         return err;
       }
       const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
@@ -787,9 +787,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
             FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
       }
     }
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Invalid blur value";
-    err.location = arg.sourceOffset();
+    err.range.start = arg.sourceOffset();
     return err;
   }
 
@@ -807,9 +807,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
       if (auto degrees = ParseAngleDegrees(*dimension)) {
         return FilterEffect(FilterEffect::HueRotate{*degrees});
       }
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Invalid angle unit for hue-rotate";
-      err.location = arg.sourceOffset();
+      err.range.start = arg.sourceOffset();
       return err;
     }
     // Accept bare 0 as 0deg.
@@ -818,9 +818,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
         return FilterEffect(FilterEffect::HueRotate{0.0});
       }
     }
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Invalid hue-rotate value";
-    err.location = arg.sourceOffset();
+    err.range.start = arg.sourceOffset();
     return err;
   }
 
@@ -831,9 +831,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     }
     // CSS Filter Effects Level 1: brightness() does not allow negative values.
     if (result.result() < 0.0) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Negative value not allowed for brightness()";
-      err.location = function.sourceOffset;
+      err.range.start = function.sourceOffset;
       return err;
     }
     return FilterEffect(FilterEffect::Brightness{result.result()});
@@ -846,9 +846,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     }
     // CSS Filter Effects Level 1: contrast() does not allow negative values.
     if (result.result() < 0.0) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Negative value not allowed for contrast()";
-      err.location = function.sourceOffset;
+      err.range.start = function.sourceOffset;
       return err;
     }
     return FilterEffect(FilterEffect::Contrast{result.result()});
@@ -885,9 +885,9 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     }
     // CSS Filter Effects Level 1: saturate() does not allow negative values.
     if (result.result() < 0.0) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Negative value not allowed for saturate()";
-      err.location = function.sourceOffset;
+      err.range.start = function.sourceOffset;
       return err;
     }
     return FilterEffect(FilterEffect::Saturate{result.result()});
@@ -943,10 +943,10 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     // Parse offset-x (required).
     auto offsetX = parseLengthArg(remaining);
     if (!offsetX) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected offset-x for drop-shadow";
       if (!remaining.empty()) {
-        err.location = remaining.front().sourceOffset();
+        err.range.start = remaining.front().sourceOffset();
       }
       return err;
     }
@@ -955,10 +955,10 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
     // Parse offset-y (required).
     auto offsetY = parseLengthArg(remaining);
     if (!offsetY) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected offset-y for drop-shadow";
       if (!remaining.empty()) {
-        err.location = remaining.front().sourceOffset();
+        err.range.start = remaining.front().sourceOffset();
       }
       return err;
     }
@@ -984,18 +984,18 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
 
     // Reject if there are extra tokens (per spec, invalid functions are ignored).
     if (!remaining.empty()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected extra values in drop-shadow()";
-      err.location = remaining.front().sourceOffset();
+      err.range.start = remaining.front().sourceOffset();
       return err;
     }
 
     return FilterEffect(FilterEffect::DropShadow{*offsetX, *offsetY, stdDeviation, color});
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Unknown filter function '" + std::string(function.name) + "'";
-  err.location = function.sourceOffset;
+  err.range.start = function.sourceOffset;
   return err;
 }
 
@@ -1118,9 +1118,9 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid pointer-events";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -1202,7 +1202,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 70> kValidPresentationAt
 constexpr auto kValidPresentationAttributes =
     makeCompileTimeMap(kValidPresentationAttributeEntries);
 
-using PropertyParseFn = std::optional<ParseError> (*)(PropertyRegistry& registry,
+using PropertyParseFn = std::optional<ParseDiagnostic> (*)(PropertyRegistry& registry,
                                                       const parser::PropertyParseFnParams& params);
 
 constexpr auto kProperties =
@@ -1271,17 +1271,17 @@ constexpr auto kProperties =
                                    first = false;
                                    name.append(ident->value);
                                  } else {
-                                   ParseError err;
+                                   ParseDiagnostic err;
                                    err.reason = "Invalid generic-family";
-                                   err.location = cv.sourceOffset();
+                                   err.range.start = cv.sourceOffset();
                                    return err;
                                  }
                                }
                                families.emplace_back(RcString(name));
                              } else {
-                               ParseError err;
+                               ParseDiagnostic err;
                                err.reason = "Invalid font-family function";
-                               err.location = item.front().sourceOffset();
+                               err.range.start = item.front().sourceOffset();
                                return err;
                              }
                            } else {
@@ -1299,9 +1299,9 @@ constexpr auto kProperties =
                                  first = false;
                                  name.append(ident->value);
                                } else {
-                                 ParseError err;
+                                 ParseDiagnostic err;
                                  err.reason = "Invalid font-family";
-                                 err.location = cv.sourceOffset();
+                                 err.range.start = cv.sourceOffset();
                                  return err;
                                }
                              }
@@ -1379,7 +1379,7 @@ constexpr auto kProperties =
                              }
                            }
                          }
-                         ParseError err;
+                         ParseDiagnostic err;
                          err.reason = "Invalid font-weight value";
                          return err;
                        },
@@ -1399,7 +1399,7 @@ constexpr auto kProperties =
                              if (ident->value.equalsLowercase("oblique")) return FontStyle::Oblique;
                            }
                          }
-                         ParseError err;
+                         ParseDiagnostic err;
                          err.reason = "Invalid font-style value";
                          return err;
                        },
@@ -1439,7 +1439,7 @@ constexpr auto kProperties =
                                return PropertyRegistry::kFontStretchWider;
                            }
                          }
-                         ParseError err;
+                         ParseDiagnostic err;
                          err.reason = "Invalid font-stretch value";
                          return err;
                        },
@@ -1459,7 +1459,7 @@ constexpr auto kProperties =
                                return FontVariant::SmallCaps;
                            }
                          }
-                         ParseError err;
+                         ParseDiagnostic err;
                          err.reason = "Invalid font-variant value";
                          return err;
                        },
@@ -1784,7 +1784,7 @@ constexpr auto kProperties =
                  }},  //
                 {"marker",
                  [](PropertyRegistry& registry,
-                    const parser::PropertyParseFnParams& params) -> std::optional<ParseError> {
+                    const parser::PropertyParseFnParams& params) -> std::optional<ParseDiagnostic> {
                    // First, parse the shorthand value as a Reference
                    const auto parseResult = ParseReference("marker", params.components());
                    if (!parseResult.hasResult()) {
@@ -1794,7 +1794,7 @@ constexpr auto kProperties =
                    const Reference& markerValue = parseResult.result();
 
                    // Now, set marker-start, marker-mid, and marker-end using the Parse function
-                   std::optional<ParseError> error;
+                   std::optional<ParseDiagnostic> error;
 
                    // Set marker-start
                    error = Parse(
@@ -1868,7 +1868,7 @@ size_t PropertyRegistry::numPropertiesSet() const {
   return result;
 }
 
-std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration& declaration,
+std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                           css::Specificity specificity) {
   const std::string_view name(declaration.name);
   const PropertyParseFn* parseFn = kProperties.find(name);
@@ -1883,9 +1883,9 @@ std::optional<ParseError> PropertyRegistry::parseProperty(const css::Declaration
     unparsedProperties.emplace(
         std::make_pair(declaration.name, parser::UnparsedProperty{declaration, specificity}));
   } else {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Unknown property '" + declaration.name + "'";
-    err.location = declaration.sourceOffset;
+    err.range.start = declaration.sourceOffset;
     return err;
   }
 

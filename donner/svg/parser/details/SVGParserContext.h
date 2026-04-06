@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "donner/base/FileOffset.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/parser/LineOffsets.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -40,7 +40,7 @@ public:
    * @param warningsStorage Storage for warnings, may be \c nullptr to disable warnings.
    * @param options Options for parsing.
    */
-  SVGParserContext(std::string_view input, std::vector<ParseError>* warningsStorage,
+  SVGParserContext(std::string_view input, std::vector<ParseDiagnostic>* warningsStorage,
                    const SVGParser::Options& options)
       : input_(input), lineOffsets_(input), warnings_(warningsStorage), options_(options) {}
 
@@ -63,15 +63,16 @@ public:
    *
    * @param error Error to remap.
    * @param origin Origin of the subparser.
-   * @return ParseError Remapped error.
+   * @return ParseDiagnostic Remapped error.
    */
-  ParseError fromSubparser(ParseError&& error, ParserOrigin origin) {
+  ParseDiagnostic fromSubparser(ParseDiagnostic&& error, ParserOrigin origin) {
     const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
     const FileOffset parentOffset = FileOffset::OffsetWithLineInfo(
         origin.startOffset, FileOffset::LineInfo{line, lineOffsets_.lineOffset(line)});
 
-    ParseError newError = std::move(error);
-    newError.location = newError.location.addParentOffset(parentOffset);
+    ParseDiagnostic newError = std::move(error);
+    newError.range.start = newError.range.start.addParentOffset(parentOffset);
+    newError.range.end = newError.range.end.addParentOffset(parentOffset);
     return newError;
   }
 
@@ -80,7 +81,7 @@ public:
    *
    * @param warning Warning to add.
    */
-  void addWarning(ParseError&& warning) {
+  void addWarning(ParseDiagnostic&& warning) {
     if (warnings_) {
       warnings_->emplace_back(std::move(warning));
     }
@@ -93,7 +94,7 @@ public:
    * @param warning Warning to add.
    * @param origin Origin of the subparser.
    */
-  void addSubparserWarning(ParseError&& warning, ParserOrigin origin) {
+  void addSubparserWarning(ParseDiagnostic&& warning, ParserOrigin origin) {
     addWarning(fromSubparser(std::move(warning), origin));
   }
 
@@ -104,7 +105,7 @@ public:
    * @param attributeName Name of the attribute.
    * @return std::optional<size_t> Offset of the element's attribute in the input string.
    */
-  std::optional<FileOffsetRange> getAttributeLocation(
+  std::optional<SourceRange> getAttributeLocation(
       const xml::XMLNode& node, const xml::XMLQualifiedNameRef& attributeName) const {
     return node.getAttributeLocation(input_, attributeName);
   }
@@ -116,7 +117,7 @@ public:
    * @param attributeName Name of the attribute.
    * @return std::optional<size_t> Offset of the element's attribute in the input string.
    */
-  std::optional<FileOffsetRange> getAttributeLocation(
+  std::optional<SourceRange> getAttributeLocation(
       const SVGElement& element, const xml::XMLQualifiedNameRef& attributeName) const {
     // Convert the SVGElement into an XMLNode.
     if (auto maybeNode = xml::XMLNode::TryCast(EntityHandle(element.entityHandle()))) {
@@ -167,7 +168,7 @@ private:
   donner::parser::LineOffsets lineOffsets_;
 
   /// Storage for warnings, may be \c nullptr to disable warnings.
-  std::vector<ParseError>* warnings_;
+  std::vector<ParseDiagnostic>* warnings_;
 
   /// Options for parsing.
   SVGParser::Options options_;
