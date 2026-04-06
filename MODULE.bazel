@@ -46,7 +46,7 @@ c_plus_plus_deps = use_repo_rule("@skia//bazel:deps.bzl", "c_plus_plus_deps")
 header_based_configs = use_repo_rule("@skia//bazel:deps.bzl", "header_based_configs")
 
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
-bazel_dep(name = "libpng", version = "1.6.44")
+bazel_dep(name = "libpng", version = "1.6.54")
 
 # Enable FreeType's PNG support for CBDT color emoji bitmaps.
 single_version_override(
