@@ -1504,6 +1504,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         } else if (ref->fallback.has_value()) {
           spanFillPaint = makeSolidPaint(
               css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)), span.opacity);
+        } else {
+          // Keep the inherited paint for non-gradient refs such as patterns.
         }
       } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
         // No explicit fill but has per-span opacity — re-apply with opacity.
@@ -1533,7 +1535,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                 css::Color(ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity)),
                 span.opacity);
           } else {
-            spanStrokePaint.reset();
+            // Keep the inherited paint for non-gradient refs such as patterns.
           }
         } else {
           spanStrokePaint.reset();

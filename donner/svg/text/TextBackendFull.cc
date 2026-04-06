@@ -73,6 +73,20 @@ uint32_t decodeCodepointAt(std::string_view str, size_t byteOffset) {
   return static_cast<uint32_t>(cp);
 }
 
+double pixelScaleForPpem(FT_Face ftFace, float fontSizePx, bool useXAxis) {
+  if (!ftFace || !ftFace->size) {
+    return 1.0 / 64.0;
+  }
+
+  const unsigned int ppem =
+      useXAxis ? ftFace->size->metrics.x_ppem : ftFace->size->metrics.y_ppem;
+  if (ppem == 0) {
+    return 1.0 / 64.0;
+  }
+
+  return static_cast<double>(fontSizePx) / (static_cast<double>(ppem) * 64.0);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -369,25 +383,27 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
   // Dividing by 64 gives the pixel coordinates, which match the caller's expected scale
   // because we set FreeType's size to `scale * upem`.
   PathSpline spline;
-  const float ftScale = 1.0f / 64.0f;
+  const double ftScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
+  const double ftScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
 
   FT_Outline_Funcs funcs{};
   struct FtCtx {
     PathSpline* spline;
-    float scale;
+    double scaleX;
+    double scaleY;
     double curX = 0.0;
     double curY = 0.0;
     bool contourOpen = false;
   };
-  FtCtx ctx{&spline, ftScale};
+  FtCtx ctx{&spline, ftScaleX, ftScaleY};
 
   funcs.move_to = [](const FT_Vector* to, void* user) -> int {
     auto* c = static_cast<FtCtx*>(user);
     if (c->contourOpen) {
       c->spline->closePath();
     }
-    const double x = static_cast<double>(to->x) * c->scale;
-    const double y = -static_cast<double>(to->y) * c->scale;
+    const double x = static_cast<double>(to->x) * c->scaleX;
+    const double y = -static_cast<double>(to->y) * c->scaleY;
     c->spline->moveTo(Vector2d(x, y));
     c->curX = x;
     c->curY = y;
@@ -396,8 +412,8 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
   };
   funcs.line_to = [](const FT_Vector* to, void* user) -> int {
     auto* c = static_cast<FtCtx*>(user);
-    const double x = static_cast<double>(to->x) * c->scale;
-    const double y = -static_cast<double>(to->y) * c->scale;
+    const double x = static_cast<double>(to->x) * c->scaleX;
+    const double y = -static_cast<double>(to->y) * c->scaleY;
     c->spline->lineTo(Vector2d(x, y));
     c->curX = x;
     c->curY = y;
@@ -405,10 +421,10 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
   };
   funcs.conic_to = [](const FT_Vector* ctrl, const FT_Vector* to, void* user) -> int {
     auto* c = static_cast<FtCtx*>(user);
-    const double cx = static_cast<double>(ctrl->x) * c->scale;
-    const double cy = -static_cast<double>(ctrl->y) * c->scale;
-    const double ex = static_cast<double>(to->x) * c->scale;
-    const double ey = -static_cast<double>(to->y) * c->scale;
+    const double cx = static_cast<double>(ctrl->x) * c->scaleX;
+    const double cy = -static_cast<double>(ctrl->y) * c->scaleY;
+    const double ex = static_cast<double>(to->x) * c->scaleX;
+    const double ey = -static_cast<double>(to->y) * c->scaleY;
     // Convert quadratic bezier to cubic.
     const double c1x = c->curX + (2.0 / 3.0) * (cx - c->curX);
     const double c1y = c->curY + (2.0 / 3.0) * (cy - c->curY);
@@ -422,12 +438,12 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
   funcs.cubic_to = [](const FT_Vector* ctrl1, const FT_Vector* ctrl2, const FT_Vector* to,
                       void* user) -> int {
     auto* c = static_cast<FtCtx*>(user);
-    const double ex = static_cast<double>(to->x) * c->scale;
-    const double ey = -static_cast<double>(to->y) * c->scale;
-    c->spline->curveTo(Vector2d(static_cast<double>(ctrl1->x) * c->scale,
-                                -static_cast<double>(ctrl1->y) * c->scale),
-                       Vector2d(static_cast<double>(ctrl2->x) * c->scale,
-                                -static_cast<double>(ctrl2->y) * c->scale),
+    const double ex = static_cast<double>(to->x) * c->scaleX;
+    const double ey = -static_cast<double>(to->y) * c->scaleY;
+    c->spline->curveTo(Vector2d(static_cast<double>(ctrl1->x) * c->scaleX,
+                                -static_cast<double>(ctrl1->y) * c->scaleY),
+                       Vector2d(static_cast<double>(ctrl2->x) * c->scaleX,
+                                -static_cast<double>(ctrl2->y) * c->scaleY),
                        Vector2d(ex, ey));
     c->curX = ex;
     c->curY = ey;
@@ -587,11 +603,8 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
   // With FreeType-backed fonts, HarfBuzz returns positions in 26.6 fixed-point pixels
   // at the face's current size. For scalable fonts that's fontSizePx; for bitmap fonts
   // it's the strike's ppem. Scale accordingly to get document-pixel coordinates.
-  double pixelScale = 1.0 / 64.0;
-  if (!FT_IS_SCALABLE(ftFace) && ftFace->size->metrics.y_ppem > 0) {
-    pixelScale = static_cast<double>(fontSizePx) /
-                 (static_cast<double>(ftFace->size->metrics.y_ppem) * 64.0);
-  }
+  const double pixelScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
+  const double pixelScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
 
   // Detect direction and script from the text chunk.
   const char* chunkData = spanText.data() + byteOffset;
@@ -751,10 +764,10 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
   for (const auto& sg : allGlyphs) {
     ShapedGlyph glyph;
     glyph.glyphIndex = static_cast<int>(sg.info.codepoint);
-    glyph.xAdvance = static_cast<double>(sg.pos.x_advance) * pixelScale;
-    glyph.yAdvance = std::abs(static_cast<double>(sg.pos.y_advance) * pixelScale);
-    glyph.xOffset = static_cast<double>(sg.pos.x_offset) * pixelScale;
-    glyph.yOffset = -static_cast<double>(sg.pos.y_offset) * pixelScale;
+    glyph.xAdvance = static_cast<double>(sg.pos.x_advance) * pixelScaleX;
+    glyph.yAdvance = std::abs(static_cast<double>(sg.pos.y_advance) * pixelScaleY);
+    glyph.xOffset = static_cast<double>(sg.pos.x_offset) * pixelScaleX;
+    glyph.yOffset = -static_cast<double>(sg.pos.y_offset) * pixelScaleY;
     glyph.xKern = 0;  // Kerning is baked into advances by GPOS.
     glyph.yKern = 0;
     glyph.cluster = sg.info.cluster + static_cast<uint32_t>(byteOffset);
@@ -766,7 +779,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
       if (sideways) {
         glyph.xAdvance =
             static_cast<double>(hb_font_get_glyph_h_advance(hbFont, sg.info.codepoint)) *
-            pixelScale;
+            pixelScaleX;
         glyph.yAdvance = 0.0;
         glyph.xOffset = 0.0;
         glyph.yOffset = 0.0;
@@ -826,11 +839,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
     hb_ft_font_changed(hbFont);
   }
 
-  double pixelScale = 1.0 / 64.0;
-  if (!FT_IS_SCALABLE(ftFace) && ftFace->size->metrics.y_ppem > 0) {
-    pixelScale = static_cast<double>(prevSizePx) /
-                 (static_cast<double>(ftFace->size->metrics.y_ppem) * 64.0);
-  }
+  const double pixelScaleX = pixelScaleForPpem(ftFace, prevSizePx, true);
 
   // Shape the pair [prev, cur] to get the combined advance.
   hb_buffer_t* pairBuf = hb_buffer_create();
@@ -846,7 +855,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
 
   double kernDelta = 0.0;
   if (pairCount >= 1) {
-    const double pairedAdvance = static_cast<double>(pairPos[0].x_advance) * pixelScale;
+    const double pairedAdvance = static_cast<double>(pairPos[0].x_advance) * pixelScaleX;
 
     // Shape the previous character alone to get its standalone advance.
     hb_buffer_t* soloBuf = hb_buffer_create();
@@ -859,7 +868,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
     unsigned int soloCount = 0;
     const hb_glyph_position_t* soloPos = hb_buffer_get_glyph_positions(soloBuf, &soloCount);
     if (soloCount >= 1) {
-      const double soloAdvance = static_cast<double>(soloPos[0].x_advance) * pixelScale;
+      const double soloAdvance = static_cast<double>(soloPos[0].x_advance) * pixelScaleX;
       kernDelta = pairedAdvance - soloAdvance;
     }
     hb_buffer_destroy(soloBuf);

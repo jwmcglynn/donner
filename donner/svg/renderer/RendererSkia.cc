@@ -1870,10 +1870,6 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
     return;
   }
 
-  // Resolve fill paint.
-  SkPaint fillPaint = basePaint(antialias_, params.opacity * paintOpacity_);
-  fillPaint.setStyle(SkPaint::kFill_Style);
-  fillPaint.setColor(toSkia(params.fillColor.rgba()));
   const auto makeSolidFillPaint = [&](const css::Color& color) {
     SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
     paint.setStyle(SkPaint::kFill_Style);
@@ -1887,26 +1883,6 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
 
   // Resolve stroke paint.
   const bool hasStroke = params.strokeParams.strokeWidth > 0.0;
-  SkPaint strokePaint;
-  if (hasStroke) {
-    strokePaint = basePaint(antialias_, params.opacity * paintOpacity_);
-    strokePaint.setStyle(SkPaint::kStroke_Style);
-    strokePaint.setColor(toSkia(params.strokeColor.rgba()));
-    strokePaint.setStrokeWidth(NarrowToFloat(params.strokeParams.strokeWidth));
-    strokePaint.setStrokeMiter(NarrowToFloat(params.strokeParams.miterLimit));
-    switch (params.strokeParams.lineCap) {
-      case StrokeLinecap::Butt: strokePaint.setStrokeCap(SkPaint::kButt_Cap); break;
-      case StrokeLinecap::Round: strokePaint.setStrokeCap(SkPaint::kRound_Cap); break;
-      case StrokeLinecap::Square: strokePaint.setStrokeCap(SkPaint::kSquare_Cap); break;
-    }
-    switch (params.strokeParams.lineJoin) {
-      case StrokeLinejoin::Miter:
-      case StrokeLinejoin::MiterClip:
-      case StrokeLinejoin::Arcs: strokePaint.setStrokeJoin(SkPaint::kMiter_Join); break;
-      case StrokeLinejoin::Round: strokePaint.setStrokeJoin(SkPaint::kRound_Join); break;
-      case StrokeLinejoin::Bevel: strokePaint.setStrokeJoin(SkPaint::kBevel_Join); break;
-    }
-  }
 
   // Resolve typeface: try system fonts first, then @font-face data, then fallback.
   const SmallVector<RcString, 1>& families = params.fontFamilies;
@@ -1941,9 +1917,6 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
   const SkScalar fontSizePx = static_cast<SkScalar>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
-  SkFont font(typeface, fontSizePx);
-  font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
-
   // Use FontManager for layout and drawGlyphs() for rendering. This ensures
   // identical text positioning across all renderer backends.
   {
@@ -1967,6 +1940,56 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       runs = textEngine.layout(text, layoutParams);
     }
 
+    Boxd textBounds;
+    {
+      double minX = std::numeric_limits<double>::max();
+      double minY = std::numeric_limits<double>::max();
+      double maxX = std::numeric_limits<double>::lowest();
+      double maxY = std::numeric_limits<double>::lowest();
+      for (size_t boundsRunIndex = 0; boundsRunIndex < runs.size(); ++boundsRunIndex) {
+        const auto& boundsRun = runs[boundsRunIndex];
+
+        float runFontSizePx = fontSizePx;
+        if (boundsRunIndex < text.spans.size() &&
+            text.spans[boundsRunIndex].fontSize.value != 0.0) {
+          runFontSizePx = static_cast<float>(text.spans[boundsRunIndex].fontSize.toPixels(
+              params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+        }
+
+        const float runScale = boundsRun.font
+                                   ? textEngine.scaleForPixelHeight(boundsRun.font, runFontSizePx)
+                                   : 0.0f;
+        double emTop = static_cast<double>(runFontSizePx);
+        double emBottom = 0.0;
+        if (boundsRun.font && runScale > 0.0f) {
+          const FontVMetrics metrics = textEngine.fontVMetrics(boundsRun.font);
+          emTop = static_cast<double>(metrics.ascent) * runScale;
+          emBottom = -static_cast<double>(metrics.descent) * runScale;
+        }
+
+        for (const auto& glyph : boundsRun.glyphs) {
+          if (glyph.glyphIndex == 0) {
+            continue;
+          }
+
+          minX = std::min(minX, glyph.xPosition);
+          maxX = std::max(maxX, glyph.xPosition + glyph.xAdvance);
+          minY = std::min(minY, glyph.yPosition - emTop);
+          maxY = std::max(maxY, glyph.yPosition + emBottom);
+        }
+      }
+
+      if (minX < maxX && minY < maxY) {
+        textBounds = Boxd({minX, minY}, {maxX, maxY});
+      }
+    }
+
+    std::optional<SkPaint> baseFillPaint = makeFillPaint(textBounds);
+    std::optional<SkPaint> baseStrokePaint;
+    if (hasStroke) {
+      baseStrokePaint = makeStrokePaint(textBounds, params.strokeParams);
+    }
+
     for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
       const auto& run = runs[runIndex];
       if (run.glyphs.empty()) {
@@ -1987,33 +2010,86 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       SkFont shapedFont(shapedTypeface, fontSizePx);
       shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
-      SkPaint spanFillPaint = fillPaint;
+      std::optional<SkPaint> spanFillPaint = baseFillPaint;
+      std::optional<SkPaint> spanStrokePaint = baseStrokePaint;
       if (runIndex < text.spans.size()) {
         const auto& span = text.spans[runIndex];
         const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
         const float spanFillOpacity = NarrowToFloat(paint_.fillOpacity);
+        const float spanStrokeOpacity = NarrowToFloat(paint_.strokeOpacity);
 
         if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
-          spanFillPaint = makeSolidFillPaint(
+          SkPaint paint = makeSolidFillPaint(
               css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)));
-          spanFillPaint.setAlphaf(
-              NarrowToFloat(spanFillPaint.getAlphaf() * static_cast<float>(span.opacity)));
+          paint.setAlphaf(
+              NarrowToFloat(paint.getAlphaf() * static_cast<float>(span.opacity)));
+          spanFillPaint = paint;
         } else if (const auto* ref =
                        std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
           const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
           if (std::optional<SkPaint> gradient = instantiateGradientPaint(
-                  *ref, Boxd(), paint_.viewBox, spanCurrentColor, combinedOpacity, antialias_)) {
+                  *ref, textBounds, paint_.viewBox, spanCurrentColor, combinedOpacity,
+                  antialias_)) {
             spanFillPaint = std::move(*gradient);
           } else if (ref->fallback.has_value()) {
-            spanFillPaint = makeSolidFillPaint(
+            SkPaint paint = makeSolidFillPaint(
                 css::Color(ref->fallback->resolve(spanCurrentColor, spanFillOpacity)));
-            spanFillPaint.setAlphaf(
-                NarrowToFloat(spanFillPaint.getAlphaf() * static_cast<float>(span.opacity)));
+            paint.setAlphaf(NarrowToFloat(paint.getAlphaf() * static_cast<float>(span.opacity)));
+            spanFillPaint = paint;
+          } else {
+            // Keep inherited paint for non-gradient refs such as patterns.
           }
-        } else if (span.opacity < 1.0) {
-          spanFillPaint = makeSolidFillPaint(params.fillColor);
-          spanFillPaint.setAlphaf(
-              NarrowToFloat(spanFillPaint.getAlphaf() * static_cast<float>(span.opacity)));
+        } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
+          SkPaint paint = makeSolidFillPaint(params.fillColor);
+          paint.setAlphaf(NarrowToFloat(paint.getAlphaf() * static_cast<float>(span.opacity)));
+          spanFillPaint = paint;
+        }
+
+        if (span.strokeWidth > 0.0) {
+          if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedStroke)) {
+            SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
+            paint.setStyle(SkPaint::kStroke_Style);
+            paint.setStrokeWidth(NarrowToFloat(span.strokeWidth));
+            paint.setStrokeMiter(NarrowToFloat(span.strokeMiterLimit));
+            paint.setStrokeCap(toSkia(span.strokeLinecap));
+            paint.setStrokeJoin(toSkia(span.strokeLinejoin));
+            css::RGBA rgba = solid->color.resolve(spanCurrentColor, spanStrokeOpacity);
+            rgba.a = static_cast<uint8_t>(
+                std::round(static_cast<double>(rgba.a) * static_cast<float>(span.opacity)));
+            paint.setColor(toSkia(rgba));
+            spanStrokePaint = paint;
+          } else if (const auto* ref =
+                         std::get_if<components::PaintResolvedReference>(&span.resolvedStroke)) {
+            const float combinedOpacity = spanStrokeOpacity * static_cast<float>(span.opacity);
+            if (std::optional<SkPaint> gradient = instantiateGradientPaint(
+                    *ref, textBounds, paint_.viewBox, spanCurrentColor, combinedOpacity,
+                    antialias_)) {
+              gradient->setStyle(SkPaint::kStroke_Style);
+              gradient->setStrokeWidth(NarrowToFloat(span.strokeWidth));
+              gradient->setStrokeMiter(NarrowToFloat(span.strokeMiterLimit));
+              gradient->setStrokeCap(toSkia(span.strokeLinecap));
+              gradient->setStrokeJoin(toSkia(span.strokeLinejoin));
+              spanStrokePaint = std::move(*gradient);
+            } else if (ref->fallback.has_value()) {
+              SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
+              paint.setStyle(SkPaint::kStroke_Style);
+              paint.setStrokeWidth(NarrowToFloat(span.strokeWidth));
+              paint.setStrokeMiter(NarrowToFloat(span.strokeMiterLimit));
+              paint.setStrokeCap(toSkia(span.strokeLinecap));
+              paint.setStrokeJoin(toSkia(span.strokeLinejoin));
+              css::RGBA rgba = ref->fallback->resolve(spanCurrentColor, spanStrokeOpacity);
+              rgba.a = static_cast<uint8_t>(
+                  std::round(static_cast<double>(rgba.a) * static_cast<float>(span.opacity)));
+              paint.setColor(toSkia(rgba));
+              spanStrokePaint = paint;
+            } else {
+              // Keep inherited paint for non-gradient refs such as patterns.
+            }
+          } else {
+            spanStrokePaint.reset();
+          }
+        } else {
+          spanStrokePaint.reset();
         }
       }
 
@@ -2049,20 +2125,26 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
             currentCanvas_->scale(run.glyphs[i].stretchScaleX, run.glyphs[i].stretchScaleY);
           }
           currentCanvas_->rotate(NarrowToFloat(run.glyphs[i].rotateDegrees));
-          if (hasStroke) {
-            currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, strokePaint);
+          if (spanFillPaint.has_value()) {
+            currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont,
+                                       *spanFillPaint);
           }
-          currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont, spanFillPaint);
+          if (spanStrokePaint.has_value()) {
+            currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont,
+                                       *spanStrokePaint);
+          }
           currentCanvas_->restore();
         }
       } else {
         // No rotation: batch draw all glyphs.
-        if (hasStroke) {
+        if (spanFillPaint.has_value()) {
           currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
-                                     shapedFont, strokePaint);
+                                     shapedFont, *spanFillPaint);
         }
-        currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
-                                   shapedFont, spanFillPaint);
+        if (spanStrokePaint.has_value()) {
+          currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
+                                     shapedFont, *spanStrokePaint);
+        }
       }
 
       // Draw text-decoration lines.
@@ -2094,10 +2176,12 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
         }
 
         SkRect decoRect = SkRect::MakeXYWH(firstX, decoY - thickness / 2, textWidth, thickness);
-        if (hasStroke) {
-          currentCanvas_->drawRect(decoRect, strokePaint);
+        if (spanFillPaint.has_value()) {
+          currentCanvas_->drawRect(decoRect, *spanFillPaint);
         }
-        currentCanvas_->drawRect(decoRect, spanFillPaint);
+        if (spanStrokePaint.has_value()) {
+          currentCanvas_->drawRect(decoRect, *spanStrokePaint);
+        }
       }
     }
   }

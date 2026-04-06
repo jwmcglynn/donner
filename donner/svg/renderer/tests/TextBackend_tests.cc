@@ -359,6 +359,37 @@ TEST(TextBackendFullCapabilities, DetectsCursiveScripts) {
   EXPECT_FALSE(backend.isCursive(0x4E00));  // CJK
 }
 
+TEST(TextBackendFullCapabilities, TinyFontAdvancesStayInScale) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendSimple simpleBackend(fontManager, registry);
+  TextBackendFull fullBackend(fontManager, registry);
+
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(font));
+
+  constexpr std::string_view kText = "Some long text";
+  const auto simpleShaped = simpleBackend.shapeRun(
+      font, 0.24f, kText, 0, kText.size(), false, FontVariant::Normal, false);
+  const auto fullShaped = fullBackend.shapeRun(
+      font, 0.24f, kText, 0, kText.size(), false, FontVariant::Normal, false);
+
+  ASSERT_EQ(simpleShaped.glyphs.size(), fullShaped.glyphs.size());
+
+  double simpleAdvance = 0.0;
+  for (const auto& glyph : simpleShaped.glyphs) {
+    simpleAdvance += glyph.xAdvance;
+  }
+
+  double fullAdvance = 0.0;
+  for (const auto& glyph : fullShaped.glyphs) {
+    fullAdvance += glyph.xAdvance;
+  }
+
+  EXPECT_NEAR(fullAdvance, simpleAdvance, 0.5)
+      << "simpleAdvance=" << simpleAdvance << ", fullAdvance=" << fullAdvance;
+}
+
 TEST(TextBackendFullCapabilities, DetectsSmallCapsFeature) {
   Registry registry;
   FontManager fontManager(registry);

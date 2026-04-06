@@ -110,7 +110,7 @@ def _donner_transitioned_executable_impl(ctx):
         ),
     ]
 
-donner_transitioned_test = rule(
+donner_transitioned_cc_test = rule(
     implementation = _donner_transitioned_executable_impl,
     test = True,
     attrs = {
@@ -125,6 +125,96 @@ donner_transitioned_test = rule(
         ),
     },
 )
+
+def _multi_transition_impl(settings, attr):
+    if settings["//build_defs:disable_backend_test_transition"]:
+        return {
+            "//donner/svg/renderer:renderer_backend": settings[
+                "//donner/svg/renderer:renderer_backend"
+            ],
+            "//donner/svg/renderer:text_full": settings[
+                "//donner/svg/renderer:text_full"
+            ],
+        }
+
+    return {
+        "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
+        "//donner/svg/renderer:text_full": attr.text_full == "true",
+    }
+
+_multi_transition = transition(
+    implementation = _multi_transition_impl,
+    inputs = [
+        "//build_defs:disable_backend_test_transition",
+        "//donner/svg/renderer:renderer_backend",
+        "//donner/svg/renderer:text_full",
+    ],
+    outputs = [
+        "//donner/svg/renderer:renderer_backend",
+        "//donner/svg/renderer:text_full",
+    ],
+)
+
+donner_multi_transitioned_test = rule(
+    implementation = _donner_transitioned_executable_impl,
+    test = True,
+    attrs = {
+        "dep": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = _multi_transition,
+        ),
+        "renderer_backend": attr.string(
+            mandatory = True,
+            values = ["skia", "tiny_skia"],
+        ),
+        "text_full": attr.string(
+            default = "false",
+            values = ["true", "false"],
+        ),
+    },
+)
+
+def donner_variant_cc_test(name, dep, variants, **kwargs):
+    """
+    Generate test targets for all combinations of variant axes, plus a default
+    that inherits the active command-line config.
+
+    Args:
+      name: Base name for the generated targets.
+      dep: The test implementation target (tagged manual).
+      variants: List of variant axis lists, e.g. [["tiny_skia", "skia"], ["text", "text_full"]].
+        First axis is renderer backend. Second axis (optional) is text tier.
+      **kwargs: Additional arguments passed to the generated test rules.
+
+    Generated targets:
+      {name}                          - alias to the default (no transition, uses active config)
+      {name}_{backend}_{text_tier}    - explicit variant, e.g. resvg_test_suite_tiny_skia_text_full
+    """
+    backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
+    text_tiers = variants[1] if len(variants) > 1 else ["text"]
+
+    for backend in backends:
+        for tier in text_tiers:
+            suffix = "{}_{}".format(backend, tier)
+            target_name = "{}_{}".format(name, suffix)
+            text_full_val = "true" if tier == "text_full" else "false"
+
+            donner_multi_transitioned_test(
+                name = target_name,
+                dep = dep,
+                renderer_backend = backend,
+                text_full = text_full_val,
+                testonly = 1,
+                **kwargs
+            )
+
+    # Default alias: uses no transition, inherits active command-line config.
+    native.alias(
+        name = name,
+        actual = dep,
+        testonly = 1,
+    )
 
 def donner_cc_binary(name, linkopts = [], **kwargs):
     """

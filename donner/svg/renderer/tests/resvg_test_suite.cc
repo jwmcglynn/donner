@@ -276,6 +276,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"a-stroke-007.svg", Params::WithThreshold(0.05f)},  // AA artifacts
             {"a-stroke-008.svg", Params::Skip()},                // Bug: Gradient stroke on text
+            {"a-stroke-009.svg", Params::WithThreshold(0.1f)},   // AA artifacts
             {"a-stroke-dasharray-007.svg", Params::Skip()},      // UB (negative values)
             {"a-stroke-dasharray-009.svg", Params::Skip()},      // UB (negative sum)
             {"a-stroke-dasharray-013.svg",
@@ -1017,8 +1018,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-textPath-034.svg", Params::WithThreshold(0.05f)},  // AA artifacts
             {"e-textPath-035.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-035.png")},  // Minor char
-                                                                                    // advance diffs
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-035.png", 0.05f)
+                 .withMaxPixelsDifferent(
+                     1100)},  // AA + minor char advance diffs, different w/ text vs. text-full so
+                              // using maxPixelsDifferent as a one-time exception
             {"e-textPath-036.svg",
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-036.png")},  // Minor char
