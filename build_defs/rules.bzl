@@ -345,17 +345,6 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         **kwargs
     )
 
-def _force_opt_transition_impl(_settings, _attr):
-    return {
-        "//command_line_option:compilation_mode": "opt",
-    }
-
-_force_opt_transition = transition(
-    implementation = _force_opt_transition_impl,
-    inputs = [],
-    outputs = ["//command_line_option:compilation_mode"],
-)
-
 def _is_compilation_outputs_empty(compilation_outputs):
     return (len(compilation_outputs.pic_objects) == 0 and
             len(compilation_outputs.objects) == 0)
