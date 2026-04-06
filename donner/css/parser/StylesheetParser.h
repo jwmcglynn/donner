@@ -3,6 +3,7 @@
 
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/Stylesheet.h"
 
 namespace donner::css::parser {
@@ -17,8 +18,12 @@ public:
    * `@font-face` rules.
    *
    * @param str Input stylesheet string.
+   * @param warningSink Sink to collect warnings (e.g. invalid selectors).
    * @return Parsed stylesheet.
    */
+  static Stylesheet Parse(std::string_view str, ParseWarningSink& warningSink);
+
+  /// Convenience overload that discards warnings.
   static Stylesheet Parse(std::string_view str);
 };
 

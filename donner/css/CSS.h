@@ -3,6 +3,7 @@
 
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/Stylesheet.h"
 
 /**
@@ -38,8 +39,12 @@ public:
    * wrapped into a \ref Stylesheet object.
    *
    * @param str Input stylesheet string.
+   * @param warningSink Sink to collect warnings (e.g. invalid selectors).
    * @return Parsed stylesheet.
    */
+  static Stylesheet ParseStylesheet(std::string_view str, ParseWarningSink& warningSink);
+
+  /// Convenience overload that discards warnings.
   static Stylesheet ParseStylesheet(std::string_view str);
 
   /**

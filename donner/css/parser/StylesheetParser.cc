@@ -55,7 +55,7 @@ std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url
 
 }  // namespace
 
-Stylesheet StylesheetParser::Parse(std::string_view str) {
+Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
   std::vector<Rule> rules = RuleParser::ParseStylesheet(str);
 
   std::vector<SelectorRule> selectorRules;
@@ -64,8 +64,8 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
     // If the rule is a QualifiedRule, then we need to parse the selector and add it to our list.
     if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
       auto selectorResult = SelectorParser::ParseComponents(qualifiedRule->prelude);
-      // Ignore errors.
       if (selectorResult.hasError()) {
+        warningSink.add(ParseDiagnostic(selectorResult.error()));
         continue;
       }
 
@@ -193,6 +193,11 @@ Stylesheet StylesheetParser::Parse(std::string_view str) {
   }
 
   return Stylesheet(std::move(selectorRules), std::move(fontFaces));
+}
+
+Stylesheet StylesheetParser::Parse(std::string_view str) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  return Parse(str, disabled);
 }
 
 }  // namespace donner::css::parser

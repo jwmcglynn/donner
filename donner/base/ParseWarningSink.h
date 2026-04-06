@@ -76,6 +76,25 @@ public:
     }
   }
 
+  /**
+   * Merge warnings from a subparser, remapping source ranges using the given parent offset.
+   *
+   * Each warning's range.start and range.end are remapped via addParentOffset(parentOffset),
+   * translating them from the subparser's local coordinate space to the parent's.
+   *
+   * @param other Subparser's warning sink to merge from.
+   * @param parentOffset The offset of the subparser's input within the parent input.
+   */
+  void mergeFromSubparser(ParseWarningSink&& other, FileOffset parentOffset) {
+    if (enabled_) {
+      for (auto& warning : other.warnings_) {
+        warning.range.start = warning.range.start.addParentOffset(parentOffset);
+        warning.range.end = warning.range.end.addParentOffset(parentOffset);
+        warnings_.push_back(std::move(warning));
+      }
+    }
+  }
+
 private:
   std::vector<ParseDiagnostic> warnings_;
   bool enabled_ = true;
