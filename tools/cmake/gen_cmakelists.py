@@ -71,6 +71,7 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 # *not* be auto-generated here.
 SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
+    "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
     "third_party/stb",
     "pixelmatch-cpp17",
     "donner/benchmarks",
