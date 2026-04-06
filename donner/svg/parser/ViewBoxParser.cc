@@ -28,7 +28,7 @@ public:
     if (!remaining_.empty()) {
       ParseDiagnostic err;
       err.reason = "Expected end of string";
-      err.range.start = currentOffset();
+      err.range = currentRange(0, 1);
       return err;
     }
 

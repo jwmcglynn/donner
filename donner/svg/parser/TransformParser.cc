@@ -134,7 +134,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = std::string("Unexpected function '").append(func) + "'";
-        err.range.start = functionStart;
+        err.range = rangeFrom(functionStart.offset.value());
         return err;
       }
 
@@ -148,7 +148,7 @@ public:
       } else {
         ParseDiagnostic err;
         err.reason = "Expected ')'";
-        err.range.start = currentOffset();
+        err.range = currentRange(0, 1);
         return err;
       }
     }
@@ -175,8 +175,7 @@ private:
         } else {
           ParseDiagnostic err;
           err.reason = "Expected '(' after function name";
-          err.range.start = currentOffset();
-          err.range.start.offset.value() += i;
+          err.range = currentRange(0, 1);
           return err;
         }
       }
@@ -184,7 +183,7 @@ private:
 
     ParseDiagnostic err;
     err.reason = "Unexpected end of string instead of transform function";
-    err.range.start = currentOffset();
+    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
     return err;
   }
 };

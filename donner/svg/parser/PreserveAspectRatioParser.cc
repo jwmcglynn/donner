@@ -12,6 +12,7 @@ public:
     PreserveAspectRatio result;
 
     {
+      const size_t alignStart = consumedChars();
       const std::string_view align = readToken();
       if (align == "none") {
         result.align = PreserveAspectRatio::Align::None;
@@ -37,7 +38,9 @@ public:
         ParseDiagnostic err;
         err.reason = align.empty() ? std::string("Unexpected end of string instead of align")
                                    : ("Invalid align: '" + std::string(align) + "'");
-        err.range.start = currentOffset();
+        err.range = align.empty()
+                        ? SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()}
+                        : rangeFrom(alignStart);
         return err;
       }
     }
