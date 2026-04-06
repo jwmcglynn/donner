@@ -63,14 +63,14 @@ No backward compatibility with the existing `ParseError` API is required.
   - [x] Migrate `TransformParser`, `ViewBoxParser`, `AngleParser`.
   - [x] Migrate `LengthPercentageParser`, `PreserveAspectRatioParser`, `Number2dParser`,
     `PointsListParser`, `CssTransformParser`, `ListParser`.
-  - [ ] Migrate `DataUrlParser` to use `ParseDiagnostic` (remove `DataUrlParserError` enum).
-    (Deferred: uses `std::variant<Result, DataUrlParserError>` touching UrlLoader, too much scope.)
+  - [x] ~~Migrate `DataUrlParser` to use `ParseDiagnostic`~~ — **Deferred** to future work
+    (uses `std::variant<Result, DataUrlParserError>` touching UrlLoader, too much scope).
   - [x] Add range-accuracy tests for each parser.
 - [x] **Milestone 3: Warning plumbing migration**
   - [x] Migrate `SVGParserContext` to hold `ParseWarningSink&` instead of
     `std::vector<ParseDiagnostic>*`.
   - [x] Migrate `SVGParser` public API: replace `std::vector<ParseDiagnostic>* outWarnings` with
-    `ParseWarningSink&` (with convenience overloads).
+    `ParseWarningSink&` (no convenience overloads — all callers pass explicit sink).
   - [x] Migrate all systems (`ShapeSystem`, `StyleSystem`, `PaintSystem`, `LayoutSystem`,
     `FilterSystem`, `TextSystem`, `ShadowTreeSystem`), resources (`SubDocumentCache`,
     `ResourceManagerContext`), rendering (`RenderingContext`, `RendererUtils`), and all
@@ -78,7 +78,7 @@ No backward compatibility with the existing `ParseError` API is required.
   - [x] Standardize subparser remapping with `SourceRange`-aware composition helpers
     (`ParseWarningSink::mergeFromSubparser`).
   - [x] Make `StylesheetParser` report diagnostics via `ParseWarningSink`.
-  - [ ] Add range-accuracy tests for CSS/XML parsers.
+  - [x] ~~Add range-accuracy tests for CSS/XML parsers~~ — **Deferred** to future work.
 - [x] **Milestone 4: Diagnostic rendering utilities**
   - [x] Implement `DiagnosticRenderer` for single-line and multi-line source highlights.
   - [x] Add severity labels (error/warning) and optional filename prefixes.
