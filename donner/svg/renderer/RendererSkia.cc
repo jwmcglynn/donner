@@ -32,12 +32,10 @@
 #error \
     "Neither DONNER_USE_CORETEXT, DONNER_USE_FREETYPE, nor DONNER_USE_FREETYPE_WITH_FONTCONFIG is defined"
 #endif
-#ifdef DONNER_TEXT_FULL
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
-#endif
 // Donner
 #include <map>
 #include <numbers>
@@ -60,7 +58,6 @@ namespace donner::svg {
 
 namespace {
 
-#ifdef DONNER_TEXT_FULL
 TextLayoutParams toTextLayoutParams(const TextParams& params) {
   TextLayoutParams layoutParams;
   layoutParams.fontFamilies = params.fontFamilies;
@@ -76,7 +73,6 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
   layoutParams.lengthAdjust = params.lengthAdjust;
   return layoutParams;
 }
-#endif
 
 const Boxd kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
@@ -1948,10 +1944,8 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
   SkFont font(typeface, fontSizePx);
   font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
-#ifdef DONNER_TEXT_FULL
-  // When text_full is enabled, use FontManager for layout and drawGlyphs()
-  // for rendering. This provides full OpenType GSUB/GPOS support with identical shaping across
-  // backends.
+  // Use FontManager for layout and drawGlyphs() for rendering. This ensures
+  // identical text positioning across all renderer backends.
   {
     if (!registry.ctx().contains<FontManager>() || !registry.ctx().contains<TextEngine>()) {
       return;
@@ -2107,151 +2101,6 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       }
     }
   }
-#else
-  // Compute dominant-baseline shift using Skia font metrics.
-  SkScalar baselineShift = 0;
-  if (params.dominantBaseline != DominantBaseline::Auto &&
-      params.dominantBaseline != DominantBaseline::Alphabetic) {
-    SkFontMetrics fm;
-    font.getMetrics(&fm);
-    // Skia: fAscent < 0 (above baseline), fDescent > 0 (below baseline).
-    // Negate to get positive-up shift values matching the stb_truetype convention.
-    switch (params.dominantBaseline) {
-      case DominantBaseline::Auto:
-      case DominantBaseline::Alphabetic: break;
-      case DominantBaseline::Middle:
-      case DominantBaseline::Central: baselineShift = -(fm.fAscent + fm.fDescent) * 0.5f; break;
-      case DominantBaseline::Hanging: baselineShift = -fm.fAscent * 0.8f; break;
-      case DominantBaseline::Mathematical: baselineShift = -fm.fAscent * 0.5f; break;
-      case DominantBaseline::TextTop: baselineShift = -fm.fAscent; break;
-      case DominantBaseline::TextBottom:
-      case DominantBaseline::Ideographic: baselineShift = -fm.fDescent; break;
-    }
-  }
-
-  for (const auto& span : text.spans) {
-    SkPaint spanFillPaint = fillPaint;
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
-      spanFillPaint = makeSolidFillPaint(css::Color(solid->color));
-    }
-
-    // Per-span typeface resolution for font-weight/style/stretch.
-    SkFont spanFont = font;
-    if (span.fontWeight != 400 || span.fontStyle != FontStyle::Normal ||
-        span.fontStretch != FontStretch::Normal) {
-      const SkFontStyle skStyle =
-          toSkiaFontStyle(span.fontWeight, span.fontStyle, span.fontStretch);
-      sk_sp<SkTypeface> spanTypeface = fontMgr_->matchFamilyStyle(familyName.c_str(), skStyle);
-      if (spanTypeface) {
-        spanFont.setTypeface(std::move(spanTypeface));
-      }
-    }
-
-    SkScalar x = 0;
-    if (span.hasExplicitX()) {
-      x = static_cast<SkScalar>(
-          span.xList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
-    }
-    if (!span.dxList.empty() && span.dxList[0].has_value()) {
-      x += static_cast<SkScalar>(
-          span.dxList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X));
-    }
-    SkScalar y = baselineShift;
-    if (span.hasExplicitY()) {
-      y = static_cast<SkScalar>(
-              span.yList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y)) +
-          baselineShift;
-    }
-    if (!span.dyList.empty() && span.dyList[0].has_value()) {
-      y += static_cast<SkScalar>(
-          span.dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y));
-    }
-
-    // Use the span slice, not the full text string.
-    const char* spanData = span.text.data() + span.start;
-    const size_t spanLen = span.end - span.start;
-
-    // Apply text-anchor adjustment.
-    if (params.textAnchor != TextAnchor::Start) {
-      const SkScalar textWidth = spanFont.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
-      if (params.textAnchor == TextAnchor::Middle) {
-        x -= textWidth / 2;
-      } else if (params.textAnchor == TextAnchor::End) {
-        x -= textWidth;
-      }
-    }
-
-    const double rotateDeg = span.rotateList.empty() ? 0.0 : span.rotateList[0];
-    if (rotateDeg != 0.0) {
-      // Per-glyph rotation: convert to glyphs and draw individually.
-      const int glyphCount = spanFont.countText(spanData, spanLen, SkTextEncoding::kUTF8);
-      if (glyphCount <= 0) {
-        continue;
-      }
-
-      std::vector<SkGlyphID> glyphs(static_cast<size_t>(glyphCount));
-      spanFont.textToGlyphs(spanData, spanLen, SkTextEncoding::kUTF8, glyphs.data(), glyphCount);
-
-      std::vector<SkScalar> widths(static_cast<size_t>(glyphCount));
-      spanFont.getWidths(glyphs.data(), glyphCount, widths.data());
-
-      SkScalar penX = x;
-      const SkPoint origin = SkPoint::Make(0, 0);
-      for (int i = 0; i < glyphCount; ++i) {
-        currentCanvas_->save();
-        currentCanvas_->translate(penX, y);
-        currentCanvas_->rotate(static_cast<SkScalar>(rotateDeg));
-        // SVG stroke is drawn first (behind fill), then fill on top.
-        if (hasStroke) {
-          currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, spanFont, strokePaint);
-        }
-        currentCanvas_->drawGlyphs(1, &glyphs[i], &origin, origin, spanFont, spanFillPaint);
-        currentCanvas_->restore();
-        penX += widths[i];
-      }
-    } else {
-      // No rotation: use drawSimpleText for better performance.
-      // SVG stroke is drawn first (behind fill), then fill on top.
-      if (hasStroke) {
-        currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, spanFont,
-                                       strokePaint);
-      }
-      currentCanvas_->drawSimpleText(spanData, spanLen, SkTextEncoding::kUTF8, x, y, spanFont,
-                                     spanFillPaint);
-    }
-
-    // Draw text-decoration lines.
-    if (params.textDecoration != TextDecoration::None) {
-      SkFontMetrics metrics;
-      spanFont.getMetrics(&metrics);
-
-      const SkScalar textWidth = spanFont.measureText(spanData, spanLen, SkTextEncoding::kUTF8);
-      SkScalar decoY = y;
-      SkScalar thickness =
-          metrics.fUnderlineThickness > 0 ? metrics.fUnderlineThickness : fontSizePx / 18.0f;
-
-      if (params.textDecoration == TextDecoration::Underline) {
-        decoY =
-            y + (metrics.fUnderlinePosition > 0 ? metrics.fUnderlinePosition : fontSizePx * 0.15f);
-      } else if (params.textDecoration == TextDecoration::Overline) {
-        decoY = y + metrics.fAscent;  // fAscent is negative (above baseline)
-      } else if (params.textDecoration == TextDecoration::LineThrough) {
-        decoY = y + (metrics.fStrikeoutPosition != 0 ? metrics.fStrikeoutPosition
-                                                     : metrics.fAscent * 0.35f);
-        if (metrics.fStrikeoutThickness > 0) {
-          thickness = metrics.fStrikeoutThickness;
-        }
-      }
-
-      SkRect decoRect = SkRect::MakeXYWH(x, decoY - thickness / 2, textWidth, thickness);
-      // SVG stroke first, then fill.
-      if (hasStroke) {
-        currentCanvas_->drawRect(decoRect, strokePaint);
-      }
-      currentCanvas_->drawRect(decoRect, spanFillPaint);
-    }
-  }
-#endif
 }
 
 RendererBitmap RendererSkia::takeSnapshot() const {
