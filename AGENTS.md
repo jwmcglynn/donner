@@ -77,6 +77,60 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) && ctest --test-dir build
   ```
 
+## Transform Naming Convention
+
+Transforms use **destFromSource** naming to make coordinate space conversions explicit:
+- `entityFromWorldTransform` — converts world coordinates to entity-local coordinates
+- `deviceFromPattern` — converts pattern coordinates to device coordinates
+- `documentWorldFromCanvasTransform_` — converts canvas coordinates to document-world coordinates
+
+When writing new transform code, always use `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
+
+## Pixel Diff Debugging Philosophy
+
+- Always aim to **root-cause** pixel diff issues, even if the code is in vendored libraries (e.g., tiny-skia-cpp).
+- Don't just bump thresholds — investigate WHY pixels differ and fix the underlying code when possible.
+- Never inflate max diff pixels without explicit user consent, it is a last resort. 99% of the time it is masking a real issue.
+
+## Resvg Test Threshold Conventions
+
+- For pixel diffs <100, just **omit the entry** — the default `Params()` applies automatically via `getTestsWithPrefix`.
+- Don't add `{"test.svg", Params()}` entries — omit them entirely.
+- `Params::Skip()` for tests that can't pass yet.
+- For resvg tests labeled "UB" (undefined behavior): always `Params::Skip()` — the golden images have "UB" text overlaid so they aren't comparable.
+
+## Debugging with lldb
+
+Bazel test binaries need runfiles to locate test data, so build separately and set env vars:
+
+```bash
+# Build in debug mode
+bazel build //path/to:test_target -c dbg
+
+# Run under lldb with runfiles
+RUNFILES_DIR=bazel-bin/path/to/test_target.runfiles \
+TEST_SRCDIR=bazel-bin/path/to/test_target.runfiles \
+lldb -b -o "run" -o "bt all" -- \
+  bazel-bin/path/to/test_binary --gtest_filter='*TestName*'
+```
+
+To catch C++ exceptions (e.g. `std::bad_alloc`) before the stack unwinds:
+
+```bash
+cat > /tmp/lldb_cmds.txt << 'EOF'
+breakpoint set -E c++
+run
+bt 50
+EOF
+
+RUNFILES_DIR=bazel-bin/path/to/test_target.runfiles \
+TEST_SRCDIR=bazel-bin/path/to/test_target.runfiles \
+lldb -s /tmp/lldb_cmds.txt -b -- \
+  bazel-bin/path/to/test_binary --gtest_filter='*TestName*'
+```
+
+Note: The binary name may differ from the target name (e.g. `resvg_test_suite_impl` vs `resvg_test_suite_tiny_skia`). Check `bazel build` output for the actual path. `bazel run` handles runfiles automatically but doesn't support attaching a debugger.
+
 ## Development Notes
 
 - Format C++ code with `clang-format` and TypeScript/JSON/Markdown with `dprint`
@@ -92,6 +146,9 @@ The `.roo/rules` directory provides condensed guidelines on coding style, archit
   - Use `tools/doxygen.sh` to generate the docs.
   - The generated docs are in `generated-doxygen/html/`.
 - Use `tools/coverage.sh` to generate code coverage reports (if lcov is installed).
+- IDE may show false positive errors (`entt.hpp` not found, unknown `Registry` type) — these are
+  from missing Bazel-generated context and do not indicate real build failures. Always verify with
+  `bazel build`.
 - Renderer image-comparison failures support an LLM quiet mode.
   - When `LLM=1`, `ImageComparisonTestFixture` suppresses verbose backend rerender logs, pixel
     dumps, terminal previews, and echoed SVG contents.
