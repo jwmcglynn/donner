@@ -366,15 +366,15 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       }
     }
 
-    // An invalid textPath (empty href, or nested inside another textPath) should hide its
-    // content entirely so that whitespace collapsing treats it as absent.
+    // Invalid textPath elements (empty href or nested) should hide their content
+    // so whitespace collapsing treats it as absent — preserving the surrounding
+    // inter-element whitespace from the parent's text chunks.
     if (!isHidden) {
       const auto* textPathComp = handle.try_get<TextPathComponent>();
       if (textPathComp) {
         if (textPathComp->href.empty()) {
           isHidden = true;
         } else {
-          // Check if this textPath is nested (not a direct child of <text>).
           const auto* tree = handle.try_get<donner::components::TreeComponent>();
           if (!tree || tree->parent() == entt::null ||
               !registry.any_of<TextRootComponent>(tree->parent())) {
@@ -431,14 +431,21 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     std::optional<size_t> lastNonEmpty;
     for (size_t i = 0; i + 1 < pendingSpans.size(); ++i) {
-      if (!pendingSpans[i].text.empty()) {
+      // Hidden spans (display:none, invalid textPath) block inter-span whitespace
+      // collapsing — surrounding visible spans preserve their whitespace.
+      if (pendingSpans[i].hidden) {
+        lastNonEmpty = std::nullopt;
+      } else if (!pendingSpans[i].text.empty()) {
         lastNonEmpty = i;
       }
 
-      size_t currentIndex = lastNonEmpty.value_or(i);
+      if (!lastNonEmpty.has_value()) {
+        continue;  // No previous visible span to check adjacency against.
+      }
+      size_t currentIndex = *lastNonEmpty;
       RcString& current = pendingSpans[currentIndex].text;
       RcString& next = pendingSpans[i + 1].text;
-      if (next.empty()) {
+      if (next.empty() || pendingSpans[i + 1].hidden) {
         continue;
       }
 
@@ -446,7 +453,15 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
           !current.empty() && current.data()[current.size() - 1] == ' ';
       const bool nextStartsWithSpace = next.data()[0] == ' ';
       if (currentEndsWithSpace && nextStartsWithSpace && !pendingSpans[i + 1].preserveSpaces) {
-        removeLeadingSpace(next);
+        // When collapsing across a textPath boundary, remove the textPath span's
+        // trailing space (keeping it off the path) rather than the next span's
+        // leading space. This ensures the inter-element space survives as flat text.
+        if (pendingSpans[currentIndex].handle.all_of<TextPathComponent>() &&
+            pendingSpans[currentIndex].handle.entity() != pendingSpans[i + 1].handle.entity()) {
+          removeTrailingSpace(current);
+        } else {
+          removeLeadingSpace(next);
+        }
       }
     }
 

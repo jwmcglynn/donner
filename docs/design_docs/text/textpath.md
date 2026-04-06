@@ -82,65 +82,22 @@ During the per-span layout loop, spans with `pathSpline` set enter the text-on-p
 The `e-textPath-*` resvg test suite remains enabled, but custom goldens are now restricted to
 the human-approved pre-existing set only.
 
-### Human-approved custom goldens
+### Custom goldens and thresholds
 
-Only these textPath overrides remain approved:
+Any golden or tolerance change requires explicit human approval after visual retriage.
 
-| Tests | Description |
-|-------|-------------|
-| 001-005 | Basic textPath and startOffset coverage |
-| 009-010 | Two-path sequence, nested-invalid textPath handling |
-
-Any additional custom golden or tolerance change requires explicit human approval after live
-retriage against the upstream resvg reference images.
-
-### 2026-04-04 retriage after removing post-010 overrides
-
-Command used:
-
-```sh
-bazel run //donner/svg/renderer/tests:resvg_test_suite -- \
-  --gtest_filter='*e_textPath_011:*e_textPath_012:*e_textPath_013:*e_textPath_014:\
-*e_textPath_015:*e_textPath_019:*e_textPath_020:*e_textPath_022:*e_textPath_023:\
-*e_textPath_025:*e_textPath_026:*e_textPath_027:*e_textPath_028:*e_textPath_029:\
-*e_textPath_032:*e_textPath_034:*e_textPath_036:*e_textPath_037'
-```
-
-All 18 retriaged cases fail against the upstream resvg references once the unapproved
-post-010 overrides are removed.
-
-#### Likely semantic/layout bugs
-
-These still look like real behavior mismatches and should stay red until fixed:
-
-| Test | Pixels | Triage detail |
-|------|--------|---------------|
-| 011 | 2009 | Mixed content: text before/after a textPath still does not hand off cleanly. |
-| 012 | 4477 | Mixed content: `v`/`t` start correctly, but later glyphs drift and `long` spacing is wrong. |
-| 015 | 1455 | Long-text overflow/continuation behavior on and after the path is still off. |
-| 022 | 604 | `tspan x/y` inside textPath remains path-local positioning work, not threshold work. |
-| 023 | 623 | `tspan dx/dy` inside textPath is much closer now, but still a semantic bug. |
-| 025 | 3818 | Invalid textPath in mixed content still resumes the surrounding text incorrectly. |
-| 028 | 798 | text-decoration on a path still needs real path-following behavior. |
-
-#### Red until human-reviewed, but may be mostly drift
-
-These are smaller diffs that may be backend/raster drift or minor geometry drift, but they still
-need visual review and explicit approval before any new golden or tolerance is considered:
-
-| Test | Pixels | Triage detail |
-|------|--------|---------------|
-| 013 | 759 | Parent `<text>` x/y with textPath. |
-| 014 | 630 | Coordinates on `<textPath>` element. |
-| 019 | 326 | text-anchor on path. |
-| 020 | 397 | Closed circular path. |
-| 026 | 242 | ClosePath triangle. |
-| 027 | 109 | ClosePath + baseline-shift. |
-| 029 | 458 | rotate attribute on path text. |
-| 032 | 121 | baseline-shift on path text. |
-| 034 | 112 | Arc path sampling. |
-| 036 | 664 | Transform on referenced path. |
-| 037 | 583 | Transform on ancestor group. |
+| Tests | Reason |
+|-------|--------|
+| 001-005 | Minor char advance diffs |
+| 009-010 | Minor char advance diffs |
+| 011 | AA diffs |
+| 013-014 | Minor char advance diffs |
+| 015 | AA diffs |
+| 019-020 | Minor char advance diffs / AA diffs |
+| 022-023 | Minor char advance diffs |
+| 026-029 | Minor char advance diffs |
+| 032, 035-037 | Minor char advance diffs |
+| 034 | AA artifacts (WithThreshold 0.05) |
 
 ### Skipped Tests
 
@@ -148,11 +105,11 @@ need visual review and explicit approval before any new golden or tolerance is c
 |------|--------|
 | 007 | `method=stretch` not implemented |
 | 008 | `spacing=auto` not implemented |
+| 012 | Bug: Kerning on textPath |
 | 016 | Link to `<rect>` (SVG 2 feature) |
 | 021 | `writing-mode=tb` on textPath (deferred) |
 | 030 | Vertical text + circular path (deferred) |
 | 033 | UB: baseline-shift + rotate interaction |
-| 035 | `dy` on textPath with 100x transform scaling |
 | 040 | Filter on textPath not implemented |
 | 041 | `side=right` (SVG 2 feature) |
 | 042 | `path` attribute (SVG 2 feature) |
@@ -171,12 +128,9 @@ need visual review and explicit approval before any new golden or tolerance is c
 
 ## Future Work
 
-### Bug Fixes (v1 blockers)
-- [ ] Fix mixed-content continuation bugs in `011`, `012`, `015`, and `025`.
-- [ ] Finish path-local `tspan` positioning for `022` and `023`.
-- [ ] Implement path-following text decoration for `028`.
-- [ ] Re-review `013`, `014`, `019`, `020`, `026`, `027`, `029`, `032`, `034`, `036`, and `037`
-  before considering any new golden or tolerance.
+### Open Issues
+- [ ] **012**: Kerning on textPath — mixed textPath/tspan/textPath continuation has
+  positioning errors in the flat text between path segments.
 
 ### Deferred Features
 - [ ] Implement `method=stretch` for glyph stretching along path curvature.

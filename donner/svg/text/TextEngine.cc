@@ -1285,14 +1285,11 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
                              ? prevTextPathPerpShift
                              : -defaultY;
       (void)hasExplicitPathY;
-      // dy[0] adjusts perpendicular to the path (not along it).
-      if (!span.dyList.empty() && span.dyList[0].has_value()) {
-        perpShift -=
-            span.dyList[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
-      }
 
       // Reposition each glyph at the midpoint of its advance along the path.
       double advanceAccum = 0.0;
+      std::optional<Vector2d> lastVisibleMidpoint;
+      double lastVisibleAdvance = 0.0;
       for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
         auto& g = run.glyphs[gi];
         // Apply within-run kerning before this glyph (not for first glyph).
@@ -1320,6 +1317,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           // Convert tangent angle to degrees and add the per-glyph rotation
           // (already set from per-character rotateList).
           g.rotateDegrees = sample.angle * MathConstants<double>::kRadToDeg + g.rotateDegrees;
+          lastVisibleMidpoint = sample.point;
+          lastVisibleAdvance = g.xAdvance;
         } else {
           // Past the end of the path — hide the glyph.
           g.glyphIndex = 0;
@@ -1332,34 +1331,23 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         }
       }
 
-      // Resume pen at the visual end of the last glyph on the path. This position
-      // includes perpShift (baseline), so the next flat span continues from where
-      // text visually ended. Set prevDefaultY = defaultY so the undo/reapply in the
-      // next span's penY calculation cancels out (preserving the glyph-end y position).
-      if (!run.glyphs.empty() && run.glyphs.back().glyphIndex != 0) {
-        const auto& lastG = run.glyphs.back();
-        // Sample the path at the last glyph's arc-length to get the tangent angle.
-        const double lastArc = startOffset + advanceAccum - lastG.xAdvance * 0.5;
-        const auto lastSample = pathSpline.pointAtArcLength(lastArc);
-        const double angle = lastSample.valid ? lastSample.angle : 0.0;
-        // Advance from the glyph origin (which was shifted back by halfAdv) by the
-        // full advance along the tangent to reach the glyph's visual end.
-        currentPenX = lastG.xPosition + lastG.xAdvance * std::cos(angle);
-        currentPenY = lastG.yPosition + lastG.xAdvance * std::sin(angle);
+      if (lastVisibleMidpoint.has_value()) {
+        currentPenX = lastVisibleMidpoint->x + lastVisibleAdvance;
+        currentPenY = lastVisibleMidpoint->y;
+        haveCurrentPosition = true;
       } else {
-        // No visible glyphs — use raw path point at text-end arc length.
-        const double textEndArc = startOffset + advanceAccum;
-        const auto endSample = pathSpline.pointAtArcLength(textEndArc);
-        if (endSample.valid) {
-          currentPenX = endSample.point.x;
-          currentPenY = endSample.point.y;
+        const auto pathEnd = pathSpline.pointAtArcLength(pathSpline.pathLength());
+        if (pathEnd.valid) {
+          currentPenX = pathEnd.point.x;
+          currentPenY = pathEnd.point.y;
+          haveCurrentPosition = true;
         } else {
           currentPenX = 0.0;
           currentPenY = 0.0;
+          haveCurrentPosition = true;
         }
       }
-      haveCurrentPosition = true;
-      prevDefaultY = defaultY;
+      prevDefaultY = 0.0;  // Path sets absolute position; no shift to undo.
       prevTextPathSource = span.textPathSourceEntity;
       prevTextPathEndOffset = startOffset + advanceAccum;
       prevTextPathPerpShift = perpShift;

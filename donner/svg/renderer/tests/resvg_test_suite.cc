@@ -960,17 +960,24 @@ INSTANTIATE_TEST_SUITE_P(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-009.png")},  // Minor char
                                                                                     // advance diffs
             {"e-textPath-010.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-textPath-010.png")},  // Minor char
+                                                                       // advance diffs
+            {"e-textPath-011.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-010.png")},  // Minor char
-                                                                                    // advance diffs
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-011.png")},  // AA diffs
+            {"e-textPath-012.svg", Params::Skip()},  // Bug: Kerning on textPath
             {"e-textPath-013.svg",
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-013.png")},  // Minor char
                                                                                     // advance diffs
             {"e-textPath-014.svg",
+             Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                        "resvg-e-textPath-014.png")},  // Minor char
+                                                                       // advance diffs
+            {"e-textPath-015.svg",
              Params::WithGoldenOverride(
-                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-014.png")},  // Minor char
-                                                                                    // advance diffs
+                 "donner/svg/renderer/testdata/golden/resvg-e-textPath-015.png")},  // AA diffs
             {"e-textPath-016.svg", Params::Skip()},  // Not impl: link to rect (SVG 2)
             {"e-textPath-019.svg",
              Params::WithGoldenOverride(

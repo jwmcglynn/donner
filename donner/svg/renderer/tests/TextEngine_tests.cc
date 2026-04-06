@@ -257,7 +257,7 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   EXPECT_NEAR(runs[2].glyphs.front().yPosition, 0.0, 1.0);
 }
 
-TEST(TextEngineTest, TextAfterTextPathStartsAtPathEnd) {
+TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine(fontManager, registry);
@@ -283,8 +283,10 @@ TEST(TextEngineTest, TextAfterTextPathStartsAtPathEnd) {
   const auto runs = engine.layout(text, params);
 
   ASSERT_EQ(runs.size(), 2u);
+  ASSERT_FALSE(runs[0].glyphs.empty());
   ASSERT_FALSE(runs[1].glyphs.empty());
-  EXPECT_GT(runs[1].glyphs.front().xPosition, 180.0);
+  EXPECT_GT(runs[1].glyphs.front().xPosition, runs[0].glyphs.back().xPosition);
+  EXPECT_LT(runs[1].glyphs.front().xPosition, 180.0);
 }
 
 }  // namespace donner::svg
