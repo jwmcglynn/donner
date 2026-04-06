@@ -66,7 +66,7 @@ int main(int argc, char* argv[]) {
   // Allow data-name attributes without generating a warning.
   options.disableUserAttributes = false;
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   // warnings and options are optional, call ParseSVG(fileData) to use defaults and ignore warnings.
   ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, &warnings, options);
   //! [parse]
@@ -82,7 +82,7 @@ int main(int argc, char* argv[]) {
 
   if (!warnings.empty()) {
     std::cout << "Warnings:\n";
-    for (ParseError& w : warnings) {
+    for (ParseDiagnostic& w : warnings) {
       std::cout << "  " << w << "\n";
     }
   }

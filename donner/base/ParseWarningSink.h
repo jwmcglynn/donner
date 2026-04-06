@@ -14,7 +14,7 @@ namespace donner {
  * warnings are silently dropped without invoking the factory callable, implicitly avoiding
  * string formatting overhead.
  *
- * Replaces the `std::vector<ParseError>* outWarnings` pattern.
+ * Replaces the `std::vector<ParseDiagnostic>* outWarnings` pattern.
  *
  * Usage:
  * @code

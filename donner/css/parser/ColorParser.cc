@@ -39,10 +39,8 @@ public:
       advance();
       return result;
     } else {
-      ParseError err;
-      err.reason = "Unexpected EOF when parsing function '" + functionName_ + "'";
-      err.location = lastOffset_;
-      return err;
+      return ParseDiagnostic::Error(
+          "Unexpected EOF when parsing function '" + functionName_ + "'", lastOffset_);
     }
   }
 
@@ -57,10 +55,8 @@ public:
     if (resultToken.is<TokenType>()) {
       return resultToken.get<TokenType>();
     } else {
-      ParseError err;
-      err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
-      err.location = resultToken.offset();
-      return err;
+      return ParseDiagnostic::Error(
+          "Unexpected token when parsing function '" + functionName_ + "'", resultToken.offset());
     }
   }
 
@@ -75,19 +71,17 @@ public:
     return foundComma;
   }
 
-  std::optional<ParseError> requireComma() {
+  std::optional<ParseDiagnostic> requireComma() {
     if (!trySkipComma()) {
-      ParseError err;
-      err.reason = "Missing comma when parsing function '" + functionName_ + "'";
-      err.location = lastOffset_;
-      return err;
+      return ParseDiagnostic::Error(
+          "Missing comma when parsing function '" + functionName_ + "'", lastOffset_);
     }
 
     return std::nullopt;
   }
 
   /// @return true if a slash was skipped.
-  std::optional<ParseError> requireSlash() {
+  std::optional<ParseDiagnostic> requireSlash() {
     if (next_ && next_.value().hasResult()) {
       const auto& nextResult = next_.value().result();
       if (nextResult.is<Token::Delim>() && nextResult.get<Token::Delim>().value == '/') {
@@ -97,18 +91,14 @@ public:
       }
     }
 
-    ParseError err;
-    err.reason = "Missing delimiter for alpha when parsing function '" + functionName_ + "'";
-    err.location = lastOffset_;
-    return err;
+    return ParseDiagnostic::Error(
+        "Missing delimiter for alpha when parsing function '" + functionName_ + "'", lastOffset_);
   }
 
-  std::optional<ParseError> requireEOF() {
+  std::optional<ParseDiagnostic> requireEOF() {
     if (!isEOF()) {
-      ParseError err;
-      err.reason = "Additional tokens when parsing function '" + functionName_ + "'";
-      err.location = lastOffset_;
-      return err;
+      return ParseDiagnostic::Error(
+          "Additional tokens when parsing function '" + functionName_ + "'", lastOffset_);
     }
 
     return std::nullopt;
@@ -134,10 +124,9 @@ private:
         }
 
       } else {
-        ParseError err;
-        err.reason = "Unexpected token when parsing function '" + functionName_ + "'";
-        err.location = component.sourceOffset();
-        next_ = std::move(err);
+        next_ = ParseDiagnostic::Error(
+            "Unexpected token when parsing function '" + functionName_ + "'",
+            component.sourceOffset());
         break;
       }
     }
@@ -156,14 +145,9 @@ public:
 
   ParseResult<Color> parseColor() {
     if (components_.empty()) {
-      ParseError err;
-      err.reason = "No color found";
-      return err;
+      return ParseDiagnostic::Error("No color found", FileOffset::Offset(0));
     } else if (components_.size() != 1) {
-      ParseError err;
-      err.reason = "Expected a single color";
-      err.location = components_.front().sourceOffset();
-      return err;
+      return ParseDiagnostic::Error("Expected a single color", components_.front().sourceOffset());
     }
 
     const auto& component = components_.front();
@@ -184,17 +168,11 @@ public:
         if (auto color = Color::ByName(name)) {
           return color.value();
         } else {
-          ParseError err;
-          err.reason = "Invalid color '" + name + "'";
-          err.location = token.offset();
-          return err;
+          return ParseDiagnostic::Error("Invalid color '" + name + "'", token.offset());
         }
 
       } else {
-        ParseError err;
-        err.reason = "Unexpected token when parsing color";
-        err.location = token.offset();
-        return err;
+        return ParseDiagnostic::Error("Unexpected token when parsing color", token.offset());
       }
     } else if (component.is<css::Function>()) {
       const auto& f = component.get<css::Function>();
@@ -215,26 +193,21 @@ public:
       } else if (name.equalsLowercase("device-cmyk")) {
         return parseDeviceCmyk(name, f.values);
       } else {
-        ParseError err;
-        err.reason = "Unsupported color function '" + name + "'";
-        err.location = f.sourceOffset;
-        return err;
+        return ParseDiagnostic::Error("Unsupported color function '" + name + "'",
+                                     f.sourceOffset);
       }
 
     } else {
-      ParseError err;
-      err.reason = "Unexpected block when parsing color";
-      err.location = component.sourceOffset();
-      return err;
+      return ParseDiagnostic::Error("Unexpected block when parsing color",
+                                    component.sourceOffset());
     }
   }
 
   ParseResult<Color> parseHash(std::string_view value) {
     if (!std::all_of(value.begin(), value.end(),
                      [](unsigned char ch) { return std::isxdigit(ch); })) {
-      ParseError err;
-      err.reason = "'#" + std::string(value) + "' is not a hex number";
-      return err;
+      return ParseDiagnostic::Error("'#" + std::string(value) + "' is not a hex number",
+                                    FileOffset::Offset(0));
     }
 
     if (value.size() == 3) {
@@ -256,9 +229,8 @@ public:
                         fromHex(value[4]) * 16 + fromHex(value[5]),  //
                         fromHex(value[6]) * 16 + fromHex(value[7])));
     } else {
-      ParseError err;
-      err.reason = "'#" + std::string(value) + "' is not a color";
-      return err;
+      return ParseDiagnostic::Error("'#" + std::string(value) + "' is not a color",
+                                    FileOffset::Offset(0));
     }
   }
 
@@ -351,17 +323,13 @@ public:
       } else if (suffix.equalsLowercase("turn")) {
         return dimension.value * 360.0;
       } else {
-        ParseError err;
-        err.reason = "Angle has unexpected dimension '" + dimension.suffixString + "'";
-        err.location = angleToken.offset();
-        return err;
+        return ParseDiagnostic::Error(
+            "Angle has unexpected dimension '" + dimension.suffixString + "'",
+            angleToken.offset());
       }
     }
 
-    ParseError err;
-    err.reason = "Unexpected token when parsing angle";
-    err.location = angleToken.offset();
-    return err;
+    return ParseDiagnostic::Error("Unexpected token when parsing angle", angleToken.offset());
   }
 
   ParseResult<Color> parseHsl(const RcString& functionName,
@@ -613,16 +581,12 @@ public:
 
   ParseResult<Color> parseColorFunction(const RcString& functionName,
                                         std::span<const css::ComponentValue> components) {
-    ParseError err;
-    err.reason = "Not implemented";
-    return err;
+    return ParseDiagnostic::Error("Not implemented", FileOffset::Offset(0));
   }
 
   ParseResult<Color> parseDeviceCmyk(const RcString& functionName,
                                      std::span<const css::ComponentValue> components) {
-    ParseError err;
-    err.reason = "Not implemented";
-    return err;
+    return ParseDiagnostic::Error("Not implemented", FileOffset::Offset(0));
   }
 
   ParseResult<uint8_t> parseAlpha(FunctionParameterParser& params) {
@@ -637,19 +601,13 @@ public:
     } else if (alphaToken.is<Token::Percentage>()) {
       return percentageToChannel(alphaToken.get<Token::Percentage>().value);
     } else {
-      ParseError err;
-      err.reason = "Unexpected alpha value";
-      err.location = alphaToken.offset();
-      return err;
+      return ParseDiagnostic::Error("Unexpected alpha value", alphaToken.offset());
     }
   }
 
 private:
-  ParseError unexpectedTokenError(const RcString& functionName, const Token& token) {
-    ParseError err;
-    err.reason = "Unexpected token when parsing function '" + functionName + "'";
-    err.location = token.offset();
-    return err;
+  ParseDiagnostic unexpectedTokenError(const RcString& functionName, const Token& token) {
+    return ParseDiagnostic::Error("Unexpected token when parsing function '" + functionName + "'", token.offset());
   }
 
   static RGBA hwbToRgb(double hue, double white, double black) {

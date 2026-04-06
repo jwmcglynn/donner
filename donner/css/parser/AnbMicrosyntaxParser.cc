@@ -120,9 +120,7 @@ public:
     skipWhitespace();
 
     if (components_.empty()) {
-      ParseError err;
-      err.reason = "An+B microsyntax expected, found empty list";
-      return err;
+      return ParseDiagnostic::Error("An+B microsyntax expected, found empty list", FileOffset::Offset(0));
     }
 
     auto firstTokenResult = consumeToken();
@@ -211,10 +209,7 @@ public:
                                       ? -thirdToken.value.value()
                                       : thirdToken.value.value()};
             } else {
-              ParseError err;
-              err.reason = "An+B microsyntax unexpected end of list";
-              err.location = FileOffset::EndOfString();
-              return err;
+              return ParseDiagnostic::Error("An+B microsyntax unexpected end of list", FileOffset::EndOfString());
             }
           }
         }
@@ -282,15 +277,9 @@ public:
     }
 
     if (components_.empty()) {
-      ParseError err;
-      err.reason = "An+B microsyntax unexpected end of list";
-      err.location = FileOffset::EndOfString();
-      return err;
+      return ParseDiagnostic::Error("An+B microsyntax unexpected end of list", FileOffset::EndOfString());
     } else {
-      ParseError err;
-      err.reason = "Unexpected token when parsing An+B microsyntax";
-      err.location = components_.front().sourceOffset();
-      return err;
+      return ParseDiagnostic::Error("Unexpected token when parsing An+B microsyntax", components_.front().sourceOffset());
     }
   }
 
@@ -324,18 +313,13 @@ private:
 
   ParseResult<AnbToken> parseNextToken() {
     if (components_.empty()) {
-      ParseError err;
-      err.reason = "An+B microsyntax unexpected end of list";
-      return err;
+      return ParseDiagnostic::Error("An+B microsyntax unexpected end of list", FileOffset::Offset(0));
     }
 
     const ComponentValue& component = components_[0];
 
     if (!component.is<Token>()) {
-      ParseError err;
-      err.reason = "Expected CSS token when parsing An+B microsyntax";
-      err.location = component.sourceOffset();
-      return err;
+      return ParseDiagnostic::Error("Expected CSS token when parsing An+B microsyntax", component.sourceOffset());
     }
 
     auto token = component.get<Token>();
@@ -431,10 +415,7 @@ private:
       }
     }
 
-    ParseError err;
-    err.reason = "Unexpected token when parsing An+B microsyntax";
-    err.location = token.offset();
-    return err;
+    return ParseDiagnostic::Error("Unexpected token when parsing An+B microsyntax", token.offset());
   }
 
   int skipWhitespace(int nextToken) {

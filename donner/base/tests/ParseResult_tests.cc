@@ -33,10 +33,10 @@ TEST(ParseResult, Value) {
 TEST(ParseResult, DeathTests) {
   ParseResult<int> withResult = 42;
   EXPECT_DEATH(withResult.error(), "hasError");
-  EXPECT_DEATH({ withResult.error().location = FileOffset::Offset(42); }, "hasError");
+  EXPECT_DEATH({ withResult.error().range.start = FileOffset::Offset(42); }, "hasError");
   EXPECT_DEATH({ const auto error = std::move(withResult.error()); }, "hasError");
 
-  ParseResult<int> withError = ParseError();
+  ParseResult<int> withError = ParseDiagnostic::Error("", FileOffset::Offset(0));
   EXPECT_DEATH(withError.result(), "hasResult");
   EXPECT_DEATH({ withError.result() = 42; }, "hasResult");
   EXPECT_DEATH(
@@ -48,30 +48,27 @@ TEST(ParseResult, DeathTests) {
 
 TEST(ParseResult, Error) {
   ParseResult<int> result = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return error;
+    return ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
   }();
 
   EXPECT_FALSE(result.hasResult());
   EXPECT_TRUE(result.hasError());
 
   EXPECT_EQ(result.error().reason, "Test error please ignore");
-  EXPECT_EQ(result.error().location, FileOffset::Offset(0));
+  EXPECT_EQ(result.error().range.start, FileOffset::Offset(0));
 
   // Mutable accessor.
-  result.error().location = FileOffset::Offset(42);
-  EXPECT_EQ(result.error().location, FileOffset::Offset(42));
+  result.error().range.start = FileOffset::Offset(42);
+  EXPECT_EQ(result.error().range.start, FileOffset::Offset(42));
 
   // R-value reference accessor.
-  const ParseError error = std::move(result.error());
+  const ParseDiagnostic error = std::move(result.error());
   EXPECT_EQ(error.reason, "Test error please ignore");
 }
 
 TEST(ParseResult, ResultAndError) {
   ParseResult<int> result = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
+    auto error = ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
     return ParseResult<int>(42, std::move(error));
   }();
 
@@ -88,9 +85,7 @@ TEST(ParseResult, Map) {
               ParseResultIs(84));
 
   ParseResult<int> withError = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return error;
+    return ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
   }();
 
   EXPECT_THAT(std::move(withError).map<int>([](int result) { return result * 2; }),
@@ -98,7 +93,7 @@ TEST(ParseResult, Map) {
 }
 
 TEST(ParseResult, MapError) {
-  auto mapFn = [](ParseError&& error) {
+  auto mapFn = [](ParseDiagnostic&& error) {
     error.reason = "Updated message";
     return std::move(error);
   };
@@ -107,9 +102,7 @@ TEST(ParseResult, MapError) {
   EXPECT_THAT(std::move(withResult).mapError<int>(mapFn), ParseResultIs(42));
 
   ParseResult<int> withError = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return error;
+    return ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
   }();
 
   EXPECT_THAT(std::move(withError).mapError<int>(mapFn), ParseErrorIs("Updated message"));
@@ -120,16 +113,13 @@ TEST(ParseResultTestUtils, PrintTo) {
   EXPECT_EQ(testing::PrintToString(withResult), "ParseResult { result: 42 }");
 
   ParseResult<int> withError = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    return error;
+    return ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
   }();
   EXPECT_EQ(testing::PrintToString(withError),
             "ParseResult { error: Parse error at 0:0: Test error please ignore }");
 
   ParseResult<int> withBoth = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
+    auto error = ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
     return ParseResult<int>(42, std::move(error));
   }();
   EXPECT_EQ(testing::PrintToString(withBoth),
@@ -139,13 +129,12 @@ TEST(ParseResultTestUtils, PrintTo) {
 TEST(ParseResultTestUtils, ErrorMatchers) {
   ParseResult<int> withResult = 42;
   ParseResult<int> withError = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
-    error.location = FileOffset::OffsetWithLineInfo(31, FileOffset::LineInfo(1, 30));
-    return error;
+    return ParseDiagnostic::Error(
+        "Test error please ignore",
+        FileOffset::OffsetWithLineInfo(31, FileOffset::LineInfo(1, 30)));
   }();
 
-  std::optional<ParseError> optionalError = withError.error();
+  std::optional<ParseDiagnostic> optionalError = withError.error();
 
   EXPECT_THAT(withResult, NoParseError());
   EXPECT_THAT(withError, Not(NoParseError()));
@@ -163,7 +152,7 @@ TEST(ParseResultTestUtils, ErrorMatchers) {
 
 TEST(ParseResultTestUtils, ResultMatchers) {
   ParseResult<int> withResult = 42;
-  ParseResult<int> withError = ParseError();
+  ParseResult<int> withError = ParseDiagnostic::Error("", FileOffset::Offset(0));
 
   EXPECT_THAT(withResult, ParseResultIs(42));
   EXPECT_THAT(withError, Not(ParseResultIs(42)));
@@ -173,8 +162,7 @@ TEST(ParseResultTestUtils, ResultMatchers) {
 
 TEST(ParseResultTestUtils, ResultAndErrorMatcher) {
   ParseResult<int> withBoth = []() -> ParseResult<int> {
-    ParseError error;
-    error.reason = "Test error please ignore";
+    auto error = ParseDiagnostic::Error("Test error please ignore", FileOffset::Offset(0));
     return ParseResult<int>(42, std::move(error));
   }();
 
@@ -182,7 +170,7 @@ TEST(ParseResultTestUtils, ResultAndErrorMatcher) {
   EXPECT_THAT(withBoth, ParseResultAndError(_, _));
 
   ParseResult<int> withResult = 42;
-  ParseResult<int> withError = ParseError();
+  ParseResult<int> withError = ParseDiagnostic::Error("", FileOffset::Offset(0));
 
   EXPECT_THAT(withResult, Not(ParseResultAndError(_, _)));
   EXPECT_THAT(withError, Not(ParseResultAndError(_, _)));

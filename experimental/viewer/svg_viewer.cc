@@ -53,7 +53,7 @@ struct SVGState {
   bool valid = false;
   SVGDocument document;
   std::optional<DonnerController> controller;
-  std::optional<ParseError> lastError;
+  std::optional<ParseDiagnostic> lastError;
   std::optional<SVGRectElement> boundsShape;
   std::optional<SVGPathElement> selectedPathOutline;
 

@@ -33,7 +33,7 @@ void PrintTo(const ParseResult<T>& result, std::ostream* os) {
 }
 
 /**
- * Matches if the result does not contain a ParseError.
+ * Matches if the result does not contain a ParseDiagnostic error.
  */
 MATCHER(NoParseError, "") {
   return !arg.hasError();
@@ -144,14 +144,14 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
 MATCHER(ParseErrorEndOfString, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return arg.offset == std::nullopt;
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
+    return arg.range.start.offset == std::nullopt;
   } else {
     if (!arg.hasError()) {
       return false;
     }
 
-    return arg.error().location.offset == std::nullopt;
+    return arg.error().range.start.offset == std::nullopt;
   }
 }
 

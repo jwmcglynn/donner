@@ -1,36 +1,34 @@
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace donner::parser {
 
-TEST(ParseError, ResolveOffset) {
+TEST(ParseDiagnostic, ResolveOffset) {
   {
     // Base case: Regular offset is left unchanged.
-    ParseError err;
-    err.location = FileOffset::Offset(1);
+    auto err = ParseDiagnostic::Error("test", FileOffset::Offset(1));
 
-    EXPECT_EQ(err.location.resolveOffset("abcdef"), FileOffset::Offset(1));
+    EXPECT_EQ(err.range.start.resolveOffset("abcdef"), FileOffset::Offset(1));
 
-    err.location = FileOffset::Offset(5);
-    EXPECT_EQ(err.location.resolveOffset("abcdef"), FileOffset::Offset(5));
+    err.range.start = FileOffset::Offset(5);
+    EXPECT_EQ(err.range.start.resolveOffset("abcdef"), FileOffset::Offset(5));
   }
 
   {
     // EndOfString() is resolved based on the input string.
-    ParseError err;
-    err.location = FileOffset::EndOfString();
+    auto err = ParseDiagnostic::Error("test", FileOffset::EndOfString());
 
-    EXPECT_EQ(err.location.resolveOffset("abcdef"), FileOffset::Offset(6));
-    EXPECT_EQ(err.location.resolveOffset("test string please ignore"), FileOffset::Offset(25));
+    EXPECT_EQ(err.range.start.resolveOffset("abcdef"), FileOffset::Offset(6));
+    EXPECT_EQ(err.range.start.resolveOffset("test string please ignore"), FileOffset::Offset(25));
   }
 }
 
-TEST(ParseError, Output) {
-  ParseError err;
-  err.reason = "Test reason";
-  err.location = FileOffset::OffsetWithLineInfo(3, FileOffset::LineInfo(1, 2));
+TEST(ParseDiagnostic, Output) {
+  auto err =
+      ParseDiagnostic::Error("Test reason",
+                             FileOffset::OffsetWithLineInfo(3, FileOffset::LineInfo(1, 2)));
 
   EXPECT_EQ((std::ostringstream() << err).str(), "Parse error at 1:2: Test reason");
 }
