@@ -58,6 +58,8 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@stb//:truetype": "stb_truetype",
     "@pixelmatch-cpp17//:pixelmatch-cpp17": "pixelmatch-cpp17",
     "@zlib//:z": "zlib",
+    "//third_party:zlib": "zlib",
+    "//third_party:freetype": "freetype",
     "@tiny-skia-cpp//src:tiny_skia_lib": "tiny_skia",
     "@tiny-skia-cpp//src:tiny_skia_lib_native": "tiny_skia",
     "@tiny-skia-cpp//src/tiny_skia:tiny_skia_core": "tiny_skia",
