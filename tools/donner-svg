@@ -1,0 +1,5 @@
+#!/bin/bash
+# Convenience wrapper for running donner-svg via Bazel.
+# Usage: tools/donner-svg input.svg --preview
+set -euo pipefail
+exec bazel run //donner/svg/tool -- "$@"

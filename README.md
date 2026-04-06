@@ -56,13 +56,30 @@ See [Building Donner](https://jwmcglynn.github.io/donner/BuildingDonner.html) fo
 
 **Not yet supported:** `<a>` `<filter>` `<switch>` `<text>` `<textPath>` `<tspan>`
 
-## Try it out: Render an SVG to PNG
+## CLI Tool: donner-svg
+
+Donner also ships an end-user CLI for rendering and previewing SVG files.
 
 ```sh
-bazel run --run_under="cd $PWD &&" //examples:svg_to_png -- donner_splash.svg
+# Render to PNG
+bazel run //donner/svg/tool -- donner_splash.svg --output output.png
+
+# Show terminal preview
+bazel run //donner/svg/tool -- donner_splash.svg --preview
+
+# Interactive terminal mode with mouse selection
+bazel run //donner/svg/tool -- donner_splash.svg --interactive
 ```
 
+Tool docs: [`donner/svg/tool/README.md`](donner/svg/tool/README.md)
+
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jwmcglynn/donner)
+
+## Simplified Example: Saving an SVG to PNG
+
+```sh
+bazel run //examples:svg_to_png -- donner_splash.svg
+```
 
 How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)
 
@@ -146,7 +163,7 @@ Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc
 ## API Demo 3: Interactive SVG Viewer using ImGui
 
 ```sh
-bazel run --run_under="cd $PWD &&" //experimental/viewer:svg_viewer -- donner_icon.svg
+bazel run //experimental/viewer:svg_viewer -- donner_icon.svg
 ```
 
 This example demonstrates how to create an interactive SVG viewer using ImGui. The viewer allows you to load and display SVG files, and interact with SVG elements using ImGui.
@@ -159,6 +176,7 @@ See the source at: [experimental/viewer/svg_viewer.cc](./experimental/viewer/svg
 - [API Documentation](https://jwmcglynn.github.io/donner/DonnerAPI.html)
 - [System architecture](https://jwmcglynn.github.io/donner/SystemArchitecture.html)
 - [Building Donner](https://jwmcglynn.github.io/donner/BuildingDonner.html)
+- [donner-svg CLI tool](https://jwmcglynn.github.io/donner/DonnerSvgTool.html)
 - [Examples](https://jwmcglynn.github.io/donner/examples.html)
 
 ## Status

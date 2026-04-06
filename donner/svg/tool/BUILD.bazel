@@ -1,0 +1,60 @@
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
+
+alias(
+    name = "tool",
+    actual = ":donner-svg",
+)
+
+donner_cc_library(
+    name = "donner_svg_tool_utils",
+    srcs = ["DonnerSvgToolUtils.cc"],
+    hdrs = ["DonnerSvgToolUtils.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_cc_binary(
+    name = "donner-svg",
+    srcs = ["donner_svg_tool.cc"],
+    deps = [
+        ":donner_svg_tool_lib",
+        "//donner/base:failure_signal_handler",
+    ],
+)
+
+donner_cc_library(
+    name = "donner_svg_tool_lib",
+    srcs = ["DonnerSvgTool.cc"],
+    hdrs = ["DonnerSvgTool.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":donner_svg_tool_utils",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:terminal_image_viewer",
+    ],
+)
+
+donner_cc_test(
+    name = "donner_svg_tool_utils_tests",
+    srcs = ["DonnerSvgToolUtils_tests.cc"],
+    deps = [
+        ":donner_svg_tool_utils",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:terminal_image_viewer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "donner_svg_tool_tests",
+    srcs = ["DonnerSvgTool_tests.cc"],
+    deps = [
+        ":donner_svg_tool_lib",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

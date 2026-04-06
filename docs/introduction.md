@@ -26,7 +26,7 @@ Donner focuses on security and performance, which is validated with code coverag
 ## Try it out: Render an SVG to PNG
 
 ```sh
-bazel run --run_under="cd $PWD &&" //examples:svg_to_png -- donner_splash.svg
+bazel run //examples:svg_to_png -- donner_splash.svg
 ```
 
 How it works: \ref svg_to_png.cc

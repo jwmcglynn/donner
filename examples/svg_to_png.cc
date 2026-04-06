@@ -6,12 +6,13 @@
  * To run:
  *
  * ```sh
- * bazel run --run_under="cd $PWD &&" //examples:svg_to_png -- donner_splash.svg
+ * bazel run //examples:svg_to_png -- donner_splash.svg
  * ```
  *
  * The output is saved to "output.png" in the current working directory.
  */
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -24,6 +25,12 @@
  * Main function, usage: svg_to_png <filename>
  */
 int main(int argc, char* argv[]) {
+  // When launched via `bazel run`, change to the user's original working
+  // directory so that relative paths resolve naturally.
+  if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
+    std::filesystem::current_path(bwd);
+  }
+
   using namespace donner;
   using namespace donner::svg;
   using namespace donner::svg::parser;

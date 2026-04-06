@@ -22,7 +22,7 @@ DONNER_DIR="$SCRIPT_DIR/../donner"
 # Function to run the Bazel command
 run_bazel_command() {
     echo "Running Bazel command..."
-    bazel run --run_under="cd $PWD && " -c dbg //donner/svg/renderer:renderer_tool -- "$SVG_FILE" --quiet
+    bazel run -c dbg //donner/svg/tool -- "$SVG_FILE" --quiet
 }
 
 # Run the command once at the start

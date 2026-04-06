@@ -1,0 +1,39 @@
+/**
+ * @file
+ * @page DonnerSvgTool donner-svg CLI Tool
+ *
+ * @section DonnerSvgToolOverview Overview
+ *
+ * `donner-svg` is a command line utility for rendering SVG files to PNG and previewing output in
+ * terminal environments.
+ *
+ * Build and run:
+ * ```sh
+ * bazel build //donner/svg/tool:donner-svg
+ * bazel run //donner/svg/tool -- input.svg
+ * ```
+ *
+ * @section DonnerSvgToolFlags Common flags
+ *
+ * - `--output <png>`: Output filename (default `output.png`).
+ * - `--width <px>` / `--height <px>`: Override render size.
+ * - `--preview`: Show a terminal preview.
+ * - `--interactive`: Enable mouse-driven terminal selection mode (implies `--preview`).
+ * - `--quiet`: Suppress parser warnings.
+ * - `--verbose`: Enable verbose renderer logs.
+ * - `--experimental`: Enable experimental parser features.
+ * - `--help`: Print usage.
+ *
+ * @section DonnerSvgToolExamples Examples
+ *
+ * ```sh
+ * # Render to PNG
+ * bazel run //donner/svg/tool -- input.svg --output output.png
+ *
+ * # Terminal preview mode
+ * bazel run //donner/svg/tool -- input.svg --preview
+ *
+ * # Interactive mode
+ * bazel run //donner/svg/tool -- input.svg --interactive
+ * ```
+ */
