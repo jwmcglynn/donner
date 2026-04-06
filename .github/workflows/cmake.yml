@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('CMakeLists.txt') }}
+          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py') }}
           restore-keys: |
             cmake-deps-linux-${{ matrix.backend }}-
 
@@ -49,7 +49,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/_deps
-          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('CMakeLists.txt') }}
+          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py') }}
           restore-keys: |
             cmake-deps-macos-${{ matrix.backend }}-
 
