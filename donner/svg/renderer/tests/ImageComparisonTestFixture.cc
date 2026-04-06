@@ -8,19 +8,108 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include "donner/css/FontFace.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 namespace donner::svg {
 
 namespace {
+
+/// Load all TTF/OTF fonts from a directory and register them as @font-face rules on the document.
+/// Cache of font faces loaded from a directory, keyed by directory path.
+/// Prevents re-reading 14MB of font files for every test in a shard, which causes glibc
+/// heap fragmentation leading to std::bad_alloc on Linux CI after ~80 tests.
+std::map<std::string, std::vector<css::FontFace>>& fontCache() {
+  static std::map<std::string, std::vector<css::FontFace>> cache;
+  return cache;
+}
+
+const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::path& fontsDir) {
+  const std::string key = fontsDir.string();
+  auto it = fontCache().find(key);
+  if (it != fontCache().end()) {
+    return it->second;
+  }
+
+  std::vector<css::FontFace> faces;
+  for (const auto& entry : std::filesystem::directory_iterator(fontsDir)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto ext = entry.path().extension().string();
+    if (ext != ".ttf" && ext != ".otf") {
+      continue;
+    }
+
+    std::ifstream fontFile(entry.path(), std::ios::binary);
+    if (!fontFile) {
+      continue;
+    }
+    fontFile.seekg(0, std::ios::end);
+    const auto size = fontFile.tellg();
+    fontFile.seekg(0);
+    std::vector<uint8_t> fontData(static_cast<size_t>(size));
+    fontFile.read(reinterpret_cast<char*>(fontData.data()), size);
+
+    const auto metadata = ParseFontMetadata(fontData);
+    if (!metadata.has_value()) {
+      continue;  // Skip fonts with unreadable name tables.
+    }
+
+    // Only register regular (400) and bold (700) weight variants. Extreme weights like Thin
+    // (100), Light (300), or Black (900) use different glyph shapes that our stb_truetype
+    // renderer cannot match to the reference renderer's output.
+    if (metadata->fontWeight != 400 && metadata->fontWeight != 700) {
+      continue;
+    }
+
+    css::FontFaceSource source;
+    source.kind = css::FontFaceSource::Kind::Data;
+    source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData));
+
+    css::FontFace face;
+    face.familyName = RcString(metadata->familyName);
+    face.fontWeight = metadata->fontWeight;
+    face.fontStyle = metadata->fontStyle;
+    face.fontStretch = metadata->fontStretch;
+    face.sources.push_back(std::move(source));
+    faces.push_back(std::move(face));
+  }
+
+  return fontCache().emplace(key, std::move(faces)).first->second;
+}
+
+void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::path& fontsDir) {
+  const auto& faces = loadFontsFromDirectory(fontsDir);
+  if (!faces.empty()) {
+    auto& resourceManager = document.registry().ctx().get<components::ResourceManagerContext>();
+    resourceManager.addFontFaces(faces);
+  }
+
+  // Register CSS generic family mappings using fonts from the resvg test suite.
+  auto& registry = document.registry();
+  auto& fontManager = registry.ctx().contains<FontManager>()
+                          ? registry.ctx().get<FontManager>()
+                          : registry.ctx().emplace<FontManager>(registry);
+  fontManager.setGenericFamilyMapping("serif", "Noto Serif");
+  fontManager.setGenericFamilyMapping("sans-serif", "Noto Sans");
+  fontManager.setGenericFamilyMapping("monospace", "Noto Mono");
+  fontManager.setGenericFamilyMapping("cursive", "Yellowtail");
+  fontManager.setGenericFamilyMapping("fantasy", "Sedgwick Ave Display");
+}
 
 bool isEnabledFromEnv(const char* name, bool defaultValue) {
   const char* value = std::getenv(name);
@@ -276,8 +365,8 @@ bool isActiveBackendAllowed(const ImageComparisonParams& params) {
 
 std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFeatures) {
   constexpr RendererBackendFeature kFeatures[] = {
-      RendererBackendFeature::Text,
-      RendererBackendFeature::FilterEffects,
+      RendererBackendFeature::Text,          RendererBackendFeature::TextFull,
+      RendererBackendFeature::FilterEffects, RendererBackendFeature::AsciiSnapshot,
       RendererBackendFeature::SkpDebug,
   };
 
@@ -292,7 +381,7 @@ std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFe
 }
 
 std::optional<std::string> skipReasonIfUnsupported(const ImageComparisonParams& params) {
-  if (params.skip) {
+  if (params.shouldSkip()) {
     return std::string("Test case disabled");
   }
 
@@ -370,7 +459,7 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
     }
   });
 
-  if (info.param.params.skip) {
+  if (info.param.params.shouldSkip()) {
     return "DISABLED_" + name;
   } else {
     return name;
@@ -481,7 +570,17 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
     return SVGDocument();
   }
 
-  return std::move(maybeResult.result());
+  SVGDocument document = std::move(maybeResult.result());
+
+  // If a resource directory is provided, load any fonts from its fonts/ subdirectory.
+  if (resourceDir) {
+    const std::filesystem::path fontsDir = *resourceDir / "fonts";
+    if (std::filesystem::is_directory(fontsDir)) {
+      registerFontsFromDirectory(document, fontsDir);
+    }
+  }
+
+  return document;
 }
 
 void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
@@ -548,9 +647,9 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   const int mismatchedPixels = pixelmatch::pixelmatch(goldenImage.data, snapshot.pixels, diffImage,
                                                       width, height, strideInPixels, options);
 
-  if (mismatchedPixels > params.maxMismatchedPixels) {
+  if (mismatchedPixels > params.effectiveMaxMismatchedPixels()) {
     std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
-              << params.maxMismatchedPixels << " max)\n";
+              << params.effectiveMaxMismatchedPixels() << " max)\n";
 
     const std::filesystem::path actualImagePath =
         std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
@@ -586,31 +685,6 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       }
     } else {
       printVerboseFailureOutputOverrideHint();
-    }
-
-    // TODO: Remove this debug output once the root causes of AA test failures are addressed
-    if (!suppressVerboseOutput) {
-      // Dump first 30 mismatched pixels with actual values for debugging.
-      {
-        int dumped = 0;
-        for (int y = 0; y < height && dumped < 30; y++) {
-          for (int x = 0; x < width && dumped < 30; x++) {
-            const size_t idx = (static_cast<size_t>(y) * strideInPixels + x) * 4;
-            if (snapshot.pixels[idx] != goldenImage.data[idx] ||
-                snapshot.pixels[idx + 1] != goldenImage.data[idx + 1] ||
-                snapshot.pixels[idx + 2] != goldenImage.data[idx + 2] ||
-                snapshot.pixels[idx + 3] != goldenImage.data[idx + 3]) {
-              std::cout << "  pixel(" << x << "," << y << "): actual=(" << (int)snapshot.pixels[idx]
-                        << "," << (int)snapshot.pixels[idx + 1] << ","
-                        << (int)snapshot.pixels[idx + 2] << "," << (int)snapshot.pixels[idx + 3]
-                        << ") expected=(" << (int)goldenImage.data[idx] << ","
-                        << (int)goldenImage.data[idx + 1] << "," << (int)goldenImage.data[idx + 2]
-                        << "," << (int)goldenImage.data[idx + 3] << ")\n";
-              dumped++;
-            }
-          }
-        }
-      }
     }
 
     ADD_FAILURE() << mismatchedPixels << " pixels different.";
@@ -658,7 +732,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     std::cout << "PASS";
     if (mismatchedPixels != 0) {
       std::cout << " (" << mismatchedPixels << " pixels differ, out of "
-                << params.maxMismatchedPixels << " max)";
+                << params.effectiveMaxMismatchedPixels() << " max)";
     }
     std::cout << "\n";
   }

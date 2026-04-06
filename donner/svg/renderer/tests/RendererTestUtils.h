@@ -27,19 +27,72 @@ struct AsciiImage {
   bool matches(std::string_view golden) const { return matchesImpl(golden, true); }
 
   /**
-   * Try matching against the primary golden, falling back to an alternate if the active backend
-   * differs.  Use this when Skia and tiny-skia produce structurally different output (e.g. pattern
-   * sampling or curve rasterization differences).
-   *
-   * @param golden Primary golden (typically tiny-skia output).
-   * @param alternateGolden Fallback golden (typically Skia output).
+   * Match against backend-specific goldens. Usage:
+   * ```
+   * EXPECT_TRUE(image.matchBackend()
+   *     .tinySkia(R"(...)")
+   *     .skia(R"(...)"));
+   * ```
+   * Each backend's golden is only checked when that backend is active. If no
+   * backend-specific golden is set, falls back to a default if provided.
    */
-  bool matchesOneOf(std::string_view golden, std::string_view alternateGolden) const {
-    if (matchesImpl(golden, false)) {
-      return true;
+  struct BackendMatcher {
+    const AsciiImage& image;
+    std::string_view defaultGolden;
+    std::string_view tinySkiaGolden;
+    std::string_view skiaGolden;
+
+    BackendMatcher& defaultPattern(std::string_view g) {
+      defaultGolden = g;
+      return *this;
     }
-    return matchesImpl(alternateGolden, true);
-  }
+    BackendMatcher& tinySkia(std::string_view g) {
+      tinySkiaGolden = g;
+      return *this;
+    }
+    BackendMatcher& skia(std::string_view g) {
+      skiaGolden = g;
+      return *this;
+    }
+
+    /// Implicit conversion to bool for use in EXPECT_TRUE.
+    /// Tries backend-specific golden first; if it doesn't match (or isn't set),
+    /// falls back to defaultPattern. Emits diagnostics for the last pattern tried.
+    operator bool() const {  // NOLINT(google-explicit-constructor)
+      std::string_view backendGolden;
+      if (ActiveRendererBackend() == RendererBackend::TinySkia) {
+        backendGolden = tinySkiaGolden;
+      } else if (ActiveRendererBackend() == RendererBackend::Skia) {
+        backendGolden = skiaGolden;
+      }
+
+      // Try backend-specific pattern first (silently).
+      if (!backendGolden.empty() && image.matchesImpl(backendGolden, false)) {
+        return true;
+      }
+
+      // Try default pattern (silently if backend was also tried).
+      if (!defaultGolden.empty() && image.matchesImpl(defaultGolden, false)) {
+        return true;
+      }
+
+      // All failed — emit diagnostics for the most specific pattern.
+      if (!backendGolden.empty()) {
+        return image.matchesImpl(backendGolden, true);
+      }
+      if (!defaultGolden.empty()) {
+        return image.matchesImpl(defaultGolden, true);
+      }
+
+      std::cerr << "No golden pattern set for active backend: "
+                << ActiveRendererBackendName() << "\n";
+      return false;
+    }
+  };
+
+  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}, {}}; }
+
+
 
 private:
   bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {

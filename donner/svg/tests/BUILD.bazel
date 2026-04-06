@@ -2,18 +2,20 @@ load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
     "donner_cc_test",
-    "donner_transitioned_test",
+    "donner_transitioned_cc_test",
 )
 
 donner_cc_test(
     name = "svg_tests_impl",
     srcs = [
         "ElementStyle_tests.cc",
+        "ElementType_tests.cc",
         "SVGCircleElement_tests.cc",
         "SVGClipPathElement_tests.cc",
         "SVGDefsElement_tests.cc",
         "SVGDocument_tests.cc",
         "SVGElement_tests.cc",
+        "SVGElementPublicApi_tests.cc",
         "SVGEllipseElement_tests.cc",
         "SVGFilterElement_tests.cc",
         "SVGLinearGradientElement_tests.cc",
@@ -38,14 +40,14 @@ donner_cc_test(
     ],
 )
 
-donner_transitioned_test(
+donner_transitioned_cc_test(
     name = "svg_tests_tiny_skia",
     dep = ":svg_tests_impl",
     renderer_backend = "tiny_skia",
     testonly = 1,
 )
 
-donner_transitioned_test(
+donner_transitioned_cc_test(
     name = "svg_tests_skia",
     dep = ":svg_tests_impl",
     renderer_backend = "skia",

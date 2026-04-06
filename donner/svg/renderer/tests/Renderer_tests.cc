@@ -339,5 +339,11 @@ TEST_F(RendererTests, UseExternalContextPaint) {
       "donner/svg/renderer/testdata/golden/use-external-context-paint.png");
 }
 
+TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
+  this->compareWithGolden("donner/svg/renderer/testdata/z0rly_test6.svg",
+                          "donner/svg/renderer/testdata/golden/z0rly_test6.png",
+                          this->optionsExperimental());
+}
+
 }  // namespace
 }  // namespace donner::svg

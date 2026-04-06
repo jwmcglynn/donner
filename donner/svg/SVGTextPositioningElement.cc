@@ -16,10 +16,12 @@ void SVGTextPositioningElement::setX(std::optional<Lengthd> value) {
   } else {
     x.clear();
   }
+  invalidateTextGeometry();
 }
 
 void SVGTextPositioningElement::setXList(SmallVector<Lengthd, 1>&& value) {
   handle_.get<components::TextPositioningComponent>().x = std::move(value);
+  invalidateTextGeometry();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::x() const {
@@ -42,10 +44,12 @@ void SVGTextPositioningElement::setY(std::optional<Lengthd> value) {
   } else {
     y.clear();
   }
+  invalidateTextGeometry();
 }
 
 void SVGTextPositioningElement::setYList(SmallVector<Lengthd, 1>&& value) {
   handle_.get<components::TextPositioningComponent>().y = std::move(value);
+  invalidateTextGeometry();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::y() const {
@@ -68,10 +72,12 @@ void SVGTextPositioningElement::setDx(std::optional<Lengthd> value) {
   } else {
     dx.clear();
   }
+  invalidateTextGeometry();
 }
 
 void SVGTextPositioningElement::setDxList(SmallVector<Lengthd, 1>&& value) {
   handle_.get_or_emplace<components::TextPositioningComponent>().dx = std::move(value);
+  invalidateTextGeometry();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::dx() const {
@@ -94,10 +100,12 @@ void SVGTextPositioningElement::setDy(std::optional<Lengthd> value) {
   } else {
     dy.clear();
   }
+  invalidateTextGeometry();
 }
 
 void SVGTextPositioningElement::setDyList(SmallVector<Lengthd, 1>&& value) {
   handle_.get_or_emplace<components::TextPositioningComponent>().dy = std::move(value);
+  invalidateTextGeometry();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::dy() const {
@@ -121,10 +129,12 @@ void SVGTextPositioningElement::setRotate(std::optional<double> degrees) {
   } else {
     rotateDegrees.clear();
   }
+  invalidateTextGeometry();
 }
 
 void SVGTextPositioningElement::setRotateList(SmallVector<double, 1>&& value) {
   handle_.get_or_emplace<components::TextPositioningComponent>().rotateDegrees = std::move(value);
+  invalidateTextGeometry();
 }
 
 std::optional<double> SVGTextPositioningElement::rotate() const {

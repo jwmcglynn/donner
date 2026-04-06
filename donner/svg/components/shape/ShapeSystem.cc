@@ -3,7 +3,11 @@
 #include <concepts>
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/text/TextEngine.h"
+#endif
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -14,6 +18,51 @@
 namespace donner::svg::components {
 
 namespace {
+
+/// Create a FontMetrics with viewport size and font-size context, so that CSS units
+/// (em/ex/ch/rem/vw/vh/vmin/vmax) resolve correctly.
+FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleComponent& style) {
+  FontMetrics metrics;
+
+  if (auto* ctx = registry.ctx().find<SVGDocumentContext>()) {
+    // Viewport size for vw/vh/vmin/vmax.
+    if (ctx->canvasSize) {
+      metrics.viewportSize = Vector2d(static_cast<double>(ctx->canvasSize->x),
+                                      static_cast<double>(ctx->canvasSize->y));
+    }
+
+    // Root font-size for rem units.
+    if (ctx->rootEntity != entt::null) {
+      if (const auto* rootStyle = registry.try_get<ComputedStyleComponent>(ctx->rootEntity)) {
+        if (rootStyle->properties) {
+          // Use default FontMetrics for resolving root font-size (avoids circular dependency).
+          metrics.rootFontSize = rootStyle->properties->fontSize.getRequired().toPixels(
+              Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+        }
+      }
+    }
+  }
+
+  // Element's computed font-size for em/ex/ch units.
+  if (style.properties) {
+    // Resolve font-size using default metrics (font-size itself can't be em-relative to itself).
+    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(Boxd(), FontMetrics(),
+                                                                         Lengthd::Extent::Mixed);
+  }
+
+#ifdef DONNER_TEXT_ENABLED
+  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+    if (style.properties) {
+      if (const auto chUnit =
+              textEngine->measureChUnitInEm(style.properties->fontFamily.getRequired())) {
+        metrics.chUnitInEm = *chUnit;
+      }
+    }
+  }
+#endif
+
+  return metrics;
+}
 
 /**
  * Parse the string of the 'd' presentation attribute out of CSS, which can be parsed with \ref
@@ -143,7 +192,8 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
-      createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, FontMetrics(),
+      const FontMetrics metrics = fontMetricsForElement(registry, style);
+      createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, metrics,
                                    outWarnings);
     }
 
@@ -421,7 +471,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 }
 
 ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params) {
+                                                 const parser::PropertyParseFnParams& params) {
   if (name == "d") {
     auto maybeError = ParseDFromAttributes(handle.get_or_emplace<PathComponent>(), params);
     if (maybeError) {

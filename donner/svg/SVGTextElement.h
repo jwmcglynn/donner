@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/Box.h"
 #include "donner/base/Length.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGTextContentElement.h"
@@ -97,6 +98,21 @@ public:
   static SVGTextElement Create(SVGDocument& document) {
     return CreateOn(CreateEmptyEntity(document));
   }
+
+  /**
+   * Convert this text element to positioned glyph outlines.
+   */
+  std::vector<PathSpline> convertToPath() const;
+
+  /**
+   * Return the ink bounding box of the rendered text.
+   */
+  Boxd inkBoundingBox() const;
+
+  /**
+   * Return the text object bounding box used for gradient/pattern mapping.
+   */
+  Boxd objectBoundingBox() const;
 };
 
 }  // namespace donner::svg

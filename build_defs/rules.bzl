@@ -65,9 +65,7 @@ def renderer_backend_compatible_with(backends):
 def _renderer_backend_transition_impl(settings, attr):
     if settings["//build_defs:disable_backend_test_transition"]:
         return {
-            "//donner/svg/renderer:renderer_backend": settings[
-                "//donner/svg/renderer:renderer_backend"
-            ],
+            "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
         }
 
     return {
@@ -110,7 +108,7 @@ def _donner_transitioned_executable_impl(ctx):
         ),
     ]
 
-donner_transitioned_test = rule(
+donner_transitioned_cc_test = rule(
     implementation = _donner_transitioned_executable_impl,
     test = True,
     attrs = {
@@ -125,6 +123,92 @@ donner_transitioned_test = rule(
         ),
     },
 )
+
+def _multi_transition_impl(settings, attr):
+    if settings["//build_defs:disable_backend_test_transition"]:
+        return {
+            "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
+            "//donner/svg/renderer:text_full": settings["//donner/svg/renderer:text_full"],
+        }
+
+    return {
+        "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
+        "//donner/svg/renderer:text_full": attr.text_full == "true",
+    }
+
+_multi_transition = transition(
+    implementation = _multi_transition_impl,
+    inputs = [
+        "//build_defs:disable_backend_test_transition",
+        "//donner/svg/renderer:renderer_backend",
+        "//donner/svg/renderer:text_full",
+    ],
+    outputs = [
+        "//donner/svg/renderer:renderer_backend",
+        "//donner/svg/renderer:text_full",
+    ],
+)
+
+donner_multi_transitioned_test = rule(
+    implementation = _donner_transitioned_executable_impl,
+    test = True,
+    attrs = {
+        "dep": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = _multi_transition,
+        ),
+        "renderer_backend": attr.string(
+            mandatory = True,
+            values = ["skia", "tiny_skia"],
+        ),
+        "text_full": attr.string(
+            default = "false",
+            values = ["true", "false"],
+        ),
+    },
+)
+
+def donner_variant_cc_test(name, dep, variants, **kwargs):
+    """
+    Generate test targets for all combinations of variant axes, plus a default
+    that inherits the active command-line config.
+
+    Args:
+      name: Base name for the generated targets.
+      dep: The test implementation target (tagged manual).
+      variants: List of variant axis lists, e.g. [["tiny_skia", "skia"], ["text", "text_full"]].
+        First axis is renderer backend. Second axis (optional) is text tier.
+      **kwargs: Additional arguments passed to the generated test rules.
+
+    Generated targets:
+      {name}                          - alias to the default (no transition, uses active config)
+      {name}_{backend}_{text_tier}    - explicit variant, e.g. resvg_test_suite_tiny_skia_text_full
+    """
+    backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
+    text_tiers = variants[1] if len(variants) > 1 else ["text"]
+
+    for backend in backends:
+        for tier in text_tiers:
+            suffix = "{}_{}".format(backend, tier)
+            target_name = "{}_{}".format(name, suffix)
+            text_full_val = "true" if tier == "text_full" else "false"
+
+            donner_multi_transitioned_test(
+                name = target_name,
+                dep = dep,
+                renderer_backend = backend,
+                text_full = text_full_val,
+                testonly = 1,
+                **kwargs
+            )
+
+    # Default alias: uses no transition, inherits active command-line config.
+    native.alias(
+        name = name,
+        actual = dep,
+        testonly = 1,
+    )
 
 def donner_cc_binary(name, linkopts = [], **kwargs):
     """
@@ -279,10 +363,13 @@ def _is_compilation_outputs_empty(compilation_outputs):
 def _donner_perf_sensitive_cc_library_impl(ctx):
     cc_toolchain = find_cpp_toolchain(ctx)
 
+    # Request the 'opt' feature for optimized compilation without changing the
+    # configuration of transitive deps (which would cause shared-library link
+    # conflicts between opt and fastbuild configurations of the same dep).
     feature_configuration = cc_common.configure_features(
         ctx = ctx,
         cc_toolchain = cc_toolchain,
-        requested_features = ctx.features,
+        requested_features = ctx.features + ["opt"],
         unsupported_features = ctx.disabled_features,
     )
 
@@ -332,7 +419,7 @@ _donner_perf_sensitive_cc_library = rule(
     attrs = {
         "srcs": attr.label_list(allow_files = [".c", ".cc", ".cpp", ".h"]),
         "hdrs": attr.label_list(allow_files = [".h"]),
-        "deps": attr.label_list(cfg = _force_opt_transition),
+        "deps": attr.label_list(),
         "includes": attr.string_list(default = []),  # Optional includes
         "defines": attr.string_list(default = []),  # Optional defines
         "local_defines": attr.string_list(default = []),  # Optional defines
@@ -342,7 +429,7 @@ _donner_perf_sensitive_cc_library = rule(
     fragments = ["cpp"],
 )
 
-def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **kwargs):
+def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, target_compatible_with = None, **kwargs):
     """
     Wrapper around a cc_library that is always compiled with optimizations.
 
@@ -361,8 +448,15 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **k
       name: Rule name.
       allow_debug_builds_config: A `selects.config_setting` that, if enabled,
         will allow this library to be built in debug mode.
+      target_compatible_with: Optional platform compatibility constraints, propagated
+        to all generated sub-targets.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
+    compat = {}
+    if target_compatible_with != None:
+        compat["target_compatible_with"] = target_compatible_with
+        kwargs["target_compatible_with"] = target_compatible_with
+
     if allow_debug_builds_config != None:
         _donner_perf_sensitive_cc_library(
             name = name + "_opt",
@@ -382,6 +476,7 @@ def donner_perf_sensitive_cc_library(name, allow_debug_builds_config = None, **k
             }),
             visibility = ["//donner:__subpackages__"],
             tags = ["perf_sensitive"],
+            **compat
         )
     else:
         _donner_perf_sensitive_cc_library(

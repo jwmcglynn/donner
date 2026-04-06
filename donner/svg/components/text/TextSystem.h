@@ -5,6 +5,8 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseError.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 
 namespace donner::svg::components {
 
@@ -23,6 +25,14 @@ public:
    * instantiation.
    */
   void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+
+  /**
+   * Instantiate computed text spans for a specific text root.
+   *
+   * @param handle Text root handle.
+   * @param outWarnings If non-null, warnings are appended here.
+   */
+  void instantiateComputedComponent(EntityHandle handle, std::vector<ParseError>* outWarnings);
 };
 
 }  // namespace donner::svg::components

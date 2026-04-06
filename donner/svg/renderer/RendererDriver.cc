@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
+#include <any>
+#include <cstring>
 #include <iostream>
 #include <optional>
 #include <vector>
@@ -8,12 +10,13 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/ParseError.h"
 #include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
-#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -21,17 +24,157 @@
 #include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/core/Overflow.h"
+#include "donner/svg/graph/Reference.h"
+#include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 
 namespace {
+
+components::ResolvedPaintServer resolvePaintServer(Registry& registry, const PaintServer& paint) {
+  if (paint.is<PaintServer::Solid>()) {
+    return paint.get<PaintServer::Solid>();
+  }
+
+  if (paint.is<PaintServer::ElementReference>()) {
+    const auto& ref = paint.get<PaintServer::ElementReference>();
+    auto resolvedRef = ref.reference.resolve(registry);
+    if (resolvedRef && resolvedRef->handle) {
+      return components::PaintResolvedReference{*resolvedRef, ref.fallback, std::nullopt};
+    }
+
+    if (ref.fallback) {
+      return PaintServer::Solid(*ref.fallback);
+    }
+  }
+
+  return PaintServer::None();
+}
+
+/// Resolves renderer-facing per-span style properties from each span's sourceEntity.
+/// Layout-facing span state is delegated to TextEngine.
+void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
+                          EntityHandle textRootHandle) {
+  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+    textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+  }
+
+  for (auto& span : text.spans) {
+    if (span.sourceEntity == entt::null) {
+      continue;
+    }
+
+    const Boxd viewBox =
+        textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Boxd();
+    const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
+
+    // Walk up to the nearest ancestor with computed style so inherited paint and decoration
+    // continue to work for nested tspans with no local ComputedStyleComponent.
+    entt::entity styleEntity = span.sourceEntity;
+    auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+    while ((!style || !style->properties) &&
+           registry.all_of<donner::components::TreeComponent>(styleEntity)) {
+      const auto& tree = registry.get<donner::components::TreeComponent>(styleEntity);
+      if (tree.parent() == entt::null) {
+        break;
+      }
+
+      styleEntity = tree.parent();
+      style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+    }
+
+    if (style && style->properties) {
+      span.resolvedFill = resolvePaintServer(registry, style->properties->fill.getRequired());
+      span.resolvedStroke = resolvePaintServer(registry, style->properties->stroke.getRequired());
+      span.fillOpacity = style->properties->fillOpacity.getRequired();
+      span.strokeOpacity = style->properties->strokeOpacity.getRequired();
+      span.strokeWidth = style->properties->strokeWidth.getRequired().toPixels(
+          viewBox, baseFm, Lengthd::Extent::Mixed);
+      span.strokeLinecap = style->properties->strokeLinecap.getRequired();
+      span.strokeLinejoin = style->properties->strokeLinejoin.getRequired();
+      span.strokeMiterLimit = style->properties->strokeMiterlimit.getRequired();
+    }
+
+    // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT
+    // inherited but the visual decoration line propagates to descendants. Walk ancestors to
+    // accumulate decoration types, but source paint from the innermost text element that
+    // contributes the decorated glyphs.
+    {
+      span.textDecoration = TextDecoration::None;
+      span.resolvedDecorationFill = PaintServer::None();
+      span.resolvedDecorationStroke = PaintServer::None();
+      span.decorationFillOpacity = 1.0;
+      span.decorationStrokeOpacity = 1.0;
+      span.decorationFontSizePx = 0.0f;
+      span.decorationStrokeWidth = 0.0;
+      span.decorationDeclarationCount = 0;
+
+      Entity decorationPaintEntity = entt::null;
+      Entity nearestTextStyleEntity =
+          registry.all_of<components::TextComponent>(styleEntity) ? styleEntity : entt::null;
+
+      Entity walkEntity = styleEntity;
+      while (walkEntity != entt::null) {
+        if (registry.all_of<components::TextComponent>(walkEntity)) {
+          nearestTextStyleEntity = walkEntity;
+        }
+
+        auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
+        if (walkStyle && walkStyle->properties) {
+          const TextDecoration ancestorDeco = walkStyle->properties->textDecoration.getRequired();
+          if (ancestorDeco != TextDecoration::None) {
+            // This ancestor declares decoration — accumulate it for descendant glyphs.
+            span.textDecoration |= ancestorDeco;
+            ++span.decorationDeclarationCount;
+
+            if (decorationPaintEntity == entt::null) {
+              decorationPaintEntity = registry.all_of<components::TextComponent>(walkEntity)
+                                          ? walkEntity
+                                          : nearestTextStyleEntity;
+              if (decorationPaintEntity == entt::null) {
+                decorationPaintEntity = walkEntity;
+              }
+            }
+          }
+        }
+
+        auto* tree = registry.try_get<donner::components::TreeComponent>(walkEntity);
+        if (!tree) {
+          break;
+        }
+        walkEntity = tree->parent();
+      }
+
+      if (decorationPaintEntity != entt::null) {
+        auto* decoStyle =
+            registry.try_get<components::ComputedStyleComponent>(decorationPaintEntity);
+        if (decoStyle && decoStyle->properties) {
+          const auto& decoProps = decoStyle->properties.value();
+          span.resolvedDecorationFill = resolvePaintServer(registry, decoProps.fill.getRequired());
+          span.resolvedDecorationStroke =
+              resolvePaintServer(registry, decoProps.stroke.getRequired());
+          span.decorationFillOpacity = decoProps.fillOpacity.getRequired();
+          span.decorationStrokeOpacity = decoProps.strokeOpacity.getRequired();
+          span.decorationStrokeWidth =
+              decoProps.strokeWidth.getRequired().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
+          span.decorationFontSizePx = static_cast<float>(
+              decoProps.fontSize.getRequired().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed));
+        }
+      }
+    }
+  }
+}
 
 PathShape toPathShape(const components::ComputedPathComponent& path,
                       const components::ComputedStyleComponent& style) {
@@ -48,7 +191,7 @@ StrokeParams toStrokeParams(Registry& registry,
   const auto& properties = style.properties.value();
 
   const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+  const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
   const double fontSizePx = properties.fontSize.getRequired().toPixels(viewBox, baseFontMetrics);
   const FontMetrics fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
@@ -100,7 +243,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
                             const components::ComputedStyleComponent& style, Registry& registry) {
   ResolvedClip clip;
   clip.clipRect = instance.clipRect;
-  clip.mask = instance.mask;
+  // Note: mask is handled separately by the caller, not through ResolvedClip.
 
   if (const auto* clipPaths =
           instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>()) {
@@ -142,21 +285,6 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   return clip;
 }
 
-std::span<const FilterEffect> resolveFilterEffects(Registry& registry,
-                                                   const components::ResolvedFilterEffect& filter) {
-  if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
-    return *effects;
-  }
-
-  if (const auto* reference = std::get_if<ResolvedReference>(&filter)) {
-    if (const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference)) {
-      return computed->effectChain;
-    }
-  }
-
-  return {};
-}
-
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style) {
   const auto& properties = style.properties.value();
@@ -181,7 +309,8 @@ css::Color resolveFillColor(const components::RenderingInstanceComponent& instan
 }
 
 TextParams toTextParams(Registry& registry, const components::RenderingInstanceComponent& instance,
-                        const components::ComputedStyleComponent& style) {
+                        const components::ComputedStyleComponent& style,
+                        const components::TextComponent* textComp) {
   TextParams params;
   const auto& properties = style.properties.value();
   const css::RGBA currentColor = properties.color.getRequired().rgba();
@@ -192,13 +321,47 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
   if (const auto* stroke = std::get_if<PaintServer::Solid>(&instance.resolvedStroke)) {
     const float strokeOpacity = NarrowToFloat(properties.strokeOpacity.getRequired());
     params.strokeColor = css::Color(stroke->color.resolve(currentColor, strokeOpacity));
+  }
+
+  // Always populate stroke params when there's any non-none stroke (solid, gradient, or pattern),
+  // so that the renderer knows to stroke text outlines.
+  if (!std::holds_alternative<PaintServer::None>(instance.resolvedStroke)) {
     params.strokeParams = toStrokeParams(registry, instance, style);
   }
 
   params.fontFamilies = properties.fontFamily.getRequired();
   params.fontSize = properties.fontSize.getRequired();
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  params.fontMetrics = FontMetrics();
+  // Resolve font size so that em/ex units in text positioning attributes resolve correctly.
+  {
+    const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
+    const double fontSizePx =
+        params.fontSize.toPixels(params.viewBox, baseFontMetrics, Lengthd::Extent::Mixed);
+    params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
+  }
+  params.textAnchor = properties.textAnchor.getRequired();
+  params.textDecoration = properties.textDecoration.getRequired();
+  params.dominantBaseline = properties.dominantBaseline.getRequired();
+  params.writingMode = properties.writingMode.getRequired();
+
+  // Resolve letter-spacing and word-spacing to pixels.
+  params.letterSpacingPx = properties.letterSpacing.getRequired().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  params.wordSpacingPx = properties.wordSpacing.getRequired().toPixels(
+      params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+
+  if (textComp) {
+    params.textLength = textComp->textLength;
+    params.lengthAdjust = textComp->lengthAdjust;
+  }
+
+  // Pass @font-face declarations so renderers can resolve custom fonts.
+  if (auto* resourceManager = registry.ctx().find<components::ResourceManagerContext>()) {
+    params.fontFaces = resourceManager->fontFaces();
+  }
+
+  // Pass the text root entity for cached layout lookup.
+  params.textRootEntity = instance.dataHandle(registry).entity();
 
   return params;
 }
@@ -250,6 +413,173 @@ void RendererDriver::draw(SVGDocument& document) {
   renderer_.endFrame();
 }
 
+void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
+                                     const RenderViewport& viewport,
+                                     const Transformd& baseTransform) {
+  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  layerBaseTransform_ = baseTransform;
+
+  renderer_.beginFrame(viewport);
+
+  RenderingInstanceView view(registry);
+
+  // Advance to the first entity.
+  while (!view.done() && view.currentEntity() != firstEntity) {
+    view.advance();
+  }
+
+  // Traverse from first to last (inclusive).
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    reachedLast = (view.currentEntity() == lastEntity);
+
+    const components::RenderingInstanceComponent& instance = view.get();
+    const Entity entity = view.currentEntity();
+    view.advance();
+
+    const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
+    if (!style.properties.has_value()) {
+      continue;
+    }
+
+    const bool hasViewportClip = instance.clipRect.has_value();
+    if (hasViewportClip) {
+      ResolvedClip viewportClip;
+      viewportClip.clipRect = instance.clipRect;
+      renderer_.pushClip(viewportClip);
+    }
+
+    renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
+
+    const double opacity = style.properties->opacity.getRequired();
+    const bool hasIsolatedLayer = opacity < 1.0;
+    if (hasIsolatedLayer) {
+      renderer_.pushIsolatedLayer(opacity, style.properties->mixBlendMode.getRequired());
+    }
+
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    entityClip.clipRect = std::nullopt;
+    // Mask is handled separately from clip — access it directly from instance.
+    const bool hasEntityClip = !entityClip.empty();
+    if (hasEntityClip) {
+      renderer_.pushClip(entityClip);
+    }
+
+    int maskDepth = 0;
+    bool subtreeConsumedBySubRendering = false;
+
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      subtreeConsumedBySubRendering = true;
+    }
+
+    if (const auto* fillRef =
+            std::get_if<components::PaintResolvedReference>(&instance.resolvedFill)) {
+      if (fillRef->subtreeInfo &&
+          fillRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
+        renderPattern(view, registry, instance, *fillRef, /*forStroke=*/false);
+        subtreeConsumedBySubRendering = true;
+      }
+    }
+    if (const auto* strokeRef =
+            std::get_if<components::PaintResolvedReference>(&instance.resolvedStroke)) {
+      if (strokeRef->subtreeInfo &&
+          strokeRef->reference.handle.try_get<components::ComputedPatternComponent>()) {
+        renderPattern(view, registry, instance, *strokeRef, /*forStroke=*/true);
+        subtreeConsumedBySubRendering = true;
+      }
+    }
+
+    const PaintParams paint = toPaintParams(registry, instance, style);
+    renderer_.setPaint(paint);
+
+    if (instance.visible) {
+      if (const auto* path =
+              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        drawMarkers(view, registry, instance, *path, style);
+      } else if (auto* text =
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        renderer_.drawText(registry, *text, textParams);
+      } else if (const auto* image =
+                     instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
+        const std::optional<ImageParams> imageParams =
+            toImageParams(instance, style, *image, registry);
+        if (imageParams.has_value()) {
+          renderer_.drawImage(*image->image, *imageParams);
+        }
+      }
+    }
+
+    const bool subtreeConsumed = instance.subtreeInfo && subtreeConsumedBySubRendering;
+    const bool shouldDefer = instance.subtreeInfo && !subtreeConsumed;
+    if (shouldDefer) {
+      DeferredPop deferred;
+      deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
+      deferred.hasViewportClip = hasViewportClip;
+      deferred.hasIsolatedLayer = hasIsolatedLayer;
+      deferred.hasEntityClip = hasEntityClip;
+      deferred.maskDepth = maskDepth;
+      subtreeMarkers_.push_back(deferred);
+    } else {
+      for (int mi = 0; mi < maskDepth; ++mi) {
+        renderer_.popMask();
+      }
+      if (hasEntityClip) {
+        renderer_.popClip();
+      }
+      if (hasIsolatedLayer) {
+        renderer_.popIsolatedLayer();
+      }
+      if (hasViewportClip) {
+        renderer_.popClip();
+      }
+    }
+
+    while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
+      const DeferredPop& deferred = subtreeMarkers_.back();
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+        renderer_.popMask();
+      }
+      if (deferred.hasEntityClip) {
+        renderer_.popClip();
+      }
+      if (deferred.hasIsolatedLayer) {
+        renderer_.popIsolatedLayer();
+      }
+      if (deferred.hasViewportClip) {
+        renderer_.popClip();
+      }
+      subtreeMarkers_.pop_back();
+    }
+  }
+
+  // Pop any remaining deferred layers (handles the case where lastEntity is
+  // a subtree root whose deferred pop hasn't fired yet).
+  while (!subtreeMarkers_.empty()) {
+    const DeferredPop& deferred = subtreeMarkers_.back();
+    for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+      renderer_.popMask();
+    }
+    if (deferred.hasEntityClip) {
+      renderer_.popClip();
+    }
+    if (deferred.hasIsolatedLayer) {
+      renderer_.popIsolatedLayer();
+    }
+    if (deferred.hasViewportClip) {
+      renderer_.popClip();
+    }
+    subtreeMarkers_.pop_back();
+  }
+
+  renderer_.endFrame();
+  layerBaseTransform_ = Transformd();
+}
+
 RendererBitmap RendererDriver::takeSnapshot() const {
   return renderer_.takeSnapshot();
 }
@@ -277,10 +607,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     // Set the absolute transform for this entity. This uses setMatrix (no save/restore),
     // so it doesn't interact with the clip/layer save stack.
+    // layerBaseTransform_ is composed with the entity's transform to support sub-document
+    // rendering where a base transform maps from the parent document's coordinate space.
     if (verbose_) {
       const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
-                << " visible=" << instance.visible << " hasMask=" << instance.mask.has_value()
+                << " visible=" << instance.visible << " maskDepth=" << instance.mask.has_value()
                 << " hasSubtree=" << instance.subtreeInfo.has_value() << " transform=" << combined
                 << "\n";
     }
@@ -289,34 +621,30 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const double opacity = style.properties->opacity.getRequired();
     const bool hasIsolatedLayer = opacity < 1.0;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity);
-    }
-
-    const bool hasFilterLayer = instance.resolvedFilter.has_value();
-    if (hasFilterLayer) {
-      const std::span<const FilterEffect> effects =
-          resolveFilterEffects(registry, instance.resolvedFilter.value());
-      renderer_.pushFilterLayer(effects);
+      renderer_.pushIsolatedLayer(opacity, style.properties->mixBlendMode.getRequired());
     }
 
     // Clip paths are in entity-local coordinates.
+    // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
+    // Push entity clip BEFORE filter so it's the outer layer: clip-path clips the filter output,
+    // not the SourceGraphic input. The filter layer saves/clears the clip mask so the
+    // SourceGraphic is rendered unclipped.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     // Mask is handled separately below; don't let pushClip see it.
-    const std::optional<components::ResolvedMask> entityMask = entityClip.mask;
-    entityClip.mask = std::nullopt;
+    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
     }
 
     // Render mask content, then transition to masked content layer.
-    const bool hasMask = entityMask.has_value() && entityMask->valid();
+    int maskDepth = 0;
     // Track whether mask/pattern rendering consumed the element's subtree entities.
     bool subtreeConsumedBySubRendering = false;
 
-    if (hasMask) {
-      renderMask(view, registry, instance, *entityMask);
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
       subtreeConsumedBySubRendering = true;
     }
 
@@ -346,55 +674,60 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
-      } else if (const auto* text =
+      } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
-        renderer_.drawText(*text, textParams);
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         // SVG sub-document referenced by <image>.
-        const auto* sizedElement =
-            instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
-        if (sizedElement != nullptr) {
-          const auto* preserveAspectRatioComp =
-              instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
-          const PreserveAspectRatio aspectRatio = preserveAspectRatioComp != nullptr
-                                                      ? preserveAspectRatioComp->preserveAspectRatio
-                                                      : PreserveAspectRatio::Default();
+        if (svgImage->subDocument) {
+          const auto* sizedElement =
+              instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
+          if (verbose_) {
+            std::cout << "[svg-image] sizedElement=" << (sizedElement != nullptr);
+            if (sizedElement) {
+              std::cout << " bounds=" << sizedElement->bounds;
+            }
+            std::cout << "\n";
+          }
+          if (sizedElement != nullptr) {
+            const auto* preserveAspectRatioComp =
+                instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
+            const PreserveAspectRatio aspectRatio =
+                preserveAspectRatioComp != nullptr ? preserveAspectRatioComp->preserveAspectRatio
+                                                   : PreserveAspectRatio::Default();
+            const double opacity = style.properties->opacity.getRequired();
 
-          SVGDocument subDocument = SVGDocument::CreateFromHandle(svgImage->subDocument);
-          drawSubDocument(subDocument, sizedElement->bounds, aspectRatio,
-                          style.properties->opacity.getRequired(),
-                          layerBaseTransform_ * instance.entityFromWorldTransform);
+            SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
+            drawSubDocument(subDoc, sizedElement->bounds, aspectRatio, opacity,
+                            layerBaseTransform_ * instance.entityFromWorldTransform);
+          }
         }
       } else if (const auto* externalUse =
                      instance.dataHandle(registry).try_get<components::ExternalUseComponent>()) {
         // External SVG sub-document referenced by <use>.
-        // Pass the <use> element's fill/stroke as context-fill/context-stroke
-        // for the sub-document (SVG2 context paint inheritance).
-        SVGDocument subDocument = SVGDocument::CreateFromHandle(externalUse->subDocument);
-        setSubDocumentContextPaint(subDocument, instance.resolvedFill,
-                                   instance.resolvedStroke);
+        if (externalUse->subDocument) {
+          SVGDocument subDoc = SVGDocument::CreateFromHandle(externalUse->subDocument);
+          setSubDocumentContextPaint(subDoc, instance.resolvedFill, instance.resolvedStroke);
 
-        if (!externalUse->fragment.empty()) {
-          // Fragment reference: render only the referenced element from the sub-document.
-          // Pass the <use> element's absolute transform so the fragment is positioned
-          // at the <use> element's location in the parent document.
-          const Transformd parentAbsoluteTransform =
-              layerBaseTransform_ * instance.entityFromWorldTransform;
-          drawSubDocumentElement(subDocument, externalUse->fragment,
-                                 parentAbsoluteTransform, style.properties->opacity.getRequired());
-        } else {
-          // Whole-document reference: render the entire sub-document.
-          // Include the <use> element's transform so the sub-document is positioned correctly.
-          const Vector2i subDocSize = subDocument.canvasSize();
-          const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
-          drawSubDocument(subDocument, viewportBounds, PreserveAspectRatio::Default(),
-                          style.properties->opacity.getRequired(),
-                          layerBaseTransform_ * instance.entityFromWorldTransform);
+          if (!externalUse->fragment.empty()) {
+            const Transformd parentAbsoluteTransform =
+                layerBaseTransform_ * instance.entityFromWorldTransform;
+            drawSubDocumentElement(subDoc, externalUse->fragment, parentAbsoluteTransform,
+                                   style.properties->opacity.getRequired());
+          } else {
+            const Vector2i subDocSize = subDoc.canvasSize();
+            const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+            drawSubDocument(subDoc, viewportBounds, PreserveAspectRatio::Default(),
+                            style.properties->opacity.getRequired(),
+                            layerBaseTransform_ * instance.entityFromWorldTransform);
+          }
+
+          clearSubDocumentContextPaint(subDoc);
         }
-
-        clearSubDocumentContextPaint(subDocument);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -443,19 +776,16 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
-      deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
-      deferred.hasMask = hasMask;
+      deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
     } else {
-      if (hasMask) {
+      for (int mi = 0; mi < maskDepth; ++mi) {
         renderer_.popMask();
       }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (hasEntityClip) {
         renderer_.popClip();
-      }
-      if (hasFilterLayer) {
-        renderer_.popFilterLayer();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -468,14 +798,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Pop deferred subtree layers when we reach their last entity.
     while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
       const DeferredPop& deferred = subtreeMarkers_.back();
-      if (deferred.hasMask) {
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
         renderer_.popMask();
       }
+      // Pop in reverse of push order: filter is innermost, then entity clip.
       if (deferred.hasEntityClip) {
         renderer_.popClip();
-      }
-      if (deferred.hasFilterLayer) {
-        renderer_.popFilterLayer();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -525,21 +853,24 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const double opacity = style.properties->opacity.getRequired();
     const bool hasIsolatedLayer = opacity < 1.0;
     if (hasIsolatedLayer) {
-      renderer_.pushIsolatedLayer(opacity);
+      renderer_.pushIsolatedLayer(opacity, style.properties->mixBlendMode.getRequired());
     }
 
-    const bool hasFilterLayer = instance.resolvedFilter.has_value();
-    if (hasFilterLayer) {
-      const std::span<const FilterEffect> effects =
-          resolveFilterEffects(registry, instance.resolvedFilter.value());
-      renderer_.pushFilterLayer(effects);
-    }
-
+    // Per SVG spec: paint → filter → clip-path. Push clip before filter so clip applies to
+    // the filter output. The filter layer saves/clears the clip mask internally.
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
+    // Mask is handled separately below; don't let pushClip see it.
+    // Mask is handled separately from clip — access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
+    }
+
+    // Render mask content, then transition to masked content layer.
+    int maskDepth = 0;
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      maskDepth = renderMask(view, registry, instance, *instance.mask);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -565,33 +896,58 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
-      } else if (const auto* text =
+        drawMarkers(view, registry, instance, *path, style);
+      } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
-        renderer_.drawText(*text, textParams);
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
-        // SVG sub-document referenced by <image>.
-        const auto* sizedElement =
-            instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
-        if (sizedElement != nullptr) {
-          const auto* preserveAspectRatioComp =
-              instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
-          const PreserveAspectRatio aspectRatio = preserveAspectRatioComp != nullptr
-                                                      ? preserveAspectRatioComp->preserveAspectRatio
-                                                      : PreserveAspectRatio::Default();
+        if (svgImage->subDocument) {
+          const auto* sizedElement =
+              instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
+          if (sizedElement != nullptr) {
+            const auto* preserveAspectRatioComp =
+                instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
+            const PreserveAspectRatio aspectRatio =
+                preserveAspectRatioComp != nullptr ? preserveAspectRatioComp->preserveAspectRatio
+                                                   : PreserveAspectRatio::Default();
 
-          SVGDocument subDocument = SVGDocument::CreateFromHandle(svgImage->subDocument);
-          drawSubDocument(subDocument, sizedElement->bounds, aspectRatio,
-                          style.properties->opacity.getRequired(),
-                          layerBaseTransform_ * instance.entityFromWorldTransform);
+            SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
+            drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
+                            style.properties->opacity.getRequired(),
+                            layerBaseTransform_ * instance.entityFromWorldTransform);
+          }
         }
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
             toImageParams(instance, style, *image, registry);
         if (imageParams.has_value()) {
-          renderer_.drawImage(*image->image, *imageParams);
+          const auto* sizedElement =
+              instance.dataHandle(registry).try_get<components::ComputedSizedElementComponent>();
+          const auto* preserveAspectRatio =
+              instance.dataHandle(registry).try_get<components::PreserveAspectRatioComponent>();
+
+          if (sizedElement != nullptr) {
+            ResolvedClip imageClip;
+            imageClip.clipRect = sizedElement->bounds;
+            renderer_.pushClip(imageClip);
+
+            const PreserveAspectRatio par = preserveAspectRatio != nullptr
+                                                ? preserveAspectRatio->preserveAspectRatio
+                                                : PreserveAspectRatio::Default();
+            const Transformd imageFromLocal = par.elementContentFromViewBoxTransform(
+                sizedElement->bounds, imageParams->targetRect);
+            renderer_.pushTransform(imageFromLocal);
+            renderer_.drawImage(*image->image, *imageParams);
+            renderer_.popTransform();
+            renderer_.popClip();
+          } else {
+            renderer_.drawImage(*image->image, *imageParams);
+          }
         }
       }
     }
@@ -600,15 +956,16 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       DeferredPop deferred;
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
-      deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
+      deferred.maskDepth = maskDepth;
       localDeferred.push_back(deferred);
     } else {
+      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
+      for (int mi = 0; mi < maskDepth; ++mi) {
+        renderer_.popMask();
+      }
       if (hasEntityClip) {
         renderer_.popClip();
-      }
-      if (hasFilterLayer) {
-        renderer_.popFilterLayer();
       }
       if (hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -617,11 +974,12 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
       const DeferredPop& deferred = localDeferred.back();
+      // Pop in reverse of push order: mask innermost, then filter, clip, layer.
+      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+        renderer_.popMask();
+      }
       if (deferred.hasEntityClip) {
         renderer_.popClip();
-      }
-      if (deferred.hasFilterLayer) {
-        renderer_.popFilterLayer();
       }
       if (deferred.hasIsolatedLayer) {
         renderer_.popIsolatedLayer();
@@ -641,24 +999,23 @@ void RendererDriver::skipUntil(RenderingInstanceView& view, Entity endEntity) {
   }
 }
 
-void RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
-                                const components::RenderingInstanceComponent& instance,
-                                const components::ResolvedMask& mask) {
+int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
+                               const components::RenderingInstanceComponent& instance,
+                               const components::ResolvedMask& mask) {
   if (!mask.subtreeInfo) {
-    return;
+    return 0;
   }
 
   const EntityHandle maskHandle = mask.reference.handle;
   if (!maskHandle.valid()) {
-    return;
+    return 0;
   }
 
   const auto* maskComponent = maskHandle.try_get<components::MaskComponent>();
   if (maskComponent == nullptr) {
-    return;
+    return 0;
   }
 
-  // Compute mask bounds.
   const Boxd shapeLocalBounds =
       components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
 
@@ -696,18 +1053,15 @@ void RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   }
   renderer_.pushMask(maskBounds);
 
-  // Save and override layerBaseTransform for mask content rendering.
   const Transformd savedLayerBase = layerBaseTransform_;
   layerBaseTransform_ = instance.entityFromWorldTransform;
 
-  // Apply maskContentUnits transform.
   if (maskComponent->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
     const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
                                                 Transformd::Translate(shapeLocalBounds.topLeft);
     layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
   }
 
-  // Render mask subtree.
   if (!shapeLocalBounds.isEmpty()) {
     traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
                   mask.subtreeInfo->lastRenderedEntity);
@@ -716,11 +1070,9 @@ void RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   }
 
   layerBaseTransform_ = savedLayerBase;
-
   renderer_.transitionMaskToContent();
-
-  // Restore the entity transform after mask rendering.
   renderer_.setTransform(instance.entityFromWorldTransform);
+  return 1;
 }
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
@@ -957,7 +1309,7 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
   // Apply opacity as an isolated layer if needed.
   const bool needsOpacityLayer = opacity < 1.0;
   if (needsOpacityLayer) {
-    renderer_.pushIsolatedLayer(opacity);
+    renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
   }
 
   // Compute the base transform that maps sub-document coordinates into device space.
@@ -969,7 +1321,11 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
   const Transformd subDocFromLocal =
       aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
   const Transformd docFromCanvas = subDocument.documentFromCanvasTransform();
-  // Transformd operator* is left-first: A * B means "apply A, then B".
+  // Compose the transform chain. Transformd operator* uses left-first order: A * B = "apply A,
+  // then B". The sub-doc root entity's entityFromWorldTransform already includes docFromCanvas^-1
+  // (mapping from document to canvas/device space). Including docFromCanvas here cancels that out,
+  // so the net result maps sub-doc element coordinates through subDocFromLocal (to parent document
+  // space), then through parentAbsoluteTransform (to device space).
   const Transformd baseTransform = subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
 
   // Save and override layerBaseTransform for sub-document rendering.
@@ -999,6 +1355,9 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   auto& docCtx = subDocument.registry().ctx().get<const components::SVGDocumentContext>();
   const Entity targetEntity = docCtx.getEntityById(RcString(fragmentId));
   if (targetEntity == entt::null) {
+    if (verbose_) {
+      std::cerr << "[drawSubDocumentElement] Fragment '" << fragmentId << "' not found\n";
+    }
     return;
   }
 
@@ -1006,6 +1365,10 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   const auto* targetInstance =
       subDocument.registry().try_get<components::RenderingInstanceComponent>(targetEntity);
   if (targetInstance == nullptr) {
+    if (verbose_) {
+      std::cerr << "[drawSubDocumentElement] No RenderingInstanceComponent for fragment '"
+                << fragmentId << "'\n";
+    }
     return;
   }
 
@@ -1016,10 +1379,16 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   // Apply opacity as an isolated layer if needed.
   const bool needsOpacityLayer = opacity < 1.0;
   if (needsOpacityLayer) {
-    renderer_.pushIsolatedLayer(opacity);
+    renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
   }
 
-  // Strip the sub-document ancestors and position the target subtree at the <use> location.
+  // Set layerBaseTransform to position the target element at the <use> element's location.
+  // The target's entityFromWorldTransform includes all ancestor transforms from the
+  // sub-document root. By composing parentAbsoluteTransform with the inverse of the target's
+  // transform, we strip the sub-document ancestors and place the element at the <use> position.
+  // For each entity in the subtree:
+  //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute *
+  //   entityFromTarget
   const Transformd savedLayerBase = layerBaseTransform_;
   layerBaseTransform_ =
       parentAbsoluteTransform * targetInstance->entityFromWorldTransform.inverse();

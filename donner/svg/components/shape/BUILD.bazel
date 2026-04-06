@@ -1,4 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:rules.bzl", "donner_cc_test")
 
 cc_library(
     name = "components",
@@ -34,6 +35,10 @@ cc_library(
     hdrs = [
         "ShapeSystem.h",
     ],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     visibility = [
         "//donner/svg/components:__subpackages__",
         "//donner/svg/properties:__pkg__",
@@ -45,5 +50,25 @@ cc_library(
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:style_system",
+    ] + select({
+        "//donner/svg/renderer:text_enabled": [
+            "//donner/svg/resources:font_manager",
+            "//donner/svg/text:text_engine",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_test(
+    name = "shape_system_tests",
+    srcs = [
+        "tests/ShapeSystem_tests.cc",
+    ],
+    deps = [
+        ":shape_system",
+        "//donner/base:base_test_utils",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
     ],
 )

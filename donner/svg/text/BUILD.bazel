@@ -1,0 +1,92 @@
+load("//build_defs:rules.bzl", "donner_cc_library")
+
+donner_cc_library(
+    name = "text_types",
+    hdrs = ["TextTypes.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/svg/resources:font_manager",
+    ],
+)
+
+donner_cc_library(
+    name = "text_backend",
+    hdrs = [
+        "FontDataUtils.h",
+        "TextBackend.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_types",
+        "//donner/svg/core",
+        "//donner/svg/resources:font_manager",
+    ],
+)
+
+donner_cc_library(
+    name = "text_layout_params",
+    hdrs = ["TextLayoutParams.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/core",
+    ],
+)
+
+donner_cc_library(
+    name = "text_backend_simple",
+    srcs = ["TextBackendSimple.cc"],
+    hdrs = ["TextBackendSimple.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_backend",
+        "//donner/base",
+        "//donner/svg/resources:font_manager",
+        "@stb//:truetype",
+    ],
+)
+
+donner_cc_library(
+    name = "text_engine",
+    srcs = ["TextEngine.cc"],
+    hdrs = [
+        "TextEngine.h",
+        "TextEngineHelpers.h",
+    ],
+    defines = select({
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_backend",
+        ":text_backend_simple",
+        ":text_layout_params",
+        ":text_types",
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg/components:components_core",
+        "//donner/svg/components/layout:layout_system",
+        "//donner/svg/components/style:components",
+        "//donner/svg/components/text:components",
+        "//donner/svg/components/text:text_system",
+        "//donner/svg/resources:font_manager",
+    ] + select({
+        "//donner/svg/renderer:text_full_enabled": [":text_backend_full"],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_library(
+    name = "text_backend_full",
+    srcs = ["TextBackendFull.cc"],
+    hdrs = ["TextBackendFull.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":text_backend",
+        "//donner/base",
+        "//donner/svg/resources:font_manager",
+        "@freetype",
+        "@harfbuzz",
+    ],
+)

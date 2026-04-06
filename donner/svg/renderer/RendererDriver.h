@@ -47,9 +47,9 @@ private:
                   const components::ResolvedMarker& marker, const Vector2d& vertexPosition,
                   const Vector2d& direction, MarkerOrient::MarkerType markerOrientType,
                   const components::ComputedStyleComponent& style);
-  void renderMask(RenderingInstanceView& view, Registry& registry,
-                  const components::RenderingInstanceComponent& instance,
-                  const components::ResolvedMask& mask);
+  int renderMask(RenderingInstanceView& view, Registry& registry,
+                 const components::RenderingInstanceComponent& instance,
+                 const components::ResolvedMask& mask);
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
@@ -58,9 +58,12 @@ private:
                        const Transformd& parentAbsoluteTransform);
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transformd& parentAbsoluteTransform, double opacity);
-  static void setSubDocumentContextPaint(
-      SVGDocument& subDocument, const components::ResolvedPaintServer& contextFill,
-      const components::ResolvedPaintServer& contextStroke);
+  void preRenderSvgFeImages(components::FilterGraph& filterGraph);
+  void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
+                       const RenderViewport& viewport, const Transformd& baseTransform);
+  static void setSubDocumentContextPaint(SVGDocument& subDocument,
+                                         const components::ResolvedPaintServer& contextFill,
+                                         const components::ResolvedPaintServer& contextStroke);
   static void clearSubDocumentContextPaint(SVGDocument& subDocument);
 
   struct DeferredPop {
@@ -69,13 +72,14 @@ private:
     bool hasIsolatedLayer = false;
     bool hasFilterLayer = false;
     bool hasEntityClip = false;
-    bool hasMask = false;
+    int maskDepth = 0;
   };
 
   RendererInterface& renderer_;
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;
   Transformd layerBaseTransform_;
+  Vector2i renderingSize_ = Vector2i::Zero();
 };
 
 }  // namespace donner::svg

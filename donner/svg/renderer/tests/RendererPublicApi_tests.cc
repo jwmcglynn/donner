@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -10,8 +11,9 @@
 namespace donner::svg {
 namespace {
 
-SVGDocument ParseDocument(std::string_view svgSource) {
+SVGDocument ParseDocument(std::string_view svgSource, bool enableExperimental = false) {
   parser::SVGParser::Options options;
+  options.enableExperimental = enableExperimental;
   ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource, nullptr, options);
   EXPECT_FALSE(maybeDocument.hasError());
   return std::move(maybeDocument.result());
@@ -94,6 +96,35 @@ TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
   EXPECT_EQ(incrementalSnapshot.dimensions, fullSnapshot.dimensions);
   EXPECT_EQ(incrementalSnapshot.rowBytes, fullSnapshot.rowBytes);
   EXPECT_EQ(incrementalSnapshot.pixels, fullSnapshot.pixels);
+}
+
+TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 200 200"
+           font-size="64">
+        <text x="32" y="100">T</text>
+      </svg>
+    )svg",
+                                      /*enableExperimental=*/true);
+
+  Renderer renderer;
+  renderer.draw(document);
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  ASSERT_EQ(snapshot.dimensions, Vector2i(500, 500));
+
+  const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
+    const size_t index =
+        (static_cast<size_t>(y) * snapshot.rowBytes) + static_cast<size_t>(x) * 4u;
+    return {snapshot.pixels[index], snapshot.pixels[index + 1], snapshot.pixels[index + 2],
+            snapshot.pixels[index + 3]};
+  };
+
+  // The glyph should be placed after the viewBox-to-canvas scale, not at the unscaled SVG-space
+  // coordinates near the top-left corner.
+  EXPECT_EQ(pixelAt(80, 20)[3], 0);
+  EXPECT_GT(pixelAt(120, 150)[3], 0);
 }
 
 }  // namespace

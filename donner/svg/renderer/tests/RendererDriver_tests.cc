@@ -3,10 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
 
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/Specificity.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -14,6 +16,7 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -92,9 +95,12 @@ public:
   MOCK_METHOD(void, popTransform, (), (override));
   MOCK_METHOD(void, pushClip, (const ResolvedClip& clip), (override));
   MOCK_METHOD(void, popClip, (), (override));
-  MOCK_METHOD(void, pushIsolatedLayer, (double opacity), (override));
+  MOCK_METHOD(void, pushIsolatedLayer, (double opacity, MixBlendMode blendMode), (override));
   MOCK_METHOD(void, popIsolatedLayer, (), (override));
-  MOCK_METHOD(void, pushFilterLayer, (std::span<const FilterEffect> effects), (override));
+  MOCK_METHOD(void, pushFilterLayer,
+              (const components::FilterGraph& filterGraph,
+               const std::optional<Boxd>& filterRegion),
+              (override));
   MOCK_METHOD(void, popFilterLayer, (), (override));
   MOCK_METHOD(void, pushMask, (const std::optional<Boxd>& maskBounds), (override));
   MOCK_METHOD(void, transitionMaskToContent, (), (override));
@@ -108,7 +114,8 @@ public:
   MOCK_METHOD(void, drawEllipse, (const Boxd& bounds, const StrokeParams& stroke), (override));
   MOCK_METHOD(void, drawImage, (const ImageResource& image, const ImageParams& params), (override));
   MOCK_METHOD(void, drawText,
-              (const components::ComputedTextComponent& text, const TextParams& params),
+              (Registry & registry, const components::ComputedTextComponent& text,
+               const TextParams& params),
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
 };
@@ -224,17 +231,140 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
     document.registry().emplace<components::ComputedStyleComponent>(textEntity, style);
 
     components::ComputedTextComponent text;
-    text.spans.push_back(components::ComputedTextComponent::TextSpan{
-        RcString("hi"), 0, 2, Lengthd(2, Lengthd::Unit::None), Lengthd(3, Lengthd::Unit::None),
-        Lengthd(), Lengthd(), 0.0});
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("hi");
+    span.start = 0;
+    span.end = 2;
+    span.xList.push_back(Lengthd(2, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(3, Lengthd::Unit::None));
+    span.startsNewChunk = true;
+    text.spans.push_back(std::move(span));
     document.registry().emplace<components::ComputedTextComponent>(textEntity, text);
   });
   EXPECT_CALL(renderer, endFrame()).Times(1);
   EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
-  EXPECT_CALL(renderer,
-              drawText(_, Field(&TextParams::fillColor, Eq(css::Color(css::RGBA(0, 255, 0, 255))))))
+  EXPECT_CALL(
+      renderer,
+      drawText(_, _, Field(&TextParams::fillColor, Eq(css::Color(css::RGBA(0, 255, 0, 255))))))
       .Times(AtLeast(1));
+
+  driver.draw(document);
+}
+
+TEST_F(RendererDriverTest, ResolvesSpanStrokeAndDecorationPaintFromTextStyle) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="1" height="1" fill="none" />
+  )svg",
+                                      Vector2i(200, 200));
+
+  auto expectSolidColor = [](const components::ResolvedPaintServer& paint,
+                             const css::RGBA& expected) {
+    const auto* solid = std::get_if<PaintServer::Solid>(&paint);
+    ASSERT_NE(solid, nullptr);
+    EXPECT_EQ(solid->color.resolve(css::RGBA(0, 0, 0, 255), 1.0f), expected);
+  };
+
+  EXPECT_CALL(renderer, beginFrame(_)).WillOnce([&](const RenderViewport&) {
+    const css::Specificity inlineSpecificity = css::Specificity::FromABC(1, 0, 0);
+    const auto setCommonTextProps = [&](PropertyRegistry& properties) {
+      properties.opacity.set(1.0, inlineSpecificity);
+      properties.color.set(css::Color(css::RGBA(0, 0, 0, 255)), inlineSpecificity);
+      properties.fillOpacity.set(1.0, inlineSpecificity);
+      properties.strokeOpacity.set(1.0, inlineSpecificity);
+      properties.strokeWidth.set(Lengthd(1, Lengthd::Unit::None), inlineSpecificity);
+      properties.fontFamily.set(SmallVector<RcString, 1>{RcString("sans-serif")},
+                                inlineSpecificity);
+      properties.fontSize.set(Lengthd(48, Lengthd::Unit::None), inlineSpecificity);
+    };
+
+    const Vector2i canvasSize = document.canvasSize();
+    const Boxd viewBox = Boxd(
+        Vector2d(), Vector2d(static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)));
+
+    Entity groupEntity = document.registry().create();
+    Entity textEntity = document.registry().create();
+    Entity tspanEntity = document.registry().create();
+
+    document.registry().emplace<::donner::components::TreeComponent>(groupEntity,
+                                                                     xml::XMLQualifiedNameRef("g"));
+    document.registry().emplace<::donner::components::TreeComponent>(
+        textEntity, xml::XMLQualifiedNameRef("text"));
+    document.registry().emplace<::donner::components::TreeComponent>(
+        tspanEntity, xml::XMLQualifiedNameRef("tspan"));
+    document.registry()
+        .get<::donner::components::TreeComponent>(groupEntity)
+        .appendChild(document.registry(), textEntity);
+    document.registry()
+        .get<::donner::components::TreeComponent>(textEntity)
+        .appendChild(document.registry(), tspanEntity);
+
+    document.registry().emplace<components::TextComponent>(textEntity);
+    document.registry().emplace<components::TextComponent>(tspanEntity);
+
+    auto& textInstance =
+        document.registry().emplace<components::RenderingInstanceComponent>(textEntity);
+    textInstance.dataEntity = textEntity;
+    textInstance.entityFromWorldTransform = Transformd();
+    textInstance.resolvedFill = PaintServer::Solid(css::Color(css::RGBA(255, 255, 0, 255)));
+    textInstance.resolvedStroke = PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255)));
+
+    document.registry().emplace<components::ComputedViewBoxComponent>(textEntity, viewBox);
+
+    components::ComputedStyleComponent groupStyle;
+    setCommonTextProps(groupStyle.properties.emplace());
+    groupStyle.properties->fill.set(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))),
+                                    inlineSpecificity);
+    groupStyle.properties->stroke.set(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255))),
+                                      inlineSpecificity);
+    groupStyle.properties->textDecoration.set(TextDecoration::LineThrough, inlineSpecificity);
+    document.registry().emplace<components::ComputedStyleComponent>(groupEntity, groupStyle);
+
+    components::ComputedStyleComponent textStyle;
+    setCommonTextProps(textStyle.properties.emplace());
+    textStyle.properties->fill.set(PaintServer::Solid(css::Color(css::RGBA(255, 255, 0, 255))),
+                                   inlineSpecificity);
+    textStyle.properties->stroke.set(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255))),
+                                     inlineSpecificity);
+    document.registry().emplace<components::ComputedStyleComponent>(textEntity, textStyle);
+
+    components::ComputedStyleComponent tspanStyle;
+    setCommonTextProps(tspanStyle.properties.emplace());
+    tspanStyle.properties->fill.set(PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255))),
+                                    inlineSpecificity);
+    tspanStyle.properties->stroke.set(PaintServer::Solid(css::Color(css::RGBA(128, 128, 128, 255))),
+                                      inlineSpecificity);
+    document.registry().emplace<components::ComputedStyleComponent>(tspanEntity, tspanStyle);
+
+    components::ComputedTextComponent text;
+    components::ComputedTextComponent::TextSpan span;
+    span.text = RcString("Text");
+    span.start = 0;
+    span.end = 4;
+    span.sourceEntity = tspanEntity;
+    span.xList.push_back(Lengthd(50, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(100, Lengthd::Unit::None));
+    span.startsNewChunk = true;
+    text.spans.push_back(std::move(span));
+    document.registry().emplace<components::ComputedTextComponent>(textEntity, std::move(text));
+  });
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillOnce([&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+        const auto spanIt =
+            std::find_if(text.spans.begin(), text.spans.end(), [](const auto& span) {
+              return std::string_view(span.text).substr(span.start, span.end - span.start) ==
+                     "Text";
+            });
+
+        ASSERT_NE(spanIt, text.spans.end());
+        EXPECT_EQ(spanIt->textDecoration, TextDecoration::LineThrough);
+        expectSolidColor(spanIt->resolvedStroke, css::RGBA(128, 128, 128, 255));
+        expectSolidColor(spanIt->resolvedDecorationFill, css::RGBA(255, 255, 0, 255));
+        expectSolidColor(spanIt->resolvedDecorationStroke, css::RGBA(0, 128, 0, 255));
+      });
 
   driver.draw(document);
 }

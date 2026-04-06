@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 
 #include <optional>
+#include <set>
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -9,8 +10,6 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
-#include "donner/svg/components/filter/FilterComponent.h"
-#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
@@ -24,6 +23,17 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shape/CircleComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/EllipseComponent.h"
+#include "donner/svg/components/shape/LineComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
+#include "donner/svg/components/shape/RectComponent.h"
+#include "donner/svg/graph/Reference.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/resources/FontManager.h"
+#include "donner/svg/text/TextEngine.h"
+#endif
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -97,8 +107,12 @@ bool IsValidMarker(EntityHandle handle) {
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
-                                const ContextPaintServers& initialContext = {})
-      : registry_(registry), verbose_(verbose), contextPaintServers_(initialContext) {
+                                const ContextPaintServers& initialContext = {},
+                                bool ignoreNonrenderable = false)
+      : registry_(registry),
+        verbose_(verbose),
+        ignoreNonrenderable_(ignoreNonrenderable),
+        contextPaintServers_(initialContext) {
     // Get the LayoutSystem from the registry context if available
     LayoutSystem* layoutSystem = nullptr;
     if (registry_.ctx().contains<LayoutSystem*>()) {
@@ -140,7 +154,7 @@ public:
     }
 
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
-      if (behavior->behavior == RenderingBehavior::Nonrenderable) {
+      if (behavior->behavior == RenderingBehavior::Nonrenderable && !ignoreNonrenderable_) {
         return;
       } else if (behavior->behavior == RenderingBehavior::NoTraverseChildren) {
         traverseChildren = false;
@@ -211,14 +225,8 @@ public:
       std::cout << "\n";
     }
 
-    const bool hasFilterEffect = !properties.filter.getRequired().is<FilterEffect::None>();
-
     if (properties.visibility.getRequired() != Visibility::Visible) {
       instance.visible = false;
-    }
-
-    if (hasFilterEffect) {
-      instance.resolvedFilter = resolveFilter(dataHandle, properties.filter.getRequired());
     }
 
     if (properties.clipPath.get()) {
@@ -239,7 +247,7 @@ public:
       if (auto resolved =
               resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
           resolved.valid()) {
-        instance.mask = resolved;
+        instance.mask = std::move(resolved);
       }
     }
 
@@ -275,11 +283,6 @@ public:
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
     // isolated group.
     if (properties.opacity.getRequired() < 1.0) {
-      instance.isolatedLayer = true;
-      ++layerDepth;
-    }
-
-    if (instance.resolvedFilter) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -456,6 +459,19 @@ public:
     }
 
     Entity firstEntity = computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value());
+
+    // Check if this subtree was already traversed (e.g., for mask-on-mask chains where the
+    // same mask element's shadow tree is referenced multiple times). If the first entity
+    // already has RenderingInstanceComponent, skip re-traversal to avoid assertion failures.
+    if (registry_.try_get<RenderingInstanceComponent>(firstEntity)) {
+      // Already traversed — find the last entity from the cached SubtreeInfo on the root.
+      const auto& rootInst = registry_.get<RenderingInstanceComponent>(firstEntity);
+      if (rootInst.subtreeInfo) {
+        return SubtreeInfo{firstEntity, rootInst.subtreeInfo->lastRenderedEntity, 0};
+      }
+      return SubtreeInfo{firstEntity, firstEntity, 0};
+    }
+
     Entity lastEntity = entt::null;
     traverseTree(firstEntity, &lastEntity);
 
@@ -519,12 +535,10 @@ public:
       if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
           computedShadow &&
           computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
-        {
-          return ResolvedMask{
-              resolvedRef.value(),
-              instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
-              resolvedRef->handle.get<MaskComponent>().maskContentUnits};
-        }
+        return ResolvedMask{
+            resolvedRef.value(),
+            instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
+            resolvedRef->handle.get<MaskComponent>().maskContentUnits};
       }
     }
 
@@ -545,28 +559,11 @@ public:
     return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};
   }
 
-  ResolvedFilterEffect resolveFilter(EntityHandle dataHandle, const FilterEffect& filter) {
-    if (filter.is<FilterEffect::ElementReference>()) {
-      const FilterEffect::ElementReference& ref = filter.get<FilterEffect::ElementReference>();
-
-      if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
-          resolvedRef && resolvedRef->handle.all_of<ComputedFilterComponent>()) {
-        return resolvedRef.value();
-      } else {
-        // Empty result.
-        return std::vector<FilterEffect>();
-      }
-    } else {
-      std::vector<FilterEffect> result;
-      result.push_back(filter);
-      return result;
-    }
-  }
-
 private:
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
-  Registry& registry_;  //!< Registry being operated on for rendering..
-  bool verbose_;        //!< If true, enable verbose logging.
+  Registry& registry_;        //!< Registry being operated on for rendering..
+  bool verbose_;              //!< If true, enable verbose logging.
+  bool ignoreNonrenderable_;  //!< If true, skip the Nonrenderable behavior check.
 
   int drawOrder_ = 0;                       //!< The current draw order index.
   Entity lastRenderedEntity_ = entt::null;  //!< The last entity rendered.
@@ -610,6 +607,34 @@ void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranch
   }
 }
 
+/// Configuration for hit-testing based on the pointer-events property.
+struct HitTestConfig {
+  bool testFill;              ///< Whether to test fill intersection.
+  bool testStroke;            ///< Whether to test stroke intersection.
+  bool requireVisible;        ///< Whether element must be visible.
+  bool requirePaintedFill;    ///< Whether fill must be non-none.
+  bool requirePaintedStroke;  ///< Whether stroke must be non-none.
+};
+
+/// Returns the hit-test configuration for a given PointerEvents value.
+HitTestConfig configFromPointerEvents(PointerEvents pe) {
+  switch (pe) {
+    case PointerEvents::None:
+      return {false, false, false, false, false};  // Should be filtered before this call.
+    case PointerEvents::BoundingBox:
+      return {false, false, false, false, false};  // Handled separately.
+    case PointerEvents::VisiblePainted: return {true, true, true, true, true};
+    case PointerEvents::VisibleFill: return {true, false, true, false, false};
+    case PointerEvents::VisibleStroke: return {false, true, true, false, false};
+    case PointerEvents::Visible: return {true, true, true, false, false};
+    case PointerEvents::Painted: return {true, true, false, true, true};
+    case PointerEvents::Fill: return {true, false, false, false, false};
+    case PointerEvents::Stroke: return {false, true, false, false, false};
+    case PointerEvents::All: return {true, true, false, false, false};
+  }
+  UTILS_UNREACHABLE();
+}
+
 }  // namespace
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
@@ -633,7 +658,23 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
 
   // Fast path: if the render tree has been built, nothing is dirty, and no full rebuild
   // is required, skip all recomputation.
-  if (renderState.hasBeenBuilt && !renderState.needsFullRebuild && !hasDirtyEntities) {
+  if (renderState.hasBeenBuilt && !renderState.needsFullStyleRecompute &&
+      !renderState.needsFullRebuild && !hasDirtyEntities) {
+    return;
+  }
+
+  ensureComputedComponents(outWarnings);
+  instantiateRenderTreeWithPrecomputedTree(verbose);
+
+  renderState.needsFullStyleRecompute = false;
+  renderState.hasBeenBuilt = true;
+}
+
+void RenderingContext::ensureComputedComponents(std::vector<ParseError>* outWarnings) {
+  auto& renderState = getRenderTreeState(registry_);
+  const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
+
+  if (!renderState.needsFullStyleRecompute && !renderState.needsFullRebuild && !hasDirtyEntities) {
     return;
   }
 
@@ -645,68 +686,141 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
     createShadowTreeSystem().teardown(registry_, shadow);
   }
   registry_.clear<ComputedShadowTreeComponent>();
+  registry_.clear<RenderingInstanceComponent>();
+  registry_.clear<ComputedClipPathsComponent>();
 
   createComputedComponents(outWarnings);
-  instantiateRenderTreeWithPrecomputedTree(verbose);
 
-  // Clear all dirty flags after full recomputation.
   registry_.clear<DirtyFlagsComponent>();
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
 }
 
-Entity RenderingContext::findIntersecting(const Vector2d& point) {
-  instantiateRenderTree(false, nullptr);
+bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (!instance) {
+    return false;
+  }
 
-  auto view = registry_.view<RenderingInstanceComponent>();
+  const ComputedStyleComponent& style =
+      StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
+  const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
 
-  // Iterate in reverse order so that the last rendered element is tested first.
-  for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    auto entity = *it;
+  if (pointerEvents == PointerEvents::None) {
+    return false;
+  }
 
-    // Skip if this shape doesn't respond to pointer events.
-    const ComputedStyleComponent& style =
-        StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
-    const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
+  const HitTestConfig config = configFromPointerEvents(pointerEvents);
 
-    // TODO(jwmcglynn): Handle different PointerEvents cases.
-    if (pointerEvents == PointerEvents::None) {
-      continue;
+  // Check visibility requirement.
+  if (config.requireVisible && !instance->visible) {
+    return false;
+  }
+
+  const bool hasFillPaint = style.properties->fill.getRequired() != PaintServer::None();
+  const bool hasStrokePaint = style.properties->stroke.getRequired() != PaintServer::None();
+  const double strokeWidth =
+      hasStrokePaint ? style.properties->strokeWidth.getRequired().value : 0.0;
+
+  if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
+      bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
+    if (pointerEvents == PointerEvents::BoundingBox) {
+      return true;
     }
 
-    const bool matchFill = style.properties->fill.getRequired() != PaintServer::None();
-    const bool matchStroke = style.properties->stroke.getRequired() != PaintServer::None();
-    const double strokeWidth =
-        matchStroke ? style.properties->strokeWidth.getRequired().value : 0.0;
+    const Vector2d pointInLocal = LayoutSystem()
+                                      .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+                                      .inverse()
+                                      .transformPosition(point);
 
-    if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
-        bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
-      if (pointerEvents == PointerEvents::BoundingBox) {
-        return entity;
-      } else {
-        const Vector2d pointInLocal =
-            LayoutSystem()
-                .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                .inverse()
-                .transformPosition(point);
+    // Test fill intersection.
+    if (config.testFill) {
+      const bool skipBecauseNotPainted = config.requirePaintedFill && !hasFillPaint;
+      if (!skipBecauseNotPainted &&
+          ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                           style.properties->fillRule.getRequired())) {
+        return true;
+      }
+    }
 
-        // Match the path.
-        if (matchFill &&
-            ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                             style.properties->fillRule.getRequired())) {
-          return entity;
-        }
-
-        if (matchStroke && ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity),
-                                                              pointInLocal, strokeWidth)) {
-          return entity;
-        }
+    // Test stroke intersection.
+    if (config.testStroke) {
+      const bool skipBecauseNotPainted = config.requirePaintedStroke && !hasStrokePaint;
+      if (!skipBecauseNotPainted &&
+          ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity), pointInLocal,
+                                             strokeWidth)) {
+        return true;
       }
     }
   }
 
+  return false;
+}
+
+Entity RenderingContext::findIntersecting(const Vector2d& point) {
+  instantiateRenderTree(false, nullptr);
+
+  // Brute-force reverse scan.
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    if (hitTestEntity(*it, point)) {
+      return *it;
+    }
+  }
+
   return entt::null;
+}
+
+std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point) {
+  instantiateRenderTree(false, nullptr);
+
+  std::vector<Entity> results;
+
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    if (hitTestEntity(*it, point)) {
+      results.push_back(*it);
+    }
+  }
+
+  return results;
+}
+
+std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
+  instantiateRenderTree(false, nullptr);
+
+  std::vector<Entity> results;
+
+  // Brute-force scan in reverse draw order.
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    const auto& instance = view.get<RenderingInstanceComponent>(*it);
+    if (instance.dataEntity == entt::null) {
+      continue;
+    }
+
+    const auto bounds =
+        ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
+    if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
+        bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
+        bounds->bottomRight.y >= rect.topLeft.y) {
+      results.push_back(*it);
+    }
+  }
+
+  return results;
+}
+
+std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
+  instantiateRenderTree(false, nullptr);
+
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (!instance || instance->dataEntity == entt::null) {
+    return std::nullopt;
+  }
+
+  return ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
 }
 
 void RenderingContext::invalidateRenderTree() {
@@ -763,6 +877,19 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
+
+#ifdef DONNER_TEXT_ENABLED
+  // Create shared font registry + text engine in the registry context.
+  // This must happen after loadResources() so @font-face data is available.
+  {
+    auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
+    auto& fontManager = registry_.ctx().emplace<FontManager>(registry_);
+    for (const auto& face : resourceManager.fontFaces()) {
+      fontManager.addFontFace(face);
+    }
+    registry_.ctx().emplace<TextEngine>(fontManager, registry_);
+  }
+#endif
 
   // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
   // after those styles are evaluated, and after which we need to compute the styles for that subset
@@ -829,6 +956,85 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
     }
   }
 
+  // Instantiate nested marker shadow trees for entities inside shadow trees.
+  // The first pass (above) only checks entities with pre-existing ComputedStyleComponent.
+  // Shadow tree entities get their styles computed after populateInstance, so we need a second
+  // pass to create marker shadow trees for those newly-styled entities (e.g., paths inside
+  // markers that have their own marker-start/mid/end properties for nested markers).
+  {
+    // Collect shadow entities that need marker shadow trees (can't modify registry while
+    // iterating views).
+    struct MarkerWork {
+      Entity shadowEntity;
+      ShadowBranchType branchType;
+      Reference reference;
+    };
+    std::vector<MarkerWork> nestedMarkerWork;
+
+    for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
+      const auto& computedShadow = view.get<ComputedShadowTreeComponent>(entity);
+      const auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(entity);
+      if (!offscreen) {
+        continue;
+      }
+      for (auto [branchType, ref] : offscreen->branches()) {
+        const std::optional<size_t> instanceIndex = computedShadow.findOffscreenShadow(branchType);
+        if (!instanceIndex) {
+          continue;
+        }
+        for (const Entity shadowEntity : computedShadow.offscreenShadowEntities(*instanceIndex)) {
+          const auto* shadowStyle = registry_.try_get<ComputedStyleComponent>(shadowEntity);
+          if (!shadowStyle || !shadowStyle->properties) {
+            continue;
+          }
+          const auto& props = shadowStyle->properties.value();
+          if (auto m = props.markerStart.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerStart, m.value()});
+          }
+          if (auto m = props.markerMid.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerMid, m.value()});
+          }
+          if (auto m = props.markerEnd.get()) {
+            nestedMarkerWork.push_back(
+                {shadowEntity, ShadowBranchType::OffscreenMarkerEnd, m.value()});
+          }
+        }
+      }
+    }
+
+    for (const auto& work : nestedMarkerWork) {
+      InstantiateMarkerShadowTree(registry_, work.shadowEntity, work.branchType, work.reference,
+                                  outWarnings);
+    }
+
+    // Populate and style the newly-created nested marker shadow trees.
+    for (const auto& work : nestedMarkerWork) {
+      auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(work.shadowEntity);
+      if (!offscreen) {
+        continue;
+      }
+      auto targetEntity = offscreen->branchTargetEntity(registry_, work.branchType);
+      if (!targetEntity) {
+        continue;
+      }
+      auto& computedShadow =
+          registry_.get_or_emplace<ComputedShadowTreeComponent>(work.shadowEntity);
+      if (computedShadow.findOffscreenShadow(work.branchType).has_value()) {
+        continue;  // Already instantiated.
+      }
+      const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
+          EntityHandle(registry_, work.shadowEntity), computedShadow, work.branchType,
+          targetEntity.value(), work.reference.href, outWarnings);
+      if (maybeInstanceIndex) {
+        const std::span<const Entity> shadowEntities =
+            computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
+        StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
+      }
+    }
+  }
+
   LayoutSystem().instantiateAllComputedComponents(registry_, outWarnings);
 
   TextSystem().instantiateAllComputedComponents(registry_, outWarnings);
@@ -836,8 +1042,6 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
 
   PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
-
-  FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {

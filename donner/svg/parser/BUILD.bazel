@@ -44,6 +44,7 @@ donner_cc_library(
     hdrs = [
         "details/SVGParserContext.h",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":parser_core",
         ":parser_header",
@@ -55,12 +56,11 @@ donner_cc_library(
     name = "attribute_parser",
     srcs = ["AttributeParser.cc"],
     hdrs = ["AttributeParser.h"],
-    visibility = [
-        "//donner/svg:__subpackages__",
-    ],
+    visibility = ["//visibility:public"],
     deps = [
         ":parser_details",
         "//donner/svg:svg_core",
+        "//donner/svg/components/filter:components",
     ],
 )
 
@@ -102,6 +102,7 @@ donner_cc_test(
     name = "parser_tests",
     srcs = [
         "tests/AngleParser_tests.cc",
+        "tests/AttributeParser_tests.cc",
         "tests/CssTransformParser_tests.cc",
         "tests/LengthPercentageParser_tests.cc",
         "tests/ListParser_tests.cc",

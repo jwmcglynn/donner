@@ -1,0 +1,13 @@
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -55,8 +55,10 @@
+     copts = [
+         "-DFT2_BUILD_LIBRARY",
+         "-UDEBUG",
++        "-DFT_CONFIG_OPTION_USE_PNG",
+     ],
+     includes = ["include"],
+     textual_hdrs = glob(["src/**/*.c"]),
++    deps = ["@libpng"],
+     visibility = ["//visibility:public"],
+ )

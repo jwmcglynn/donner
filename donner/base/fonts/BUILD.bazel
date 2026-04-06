@@ -1,4 +1,12 @@
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
+
+exports_files(
+    [
+        "testdata/valid-001.woff",
+        "testdata/valid-001.woff2",
+    ],
+    visibility = ["//donner:__subpackages__"],
+)
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -25,6 +33,29 @@ donner_cc_test(
         ":fonts",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "woff2_parser",
+    srcs = ["Woff2Parser.cc"],
+    hdrs = ["Woff2Parser.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "@woff2//:woff2_decode",
+    ],
+)
+
+donner_cc_test(
+    name = "woff2_parser_tests",
+    srcs = ["tests/Woff2Parser_tests.cc"],
+    data = ["testdata/valid-001.woff2"],
+    deps = [
+        ":woff2_parser",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+        "@stb//:truetype",
     ],
 )
 

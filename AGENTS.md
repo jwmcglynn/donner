@@ -86,50 +86,47 @@ Transforms use **destFromSource** naming to make coordinate space conversions ex
 
 When writing new transform code, always use `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
 
+## Text Rendering Build Configurations
+
+Text support has three build tiers. When making text-related changes, test all applicable configurations:
+
+| Config | Flag | Layout Engine | Description |
+|--------|------|--------------|-------------|
+| Base text | `--config=text` | stb_truetype (`TextLayout`) | Kern-table kerning, glyph outlines |
+| Full text | `--config=text-full` | HarfBuzz (`TextShaper`) + WOFF2 | Full OpenType shaping (GSUB/GPOS) |
+| Skia backend | `--config=skia` | Skia internal | Skia's own text rendering |
+
+Example: `bazel test --config=text-full //donner/svg/renderer/tests:resvg_test_suite`
+
+Update golden images: `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:renderer_tests`
+
 ## Pixel Diff Debugging Philosophy
 
 - Always aim to **root-cause** pixel diff issues, even if the code is in vendored libraries (e.g., tiny-skia-cpp).
 - Don't just bump thresholds — investigate WHY pixels differ and fix the underlying code when possible.
-- Never inflate max diff pixels without explicit user consent, it is a last resort. 99% of the time it is masking a real issue.
+- For text rendering, "glyph outline differences" is almost never a sufficient explanation for a
+  resvg failure. Treat that as a red herring unless you have strong evidence from the rendered
+  output and font data.
+- Threshold adjustments are a last resort after the rendering bug has been investigated and reduced as far as practical.
+- Threshold changes are not a way to paper over incorrect rendering just to get tests passing.
+- Enabling skipped tests with large thresholds is not useful without understanding the root cause.
 
 ## Resvg Test Threshold Conventions
 
 - For pixel diffs <100, just **omit the entry** — the default `Params()` applies automatically via `getTestsWithPrefix`.
+- Any non-default threshold or other tolerance override requires explicit human review and approval.
+- When a tolerance adjustment is approved, prefer changing the floating-point threshold first; that
+  is the normal way to handle minor AA or shading differences.
+- Only add an override entry with `Params::WithThreshold(threshold, N)` when you have already
+  investigated the root cause and determined the remaining differences are acceptable residual
+  rasterization differences.
+- Do not raise max mismatched pixels by itself as an easy escape hatch.
+- If you want to increase max mismatched pixels materially, that requires explicit human review and approval.
+- Do not assume that "only 200 pixels off" is small. Many real false-positives have landed close
+  to that range, so even low-hundreds max-diff values can still hide meaningful rendering bugs.
 - Don't add `{"test.svg", Params()}` entries — omit them entirely.
 - `Params::Skip()` for tests that can't pass yet.
 - For resvg tests labeled "UB" (undefined behavior): always `Params::Skip()` — the golden images have "UB" text overlaid so they aren't comparable.
-
-## Debugging with lldb
-
-Bazel test binaries need runfiles to locate test data, so build separately and set env vars:
-
-```bash
-# Build in debug mode
-bazel build //path/to:test_target -c dbg
-
-# Run under lldb with runfiles
-RUNFILES_DIR=bazel-bin/path/to/test_target.runfiles \
-TEST_SRCDIR=bazel-bin/path/to/test_target.runfiles \
-lldb -b -o "run" -o "bt all" -- \
-  bazel-bin/path/to/test_binary --gtest_filter='*TestName*'
-```
-
-To catch C++ exceptions (e.g. `std::bad_alloc`) before the stack unwinds:
-
-```bash
-cat > /tmp/lldb_cmds.txt << 'EOF'
-breakpoint set -E c++
-run
-bt 50
-EOF
-
-RUNFILES_DIR=bazel-bin/path/to/test_target.runfiles \
-TEST_SRCDIR=bazel-bin/path/to/test_target.runfiles \
-lldb -s /tmp/lldb_cmds.txt -b -- \
-  bazel-bin/path/to/test_binary --gtest_filter='*TestName*'
-```
-
-Note: The binary name may differ from the target name (e.g. `resvg_test_suite_impl` vs `resvg_test_suite_tiny_skia`). Check `bazel build` output for the actual path. `bazel run` handles runfiles automatically but doesn't support attaching a debugger.
 
 ## Development Notes
 

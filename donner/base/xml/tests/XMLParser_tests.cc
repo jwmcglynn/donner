@@ -259,6 +259,41 @@ TEST_F(XMLParserTests, ParseData) {
   EXPECT_THAT(child.value(), Eq("abcd"));
 }
 
+TEST_F(XMLParserTests, WhitespaceOnlyDataBetweenChildrenPreserved) {
+  auto maybeNode = parseAndGetFirstNode(R"(<node>  <a/>  <b/>  </node>)");
+  ASSERT_TRUE(maybeNode.has_value());
+
+  const XMLNode node = std::move(maybeNode.value());
+
+  auto child = node.firstChild();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Data);
+  EXPECT_THAT(child->value(), testing::Optional(Eq("  ")));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Element);
+  EXPECT_THAT(child->tagName(), Eq("a"));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Data);
+  EXPECT_THAT(child->value(), testing::Optional(Eq("  ")));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Element);
+  EXPECT_THAT(child->tagName(), Eq("b"));
+
+  child = child->nextSibling();
+  ASSERT_TRUE(child.has_value());
+  EXPECT_EQ(child->type(), XMLNode::Type::Data);
+  EXPECT_THAT(child->value(), testing::Optional(Eq("  ")));
+
+  child = child->nextSibling();
+  ASSERT_FALSE(child.has_value());
+}
+
 TEST_F(XMLParserTests, ParseCData) {
   auto maybeNode = parseAndGetFirstNode(R"(<![CDATA[abcd]]>)");
   ASSERT_TRUE(maybeNode.has_value());

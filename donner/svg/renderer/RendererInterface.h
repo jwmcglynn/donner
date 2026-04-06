@@ -12,12 +12,20 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/css/FontFace.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterEffect.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FillRule.h"
+#include "donner/svg/core/LengthAdjust.h"
+#include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/PathSpline.h"
-#include "donner/svg/core/Stroke.h"
+#include "donner/svg/core/TextAnchor.h"
+#include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/core/WritingMode.h"
+#include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
@@ -64,25 +72,6 @@ struct PathShape {
 };
 
 /**
- * Stroke configuration used for path and primitive drawing.
- */
-struct StrokeParams {
-  /// Stroke width in user units.
-  double strokeWidth = 0.0;
-  StrokeLinecap lineCap = StrokeLinecap::Butt;
-  StrokeLinejoin lineJoin = StrokeLinejoin::Miter;
-  /// Maximum miter ratio before converting to bevel.
-  double miterLimit = 4.0;
-  /// Dash pattern lengths alternating on/off segments.
-  std::vector<double> dashArray;
-  /// Dash phase offset.
-  double dashOffset = 0.0;
-  /// SVG pathLength attribute value; 0 means unused. When non-zero, dash arrays and offsets are
-  /// scaled by the ratio of the actual path length to this value.
-  double pathLength = 0.0;
-};
-
-/**
  * Paint state derived from resolved style for the current node.
  */
 struct PaintParams {
@@ -108,6 +97,29 @@ struct ResolvedClip {
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
   Transformd clipPathUnitsTransform;
   std::optional<components::ResolvedMask> mask;
+
+  ResolvedClip() = default;
+  ResolvedClip(ResolvedClip&&) = default;
+  ResolvedClip& operator=(ResolvedClip&&) = default;
+
+  /// Deep copy (clones mask chain).
+  ResolvedClip(const ResolvedClip& other)
+      : clipRect(other.clipRect),
+        clipPaths(other.clipPaths),
+        clipPathUnitsTransform(other.clipPathUnitsTransform),
+        mask(other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
+                        : std::nullopt) {}
+
+  ResolvedClip& operator=(const ResolvedClip& other) {
+    if (this != &other) {
+      clipRect = other.clipRect;
+      clipPaths = other.clipPaths;
+      clipPathUnitsTransform = other.clipPathUnitsTransform;
+      mask = other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
+                        : std::nullopt;
+    }
+    return *this;
+  }
 
   [[nodiscard]] bool empty() const { return !clipRect.has_value() && clipPaths.empty() && !mask; }
 };
@@ -135,6 +147,22 @@ struct TextParams {
   Lengthd fontSize;
   Boxd viewBox;
   FontMetrics fontMetrics;
+  TextAnchor textAnchor = TextAnchor::Start;
+  TextDecoration textDecoration = TextDecoration::None;
+  DominantBaseline dominantBaseline = DominantBaseline::Auto;
+  /// CSS `writing-mode` for this text element. Controls horizontal vs vertical text flow.
+  WritingMode writingMode = WritingMode::HorizontalTb;
+  /// Extra spacing added after each character (CSS `letter-spacing`). 0 = normal.
+  double letterSpacingPx = 0.0;
+  /// Extra spacing added after each word/space character (CSS `word-spacing`). 0 = normal.
+  double wordSpacingPx = 0.0;
+  /// If set, stretches or compresses text to fill the given length.
+  std::optional<Lengthd> textLength;
+  LengthAdjust lengthAdjust = LengthAdjust::Default;
+  /// @font-face declarations for custom font resolution.
+  std::span<const css::FontFace> fontFaces;
+  /// Entity of the text root element, for cached layout lookup. entt::null if unknown.
+  entt::entity textRootEntity = entt::null;
 };
 
 /**
@@ -194,10 +222,11 @@ public:
   virtual void popClip() = 0;
 
   /**
-   * Pushes an isolated compositing layer with the given opacity. Content drawn between
-   * pushIsolatedLayer and popIsolatedLayer is composited as a group at the specified opacity.
+   * Pushes an isolated compositing layer with the given opacity and blend mode. Content drawn
+   * between pushIsolatedLayer and popIsolatedLayer is composited as a group at the specified
+   * opacity using the specified blend mode.
    */
-  virtual void pushIsolatedLayer(double opacity) = 0;
+  virtual void pushIsolatedLayer(double opacity, MixBlendMode blendMode) = 0;
 
   /**
    * Pops the most recent isolated layer, compositing it with the given opacity.
@@ -207,7 +236,8 @@ public:
   /**
    * Pushes a filter layer that applies the given effect chain to all content drawn within it.
    */
-  virtual void pushFilterLayer(std::span<const FilterEffect> effects) = 0;
+  virtual void pushFilterLayer(const components::FilterGraph& filterGraph,
+                               const std::optional<Boxd>& filterRegion) = 0;
 
   /**
    * Pops the most recent filter layer.
@@ -279,7 +309,7 @@ public:
   /**
    * Draws pre-shaped text with the provided paint parameters.
    */
-  virtual void drawText(const components::ComputedTextComponent& text,
+  virtual void drawText(Registry& registry, const components::ComputedTextComponent& text,
                         const TextParams& params) = 0;
 
   /**

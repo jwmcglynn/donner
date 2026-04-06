@@ -1,8 +1,15 @@
-"""Donner is a modern C++20 SVG rendering library which intends to provide easily
-embeddable SVG support into apps and games, enabling browser-level functionalit
- without the browser."""
+"""Donner SVG: Embeddable browser-grade SVG2 engine for your application.
+
+A C++20 SVG rendering library providing full SVG DOM access with complete rendering
+support including text, filters, and animation."""
 
 module(name = "donner", version = "0.1.2")
+
+# Donner build-time feature configuration.
+# Downstream consumers can override these defaults via donner.configure() in their MODULE.bazel.
+donner = use_extension("//config:extensions.bzl", "donner")
+donner.configure()
+use_repo(donner, "donner_config")
 
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
@@ -39,6 +46,18 @@ c_plus_plus_deps = use_repo_rule("@skia//bazel:deps.bzl", "c_plus_plus_deps")
 header_based_configs = use_repo_rule("@skia//bazel:deps.bzl", "header_based_configs")
 
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
+bazel_dep(name = "libpng", version = "1.6.44")
+
+# Enable FreeType's PNG support for CBDT color emoji bitmaps.
+single_version_override(
+    module_name = "freetype",
+    version = "2.13.3.bcr.1",
+    patches = [
+        "//third_party/patches:freetype-enable-png-module.patch",
+        "//third_party/patches:freetype-enable-png-build.patch",
+    ],
+    patch_strip = 1,
+)
 
 git_repository(
     name = "entt",
@@ -63,6 +82,40 @@ new_local_repository(
 )
 
 bazel_dep(name = "zlib", version = "1.3.2")
+
+# WOFF2 text support (gated by text_full flag)
+bazel_dep(name = "brotli", version = "1.2.0")
+
+new_git_repository(
+    name = "woff2",
+    build_file = "//third_party:BUILD.woff2",
+    commit = "1bccf208bca986e53a647dfe4811322adb06ecf8",
+    remote = "https://github.com/google/woff2.git",
+)
+
+# HarfBuzz text shaping (gated by text_full flag)
+new_git_repository(
+    name = "harfbuzz",
+    build_file = "//third_party:BUILD.harfbuzz",
+    tag = "10.1.0",
+    remote = "https://github.com/harfbuzz/harfbuzz.git",
+    patch_cmds = [
+        # Create config-override.h to re-enable the draw API (disabled by HB_LEAN/HB_TINY).
+        # We need hb_font_draw_glyph() for glyph outline extraction.
+        """cat > src/config-override.h << 'HBEOF'
+// Re-enable the draw API for glyph outline extraction.
+// HB_TINY -> HB_LEAN -> HB_NO_DRAW -> HB_NO_OUTLINE, which strips these.
+#undef HB_NO_DRAW
+#undef HB_NO_OUTLINE
+// Re-enable CFF outlines (our fallback font Public Sans is OTF/CFF).
+#undef HB_NO_CFF
+#undef HB_NO_OT_FONT_CFF
+// Re-enable file I/O (hb_face_create_from_file_or_fail references
+// hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
+#undef HB_NO_OPEN
+HBEOF""",
+    ],
+)
 
 ##
 ## Test dependencies

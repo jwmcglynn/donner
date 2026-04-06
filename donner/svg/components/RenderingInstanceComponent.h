@@ -76,6 +76,12 @@ struct ResolvedMask {
   /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
   /// properly resolve.
   bool valid() const { return reference.valid(); }
+
+  /// Deep copy.
+  ResolvedMask deepCopy() const {
+    ResolvedMask copy{reference, subtreeInfo, contentUnits};
+    return copy;
+  }
 };
 
 struct ResolvedMarker {

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <functional>
 #include <string>
 
 #include "donner/base/EcsRegistry.h"
@@ -11,6 +12,7 @@
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkGraphics.h"
 #include "include/core/SkPictureRecorder.h"
+#include "include/core/SkSurface.h"
 
 namespace donner::svg {
 
@@ -21,7 +23,12 @@ namespace donner::svg {
  * supports all functionality required to implement SVG (as many of these projects also support
  * SVG).
  *
- * Skia is used as the reference renderer while implementing Donner.
+ * Skia is used as the reference renderer while implementing Donner, but long-term Donner would like
+ * to support other rendering backends, so dependencies on Skia should be kept to a minimum and
+ * isolated to RendererSkia.
+ *
+ * This is a prototype-quality implementation, and is subject to refactoring in the future to
+ * provide a cleaner API boundary between Donner and the rendering backend.
  */
 class RendererSkia : public RendererInterface {
 public:
@@ -49,7 +56,7 @@ public:
    *
    * @param document The SVG document to render.
    */
-  void draw(SVGDocument& document) override;
+  void draw(SVGDocument& document);
 
   /**
    * Begins a render pass for the given viewport.
@@ -89,7 +96,7 @@ public:
   /**
    * Pushes an isolated compositing layer with the given opacity.
    */
-  void pushIsolatedLayer(double opacity) override;
+  void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override;
 
   /**
    * Pops the most recent isolated layer.
@@ -99,7 +106,8 @@ public:
   /**
    * Pushes a filter layer that applies the given effect chain.
    */
-  void pushFilterLayer(std::span<const FilterEffect> effects) override;
+  void pushFilterLayer(const components::FilterGraph& filterGraph,
+                       const std::optional<Boxd>& filterRegion) override;
 
   /**
    * Pops the most recent filter layer.
@@ -110,7 +118,7 @@ public:
   void transitionMaskToContent() override;
   void popMask() override;
 
-  void beginPatternTile(const Boxd& tileRect, const Transformd& patternToTarget) override;
+  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
   void endPatternTile(bool forStroke) override;
 
   /**
@@ -141,7 +149,8 @@ public:
   /**
    * Draws text runs.
    */
-  void drawText(const components::ComputedTextComponent& text, const TextParams& params) override;
+  void drawText(Registry& registry, const components::ComputedTextComponent& text,
+                const TextParams& params) override;
 
   /**
    * Captures a CPU-readable snapshot of the last-rendered frame.
@@ -173,10 +182,10 @@ public:
   std::span<const uint8_t> pixelData() const;
 
   /// Get the width of the rendered image in pixels.
-  int width() const override { return bitmap_.width(); }
+  int width() const { return bitmap_.width(); }
 
   /// Get the height of the rendered image in pixels.
-  int height() const override { return bitmap_.height(); }
+  int height() const { return bitmap_.height(); }
 
   /// Get the SkBitmap of the rendered image.
   const SkBitmap& bitmap() const { return bitmap_; }
@@ -201,7 +210,6 @@ private:
   std::unique_ptr<SkCanvas> bitmapCanvas_;  //!< Direct canvas from bitmap.
   SkCanvas* currentCanvas_ = nullptr;       //!< The current canvas.
   bool antialias_ = true;                   //!< Whether to antialias.
-
   RenderViewport viewport_;
   PaintParams paint_;
   double paintOpacity_ = 1.0;
@@ -211,16 +219,48 @@ private:
 
   // Pattern recording state, stacked for nested patterns.
   struct PatternState {
-    std::unique_ptr<SkPictureRecorder> recorder;
+    sk_sp<SkSurface> surface;
     SkCanvas* savedCanvas = nullptr;
-    Transformd patternToTarget;
+    Transformd patternRasterFromTile;
+    Transformd targetFromPattern;
   };
   std::vector<PatternState> patternStack_;
   std::optional<SkPaint> patternFillPaint_;
   std::optional<SkPaint> patternStrokePaint_;
 
+  struct ClipStackEntry {
+    ResolvedClip clip;
+    SkMatrix matrix;
+  };
+
+  struct FilterLayerState {
+    bool usesNativeSkiaFilter = false;
+    sk_sp<SkSurface> surface;
+    sk_sp<SkSurface> fillPaintSurface;
+    sk_sp<SkSurface> strokePaintSurface;
+    SkCanvas* parentCanvas = nullptr;
+    components::FilterGraph filterGraph;
+    std::optional<Boxd> filterRegion;
+    Transformd deviceFromFilter;
+  };
+
+  struct MaskLayerState {
+    sk_sp<SkSurface> maskSurface;
+    sk_sp<SkSurface> contentSurface;
+    SkCanvas* parentCanvas = nullptr;
+    /// Luminance alpha mask: one byte per pixel, computed from the mask surface.
+    std::vector<uint8_t> maskAlpha;
+  };
+
+  std::vector<ClipStackEntry> activeClips_;
+  std::vector<FilterLayerState> filterLayerStack_;
+  std::vector<MaskLayerState> maskLayerStack_;
+
   std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
   std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);
+  FilterLayerState* currentFilterLayerState();
+  void drawOnFilterInputSurface(const sk_sp<SkSurface>& surface,
+                                const std::function<void(SkCanvas*)>& drawFn);
 };
 
 }  // namespace donner::svg

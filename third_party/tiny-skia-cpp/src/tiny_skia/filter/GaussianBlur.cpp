@@ -343,15 +343,6 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
     return;
   }
 
-  // Clamp sigma to Skia's raster blur engine limit. For larger sigmas, Skia downscales the
-  // image before blurring and upscales after, but we don't implement that pipeline. Clamping
-  // to 135 keeps the box blur window ≤ 254 pixels, preventing over-dilution where the window
-  // exceeds the image size and out-of-bounds zero-padding washes out the result.
-  // The SVG spec allows implementations to limit stdDeviation.
-  constexpr double kMaxSigma = 135.0;
-  sigmaX = std::min(sigmaX, kMaxSigma);
-  sigmaY = std::min(sigmaY, kMaxSigma);
-
   // Guard against OOM: each buffer is width*height*4 bytes.
   constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
   const std::size_t bufferSize = static_cast<std::size_t>(width) * height * 4;
@@ -411,15 +402,6 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
   if (width <= 0 || height <= 0) {
     return;
   }
-
-  // Clamp sigma to Skia's raster blur engine limit. For larger sigmas, Skia downscales the
-  // image before blurring and upscales after, but we don't implement that pipeline. Clamping
-  // to 135 keeps the box blur window ≤ 254 pixels, preventing over-dilution where the window
-  // exceeds the image size and out-of-bounds zero-padding washes out the result.
-  // The SVG spec allows implementations to limit stdDeviation.
-  constexpr double kMaxSigma = 135.0;
-  sigmaX = std::min(sigmaX, kMaxSigma);
-  sigmaY = std::min(sigmaY, kMaxSigma);
 
   // Guard against OOM: each buffer is width*height*4 floats.
   constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;

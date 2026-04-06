@@ -61,6 +61,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "font_metadata",
+    srcs = ["FontMetadata.cc"],
+    hdrs = ["FontMetadata.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
+donner_cc_library(
     name = "font_loader",
     srcs = ["FontLoader.cc"],
     hdrs = ["FontLoader.h"],
@@ -69,6 +76,46 @@ donner_cc_library(
         "//donner/base/fonts",
         "//donner/svg/components/resources:font_resource",
         "//donner/svg/resources:url_loader",
+    ],
+)
+
+donner_cc_library(
+    name = "font_manager",
+    srcs = ["FontManager.cc"],
+    hdrs = ["FontManager.h"],
+    defines = select({
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/base/fonts",
+        "//donner/css:core",
+        "//third_party/public-sans",
+        "@stb//:truetype",
+    ] + select({
+        "//donner/svg/renderer:text_full_enabled": ["//donner/base/fonts:woff2_parser"],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_test(
+    name = "font_manager_tests",
+    srcs = ["tests/FontManager_tests.cc"],
+    data = [
+        "//donner/base/fonts:testdata/valid-001.woff",
+        "//donner/base/fonts:testdata/valid-001.woff2",
+    ],
+    defines = select({
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":font_manager",
+        "//third_party/public-sans",
+        "@com_google_gtest//:gtest_main",
+        "@stb//:truetype",
     ],
 )
 

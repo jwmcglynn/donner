@@ -107,7 +107,9 @@ void ResourceManagerContext::loadResources(std::vector<ParseError>* outWarnings)
           loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
         }
       } else if (source.kind == css::FontFaceSource::Kind::Data) {
-        auto maybeFontData = fontLoader.fromData(std::get<std::vector<uint8_t>>(source.payload));
+        const auto& dataPtr =
+            std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+        auto maybeFontData = fontLoader.fromData(*dataPtr);
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
           if (outWarnings) {
@@ -190,6 +192,7 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
   fontFacesToLoad_.insert(fontFacesToLoad_.end(), fontFaces.begin(), fontFaces.end());
+  fontFaces_.insert(fontFaces_.end(), fontFaces.begin(), fontFaces.end());
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {

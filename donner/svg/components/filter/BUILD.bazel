@@ -4,6 +4,7 @@ donner_cc_library(
     name = "components",
     hdrs = [
         "FilterComponent.h",
+        "FilterGraph.h",
         "FilterPrimitiveComponent.h",
         "FilterUnits.h",
     ],
@@ -29,6 +30,7 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/css:core",
         "//donner/svg/graph",
     ],
 )

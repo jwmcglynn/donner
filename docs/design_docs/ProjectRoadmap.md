@@ -1,121 +1,246 @@
-# Design: Donner Project Roadmap to v1.0 and v2.0 {#DonnerProjectRoadmap}
+# Donner Project Roadmap {#DonnerProjectRoadmap}
 
-**Status:** Design
-**Author:** GPT-5.2-Codex
-**Created:** 2026-02-15
+**Status:** Active
+**Updated:** 2026-03-13
 
 ## Summary
 
-This roadmap defines a phased plan for Donner from the current static-focused state to a robust
-SVG platform. It aligns with existing project status notes and open issues, then extends them into
-a concrete delivery sequence from active pre-v1 milestones into v1.0 and v2.0.
+Donner is an SVG rendering library targeting broad SVG2 compatibility, high performance, and
+interactive editing workflows.
 
-The roadmap explicitly incorporates the existing project milestones: closed v0.1 as the shipped
-static baseline and open v0.2 for text support plus cached rendering. Building from that, v1.0
-focuses on finishing standards-critical rendering support: backend abstraction, text, filters,
-animation, SVG2 conformance review, and API usability for creation/edit/save workflows. v2.0
-extends Donner into interactive authoring and runtime experiences: real-time editor backend
-capabilities, geometry tooling for graphical editors, and modular advanced runtime extensions such
-as JavaScript.
+After v0.1 established the static rendering baseline, a large body of work landed covering renderer
+abstraction, a complete software rasterizer, text shaping, all 17 SVG filter primitives, animation,
+composited rendering, and interactivity. This is collected as **v0.5**, skipping intermediate
+milestones that were overtaken by the pace of development. The next target is **v1.0**: a
+production-quality release focused on interactive editing, conformance, parser hardening, and
+ecosystem integration.
 
-## Goals
+---
 
-- Ship a practical v1.0 for production SVG rendering with broad SVG2 compatibility.
-- Prioritize missing high-impact gaps already tracked by the project (text, filters, rendering API).
-- Improve API ergonomics for creating, editing, and serializing SVG programmatically.
-- Establish architecture that keeps advanced capabilities modular and opt-in for binary
-  size control.
-- Define a credible path to a v2.0 platform suitable for interactive editor and game workflows.
+## v0.1 — Static Rendering Baseline (shipped)
 
-## Non-Goals
+Core static SVG path/shape rendering and CSS cascade foundation. Established the ECS architecture,
+XML parser, CSS parser, and Skia-based renderer.
 
-- Guarantee 100% SVG2 conformance by v1.0.
-- Commit to a single editor product UX in this roadmap (focus is backend/runtime enablers).
-- Require JavaScript runtime support in core library builds.
-- Define every low-level class signature in this document.
+---
 
-## Next Steps
+## v0.5 — Rendering Engine (shipped)
 
-- Confirm v0.2 exit criteria against the existing milestone scope and open issues.
-- Add explicit pre-v1 checkpoints (v0.3/v0.4) that roll up into v1.0 readiness gates.
-- Start with renderer interface and text completion tasks that directly unblock v0.2.
+Everything completed since v0.1, collected into a single release milestone.
 
-## Implementation Plan
+### Renderer Architecture
 
-- [ ] Milestone 0: Roadmap design-doc backlog setup
-  - [ ] Create a tracking table linking each roadmap feature to a dedicated design doc.
-  - [ ] Define design-doc review owners and readiness gates for each feature.
-  - [ ] Prioritize design-doc drafting order by milestone risk and dependency.
+- **Renderer interface abstraction** — `RendererInterface` / `RendererSkia` split with
+  `RendererDriver` traversing a flat render tree. Enables future backend swaps.
+  ([design](renderer_interface_design.md))
+- **tiny-skia software renderer** — Full software rasterizer (fill, stroke, gradients, patterns,
+  shaders, lowp/highp pipeline) as an alternative to Skia. All render operations within 1.5× of
+  Skia performance.
 
-- [ ] Milestone 1: Pre-v1 design docs (v0.2-v0.4)
-  - [ ] Design Doc: Renderer backend abstraction and driver API (`v0.2`, issue #168).
-  - [ ] Design Doc: Text rendering architecture and CSS text subset (`v0.2`, issue #242).
-  - [ ] Design Doc: Cached rendering invalidation model and performance instrumentation.
-  - [ ] Design Doc: Filter graph foundation and first filter primitive tranche (`v0.3`, issue #151).
-  - [ ] Design Doc: SVG2/CSS conformance scorecard methodology and audit workflow (`v0.3`).
-  - [ ] Design Doc: Animation MVP scheduler and invalidation strategy (`v0.4`).
-  - [ ] Design Doc: API usability pass for create/edit/save workflows (`v0.4`).
+### Text Rendering
 
-- [ ] Milestone 2: v1.0 release-readiness design docs
-  - [ ] Design Doc: v1.0 conformance gap-closure plan and release threshold policy.
-  - [ ] Design Doc: Optimization and code-size strategy, including text on/off build profile.
-  - [ ] Design Doc: v1.0 release criteria, compatibility guarantees, and deprecation policy.
+- Phases 1–5: stb_truetype font loading, glyph outlines, `TextLayout`, WOFF2 support,
+  `dominant-baseline`.
+- Phase 6: Optional HarfBuzz text shaping tier (`--config=text-full`).
+- ([design](text_rendering.md))
 
-- [ ] Milestone 3: v2.x interactive/editor design docs
-  - [ ] Design Doc: Bidirectional XML <-> runtime graph synchronization architecture.
-  - [ ] Design Doc: Real-time patch pipeline for high-frequency editing operations.
-  - [ ] Design Doc: Editor services for mouse picking acceleration structures.
-  - [ ] Design Doc: Boolean path operations and fast in-memory geometry mutation APIs.
-  - [ ] Design Doc: Modular advanced runtime extensions (optional scripting/Flash-like tooling).
-  - [ ] Design Doc: Game-runtime suitability profile (latency, frame pacing, memory budgets).
+### SVG Filter Effects
 
-- [ ] Milestone 4: Ongoing design-doc maintenance
-  - [ ] Convert shipped feature design docs into developer-facing architecture docs.
-  - [ ] Keep roadmap and feature-doc checkboxes synced with implementation progress.
-  - [ ] Review all open roadmap docs quarterly and re-rank based on milestone changes.
+- All 17 SVG filter primitives implemented in both Skia (native `SkImageFilter` lowering) and
+  tiny-skia backends.
+- Float-precision filter pipeline with SIMD optimizations (NEON): Gaussian blur, morphology,
+  color matrix, turbulence, convolution, blend, composite, lighting, displacement map, component
+  transfer, flood, offset, merge, tile.
+- All 23 filter benchmarks within 1.5× of Skia; 21 of 23 are faster.
+- ([design](filter_effects.md), [perf](filter_performance.md))
 
-## User Stories
+### SVG Animation
 
-- As an application developer, I want a stable renderer interface so I can target
-  different backends.
-- As a graphics engineer, I want text, filters, and animation in v1.0 so modern SVG content renders.
-- As a tool developer, I want real-time SVG edit APIs plus XML sync so I can build live editors.
-- As an integrator, I want optional subsystems so I can control binary size and startup overhead.
+- Phases 1–9: timing model, interpolation engine, sandwich composition, attribute targeting,
+  `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
+- ([design](animation.md))
 
-## Background
+### Composited Rendering
 
-The current public project status identifies text, filters, animation, and rendering API
-evolution as core roadmap topics. This roadmap builds directly on those signals:
+- Layer-based caching architecture for animation and editing performance.
+- ([design](composited_rendering.md))
 
-- README states v0.1.0 shipped static SVG core and calls out text/filter/animation on roadmap.
-- Project Status issue tracks SVG feature support and missing text/filter/animation capabilities.
-- Existing milestones: v0.1 is complete (static baseline) and v0.2 is open (text + cached
-  rendering focus).
-- Open issues include renderer interface abstraction, text support, filter support,
-  in-place editing, and boolean path operations.
+### Interactivity
 
-References:
+- Phases 1–6: `EventSystem` with `SpatialGrid`-accelerated hit testing, event dispatch (mouse,
+  pointer), CSS cursor property, `DonnerController` public API (`addEventListener`,
+  `elementFromPoint`, `findIntersectingRect`, `getWorldBounds`), incremental spatial index updates.
+- ([design](interactivity.md))
 
-- https://github.com/jwmcglynn/donner/issues/149
-- https://github.com/jwmcglynn/donner/milestone/1
-- https://github.com/jwmcglynn/donner/milestone/2
-- https://github.com/jwmcglynn/donner/issues/168
-- https://github.com/jwmcglynn/donner/issues/242
-- https://github.com/jwmcglynn/donner/issues/151
-- https://github.com/jwmcglynn/donner/issues/395
-- https://github.com/jwmcglynn/donner/issues/392
+### Incremental Invalidation
 
-## Requirements and Constraints
+- **Partial computed tree invalidation** — When DOM mutations occur, only invalidate the
+  affected subtree of the computed style/layout tree rather than recomputing the entire
+  document. CSS restyling performs differential updates: identify which elements' computed
+  styles are affected by a change and re-resolve only those, propagating inherited property
+  changes down the affected subtree.
 
-- Preserve current exception-free API style and ECS-based architecture.
-- Keep lines of responsibility clear between parsing, style, layout, and rendering stages.
-- Maintain deterministic behavior for malformed/untrusted SVG/XML input.
-- Ensure optional feature sets can be compiled out for footprint-sensitive targets.
-- Avoid introducing heavyweight dependencies without strong justification.
+### Infrastructure
 
-## Proposed Architecture
+- Auto-detect font backends, crash handling hardening.
+- Filter and render benchmark suites with perf regression tests (1.5× threshold enforcement).
+- resvg test suite integration for golden image validation.
 
-Roadmap work is organized into capability layers:
+---
+
+## v1.0 — Production Release (in progress)
+
+Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
+
+### Interactive SVG Editing
+
+Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
+
+- [ ] **Import donner-editor** — Move the `donner-editor` project into this repository and polish
+  for release.
+- [ ] **Structured editing API** — Programmatic DOM mutations that propagate through ECS with
+  incremental re-render (building on composited rendering + interactivity).
+- [ ] **Partial re-parsing** — Parser support for updating a document in-place from modified SVG
+  source. When a user edits source text, parse only the changed region and splice updates into
+  the live document.
+- [ ] **Reverse serialization** — From interactive editor operations, surgically splice updated
+  SVG content back into the source text, preserving surrounding structure and formatting. Enables
+  round-trip editing: source → DOM → visual edit → source.
+- [ ] **Invalid-region tolerance** — Graceful handling of temporarily invalid SVG during freeform
+  text editing. The editor should not crash or lose state when the user is mid-keystroke. This is
+  a hybrid approach — not a "true" structured editor, but a text editor with syntax-aware support.
+
+### Parser Improvements
+
+- [ ] **`ParseWarning` type** — Introduce a first-class `ParseWarning` type (or `ParseWarnings`
+  container) replacing the current `vector<ParseError>` pattern. Warnings vs errors should be
+  distinct at the type level.
+- [ ] **Source location audit** — Review all current parse errors to verify correct source
+  locations are reported.
+- [ ] **Full source ranges** — Extend parse errors/warnings to carry full source ranges
+  (start + end), not just the start index.
+- [ ] **CSS parser update** — Consider making the CSS parser streaming, potentially using C++20
+  coroutines (`co_await`). Reduce places where we tokenize to a vector. Add support for source
+  ranges and incremental updates matching the XML parser's capabilities.
+- [ ] **XML parser conformance** — Fix bugs like non-conforming `Name` token acceptance
+  ([#304](https://github.com/jwmcglynn/donner/issues/304)).
+- [ ] **CSS3 gap closure** — Audit CSS3 property and selector support against the properties
+  used by SVG2. Close gaps in selectors, cascading, specificity, shorthand expansion, and
+  value parsing for properties referenced by the SVG2 spec.
+
+### Entity Lifecycle
+
+- [ ] **Node removal cleanup** — Implement proper cleanup for nodes removed from the document
+  graph. Currently removed entities are leaked in the ECS registry. Add destruction hooks that
+  tear down components, release resources, and remove entities from spatial indices and caches.
+
+### DOM Support
+
+- [ ] **SVG2 DOM gap analysis** — Audit current DOM implementation against the full SVG2 DOM
+  specification. Identify missing interfaces, attributes, and methods across all element types.
+- [ ] **Close DOM gaps** — Implement missing DOM interfaces and properties identified by the audit,
+  prioritizing those needed for interactive editing and JavaScript integration.
+
+### Conformance & Testing
+
+- [ ] **SVG2 conformance pass** — Systematic audit of SVG2 spec coverage. Identify and close
+  high-impact gaps across all element categories.
+- [ ] **90% code coverage** — Achieve and maintain ≥90% line coverage across all production code.
+  Identify under-covered subsystems and add targeted tests.
+- [ ] **Animation test suite** — Comprehensive test coverage for the animation system
+  (Phases 1–9), including timing edge cases, interpolation correctness, and event-based triggers.
+- [ ] **Update resvg test suite** — The upstream resvg test suite had a major refactor/rename of
+  all tests. Update our integration to match the new test naming and structure.
+- [ ] **Enable text resvg tests** — Currently skipped. Enable and validate text rendering tests
+  against resvg golden images.
+- [ ] **Add Donner to resvg test harness** — Contribute Donner as a backend in the upstream resvg
+  test suite repository (external repo contribution).
+
+### SVG Feature Gaps
+
+- [ ] **`<symbol>` refX/refY units** — Support `<length>` values and keyword tokens
+  (left/center/right, top/center/bottom) per SVG2 spec
+  ([#318](https://github.com/jwmcglynn/donner/issues/318)).
+- [ ] **`<marker>` attribute units** — Support `<length-percentage>`, `<number>`, and keyword
+  tokens for refX/refY/markerWidth/markerHeight per SVG2
+  ([#316](https://github.com/jwmcglynn/donner/issues/316)).
+- [ ] **`<clipPath>` `<use>` support** — Resolve `<use>` children referencing path/shape elements
+  inside `<clipPath>`, per CSS Masking spec
+  ([#238](https://github.com/jwmcglynn/donner/issues/238)).
+
+### Security
+
+- [ ] **AI-assisted security pass** — Comprehensive security audit using AI-assisted analysis.
+  Add new fuzzers for under-covered parser surfaces (CSS, filter parameters, animation timing,
+  edit/patch paths). Scan for vulnerabilities across all input-handling code (XML, CSS, SVG
+  attributes, external references).
+
+### Optional Extensions
+
+- [ ] **JavaScript support** — Identify a small embeddable JavaScript engine and integrate as an
+  optional feature (similar to how filters are optional). Enable scripted SVG content for
+  interactive applications.
+
+### Optimization
+
+- [ ] **Performance profiling** — Profile end-to-end render paths and identify remaining
+  bottlenecks. Target hot paths in parsing, style resolution, layout, and rasterization.
+- [ ] **Code size reduction** — Audit binary size contributions by subsystem. Reduce template
+  bloat, eliminate dead code, and ensure optional features (text, filters, JS) compile out cleanly.
+- [ ] **Memory usage** — Reduce peak and steady-state memory consumption. Audit ECS component
+  sizes, pixmap allocations, and intermediate buffers in filter/render pipelines.
+- [ ] **Compile time** — Reduce build times. Audit heavy template instantiations, consider
+  explicit template instantiation, forward declarations, and pimpl patterns where header
+  fan-out is excessive.
+- [ ] **"Donner Tiny" build profile** — A minimal-footprint tier that strips text, filters,
+  animation, and JavaScript, producing the smallest possible binary for embedded/constrained
+  environments. Each feature is independently opt-in via build flags (CMake options / Bazel
+  configs), so users can compose exactly the feature set they need. Document the size impact of
+  each optional module and provide pre-defined profiles: `tiny` (core rendering only), `standard`
+  (current default), `full` (everything including JS).
+
+### Ecosystem
+
+- [ ] **Comparison with other SVG libraries** — Publish a detailed comparison of Donner against
+  lunasvg and resvg, covering feature support, conformance, performance, API design, binary size,
+  and build complexity. Include reproducible benchmarks and conformance test results.
+
+### Documentation
+
+- [ ] **Design docs → developer docs** — Convert all shipped design documents into
+  developer-facing architecture documentation. Remove planning/status artifacts, focus on
+  how-it-works descriptions for contributors and embedders.
+- [ ] **In-code documentation cleanup** — Review and update code comments, Doxygen annotations,
+  and API documentation across public headers. Ensure all public APIs have clear documentation
+  ready for consumption.
+- [ ] **Embedding guide** — End-to-end guide for integrating Donner into applications, covering
+  build configuration, feature toggles, rendering setup, and common workflows.
+
+### Release Criteria
+
+- All v1.0 issues closed.
+- SVG2 conformance report published with known limitations documented.
+- Stable API surface for rendering, editing, and authoring operations.
+- ≥90% code coverage across production code.
+- CSS3 gap analysis complete, all SVG2-referenced properties supported.
+- Performance and binary-size profiles documented.
+- Release documentation complete for embedders.
+
+---
+
+## Future Work (post-v1.0)
+
+- **"Geode" GPU-accelerated renderer** — Custom GPU rendering backend targeting modern graphics
+  APIs, replacing Skia dependency for high-performance and embedded use cases.
+- **Multithreading** — Thread-safe access to documents and rendering. Define ownership and
+  concurrency model for ECS registry access, enable parallel rendering and background parsing.
+- Boolean path operations and geometry mutation APIs for graphical editors.
+- Multi-user collaboration patch protocol.
+- Game-runtime suitability profile (latency, frame pacing, memory budgets).
+
+---
+
+## Architecture
 
 ```mermaid
 flowchart TD
@@ -123,9 +248,9 @@ flowchart TD
   B --> C[Rendering Instance Graph]
   C --> D[Renderer Backend Interface]
   D --> E1[Skia Backend]
-  D --> E2[Future Backends]
+  D --> E2[tiny-skia Software Backend]
 
-  A --> F[Live XML Patch Engine]
+  A --> F[Partial Re-parse / Live Patch Engine]
   F --> C
 
   C --> G[Animation Scheduler]
@@ -133,210 +258,24 @@ flowchart TD
   C --> I[Text Shaping/Layout]
 
   C --> J[Editor Services]
-  J --> J1[Picking Index]
-  J --> J2[Boolean Path Ops]
-  J --> J3[Fast Geometry Mutation]
+  J --> J1[Spatial Index / Hit Testing]
+  J --> J2[Event System]
+  J --> J3[Structured Editing API]
 
-  K[Optional Extensions] --> K1[Scripting Runtime]
-  K --> K2[Advanced Timeline Tooling]
+  K[Optional Extensions] --> K1[JavaScript Runtime]
   K1 --> C
-  K2 --> G
 ```
 
-### Phase boundaries
-
-- pre-v1 scope (v0.2-v0.4): D/E1 and I first, then initial H/G with conformance tracking.
-- v1.0 scope: complete D/E1/I/H/G plus conformance, API polish, and optimization across A/B/C.
-- v2.0 scope: F and J, plus K as opt-in modules for advanced authoring/runtime scenarios.
-
-## API / Interfaces
-
-Planned interface families:
-
-- Renderer abstraction: backend-neutral render context and submission contracts.
-- Animation runtime API: timeline controls, play/pause/seek, and invalidation hooks.
-- Editing API: transactional DOM mutations with efficient incremental update propagation.
-- Serialization API: full-document and patch-based XML export.
-- Feature configuration API: compile-time/runtime toggles for text and optional extensions.
-
-## Data and State
-
-- Keep ECS components as source of truth for runtime rendering state.
-- Introduce patch journals to bridge XML text edits and ECS graph updates bidirectionally.
-- Maintain per-frame caches keyed by dirty-region and dependency invalidation sets.
-
-## Error Handling
-
-- Continue ParseResult-style diagnostics for parse/edit/serialization operations.
-- Add explicit error categories for patch conflicts in bidirectional sync paths.
-- Keep unsupported-feature reporting structured to feed conformance scorecards.
-
-## Performance
-
-Target themes:
-
-- Real-time update path for editor workloads with minimal full-tree rebuilds.
-- Animation frame scheduling that scales with scene complexity and dirty region size.
-- Binary-size profiles with optional text and scripting modules disabled.
-- Backend abstraction overhead kept near-zero in hot render loops.
-
-## Security / Privacy
-
-Primary trust boundaries involve untrusted SVG/XML input and optional scripting modules.
-
-```mermaid
-flowchart LR
-  U[Untrusted SVG/XML] --> P[Parser + Validation]
-  P --> D[DOM/ECS State]
-  D --> R[Renderer Backends]
-
-  U2[Editor Patch Input] --> V[Patch Validator]
-  V --> D
-
-  S[Optional Script Input] --> SB[Sandboxed Runtime]
-  SB --> D
-```
-
-Controls:
-
-- Enforce size/depth/complexity limits in parser and patch processors.
-- Add fuzzing for XML/parser/edit patch surfaces and malformed animation/filter payloads.
-- Keep scripting fully opt-in and sandboxed behind explicit build/runtime flags.
-
-## Testing and Validation
-
-- Conformance: expand and triage resvg test suite coverage by feature area.
-- Unit tests: backend interface contracts, text/layout units, filter primitives,
-  animation scheduler.
-- Integration tests: full parse -> style -> render -> save flows for create/edit/save usability.
-- Regression tests: XML bidirectional sync and incremental patch correctness.
-- Performance gates: frame-time benchmarks, memory regressions, and binary-size tracking.
-
-## Dependencies
-
-- Prefer existing Donner subsystems and utilities first.
-- Treat font shaping and scripting dependencies as optional and modular.
-- Keep backend adapters isolated so backend-specific dependencies stay contained.
-
-## Rollout Plan
-
-### v0.1 (complete): Static rendering baseline
-
-- Delivered core static SVG path/shape rendering and CSS cascade foundation.
-- Established the architecture baseline used by subsequent text/filter/animation work.
-
-### v0.2 (active): Text + cached rendering foundations
-
-Primary focus:
-
-- Complete `<text>` baseline support and close v0.2 milestone issues.
-- Land renderer interface/driver abstraction for backend decoupling.
-- Improve cached rendering invalidation behavior for frame-to-frame stability.
-
-Expected deliverables:
-
-- Text MVP for common Latin-script cases and core text-related style handling.
-- Renderer API abstraction integrated with existing Skia backend.
-- Regression tests for cache invalidation and mutable DOM rendering updates.
-
-Exit criteria:
-
-- v0.2 milestone issues are closed or explicitly re-scoped.
-- Resvg text subset coverage demonstrates measurable pass-rate improvement.
-- Cached rendering correctness checks pass for targeted edit/re-render scenarios.
-
-### v0.3 (planned): Filter tranche + conformance baseline
-
-Primary focus:
-
-- Deliver first production-ready filter subset for common artwork.
-- Publish SVG2/CSS conformance scorecard and establish baseline metrics.
-
-Expected deliverables:
-
-- Filter graph plumbing and a first tranche of high-value filter primitives.
-- Conformance matrix grouped by feature category and test suite references.
-- Documented gap list with priorities and owners for v0.4/v1.0 closure.
-
-Exit criteria:
-
-- Core filter scenarios render correctly in golden/regression tests.
-- Conformance scorecard is published and linked from project status docs.
-- Remaining blocker list for v1.0 is ranked and actively tracked.
-
-### v0.4 (planned): Animation MVP + API usability hardening
-
-Primary focus:
-
-- Ship animation MVP with frame scheduling and incremental invalidation.
-- Improve authoring APIs for create/edit/save and in-place document workflows.
-
-Expected deliverables:
-
-- Initial animation subsystem for key SVG animation paths.
-- API ergonomics pass for programmatic authoring and serialization.
-- Performance baselines for frame times, memory, and binary-size profiles.
-
-Exit criteria:
-
-- Animation MVP passes targeted integration tests and stability checks.
-- API usability pass closes top ergonomics issues from maintainers/users.
-- v1.0 release gates are agreed and tracked as explicit checklist items.
-
-### v1.0 (target): Feature-complete rendering release
-
-Primary focus:
-
-- Finalize standards-critical scope: renderer abstraction, text, filters, animation.
-- Complete SVG2/CSS audit closure for prioritized high-impact feature gaps.
-- Execute optimization pass (performance, memory, and code size).
-
-Expected deliverables:
-
-- Published v1.0 conformance report with known limitations and rationale.
-- Stable API surface for rendering and core authoring operations.
-- Build-time feature toggles (including text on/off profile) documented.
-
-Exit criteria:
-
-- All v1.0 must-have issues are closed.
-- Conformance and performance targets meet release thresholds.
-- Release documentation is complete for embedders and maintainers.
-
-### v2.x (post-v1): Interactive/editor and advanced runtime track
-
-Primary focus:
-
-- Build real-time editor backend capabilities and bidirectional XML/runtime sync.
-- Add editor geometry services (picking acceleration, boolean path operations).
-- Explore optional advanced extensions, including modular scripting support.
-
-Expected deliverables:
-
-- Patch-based live editing pipeline with deterministic graph updates.
-- Authoring-performance toolchain for high-frequency geometry edits.
-- Deployment profiles for editor-grade and game-runtime use cases.
-
-Exit criteria:
-
-- Interactive editing benchmarks meet latency/throughput objectives.
-- Game-backend suitability checks pass representative workload scenarios.
-- Advanced extensions remain modular and opt-in for size-sensitive builds.
-
-## Alternatives Considered
-
-- Big-bang v2-style editor architecture before v1.0 completeness.
-  - Rejected: delays standards-critical support and risks adoption.
-- Monolithic runtime with always-on advanced features.
-  - Rejected: conflicts with embeddability and binary-size requirements.
-
-## Open Questions
-
-- Which secondary renderer backend should be first after Skia abstraction completion?
-- Which filter primitives are mandatory for v1.0 versus post-v1.
-- What minimum scripting capability, if any, is needed in early v2 milestones?
-
-# Future Work
-
-- [ ] GPU-native scene graph path for very large animated documents.
-- [ ] Collaboration-ready patch protocol for multi-user editor sessions.
+## Design Documents
+
+| Document | Status |
+|----------|--------|
+| [Renderer Interface](renderer_interface_design.md) | Shipped (Phases 1–2a) |
+| [Text Rendering](text_rendering.md) | Shipped (Phases 1–6) |
+| [Filter Effects](filter_effects.md) | Shipped (17/17 primitives) |
+| [Filter Performance](filter_performance.md) | Shipped (all within 1.5×) |
+| [Animation](animation.md) | Shipped (Phases 1–9) |
+| [Composited Rendering](composited_rendering.md) | Shipped |
+| [Interactivity](interactivity.md) | Shipped (Phases 1–6) |
+| [v0.5 Release](v0_5_release.md) | In Progress |
+| [External SVG References](external_svg_references.md) | Design |

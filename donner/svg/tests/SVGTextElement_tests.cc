@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -127,36 +128,22 @@ TEST(SVGTextElementViewportTests, SimpleLetter) {
   )-",
                                        kExperimentalOptions);
 
-  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(doc).matchesOneOf(R"(
+  // Both TinySkia and Skia use TextEngine glyph outlines, producing the same
+  // output per platform. macOS produces non-AA output, Linux produces AA edges.
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(doc).matchBackend()
+      .defaultPattern(R"(
       ................
       ................
       ................
-      .....+******....
-      .....:++@*+=....
-      ........@:......
-      ........@:......
-      ........@:......
-      ........@:......
-      ........@:......
-      ........@:......
-      ........@:......
-      ................
-      ................
-      ................
-      ................
-  )", R"(
-      ................
-      ................
-      ................
-      .....=*****+....
-      .....:==@*==....
-      ........@-......
-      ........@-......
-      ........@-......
-      ........@-......
-      ........@-......
-      ........@-......
-      ........@-......
+      .....@@@@@@@....
+      ........@.......
+      ........@.......
+      ........@.......
+      ........@.......
+      ........@.......
+      ........@.......
+      ........@.......
+      ........@.......
       ................
       ................
       ................
@@ -174,47 +161,164 @@ TEST(SVGTextElementViewportTests, MultipleTSpansComputed) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 16 16">
       <text id="root" x="0" y="12" font-family="fallback-font" font-size="12px" fill="black">
-        <tspan>A</tspan><tspan dx="8">B</tspan>
+        <tspan>A</tspan><tspan dx="2">B</tspan>
       </text>
     </svg>
   )-",
                                        kExperimentalOptions);
 
-  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(doc).matchesOneOf(R"(
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(doc).matchBackend()
+      .defaultPattern(R"(
       ................
       ................
       ................
-      ...:*....****=..
-      ...%@=...@*:=%%.
-      ..-@=#...@:..,%,
-      ..+*.@,..@:..:@.
-      ..@-.#=..@@@@@-.
-      .:@==*%..@=,-+@.
-      .*%###@-.@:...@:
-      .@-...#+.@=.,=@-
-      :@....:@.@@@@%=.
-      ................
-      ................
-      ................
-      ................
-  )", R"(
-      ................
-      ................
-      ................
-      ...:*....+**+=..
-      ...%@:...@+:=%%.
-      ..,@=#...@:...@,
-      ..++.@,..@:..:@.
-      ..@-.*=..@@@@@-.
-      .-@==*%..@=,-+@.
-      .*%###@,.@:...@:
-      .@-...#+.@:.,=@-
-      :@....:@.@@@@%=.
+      ....@.......@@@@
+      ...@@.......@...
+      ...@.@......@...
+      ..@@.@......@...
+      ..@..@......@@@@
+      ..@...@.....@...
+      .@@@@@@.....@...
+      .@....@@....@...
+      .@.....@....@@@@
       ................
       ................
       ................
       ................
   )"));
+}
+
+TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  EXPECT_EQ(textElement.getNumberOfChars(), 3);
+  EXPECT_NEAR(textElement.getComputedTextLength(), 25.0, 0.05);
+  EXPECT_NEAR(textElement.getSubStringLength(0, 2), 16.66, 0.05);
+
+  const Vector2d start = textElement.getStartPositionOfChar(0);
+  EXPECT_NEAR(start.x, 10.0, 0.5);
+  EXPECT_NEAR(start.y, 20.0, 0.5);
+
+  const Boxd extent = textElement.getExtentOfChar(0);
+  EXPECT_THAT(extent, BoxEq(Vector2Near(10.4531, 11.3281), Vector2Near(18.125, 20.0)));
+  EXPECT_EQ(textElement.getCharNumAtPosition((extent.topLeft + extent.bottomRight) * 0.5), 0);
+
+  const std::vector<PathSpline> paths = textElement.convertToPath();
+  EXPECT_FALSE(paths.empty());
+  const Boxd inkBounds = textElement.inkBoundingBox();
+  EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.204), Vector2Near(34.36, 20.12)));
+
+  const Boxd objectBounds = textElement.objectBoundingBox();
+  EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(34.984, 22.7)));
+}
+
+TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="root" x="10" y="20" font-family="fallback-font" font-size="12px">
+        A<tspan id="span" dx="6" rotate="30">BC</tspan>
+      </text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+
+  EXPECT_EQ(root.getNumberOfChars(), 3);
+  EXPECT_EQ(span.getNumberOfChars(), 2);
+  EXPECT_NEAR(span.getComputedTextLength(), root.getSubStringLength(1, 2), 1e-6);
+  EXPECT_EQ(span.getExtentOfChar(0), root.getExtentOfChar(1));
+  EXPECT_DOUBLE_EQ(span.getRotationOfChar(0), 30.0);
+  EXPECT_EQ(span.getStartPositionOfChar(0), root.getStartPositionOfChar(1));
+}
+
+// ── Cache invalidation tests ────────────────────────────────────────────────
+
+TEST(SVGTextElementCacheTests, GeometryIsCachedAcrossQueries) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // First query populates cache.
+  const double len1 = textElement.getComputedTextLength();
+  // Second query should return same result from cache.
+  const double len2 = textElement.getComputedTextLength();
+  EXPECT_DOUBLE_EQ(len1, len2);
+}
+
+TEST(SVGTextElementCacheTests, SetTextLengthInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // textLength affects glyph positions, so use start position of last char.
+  const Vector2d posBefore = textElement.getStartPositionOfChar(5);
+
+  // Setting textLength should invalidate the cache and change glyph positions.
+  textElement.setTextLength(Lengthd(200.0, Lengthd::Unit::Px));
+  const Vector2d posAfter = textElement.getStartPositionOfChar(5);
+  // The last character should have moved significantly.
+  EXPECT_GT(std::abs(posAfter.x - posBefore.x), 10.0);
+}
+
+TEST(SVGTextElementCacheTests, SetPositionInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">AB</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  const Vector2d startBefore = textElement.getStartPositionOfChar(0);
+  EXPECT_NEAR(startBefore.x, 10.0, 0.5);
+
+  // Change X position.
+  textElement.setX(Lengthd(50.0, Lengthd::Unit::Px));
+  const Vector2d startAfter = textElement.getStartPositionOfChar(0);
+  EXPECT_NEAR(startAfter.x, 50.0, 0.5);
+}
+
+TEST(SVGTextElementCacheTests, TSpanPositionChangeInvalidatesParent) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="root" x="10" y="20" font-family="fallback-font" font-size="12px">
+        A<tspan id="span">B</tspan>
+      </text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+
+  // Prime the cache.
+  const Vector2d spanStartBefore = span.getStartPositionOfChar(0);
+
+  // Change dx on the tspan.
+  span.setDx(Lengthd(20.0, Lengthd::Unit::Px));
+  const Vector2d spanStartAfter = span.getStartPositionOfChar(0);
+  // The span's character should have moved by ~20px.
+  EXPECT_NEAR(spanStartAfter.x - spanStartBefore.x, 20.0, 1.0);
 }
 
 }  // namespace donner::svg

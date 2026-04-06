@@ -91,7 +91,7 @@
 
 #define UTILS_RELEASE_ASSERT_MSG(x, msg)                                          \
   do {                                                                            \
-    const bool _utilsResult = (x);                                                \
+    const bool _utilsResult = static_cast<bool>(x);                               \
     if (!_utilsResult) {                                                          \
       fprintf(stderr, "Error: UTILS_RELEASE_ASSERT failed: %s, %s\n", #x, (msg)); \
       abort();                                                                    \

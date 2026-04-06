@@ -93,6 +93,11 @@ public:
    */
   const std::vector<FontResource>& loadedFonts() const { return loadedFonts_; }
 
+  /**
+   * Get all registered @font-face declarations.
+   */
+  const std::vector<css::FontFace>& fontFaces() const { return fontFaces_; }
+
 private:
   /**
    * Get the \ref LoadedImageComponent for an entity. This will synchronously load the image if it
@@ -109,6 +114,9 @@ private:
   /// A user-supplied handler interface which handles loading URLs based on application-specific
   /// logic.
   std::unique_ptr<ResourceLoaderInterface> loader_;
+
+  /// All registered @font-face declarations (persistent, for FontRegistry resolution).
+  std::vector<css::FontFace> fontFaces_;
 
   /// A list of all font faces that need to be loaded.
   std::vector<css::FontFace> fontFacesToLoad_;

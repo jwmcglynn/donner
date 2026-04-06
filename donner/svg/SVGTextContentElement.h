@@ -1,10 +1,15 @@
 #pragma once
 /// @file
 
+#include <vector>
+
+#include "donner/base/Box.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/LengthAdjust.h"
+#include "donner/svg/core/PathSpline.h"
 
 namespace donner::svg {
 
@@ -28,10 +33,25 @@ protected:
    */
   explicit SVGTextContentElement(EntityHandle handle);
 
+  /**
+   * Return glyph outlines for this text subtree, in local coordinates.
+   */
+  std::vector<PathSpline> computedGlyphPaths() const;
+
+  /**
+   * Return the ink bounds for this text subtree, in local coordinates.
+   */
+  Boxd computedInkBounds() const;
+
+  /**
+   * Return the text object bounding box for this text subtree, in local coordinates.
+   */
+  Boxd computedObjectBoundingBox() const;
+
 public:
   /// Returns true if the given element type can be cast to \ref SVGTextContentElement.
   static constexpr bool IsBaseOf(ElementType type) {
-    return type == ElementType::Text || type == ElementType::TSpan;
+    return type == ElementType::Text || type == ElementType::TextPath || type == ElementType::TSpan;
   }
 
   /**
@@ -125,11 +145,24 @@ public:
   void selectSubString(std::size_t charnum, std::size_t nchars);
 
   /**
+   * Invalidate cached text layout for the text root containing this element.
+   * Called when any text property that affects layout changes.
+   */
+  void invalidateTextGeometry();
+
+  /**
    * Append text content from text or CDATA nodes.
    *
    * @param text Text content to append.
    */
   void appendText(std::string_view text);
+
+  /**
+   * Start a new direct-text chunk after an intervening child element.
+   *
+   * This preserves the ordering of mixed text and child elements for layout.
+   */
+  void advanceTextChunk();
 
   /**
    * Get the raw text content concatenated from all child text nodes.

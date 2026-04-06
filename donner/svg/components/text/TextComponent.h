@@ -17,6 +17,13 @@ struct TextComponent {
   /// Text content.
   RcString text;
 
+  /// Direct text chunks between child elements, in DOM order.
+  ///
+  /// Chunk 0 is the text before the first child element, chunk 1 is the text between the first
+  /// and second child elements, and so on. Empty chunks are preserved so mixed text and element
+  /// content can be reconstructed in order during layout.
+  SmallVector<RcString, 1> textChunks;
+
   /// Override for the text length. If empty, the property is not set.
   std::optional<Lengthd> textLength;
 

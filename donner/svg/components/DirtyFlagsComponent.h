@@ -25,7 +25,8 @@ struct DirtyFlagsComponent {
     Paint = 1 << 5,           //!< ResolvedPaintServer (fill/stroke) needs re-resolution.
     Filter = 1 << 6,          //!< Filter effect chain needs re-resolution.
     RenderInstance = 1 << 7,  //!< RenderingInstanceComponent needs update.
-    ShadowTree = 1 << 8,     //!< Shadow tree needs re-instantiation.
+    ShadowTree = 1 << 8,      //!< Shadow tree needs re-instantiation.
+    TextGeometry = 1 << 9,    //!< ComputedTextGeometryComponent needs recomputation.
 
     /// Compound flag: style change that may affect paint, filter, and render instance.
     StyleCascade = Style | Paint | Filter | RenderInstance,

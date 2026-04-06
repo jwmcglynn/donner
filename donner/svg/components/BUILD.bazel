@@ -43,6 +43,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/base/xml/components",
+        "//donner/svg/components/filter:components",
         "//donner/svg/components/layout:components",
         "//donner/svg/components/shadow:components",
         "//donner/svg/components/style:components",
@@ -59,7 +60,6 @@ donner_cc_library(
     ],
     deps = [
         ":components_core",
-        "//donner/svg/components/filter:filter_system",
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/paint:paint_system",
         "//donner/svg/components/resources:components",

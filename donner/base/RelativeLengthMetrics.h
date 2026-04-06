@@ -1,6 +1,10 @@
 #pragma once
 /// @file
 
+#include <optional>
+
+#include "donner/base/Vector2.h"
+
 namespace donner {
 
 /**
@@ -14,6 +18,10 @@ struct FontMetrics {
   double exUnitInEm = 0.5f;     //!< x-height measurement.
   double chUnitInEm =
       0.5f;  //!< Equal to the used advance measure of the "0" glyph in the font used to render it.
+
+  /// Viewport dimensions for resolving vw/vh/vmin/vmax units.
+  /// When nullopt, toPixels() falls back to viewBox dimensions.
+  std::optional<Vector2d> viewportSize;
 
   /// The value of an "ex" unit.
   double exUnit() const { return exUnitInEm * fontSize; }
