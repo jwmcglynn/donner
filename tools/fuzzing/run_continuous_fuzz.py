@@ -114,6 +114,34 @@ FINAL_STAT_RE = re.compile(r"stat::(\w+):\s*(\d+)")
 # Target discovery
 # ---------------------------------------------------------------------------
 
+def parse_bazel_query_output(
+    output: str, name_filter: Optional[str] = None
+) -> list[tuple[str, str]]:
+    """Parse bazel query output into (label, name) pairs.
+
+    Returns a sorted list of (label, short_name) tuples for _bin targets.
+    """
+    results = []
+    for line in output.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Extract short name: //donner/css/parser:color_parser_fuzzer_bin -> color_parser_fuzzer
+        name = line.split(":")[-1]
+        if name.endswith("_bin"):
+            name = name[:-4]
+        else:
+            continue  # Skip non-_bin targets
+
+        if name_filter and name_filter not in name:
+            continue
+
+        results.append((line, name))
+
+    results.sort(key=lambda t: t[1])
+    return results
+
+
 def discover_targets(repo_root: Path, name_filter: Optional[str] = None) -> list[FuzzerTarget]:
     """Discover fuzzer targets via Bazel query."""
     print("Discovering fuzzer targets...")
@@ -129,25 +157,11 @@ def discover_targets(repo_root: Path, name_filter: Optional[str] = None) -> list
         sys.exit(1)
 
     targets = []
-    for line in result.stdout.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # Extract short name: //donner/css/parser:color_parser_fuzzer_bin -> color_parser_fuzzer
-        name = line.split(":")[-1]
-        if name.endswith("_bin"):
-            name = name[:-4]
-        else:
-            continue  # Skip non-_bin targets
-
-        if name_filter and name_filter not in name:
-            continue
-
-        target = FuzzerTarget(label=line, name=name)
-        target.corpus_dir = find_corpus_dir(repo_root, line, name)
+    for label, name in parse_bazel_query_output(result.stdout, name_filter):
+        target = FuzzerTarget(label=label, name=name)
+        target.corpus_dir = find_corpus_dir(repo_root, label, name)
         targets.append(target)
 
-    targets.sort(key=lambda t: t.name)
     return targets
 
 
@@ -213,6 +227,34 @@ def build_targets(repo_root: Path, targets: list[FuzzerTarget]) -> bool:
 # ---------------------------------------------------------------------------
 # Fuzzer execution
 # ---------------------------------------------------------------------------
+
+def parse_stats_line(line: str) -> Optional[dict]:
+    """Parse a libFuzzer stats line and return extracted fields.
+
+    Returns a dict with any of: total_execs, coverage, features, corpus_size,
+    execs_per_sec, final_stat_key, final_stat_value. Returns None if the line
+    contains no parseable stats.
+    """
+    result = {}
+
+    m = STATS_LINE_RE.search(line)
+    if m:
+        result["total_execs"] = int(m.group(1))
+        result["coverage"] = int(m.group(2))
+        result["features"] = int(m.group(3))
+        result["corpus_size"] = int(m.group(4))
+
+    m = EXECS_PER_SEC_RE.search(line)
+    if m:
+        result["execs_per_sec"] = int(m.group(1))
+
+    m = FINAL_STAT_RE.search(line)
+    if m:
+        result["final_stat_key"] = m.group(1)
+        result["final_stat_value"] = int(m.group(2))
+
+    return result if result else None
+
 
 def _seed_corpus(target: FuzzerTarget, work_corpus: Path,
                   persistent_corpus_dir: Optional[Path]) -> None:
@@ -345,29 +387,27 @@ def run_fuzzer(
                     line = line_bytes.decode("utf-8", errors="replace")
                     log_fh.write(line + "\n")
 
-                    m = STATS_LINE_RE.search(line)
-                    if m:
-                        stats.total_execs = int(m.group(1))
-                        cov = int(m.group(2))
-                        stats.peak_coverage = max(stats.peak_coverage, cov)
-                        stats.peak_features = max(
-                            stats.peak_features, int(m.group(3))
-                        )
-                        stats.corpus_size = int(m.group(4))
-
-                        if cov > last_cov:
-                            last_cov = cov
-                            last_cov_increase_time = time.monotonic()
-
-                    m = EXECS_PER_SEC_RE.search(line)
-                    if m:
-                        stats.execs_per_sec = int(m.group(1))
-
-                    m = FINAL_STAT_RE.search(line)
-                    if m:
-                        key, value = m.group(1), int(m.group(2))
-                        if key == "number_of_executed_units":
-                            stats.total_execs = value
+                    parsed = parse_stats_line(line)
+                    if parsed:
+                        if "total_execs" in parsed:
+                            stats.total_execs = parsed["total_execs"]
+                        if "coverage" in parsed:
+                            cov = parsed["coverage"]
+                            stats.peak_coverage = max(stats.peak_coverage, cov)
+                            stats.corpus_size = parsed.get(
+                                "corpus_size", stats.corpus_size
+                            )
+                            stats.peak_features = max(
+                                stats.peak_features,
+                                parsed.get("features", 0),
+                            )
+                            if cov > last_cov:
+                                last_cov = cov
+                                last_cov_increase_time = time.monotonic()
+                        if "execs_per_sec" in parsed:
+                            stats.execs_per_sec = parsed["execs_per_sec"]
+                        if parsed.get("final_stat_key") == "number_of_executed_units":
+                            stats.total_execs = parsed["final_stat_value"]
 
             # Plateau detection (checked every iteration, not just on stats lines)
             if (
