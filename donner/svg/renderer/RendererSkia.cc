@@ -127,6 +127,30 @@ SkFontStyle toSkiaFontStyle(int fontWeight, FontStyle fontStyle, FontStretch fon
 
 SkPath toSkia(const PathSpline& spline);
 
+PathSpline transformPathSpline(const PathSpline& spline, const Transformd& transform) {
+  PathSpline result;
+  const std::vector<Vector2d>& points = spline.points();
+
+  for (const PathSpline::Command& command : spline.commands()) {
+    switch (command.type) {
+      case PathSpline::CommandType::MoveTo:
+        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case PathSpline::CommandType::LineTo:
+        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case PathSpline::CommandType::CurveTo:
+        result.curveTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]),
+                       transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case PathSpline::CommandType::ClosePath: result.closePath(); break;
+    }
+  }
+
+  return result;
+}
+
 SkTileMode toSkia(GradientSpreadMethod spreadMethod);
 
 /// Premultiply straight-alpha RGBA pixels for Skia consumption.
@@ -1261,16 +1285,17 @@ std::optional<SkPaint> RendererSkia::makeFillPaint(const Boxd& bounds) {
     return std::nullopt;
   }
 
+  const css::RGBA currentColor = paint_.currentColor.rgba();
+  const float fillOpacity = NarrowToFloat(paint_.fillOpacity);
+
   // Use pre-recorded pattern tile if available.
   if (patternFillPaint_.has_value()) {
     SkPaint paint = std::move(*patternFillPaint_);
     patternFillPaint_.reset();
     paint.setStyle(SkPaint::Style::kFill_Style);
+    paint.setAlphaf(fillOpacity);
     return paint;
   }
-
-  const css::RGBA currentColor = paint_.currentColor.rgba();
-  const float fillOpacity = NarrowToFloat(paint_.fillOpacity);
 
   if (const auto* solid = std::get_if<PaintServer::Solid>(&paint_.fill)) {
     SkPaint paint;
@@ -1328,16 +1353,17 @@ std::optional<SkPaint> RendererSkia::makeStrokePaint(const Boxd& bounds,
     }
   };
 
+  const css::RGBA currentColor = paint_.currentColor.rgba();
+  const float strokeOpacity = NarrowToFloat(paint_.strokeOpacity);
+
   // Use pre-recorded pattern tile if available.
   if (patternStrokePaint_.has_value()) {
     SkPaint paint = std::move(*patternStrokePaint_);
     patternStrokePaint_.reset();
     configureStroke(paint);
+    paint.setAlphaf(strokeOpacity);
     return paint;
   }
-
-  const css::RGBA currentColor = paint_.currentColor.rgba();
-  const float strokeOpacity = NarrowToFloat(paint_.strokeOpacity);
 
   if (const auto* solid = std::get_if<PaintServer::Solid>(&paint_.stroke)) {
     SkPaint paint;
@@ -1956,9 +1982,8 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
               params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
         }
 
-        const float runScale = boundsRun.font
-                                   ? textEngine.scaleForPixelHeight(boundsRun.font, runFontSizePx)
-                                   : 0.0f;
+        const float runScale =
+            boundsRun.font ? textEngine.scaleForPixelHeight(boundsRun.font, runFontSizePx) : 0.0f;
         double emTop = static_cast<double>(runFontSizePx);
         double emBottom = 0.0;
         if (boundsRun.font && runScale > 0.0f) {
@@ -1996,6 +2021,12 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
         continue;
       }
 
+      float spanFontSizePx = fontSizePx;
+      if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
+        spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
+            params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+      }
+
       sk_sp<SkTypeface> shapedTypeface = typeface;
       if (run.font) {
         const auto fontBytes = fontManager.fontData(run.font);
@@ -2007,7 +2038,7 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
         }
       }
 
-      SkFont shapedFont(shapedTypeface, fontSizePx);
+      SkFont shapedFont(shapedTypeface, spanFontSizePx);
       shapedFont.setEdging(SkFont::Edging::kSubpixelAntiAlias);
 
       std::optional<SkPaint> spanFillPaint = baseFillPaint;
@@ -2021,15 +2052,14 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
         if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
           SkPaint paint = makeSolidFillPaint(
               css::Color(solid->color.resolve(spanCurrentColor, spanFillOpacity)));
-          paint.setAlphaf(
-              NarrowToFloat(paint.getAlphaf() * static_cast<float>(span.opacity)));
+          paint.setAlphaf(NarrowToFloat(paint.getAlphaf() * static_cast<float>(span.opacity)));
           spanFillPaint = paint;
         } else if (const auto* ref =
                        std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
           const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
-          if (std::optional<SkPaint> gradient = instantiateGradientPaint(
-                  *ref, textBounds, paint_.viewBox, spanCurrentColor, combinedOpacity,
-                  antialias_)) {
+          if (std::optional<SkPaint> gradient =
+                  instantiateGradientPaint(*ref, textBounds, paint_.viewBox, spanCurrentColor,
+                                           combinedOpacity, antialias_)) {
             spanFillPaint = std::move(*gradient);
           } else if (ref->fallback.has_value()) {
             SkPaint paint = makeSolidFillPaint(
@@ -2061,9 +2091,9 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
           } else if (const auto* ref =
                          std::get_if<components::PaintResolvedReference>(&span.resolvedStroke)) {
             const float combinedOpacity = spanStrokeOpacity * static_cast<float>(span.opacity);
-            if (std::optional<SkPaint> gradient = instantiateGradientPaint(
-                    *ref, textBounds, paint_.viewBox, spanCurrentColor, combinedOpacity,
-                    antialias_)) {
+            if (std::optional<SkPaint> gradient =
+                    instantiateGradientPaint(*ref, textBounds, paint_.viewBox, spanCurrentColor,
+                                             combinedOpacity, antialias_)) {
               gradient->setStyle(SkPaint::kStroke_Style);
               gradient->setStrokeWidth(NarrowToFloat(span.strokeWidth));
               gradient->setStrokeMiter(NarrowToFloat(span.strokeMiterLimit));
@@ -2093,94 +2123,333 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
         }
       }
 
-      // Convert shaped glyphs to Skia arrays.
-      const auto glyphCount = static_cast<int>(run.glyphs.size());
-      std::vector<SkGlyphID> skGlyphs(run.glyphs.size());
-      std::vector<SkPoint> skPositions(run.glyphs.size());
+      const bool isBitmapFont = run.font && textEngine.isBitmapOnly(run.font);
+      const float glyphScale =
+          run.font ? textEngine.scaleForPixelHeight(run.font, spanFontSizePx) : 0.0f;
 
-      for (size_t i = 0; i < run.glyphs.size(); ++i) {
-        skGlyphs[i] = static_cast<SkGlyphID>(run.glyphs[i].glyphIndex);
-        skPositions[i] = SkPoint::Make(NarrowToFloat(run.glyphs[i].xPosition),
-                                       NarrowToFloat(run.glyphs[i].yPosition));
-      }
-
-      const SkPoint origin = SkPoint::Make(0, 0);
-      const bool hasPerGlyphTransform =
-          std::any_of(run.glyphs.begin(), run.glyphs.end(), [](const auto& glyph) {
-            return glyph.rotateDegrees != 0.0 || std::abs(glyph.fontSizeScale - 1.0f) > 1e-6f ||
-                   std::abs(glyph.stretchScaleX - 1.0f) > 1e-6f ||
-                   std::abs(glyph.stretchScaleY - 1.0f) > 1e-6f;
-          });
-
-      if (hasPerGlyphTransform) {
-        // Per-glyph transforms: draw each glyph individually.
-        for (int i = 0; i < glyphCount; ++i) {
-          currentCanvas_->save();
-          currentCanvas_->translate(skPositions[i].x(), skPositions[i].y());
-          if (std::abs(run.glyphs[i].fontSizeScale - 1.0f) > 1e-6f) {
-            currentCanvas_->scale(run.glyphs[i].fontSizeScale, run.glyphs[i].fontSizeScale);
+      if (run.font != FontHandle() && !isBitmapFont && glyphScale > 0.0f) {
+        for (const auto& glyph : run.glyphs) {
+          if (glyph.glyphIndex == 0) {
+            continue;
           }
-          if (std::abs(run.glyphs[i].stretchScaleX - 1.0f) > 1e-6f ||
-              std::abs(run.glyphs[i].stretchScaleY - 1.0f) > 1e-6f) {
-            currentCanvas_->scale(run.glyphs[i].stretchScaleX, run.glyphs[i].stretchScaleY);
+
+          PathSpline glyphPath =
+              textEngine.glyphOutline(run.font, glyph.glyphIndex, glyphScale * glyph.fontSizeScale);
+          if (glyphPath.empty()) {
+            continue;
           }
-          currentCanvas_->rotate(NarrowToFloat(run.glyphs[i].rotateDegrees));
+
+          if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+            glyphPath = transformPathSpline(
+                glyphPath, Transformd::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+          }
+
+          Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+          if (glyph.rotateDegrees != 0.0) {
+            glyphFromLocal =
+                Transformd::Rotate(glyph.rotateDegrees * std::numbers::pi_v<double> / 180.0) *
+                glyphFromLocal;
+          }
+
+          const SkPath skPath = toSkia(transformPathSpline(glyphPath, glyphFromLocal));
           if (spanFillPaint.has_value()) {
-            currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont,
-                                       *spanFillPaint);
+            currentCanvas_->drawPath(skPath, *spanFillPaint);
           }
           if (spanStrokePaint.has_value()) {
-            currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont,
-                                       *spanStrokePaint);
+            currentCanvas_->drawPath(skPath, *spanStrokePaint);
           }
-          currentCanvas_->restore();
         }
       } else {
-        // No rotation: batch draw all glyphs.
-        if (spanFillPaint.has_value()) {
-          currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
-                                     shapedFont, *spanFillPaint);
+        const auto glyphCount = static_cast<int>(run.glyphs.size());
+        std::vector<SkGlyphID> skGlyphs(run.glyphs.size());
+        std::vector<SkPoint> skPositions(run.glyphs.size());
+
+        for (size_t i = 0; i < run.glyphs.size(); ++i) {
+          skGlyphs[i] = static_cast<SkGlyphID>(run.glyphs[i].glyphIndex);
+          skPositions[i] = SkPoint::Make(NarrowToFloat(run.glyphs[i].xPosition),
+                                         NarrowToFloat(run.glyphs[i].yPosition));
         }
-        if (spanStrokePaint.has_value()) {
-          currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
-                                     shapedFont, *spanStrokePaint);
+
+        const SkPoint origin = SkPoint::Make(0, 0);
+        const bool hasPerGlyphTransform =
+            std::any_of(run.glyphs.begin(), run.glyphs.end(), [](const auto& glyph) {
+              return glyph.rotateDegrees != 0.0 || std::abs(glyph.fontSizeScale - 1.0f) > 1e-6f ||
+                     std::abs(glyph.stretchScaleX - 1.0f) > 1e-6f ||
+                     std::abs(glyph.stretchScaleY - 1.0f) > 1e-6f;
+            });
+
+        if (hasPerGlyphTransform) {
+          for (int i = 0; i < glyphCount; ++i) {
+            currentCanvas_->save();
+            currentCanvas_->translate(skPositions[i].x(), skPositions[i].y());
+            if (std::abs(run.glyphs[i].fontSizeScale - 1.0f) > 1e-6f) {
+              currentCanvas_->scale(run.glyphs[i].fontSizeScale, run.glyphs[i].fontSizeScale);
+            }
+            if (std::abs(run.glyphs[i].stretchScaleX - 1.0f) > 1e-6f ||
+                std::abs(run.glyphs[i].stretchScaleY - 1.0f) > 1e-6f) {
+              currentCanvas_->scale(run.glyphs[i].stretchScaleX, run.glyphs[i].stretchScaleY);
+            }
+            currentCanvas_->rotate(NarrowToFloat(run.glyphs[i].rotateDegrees));
+            if (spanFillPaint.has_value()) {
+              currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont,
+                                         *spanFillPaint);
+            }
+            if (spanStrokePaint.has_value()) {
+              currentCanvas_->drawGlyphs(1, &skGlyphs[i], &origin, origin, shapedFont,
+                                         *spanStrokePaint);
+            }
+            currentCanvas_->restore();
+          }
+        } else {
+          if (spanFillPaint.has_value()) {
+            currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
+                                       shapedFont, *spanFillPaint);
+          }
+          if (spanStrokePaint.has_value()) {
+            currentCanvas_->drawGlyphs(glyphCount, skGlyphs.data(), skPositions.data(), origin,
+                                       shapedFont, *spanStrokePaint);
+          }
         }
       }
 
-      // Draw text-decoration lines.
-      if (params.textDecoration != TextDecoration::None) {
-        SkFontMetrics metrics;
-        shapedFont.getMetrics(&metrics);
+      const bool hasSpan = runIndex < text.spans.size();
+      const TextDecoration spanDecoration =
+          hasSpan ? text.spans[runIndex].textDecoration : params.textDecoration;
 
-        const SkScalar firstX = NarrowToFloat(run.glyphs.front().xPosition);
-        const SkScalar lastEnd =
-            NarrowToFloat(run.glyphs.back().xPosition + run.glyphs.back().xAdvance);
-        const SkScalar textWidth = lastEnd - firstX;
-        const SkScalar y = NarrowToFloat(run.glyphs.front().yPosition);
+      // Draw text-decoration lines. Per CSS Text Decoration §3, decoration uses the paint and
+      // font metrics of the element that declared text-decoration, not the current span's.
+      if (spanDecoration != TextDecoration::None && !run.glyphs.empty() && run.font && hasSpan) {
+        const auto& span = text.spans[runIndex];
 
-        SkScalar decoY = y;
-        SkScalar thickness =
-            metrics.fUnderlineThickness > 0 ? metrics.fUnderlineThickness : fontSizePx / 18.0f;
+        const float decoFontSizePx =
+            span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
+        const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
+        const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
 
-        if (params.textDecoration == TextDecoration::Underline) {
-          decoY = y + (metrics.fUnderlinePosition > 0 ? metrics.fUnderlinePosition
-                                                      : fontSizePx * 0.15f);
-        } else if (params.textDecoration == TextDecoration::Overline) {
-          decoY = y + metrics.fAscent;
-        } else if (params.textDecoration == TextDecoration::LineThrough) {
-          decoY = y + (metrics.fStrikeoutPosition != 0 ? metrics.fStrikeoutPosition
-                                                       : metrics.fAscent * 0.35f);
-          if (metrics.fStrikeoutThickness > 0) {
-            thickness = metrics.fStrikeoutThickness;
+        const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
+        const int ascent = vmetrics.ascent;
+        const int descent = vmetrics.descent;
+
+        double fontUnderlinePos = 0.0;
+        double fontUnderlineThick = 0.0;
+        if (auto underline = textEngine.underlineMetrics(run.font)) {
+          fontUnderlinePos = underline->position;
+          fontUnderlineThick = underline->thickness;
+        }
+
+        double fontStrikePos = 0.0;
+        double fontStrikeThick = 0.0;
+        if (auto strike = textEngine.strikeoutMetrics(run.font)) {
+          fontStrikePos = strike->position;
+          fontStrikeThick = strike->thickness;
+        }
+
+        const double thickness = fontUnderlineThick > 0.0
+                                     ? fontUnderlineThick * decoEmScale
+                                     : static_cast<double>(ascent - descent) * decoScale / 18.0;
+
+        std::optional<SkPaint> decoFillPaint;
+        const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
+        if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedDecorationFill)) {
+          SkPaint paint = makeSolidFillPaint(css::Color(
+              solid->color.resolve(spanCurrentColor, NarrowToFloat(span.decorationFillOpacity))));
+          paint.setAlphaf(NarrowToFloat(paint.getAlphaf() * static_cast<float>(span.opacity)));
+          decoFillPaint = paint;
+        } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(
+                       &span.resolvedDecorationFill)) {
+          const float combinedOpacity =
+              NarrowToFloat(span.decorationFillOpacity) * static_cast<float>(span.opacity);
+          if (std::optional<SkPaint> gradient =
+                  instantiateGradientPaint(*ref, textBounds, paint_.viewBox, spanCurrentColor,
+                                           combinedOpacity, antialias_)) {
+            decoFillPaint = std::move(*gradient);
+          }
+        }
+        if (!decoFillPaint.has_value()) {
+          decoFillPaint = spanFillPaint;
+        }
+
+        std::optional<SkPaint> decoStrokePaint;
+        if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedDecorationStroke)) {
+          SkPaint paint = basePaint(antialias_, params.opacity * paintOpacity_);
+          paint.setStyle(SkPaint::kStroke_Style);
+          paint.setStrokeWidth(NarrowToFloat(span.decorationStrokeWidth));
+          css::RGBA rgba =
+              solid->color.resolve(spanCurrentColor, NarrowToFloat(span.decorationStrokeOpacity));
+          rgba.a = static_cast<uint8_t>(
+              std::round(static_cast<double>(rgba.a) * static_cast<float>(span.opacity)));
+          paint.setColor(toSkia(rgba));
+          decoStrokePaint = paint;
+        } else if (const auto* ref = std::get_if<components::PaintResolvedReference>(
+                       &span.resolvedDecorationStroke)) {
+          const float combinedOpacity =
+              NarrowToFloat(span.decorationStrokeOpacity) * static_cast<float>(span.opacity);
+          if (std::optional<SkPaint> gradient =
+                  instantiateGradientPaint(*ref, textBounds, paint_.viewBox, spanCurrentColor,
+                                           combinedOpacity, antialias_)) {
+            gradient->setStyle(SkPaint::kStroke_Style);
+            gradient->setStrokeWidth(NarrowToFloat(span.decorationStrokeWidth));
+            decoStrokePaint = std::move(*gradient);
           }
         }
 
-        SkRect decoRect = SkRect::MakeXYWH(firstX, decoY - thickness / 2, textWidth, thickness);
-        if (spanFillPaint.has_value()) {
-          currentCanvas_->drawRect(decoRect, *spanFillPaint);
-        }
-        if (spanStrokePaint.has_value()) {
-          currentCanvas_->drawRect(decoRect, *spanStrokePaint);
+        const bool hasRotation =
+            std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                        [](const auto& glyph) { return glyph.rotateDegrees != 0.0; });
+
+        for (TextDecoration decoType :
+             {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
+          if (!hasFlag(spanDecoration, decoType)) {
+            continue;
+          }
+
+          double decoThickness = thickness;
+          if (decoType == TextDecoration::LineThrough && fontStrikeThick > 0.0) {
+            decoThickness = fontStrikeThick * decoEmScale;
+          }
+
+          double decoOffsetY = 0.0;
+          if (decoType == TextDecoration::Underline) {
+            decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * decoEmScale
+                                                  : -static_cast<double>(descent) * decoScale * 0.4;
+          } else if (decoType == TextDecoration::Overline) {
+            decoOffsetY = -static_cast<double>(ascent) * decoScale;
+          } else if (decoType == TextDecoration::LineThrough) {
+            decoOffsetY = fontStrikePos != 0.0 ? -fontStrikePos * decoEmScale
+                                               : -static_cast<double>(ascent) * decoScale * 0.35;
+          }
+
+          double decoTopY = decoOffsetY - decoThickness / 2.0;
+
+          const bool hasMultipleDecorationLines =
+              (hasFlag(spanDecoration, TextDecoration::Underline) ? 1 : 0) +
+                  (hasFlag(spanDecoration, TextDecoration::Overline) ? 1 : 0) +
+                  (hasFlag(spanDecoration, TextDecoration::LineThrough) ? 1 : 0) >
+              1;
+          if (span.decorationDeclarationCount == 1 && hasMultipleDecorationLines) {
+            if (decoType == TextDecoration::Overline) {
+              decoTopY += decoThickness * 1.5;
+            } else if (decoType == TextDecoration::LineThrough) {
+              decoTopY -= decoThickness;
+            }
+          }
+
+          auto drawDecoPath = [&](const PathSpline& spline) {
+            const SkPath path = toSkia(spline);
+            if (decoFillPaint.has_value()) {
+              currentCanvas_->drawPath(path, *decoFillPaint);
+            }
+            if (decoStrokePaint.has_value() && span.decorationStrokeWidth > 0.0) {
+              currentCanvas_->drawPath(path, *decoStrokePaint);
+            }
+          };
+
+          const auto isRenderedGlyph = [](const auto& glyph) {
+            return glyph.glyphIndex != 0 && glyph.xAdvance > 0.0;
+          };
+
+          if (hasRotation) {
+            for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
+              const auto& glyph = run.glyphs[glyphIndex];
+              if (!isRenderedGlyph(glyph)) {
+                continue;
+              }
+
+              double segmentWidth = glyph.xAdvance;
+              for (size_t nextIndex = glyphIndex + 1; nextIndex < run.glyphs.size(); ++nextIndex) {
+                const auto& nextGlyph = run.glyphs[nextIndex];
+                if (!isRenderedGlyph(nextGlyph)) {
+                  continue;
+                }
+
+                segmentWidth = std::min(segmentWidth, nextGlyph.xPosition - glyph.xPosition);
+                break;
+              }
+
+              if (segmentWidth <= 0.0) {
+                continue;
+              }
+
+              PathSpline segmentPath;
+              segmentPath.moveTo(Vector2d(0.0, decoTopY));
+              segmentPath.lineTo(Vector2d(segmentWidth, decoTopY));
+              segmentPath.lineTo(Vector2d(segmentWidth, decoTopY + decoThickness));
+              segmentPath.lineTo(Vector2d(0.0, decoTopY + decoThickness));
+              segmentPath.closePath();
+
+              Transformd segmentFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+              if (glyph.rotateDegrees != 0.0) {
+                segmentFromLocal =
+                    Transformd::Rotate(glyph.rotateDegrees * std::numbers::pi_v<double> / 180.0) *
+                    segmentFromLocal;
+              }
+
+              drawDecoPath(transformPathSpline(segmentPath, segmentFromLocal));
+            }
+          } else {
+            const auto firstGlyph =
+                std::find_if(run.glyphs.begin(), run.glyphs.end(), isRenderedGlyph);
+            const auto lastGlyph =
+                std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), isRenderedGlyph);
+            if (firstGlyph == run.glyphs.end() || lastGlyph == run.glyphs.rend()) {
+              continue;
+            }
+
+            const double baselineY = firstGlyph->yPosition;
+            const bool sameBaseline =
+                std::all_of(run.glyphs.begin(), run.glyphs.end(), [&](const auto& glyph) {
+                  return !isRenderedGlyph(glyph) || std::abs(glyph.yPosition - baselineY) < 1e-6;
+                });
+
+            if (sameBaseline) {
+              PathSpline decoPath;
+              const double x0 = firstGlyph->xPosition;
+              const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
+              const double y = baselineY + decoTopY;
+              decoPath.moveTo(Vector2d(x0, y));
+              decoPath.lineTo(Vector2d(x1, y));
+              decoPath.lineTo(Vector2d(x1, y + decoThickness));
+              decoPath.lineTo(Vector2d(x0, y + decoThickness));
+              decoPath.closePath();
+              drawDecoPath(decoPath);
+            } else {
+              PathSpline decoPath;
+              for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
+                const auto& glyph = run.glyphs[glyphIndex];
+                if (!isRenderedGlyph(glyph)) {
+                  continue;
+                }
+
+                const double x0 = glyph.xPosition;
+                double x1 = glyph.xPosition + glyph.xAdvance;
+                for (size_t nextIndex = glyphIndex + 1; nextIndex < run.glyphs.size();
+                     ++nextIndex) {
+                  const auto& nextGlyph = run.glyphs[nextIndex];
+                  if (!isRenderedGlyph(nextGlyph)) {
+                    continue;
+                  }
+
+                  x1 = std::min(x1, nextGlyph.xPosition);
+                  break;
+                }
+
+                if (x1 <= x0) {
+                  continue;
+                }
+
+                const double y = glyph.yPosition + decoTopY;
+                decoPath.moveTo(Vector2d(x0, y));
+                decoPath.lineTo(Vector2d(x1, y));
+                decoPath.lineTo(Vector2d(x1, y + decoThickness));
+                decoPath.lineTo(Vector2d(x0, y + decoThickness));
+                decoPath.closePath();
+              }
+
+              if (!decoPath.empty()) {
+                drawDecoPath(decoPath);
+              }
+            }
+          }
         }
       }
     }
