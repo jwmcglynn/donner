@@ -4,7 +4,6 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")
 if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia" AND DONNER_FILTERS)
 add_library(donner_svg_renderer_filter_graph_executor
   FilterGraphExecutor.cc
@@ -73,7 +72,6 @@ target_include_directories(donner_svg_renderer_renderer_interface INTERFACE ${PR
 target_compile_options(donner_svg_renderer_renderer_interface INTERFACE -fno-exceptions)
 target_link_libraries(donner_svg_renderer_renderer_interface INTERFACE donner_base_base donner_base_element_element donner_base_xml_xml_qualified_name donner_css_core donner_css_css donner_css_parser_parser donner_svg_components_components donner_svg_components_components_core donner_svg_components_filter_components donner_svg_components_filter_filter_effect donner_svg_components_layout_layout_system donner_svg_components_paint_paint_system donner_svg_components_resources_components donner_svg_components_resources_resource_manager_context donner_svg_components_shadow_components donner_svg_components_shadow_shadow_tree_system donner_svg_components_shape_shape_system donner_svg_components_text_text_system donner_svg_core_core donner_svg_properties_properties donner_svg_properties_property_parsing donner_svg_renderer_stroke_params donner_svg_resources_image_resource)
 if(DONNER_RENDERER_BACKEND STREQUAL "skia")
-if(DONNER_RENDERER_BACKEND STREQUAL "skia")
 add_library(donner_svg_renderer_renderer_skia
   RendererSkia.cc
   RendererSkia.h
@@ -101,7 +99,6 @@ if(DONNER_TEXT_FULL)
   target_compile_definitions(donner_svg_renderer_renderer_skia PUBLIC DONNER_TEXT_FULL)
 endif()
 endif() # DONNER_RENDERER_BACKEND STREQUAL "skia"
-if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")
 if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")
 add_library(donner_svg_renderer_renderer_tiny_skia
   RendererTinySkia.cc
@@ -162,7 +159,6 @@ if(DONNER_TEXT_FULL)
   target_compile_definitions(donner_svg_renderer_rendering_context PUBLIC DONNER_TEXT_FULL)
 endif()
 if(DONNER_RENDERER_BACKEND STREQUAL "skia")
-if(DONNER_RENDERER_BACKEND STREQUAL "skia")
 add_library(donner_svg_renderer_skia_deps INTERFACE)
 target_include_directories(donner_svg_renderer_skia_deps INTERFACE ${PROJECT_SOURCE_DIR})
 target_compile_options(donner_svg_renderer_skia_deps INTERFACE -fno-exceptions)
@@ -177,12 +173,10 @@ target_include_directories(donner_svg_renderer_skia_deps INTERFACE ${skia_SOURCE
 target_compile_definitions(donner_svg_renderer_skia_deps INTERFACE DONNER_USE_CORETEXT)
 endif() # DONNER_RENDERER_BACKEND STREQUAL "skia"
 if(DONNER_RENDERER_BACKEND STREQUAL "skia")
-if(DONNER_RENDERER_BACKEND STREQUAL "skia")
 add_library(donner_svg_renderer_skia_deps_opt INTERFACE)
 target_include_directories(donner_svg_renderer_skia_deps_opt INTERFACE ${PROJECT_SOURCE_DIR})
 target_compile_options(donner_svg_renderer_skia_deps_opt INTERFACE -fno-exceptions)
 endif() # DONNER_RENDERER_BACKEND STREQUAL "skia"
-if(DONNER_RENDERER_BACKEND STREQUAL "skia")
 if(DONNER_RENDERER_BACKEND STREQUAL "skia")
 add_library(donner_svg_renderer_skia_deps_unconfigured INTERFACE)
 target_include_directories(donner_svg_renderer_skia_deps_unconfigured INTERFACE ${PROJECT_SOURCE_DIR})

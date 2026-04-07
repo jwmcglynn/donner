@@ -60,7 +60,6 @@ if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")
   target_link_libraries(donner_svg_renderer_tests_renderer_test_utils INTERFACE donner_svg_renderer_renderer_tiny_skia)
 endif()
 endif() # DONNER_RENDERER_BACKEND STREQUAL "skia"
-if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")
 add_executable(donner_svg_renderer_tests_filter_graph_executor_tests
   FilterGraphExecutor_tests.cc
 )
