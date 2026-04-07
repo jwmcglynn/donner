@@ -14,18 +14,18 @@ TEST(ViewBoxParser, Empty) {
 }
 
 TEST(ViewBoxParser, Valid) {
-  EXPECT_THAT(ViewBoxParser::Parse("0 0 1 1"), ParseResultIs(Boxd({0, 0}, {1, 1})));
-  EXPECT_THAT(ViewBoxParser::Parse("-100 -95 1 3"), ParseResultIs(Boxd({-100, -95}, {-99, -92})));
-  EXPECT_THAT(ViewBoxParser::Parse(".5 1.5 1 2.5"), ParseResultIs(Boxd({0.5, 1.5}, {1.5, 4})));
+  EXPECT_THAT(ViewBoxParser::Parse("0 0 1 1"), ParseResultIs(Box2d({0, 0}, {1, 1})));
+  EXPECT_THAT(ViewBoxParser::Parse("-100 -95 1 3"), ParseResultIs(Box2d({-100, -95}, {-99, -92})));
+  EXPECT_THAT(ViewBoxParser::Parse(".5 1.5 1 2.5"), ParseResultIs(Box2d({0.5, 1.5}, {1.5, 4})));
 
   // width/height of 0,0 is valid, but should be handled by caller.
-  EXPECT_THAT(ViewBoxParser::Parse("0 0 0 0"), ParseResultIs(Boxd({0, 0}, {0, 0})));
+  EXPECT_THAT(ViewBoxParser::Parse("0 0 0 0"), ParseResultIs(Box2d({0, 0}, {0, 0})));
 }
 
 TEST(ViewBoxParser, Commas) {
   // One comma, with spaces -> OK.
-  EXPECT_THAT(ViewBoxParser::Parse("0,0,1,1"), ParseResultIs(Boxd({0, 0}, {1, 1})));
-  EXPECT_THAT(ViewBoxParser::Parse("0 , 0,  1  ,1"), ParseResultIs(Boxd({0, 0}, {1, 1})));
+  EXPECT_THAT(ViewBoxParser::Parse("0,0,1,1"), ParseResultIs(Box2d({0, 0}, {1, 1})));
+  EXPECT_THAT(ViewBoxParser::Parse("0 , 0,  1  ,1"), ParseResultIs(Box2d({0, 0}, {1, 1})));
 
   // Two commas -> error.
   EXPECT_THAT(ViewBoxParser::Parse("0,,0 1 1"),

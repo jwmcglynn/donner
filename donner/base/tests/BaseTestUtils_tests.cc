@@ -85,82 +85,82 @@ TEST(NormalizedEq, Failure) {
 }
 
 TEST(TransformEq, Success) {
-  EXPECT_THAT(Transformd(), TransformEq(Transformd()));
-  EXPECT_THAT(Transformd(), TransformEq(Transformd::Translate(Vector2d(0.0, 0.0))));
-  EXPECT_THAT(Transformd::Translate(Vector2d(1.0, 2.0)),
-              TransformEq(Transformd::Translate(Vector2d(1.0, 2.0))));
-  EXPECT_THAT(Transformd::Translate(Vector2d(1.0, 2.0)),
-              TransformEq(Transformd::Translate(Vector2d(1.00001, 1.9999))));
+  EXPECT_THAT(Transform2d(), TransformEq(Transform2d()));
+  EXPECT_THAT(Transform2d(), TransformEq(Transform2d::Translate(Vector2d(0.0, 0.0))));
+  EXPECT_THAT(Transform2d::Translate(Vector2d(1.0, 2.0)),
+              TransformEq(Transform2d::Translate(Vector2d(1.0, 2.0))));
+  EXPECT_THAT(Transform2d::Translate(Vector2d(1.0, 2.0)),
+              TransformEq(Transform2d::Translate(Vector2d(1.00001, 1.9999))));
 }
 
 TEST(TransformEq, Failure) {
   testing::StringMatchResultListener resultListener;
-  EXPECT_FALSE(testing::ExplainMatchResult(TransformEq(Transformd::Translate(Vector2d(1.0, 2.0))),
-                                           Transformd::Translate(Vector2d(1.1, 2.1)),
+  EXPECT_FALSE(testing::ExplainMatchResult(TransformEq(Transform2d::Translate(Vector2d(1.0, 2.0))),
+                                           Transform2d::Translate(Vector2d(1.1, 2.1)),
                                            &resultListener));
   EXPECT_EQ(resultListener.str(),
             "where the value pair (1.1, 1) at index #4 don't match, which is -0.1 from 1.1");
 
   resultListener.Clear();
-  EXPECT_FALSE(testing::ExplainMatchResult(TransformEq(Transformd::Translate(Vector2d(1.0, 2.0))),
-                                           Transformd::Translate(Vector2d(1.0, 2.1)),
+  EXPECT_FALSE(testing::ExplainMatchResult(TransformEq(Transform2d::Translate(Vector2d(1.0, 2.0))),
+                                           Transform2d::Translate(Vector2d(1.0, 2.1)),
                                            &resultListener));
   EXPECT_EQ(resultListener.str(),
             "where the value pair (2.1, 2) at index #5 don't match, which is -0.1 from 2.1");
 }
 
 TEST(TransformIs, Success) {
-  EXPECT_THAT(Transformd(), TransformIs(1.0, 0.0, 0.0, 1.0, 0.0, 0.0));
-  EXPECT_THAT(Transformd::Translate(Vector2d(1.0, 2.0)), TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0));
-  EXPECT_THAT(Transformd::Scale(Vector2d(2.0, 3.0)), TransformIs(2.0, 0.0, 0.0, 3.0, 0.0, 0.0));
-  EXPECT_THAT(Transformd::Rotate(0.5),
+  EXPECT_THAT(Transform2d(), TransformIs(1.0, 0.0, 0.0, 1.0, 0.0, 0.0));
+  EXPECT_THAT(Transform2d::Translate(Vector2d(1.0, 2.0)), TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0));
+  EXPECT_THAT(Transform2d::Scale(Vector2d(2.0, 3.0)), TransformIs(2.0, 0.0, 0.0, 3.0, 0.0, 0.0));
+  EXPECT_THAT(Transform2d::Rotate(0.5),
               TransformIs(0.877582, 0.479426, -0.479426, 0.877582, 0.0, 0.0));
 }
 
 TEST(TransformIs, Failure) {
   testing::StringMatchResultListener resultListener;
   EXPECT_FALSE(testing::ExplainMatchResult(TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0),
-                                           Transformd::Translate(Vector2d(1.1, 2.1)),
+                                           Transform2d::Translate(Vector2d(1.1, 2.1)),
                                            &resultListener));
   EXPECT_THAT(resultListener.str(), testing::MatchesRegex("whose element #4.*which is 0.1 from 1"));
 
   resultListener.Clear();
   EXPECT_FALSE(testing::ExplainMatchResult(TransformIs(1.0, 0.0, 0.0, 1.0, 1.0, 2.0),
-                                           Transformd::Translate(Vector2d(1.0, 2.1)),
+                                           Transform2d::Translate(Vector2d(1.0, 2.1)),
                                            &resultListener));
   EXPECT_THAT(resultListener.str(), testing::MatchesRegex("whose element #5.*which is 0.1 from 2"));
 }
 
 TEST(TransformIsIdentity, Success) {
-  EXPECT_THAT(Transformd(), TransformIsIdentity());
-  EXPECT_THAT(Transformd::Translate(Vector2d(0.0, 0.0)), TransformIsIdentity());
+  EXPECT_THAT(Transform2d(), TransformIsIdentity());
+  EXPECT_THAT(Transform2d::Translate(Vector2d(0.0, 0.0)), TransformIsIdentity());
 }
 
 TEST(TransformIsIdentity, Failure) {
   testing::StringMatchResultListener resultListener;
   EXPECT_FALSE(testing::ExplainMatchResult(
-      TransformIsIdentity(), Transformd::Translate(Vector2d(1.0, 2.0)), &resultListener));
+      TransformIsIdentity(), Transform2d::Translate(Vector2d(1.0, 2.0)), &resultListener));
   EXPECT_EQ(resultListener.str(), "");
 }
 
 TEST(BoxEq, Success) {
-  EXPECT_THAT(Boxd::CreateEmpty(Vector2d()), BoxEq(Vector2d(), Vector2d()));
-  EXPECT_THAT(Boxd(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)),
+  EXPECT_THAT(Box2d::CreateEmpty(Vector2d()), BoxEq(Vector2d(), Vector2d()));
+  EXPECT_THAT(Box2d(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)),
               BoxEq(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)));
-  EXPECT_THAT(Boxd(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)),
+  EXPECT_THAT(Box2d(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)),
               BoxEq(Vector2Near(1.00001, 1.9999), Vector2Near(3.00001, 4.00001)));
 }
 
 TEST(BoxEq, Failure) {
   testing::StringMatchResultListener resultListener;
   EXPECT_FALSE(testing::ExplainMatchResult(BoxEq(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)),
-                                           Boxd(Vector2d(1.1, 2.1), Vector2d(3.1, 4.1)),
+                                           Box2d(Vector2d(1.1, 2.1), Vector2d(3.1, 4.1)),
                                            &resultListener));
   EXPECT_EQ(resultListener.str(), "");
 
   resultListener.Clear();
   EXPECT_FALSE(testing::ExplainMatchResult(BoxEq(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0)),
-                                           Boxd(Vector2d(1.0, 2.1), Vector2d(3.1, 4.1)),
+                                           Box2d(Vector2d(1.0, 2.1), Vector2d(3.1, 4.1)),
                                            &resultListener));
   EXPECT_EQ(resultListener.str(), "");
 }

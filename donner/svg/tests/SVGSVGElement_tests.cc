@@ -311,7 +311,7 @@ TEST(SVGSVGElementTests, SetViewBox) {
 
   EXPECT_THAT(svg.viewBox(), Eq(std::nullopt));
 
-  svg.setViewBox(Boxd::FromXYWH(0, 0, 200, 100));
+  svg.setViewBox(Box2d::FromXYWH(0, 0, 200, 100));
   ASSERT_TRUE(svg.viewBox().has_value());
   const auto box = *svg.viewBox();
   EXPECT_DOUBLE_EQ(box.topLeft.x, 0.0);

@@ -27,7 +27,7 @@ components::ComputedTextComponent::TextSpan MakeSpan(const std::string& str) {
 TextLayoutParams MakeTextParams(double fontSize) {
   TextLayoutParams params;
   params.fontSize = Lengthd(fontSize, Lengthd::Unit::Px);
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   return params;
 }
@@ -126,7 +126,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
       engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
   ASSERT_FALSE(firstGlyphPath.empty());
 
-  Boxd positionedBounds = firstGlyphPath.bounds();
+  Box2d positionedBounds = firstGlyphPath.bounds();
   positionedBounds += Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
   const double centerX = (positionedBounds.topLeft.x + positionedBounds.bottomRight.x) * 0.5;
   EXPECT_NEAR(centerX, 100.0, 2.0);

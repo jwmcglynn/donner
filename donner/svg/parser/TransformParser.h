@@ -44,7 +44,7 @@ public:
    * @param str String corresponding to the SVG transform attribute.
    * @return Parsed transform, or an error.
    */
-  static ParseResult<Transformd> Parse(std::string_view str);
+  static ParseResult<Transform2d> Parse(std::string_view str);
 };
 
 }  // namespace donner::svg::parser

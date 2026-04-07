@@ -840,11 +840,11 @@ TEST_F(SVGElementTests, AbsoluteTransform) {
     )-");
 
   auto rect1 = document.querySelector("#rect1").value().cast<SVGRectElement>();
-  EXPECT_THAT(rect1.elementFromWorld(), TransformEq(Transformd::Translate({10, 20})));
+  EXPECT_THAT(rect1.elementFromWorld(), TransformEq(Transform2d::Translate({10, 20})));
 
   auto rect2 = document.querySelector("#rect2").value().cast<SVGRectElement>();
   EXPECT_THAT(rect2.elementFromWorld(),
-              TransformEq(Transformd::Translate({-10, -20}) * Transformd::Scale({2, 2})));
+              TransformEq(Transform2d::Translate({-10, -20}) * Transform2d::Scale({2, 2})));
 }
 
 TEST_F(SVGElementTests, QuerySelector) {

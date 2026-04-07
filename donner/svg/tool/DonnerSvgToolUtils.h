@@ -35,7 +35,7 @@ struct SampledImageInfo {
  * @param bounds AABB in image coordinates.
  * @param imageInfo Terminal sampling info for sub-pixel alignment.
  */
-void CompositeAABBRect(RendererBitmap& bitmap, const Boxd& bounds,
+void CompositeAABBRect(RendererBitmap& bitmap, const Box2d& bounds,
                        const SampledImageInfo& imageInfo);
 
 }  // namespace donner::svg

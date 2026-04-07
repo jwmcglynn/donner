@@ -30,8 +30,8 @@ namespace donner::svg {
  * @param filterRegion Optional filter region in filter local coordinates.
  */
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
-                              const Transformd& deviceFromFilter,
-                              const std::optional<Boxd>& filterRegion,
+                              const Transform2d& deviceFromFilter,
+                              const std::optional<Box2d>& filterRegion,
                               bool clipSourceToFilterRegion = false,
                               const tiny_skia::Pixmap* fillPaintInput = nullptr,
                               const tiny_skia::Pixmap* strokePaintInput = nullptr);
@@ -43,7 +43,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
  * @param filterRegion Optional filter region in filter local coordinates.
  * @param deviceFromFilter Transform from filter local coordinates to device coordinates.
  */
-void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Boxd>& filterRegion,
-                              const Transformd& deviceFromFilter);
+void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box2d>& filterRegion,
+                              const Transform2d& deviceFromFilter);
 
 }  // namespace donner::svg

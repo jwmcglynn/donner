@@ -80,10 +80,10 @@ public:
   std::vector<PathSpline> computedGlyphPaths(EntityHandle handle) const;
 
   /// Return the ink bounds for the text subtree rooted at \p handle.
-  Boxd computedInkBounds(EntityHandle handle) const;
+  Box2d computedInkBounds(EntityHandle handle) const;
 
   /// Return the object bounding box for the text subtree rooted at \p handle.
-  Boxd computedObjectBoundingBox(EntityHandle handle) const;
+  Box2d computedObjectBoundingBox(EntityHandle handle) const;
 
   /// Return the number of addressable characters for the text subtree rooted at \p handle.
   long getNumberOfChars(EntityHandle handle) const;
@@ -101,7 +101,7 @@ public:
   Vector2d getEndPositionOfChar(EntityHandle handle, std::size_t charnum) const;
 
   /// Return the extent of a character for the text subtree rooted at \p handle.
-  Boxd getExtentOfChar(EntityHandle handle, std::size_t charnum) const;
+  Box2d getExtentOfChar(EntityHandle handle, std::size_t charnum) const;
 
   /// Return the rotation of a character for the text subtree rooted at \p handle.
   double getRotationOfChar(EntityHandle handle, std::size_t charnum) const;

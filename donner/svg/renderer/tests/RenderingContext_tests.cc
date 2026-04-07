@@ -266,7 +266,7 @@ TEST_F(RenderingContextTest, RectIntersection) {
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
 
-  std::vector<Entity> hits = ctx.findIntersectingRect(Boxd(Vector2d(60, 60), Vector2d(80, 80)));
+  std::vector<Entity> hits = ctx.findIntersectingRect(Box2d(Vector2d(60, 60), Vector2d(80, 80)));
   EXPECT_THAT(hits.size(), Gt(0u));
 }
 

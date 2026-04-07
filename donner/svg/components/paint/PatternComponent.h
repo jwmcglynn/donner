@@ -40,11 +40,11 @@ struct ComputedPatternComponent {
   /// The pattern content units of the pattern, defaults to \ref PatternContentUnits::Default.
   PatternContentUnits patternContentUnits = PatternContentUnits::Default;
   /// The pattern tile rectangle, defaults to the empty rect.
-  Boxd tileRect = Boxd::CreateEmpty(Vector2d());
+  Box2d tileRect = Box2d::CreateEmpty(Vector2d());
   /// The preserveAspectRatio of the pattern, defaults to \ref PreserveAspectRatio::None.
   PreserveAspectRatio preserveAspectRatio;
   /// The viewBox of the pattern, or \c std::nullopt if not set.
-  std::optional<Boxd> viewBox;
+  std::optional<Box2d> viewBox;
   /// Resolved `x`, `y`, `width`, and `height` properties of the pattern tile rectangle.
   SizedElementProperties sizeProperties;
 

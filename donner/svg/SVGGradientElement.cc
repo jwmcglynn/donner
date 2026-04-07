@@ -25,7 +25,7 @@ GradientUnits SVGGradientElement::gradientUnits() const {
       GradientUnits::Default);
 }
 
-Transformd SVGGradientElement::gradientTransform() const {
+Transform2d SVGGradientElement::gradientTransform() const {
   return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
@@ -46,7 +46,7 @@ void SVGGradientElement::setGradientUnits(GradientUnits value) {
   invalidate();
 }
 
-void SVGGradientElement::setGradientTransform(const Transformd& value) {
+void SVGGradientElement::setGradientTransform(const Transform2d& value) {
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, value);
   invalidate();
 }

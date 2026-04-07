@@ -216,7 +216,7 @@ double SubdivideAndMeasureCubic(const std::array<Vector2d, 4>& points, double to
  * @param strokeWidth Width of the stroke.
  * @param miterLimit Miter limit.
  */
-void ComputeMiter(Boxd& box, const Vector2d& currentPoint, const Vector2d& tangent0,
+void ComputeMiter(Box2d& box, const Vector2d& currentPoint, const Vector2d& tangent0,
                   const Vector2d& tangent1, double strokeWidth, double miterLimit) {
   const double intersectionAngle = tangent0.angleWith(-tangent1);
 
@@ -702,14 +702,14 @@ Vector2d PathSpline::currentPoint() const {
   return endPoint(commands_.size() - 1);
 }
 
-Boxd PathSpline::bounds() const {
-  return transformedBounds(Transformd());
+Box2d PathSpline::bounds() const {
+  return transformedBounds(Transform2d());
 }
 
-Boxd PathSpline::transformedBounds(const Transformd& pathFromTarget) const {
+Box2d PathSpline::transformedBounds(const Transform2d& pathFromTarget) const {
   UTILS_RELEASE_ASSERT(!empty());
 
-  Boxd box = Boxd::CreateEmpty(pathFromTarget.transformPosition(points_.front()));
+  Box2d box = Box2d::CreateEmpty(pathFromTarget.transformPosition(points_.front()));
   Vector2d currentPoint;
 
   for (size_t i = 0; i < commands_.size(); ++i) {
@@ -804,12 +804,12 @@ Boxd PathSpline::transformedBounds(const Transformd& pathFromTarget) const {
   return box;
 }
 
-Boxd PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const {
+Box2d PathSpline::strokeMiterBounds(double strokeWidth, double miterLimit) const {
   UTILS_RELEASE_ASSERT(!empty());
   assert(strokeWidth > 0.0);
   assert(miterLimit >= 0.0);
 
-  Boxd box = Boxd::CreateEmpty(points_.front());
+  Box2d box = Box2d::CreateEmpty(points_.front());
   Vector2d current;
 
   size_t lastIndex = kNPos;

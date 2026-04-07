@@ -67,14 +67,14 @@ public:
    *
    * @param transform The transform to apply.
    */
-  void setTransform(const Transformd& transform) override;
+  void setTransform(const Transform2d& transform) override;
 
   /**
    * Pushes a relative transform.
    *
    * @param transform The transform to compose with the current matrix.
    */
-  void pushTransform(const Transformd& transform) override;
+  void pushTransform(const Transform2d& transform) override;
 
   /// Pops the most recent transform.
   void popTransform() override;
@@ -106,7 +106,7 @@ public:
    * @param filterRegion Optional filter region bounds in user space.
    */
   void pushFilterLayer(const components::FilterGraph& filterGraph,
-                       const std::optional<Boxd>& filterRegion) override;
+                       const std::optional<Box2d>& filterRegion) override;
 
   /// Pops the most recent filter layer.
   void popFilterLayer() override;
@@ -116,7 +116,7 @@ public:
    *
    * @param maskBounds Optional mask bounds clip.
    */
-  void pushMask(const std::optional<Boxd>& maskBounds) override;
+  void pushMask(const std::optional<Box2d>& maskBounds) override;
 
   /// Switches from mask rendering to masked content rendering.
   void transitionMaskToContent() override;
@@ -130,7 +130,7 @@ public:
    * @param tileRect Tile bounds in pattern space.
    * @param targetFromPattern Transform from pattern tile space to target space.
    */
-  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
+  void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) override;
 
   /**
    * Ends pattern recording and stores the resulting pattern paint.
@@ -160,7 +160,7 @@ public:
    * @param rect The rectangle bounds.
    * @param stroke Stroke configuration for the rectangle.
    */
-  void drawRect(const Boxd& rect, const StrokeParams& stroke) override;
+  void drawRect(const Box2d& rect, const StrokeParams& stroke) override;
 
   /**
    * Draws an ellipse.
@@ -168,7 +168,7 @@ public:
    * @param bounds The ellipse bounds.
    * @param stroke Stroke configuration for the ellipse.
    */
-  void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) override;
+  void drawEllipse(const Box2d& bounds, const StrokeParams& stroke) override;
 
   /**
    * Draws an image resource.

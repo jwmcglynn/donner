@@ -73,7 +73,7 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
   return layoutParams;
 }
 
-const Boxd kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
 bool skiaFilterDebugEnabled() {
   const char* verbose = std::getenv("DONNER_RENDERER_TEST_VERBOSE");
@@ -99,7 +99,7 @@ SkPoint toSkia(Vector2d value) {
   return SkPoint::Make(NarrowToFloat(value.x), NarrowToFloat(value.y));
 }
 
-SkMatrix toSkiaMatrix(const Transformd& transform) {
+SkMatrix toSkiaMatrix(const Transform2d& transform) {
   return SkMatrix::MakeAll(NarrowToFloat(transform.data[0]),  // scaleX
                            NarrowToFloat(transform.data[2]),  // skewX
                            NarrowToFloat(transform.data[4]),  // transX
@@ -109,14 +109,14 @@ SkMatrix toSkiaMatrix(const Transformd& transform) {
                            0, 0, 1);
 }
 
-SkRect toSkia(const Boxd& box) {
+SkRect toSkia(const Box2d& box) {
   return SkRect::MakeLTRB(
       static_cast<SkScalar>(box.topLeft.x), static_cast<SkScalar>(box.topLeft.y),
       static_cast<SkScalar>(box.bottomRight.x), static_cast<SkScalar>(box.bottomRight.y));
 }
 
-Transformd toDonnerTransform(const SkMatrix& matrix) {
-  Transformd transform;
+Transform2d toDonnerTransform(const SkMatrix& matrix) {
+  Transform2d transform;
   transform.data[0] = matrix.getScaleX();
   transform.data[1] = matrix.getSkewY();
   transform.data[2] = matrix.getSkewX();
@@ -146,7 +146,7 @@ SkFontStyle toSkiaFontStyle(int fontWeight, FontStyle fontStyle, FontStretch fon
 
 SkPath toSkia(const PathSpline& spline);
 
-PathSpline transformPathSpline(const PathSpline& spline, const Transformd& transform) {
+PathSpline transformPathSpline(const PathSpline& spline, const Transform2d& transform) {
   PathSpline result;
   const std::vector<Vector2d>& points = spline.points();
 
@@ -187,8 +187,8 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
 
 std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
     std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
-    const Transformd& deviceFromImage, const Boxd& userSubregion,
-    const Transformd& filterFromDevice, int outputWidth, int outputHeight) {
+    const Transform2d& deviceFromImage, const Box2d& userSubregion,
+    const Transform2d& filterFromDevice, int outputWidth, int outputHeight) {
   std::vector<std::uint8_t> output(static_cast<std::size_t>(outputWidth * outputHeight * 4), 0);
   if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
     return output;
@@ -201,7 +201,7 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
   (void)userSubregion;
   (void)filterFromDevice;
 
-  const Transformd imageFromDevice = deviceFromImage.inverse();
+  const Transform2d imageFromDevice = deviceFromImage.inverse();
   auto sampleSource = [&](int x, int y, int channel) -> float {
     x = std::clamp(x, 0, sourceWidth - 1);
     y = std::clamp(y, 0, sourceHeight - 1);
@@ -378,7 +378,7 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
 }
 
 bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
-                                  const Transformd& deviceFromFilter) {
+                                  const Transform2d& deviceFromFilter) {
   const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
   const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
   const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
@@ -783,7 +783,7 @@ private:
 /// Generate SVG-spec feTurbulence noise into an SkImage.
 sk_sp<SkImage> generateSvgTurbulenceImage(
     int width, int height, const components::filter_primitive::Turbulence& primitive,
-    const Transformd& deviceFromFilter, int tileWidth, int tileHeight) {
+    const Transform2d& deviceFromFilter, int tileWidth, int tileHeight) {
   if (width <= 0 || height <= 0) {
     return nullptr;
   }
@@ -1052,7 +1052,7 @@ double spotLightFactor(double deviceLx, double deviceLy, double deviceLz,
 /// Replaces Skia's native SpotLitDiffuse/SpotLitSpecular for SVG-spec conformance.
 sk_sp<SkImage> generateSpotLighting(
     const sk_sp<SkImage>& srcImage, int width, int height,
-    const Transformd& deviceFromFilter, double pixelScale,
+    const Transform2d& deviceFromFilter, double pixelScale,
     double userX, double userY, double userZ,
     double userPtX, double userPtY, double userPtZ,
     double spotExponent, const std::optional<double>& limitingConeAngle,
@@ -1098,7 +1098,7 @@ sk_sp<SkImage> generateSpotLighting(
   svg_lighting::normalize3(userSpotDirX, userSpotDirY, userSpotDirZ);
 
   // Inverse transform for pixel→user-space mapping under shear.
-  Transformd inv;
+  Transform2d inv;
   if (hasShear) {
     inv = deviceFromFilter.inverse();
   }
@@ -1183,7 +1183,7 @@ sk_sp<SkImage> generateSpotLighting(
 
 /// Returns nullptr if any node can't be lowered (caller should fall back to CPU path).
 sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& filterGraph,
-                                              const Transformd& deviceFromFilter,
+                                              const Transform2d& deviceFromFilter,
                                               int sourceWidth,
                                               int sourceHeight,
                                               FinalTilePlan* finalTilePlan = nullptr,
@@ -1202,12 +1202,12 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   const bool graphUsesLinearRGB =
       filterGraph.colorInterpolationFilters == ColorInterpolationFilters::LinearRGB;
 
-  // Resolve a node's subregion to user-space Boxd. Used by feTile (needs input subregion)
+  // Resolve a node's subregion to user-space Box2d. Used by feTile (needs input subregion)
   // and feImage (needs viewport for preserveAspectRatio mapping).
   const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                      filterGraph.elementBoundingBox.has_value();
-  const Boxd defaultSubregion = filterGraph.filterRegion.value_or(Boxd::FromXYWH(0, 0, 1, 1));
-  const Boxd primitiveUnitsBounds = [&]() -> Boxd {
+  const Box2d defaultSubregion = filterGraph.filterRegion.value_or(Box2d::FromXYWH(0, 0, 1, 1));
+  const Box2d primitiveUnitsBounds = [&]() -> Box2d {
     if (isOBB) {
       return *filterGraph.elementBoundingBox;
     }
@@ -1220,14 +1220,14 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
         NearZero(filterGraph.userToPixelScale.y, 1e-12)
             ? defaultSubregion.height()
             : static_cast<double>(sourceHeight) / filterGraph.userToPixelScale.y;
-    return Boxd::FromXYWH(0.0, 0.0, userW, userH);
+    return Box2d::FromXYWH(0.0, 0.0, userW, userH);
   }();
 
-  auto resolveNodeSubregion = [&](const components::FilterNode& n) -> Boxd {
+  auto resolveNodeSubregion = [&](const components::FilterNode& n) -> Box2d {
     if (!n.x.has_value() && !n.y.has_value() && !n.width.has_value() && !n.height.has_value()) {
       return defaultSubregion;
     }
-    const Boxd& bbox = primitiveUnitsBounds;
+    const Box2d& bbox = primitiveUnitsBounds;
     auto resolvePos = [&](const std::optional<Lengthd>& len, Lengthd::Extent ext, double origin,
                           double bboxDim) -> double {
       if (!len.has_value()) {
@@ -1265,7 +1265,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     const double y = resolvePos(n.y, Lengthd::Extent::Y, bboxY, bboxH);
     const double w = resolveSize(n.width, Lengthd::Extent::X, bboxW);
     const double h = resolveSize(n.height, Lengthd::Extent::Y, bboxH);
-    return Boxd::FromXYWH(x, y, w, h);
+    return Box2d::FromXYWH(x, y, w, h);
   };
 
   // Extract scale factors from deviceFromFilter. The filter DAG operates on device-pixel
@@ -1307,9 +1307,9 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
   }();
 
-  // Transform a user-space Boxd to device-pixel SkRect.
-  auto toDeviceRect = [&](const Boxd& userRegion) -> SkRect {
-    const Boxd deviceBox = deviceFromFilter.transformBox(userRegion);
+  // Transform a user-space Box2d to device-pixel SkRect.
+  auto toDeviceRect = [&](const Box2d& userRegion) -> SkRect {
+    const Box2d deviceBox = deviceFromFilter.transformBox(userRegion);
     return toSkia(deviceBox);
   };
 
@@ -1338,9 +1338,9 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
   // Track the previous node's resolved subregion (for feTile input subregion).
   // Stored in device-pixel coordinates.
-  Boxd previousSubregion = deviceFromFilter.transformBox(defaultSubregion);
-  std::map<RcString, Boxd> namedSubregions;
-  const Boxd filterRegionDeviceSpace = previousSubregion;
+  Box2d previousSubregion = deviceFromFilter.transformBox(defaultSubregion);
+  std::map<RcString, Box2d> namedSubregions;
+  const Box2d filterRegionDeviceSpace = previousSubregion;
 
   // SourceGraphic participates in filter processing only inside the filter region.
   // Crop the implicit source input up front so primitives like feGaussianBlur see
@@ -1353,14 +1353,14 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   // Track the implicit previous result and named results.
   sk_sp<SkImageFilter> previousFilter = sourceGraphicInput;
 
-  auto intersectBoxes = [](const Boxd& a, const Boxd& b) -> Boxd {
-    return Boxd(Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
+  auto intersectBoxes = [](const Box2d& a, const Box2d& b) -> Box2d {
+    return Box2d(Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
                 Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
                          std::min(a.bottomRight.y, b.bottomRight.y)));
   };
 
-  auto unionBoxes = [](const Boxd& a, const Boxd& b) -> Boxd {
-    return Boxd(Vector2d(std::min(a.topLeft.x, b.topLeft.x), std::min(a.topLeft.y, b.topLeft.y)),
+  auto unionBoxes = [](const Box2d& a, const Box2d& b) -> Box2d {
+    return Box2d(Vector2d(std::min(a.topLeft.x, b.topLeft.x), std::min(a.topLeft.y, b.topLeft.y)),
                 Vector2d(std::max(a.bottomRight.x, b.bottomRight.x),
                          std::max(a.bottomRight.y, b.bottomRight.y)));
   };
@@ -1368,9 +1368,9 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   // Resolve the effective subregion for a filter input. SourceGraphic/SourceAlpha use the
   // full filter region; named results use their stored subregion; Previous uses
   // previousSubregion.
-  auto resolveInputSubregion = [&](const components::FilterInput& input) -> Boxd {
+  auto resolveInputSubregion = [&](const components::FilterInput& input) -> Box2d {
     return std::visit(
-        [&](const auto& v) -> Boxd {
+        [&](const auto& v) -> Box2d {
           using T = std::decay_t<decltype(v)>;
           if constexpr (std::is_same_v<T, components::FilterInput::Previous>) {
             return previousSubregion;
@@ -1494,8 +1494,8 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
             if (hasShear && hasExplicitSubregion) {
               // Resolve the user-space subregion and clip per-pixel.
-              const Boxd userSubregion = resolveNodeSubregion(node);
-              const Transformd filterFromDevice = deviceFromFilter.inverse();
+              const Box2d userSubregion = resolveNodeSubregion(node);
+              const Transform2d filterFromDevice = deviceFromFilter.inverse();
 
               SkBitmap bitmap;
               bitmap.allocPixels(SkImageInfo::MakeN32Premul(sourceWidth, sourceHeight));
@@ -1881,7 +1881,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
           } else if constexpr (std::is_same_v<T, fp::Tile>) {
             // feTile tiles the input's subregion to fill the output.
             // Both rects are in device-pixel coordinates (subregions stored in device space).
-            Boxd inputSubregion = previousSubregion;
+            Box2d inputSubregion = previousSubregion;
             if (!node.inputs.empty()) {
               const auto& input = node.inputs[0];
               std::visit(
@@ -1991,22 +1991,22 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               // Fragment references with host transform (skew/rotation): rasterize the
               // fragment through the combined transform that maps from fragment pixel coords
               // to device pixel coords, including the host's transform and filter region offset.
-              const Transformd viewBoxScaleInv = Transformd::Scale(
+              const Transform2d viewBoxScaleInv = Transform2d::Scale(
                   NearZero(filterGraph.userToPixelScale.x, 1e-12)
                       ? 1.0
                       : 1.0 / filterGraph.userToPixelScale.x,
                   NearZero(filterGraph.userToPixelScale.y, 1e-12)
                       ? 1.0
                       : 1.0 / filterGraph.userToPixelScale.y);
-              const Transformd regionOffset = Transformd::Translate(
+              const Transform2d regionOffset = Transform2d::Translate(
                   primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
-              const Transformd deviceFromFragment =
+              const Transform2d deviceFromFragment =
                   viewBoxScaleInv * regionOffset * deviceFromFilter;
 
               const std::vector<std::uint8_t> rasterized =
                   RasterizeTransformedImagePremultiplied(
                       premultiplied, primitive.imageWidth, primitive.imageHeight,
-                      deviceFromFragment, Boxd(), Transformd(), sourceWidth, sourceHeight);
+                      deviceFromFragment, Box2d(), Transform2d(), sourceWidth, sourceHeight);
               const SkImageInfo rasterizedInfo = SkImageInfo::Make(
                   sourceWidth, sourceHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
               const SkPixmap rasterizedPixmap(rasterizedInfo, rasterized.data(),
@@ -2041,13 +2041,13 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               return true;
             }
             if (hasShear) {
-              const Boxd userSubregion = resolveNodeSubregion(node);
-              const Boxd imageBox =
-                  Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
-              const Transformd filterFromImage =
+              const Box2d userSubregion = resolveNodeSubregion(node);
+              const Box2d imageBox =
+                  Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+              const Transform2d filterFromImage =
                   primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion,
                                                                                    imageBox);
-              const Transformd deviceFromImage = filterFromImage * deviceFromFilter;
+              const Transform2d deviceFromImage = filterFromImage * deviceFromFilter;
               const std::vector<std::uint8_t> rasterized = RasterizeTransformedImagePremultiplied(
                   premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
                   userSubregion, deviceFromFilter.inverse(), sourceWidth, sourceHeight);
@@ -2069,10 +2069,10 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
 
             // Compute viewport from node's subregion for preserveAspectRatio mapping.
             // The viewport is in device-pixel coordinates.
-            const Boxd viewport = deviceFromFilter.transformBox(resolveNodeSubregion(node));
-            const Boxd imageBox = Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
-            const Boxd viewportLocal = Boxd::FromXYWH(0, 0, viewport.width(), viewport.height());
-            const Transformd viewportFromImage =
+            const Box2d viewport = deviceFromFilter.transformBox(resolveNodeSubregion(node));
+            const Box2d imageBox = Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+            const Box2d viewportLocal = Box2d::FromXYWH(0, 0, viewport.width(), viewport.height());
+            const Transform2d viewportFromImage =
                 primitive.preserveAspectRatio.elementContentFromViewBoxTransform(viewportLocal,
                                                                                  imageBox);
 
@@ -2112,28 +2112,28 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
     const bool hasExplicitSubregion =
         node.x.has_value() || node.y.has_value() || node.width.has_value() ||
         node.height.has_value();
-    Boxd nodeSubregion;
+    Box2d nodeSubregion;
     if (hasExplicitSubregion) {
       nodeSubregion = deviceFromFilter.transformBox(resolveNodeSubregion(node));
     } else {
       // Compute effective subregion from primitive type and input bounds.
       nodeSubregion = std::visit(
-          [&](const auto& prim) -> Boxd {
+          [&](const auto& prim) -> Box2d {
             using T = std::decay_t<decltype(prim)>;
             if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
               const double ex = std::ceil(primToDeviceX(prim.stdDeviationX) * 3.0);
               const double ey = std::ceil(primToDeviceY(prim.stdDeviationY) * 3.0);
-              return Boxd(previousSubregion.topLeft - Vector2d(ex, ey),
+              return Box2d(previousSubregion.topLeft - Vector2d(ex, ey),
                           previousSubregion.bottomRight + Vector2d(ex, ey));
             } else if constexpr (std::is_same_v<T, fp::DropShadow>) {
               const Vector2d off = toDeviceOffset(prim.dx, prim.dy);
-              const Boxd shadowBounds(previousSubregion.topLeft + off,
+              const Box2d shadowBounds(previousSubregion.topLeft + off,
                                       previousSubregion.bottomRight + off);
               const double ex = std::ceil(primToDeviceX(prim.stdDeviationX) * 3.0);
               const double ey = std::ceil(primToDeviceY(prim.stdDeviationY) * 3.0);
-              const Boxd expandedShadow(shadowBounds.topLeft - Vector2d(ex, ey),
+              const Box2d expandedShadow(shadowBounds.topLeft - Vector2d(ex, ey),
                                         shadowBounds.bottomRight + Vector2d(ex, ey));
-              return Boxd(Vector2d(std::min(previousSubregion.topLeft.x, expandedShadow.topLeft.x),
+              return Box2d(Vector2d(std::min(previousSubregion.topLeft.x, expandedShadow.topLeft.x),
                                    std::min(previousSubregion.topLeft.y,
                                             expandedShadow.topLeft.y)),
                           Vector2d(std::max(previousSubregion.bottomRight.x,
@@ -2144,7 +2144,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               if (prim.op == fp::Morphology::Operator::Dilate) {
                 const double ex = std::abs(toDeviceX(prim.radiusX));
                 const double ey = std::abs(toDeviceY(prim.radiusY));
-                return Boxd(previousSubregion.topLeft - Vector2d(ex, ey),
+                return Box2d(previousSubregion.topLeft - Vector2d(ex, ey),
                             previousSubregion.bottomRight + Vector2d(ex, ey));
               }
               return previousSubregion;
@@ -2165,7 +2165,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
               return previousSubregion;
             } else if constexpr (std::is_same_v<T, fp::Merge>) {
               // Merge: subregion is the union of all input subregions.
-              Boxd merged = resolveInputSubregion(
+              Box2d merged = resolveInputSubregion(
                   node.inputs.empty() ? components::FilterInput{components::FilterInput::Previous{}}
                                       : node.inputs[0]);
               for (std::size_t i = 1; i < node.inputs.size(); ++i) {
@@ -2194,7 +2194,7 @@ sk_sp<SkImageFilter> buildNativeSkiaFilterDAG(const components::FilterGraph& fil
   return previousFilter;
 }
 
-Vector2d patternRasterScaleForTransform(const Transformd& deviceFromPattern) {
+Vector2d patternRasterScaleForTransform(const Transform2d& deviceFromPattern) {
   const double scaleX =
       std::max(1.0, deviceFromPattern.transformVector(Vector2d(1.0, 0.0)).length());
   const double scaleY =
@@ -2203,7 +2203,7 @@ Vector2d patternRasterScaleForTransform(const Transformd& deviceFromPattern) {
   return Vector2d(scaleX * kPatternSupersampleScale, scaleY * kPatternSupersampleScale);
 }
 
-Vector2d effectivePatternRasterScale(const Boxd& tileRect, int pixelWidth, int pixelHeight,
+Vector2d effectivePatternRasterScale(const Box2d& tileRect, int pixelWidth, int pixelHeight,
                                      const Vector2d& fallbackScale) {
   const double scaleX = NearZero(tileRect.width())
                             ? fallbackScale.x
@@ -2214,8 +2214,8 @@ Vector2d effectivePatternRasterScale(const Boxd& tileRect, int pixelWidth, int p
   return Vector2d(scaleX, scaleY);
 }
 
-Transformd scaleTransformOutput(const Transformd& transform, const Vector2d& scale) {
-  Transformd result = transform;
+Transform2d scaleTransformOutput(const Transform2d& transform, const Vector2d& scale) {
+  Transform2d result = transform;
   result.data[0] *= scale.x;
   result.data[2] *= scale.x;
   result.data[4] *= scale.x;
@@ -2238,31 +2238,31 @@ inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
   return value;
 }
 
-inline SkScalar resolveGradientCoord(Lengthd value, const Boxd& viewBox, bool numbersArePercent) {
+inline SkScalar resolveGradientCoord(Lengthd value, const Box2d& viewBox, bool numbersArePercent) {
   return NarrowToFloat(toPercent(value, numbersArePercent).toPixels(viewBox, FontMetrics()));
 }
 
-Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Boxd& viewBox, bool numbersArePercent) {
+Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& viewBox, bool numbersArePercent) {
   return Vector2d(
       toPercent(x, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::X),
       toPercent(y, numbersArePercent).toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y));
 }
 
-Transformd resolveGradientTransform(
+Transform2d resolveGradientTransform(
     const components::ComputedLocalTransformComponent* maybeTransformComponent,
-    const Boxd& viewBox) {
+    const Box2d& viewBox) {
   if (maybeTransformComponent == nullptr) {
-    return Transformd();
+    return Transform2d();
   }
 
   const Vector2d origin = maybeTransformComponent->transformOrigin;
-  const Transformd entityFromParent =
+  const Transform2d entityFromParent =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transformd::Translate(origin) * entityFromParent * Transformd::Translate(-origin);
+  return Transform2d::Translate(origin) * entityFromParent * Transform2d::Translate(-origin);
 }
 
 std::optional<SkPaint> instantiateGradientPaint(const components::PaintResolvedReference& ref,
-                                                const Boxd& pathBounds, const Boxd& viewBox,
+                                                const Box2d& pathBounds, const Box2d& viewBox,
                                                 const css::RGBA currentColor, float opacity,
                                                 bool antialias) {
   const EntityHandle handle = ref.reference.handle;
@@ -2287,20 +2287,20 @@ std::optional<SkPaint> instantiateGradientPaint(const components::PaintResolvedR
     return std::nullopt;
   }
 
-  Transformd gradientFromGradientUnits;
+  Transform2d gradientFromGradientUnits;
   if (objectBoundingBox) {
     gradientFromGradientUnits = resolveGradientTransform(
         handle.try_get<components::ComputedLocalTransformComponent>(), kUnitPathBounds);
 
-    const Transformd objectBoundingBoxFromUnitBox =
-        Transformd::Scale(pathBounds.size()) * Transformd::Translate(pathBounds.topLeft);
+    const Transform2d objectBoundingBoxFromUnitBox =
+        Transform2d::Scale(pathBounds.size()) * Transform2d::Translate(pathBounds.topLeft);
     gradientFromGradientUnits = gradientFromGradientUnits * objectBoundingBoxFromUnitBox;
   } else {
     gradientFromGradientUnits = resolveGradientTransform(
         handle.try_get<components::ComputedLocalTransformComponent>(), viewBox);
   }
 
-  const Boxd& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
+  const Box2d& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
 
   std::vector<SkScalar> positions;
   std::vector<SkColor> colors;
@@ -2509,7 +2509,7 @@ void RendererSkia::endFrame() {
   filterLayerStack_.clear();
 }
 
-void RendererSkia::setTransform(const Transformd& transform) {
+void RendererSkia::setTransform(const Transform2d& transform) {
   if (currentCanvas_ == nullptr) {
     return;
   }
@@ -2529,7 +2529,7 @@ void RendererSkia::setTransform(const Transformd& transform) {
   currentCanvas_->setMatrix(m);
 }
 
-void RendererSkia::pushTransform(const Transformd& transform) {
+void RendererSkia::pushTransform(const Transform2d& transform) {
   if (currentCanvas_ == nullptr) {
     return;
   }
@@ -2572,7 +2572,7 @@ void RendererSkia::popClip() {
   }
 }
 
-std::optional<SkPaint> RendererSkia::makeFillPaint(const Boxd& bounds) {
+std::optional<SkPaint> RendererSkia::makeFillPaint(const Box2d& bounds) {
   if (std::holds_alternative<PaintServer::None>(paint_.fill)) {
     return std::nullopt;
   }
@@ -2616,7 +2616,7 @@ std::optional<SkPaint> RendererSkia::makeFillPaint(const Boxd& bounds) {
   return std::nullopt;
 }
 
-std::optional<SkPaint> RendererSkia::makeStrokePaint(const Boxd& bounds,
+std::optional<SkPaint> RendererSkia::makeStrokePaint(const Box2d& bounds,
                                                      const StrokeParams& stroke) {
   if (std::holds_alternative<PaintServer::None>(paint_.stroke) || stroke.strokeWidth <= 0.0) {
     return std::nullopt;
@@ -2730,7 +2730,7 @@ void RendererSkia::drawOnFilterInputSurface(const sk_sp<SkSurface>& surface,
 }
 
 void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
-                                   const std::optional<Boxd>& filterRegion) {
+                                   const std::optional<Box2d>& filterRegion) {
   if (currentCanvas_ == nullptr) {
     return;
   }
@@ -2747,11 +2747,11 @@ void RendererSkia::pushFilterLayer(const components::FilterGraph& filterGraph,
   int offsetX = 0;
   int offsetY = 0;
 
-  const Transformd originalDeviceFromFilter = toDonnerTransform(currentCanvas_->getTotalMatrix());
+  const Transform2d originalDeviceFromFilter = toDonnerTransform(currentCanvas_->getTotalMatrix());
 
   if (filterRegion.has_value()) {
-    const Transformd parentDeviceFromFilter = originalDeviceFromFilter;
-    const Boxd deviceRegion = parentDeviceFromFilter.transformBox(*filterRegion);
+    const Transform2d parentDeviceFromFilter = originalDeviceFromFilter;
+    const Box2d deviceRegion = parentDeviceFromFilter.transformBox(*filterRegion);
     const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
     const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
 
@@ -2844,13 +2844,13 @@ void RendererSkia::popFilterLayer() {
       shouldUseTransformedBlurPath(state.filterGraph, state.deviceFromFilter);
 
   if (useTransformedBlurPath) {
-    const Boxd& filterRegion = *state.filterRegion;
+    const Box2d& filterRegion = *state.filterRegion;
     const double scaleX =
         std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
     const double scaleY =
         std::max(1.0, state.deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
     const double blurPadding = computeBlurPadding(state.filterGraph);
-    const Boxd paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
+    const Box2d paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
     const int localWidth =
         std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
@@ -2860,11 +2860,11 @@ void RendererSkia::popFilterLayer() {
     sk_sp<SkSurface> localSourceSurface = SkSurfaces::Raster(
         SkImageInfo::Make(localWidth, localHeight, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
     if (localSourceSurface != nullptr) {
-      const Transformd filterFromDevice = state.deviceFromFilter.inverse();
-      const Transformd deviceToLocal =
+      const Transform2d filterFromDevice = state.deviceFromFilter.inverse();
+      const Transform2d deviceToLocal =
           filterFromDevice *
-          Transformd::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
-          Transformd::Scale(scaleX, scaleY);
+          Transform2d::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
+          Transform2d::Scale(scaleX, scaleY);
 
       {
         SkCanvas* canvas = localSourceSurface->getCanvas();
@@ -2880,9 +2880,9 @@ void RendererSkia::popFilterLayer() {
       sk_sp<SkImage> localSourceImage = localSourceSurface->makeImageSnapshot();
       if (localSourceImage != nullptr) {
         components::FilterGraph localGraph = state.filterGraph;
-        const Transformd localTransform = Transformd::Scale(scaleX, scaleY);
+        const Transform2d localTransform = Transform2d::Scale(scaleX, scaleY);
         localGraph.filterRegion =
-            Boxd::FromXYWH(blurPadding, blurPadding, filterRegion.width(), filterRegion.height());
+            Box2d::FromXYWH(blurPadding, blurPadding, filterRegion.width(), filterRegion.height());
 
         sk_sp<SkImageFilter> localFilter = buildNativeSkiaFilterDAG(
             localGraph, localTransform, localSourceImage->width(), localSourceImage->height(),
@@ -2905,9 +2905,9 @@ void RendererSkia::popFilterLayer() {
 
             sk_sp<SkImage> filteredLocalImage = localOutputSurface->makeImageSnapshot();
             if (filteredLocalImage != nullptr) {
-              const Transformd deviceFromLocal =
-                  Transformd::Scale(1.0 / scaleX, 1.0 / scaleY) *
-                  Transformd::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
+              const Transform2d deviceFromLocal =
+                  Transform2d::Scale(1.0 / scaleX, 1.0 / scaleY) *
+                  Transform2d::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
                   state.deviceFromFilter;
 
               currentCanvas_->save();
@@ -2934,8 +2934,8 @@ void RendererSkia::popFilterLayer() {
         SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
     std::vector<std::uint8_t> pixels(static_cast<size_t>(width) * height * 4);
     if (sourceImage->readPixels(info, pixels.data(), static_cast<size_t>(width) * 4, 0, 0)) {
-      const Transformd filterFromDevice = state.deviceFromFilter.inverse();
-      const Boxd& filterRegion = *state.filterRegion;
+      const Transform2d filterFromDevice = state.deviceFromFilter.inverse();
+      const Box2d& filterRegion = *state.filterRegion;
       for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
           const Vector2d filterPoint =
@@ -3135,7 +3135,7 @@ void RendererSkia::popFilterLayer() {
     if (state.filterRegion.has_value() &&
         (!NearZero(state.originalDeviceFromFilter.data[1], 1e-6) ||
          !NearZero(state.originalDeviceFromFilter.data[2], 1e-6))) {
-      const Boxd& filterRegion = *state.filterRegion;
+      const Box2d& filterRegion = *state.filterRegion;
       const Vector2d topLeft =
           state.originalDeviceFromFilter.transformPosition(filterRegion.topLeft);
       const Vector2d topRight = state.originalDeviceFromFilter.transformPosition(
@@ -3194,7 +3194,7 @@ void RendererSkia::popFilterLayer() {
   if (state.filterRegion.has_value() &&
       (!NearZero(state.originalDeviceFromFilter.data[1], 1e-6) ||
        !NearZero(state.originalDeviceFromFilter.data[2], 1e-6))) {
-    const Boxd& filterRegion = *state.filterRegion;
+    const Box2d& filterRegion = *state.filterRegion;
     const Vector2d topLeft =
         state.originalDeviceFromFilter.transformPosition(filterRegion.topLeft);
     const Vector2d topRight = state.originalDeviceFromFilter.transformPosition(
@@ -3264,7 +3264,7 @@ void RendererSkia::popIsolatedLayer() {
   currentCanvas_->restore();
 }
 
-void RendererSkia::pushMask(const std::optional<Boxd>& maskBounds) {
+void RendererSkia::pushMask(const std::optional<Box2d>& maskBounds) {
   if (currentCanvas_ == nullptr) {
     return;
   }
@@ -3404,7 +3404,7 @@ void RendererSkia::popMask() {
   currentCanvas_->restore();
 }
 
-void RendererSkia::beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) {
+void RendererSkia::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
   if (currentCanvas_ == nullptr) {
     return;
   }
@@ -3511,7 +3511,7 @@ void RendererSkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
   }
 }
 
-void RendererSkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
+void RendererSkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
   const SkRect skRect = toSkia(rect);
   FilterLayerState* filterLayerState = currentFilterLayerState();
   if (std::optional<SkPaint> fillPaint = makeFillPaint(rect)) {
@@ -3531,7 +3531,7 @@ void RendererSkia::drawRect(const Boxd& rect, const StrokeParams& stroke) {
   }
 }
 
-void RendererSkia::drawEllipse(const Boxd& bounds, const StrokeParams& stroke) {
+void RendererSkia::drawEllipse(const Box2d& bounds, const StrokeParams& stroke) {
   SkPath ellipse;
   ellipse.addOval(toSkia(bounds));
   FilterLayerState* filterLayerState = currentFilterLayerState();
@@ -3649,7 +3649,7 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       runs = textEngine.layout(text, layoutParams);
     }
 
-    Boxd textBounds;
+    Box2d textBounds;
     {
       double minX = std::numeric_limits<double>::max();
       double minY = std::numeric_limits<double>::max();
@@ -3688,7 +3688,7 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
       }
 
       if (minX < maxX && minY < maxY) {
-        textBounds = Boxd({minX, minY}, {maxX, maxY});
+        textBounds = Box2d({minX, minY}, {maxX, maxY});
       }
     }
 
@@ -3824,13 +3824,13 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
 
           if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
             glyphPath = transformPathSpline(
-                glyphPath, Transformd::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+                glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
           }
 
-          Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+          Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
           if (glyph.rotateDegrees != 0.0) {
             glyphFromLocal =
-                Transformd::Rotate(glyph.rotateDegrees * std::numbers::pi_v<double> / 180.0) *
+                Transform2d::Rotate(glyph.rotateDegrees * std::numbers::pi_v<double> / 180.0) *
                 glyphFromLocal;
           }
 
@@ -4094,10 +4094,10 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
               segmentPath.lineTo(Vector2d(0.0, decoTopY + decoThickness));
               segmentPath.closePath();
 
-              Transformd segmentFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+              Transform2d segmentFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
               if (glyph.rotateDegrees != 0.0) {
                 segmentFromLocal =
-                    Transformd::Rotate(glyph.rotateDegrees * std::numbers::pi_v<double> / 180.0) *
+                    Transform2d::Rotate(glyph.rotateDegrees * std::numbers::pi_v<double> / 180.0) *
                     segmentFromLocal;
               }
 

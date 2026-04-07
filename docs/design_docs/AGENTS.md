@@ -27,7 +27,7 @@ All design documents live under `docs/design_docs/`.
 
 ## Donner-Specific
 
-- Prefer project utilities (`Transformd`, `RcString`, `StringUtils`); avoid unnecessary deps.
+- Prefer project utilities (e.g., `Transform2d`, `RcString`, `StringUtils`); avoid unnecessary deps.
 - Use gMock for tests; consider fuzzing for parsers.
 
 ## Resvg Test Integration

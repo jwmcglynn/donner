@@ -42,7 +42,7 @@ public:
    * @param baseTransform Transform applied to all entities (e.g., layer-local offset).
    */
   void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
-                       const RenderViewport& viewport, const Transformd& baseTransform);
+                       const RenderViewport& viewport, const Transform2d& baseTransform);
 
   /**
    * Capture a snapshot from the underlying backend after rendering.
@@ -69,14 +69,14 @@ private:
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
-  void drawSubDocument(SVGDocument& subDocument, const Boxd& viewportBounds,
+  void drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                        const PreserveAspectRatio& aspectRatio, double opacity,
-                       const Transformd& parentAbsoluteTransform);
+                       const Transform2d& parentAbsoluteTransform);
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                              const Transformd& parentAbsoluteTransform, double opacity);
+                              const Transform2d& parentAbsoluteTransform, double opacity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph);
   void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
-                                 Entity hostEntity, const std::optional<Boxd>& filterRegion);
+                                 Entity hostEntity, const std::optional<Box2d>& filterRegion);
   static void setSubDocumentContextPaint(SVGDocument& subDocument,
                                          const components::ResolvedPaintServer& contextFill,
                                          const components::ResolvedPaintServer& contextStroke);
@@ -94,7 +94,7 @@ private:
   RendererInterface& renderer_;
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;
-  Transformd layerBaseTransform_;
+  Transform2d layerBaseTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered

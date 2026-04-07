@@ -83,7 +83,7 @@ std::string BuildCssSelectorPath(const SVGElement& element) {
   return out.str();
 }
 
-void CompositeAABBRect(RendererBitmap& bitmap, const Boxd& bounds,
+void CompositeAABBRect(RendererBitmap& bitmap, const Box2d& bounds,
                        const SampledImageInfo& imageInfo) {
   const int imgW = bitmap.dimensions.x;
   const int imgH = bitmap.dimensions.y;

@@ -23,7 +23,7 @@ struct ComputedPathComponent {
    *
    * @param pathFromTarget Transform to transform the path to the target coordinate system.
    */
-  Boxd transformedBounds(const Transformd& pathFromTarget) {
+  Box2d transformedBounds(const Transform2d& pathFromTarget) {
     return spline.transformedBounds(pathFromTarget);
   }
 };

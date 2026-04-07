@@ -38,7 +38,7 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
         if (rootStyle->properties) {
           // Use default FontMetrics for resolving root font-size (avoids circular dependency).
           metrics.rootFontSize = rootStyle->properties->fontSize.getRequired().toPixels(
-              Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+              Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
         }
       }
     }
@@ -47,7 +47,7 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   // Element's computed font-size for em/ex/ch units.
   if (style.properties) {
     // Resolve font-size using default metrics (font-size itself can't be em-relative to itself).
-    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(Boxd(), FontMetrics(),
+    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(Box2d(), FontMetrics(),
                                                                          Lengthd::Extent::Mixed);
   }
 
@@ -203,15 +203,15 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
   });
 }
 
-std::optional<Boxd> ShapeSystem::getShapeBounds(EntityHandle handle) {
-  const Transformd worldFromOuterEntityLocal =
+std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
+  const Transform2d worldFromOuterEntityLocal =
       LayoutSystem().getEntityFromWorldTransform(handle).inverse();
 
   return getTransformedShapeBounds(handle, worldFromOuterEntityLocal);
 }
 
-std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
-  return getTransformedShapeBounds(handle, Transformd());
+std::optional<Box2d> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
+  return getTransformedShapeBounds(handle, Transform2d());
 }
 
 bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
@@ -236,9 +236,9 @@ bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& poin
   return false;
 }
 
-std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
-                                                           const Transformd& worldFromTarget) {
-  std::optional<Boxd> overallBounds;
+std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
+                                                           const Transform2d& worldFromTarget) {
+  std::optional<Box2d> overallBounds;
 
   if (const ComputedStyleComponent* style = handle.try_get<ComputedStyleComponent>()) {
     if (style->properties->display.getRequired() == Display::None) {
@@ -265,9 +265,9 @@ std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
         ParseWarningSink disabledSink = ParseWarningSink::Disabled();
         if (ComputedPathComponent* computedPath =
                 createComputedPathIfShape(child, FontMetrics(), disabledSink)) {
-          const Boxd bounds = computedPath->transformedBounds(
+          const Box2d bounds = computedPath->transformedBounds(
               LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget);
-          overallBounds = overallBounds ? Boxd::Union(overallBounds.value(), bounds) : bounds;
+          overallBounds = overallBounds ? Box2d::Union(overallBounds.value(), bounds) : bounds;
         }
       });
 
@@ -280,7 +280,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
       circle.properties, style.properties->unparsedProperties, warningSink);
 
-  const Boxd viewport = LayoutSystem().getViewBox(handle);
+  const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d center(computedCircle.properties.cx.getRequired().toPixels(viewport, fontMetrics,
                                                                             Lengthd::Extent::X),
@@ -304,7 +304,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedEllipseComponent& computedEllipse = handle.get_or_emplace<ComputedEllipseComponent>(
       ellipse.properties, style.properties->unparsedProperties, warningSink);
 
-  const Boxd viewport = LayoutSystem().getViewBox(handle);
+  const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d center(
       computedEllipse.properties.cx.getRequired().toPixels(viewport, fontMetrics),
@@ -325,7 +325,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
-  const Boxd viewport = LayoutSystem().getViewBox(handle);
+  const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d start(line.x1.toPixels(viewport, fontMetrics),
                        line.y1.toPixels(viewport, fontMetrics));
@@ -401,7 +401,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
       rect.properties, style.properties->unparsedProperties, warningSink);
 
-  const Boxd viewport = LayoutSystem().getViewBox(handle);
+  const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d pos(
       computedRect.properties.x.getRequired().toPixels(viewport, fontMetrics, Lengthd::Extent::X),

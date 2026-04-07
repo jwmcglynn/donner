@@ -8,138 +8,138 @@
 namespace donner {
 
 TEST(Transform, Construct) {
-  Transformf transform_float;
+  Transform2f transform_float;
   EXPECT_TRUE(transform_float.isIdentity());
 
-  Transformd transform_double;
+  Transform2d transform_double;
   EXPECT_TRUE(transform_double.isIdentity());
 }
 
 TEST(Transform, Rotate) {
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi);
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi);
     EXPECT_THAT(t, TransformIs(0, 1, -1, 0, 0, 0));
   }
 
   {
-    Transformd t = Transformd::Rotate(-MathConstants<double>::kHalfPi);
+    Transform2d t = Transform2d::Rotate(-MathConstants<double>::kHalfPi);
     EXPECT_THAT(t, TransformIs(0, -1, 1, 0, 0, 0));
   }
 }
 
 TEST(Transform, Scale) {
   {
-    Transformd t = Transformd::Scale(2);
+    Transform2d t = Transform2d::Scale(2);
     EXPECT_THAT(t, TransformIs(2, 0, 0, 2, 0, 0));
   }
 
   {
-    Transformd t = Transformd::Scale(0.5);
+    Transform2d t = Transform2d::Scale(0.5);
     EXPECT_THAT(t, TransformIs(0.5, 0, 0, 0.5, 0, 0));
   }
 
   {
-    Transformd t = Transformd::Scale({-1, 1});
+    Transform2d t = Transform2d::Scale({-1, 1});
     EXPECT_THAT(t, TransformIs(-1, 0, 0, 1, 0, 0));
   }
 
   {
-    Transformd t = Transformd::Scale(1, -1);
+    Transform2d t = Transform2d::Scale(1, -1);
     EXPECT_THAT(t, TransformIs(1, 0, 0, -1, 0, 0));
   }
 }
 
 TEST(Transform, Translate) {
   {
-    Transformd t = Transformd::Translate({50, -100});
+    Transform2d t = Transform2d::Translate({50, -100});
     EXPECT_THAT(t, TransformIs(1, 0, 0, 1, 50, -100));
   }
 
   {
-    Transformd t = Transformd::Translate(-50, 100);
+    Transform2d t = Transform2d::Translate(-50, 100);
     EXPECT_THAT(t, TransformIs(1, 0, 0, 1, -50, 100));
   }
 }
 
 TEST(Transform, SkewX) {
   {
-    Transformd t = Transformd::SkewX(MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::SkewX(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t, TransformIs(1, 0, 1, 1, 0, 0));
   }
 
   {
-    Transformd t = Transformd::SkewX(-MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::SkewX(-MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t, TransformIs(1, 0, -1, 1, 0, 0));
   }
 }
 
 TEST(Transform, SkewY) {
   {
-    Transformd t = Transformd::SkewY(MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::SkewY(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t, TransformIs(1, 1, 0, 1, 0, 0));
   }
 
   {
-    Transformd t = Transformd::SkewY(-MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::SkewY(-MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t, TransformIs(1, -1, 0, 1, 0, 0));
   }
 }
 
 TEST(Transform, IsIdentity) {
-  Transformd defaultConstruct;
+  Transform2d defaultConstruct;
   EXPECT_TRUE(defaultConstruct.isIdentity());
 
-  Transformd noTranslation = Transformd::Translate(0, 0);
+  Transform2d noTranslation = Transform2d::Translate(0, 0);
   EXPECT_TRUE(noTranslation.isIdentity());
 }
 
 TEST(Transform, Determinant) {
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_EQ(t.determinant(), 1);
   }
 
   {
-    Transformd t = Transformd::Scale({2, 2});
+    Transform2d t = Transform2d::Scale({2, 2});
     EXPECT_EQ(t.determinant(), 4);
   }
 }
 
 TEST(Transform, Inverse) {
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.inverse(),
-                TransformEq(Transformd::Rotate(MathConstants<double>::kHalfPi * -0.5)));
+                TransformEq(Transform2d::Rotate(MathConstants<double>::kHalfPi * -0.5)));
   }
 
   {
-    Transformd t = Transformd::Scale({2, 2});
-    EXPECT_THAT(t.inverse(), TransformEq(Transformd::Scale({0.5, 0.5})));
+    Transform2d t = Transform2d::Scale({2, 2});
+    EXPECT_THAT(t.inverse(), TransformEq(Transform2d::Scale({0.5, 0.5})));
   }
 
   {
-    Transformd t = Transformd::Translate({50, -100});
-    EXPECT_THAT(t.inverse(), TransformEq(Transformd::Translate({-50, 100})));
+    Transform2d t = Transform2d::Translate({50, -100});
+    EXPECT_THAT(t.inverse(), TransformEq(Transform2d::Translate({-50, 100})));
   }
 
   {
-    Transformd t = Transformd::SkewX(0.5);
-    EXPECT_THAT(t.inverse(), TransformEq(Transformd::SkewX(-0.5)));
+    Transform2d t = Transform2d::SkewX(0.5);
+    EXPECT_THAT(t.inverse(), TransformEq(Transform2d::SkewX(-0.5)));
   }
 
   {
-    Transformd t = Transformd::SkewY(0.2);
-    EXPECT_THAT(t.inverse(), TransformEq(Transformd::SkewY(-0.2)));
+    Transform2d t = Transform2d::SkewY(0.2);
+    EXPECT_THAT(t.inverse(), TransformEq(Transform2d::SkewY(-0.2)));
   }
 
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5) *
-                   Transformd::Scale({2, 2}) * Transformd::Translate({-50, 100});
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
+                   Transform2d::Scale({2, 2}) * Transform2d::Translate({-50, 100});
 
     // The inverse should apply the inverse transformations in reverse order
     EXPECT_THAT(t.inverse(),
-                TransformEq(Transformd::Translate({50, -100}) * Transformd::Scale({0.5, 0.5}) *
-                            Transformd::Rotate(MathConstants<double>::kHalfPi * -0.5)));
+                TransformEq(Transform2d::Translate({50, -100}) * Transform2d::Scale({0.5, 0.5}) *
+                            Transform2d::Rotate(MathConstants<double>::kHalfPi * -0.5)));
   }
 }
 
@@ -149,8 +149,8 @@ TEST(Transform, MultiplicationOrder) {
   const double sin45 = std::sin(angle);                       // sin(45 degrees)
   const double scaleFactor = 2.0;
 
-  const Transformd t = Transformd::Rotate(angle) * Transformd::Scale({scaleFactor, scaleFactor}) *
-                       Transformd::Translate({-50, 100});
+  const Transform2d t = Transform2d::Rotate(angle) * Transform2d::Scale({scaleFactor, scaleFactor}) *
+                       Transform2d::Translate({-50, 100});
 
   EXPECT_THAT(t, TransformIs(cos45 * scaleFactor,   // a
                              sin45 * scaleFactor,   // b
@@ -163,7 +163,7 @@ TEST(Transform, MultiplicationOrder) {
 
 TEST(Transform, TransformVectorOrPosition) {
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.transformVector({100, 100}), Vector2Near(0, 100 * sqrt(2)));
     EXPECT_THAT(t.transformVector({-100, 0}), Vector2Near(-100 / sqrt(2), -100 / sqrt(2)));
 
@@ -172,7 +172,7 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::Scale({-0.5, 2});
+    Transform2d t = Transform2d::Scale({-0.5, 2});
     EXPECT_THAT(t.transformVector({100, 100}), Vector2Near(-50, 200));
     EXPECT_THAT(t.transformVector({50, -200}), Vector2Near(-25, -400));
 
@@ -181,7 +181,7 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::Translate({50, -100});
+    Transform2d t = Transform2d::Translate({50, -100});
     EXPECT_THAT(t.transformVector({100, 100}), Vector2Near(100, 100));
     EXPECT_THAT(t.transformVector({50, -200}), Vector2Near(50, -200));
 
@@ -190,7 +190,7 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::SkewX(MathConstants<double>::kHalfPi * 0.5);
+    Transform2d t = Transform2d::SkewX(MathConstants<double>::kHalfPi * 0.5);
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(100, 50));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(150, 100));
@@ -201,7 +201,7 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::SkewY(MathConstants<double>::kHalfPi * -0.5);
+    Transform2d t = Transform2d::SkewY(MathConstants<double>::kHalfPi * -0.5);
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(50, 0));
     EXPECT_THAT(t.transformVector({100, 50}), Vector2Near(100, -50));
@@ -212,8 +212,8 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi) * Transformd::Scale({2, 2}) *
-                   Transformd::Translate({-50, 100});
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi) * Transform2d::Scale({2, 2}) *
+                   Transform2d::Translate({-50, 100});
 
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(-100, 100));
@@ -227,27 +227,27 @@ TEST(Transform, TransformVectorOrPosition) {
 
 TEST(Transform, TransformBox) {
   {
-    Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
-    EXPECT_THAT(t.transformBox(Boxd({-100, -100}, {100, 100})),
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    EXPECT_THAT(t.transformBox(Box2d({-100, -100}, {100, 100})),
                 BoxEq(Vector2Near(-100 * sqrt(2), -100 * sqrt(2)),
                       Vector2Near(100 * sqrt(2), 100 * sqrt(2))));
   }
 
   {
-    Transformd t = Transformd::Scale({-0.5, 2});
-    EXPECT_THAT(t.transformBox(Boxd({-200, -50}, {100, 150})),
+    Transform2d t = Transform2d::Scale({-0.5, 2});
+    EXPECT_THAT(t.transformBox(Box2d({-200, -50}, {100, 150})),
                 BoxEq(Vector2Near(-50, -100), Vector2Near(100, 300)));
   }
 
   {
-    Transformd t = Transformd::Translate({50, -100});
-    EXPECT_THAT(t.transformBox(Boxd({-200, -50}, {100, 150})),
+    Transform2d t = Transform2d::Translate({50, -100});
+    EXPECT_THAT(t.transformBox(Box2d({-200, -50}, {100, 150})),
                 BoxEq(Vector2Near(-150, -150), Vector2Near(150, 50)));
   }
 }
 
 TEST(Transform, Output) {
-  Transformd t(Transformd::uninitialized);
+  Transform2d t(Transform2d::uninitialized);
   t.data[0] = 1.0;
   t.data[1] = -2.0;
   t.data[2] = 3.0;

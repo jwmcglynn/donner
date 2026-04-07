@@ -93,14 +93,14 @@ public:
    *
    * @param viewBox The viewBox value to set.
    */
-  void setViewBox(OptionalRef<Boxd> viewBox);
+  void setViewBox(OptionalRef<Box2d> viewBox);
 
   /**
    * Get the parsed value of the `viewBox` attribute, if specified.
    *
    * @return The viewBox rectangle, if set.
    */
-  std::optional<Boxd> viewBox() const;
+  std::optional<Box2d> viewBox() const;
 
   /**
    * Set the `preserveAspectRatio` attribute, which determines how the

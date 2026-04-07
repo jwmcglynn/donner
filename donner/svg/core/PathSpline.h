@@ -241,14 +241,14 @@ public:
   /**
    * Returns the bounding box for this spline in local space.
    */
-  Boxd bounds() const;
+  Box2d bounds() const;
 
   /**
    * Returns the tight bounding box for this spline transformed to a target coordinate system.
    *
    * @param pathFromTarget Transform to transform the path to the target coordinate system.
    */
-  Boxd transformedBounds(const Transformd& pathFromTarget) const;
+  Box2d transformedBounds(const Transform2d& pathFromTarget) const;
 
   /**
    * Get the bounds of critical points created by miter joints when applying a stroke to this
@@ -257,7 +257,7 @@ public:
    * @param strokeWidth Width of stroke.
    * @param miterLimit Miter limit of the stroke.
    */
-  Boxd strokeMiterBounds(double strokeWidth, double miterLimit) const;
+  Box2d strokeMiterBounds(double strokeWidth, double miterLimit) const;
 
   /**
    * Result of sampling the path at a given arc length distance.

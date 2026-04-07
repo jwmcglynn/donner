@@ -28,7 +28,7 @@ namespace donner::svg {
  */
 std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& property,
                                                      const Property<Lengthd>& fallbackProperty,
-                                                     const Boxd& viewBox,
+                                                     const Box2d& viewBox,
                                                      const FontMetrics& fontMetrics);
 
 }  // namespace donner::svg

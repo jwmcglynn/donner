@@ -142,7 +142,7 @@ public:
   /**
    * Get the scale transform from the canvas to the SVG document.
    */
-  Transformd documentFromCanvasTransform() const;
+  Transform2d documentFromCanvasTransform() const;
 
   /**
    * Returns true if the two SVGDocument handles reference the same underlying document.

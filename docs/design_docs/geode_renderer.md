@@ -660,7 +660,7 @@ and should land as standalone PRs before Geode-specific code.
 
 | Current | New | References | Files |
 |---------|-----|-----------|-------|
-| `Transformd` | `Transform2d` | ~514 | ~57 |
+| `Transform2d` | `Transform2d` | ~514 | ~57 |
 | `Transformf` | `Transform2f` | ~2 | ~2 |
 | `Transform<T>` | `Transform2<T>` | (template) | 1 |
 
@@ -668,15 +668,14 @@ and should land as standalone PRs before Geode-specific code.
 The current name `Transform` implies generality but is inherently 2D (3×3 affine matrix, 6
 parameters).
 
-**Migration strategy:** Mechanical rename via `sed`/IDE refactor. Keep `using Transformd = Transform2d`
-compatibility aliases in `Transform.h` for one release cycle to avoid breaking downstream
-consumers, then remove.
+**Migration strategy:** Mechanical rename via `sed`/IDE refactor. Keep `using Transform2d = Transform2d`
+compatibility aliases in `Transform.h` transitionally for downstream consumers, then remove.
 
 ### Rename: `Box` → `Box2`
 
 | Current | New | References | Files |
 |---------|-----|-----------|-------|
-| `Boxd` | `Box2d` | ~516 | ~76 |
+| `Box2d` | `Box2d` | ~516 | ~76 |
 | `Box<T>` | `Box2<T>` | (template) | 1 |
 
 **Why now:** Same reasoning as Transform. `Box` uses `Vector2<T>` corners internally — the 3D
@@ -913,9 +912,9 @@ cleanup.
 
 ### Phase 0: Type Refactoring (pre-Geode)
 
-- [ ] Rename `Transform<T>` → `Transform2<T>`, `Transformd` → `Transform2d` with compatibility
+- [ ] Rename `Transform<T>` → `Transform2<T>`, `Transform2d` → `Transform2d` with compatibility
   aliases.
-- [ ] Rename `Box<T>` → `Box2<T>`, `Boxd` → `Box2d` with compatibility aliases.
+- [ ] Rename `Box<T>` → `Box2<T>`, `Box2d` → `Box2d` with compatibility aliases.
 - [ ] Implement Bézier utility functions: `SplitQuadratic`, `SplitCubic`,
   `ApproximateCubicWithQuadratics`, `QuadraticYExtrema`, `CubicYExtrema`, `QuadraticBounds`,
   `CubicBounds`, `EvalQuadratic`, `EvalCubic`.

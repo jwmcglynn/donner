@@ -41,12 +41,12 @@ protected:
   /**
    * Return the ink bounds for this text subtree, in local coordinates.
    */
-  Boxd computedInkBounds() const;
+  Box2d computedInkBounds() const;
 
   /**
    * Return the text object bounding box for this text subtree, in local coordinates.
    */
-  Boxd computedObjectBoundingBox() const;
+  Box2d computedObjectBoundingBox() const;
 
 public:
   /// Returns true if the given element type can be cast to \ref SVGTextContentElement.
@@ -122,7 +122,7 @@ public:
    * in the element's coordinate space.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getExtentOfChar
    */
-  Boxd getExtentOfChar(std::size_t charnum) const;
+  Box2d getExtentOfChar(std::size_t charnum) const;
 
   /**
    * Returns the rotation applied to the glyphs corresponding to the

@@ -54,8 +54,8 @@ struct SizedElementComponent {
  * computed rect and inherited viewBox of the parent element.
  */
 struct ComputedSizedElementComponent {
-  Boxd bounds;            ///< The computed rect of this sized element.
-  Boxd inheritedViewBox;  ///< The viewBox of the parent element, used for preserveAspectRatio
+  Box2d bounds;            ///< The computed rect of this sized element.
+  Box2d inheritedViewBox;  ///< The viewBox of the parent element, used for preserveAspectRatio
                           ///< transformations.
 };
 
@@ -70,7 +70,7 @@ struct ComputedSizedElementComponent {
  *
  */
 struct ComputedShadowSizedElementComponent {
-  Boxd bounds;  ///< The computed rect of this sized element.
+  Box2d bounds;  ///< The computed rect of this sized element.
 };
 
 }  // namespace donner::svg::components

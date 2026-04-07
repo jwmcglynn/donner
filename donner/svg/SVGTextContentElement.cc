@@ -62,20 +62,20 @@ std::vector<PathSpline> SVGTextContentElement::computedGlyphPaths() const {
   return {};
 }
 
-Boxd SVGTextContentElement::computedInkBounds() const {
+Box2d SVGTextContentElement::computedInkBounds() const {
   if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
     return engine->computedInkBounds(handle_);
   }
 
-  return Boxd();
+  return Box2d();
 }
 
-Boxd SVGTextContentElement::computedObjectBoundingBox() const {
+Box2d SVGTextContentElement::computedObjectBoundingBox() const {
   if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
     return engine->computedObjectBoundingBox(handle_);
   }
 
-  return Boxd();
+  return Box2d();
 }
 
 std::optional<Lengthd> SVGTextContentElement::textLength() const {
@@ -136,12 +136,12 @@ Vector2d SVGTextContentElement::getEndPositionOfChar(std::size_t charnum) const 
   return Vector2d();
 }
 
-Boxd SVGTextContentElement::getExtentOfChar(std::size_t charnum) const {
+Box2d SVGTextContentElement::getExtentOfChar(std::size_t charnum) const {
   if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
     return engine->getExtentOfChar(handle_, charnum);
   }
 
-  return Boxd();
+  return Box2d();
 }
 
 double SVGTextContentElement::getRotationOfChar(std::size_t charnum) const {

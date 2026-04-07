@@ -13,7 +13,7 @@ namespace donner::svg::components {
  */
 struct ViewBoxComponent {
   /// Stored viewBox, if any.
-  std::optional<Boxd> viewBox;
+  std::optional<Box2d> viewBox;
 };
 
 /**
@@ -21,7 +21,7 @@ struct ViewBoxComponent {
  * this is the viewBox of the nearest ancestor or the document itself.
  */
 struct ComputedViewBoxComponent {
-  Boxd viewBox;  //!< The viewBox of the element, or the viewBox of the nearest ancestor.
+  Box2d viewBox;  //!< The viewBox of the element, or the viewBox of the nearest ancestor.
 };
 
 }  // namespace donner::svg::components

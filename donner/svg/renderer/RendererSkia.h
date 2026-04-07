@@ -71,12 +71,12 @@ public:
   /**
    * Sets the absolute transform, replacing the current matrix.
    */
-  void setTransform(const Transformd& transform) override;
+  void setTransform(const Transform2d& transform) override;
 
   /**
    * Pushes a transform onto the Skia canvas stack.
    */
-  void pushTransform(const Transformd& transform) override;
+  void pushTransform(const Transform2d& transform) override;
 
   /**
    * Pops the most recently applied transform.
@@ -107,18 +107,18 @@ public:
    * Pushes a filter layer that applies the given effect chain.
    */
   void pushFilterLayer(const components::FilterGraph& filterGraph,
-                       const std::optional<Boxd>& filterRegion) override;
+                       const std::optional<Box2d>& filterRegion) override;
 
   /**
    * Pops the most recent filter layer.
    */
   void popFilterLayer() override;
 
-  void pushMask(const std::optional<Boxd>& maskBounds) override;
+  void pushMask(const std::optional<Box2d>& maskBounds) override;
   void transitionMaskToContent() override;
   void popMask() override;
 
-  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override;
+  void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) override;
   void endPatternTile(bool forStroke) override;
 
   /**
@@ -134,12 +134,12 @@ public:
   /**
    * Draws a rectangle convenience primitive.
    */
-  void drawRect(const Boxd& rect, const StrokeParams& stroke) override;
+  void drawRect(const Box2d& rect, const StrokeParams& stroke) override;
 
   /**
    * Draws an ellipse convenience primitive.
    */
-  void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) override;
+  void drawEllipse(const Box2d& bounds, const StrokeParams& stroke) override;
 
   /**
    * Draws an image resource.
@@ -221,7 +221,7 @@ private:
   struct PatternState {
     std::unique_ptr<SkPictureRecorder> recorder;
     SkCanvas* savedCanvas = nullptr;
-    Transformd targetFromPattern;
+    Transform2d targetFromPattern;
   };
   std::vector<PatternState> patternStack_;
   std::optional<SkPaint> patternFillPaint_;
@@ -241,9 +241,9 @@ private:
     int filterBufferOffsetY = 0;
     SkCanvas* parentCanvas = nullptr;
     components::FilterGraph filterGraph;
-    std::optional<Boxd> filterRegion;
-    Transformd originalDeviceFromFilter;
-    Transformd deviceFromFilter;
+    std::optional<Box2d> filterRegion;
+    Transform2d originalDeviceFromFilter;
+    Transform2d deviceFromFilter;
   };
 
   struct MaskLayerState {
@@ -258,8 +258,8 @@ private:
   std::vector<FilterLayerState> filterLayerStack_;
   std::vector<MaskLayerState> maskLayerStack_;
 
-  std::optional<SkPaint> makeFillPaint(const Boxd& bounds);
-  std::optional<SkPaint> makeStrokePaint(const Boxd& bounds, const StrokeParams& stroke);
+  std::optional<SkPaint> makeFillPaint(const Box2d& bounds);
+  std::optional<SkPaint> makeStrokePaint(const Box2d& bounds, const StrokeParams& stroke);
   FilterLayerState* currentFilterLayerState();
   void drawOnFilterInputSurface(const sk_sp<SkSurface>& surface,
                                 const std::function<void(SkCanvas*)>& drawFn);

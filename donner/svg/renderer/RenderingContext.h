@@ -61,7 +61,7 @@ public:
    *
    * @param rect Rectangle in world coordinates to test intersection against
    */
-  std::vector<Entity> findIntersectingRect(const Boxd& rect);
+  std::vector<Entity> findIntersectingRect(const Box2d& rect);
 
   /**
    * Get the world-space bounding box of an entity (fill bounds only, not including stroke).
@@ -69,7 +69,7 @@ public:
    * @param entity Entity to get bounds for
    * @return The world-space AABB, or std::nullopt if the entity has no shape
    */
-  std::optional<Boxd> getWorldBounds(Entity entity);
+  std::optional<Box2d> getWorldBounds(Entity entity);
 
   /**
    * Invalidate the rendering tree, forcing it to be recreated on the next render.

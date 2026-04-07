@@ -39,13 +39,13 @@ public:
    *
    * @param transform Initial transform.
    */
-  explicit CssTransform(const Transformd& transform) { appendTransform(transform); }
+  explicit CssTransform(const Transform2d& transform) { appendTransform(transform); }
 
   /**
    * Stores a precomputed transform.
    */
   struct Simple {
-    Transformd transform;  ///< Transform to apply.
+    Transform2d transform;  ///< Transform to apply.
   };
 
   /**
@@ -66,13 +66,13 @@ public:
    * @param viewBox ViewBox size, used to resolve percentage units.
    * @param fontMetrics Font metrics, used to resolve 'em' and other font-relative units.
    */
-  Transformd compute(const Boxd& viewBox, FontMetrics fontMetrics) const {
-    Transformd result;
+  Transform2d compute(const Box2d& viewBox, FontMetrics fontMetrics) const {
+    Transform2d result;
     for (const auto& element : elements_) {
       if (const auto* simple = std::get_if<Simple>(&element)) {
         result = simple->transform * result;
       } else if (const auto* translate = std::get_if<Translate>(&element)) {
-        result = Transformd::Translate(
+        result = Transform2d::Translate(
                      Vector2d(translate->x.toPixels(viewBox, fontMetrics, Lengthd::Extent::X),
                               translate->y.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y))) *
                  result;
@@ -87,7 +87,7 @@ public:
    *
    * @param transform Transform to append.
    */
-  void appendTransform(const Transformd& transform) {
+  void appendTransform(const Transform2d& transform) {
     if (!elements_.empty()) {
       if (Simple* s = std::get_if<Simple>(&elements_.back())) {
         s->transform = s->transform * transform;

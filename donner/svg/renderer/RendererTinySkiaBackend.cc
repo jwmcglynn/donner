@@ -17,9 +17,9 @@ public:
 
   void endFrame() override { renderer_.endFrame(); }
 
-  void setTransform(const Transformd& transform) override { renderer_.setTransform(transform); }
+  void setTransform(const Transform2d& transform) override { renderer_.setTransform(transform); }
 
-  void pushTransform(const Transformd& transform) override { renderer_.pushTransform(transform); }
+  void pushTransform(const Transform2d& transform) override { renderer_.pushTransform(transform); }
 
   void popTransform() override { renderer_.popTransform(); }
 
@@ -34,19 +34,19 @@ public:
   void popIsolatedLayer() override { renderer_.popIsolatedLayer(); }
 
   void pushFilterLayer(const components::FilterGraph& filterGraph,
-                       const std::optional<Boxd>& filterRegion) override {
+                       const std::optional<Box2d>& filterRegion) override {
     renderer_.pushFilterLayer(filterGraph, filterRegion);
   }
 
   void popFilterLayer() override { renderer_.popFilterLayer(); }
 
-  void pushMask(const std::optional<Boxd>& maskBounds) override { renderer_.pushMask(maskBounds); }
+  void pushMask(const std::optional<Box2d>& maskBounds) override { renderer_.pushMask(maskBounds); }
 
   void transitionMaskToContent() override { renderer_.transitionMaskToContent(); }
 
   void popMask() override { renderer_.popMask(); }
 
-  void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) override {
+  void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) override {
     renderer_.beginPatternTile(tileRect, targetFromPattern);
   }
 
@@ -58,11 +58,11 @@ public:
     renderer_.drawPath(path, stroke);
   }
 
-  void drawRect(const Boxd& rect, const StrokeParams& stroke) override {
+  void drawRect(const Box2d& rect, const StrokeParams& stroke) override {
     renderer_.drawRect(rect, stroke);
   }
 
-  void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) override {
+  void drawEllipse(const Box2d& bounds, const StrokeParams& stroke) override {
     renderer_.drawEllipse(bounds, stroke);
   }
 

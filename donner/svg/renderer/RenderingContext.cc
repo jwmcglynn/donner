@@ -146,7 +146,7 @@ public:
     const EntityHandle dataHandle(
         registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : treeEntity);
     bool traverseChildren = true;
-    std::optional<Boxd> clipRect;
+    std::optional<Box2d> clipRect;
     int layerDepth = 0;
     std::optional<ContextPaintServers> savedContextPaintServers;
     const bool isShape = dataHandle.all_of<ComputedPathComponent>();
@@ -214,7 +214,7 @@ public:
     instance.entityFromWorldTransform =
         absoluteTransformComponent.entityFromWorld * (absoluteTransformComponent.worldIsCanvas
                                                           ? documentWorldFromCanvasTransform_
-                                                          : Transformd());
+                                                          : Transform2d());
 
     instance.clipRect = clipRect;
     instance.dataEntity = dataHandle.entity();
@@ -415,7 +415,7 @@ public:
 
       hasAnyChildren = true;
 
-      const Transformd entityFromParent = LayoutSystem().getEntityFromWorldTransform(entity);
+      const Transform2d entityFromParent = LayoutSystem().getEntityFromWorldTransform(entity);
       const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
       clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
     };
@@ -658,7 +658,7 @@ private:
   ContextPaintServers contextPaintServers_;
 
   /// Transform from the canvas to the SVG document root, for the current canvas scale.
-  Transformd documentWorldFromCanvasTransform_;
+  Transform2d documentWorldFromCanvasTransform_;
 
   /// Tracks mask elements currently being rendered to detect mutual recursion
   /// (e.g., mask1→mask2→mask1). When a mask reference resolves to an element already in this
@@ -881,7 +881,7 @@ std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point)
   return results;
 }
 
-std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
+std::vector<Entity> RenderingContext::findIntersectingRect(const Box2d& rect) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   instantiateRenderTree(false, disabledSink);
 
@@ -907,7 +907,7 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
   return results;
 }
 
-std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
+std::optional<Box2d> RenderingContext::getWorldBounds(Entity entity) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   instantiateRenderTree(false, disabledSink);
 

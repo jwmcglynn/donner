@@ -44,7 +44,7 @@ std::optional<PathSpline> SVGGeometryElement::computedSpline() const {
   }
 }
 
-std::optional<Boxd> SVGGeometryElement::worldBounds() const {
+std::optional<Box2d> SVGGeometryElement::worldBounds() const {
   return components::ShapeSystem().getShapeWorldBounds(handle_);
 }
 

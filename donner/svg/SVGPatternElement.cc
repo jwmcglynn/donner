@@ -27,7 +27,7 @@ SVGPatternElement SVGPatternElement::CreateOn(EntityHandle handle) {
   return SVGPatternElement(handle);
 }
 
-std::optional<Boxd> SVGPatternElement::viewBox() const {
+std::optional<Box2d> SVGPatternElement::viewBox() const {
   return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
@@ -61,7 +61,7 @@ PatternContentUnits SVGPatternElement::patternContentUnits() const {
       PatternContentUnits::Default);
 }
 
-Transformd SVGPatternElement::patternTransform() const {
+Transform2d SVGPatternElement::patternTransform() const {
   return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
@@ -74,7 +74,7 @@ std::optional<RcString> SVGPatternElement::href() const {
   }
 }
 
-void SVGPatternElement::setViewBox(OptionalRef<Boxd> viewBox) {
+void SVGPatternElement::setViewBox(OptionalRef<Box2d> viewBox) {
   handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
@@ -111,7 +111,7 @@ void SVGPatternElement::setPatternContentUnits(PatternContentUnits value) {
   handle_.get_or_emplace<components::PatternComponent>().patternContentUnits = value;
 }
 
-void SVGPatternElement::setPatternTransform(Transformd transform) {
+void SVGPatternElement::setPatternTransform(Transform2d transform) {
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, transform);
 }
 

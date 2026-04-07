@@ -96,7 +96,7 @@ MATCHER_P(NormalizedEq, expectedVector, "") {
  *
  * Example:
  * ```
- * EXPECT_THAT(result, TransformEq(Transformd::Scale({2.0, 2.0})));
+ * EXPECT_THAT(result, TransformEq(Transform2d::Scale({2.0, 2.0})));
  * ```
  *
  * @param other Transform object to compare.

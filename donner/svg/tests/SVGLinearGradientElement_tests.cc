@@ -22,7 +22,7 @@ TEST(SVGLinearGradientElementTests, Defaults) {
 
   EXPECT_THAT(gradient->href(), testing::Eq(std::nullopt));
   EXPECT_THAT(gradient->gradientUnits(), testing::Eq(GradientUnits::ObjectBoundingBox));
-  EXPECT_THAT(gradient->gradientTransform(), TransformEq(Transformd()));
+  EXPECT_THAT(gradient->gradientTransform(), TransformEq(Transform2d()));
   EXPECT_THAT(gradient->spreadMethod(), testing::Eq(GradientSpreadMethod::Pad));
 }
 
@@ -242,7 +242,7 @@ TEST(SVGLinearGradientElementTests, RenderingTransform) {
         )"));
   }
 
-  fragment->setGradientTransform(Transformd::Rotate(90.0 * MathConstants<double>::kDegToRad));
+  fragment->setGradientTransform(Transform2d::Rotate(90.0 * MathConstants<double>::kDegToRad));
 
   EXPECT_THAT(fragment->gradientTransform(), TransformIs(0, 1, -1, 0, 0, 0));
 

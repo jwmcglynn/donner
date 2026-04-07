@@ -343,7 +343,7 @@ struct TextParams {
   StrokeParams strokeParams;
   SmallVector<RcString, 1> fontFamilies;
   Lengthd fontSize;
-  Boxd viewBox;
+  Box2d viewBox;
   FontMetrics fontMetrics;
   // New fields:
   TextAnchor textAnchor = TextAnchor::Start;

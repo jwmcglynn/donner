@@ -133,9 +133,9 @@ struct RenderingInstanceComponent {
   bool isolatedLayer = false;
 
   /// The canvas-space transform of the element, element-from-world.
-  Transformd entityFromWorldTransform;
+  Transform2d entityFromWorldTransform;
 
-  std::optional<Boxd> clipRect;  //!< The clip rect of the element, if set.
+  std::optional<Box2d> clipRect;  //!< The clip rect of the element, if set.
 
   std::optional<ResolvedClipPath> clipPath;  //!< The clip path of the element, if set.
 

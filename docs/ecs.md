@@ -52,7 +52,7 @@ For a real-world example, here is how the `ViewBoxComponent` is created for SVG 
 ```cpp
 struct ViewBoxComponent {
   /// Stored viewBox, if any.
-  std::optional<Boxd> viewBox;
+  std::optional<Box2d> viewBox;
 };
 ```
 

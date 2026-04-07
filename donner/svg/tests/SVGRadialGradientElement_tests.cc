@@ -23,7 +23,7 @@ TEST(SVGRadialGradientElementTests, Defaults) {
 
   EXPECT_THAT(gradient->href(), testing::Eq(std::nullopt));
   EXPECT_THAT(gradient->gradientUnits(), testing::Eq(GradientUnits::ObjectBoundingBox));
-  EXPECT_THAT(gradient->gradientTransform(), TransformEq(Transformd()));
+  EXPECT_THAT(gradient->gradientTransform(), TransformEq(Transform2d()));
   EXPECT_THAT(gradient->spreadMethod(), testing::Eq(GradientSpreadMethod::Pad));
 }
 
@@ -241,7 +241,7 @@ TEST(SVGRadialGradientElementTests, RenderingTransform) {
         )"));
   }
 
-  fragment->setGradientTransform(Transformd());
+  fragment->setGradientTransform(Transform2d());
 
   {
     const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(fragment.document);

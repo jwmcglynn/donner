@@ -15,11 +15,11 @@ namespace {
  * @param thetaAlpha Angle in radians.
  * @param thetaBeta Angle in radians.
  */
-static Transformd Skew(double thetaAlpha, double thetaBeta) {
+static Transform2d Skew(double thetaAlpha, double thetaBeta) {
   const double shearX = std::tan(thetaAlpha);
   const double shearY = std::tan(thetaBeta);
 
-  Transformd result;
+  Transform2d result;
   result.data[2] = shearX;
   result.data[1] = shearY;
   return result;
@@ -198,21 +198,21 @@ public:
           return std::move(result.error());
         }
 
-        transform_.appendTransform(Transformd::Scale(Vector2d(result.result(), 1.0)));
+        transform_.appendTransform(Transform2d::Scale(Vector2d(result.result(), 1.0)));
       } else if (name.equalsLowercase("scaley")) {
         auto result = parseSingleNumber(subparser);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.appendTransform(Transformd::Scale(Vector2d(1.0, result.result())));
+        transform_.appendTransform(Transform2d::Scale(Vector2d(1.0, result.result())));
       } else if (name.equalsLowercase("rotate")) {
         auto result = parseSingleAngle(subparser, AngleParseOptions::AllowBareZero);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.appendTransform(Transformd::Rotate(result.result()));
+        transform_.appendTransform(Transform2d::Rotate(result.result()));
       } else if (name.equalsLowercase("skew")) {
         return parseSkew(subparser);
       } else if (name.equalsLowercase("skewx")) {
@@ -221,14 +221,14 @@ public:
           return std::move(result.error());
         }
 
-        transform_.appendTransform(Transformd::SkewX(result.result()));
+        transform_.appendTransform(Transform2d::SkewX(result.result()));
       } else if (name.equalsLowercase("skewy")) {
         auto result = parseSingleAngle(subparser, AngleParseOptions::AllowBareZero);
         if (result.hasError()) {
           return std::move(result.error());
         }
 
-        transform_.appendTransform(Transformd::SkewY(result.result()));
+        transform_.appendTransform(Transform2d::SkewY(result.result()));
       } else {
         ParseDiagnostic err;
         err.reason = "Unexpected function '" + name + "'";
@@ -298,7 +298,7 @@ public:
   }
 
   std::optional<ParseDiagnostic> parseMatrix(ComponentValueParser& subparser) {
-    Transformd t(Transformd::uninitialized);
+    Transform2d t(Transform2d::uninitialized);
     if (auto error = subparser.readNumbers(t.data)) {
       return std::move(error.value());
     }
@@ -368,7 +368,7 @@ public:
 
     if (subparser.isEOF()) {
       // Only one parameter provided, use Sx for both x and y.
-      transform_.appendTransform(Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result())));
+      transform_.appendTransform(Transform2d::Scale(Vector2d(maybeSx.result(), maybeSx.result())));
     } else {
       if (subparser.tryConsumeToken<css::Token::Comma>()) {
         subparser.skipWhitespace();
@@ -384,7 +384,7 @@ public:
         return std::move(maybeSy.error());
       }
 
-      transform_.appendTransform(Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result())));
+      transform_.appendTransform(Transform2d::Scale(Vector2d(maybeSx.result(), maybeSy.result())));
     }
 
     subparser.skipWhitespace();

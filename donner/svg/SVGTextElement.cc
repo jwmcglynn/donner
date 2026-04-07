@@ -18,11 +18,11 @@ std::vector<PathSpline> SVGTextElement::convertToPath() const {
   return computedGlyphPaths();
 }
 
-Boxd SVGTextElement::inkBoundingBox() const {
+Box2d SVGTextElement::inkBoundingBox() const {
   return computedInkBounds();
 }
 
-Boxd SVGTextElement::objectBoundingBox() const {
+Box2d SVGTextElement::objectBoundingBox() const {
   return computedObjectBoundingBox();
 }
 

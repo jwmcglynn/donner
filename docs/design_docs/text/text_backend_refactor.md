@@ -555,14 +555,14 @@ struct ComputedTextGeometryComponent {
   struct GlyphGeometry {
     entt::entity sourceEntity = entt::null;
     PathSpline path;
-    Boxd extent;
+    Box2d extent;
   };
 
   struct CharacterGeometry {
     entt::entity sourceEntity = entt::null;
     Vector2d startPosition = Vector2d::Zero();
     Vector2d endPosition = Vector2d::Zero();
-    Boxd extent;
+    Box2d extent;
     double rotation = 0.0;
     double advance = 0.0;
     bool rendered = false;
@@ -571,8 +571,8 @@ struct ComputedTextGeometryComponent {
 
   std::vector<GlyphGeometry> glyphs;
   std::vector<CharacterGeometry> characters;
-  Boxd inkBounds;
-  Boxd emBoxBounds;
+  Box2d inkBounds;
+  Box2d emBoxBounds;
 };
 
 }  // namespace donner::svg::components
@@ -614,10 +614,10 @@ public:
   std::vector<PathSpline> convertToPath() const;
 
   /// Get the ink bounding box of the rendered text (actual glyph outlines).
-  Boxd inkBoundingBox() const;
+  Box2d inkBoundingBox() const;
 
   /// Get the em-box bounding box (SVG objectBoundingBox for gradient mapping).
-  Boxd objectBoundingBox() const;
+  Box2d objectBoundingBox() const;
 
   /// Get the number of addressable characters (for selection, caret positioning).
   int getNumberOfChars() const;

@@ -53,7 +53,7 @@ void SVGDocument::setCanvasSize(int width, int height) {
   registry_->ctx().get<components::SVGDocumentContext>().canvasSize = Vector2i(width, height);
 }
 
-Transformd SVGDocument::documentFromCanvasTransform() const {
+Transform2d SVGDocument::documentFromCanvasTransform() const {
   return components::LayoutSystem().getDocumentFromCanvasTransform(*registry_);
 }
 

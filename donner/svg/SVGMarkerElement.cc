@@ -20,11 +20,11 @@ SVGMarkerElement SVGMarkerElement::CreateOn(EntityHandle handle) {
   return SVGMarkerElement(handle);
 }
 
-void SVGMarkerElement::setViewBox(OptionalRef<Boxd> viewBox) {
+void SVGMarkerElement::setViewBox(OptionalRef<Box2d> viewBox) {
   handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
-std::optional<Boxd> SVGMarkerElement::viewBox() const {
+std::optional<Box2d> SVGMarkerElement::viewBox() const {
   return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 

@@ -124,10 +124,10 @@ double GetDefiniteSize(const Property<T, kCascade>& property) {
   assert(IsAbsolute(property) && "Property must be absolute to get definite size");
 
   // Since we know the size is absolute, we don't need to specify a real viewBox or FontMetrics.
-  return property.getRequired().toPixels(Boxd::CreateEmpty(Vector2d()), FontMetrics());
+  return property.getRequired().toPixels(Box2d::CreateEmpty(Vector2d()), FontMetrics());
 }
 
-Boxd GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Boxd> parentViewBox,
+Box2d GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Box2d> parentViewBox,
                         Entity currentEntity) {
   if (const auto* viewBoxComponent = registry.try_get<ComputedViewBoxComponent>(currentEntity)) {
     return viewBoxComponent->viewBox;
@@ -154,7 +154,7 @@ Boxd GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Box
       // No viewBox found, use the document size.
       const Vector2i documentSize = LayoutSystem().calculateCanvasScaledDocumentSize(
           registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
-      return Boxd(Vector2d::Zero(), documentSize);
+      return Box2d(Vector2d::Zero(), documentSize);
     }
   }
 }
@@ -208,7 +208,7 @@ Vector2i LayoutSystem::calculateDocumentSize(Registry& registry) const {
   return RoundSize(calculateRawDocumentSize(registry));
 }
 
-Boxd LayoutSystem::getViewBox(EntityHandle entity) {
+Box2d LayoutSystem::getViewBox(EntityHandle entity) {
   if (const auto* computedViewBox = entity.try_get<ComputedViewBoxComponent>()) {
     return computedViewBox->viewBox;
   }
@@ -216,7 +216,7 @@ Boxd LayoutSystem::getViewBox(EntityHandle entity) {
   Registry& registry = *entity.registry();
   SmallVector<Entity, 8> parents;
 
-  std::optional<Boxd> parentViewBox;
+  std::optional<Box2d> parentViewBox;
 
   // Traverse up through the parent list until we find the root or a previously computed viewBox.
   for (Entity parent = entity; parent != entt::null;
@@ -239,7 +239,7 @@ Boxd LayoutSystem::getViewBox(EntityHandle entity) {
     Entity currentEntity = parents[parents.size() - 1];
     parents.pop_back();
 
-    const Boxd currentViewBox =
+    const Box2d currentViewBox =
         GetViewBoxInternal(registry, rootEntity, parentViewBox, currentEntity);
     registry.emplace<ComputedViewBoxComponent>(currentEntity, currentViewBox);
 
@@ -283,11 +283,11 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
   Vector2d scale = Vector2d(maybeCanvasSize.value()) / documentSize;
   scale.x = scale.y = std::min(scale.x, scale.y);
 
-  const Transformd transform = Transformd::Scale(scale);
+  const Transform2d transform = Transform2d::Scale(scale);
   return RoundSize(transform.transformPosition(documentSize));
 }
 
-Transformd LayoutSystem::getRawEntityFromParentTransform(EntityHandle entity) {
+Transform2d LayoutSystem::getRawEntityFromParentTransform(EntityHandle entity) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, disabledSink);
 
@@ -297,19 +297,19 @@ Transformd LayoutSystem::getRawEntityFromParentTransform(EntityHandle entity) {
   return computedTransform.entityFromParent;
 }
 
-Transformd LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
+Transform2d LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, disabledSink);
 
   const ComputedLocalTransformComponent& computedTransform =
       createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), disabledSink);
 
-  return Transformd::Translate(computedTransform.transformOrigin) *
+  return Transform2d::Translate(computedTransform.transformOrigin) *
          computedTransform.entityFromParent *
-         Transformd::Translate(-computedTransform.transformOrigin);
+         Transform2d::Translate(-computedTransform.transformOrigin);
 }
 
-Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
+Transform2d LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
   EntityHandle rootEntity(registry, registry.ctx().get<SVGDocumentContext>().rootEntity);
   if (rootEntity.all_of<SizedElementComponent>()) {
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
@@ -320,11 +320,11 @@ Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
                                                      disabledSink);
     return elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
   } else {
-    return Transformd();
+    return Transform2d();
   }
 }
 
-Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
+Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity) {
   // If a shadow tree has been instantiated, there may be a ComputedShadowSizedElementComponent,
   // used for <symbol> elements.
   if (UTILS_PREDICT_FALSE(entity.all_of<ShadowTreeRootComponent>())) {
@@ -334,19 +334,19 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
             entity.try_get<ComputedShadowSizedElementComponent>()) {
       // If there is no viewBox, we cannot apply scaling, return identity
       if (!overridesViewBox(lightEntity)) {
-        return Transformd();
+        return Transform2d();
       }
 
       const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(lightEntity);
 
-      const Boxd viewBox = getViewBox(lightEntity);
-      const Transformd elementContentFromViewBox =
+      const Box2d viewBox = getViewBox(lightEntity);
+      const Transform2d elementContentFromViewBox =
           preserveAspectRatio.elementContentFromViewBoxTransform(computedShadowSizedElement->bounds,
                                                                  viewBox);
 
       if (const auto* symbolComponent = lightEntity.try_get<SymbolComponent>()) {
-        const Transformd symbolContentFromElementContent =
-            Transformd::Translate(-symbolComponent->refX, -symbolComponent->refY);
+        const Transform2d symbolContentFromElementContent =
+            Transform2d::Translate(-symbolComponent->refX, -symbolComponent->refY);
 
         return symbolContentFromElementContent * elementContentFromViewBox;
       } else {
@@ -359,7 +359,7 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
              entity.registry()->ctx().get<SVGDocumentContext>().rootEntity != entity.entity()) {
     const SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
     if (sizedElement.applyTranslationForUseElement) {
-      return Transformd::Translate(entity.get<ComputedSizedElementComponent>().bounds.topLeft);
+      return Transform2d::Translate(entity.get<ComputedSizedElementComponent>().bounds.topLeft);
     }
 
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();
@@ -367,17 +367,17 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
 
     const ComputedSizedElementComponent& computedSizedElement =
         createComputedSizedElementComponentWithStyle(entity, computedStyle, FontMetrics(), disabledSink);
-    const Transformd viewBoxTransform =
+    const Transform2d viewBoxTransform =
         elementContentFromViewBoxTransform(entity, computedSizedElement);
 
     return viewBoxTransform;
   }
 
-  return Transformd();
+  return Transform2d();
 }
 
 void LayoutSystem::setRawEntityFromParentTransform(EntityHandle entity,
-                                                   const Transformd& entityFromParent) {
+                                                   const Transform2d& entityFromParent) {
   auto& component = entity.get_or_emplace<components::TransformComponent>();
   component.transform.set(CssTransform(entityFromParent), css::Specificity::Override());
 
@@ -394,7 +394,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
   Registry& registry = *entity.registry();
   SmallVector<Entity, 8> parents;
 
-  Transformd parentFromWorld;
+  Transform2d parentFromWorld;
   bool worldIsCanvas = true;
 
   // Traverse up through the parent list until we find the root or a previously computed viewBox.
@@ -416,7 +416,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
 
     if (const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(lightEntity);
         renderingBehavior && !renderingBehavior->inheritsParentTransform) {
-      parentFromWorld = Transformd();
+      parentFromWorld = Transform2d();
       worldIsCanvas = false;
       if (renderingBehavior->appliesSelfTransform) {
         parents.push_back(parent);
@@ -439,7 +439,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
     EntityHandle currentHandle(registry, parents[parents.size() - 1]);
     parents.pop_back();
 
-    const Transformd entityFromWorld = getEntityContentFromEntityTransform(currentHandle) *
+    const Transform2d entityFromWorld = getEntityContentFromEntityTransform(currentHandle) *
                                        getEntityFromParentTransform(currentHandle) *
                                        parentFromWorld;
     currentHandle.emplace<ComputedAbsoluteTransformComponent>(entityFromWorld, worldIsCanvas);
@@ -450,7 +450,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
   return entity.get<ComputedAbsoluteTransformComponent>();
 }
 
-Transformd LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
+Transform2d LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
   return getAbsoluteTransformComponent(entity).entityFromWorld;
 }
 
@@ -462,7 +462,7 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedViewBoxComponent>();
 }
 
-Transformd LayoutSystem::elementContentFromViewBoxTransform(
+Transform2d LayoutSystem::elementContentFromViewBoxTransform(
     EntityHandle entity, const ComputedSizedElementComponent& computedSizedElement) const {
   const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(entity);
   // If this entity also has a viewBox, it defines a viewport.
@@ -473,7 +473,7 @@ Transformd LayoutSystem::elementContentFromViewBoxTransform(
     // Images compute their transform based on the image's intrinsic size, not the viewBox.
     // TODO: This should be based on the image's intrinsic size, move this transform computation
     // here from RendererSkia.
-    return Transformd();
+    return Transform2d();
   } else {
     // This branch is hit for <use> elements.
     return preserveAspectRatio.elementContentFromViewBoxTransform(
@@ -501,7 +501,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   // TODO(jwmcglynn): Also calculate the absolute transform
   struct ElementContext {
     Entity entity;
-    std::optional<Boxd> parentViewBox;
+    std::optional<Box2d> parentViewBox;
   };
 
   const Entity rootEntity = registry.ctx().get<SVGDocumentContext>().rootEntity;
@@ -513,7 +513,7 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     ElementContext current = stack[stack.size() - 1];
     stack.pop_back();
 
-    const Boxd currentViewBox =
+    const Box2d currentViewBox =
         GetViewBoxInternal(registry, rootEntity, current.parentViewBox, current.entity);
     registry.emplace_or_replace<ComputedViewBoxComponent>(current.entity, currentViewBox);
 
@@ -527,9 +527,9 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
 }
 
 // Evaluates SizedElementProperties and returns the resulting bounds.
-Boxd LayoutSystem::computeSizeProperties(
+Box2d LayoutSystem::computeSizeProperties(
     EntityHandle entity, const SizedElementProperties& sizeProperties,
-    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewBox,
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Box2d& viewBox,
     FontMetrics fontMetrics, ParseWarningSink& warningSink) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
 
@@ -545,10 +545,10 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Entity parent = entity.get<donner::components::TreeComponent>().parent();
-  const Boxd viewBox = parent != entt::null ? getViewBox(EntityHandle(*entity.registry(), parent))
+  const Box2d viewBox = parent != entt::null ? getViewBox(EntityHandle(*entity.registry(), parent))
                                             : getViewBox(entity);
 
-  const Boxd bounds =
+  const Box2d bounds =
       computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
                             viewBox, fontMetrics, warningSink);
   return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewBox);
@@ -581,7 +581,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
           if (const std::string_view* str =
                   std::get_if<std::string_view>(&params.valueOrComponents)) {
             return parser::TransformParser::Parse(*str).map<CssTransform>(
-                [](const Transformd& transform) { return CssTransform(transform); });
+                [](const Transform2d& transform) { return CssTransform(transform); });
           } else {
             return parser::CssTransformParser::Parse(params.components());
           }
@@ -599,7 +599,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
     const TransformOrigin originValue = style.properties->transformOrigin.getRequired();
 
     // The transform-origin is relative to the element's bounding box.
-    Boxd bounds;
+    Box2d bounds;
     if (handle.all_of<SizedElementComponent>() && !handle.all_of<ImageComponent>()) {
       // For sized elements, we need to compute the size first to get the bounding box. The bounds
       // of an element are defined in the parent's coordinate system, which is what we need.
@@ -612,7 +612,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
     }
 
     // Percentages are resolved against the size of the bounding box.
-    const Boxd percentageBox = Boxd::WithSize(bounds.size());
+    const Box2d percentageBox = Box2d::WithSize(bounds.size());
 
     Vector2d originOffset(originValue.x.toPixels(percentageBox, fontMetrics, Lengthd::Extent::X),
                           originValue.y.toPixels(percentageBox, fontMetrics, Lengthd::Extent::Y));
@@ -626,14 +626,14 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
         transform.transform.get().value().compute(percentageBox, fontMetrics);
 
   } else {
-    computedTransform.entityFromParent = Transformd();
+    computedTransform.entityFromParent = Transform2d();
     computedTransform.transformOrigin = Vector2d();
   }
 
   return computedTransform;
 }
 
-std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
+std::optional<Box2d> LayoutSystem::clipRect(EntityHandle handle) const {
   // Check for shadow sized element component
   if (const auto* shadowSizedElement = handle.try_get<ComputedShadowSizedElementComponent>()) {
     return shadowSizedElement->bounds;
@@ -649,9 +649,9 @@ std::optional<Boxd> LayoutSystem::clipRect(EntityHandle handle) const {
   return std::nullopt;
 }
 
-Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
+Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
                                                const SizedElementProperties& properties,
-                                               const Boxd& inheritedViewBox,
+                                               const Box2d& inheritedViewBox,
                                                FontMetrics fontMetrics) {
   Registry& registry = *entity.registry();
 
@@ -666,7 +666,7 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
       // This is the root <svg> element.
       const Vector2i documentSize =
           calculateCanvasScaledDocumentSize(registry, InvalidSizeBehavior::ZeroSize);
-      return Boxd(Vector2d(), documentSize);
+      return Box2d(Vector2d(), documentSize);
     }
   }
 
@@ -699,7 +699,7 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
       // Use the default sizing algorithm to detect the size if any parameters are missing.
       // See https://www.w3.org/TR/css-images-3/#default-sizing
       if (properties.width.hasValue() && properties.height.hasValue()) {
-        return Boxd(origin, origin + size);
+        return Box2d(origin, origin + size);
       } else if (!properties.width.hasValue() && !properties.height.hasValue()) {
         size = Vector2d(imageSize);
       } else {
@@ -718,10 +718,10 @@ Boxd LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
     }
   } else if (registry.all_of<MaskComponent>(entity)) {
     // The bounds of a shadow entity are determined by the light entity.
-    return Boxd(origin, origin + size);
+    return Box2d(origin, origin + size);
   }
 
-  return Boxd(origin, origin + size);
+  return Box2d(origin, origin + size);
 }
 
 Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
@@ -730,7 +730,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   const SizedElementProperties& properties = root.get<SizedElementComponent>().properties;
 
   const std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
-  const Boxd canvasMaxBounds = Boxd::WithSize(
+  const Box2d canvasMaxBounds = Box2d::WithSize(
       maybeCanvasSize.has_value() ? *maybeCanvasSize : Vector2i(kDefaultWidth, kDefaultHeight));
 
   const bool definiteWidth = IsAbsolute(properties.width);
@@ -800,8 +800,8 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   const Vector2d canvasSize(maybeCanvasSize.value());
 
   // Scale the original viewBox to the canvas size.
-  const Transformd transform = preserveAspectRatio.elementContentFromViewBoxTransform(
-      Boxd(Vector2d(), canvasSize), viewBox.viewBox);
+  const Transform2d transform = preserveAspectRatio.elementContentFromViewBoxTransform(
+      Box2d(Vector2d(), canvasSize), viewBox.viewBox);
 
   return transform.transformPosition(viewBoxSize);
 }
@@ -825,7 +825,7 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
     return false;
   }
 
-  const Boxd parentViewBox = getViewBox(useEntity);
+  const Box2d parentViewBox = getViewBox(useEntity);
 
   // Override the width/height if the parent element specifies them
   SizedElementProperties properties = targetSizedElement->properties;
@@ -855,7 +855,7 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
   // Create the shadow component
   auto& shadowSized =
       registry.emplace_or_replace<ComputedShadowSizedElementComponent>(shadowEntity);
-  shadowSized.bounds = Boxd(origin, origin + size);
+  shadowSized.bounds = Box2d(origin, origin + size);
 
   return true;
 }

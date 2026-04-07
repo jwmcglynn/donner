@@ -538,7 +538,7 @@ TEST(PathSpline, Bounds) {
   spline.lineTo(kVec1);
   spline.lineTo(kVec2);
 
-  EXPECT_EQ(spline.bounds(), Boxd(Vector2d(0.0, 0.0), Vector2d(123.0, 1011.12)));
+  EXPECT_EQ(spline.bounds(), Box2d(Vector2d(0.0, 0.0), Vector2d(123.0, 1011.12)));
 }
 
 TEST(PathSpline, BoundsCurve) {
@@ -553,7 +553,7 @@ TEST(PathSpline, BoundsEllipse) {
   PathSpline spline;
   spline.ellipse(Vector2d(1.0, 2.0), Vector2d(2.0, 1.0));
 
-  EXPECT_THAT(spline.bounds(), Boxd(Vector2d(-1.0, 1.0), Vector2d(3.0, 3.0)));
+  EXPECT_THAT(spline.bounds(), Box2d(Vector2d(-1.0, 1.0), Vector2d(3.0, 3.0)));
 }
 
 TEST(PathSpline, TransformedBoundsIdentity) {
@@ -564,7 +564,7 @@ TEST(PathSpline, TransformedBoundsIdentity) {
   spline.lineTo(Vector2d(0.0, 1.0));
   spline.closePath();
 
-  const Transformd identityTransform = Transformd();
+  const Transform2d identityTransform = Transform2d();
   EXPECT_EQ(spline.transformedBounds(identityTransform), spline.bounds());
 }
 
@@ -576,8 +576,8 @@ TEST(PathSpline, TransformedBoundsTranslation) {
   spline.lineTo(Vector2d(0.0, 2.0));
   spline.closePath();
 
-  const Transformd translationTransform = Transformd::Translate(3.0, 4.0);
-  const Boxd expectedBounds(Vector2d(3.0, 4.0), Vector2d(5.0, 6.0));
+  const Transform2d translationTransform = Transform2d::Translate(3.0, 4.0);
+  const Box2d expectedBounds(Vector2d(3.0, 4.0), Vector2d(5.0, 6.0));
 
   EXPECT_EQ(spline.transformedBounds(translationTransform), expectedBounds);
 }
@@ -590,12 +590,12 @@ TEST(PathSpline, TransformedBoundsRotation) {
   spline.lineTo(Vector2d(1.0, 3.0));
   spline.closePath();
 
-  const Transformd rotationTransform = Transformd::Rotate(MathConstants<double>::kPi / 4);
-  const Boxd transformedBounds = spline.transformedBounds(rotationTransform);
+  const Transform2d rotationTransform = Transform2d::Rotate(MathConstants<double>::kPi / 4);
+  const Box2d transformedBounds = spline.transformedBounds(rotationTransform);
 
   // Expected bounds after rotation
   const double sqrt2 = std::sqrt(2.0);
-  const Boxd expectedBounds(Vector2d(-sqrt2, sqrt2), Vector2d(sqrt2, 3 * sqrt2));
+  const Box2d expectedBounds(Vector2d(-sqrt2, sqrt2), Vector2d(sqrt2, 3 * sqrt2));
 
   EXPECT_THAT(transformedBounds.topLeft, Vector2Near(-sqrt2, sqrt2));
   EXPECT_THAT(transformedBounds.bottomRight, Vector2Near(sqrt2, 3 * sqrt2));
@@ -609,8 +609,8 @@ TEST(PathSpline, TransformedBoundsScaling) {
   spline.lineTo(Vector2d(-1.0, 1.0));
   spline.closePath();
 
-  const Transformd scalingTransform = Transformd::Scale(2.0);
-  const Boxd expectedBounds(Vector2d(-2.0, -2.0), Vector2d(2.0, 2.0));
+  const Transform2d scalingTransform = Transform2d::Scale(2.0);
+  const Box2d expectedBounds(Vector2d(-2.0, -2.0), Vector2d(2.0, 2.0));
 
   EXPECT_EQ(spline.transformedBounds(scalingTransform), expectedBounds);
 }
@@ -620,11 +620,11 @@ TEST(PathSpline, TransformedBoundsComplexTransform) {
   spline.moveTo(Vector2d(0.0, 0.0));
   spline.curveTo(Vector2d(1.0, 2.0), Vector2d(3.0, 2.0), Vector2d(4.0, 0.0));
 
-  const Transformd complexTransform =
-      Transformd::Scale(0.5) *
-      Transformd::Rotate(MathConstants<double>::kHalfPi)  // Rotate by 90 degrees
-      * Transformd::Translate(2.0, -1.0);
-  const Boxd transformedBounds = spline.transformedBounds(complexTransform);
+  const Transform2d complexTransform =
+      Transform2d::Scale(0.5) *
+      Transform2d::Rotate(MathConstants<double>::kHalfPi)  // Rotate by 90 degrees
+      * Transform2d::Translate(2.0, -1.0);
+  const Box2d transformedBounds = spline.transformedBounds(complexTransform);
 
   EXPECT_THAT(transformedBounds.topLeft, Vector2Near(1.25, -1));
   EXPECT_THAT(transformedBounds.bottomRight, Vector2Near(2, 1));
@@ -632,7 +632,7 @@ TEST(PathSpline, TransformedBoundsComplexTransform) {
 
 TEST(PathSpline, TransformedBoundsEmptySpline) {
   PathSpline spline;
-  const Transformd anyTransform = Transformd();
+  const Transform2d anyTransform = Transform2d();
   EXPECT_DEATH(spline.transformedBounds(anyTransform), "!empty()");
 }
 
@@ -658,8 +658,8 @@ TEST(PathSpline, TransformedBoundsDegenerateXExtrema) {
   EXPECT_THAT(spline.pointAt(1, 0.5), Vector2Near(0.75, 0.0));
 
   // Apply a 90-degree rotation about the origin.
-  const Transformd rotation90 = Transformd::Rotate(MathConstants<double>::kHalfPi);
-  const Boxd bounds = spline.transformedBounds(rotation90);
+  const Transform2d rotation90 = Transform2d::Rotate(MathConstants<double>::kHalfPi);
+  const Box2d bounds = spline.transformedBounds(rotation90);
   EXPECT_THAT(bounds, BoxEq(Vector2Near(0.0, 0.0), Vector2d(0.0, 0.75)));
 }
 
@@ -685,8 +685,8 @@ TEST(PathSpline, TransformedBoundsDegenerateYExtrema) {
   EXPECT_THAT(spline.pointAt(1, 0.5), Vector2Near(0.0, 0.75));
 
   // Apply a 90-degree rotation about the origin (rotation: (x,y) -> (-y,x)).
-  const Transformd rotation90 = Transformd::Rotate(MathConstants<double>::kHalfPi);
-  const Boxd bounds = spline.transformedBounds(rotation90);
+  const Transform2d rotation90 = Transform2d::Rotate(MathConstants<double>::kHalfPi);
+  const Box2d bounds = spline.transformedBounds(rotation90);
 
   EXPECT_THAT(bounds, BoxEq(Vector2d(-0.75, 0.0), Vector2Near(0.0, 0.0)));
 }
@@ -716,7 +716,7 @@ TEST(PathSpline, StrokeMiterBounds) {
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
-  const Boxd kBoundsWithoutMiter = Boxd(kBottomLeft, Vector2d(kXHalfExtent, 100.0));
+  const Box2d kBoundsWithoutMiter = Box2d(kBottomLeft, Vector2d(kXHalfExtent, 100.0));
   // The expected cutoff for stroke width 5 is: c=5/sin(60deg/2), giving c=10.0
   const double kExpectedCutoff = 10.0;
 
@@ -761,7 +761,7 @@ TEST(PathSpline, StrokeMiterBoundsClosePath) {
 
   ASSERT_THAT(spline.commands(), SizeIs(4));
 
-  const Boxd kBoundsWithoutMiter = Boxd(kBottomLeft, Vector2d(kXHalfExtent, 100.0));
+  const Box2d kBoundsWithoutMiter = Box2d(kBottomLeft, Vector2d(kXHalfExtent, 100.0));
   // The expected cutoff for stroke width 5 is: c=5/sin(60deg/2), giving c=10.0
   const double kExpectedCutoff = 10.0;
 
@@ -797,7 +797,7 @@ TEST(PathSpline, StrokeMiterBoundsColinear) {
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
-  const Boxd kBoundsWithoutMiter = Boxd(Vector2d::Zero(), Vector2d(0.0, 100.0));
+  const Box2d kBoundsWithoutMiter = Box2d(Vector2d::Zero(), Vector2d(0.0, 100.0));
 
   // Simple bounds should not include miter.
   EXPECT_EQ(spline.bounds(), kBoundsWithoutMiter);
@@ -823,7 +823,7 @@ TEST(PathSpline, StrokeMiterBoundsInfinite) {
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
-  const Boxd kBoundsWithoutMiter = Boxd(Vector2d::Zero(), Vector2d(0.0, 100.0));
+  const Box2d kBoundsWithoutMiter = Box2d(Vector2d::Zero(), Vector2d(0.0, 100.0));
 
   // Simple bounds should not include miter.
   EXPECT_EQ(spline.bounds(), kBoundsWithoutMiter);

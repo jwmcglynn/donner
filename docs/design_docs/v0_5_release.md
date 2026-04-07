@@ -423,7 +423,7 @@ a-dominant-baseline-*.
 - [x] **Fix feImage fragment ref offset** — 6 tests (006/012/013/014/017/023): 9K–36K→0 — Fragment
   pre-rendering needed `+filterRegion.topLeft` translation to align with filter pixmap coordinates.
 - [x] **Enable SVG-as-image** — 15 image tests + 1 marker test enabled by fixing `drawSubDocument`
-  viewBox-to-canvas transform scaling (Transformd left-first composition order). Also added SVG
+  viewBox-to-canvas transform scaling (Transform2d left-first composition order). Also added SVG
   content detection for data URIs without MIME type.
 - [x] **Fix image rendering in traverseRange** — `<image>` elements inside markers/patterns/masks
   were silently not rendered (traverseRange lacked LoadedSVGImageComponent/LoadedImageComponent

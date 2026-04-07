@@ -21,7 +21,7 @@ namespace donner::svg {
 struct TextLayoutParams {
   SmallVector<RcString, 1> fontFamilies;
   Lengthd fontSize;
-  Boxd viewBox;
+  Box2d viewBox;
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
   DominantBaseline dominantBaseline = DominantBaseline::Auto;

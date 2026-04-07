@@ -19,7 +19,7 @@ struct ComputedClipPathsComponent {
     PathSpline path;
 
     /// Transform to the clip path from the parent entity.
-    Transformd entityFromParent;
+    Transform2d entityFromParent;
 
     /// Computed clip rule for this path.
     ClipRule clipRule = ClipRule::NonZero;

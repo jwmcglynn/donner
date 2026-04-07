@@ -202,8 +202,8 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
 
   // If patternUnits are objectBoundingBox, we want to evaluate percentages to [0, 1]. Otherwise
   // evaluate to userUnits.
-  const Boxd tileViewBox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
-                               ? Boxd(Vector2d(), Vector2d(1.0, 1.0))
+  const Box2d tileViewBox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
+                               ? Box2d(Vector2d(), Vector2d(1.0, 1.0))
                                : LayoutSystem().getViewBox(handle);
 
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(

@@ -379,10 +379,10 @@ struct FilterGraph {
 
   /// Bounding box of the referencing element, used when primitiveUnits=objectBoundingBox.
   /// Set by the renderer driver before passing to the renderer.
-  std::optional<Boxd> elementBoundingBox;
+  std::optional<Box2d> elementBoundingBox;
 
   /// The filter region in user-space coordinates.
-  std::optional<Boxd> filterRegion;
+  std::optional<Box2d> filterRegion;
 
   /// Scale factor from SVG user-space coordinates to pixel-space coordinates.
   /// Needed by lighting filters to transform light positions from user space to the pixel-space

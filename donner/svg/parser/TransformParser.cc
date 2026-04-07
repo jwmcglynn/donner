@@ -10,9 +10,9 @@ class TransformParserImpl : public donner::parser::ParserBase {
 public:
   TransformParserImpl(std::string_view str) : ParserBase(str) {}
 
-  ParseResult<Transformd> parse() {
+  ParseResult<Transform2d> parse() {
     bool allowComma = false;
-    Transformd transform;
+    Transform2d transform;
 
     skipWhitespace();
 
@@ -33,7 +33,7 @@ public:
 
       const std::string_view func = maybeFunc.result();
       if (func == "matrix") {
-        Transformd t(Transformd::uninitialized);
+        Transform2d t(Transform2d::uninitialized);
         if (auto error = readNumbers(t.data)) {
           return std::move(error.value());
         }
@@ -50,7 +50,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, so Ty is implicitly 0.0.
-          transform = Transformd::Translate(Vector2d(maybeTx.result(), 0.0)) * transform;
+          transform = Transform2d::Translate(Vector2d(maybeTx.result(), 0.0)) * transform;
         } else {
           skipCommaWhitespace();
 
@@ -60,7 +60,7 @@ public:
           }
 
           transform =
-              Transformd::Translate(Vector2d(maybeTx.result(), maybeTy.result())) * transform;
+              Transform2d::Translate(Vector2d(maybeTx.result(), maybeTy.result())) * transform;
         }
 
       } else if (func == "scale") {
@@ -73,7 +73,7 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, use Sx for both x and y.
-          transform = Transformd::Scale(Vector2d(maybeSx.result(), maybeSx.result())) * transform;
+          transform = Transform2d::Scale(Vector2d(maybeSx.result(), maybeSx.result())) * transform;
         } else {
           skipCommaWhitespace();
 
@@ -82,7 +82,7 @@ public:
             return std::move(maybeSy.error());
           }
 
-          transform = Transformd::Scale(Vector2d(maybeSx.result(), maybeSy.result())) * transform;
+          transform = Transform2d::Scale(Vector2d(maybeSx.result(), maybeSy.result())) * transform;
         }
 
       } else if (func == "rotate") {
@@ -96,7 +96,7 @@ public:
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, rotation around origin.
           transform =
-              Transformd::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
+              Transform2d::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
               transform;
         } else {
           skipCommaWhitespace();
@@ -108,9 +108,9 @@ public:
 
           const Vector2d offset(numbers[0], numbers[1]);
           transform =
-              Transformd::Translate(-offset) *
-              Transformd::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
-              Transformd::Translate(offset) * transform;
+              Transform2d::Translate(-offset) *
+              Transform2d::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
+              Transform2d::Translate(offset) * transform;
         }
 
       } else if (func == "skewX") {
@@ -120,7 +120,7 @@ public:
         }
 
         transform =
-            Transformd::SkewX(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
+            Transform2d::SkewX(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
 
       } else if (func == "skewY") {
         auto maybeNumber = readNumber();
@@ -129,7 +129,7 @@ public:
         }
 
         transform =
-            Transformd::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
+            Transform2d::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
 
       } else {
         ParseDiagnostic err;
@@ -190,7 +190,7 @@ private:
 
 }  // namespace
 
-ParseResult<Transformd> TransformParser::Parse(std::string_view str) {
+ParseResult<Transform2d> TransformParser::Parse(std::string_view str) {
   TransformParserImpl parser(str);
   return parser.parse();
 }

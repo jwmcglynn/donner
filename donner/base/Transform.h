@@ -28,7 +28,7 @@ namespace donner {
  * @tparam T Element type.
  */
 template <typename T>
-struct Transform {
+struct Transform2 {
   /// Tag type for constructing an uninitialized transform.
   struct UninitializedTag {};
 
@@ -50,7 +50,7 @@ struct Transform {
   T data[6];
 
   /// Construct an identity transform.
-  Transform() {
+  Transform2() {
     data[0] = T(1);  // a
     data[1] = T(0);  // b
     data[2] = T(0);  // c
@@ -63,34 +63,34 @@ struct Transform {
    * Construct an uninitialized transform.
    *
    * ```
-   * Transform<T> transform(Transform::uninitialized);
+   * Transform2<T> transform(Transform2::uninitialized);
    * ```
    */
-  explicit Transform(UninitializedTag) {}
+  explicit Transform2(UninitializedTag) {}
 
   /// Destructor.
-  ~Transform() = default;
+  ~Transform2() = default;
 
   // Copyable and movable.
   /// Copy constructor.
-  Transform(const Transform<T>&) = default;
+  Transform2(const Transform2<T>&) = default;
   /// Move constructor.
-  Transform(Transform<T>&&) = default;
+  Transform2(Transform2<T>&&) = default;
   /// Copy assignment operator.
-  Transform<T>& operator=(const Transform<T>&) = default;
+  Transform2<T>& operator=(const Transform2<T>&) = default;
   /// Move assignment operator.
-  Transform<T>& operator=(Transform<T>&&) = default;
+  Transform2<T>& operator=(Transform2<T>&&) = default;
 
   /**
    * Return a 2D rotation matrix with the given angle, in radians.
    *
    * @param theta Angle in radians.
    */
-  static Transform Rotate(T angleRadians) {
+  static Transform2 Rotate(T angleRadians) {
     const T sinVal = std::sin(angleRadians);
     const T cosVal = std::cos(angleRadians);
 
-    Transform<T> result(uninitialized);
+    Transform2<T> result(uninitialized);
     result.data[0] = cosVal;   // a
     result.data[1] = sinVal;   // b
     result.data[2] = -sinVal;  // c
@@ -105,15 +105,15 @@ struct Transform {
    *
    * @param extent Scale x/y parameters.
    */
-  static Transform Scale(T extent) { return Scale(Vector2<T>(extent, extent)); }
+  static Transform2 Scale(T extent) { return Scale(Vector2<T>(extent, extent)); }
 
   /**
    * Return a 2D scale matrix with horizontal and vertical scaling from a Vector2.
    *
    * @param extent Scale x/y parameters.
    */
-  static Transform Scale(const Vector2<T>& extent) {
-    Transform<T> result(uninitialized);
+  static Transform2 Scale(const Vector2<T>& extent) {
+    Transform2<T> result(uninitialized);
     result.data[0] = extent.x;  // a
     result.data[1] = T(0);      // b
     result.data[2] = T(0);      // c
@@ -130,15 +130,15 @@ struct Transform {
    * @param x Horizontal scale.
    * @param y Vertical scale.
    */
-  static Transform Scale(T x, T y) { return Scale(Vector2<T>(x, y)); }
+  static Transform2 Scale(T x, T y) { return Scale(Vector2<T>(x, y)); }
 
   /**
    * Return a 2D translation matrix.
    *
    * @param offset Translation offset.
    */
-  static Transform Translate(const Vector2<T>& offset) {
-    Transform<T> result;
+  static Transform2 Translate(const Vector2<T>& offset) {
+    Transform2<T> result;
     result.data[4] = offset.x;  // e
     result.data[5] = offset.y;  // f
     return result;
@@ -150,7 +150,7 @@ struct Transform {
    * @param x Horizontal translation offset.
    * @param y Vertical translation offset.
    */
-  static Transform Translate(T x, T y) { return Translate(Vector2<T>(x, y)); }
+  static Transform2 Translate(T x, T y) { return Translate(Vector2<T>(x, y)); }
 
   /**
    * Returns a 2D skew transformation along the X axis.
@@ -159,10 +159,10 @@ struct Transform {
    *
    * @param theta Angle in radians.
    */
-  static Transform SkewX(T theta) {
+  static Transform2 SkewX(T theta) {
     const T shear = std::tan(theta);
 
-    Transform<T> result;
+    Transform2<T> result;
     result.data[2] = shear;  // c
     return result;
   }
@@ -174,10 +174,10 @@ struct Transform {
    *
    * @param theta Angle in radians.
    */
-  static Transform SkewY(T theta) {
+  static Transform2 SkewY(T theta) {
     const T shear = std::tan(theta);
 
-    Transform<T> result;
+    Transform2<T> result;
     result.data[1] = shear;  // b
     return result;
   }
@@ -198,10 +198,10 @@ struct Transform {
   /**
    * Returns the inverse of this transform.
    */
-  Transform<T> inverse() const {
+  Transform2<T> inverse() const {
     const T invDet = T(1.0) / determinant();
 
-    Transform<T> result(uninitialized);
+    Transform2<T> result(uninitialized);
     result.data[0] = data[3] * invDet;
     result.data[1] = -data[1] * invDet;
     result.data[2] = -data[2] * invDet;
@@ -278,8 +278,8 @@ struct Transform {
    *
    * @param rhs Other transform.
    */
-  Transform<T> operator*(const Transform<T>& rhs) const {
-    Transform<T> result(uninitialized);
+  Transform2<T> operator*(const Transform2<T>& rhs) const {
+    Transform2<T> result(uninitialized);
     result.data[0] = data[0] * rhs.data[0] + data[1] * rhs.data[2];
     result.data[1] = data[0] * rhs.data[1] + data[1] * rhs.data[3];
     result.data[2] = data[2] * rhs.data[0] + data[3] * rhs.data[2];
@@ -290,7 +290,7 @@ struct Transform {
   }
 
   /// Ostream output operator.
-  friend std::ostream& operator<<(std::ostream& os, const Transform<T>& t) {
+  friend std::ostream& operator<<(std::ostream& os, const Transform2<T>& t) {
     os << "matrix(" << t.data[0] << " " << t.data[1] << " " << t.data[2] << " " << t.data[3] << " "
        << t.data[4] << " " << t.data[5] << ") =>" << std::endl
        << "[ " << t.data[0] << "\t" << t.data[2] << "\t" << t.data[4] << std::endl
@@ -303,11 +303,21 @@ struct Transform {
 /// @name Typedefs
 /// @{
 
-/// Shorthand for \c Transform<float>
-using Transformf = Transform<float>;
+/// Shorthand for \c Transform2<float>
+using Transform2f = Transform2<float>;
 
-/// Shorthand for \c Transform<double>
-using Transformd = Transform<double>;
+/// Shorthand for \c Transform2<double>
+using Transform2d = Transform2<double>;
+
+/// @}
+
+/// @name Compatibility aliases
+/// @{
+
+template <typename T>
+using Transform = Transform2<T>;
+using Transformf = Transform2f;
+using Transformd = Transform2d;
 
 /// @}
 

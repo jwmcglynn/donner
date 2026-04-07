@@ -139,7 +139,7 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   const auto* localTransform =
       registry.try_get<ComputedLocalTransformComponent>(resolved->handle.entity());
   if (localTransform && !localTransform->entityFromParent.isIdentity()) {
-    const Transformd& parentFromEntity = localTransform->entityFromParent;
+    const Transform2d& parentFromEntity = localTransform->entityFromParent;
     const auto& srcPoints = computedPath->spline.points();
     const auto& srcCommands = computedPath->spline.commands();
     PathSpline transformed;
@@ -169,7 +169,7 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
       span.pathStartOffset = textPath.startOffset->value * pathLen / 100.0;
     } else {
       span.pathStartOffset =
-          textPath.startOffset->toPixels(Boxd({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
+          textPath.startOffset->toPixels(Box2d({0, 0}, {0, 0}), FontMetrics(), Lengthd::Extent::X);
     }
   }
 }

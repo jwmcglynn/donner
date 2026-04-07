@@ -37,7 +37,7 @@ MATCHER_P(Vector2dEq, expected, "matches Vector2d") {
 }
 
 MATCHER(IsIdentityTransform, "identity transform") {
-  const Transformd identity;
+  const Transform2d identity;
   for (size_t i = 0; i < 6; ++i) {
     if (std::abs(arg.data[i] - identity.data[i]) > 1e-9) {
       return false;
@@ -90,8 +90,8 @@ public:
   MOCK_METHOD(int, height, (), (const, override));
   MOCK_METHOD(void, beginFrame, (const RenderViewport& viewport), (override));
   MOCK_METHOD(void, endFrame, (), (override));
-  MOCK_METHOD(void, setTransform, (const Transformd& transform), (override));
-  MOCK_METHOD(void, pushTransform, (const Transformd& transform), (override));
+  MOCK_METHOD(void, setTransform, (const Transform2d& transform), (override));
+  MOCK_METHOD(void, pushTransform, (const Transform2d& transform), (override));
   MOCK_METHOD(void, popTransform, (), (override));
   MOCK_METHOD(void, pushClip, (const ResolvedClip& clip), (override));
   MOCK_METHOD(void, popClip, (), (override));
@@ -99,19 +99,19 @@ public:
   MOCK_METHOD(void, popIsolatedLayer, (), (override));
   MOCK_METHOD(void, pushFilterLayer,
               (const components::FilterGraph& filterGraph,
-               const std::optional<Boxd>& filterRegion),
+               const std::optional<Box2d>& filterRegion),
               (override));
   MOCK_METHOD(void, popFilterLayer, (), (override));
-  MOCK_METHOD(void, pushMask, (const std::optional<Boxd>& maskBounds), (override));
+  MOCK_METHOD(void, pushMask, (const std::optional<Box2d>& maskBounds), (override));
   MOCK_METHOD(void, transitionMaskToContent, (), (override));
   MOCK_METHOD(void, popMask, (), (override));
-  MOCK_METHOD(void, beginPatternTile, (const Boxd& tileRect, const Transformd& targetFromPattern),
+  MOCK_METHOD(void, beginPatternTile, (const Box2d& tileRect, const Transform2d& targetFromPattern),
               (override));
   MOCK_METHOD(void, endPatternTile, (bool forStroke), (override));
   MOCK_METHOD(void, setPaint, (const PaintParams& paint), (override));
   MOCK_METHOD(void, drawPath, (const PathShape& path, const StrokeParams& stroke), (override));
-  MOCK_METHOD(void, drawRect, (const Boxd& rect, const StrokeParams& stroke), (override));
-  MOCK_METHOD(void, drawEllipse, (const Boxd& bounds, const StrokeParams& stroke), (override));
+  MOCK_METHOD(void, drawRect, (const Box2d& rect, const StrokeParams& stroke), (override));
+  MOCK_METHOD(void, drawEllipse, (const Box2d& bounds, const StrokeParams& stroke), (override));
   MOCK_METHOD(void, drawImage, (const ImageResource& image, const ImageParams& params), (override));
   MOCK_METHOD(void, drawText,
               (Registry & registry, const components::ComputedTextComponent& text,
@@ -211,13 +211,13 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
     auto& textInstance =
         document.registry().emplace<components::RenderingInstanceComponent>(textEntity);
     textInstance.dataEntity = textEntity;
-    textInstance.entityFromWorldTransform = Transformd();
+    textInstance.entityFromWorldTransform = Transform2d();
     textInstance.resolvedFill = PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0)));
 
     const Vector2i canvasSize = document.canvasSize();
     document.registry().emplace<components::ComputedViewBoxComponent>(
         textEntity,
-        Boxd(Vector2d(),
+        Box2d(Vector2d(),
              Vector2d(static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y))));
 
     components::ComputedStyleComponent style;
@@ -280,7 +280,7 @@ TEST_F(RendererDriverTest, ResolvesSpanStrokeAndDecorationPaintFromTextStyle) {
     };
 
     const Vector2i canvasSize = document.canvasSize();
-    const Boxd viewBox = Boxd(
+    const Box2d viewBox = Box2d(
         Vector2d(), Vector2d(static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)));
 
     Entity groupEntity = document.registry().create();
@@ -306,7 +306,7 @@ TEST_F(RendererDriverTest, ResolvesSpanStrokeAndDecorationPaintFromTextStyle) {
     auto& textInstance =
         document.registry().emplace<components::RenderingInstanceComponent>(textEntity);
     textInstance.dataEntity = textEntity;
-    textInstance.entityFromWorldTransform = Transformd();
+    textInstance.entityFromWorldTransform = Transform2d();
     textInstance.resolvedFill = PaintServer::Solid(css::Color(css::RGBA(255, 255, 0, 255)));
     textInstance.resolvedStroke = PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255)));
 
@@ -411,12 +411,12 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
   auto images = document.registry().view<components::ImageComponent>();
   ASSERT_FALSE(images.empty());
 
-  std::vector<Transformd> transforms;
+  std::vector<Transform2d> transforms;
   EXPECT_CALL(renderer, pushTransform(_))
       .Times(testing::AtLeast(1))
-      .WillRepeatedly([&](const Transformd& transform) { transforms.push_back(transform); });
+      .WillRepeatedly([&](const Transform2d& transform) { transforms.push_back(transform); });
 
-  const Boxd bounds = Boxd::FromXYWH(2, 0, 6, 4);
+  const Box2d bounds = Box2d::FromXYWH(2, 0, 6, 4);
 
   for (const Entity entity : images) {
     document.registry().remove<components::PreserveAspectRatioComponent>(entity);
@@ -428,8 +428,8 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
     loaded.image->data = std::vector<uint8_t>(
         static_cast<size_t>(loaded.image->width * loaded.image->height * 4), 255);
 
-    const Boxd intrinsicSize = Boxd::WithSize(Vector2d(loaded.image->width, loaded.image->height));
-    const Transformd expectedTransform =
+    const Box2d intrinsicSize = Box2d::WithSize(Vector2d(loaded.image->width, loaded.image->height));
+    const Transform2d expectedTransform =
         PreserveAspectRatio::Default().elementContentFromViewBoxTransform(bounds, intrinsicSize);
     EXPECT_THAT(transforms,
                 testing::Not(testing::Contains(TransformNear(expectedTransform, 1e-6))));
@@ -446,8 +446,8 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
 
   driver.draw(document);
 
-  const Boxd intrinsicSize = Boxd::WithSize(Vector2d(3, 2));
-  const Transformd expectedTransform =
+  const Box2d intrinsicSize = Box2d::WithSize(Vector2d(3, 2));
+  const Transform2d expectedTransform =
       PreserveAspectRatio::Default().elementContentFromViewBoxTransform(bounds, intrinsicSize);
   EXPECT_THAT(transforms, testing::Contains(TransformNear(expectedTransform, 1e-6)));
 }
@@ -474,7 +474,7 @@ TEST_F(RendererDriverTest, EmitsMaskSequenceForMaskedElement) {
   EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
 
-  EXPECT_CALL(renderer, pushMask(_)).WillRepeatedly([&](const std::optional<Boxd>&) {
+  EXPECT_CALL(renderer, pushMask(_)).WillRepeatedly([&](const std::optional<Box2d>&) {
     ++pushMaskCount;
   });
   EXPECT_CALL(renderer, transitionMaskToContent()).WillRepeatedly([&]() {
@@ -596,7 +596,7 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
 
   EXPECT_CALL(renderer, beginPatternTile(_, _))
-      .WillRepeatedly([&](const Boxd& tileRect, const Transformd&) {
+      .WillRepeatedly([&](const Box2d& tileRect, const Transform2d&) {
         ++beginPatternCount;
         // Pattern tile should have the specified 4x4 size.
         EXPECT_NEAR(tileRect.width(), 4.0, 1e-6);
@@ -660,7 +660,7 @@ TEST_F(RendererDriverTest, AccumulatesTransformsForNestedGroups) {
   )svg",
                                       Vector2i(40, 40));
 
-  std::vector<Transformd> setTransformCalls;
+  std::vector<Transform2d> setTransformCalls;
 
   EXPECT_CALL(renderer, beginFrame(_)).Times(1);
   EXPECT_CALL(renderer, endFrame()).Times(1);
@@ -670,19 +670,19 @@ TEST_F(RendererDriverTest, AccumulatesTransformsForNestedGroups) {
   EXPECT_CALL(renderer, setTransform(_))
       .Times(AtLeast(1))
       .WillRepeatedly(
-          [&](const Transformd& transform) { setTransformCalls.push_back(transform); });
+          [&](const Transform2d& transform) { setTransformCalls.push_back(transform); });
 
   driver.draw(document);
 
   // The inner rect should receive a combined translate(10, 20) transform.
   // The driver computes absolute transforms during preparation and sets them via setTransform.
-  const Transformd expectedCombined = Transformd::Translate(Vector2d(10, 20));
+  const Transform2d expectedCombined = Transform2d::Translate(Vector2d(10, 20));
   EXPECT_THAT(setTransformCalls,
               testing::Contains(TransformNear(expectedCombined, 1e-6)))
       << "setTransform should be called with the combined translate(10, 20) transform";
 
   // Also verify that the outer group's translate(10, 0) transform appears separately.
-  const Transformd outerTransform = Transformd::Translate(Vector2d(10, 0));
+  const Transform2d outerTransform = Transform2d::Translate(Vector2d(10, 0));
   EXPECT_THAT(setTransformCalls,
               testing::Contains(TransformNear(outerTransform, 1e-6)))
       << "setTransform should be called with translate(10, 0) for the outer group";

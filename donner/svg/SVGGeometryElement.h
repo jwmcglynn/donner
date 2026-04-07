@@ -64,7 +64,7 @@ public:
    * Get the bounding box of the element, in world coordinates. If this is an invalid shape, returns
    * \c std::nullopt.
    */
-  std::optional<Boxd> worldBounds() const;
+  std::optional<Box2d> worldBounds() const;
 
 protected:
   /**

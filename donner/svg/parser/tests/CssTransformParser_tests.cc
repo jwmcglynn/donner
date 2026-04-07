@@ -13,14 +13,14 @@ namespace {
 
 constexpr double kInvSqrt2 = MathConstants<double>::kInvSqrt2;
 
-ParseResult<Transformd> parseAsCss(std::string_view str) {
+ParseResult<Transform2d> parseAsCss(std::string_view str) {
   const std::vector<css::ComponentValue> components = css::parser::ValueParser::Parse(str);
   auto cssTransformResult = parser::CssTransformParser::Parse(components);
   if (cssTransformResult.hasError()) {
     return std::move(cssTransformResult.error());
   }
 
-  return cssTransformResult.result().compute(Boxd(Vector2d(0, 0), Vector2d(800, 600)),
+  return cssTransformResult.result().compute(Box2d(Vector2d(0, 0), Vector2d(800, 600)),
                                              FontMetrics());
 }
 
@@ -478,7 +478,7 @@ TEST(TransformParserCss, SkewX) {
     auto maybeTransform = parseAsCss("skewX(45deg)");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, 0, 1, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(100, 50));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(150, 100));
@@ -492,7 +492,7 @@ TEST(TransformParserCss, SkewX) {
     auto maybeTransform = parseAsCss("skewX( \t -45deg ) ");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, 0, -1, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(0, 50));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(-50, 100));
@@ -539,7 +539,7 @@ TEST(TransformParserCss, SkewY) {
     auto maybeTransform = parseAsCss("skewY(45deg)");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, 1, 0, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(50, 100));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(50, 150));
@@ -553,7 +553,7 @@ TEST(TransformParserCss, SkewY) {
     auto maybeTransform = parseAsCss("skewY( \t -45deg ) ");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, -1, 0, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(50, 0));
     EXPECT_THAT(t.transformVector({100, 50}), Vector2Near(100, -50));
@@ -593,16 +593,16 @@ TEST(TransformParserCss, SkewYParseErrors) {
 
 TEST(TransformParserCss, MultiplicationOrder) {
   {
-    const Transformd t = Transformd::Translate({-50, 100}) * Transformd::Scale({2, 2}) *
-                         Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    const Transform2d t = Transform2d::Translate({-50, 100}) * Transform2d::Scale({2, 2}) *
+                         Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
 
     EXPECT_THAT(parseAsCss("rotate(45deg) scale(2) translate(-50px, 100px)"),
                 ParseResultIs(TransformEq(t)));
   }
 
   {
-    const Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5) *
-                         Transformd::Scale({1.5, 1.5}) * Transformd::Translate({80, 80});
+    const Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
+                         Transform2d::Scale({1.5, 1.5}) * Transform2d::Translate({80, 80});
 
     EXPECT_THAT(parseAsCss("translate(80px, 80px) scale(1.5, 1.5) \n rotate(45deg) "),
                 ParseResultIs(TransformEq(t)));

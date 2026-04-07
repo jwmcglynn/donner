@@ -47,7 +47,7 @@ struct RectProperties {
    * @param fontMetrics The font metrics of the SVG document.
    * @return The actual value of \ref rx in pixels.
    */
-  std::tuple<Lengthd, double> calculateRx(const Boxd& viewBox,
+  std::tuple<Lengthd, double> calculateRx(const Box2d& viewBox,
                                           const FontMetrics& fontMetrics) const {
     return CalculateRadiusMaybeAuto(rx, ry, viewBox, fontMetrics);
   }
@@ -60,7 +60,7 @@ struct RectProperties {
    * @param fontMetrics The font metrics of the SVG document.
    * @return The actual value of \ref ry in pixels.
    */
-  std::tuple<Lengthd, double> calculateRy(const Boxd& viewBox,
+  std::tuple<Lengthd, double> calculateRy(const Box2d& viewBox,
                                           const FontMetrics& fontMetrics) const {
     return CalculateRadiusMaybeAuto(ry, rx, viewBox, fontMetrics);
   }

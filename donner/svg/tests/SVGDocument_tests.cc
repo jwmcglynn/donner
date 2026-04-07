@@ -117,7 +117,7 @@ TEST(SVGDocument, DocumentFromCanvasTransformIdentity) {
     </svg>
   )");
 
-  const Transformd transform = document.documentFromCanvasTransform();
+  const Transform2d transform = document.documentFromCanvasTransform();
   EXPECT_TRUE(transform.isIdentity()) << "transform=" << transform;
 }
 
@@ -136,7 +136,7 @@ TEST(SVGDocument, DocumentFromCanvasTransformScaling) {
     </svg>
   )");
 
-  const Transformd transform = document.documentFromCanvasTransform();
+  const Transform2d transform = document.documentFromCanvasTransform();
   EXPECT_EQ(transform.transformPosition(Vector2d(50, 100)), Vector2d(25, 100));
 }
 

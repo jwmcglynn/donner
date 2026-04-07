@@ -32,7 +32,7 @@ public:
    * @param str Input string, e.g. "0 0 100 100".
    * @return Parsed box, or an error.
    */
-  static ParseResult<Boxd> Parse(std::string_view str);
+  static ParseResult<Box2d> Parse(std::string_view str);
 };
 
 }  // namespace donner::svg::parser

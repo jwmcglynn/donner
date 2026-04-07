@@ -110,14 +110,14 @@ public:
    * Return the tight bounding box of the actual rendered glyphs (ink extents). This is the
    * smallest rectangle that encloses all painted pixels.
    */
-  Boxd inkBoundingBox() const;
+  Box2d inkBoundingBox() const;
 
   /**
    * Return the object bounding box as defined by SVG2. This is used for resolving
    * `objectBoundingBox` units in gradients, patterns, and clip paths applied to this text. It may
    * differ from inkBoundingBox() due to line-height and baseline positioning.
    */
-  Boxd objectBoundingBox() const;
+  Box2d objectBoundingBox() const;
 };
 
 }  // namespace donner::svg

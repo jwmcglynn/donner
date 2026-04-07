@@ -25,7 +25,7 @@ TEST(SVGPatternElementTests, Defaults) {
 
   EXPECT_THAT(pattern->patternUnits(), testing::Eq(PatternUnits::ObjectBoundingBox));
   EXPECT_THAT(pattern->patternContentUnits(), testing::Eq(PatternContentUnits::UserSpaceOnUse));
-  EXPECT_THAT(pattern->patternTransform(), TransformEq(Transformd()));
+  EXPECT_THAT(pattern->patternTransform(), TransformEq(Transform2d()));
   EXPECT_THAT(pattern->href(), testing::Eq(std::nullopt));
 }
 
@@ -279,7 +279,7 @@ TEST(SVGPatternElementTests, PatternTransform) {
 
   EXPECT_THAT(pattern->patternTransform(), TransformIs(2, 0, 0, 2, 0, 0));
 
-  pattern->setPatternTransform(Transformd::Translate(Vector2d(3.0, 5.0)));
+  pattern->setPatternTransform(Transform2d::Translate(Vector2d(3.0, 5.0)));
   EXPECT_THAT(pattern->patternTransform(), TransformIs(1, 0, 0, 1, 3.0, 5.0));
 }
 
