@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGFEComponentTransferElement.h"
 #include "donner/svg/SVGFEFuncBElement.h"
@@ -152,8 +153,8 @@ TEST(SVGFilterElementTests, HrefInheritsPrimitivesAndRegion) {
   )",
                                             options, Vector2i(200, 200));
 
-  std::vector<ParseError> warnings;
-  components::FilterSystem().instantiateAllComputedComponents(document.registry(), &warnings);
+  ParseWarningSink warningSink;
+  components::FilterSystem().instantiateAllComputedComponents(document.registry(), warningSink);
 
   const entt::entity filter1Entity =
       document.registry().ctx().get<const components::SVGDocumentContext>().getEntityById(
@@ -192,8 +193,8 @@ TEST(SVGFilterElementTests, HrefInheritsAttributesButKeepsLocalPrimitives) {
   )",
                                             options, Vector2i(200, 200));
 
-  std::vector<ParseError> warnings;
-  components::FilterSystem().instantiateAllComputedComponents(document.registry(), &warnings);
+  ParseWarningSink warningSink;
+  components::FilterSystem().instantiateAllComputedComponents(document.registry(), warningSink);
 
   const entt::entity filter1Entity =
       document.registry().ctx().get<const components::SVGDocumentContext>().getEntityById(
