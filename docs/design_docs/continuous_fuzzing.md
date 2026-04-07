@@ -69,13 +69,13 @@ The plan is split into two phases: a **local-first scaffold** you can run immedi
   - [x] Deduplicate crashes by stack trace signature (top N frames)
   - [x] File GitHub Issues via `gh` CLI with crash details, repro input (attached), and labels
   - [x] Optionally send notifications (email, Slack webhook, or similar)
-- [ ] Milestone 5: Trigger mechanism
-  - [ ] Create `tools/fuzzing/trigger_fuzz.sh` with rate-limiting and commit-tracking logic
-  - [ ] Create systemd timer + service unit (fires every 30 min, enforces 2-hour minimum
+- [x] Milestone 5: Trigger mechanism
+  - [x] Create `tools/fuzzing/trigger_fuzz.sh` with rate-limiting and commit-tracking logic
+  - [x] Create systemd timer + service unit (fires every 30 min, enforces 2-hour minimum
         interval)
-  - [ ] Implement "catch-up" logic: if main has new commits since last run and > 2 hours have
+  - [x] Implement "catch-up" logic: if main has new commits since last run and > 2 hours have
         passed, trigger immediately
-  - [ ] Add git fetch/polling to detect new pushes to main
+  - [x] Add git fetch/polling to detect new pushes to main
 - [ ] Milestone 6: Observability and maintenance
   - [ ] Write run summaries to a log directory with per-fuzzer stats (coverage, corpus size,
         executions/sec, crashes found)
