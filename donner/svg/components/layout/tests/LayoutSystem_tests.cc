@@ -433,10 +433,10 @@ TEST_F(LayoutSystemTest, InstantiateAllComputedComponentsNoWarnings) {
   )");
 
   auto& registry = document.registry();
-  std::vector<ParseDiagnostic> warnings;
-  layoutSystem.instantiateAllComputedComponents(registry, &warnings);
+  ParseWarningSink warningSink;
+  layoutSystem.instantiateAllComputedComponents(registry, warningSink);
 
-  EXPECT_TRUE(warnings.empty());
+  EXPECT_FALSE(warningSink.hasWarnings());
 }
 
 // --- ClipRect ---

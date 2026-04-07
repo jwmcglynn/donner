@@ -1,5 +1,6 @@
 #include "donner/svg/SVGTextContentElement.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -22,7 +23,8 @@ const TextEngine* tryGetPreparedTextEngine(EntityHandle handle) {
     textEngine = &registry.ctx().emplace<TextEngine>(fontManager, registry);
   }
 
-  textEngine->prepareForElement(handle, nullptr);
+  ParseWarningSink warningSink;
+  textEngine->prepareForElement(handle, warningSink);
   return textEngine;
 }
 

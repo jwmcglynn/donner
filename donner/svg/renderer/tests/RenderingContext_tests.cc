@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -19,10 +20,13 @@ namespace donner::svg::components {
 class RenderingContextTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
+
+  ParseWarningSink warningSink_;
 };
 
 // --- instantiateRenderTree ---
@@ -35,7 +39,7 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeBasic) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeVerbose) {
@@ -46,7 +50,7 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeVerbose) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(true, nullptr);
+  ctx.instantiateRenderTree(true, warningSink_);
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeWarnings) {
@@ -56,9 +60,8 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeWarnings) {
     </svg>
   )");
 
-  std::vector<ParseDiagnostic> warnings;
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, &warnings);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeMultipleShapes) {
@@ -72,7 +75,7 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeMultipleShapes) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 // --- Hit testing ---
@@ -85,7 +88,7 @@ TEST_F(RenderingContextTest, FindIntersectingHitsRect) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
   EXPECT_NE(hit, entt::null);
@@ -99,7 +102,7 @@ TEST_F(RenderingContextTest, FindIntersectingMissesEmptyArea) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(5, 5));
   EXPECT_EQ(hit, entt::null);
@@ -114,7 +117,7 @@ TEST_F(RenderingContextTest, FindAllIntersecting) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   std::vector<Entity> hits = ctx.findAllIntersecting(Vector2d(50, 50));
   EXPECT_THAT(hits.size(), Gt(0u));
@@ -130,7 +133,7 @@ TEST_F(RenderingContextTest, GetWorldBoundsRect) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
@@ -148,7 +151,7 @@ TEST_F(RenderingContextTest, GetWorldBoundsInvalidEntity) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   auto bounds = ctx.getWorldBounds(entt::null);
   EXPECT_FALSE(bounds.has_value());
@@ -164,9 +167,9 @@ TEST_F(RenderingContextTest, InvalidateAndReinstantiate) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
   ctx.invalidateRenderTree();
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 // --- Complex documents ---
@@ -181,7 +184,7 @@ TEST_F(RenderingContextTest, GroupedElements) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   auto bounds = ctx.getWorldBounds(document.querySelector("#r")->entityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
@@ -206,7 +209,7 @@ TEST_F(RenderingContextTest, GradientAndClipPath) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 TEST_F(RenderingContextTest, UseElement) {
@@ -220,7 +223,7 @@ TEST_F(RenderingContextTest, UseElement) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 TEST_F(RenderingContextTest, FilterElement) {
@@ -236,7 +239,7 @@ TEST_F(RenderingContextTest, FilterElement) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 TEST_F(RenderingContextTest, DisplayNoneNotIntersectable) {
@@ -247,7 +250,7 @@ TEST_F(RenderingContextTest, DisplayNoneNotIntersectable) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
   EXPECT_EQ(hit, entt::null);
@@ -261,7 +264,7 @@ TEST_F(RenderingContextTest, RectIntersection) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 
   std::vector<Entity> hits = ctx.findIntersectingRect(Boxd(Vector2d(60, 60), Vector2d(80, 80)));
   EXPECT_THAT(hits.size(), Gt(0u));
@@ -280,7 +283,7 @@ TEST_F(RenderingContextTest, MaskElement) {
   )");
 
   RenderingContext ctx(document.registry());
-  ctx.instantiateRenderTree(false, nullptr);
+  ctx.instantiateRenderTree(false, warningSink_);
 }
 
 }  // namespace donner::svg::components

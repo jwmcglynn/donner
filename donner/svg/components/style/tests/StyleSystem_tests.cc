@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -19,14 +20,16 @@ namespace donner::svg::components {
 class StyleSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
 
   SVGDocument ParseAndComputeStyles(std::string_view input) {
     auto document = ParseSVG(input);
-    styleSystem.computeAllStyles(document.registry(), nullptr);
+    ParseWarningSink warningSink;
+    styleSystem.computeAllStyles(document.registry(), warningSink);
     return document;
   }
 
@@ -158,7 +161,8 @@ TEST_F(StyleSystemTest, ComputeStyleForSingleEntity) {
 
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
-  const auto& computed = styleSystem.computeStyle(element->entityHandle(), nullptr);
+  ParseWarningSink warningSink;
+  const auto& computed = styleSystem.computeStyle(element->entityHandle(), warningSink);
   EXPECT_TRUE(computed.properties.has_value());
 }
 
@@ -211,8 +215,8 @@ TEST_F(StyleSystemTest, WarningsCollectedForInvalidProperties) {
     </svg>
   )");
 
-  std::vector<ParseDiagnostic> warnings;
-  styleSystem.computeAllStyles(document.registry(), &warnings);
+  ParseWarningSink warningSink;
+  styleSystem.computeAllStyles(document.registry(), warningSink);
   // Invalid color should produce a warning (or be ignored gracefully).
   // We just verify it doesn't crash; the warning list may or may not be populated
   // depending on implementation detail.

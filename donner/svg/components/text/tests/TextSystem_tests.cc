@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -25,14 +26,15 @@ protected:
   SVGDocument ParseAndCompute(std::string_view input) {
     parser::SVGParser::Options options;
     options.enableExperimental = true;
-    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink, options);
     EXPECT_THAT(maybeResult, NoParseError());
     auto document = std::move(maybeResult).result();
 
     auto& registry = document.registry();
-    std::vector<ParseDiagnostic> warnings;
-    StyleSystem().computeAllStyles(registry, &warnings);
-    TextSystem().instantiateAllComputedComponents(registry, &warnings);
+    ParseWarningSink warningSink;
+    StyleSystem().computeAllStyles(registry, warningSink);
+    TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
     return document;
   }
@@ -499,21 +501,22 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
 TEST_F(TextSystemTest, NoWarningsForValidText) {
   parser::SVGParser::Options options;
   options.enableExperimental = true;
+  ParseWarningSink parseSink;
   auto maybeResult = parser::SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <text x="10" y="20">Hello World</text>
     </svg>
   )",
-                                                 nullptr, options);
+                                                 parseSink, options);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult).result();
 
   auto& registry = document.registry();
-  std::vector<ParseDiagnostic> warnings;
-  StyleSystem().computeAllStyles(registry, &warnings);
-  TextSystem().instantiateAllComputedComponents(registry, &warnings);
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
-  EXPECT_THAT(warnings, IsEmpty());
+  EXPECT_FALSE(warningSink.hasWarnings());
 }
 
 // --- List-only positioning (no scalar fields) ---

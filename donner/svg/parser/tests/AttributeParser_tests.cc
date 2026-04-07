@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/Length.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGCircleElement.h"
@@ -34,7 +35,8 @@ namespace donner::svg::parser {
 namespace {
 
 SVGDocument ParseSVG(std::string_view input) {
-  auto maybeResult = SVGParser::ParseSVG(input);
+  ParseWarningSink parseSink;
+  auto maybeResult = SVGParser::ParseSVG(input, parseSink);
   EXPECT_THAT(maybeResult, NoParseError());
   return std::move(maybeResult).result();
 }
@@ -42,7 +44,8 @@ SVGDocument ParseSVG(std::string_view input) {
 SVGDocument ParseSVGExperimental(std::string_view input) {
   SVGParser::Options options;
   options.enableExperimental = true;
-  auto maybeResult = SVGParser::ParseSVG(input, nullptr, options);
+  ParseWarningSink parseSink;
+  auto maybeResult = SVGParser::ParseSVG(input, parseSink, options);
   EXPECT_THAT(maybeResult, NoParseError());
   return std::move(maybeResult).result();
 }
@@ -442,12 +445,12 @@ TEST(AttributeParserTest, LengthUnitCm) {
 // --- Invalid attribute values ---
 
 TEST(AttributeParserTest, InvalidLengthIgnored) {
-  std::vector<ParseDiagnostic> warnings;
+  ParseWarningSink warningSink;
   auto maybeResult = SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="abc" y="0" width="50" height="50"/>
     </svg>
-  )", &warnings);
+  )", warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
 
   auto document = std::move(maybeResult).result();
@@ -457,12 +460,12 @@ TEST(AttributeParserTest, InvalidLengthIgnored) {
 }
 
 TEST(AttributeParserTest, ExtraDataAfterLength) {
-  std::vector<ParseDiagnostic> warnings;
+  ParseWarningSink warningSink;
   auto maybeResult = SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="10xyz" y="0" width="50" height="50"/>
     </svg>
-  )", &warnings);
+  )", warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
 
   auto document = std::move(maybeResult).result();

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
@@ -47,7 +48,7 @@ public:
   void addFontFaces(std::span<const css::FontFace> faces);
 
   /// Prepare text dependencies for the text root containing \p handle.
-  void prepareForElement(EntityHandle handle, std::vector<ParseDiagnostic>* outWarnings = nullptr);
+  void prepareForElement(EntityHandle handle, ParseWarningSink& warningSink);
 
   /// Lay out all spans, returning positioned glyph runs.
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,

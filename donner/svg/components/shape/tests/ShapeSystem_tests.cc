@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -22,7 +23,8 @@ namespace donner::svg::components {
 class ShapeSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
@@ -30,8 +32,9 @@ protected:
   /// Parse, compute styles, then compute shapes.
   SVGDocument ParseAndComputeShapes(std::string_view input) {
     auto document = ParseSVG(input);
-    StyleSystem().computeAllStyles(document.registry(), nullptr);
-    shapeSystem.instantiateAllComputedPaths(document.registry(), nullptr);
+    ParseWarningSink warningSink;
+    StyleSystem().computeAllStyles(document.registry(), warningSink);
+    shapeSystem.instantiateAllComputedPaths(document.registry(), warningSink);
     return document;
   }
 
