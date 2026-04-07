@@ -21,6 +21,15 @@
 #   FUZZ_PLATEAU        Plateau timeout in seconds (default: 120 = 2 min)
 #   FUZZ_MAX_TOTAL      Max total run time in seconds (default: 3600 = 1 hour)
 #   FUZZ_LOG_DIR        Log directory (default: $FUZZ_STATE_DIR/trigger-logs)
+#   FUZZ_QUIET_MODE     When host contention is detected: "reduce" (default),
+#                       "skip" (don't fuzz at all), or "ignore" (full speed)
+#   FUZZ_QUIET_WORKERS  Worker count when in quiet mode (default: 2)
+#   FUZZ_QUIET_MAX_TOTAL  Max total time in quiet mode (default: 1800 = 30 min)
+#   FUZZ_LOAD_THRESHOLD 1-min load average threshold (default: 0 = disabled)
+#   FUZZ_STEAL_THRESHOLD  CPU steal time % above which quiet mode activates
+#                       (default: 10). Steal time indicates the hypervisor is
+#                       giving CPU to other VMs/host processes — the best
+#                       signal that other users are active on the host.
 
 set -euo pipefail
 
@@ -37,6 +46,11 @@ FUZZ_FUZZER_TIME="${FUZZ_FUZZER_TIME:-900}"
 FUZZ_PLATEAU="${FUZZ_PLATEAU:-120}"
 FUZZ_MAX_TOTAL="${FUZZ_MAX_TOTAL:-3600}"
 FUZZ_LOG_DIR="${FUZZ_LOG_DIR:-$FUZZ_STATE_DIR/trigger-logs}"
+FUZZ_QUIET_MODE="${FUZZ_QUIET_MODE:-reduce}"
+FUZZ_QUIET_WORKERS="${FUZZ_QUIET_WORKERS:-2}"
+FUZZ_QUIET_MAX_TOTAL="${FUZZ_QUIET_MAX_TOTAL:-1800}"
+FUZZ_LOAD_THRESHOLD="${FUZZ_LOAD_THRESHOLD:-0}"
+FUZZ_STEAL_THRESHOLD="${FUZZ_STEAL_THRESHOLD:-10}"
 
 TIMESTAMP_FILE="$FUZZ_STATE_DIR/last_run_timestamp"
 COMMIT_FILE="$FUZZ_STATE_DIR/last_run_commit"
@@ -152,6 +166,125 @@ check_new_commits() {
 }
 
 # ---------------------------------------------------------------------------
+# Quiet hours (shared VM detection)
+# ---------------------------------------------------------------------------
+
+get_other_users() {
+    # List unique logged-in users excluding the current user.
+    # Returns one username per line, or empty if no other users.
+    who | awk '{print $1}' | sort -u | grep -v "^$(whoami)$" || true
+}
+
+get_load_average() {
+    # Get the 1-minute load average as an integer (rounded up).
+    awk '{printf "%d\n", $1 + 0.5}' /proc/loadavg 2>/dev/null || echo 0
+}
+
+get_cpu_steal_pct() {
+    # Measure CPU steal time percentage over a 1-second sample.
+    # Steal time is the % of CPU cycles taken by the hypervisor for other
+    # VMs or host processes. High steal = the physical host is busy.
+    # Returns an integer percentage (0-100).
+    #
+    # /proc/stat cpu line format:
+    #   cpu user nice system idle iowait irq softirq steal guest guest_nice
+    local line1 line2
+    line1=$(head -1 /proc/stat 2>/dev/null) || { echo 0; return; }
+    sleep 1
+    line2=$(head -1 /proc/stat 2>/dev/null) || { echo 0; return; }
+
+    # Parse the two samples and compute steal delta / total delta
+    echo "$line1
+$line2" | awk '
+    NR==1 {
+        for (i=2; i<=NF; i++) total1 += $i
+        steal1 = $10  # steal is the 9th value after "cpu", field 10
+    }
+    NR==2 {
+        for (i=2; i<=NF; i++) total2 += $i
+        steal2 = $10
+        dt = total2 - total1
+        ds = steal2 - steal1
+        if (dt > 0) printf "%d\n", (ds * 100) / dt
+        else print 0
+    }'
+}
+
+check_quiet_hours() {
+    # Checks if the host is under contention (CPU steal, other users, load).
+    # Sets QUIET=1 if quiet mode should be activated.
+    # Returns 0 if fuzzing should proceed (possibly with reduced resources),
+    # returns 1 if fuzzing should be skipped entirely.
+    QUIET=0
+
+    if [ "$FUZZ_QUIET_MODE" = "ignore" ]; then
+        log "Quiet hours: disabled (FUZZ_QUIET_MODE=ignore)"
+        return 0
+    fi
+
+    # 1. CPU steal time — best signal for host contention in a VM.
+    #    When the hypervisor gives CPU to other VMs, steal time rises.
+    #    Set to -1 to disable this check entirely.
+    if [ "$FUZZ_STEAL_THRESHOLD" -ge 0 ]; then
+        local steal
+        steal=$(get_cpu_steal_pct)
+        if [ "$steal" -ge "$FUZZ_STEAL_THRESHOLD" ]; then
+            log "Quiet hours: CPU steal time (${steal}%) >= threshold (${FUZZ_STEAL_THRESHOLD}%)"
+            QUIET=1
+        else
+            log "Quiet hours: CPU steal time ${steal}% (threshold: ${FUZZ_STEAL_THRESHOLD}%)"
+        fi
+    fi
+
+    # 2. Check for other logged-in users (useful if users SSH into the VM).
+    if [ "$QUIET" -eq 0 ]; then
+        local other_users
+        other_users=$(get_other_users)
+        if [ -n "$other_users" ]; then
+            local user_list
+            user_list=$(echo "$other_users" | tr '\n' ', ' | sed 's/,$//')
+            log "Quiet hours: other users detected: $user_list"
+            QUIET=1
+        fi
+    fi
+
+    # 3. Check system load if threshold is set.
+    if [ "$FUZZ_LOAD_THRESHOLD" -gt 0 ] && [ "$QUIET" -eq 0 ]; then
+        local load
+        load=$(get_load_average)
+        if [ "$load" -ge "$FUZZ_LOAD_THRESHOLD" ]; then
+            log "Quiet hours: load average ($load) >= threshold ($FUZZ_LOAD_THRESHOLD)"
+            QUIET=1
+        fi
+    fi
+
+    if [ "$QUIET" -eq 0 ]; then
+        log "Quiet hours: host is idle, running at full capacity"
+        return 0
+    fi
+
+    # Quiet mode is active — decide what to do
+    case "$FUZZ_QUIET_MODE" in
+        skip)
+            log "Quiet hours: skipping fuzzing (FUZZ_QUIET_MODE=skip)"
+            return 1
+            ;;
+        reduce)
+            log "Quiet hours: reducing to $FUZZ_QUIET_WORKERS workers, ${FUZZ_QUIET_MAX_TOTAL}s max"
+            FUZZ_WORKERS="$FUZZ_QUIET_WORKERS"
+            FUZZ_MAX_TOTAL="$FUZZ_QUIET_MAX_TOTAL"
+            return 0
+            ;;
+        *)
+            log "WARNING: unknown FUZZ_QUIET_MODE=$FUZZ_QUIET_MODE, treating as 'reduce'"
+            FUZZ_WORKERS="$FUZZ_QUIET_WORKERS"
+            FUZZ_MAX_TOTAL="$FUZZ_QUIET_MAX_TOTAL"
+            return 0
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # Run fuzzing
 # ---------------------------------------------------------------------------
 
@@ -233,8 +366,17 @@ main() {
         exit 0
     fi
 
+    # Check if VM is shared — may reduce workers or skip entirely
+    if ! check_quiet_hours; then
+        exit 0
+    fi
+
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "Dry run: would start fuzzing now. Exiting."
+        if [ "$QUIET" -eq 1 ]; then
+            log "Dry run: would start fuzzing in quiet mode ($FUZZ_WORKERS workers). Exiting."
+        else
+            log "Dry run: would start fuzzing now. Exiting."
+        fi
         exit 0
     fi
 

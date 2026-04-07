@@ -160,6 +160,113 @@ class TestLocking:
         assert "Stale lock" in result.stdout
 
 
+class TestQuietHours:
+    def test_ignore_mode_runs_full_speed(self, tmp_path):
+        """FUZZ_QUIET_MODE=ignore should always run at full capacity."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={"FUZZ_QUIET_MODE": "ignore"},
+            args=["--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "disabled" in result.stdout.lower()
+        assert "would start fuzzing now" in result.stdout.lower()
+
+    def test_no_contention_full_speed(self, tmp_path):
+        """When no contention signals, run at full capacity."""
+        # Disable steal check (set to 100% — impossible to exceed) to test
+        # the no-contention path predictably
+        result = run_trigger(
+            tmp_path,
+            extra_env={"FUZZ_STEAL_THRESHOLD": "100"},
+            args=["--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "idle" in result.stdout.lower() or "would start fuzzing" in result.stdout.lower()
+
+    def test_steal_time_logged(self, tmp_path):
+        """CPU steal time should be checked and logged."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={"FUZZ_STEAL_THRESHOLD": "100"},  # Won't trigger
+            args=["--force", "--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "steal time" in result.stdout.lower()
+
+    def test_high_steal_triggers_quiet(self, tmp_path):
+        """Steal threshold of 0% should always trigger quiet mode."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={
+                "FUZZ_QUIET_MODE": "reduce",
+                "FUZZ_STEAL_THRESHOLD": "0",  # 0% = always triggers
+                "FUZZ_QUIET_WORKERS": "2",
+            },
+            args=["--force", "--dry-run"],
+        )
+        assert result.returncode == 0
+        # steal >= 0 always true, so quiet should activate
+        assert "reducing" in result.stdout.lower()
+        assert "quiet mode" in result.stdout.lower()
+
+    def test_load_threshold_below(self, tmp_path):
+        """Load below threshold should not trigger quiet mode."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={
+                "FUZZ_QUIET_MODE": "reduce",
+                "FUZZ_LOAD_THRESHOLD": "9999",  # Unreachably high
+                "FUZZ_STEAL_THRESHOLD": "100",   # Disable steal check
+            },
+            args=["--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "idle" in result.stdout.lower() or "would start fuzzing" in result.stdout.lower()
+
+    def test_skip_mode_exits_when_busy(self, tmp_path):
+        """FUZZ_QUIET_MODE=skip should exit when contention is detected."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={
+                "FUZZ_QUIET_MODE": "skip",
+                "FUZZ_STEAL_THRESHOLD": "0",  # Always triggers
+            },
+            args=["--force", "--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "skipping" in result.stdout.lower()
+
+    def test_reduce_mode_shows_reduced_workers(self, tmp_path):
+        """FUZZ_QUIET_MODE=reduce should log the reduced worker count."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={
+                "FUZZ_QUIET_MODE": "reduce",
+                "FUZZ_STEAL_THRESHOLD": "0",  # Always triggers
+                "FUZZ_QUIET_WORKERS": "3",
+            },
+            args=["--force", "--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "reducing" in result.stdout.lower()
+        assert "3 workers" in result.stdout
+        assert "quiet mode" in result.stdout.lower()
+
+    def test_quiet_dry_run_message(self, tmp_path):
+        """Dry run in quiet mode should mention quiet mode."""
+        result = run_trigger(
+            tmp_path,
+            extra_env={
+                "FUZZ_QUIET_MODE": "reduce",
+                "FUZZ_STEAL_THRESHOLD": "0",  # Always triggers
+            },
+            args=["--force", "--dry-run"],
+        )
+        assert result.returncode == 0
+        assert "quiet mode" in result.stdout.lower()
+
+
 class TestDryRun:
     def test_dry_run_does_not_modify_state(self, tmp_path):
         """--dry-run should not create timestamp or commit files."""

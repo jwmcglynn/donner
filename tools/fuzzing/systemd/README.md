@@ -57,3 +57,24 @@ Override defaults via environment variables in the service file
 | `FUZZ_FUZZER_TIME` | 900 (15m) | Max time per fuzzer |
 | `FUZZ_PLATEAU` | 120 (2m) | Coverage plateau timeout |
 | `FUZZ_MAX_TOTAL` | 3600 (1h) | Max total run time |
+| `FUZZ_QUIET_MODE` | reduce | `reduce`, `skip`, or `ignore` |
+| `FUZZ_QUIET_WORKERS` | 2 | Worker count in quiet mode |
+| `FUZZ_QUIET_MAX_TOTAL` | 1800 (30m) | Max total time in quiet mode |
+| `FUZZ_STEAL_THRESHOLD` | 10 | CPU steal % to trigger quiet mode |
+| `FUZZ_LOAD_THRESHOLD` | 0 (off) | Load average to trigger quiet mode |
+
+## Quiet hours (shared host detection)
+
+When running on a shared host (physical or VM), the trigger automatically
+detects contention and throttles fuzzing:
+
+1. **CPU steal time** (primary signal for VMs) — when the hypervisor gives
+   CPU to other VMs or host processes, steal time rises. If steal exceeds
+   `FUZZ_STEAL_THRESHOLD` (default: 10%), quiet mode activates.
+2. **Logged-in users** — if other users are SSH'd into the VM.
+3. **Load average** — if `FUZZ_LOAD_THRESHOLD` is set and exceeded.
+
+In quiet mode, behavior depends on `FUZZ_QUIET_MODE`:
+- `reduce` (default): run with fewer workers and shorter time limit
+- `skip`: don't fuzz at all, wait for the next timer tick
+- `ignore`: always run at full speed regardless
