@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feSpecularLighting "<feSpecularLighting>"
+ * @page xml_feSpecularLighting "<feSpecularLighting>"
  *
  * Lights an image using the alpha channel as a bump map, computing the specular component of
  * the Phong lighting model.
@@ -56,8 +56,6 @@ public:
   static constexpr ElementType Type = ElementType::FeSpecularLighting;
   /// XML tag name, \ref xml_feSpecularLighting.
   static constexpr std::string_view Tag{"feSpecularLighting"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

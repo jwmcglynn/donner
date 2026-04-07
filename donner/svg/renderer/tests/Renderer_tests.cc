@@ -29,12 +29,6 @@ namespace {
 
 class RendererTests : public ImageComparisonTestFixture {
 protected:
-  parser::SVGParser::Options optionsExperimental() {
-    parser::SVGParser::Options options;
-    options.enableExperimental = true;
-    return options;
-  }
-
   SVGDocument loadSVG(const char* filename, parser::SVGParser::Options options = {}) {
     std::ifstream file(filename);
     EXPECT_TRUE(file) << "Failed to open file: " << filename;
@@ -258,36 +252,36 @@ TEST_F(RendererTests, BigLightningGlowNoFilterCrop) {
 TEST_F(RendererTests, FilterFillPaint) {
   this->compareWithGolden(
       "donner/svg/renderer/testdata/filter_fill_paint.svg",
-      "donner/svg/renderer/testdata/golden/filter_fill_paint.png", this->optionsExperimental(),
+      "donner/svg/renderer/testdata/golden/filter_fill_paint.png", parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.1f, 50)
-          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
           .includeAntiAliasingDifferences());
 }
 
 TEST_F(RendererTests, FilterStrokePaint) {
   this->compareWithGolden(
       "donner/svg/renderer/testdata/filter_stroke_paint.svg",
-      "donner/svg/renderer/testdata/golden/filter_stroke_paint.png", this->optionsExperimental(),
+      "donner/svg/renderer/testdata/golden/filter_stroke_paint.png", parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.1f, 50)
-          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
           .includeAntiAliasingDifferences());
 }
 
 TEST_F(RendererTests, FilterDropShadow) {
   this->compareWithGolden(
       "donner/svg/renderer/testdata/filter_drop_shadow.svg",
-      "donner/svg/renderer/testdata/golden/filter_drop_shadow.png", this->optionsExperimental(),
+      "donner/svg/renderer/testdata/golden/filter_drop_shadow.png", parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.1f, 50)
-          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
           .includeAntiAliasingDifferences());
 }
 
 TEST_F(RendererTests, FilterSpotLight) {
   this->compareWithGolden(
       "donner/svg/renderer/testdata/filter_spot_light.svg",
-      "donner/svg/renderer/testdata/golden/filter_spot_light.png", this->optionsExperimental(),
+      "donner/svg/renderer/testdata/golden/filter_spot_light.png", parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.1f, 50)
-          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
           .includeAntiAliasingDifferences());
 }
 
@@ -295,9 +289,9 @@ TEST_F(RendererTests, FilterDisplacementMap) {
   this->compareWithGolden(
       "donner/svg/renderer/testdata/filter_displacement_map.svg",
       "donner/svg/renderer/testdata/golden/filter_displacement_map.png",
-      this->optionsExperimental(),
+      parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.1f, 600)
-          .requireFeature(RendererBackendFeature::FilterEffects, "experimental filter effects")
+          .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
           .includeAntiAliasingDifferences());
 }
 
@@ -339,17 +333,14 @@ TEST_F(RendererTests, SVG2_e_use_005) {
 }
 
 TEST_F(RendererTests, FeImageExternalSvg) {
-  parser::SVGParser::Options options;
-  options.enableExperimental = true;
   this->compareWithGoldenAndResources(
       "donner/svg/renderer/testdata/feimage-external-svg.svg",
-      "donner/svg/renderer/testdata/golden/feimage-external-svg.png", options);
+      "donner/svg/renderer/testdata/golden/feimage-external-svg.png");
 }
 
 TEST_F(RendererTests, Edzample) {
   this->compareWithGolden("donner/svg/renderer/testdata/Edzample_Anim3.svg",
-                          "donner/svg/renderer/testdata/golden/Edzample_Anim3.png",
-                          this->optionsExperimental());
+                          "donner/svg/renderer/testdata/golden/Edzample_Anim3.png");
 }
 
 TEST_F(RendererTests, ImageExternalSvgBasic) {
@@ -390,7 +381,7 @@ TEST_F(RendererTests, UseExternalContextPaint) {
 TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
   this->compareWithGolden("donner/svg/renderer/testdata/z0rly_test6.svg",
                           "donner/svg/renderer/testdata/golden/z0rly_test6.png",
-                          this->optionsExperimental());
+                          parser::SVGParser::Options());
 }
 
 

@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feMerge "<feMerge>"
+ * @page xml_feMerge "<feMerge>"
  *
  * Defines a filter primitive that composites multiple input layers using Source Over.
  *
@@ -45,8 +45,6 @@ public:
   static constexpr ElementType Type = ElementType::FeMerge;
   /// XML tag name, \ref xml_feMerge.
   static constexpr std::string_view Tag{"feMerge"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

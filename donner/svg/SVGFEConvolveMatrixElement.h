@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feConvolveMatrix "<feConvolveMatrix>"
+ * @page xml_feConvolveMatrix "<feConvolveMatrix>"
  *
  * Applies a matrix convolution filter effect to the input image.
  *
@@ -51,8 +51,6 @@ public:
   static constexpr ElementType Type = ElementType::FeConvolveMatrix;
   /// XML tag name, \ref xml_feConvolveMatrix.
   static constexpr std::string_view Tag{"feConvolveMatrix"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

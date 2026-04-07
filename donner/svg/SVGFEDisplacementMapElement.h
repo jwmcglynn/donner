@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feDisplacementMap "<feDisplacementMap>"
+ * @page xml_feDisplacementMap "<feDisplacementMap>"
  *
  * Uses the pixel values from a second input to spatially displace the first input image.
  *
@@ -54,8 +54,6 @@ public:
   static constexpr ElementType Type = ElementType::FeDisplacementMap;
   /// XML tag name, \ref xml_feDisplacementMap.
   static constexpr std::string_view Tag{"feDisplacementMap"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

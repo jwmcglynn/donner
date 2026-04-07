@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feFuncB "<feFuncB>"
+ * @page xml_feFuncB "<feFuncB>"
  *
  * A child element of \ref xml_feComponentTransfer defining the transfer function for the blue
  * channel.
@@ -31,8 +31,6 @@ public:
   static constexpr ElementType Type = ElementType::FeFuncB;
   /// XML tag name, \ref xml_feFuncB.
   static constexpr std::string_view Tag{"feFuncB"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

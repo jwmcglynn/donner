@@ -564,7 +564,7 @@ names to actual fonts. All generic families render with the fallback font (Publi
 | family-003 | 2,727 | `cursive` |
 | family-004 | 5,375 | `fantasy` |
 | family-005 | 3,924 | `monospace` |
-| family-007 | 1,271 | Named font `Source Sans Pro` (not in @font-face) |
+| family-007 | 1,271 | Named font `Source Sans Pro` (not in `@font-face`) |
 | family-008 | 1,271 | Font list: `'Source Sans Pro', Noto Sans, serif` |
 | family-009 | 5,228 | Fallback from `Invalid` family |
 | family-010 | 990 | Fallback: `Invalid, Noto Sans` |

@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feSpotLight "<feSpotLight>"
+ * @page xml_feSpotLight "<feSpotLight>"
  *
  * Defines a spotlight source for use within \ref xml_feDiffuseLighting or
  * \ref xml_feSpecularLighting filter primitives.
@@ -35,8 +35,6 @@ public:
   static constexpr ElementType Type = ElementType::FeSpotLight;
   /// XML tag name, \ref xml_feSpotLight.
   static constexpr std::string_view Tag{"feSpotLight"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

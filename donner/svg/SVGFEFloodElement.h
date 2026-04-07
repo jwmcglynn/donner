@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feFlood "<feFlood>"
+ * @page xml_feFlood "<feFlood>"
  *
  * Defines a filter primitive that fills the filter subregion with a solid color and opacity.
  *
@@ -55,8 +55,6 @@ public:
   static constexpr ElementType Type = ElementType::FeFlood;
   /// XML tag name, \ref xml_feFlood.
   static constexpr std::string_view Tag{"feFlood"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

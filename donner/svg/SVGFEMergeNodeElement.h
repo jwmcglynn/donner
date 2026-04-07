@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feMergeNode "<feMergeNode>"
+ * @page xml_feMergeNode "<feMergeNode>"
  *
  * A child element of \ref xml_feMerge that specifies one input layer.
  *
@@ -32,8 +32,6 @@ public:
   static constexpr ElementType Type = ElementType::FeMergeNode;
   /// XML tag name, \ref xml_feMergeNode.
   static constexpr std::string_view Tag{"feMergeNode"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

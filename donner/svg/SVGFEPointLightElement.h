@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_fePointLight "<fePointLight>"
+ * @page xml_fePointLight "<fePointLight>"
  *
  * Defines a point light source for use within \ref xml_feDiffuseLighting or
  * \ref xml_feSpecularLighting filter primitives.
@@ -34,8 +34,6 @@ public:
   static constexpr ElementType Type = ElementType::FePointLight;
   /// XML tag name, \ref xml_fePointLight.
   static constexpr std::string_view Tag{"fePointLight"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

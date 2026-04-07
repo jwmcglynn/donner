@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feDiffuseLighting "<feDiffuseLighting>"
+ * @page xml_feDiffuseLighting "<feDiffuseLighting>"
  *
  * Lights an image using the alpha channel as a bump map, computing the diffuse component of
  * the Phong lighting model.
@@ -56,8 +56,6 @@ public:
   static constexpr ElementType Type = ElementType::FeDiffuseLighting;
   /// XML tag name, \ref xml_feDiffuseLighting.
   static constexpr std::string_view Tag{"feDiffuseLighting"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

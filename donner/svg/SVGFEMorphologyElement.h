@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feMorphology "<feMorphology>"
+ * @page xml_feMorphology "<feMorphology>"
  *
  * Defines a filter primitive that erodes or dilates the input image.
  *
@@ -51,8 +51,6 @@ public:
   static constexpr ElementType Type = ElementType::FeMorphology;
   /// XML tag name, \ref xml_feMorphology.
   static constexpr std::string_view Tag{"feMorphology"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

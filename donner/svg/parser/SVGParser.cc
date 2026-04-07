@@ -401,9 +401,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
   }
 
   xml::XMLParser::Options xmlOptions;
-  if (options.enableExperimental) {
-    xmlOptions.parseCustomEntities = true;
-  }
+  xmlOptions.parseCustomEntities = true;
 
   std::vector<uint8_t> decompressedData;
   if (source.size() >= 2 && static_cast<unsigned char>(source[0]) == 0x1F &&

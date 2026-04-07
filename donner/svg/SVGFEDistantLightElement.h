@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feDistantLight "<feDistantLight>"
+ * @page xml_feDistantLight "<feDistantLight>"
  *
  * Defines a distant (directional) light source for use within \ref xml_feDiffuseLighting or
  * \ref xml_feSpecularLighting filter primitives.
@@ -34,8 +34,6 @@ public:
   static constexpr ElementType Type = ElementType::FeDistantLight;
   /// XML tag name, \ref xml_feDistantLight.
   static constexpr std::string_view Tag{"feDistantLight"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg
