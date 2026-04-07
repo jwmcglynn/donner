@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include "donner/base/BezierUtils.h"
 #include "donner/base/MathUtils.h"
