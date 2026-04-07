@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <unordered_set>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -27,6 +29,20 @@ public:
    * Render the given \ref SVGDocument using the configured backend.
    */
   void draw(SVGDocument& document);
+
+  /**
+   * Render a range of entities from an already-prepared document's render tree.
+   * The document must have been prepared via RendererUtils::prepareDocumentForRendering()
+   * before calling this method.
+   *
+   * @param registry The registry containing the prepared render tree.
+   * @param firstEntity First entity in the range to render (inclusive).
+   * @param lastEntity Last entity in the range to render (inclusive).
+   * @param viewport Viewport for the render pass.
+   * @param baseTransform Transform applied to all entities (e.g., layer-local offset).
+   */
+  void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
+                       const RenderViewport& viewport, const Transformd& baseTransform);
 
   /**
    * Capture a snapshot from the underlying backend after rendering.
@@ -59,8 +75,8 @@ private:
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transformd& parentAbsoluteTransform, double opacity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph);
-  void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
-                       const RenderViewport& viewport, const Transformd& baseTransform);
+  void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
+                                 Entity hostEntity, const std::optional<Boxd>& filterRegion);
   static void setSubDocumentContextPaint(SVGDocument& subDocument,
                                          const components::ResolvedPaintServer& contextFill,
                                          const components::ResolvedPaintServer& contextStroke);
@@ -80,6 +96,11 @@ private:
   std::vector<DeferredPop> subtreeMarkers_;
   Transformd layerBaseTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
+
+  /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
+  /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
+  /// instances via pointer.
+  std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
 };
 
 }  // namespace donner::svg

@@ -12,8 +12,8 @@
 #include "donner/css/Specificity.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
-#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -105,7 +105,7 @@ public:
   MOCK_METHOD(void, pushMask, (const std::optional<Boxd>& maskBounds), (override));
   MOCK_METHOD(void, transitionMaskToContent, (), (override));
   MOCK_METHOD(void, popMask, (), (override));
-  MOCK_METHOD(void, beginPatternTile, (const Boxd& tileRect, const Transformd& patternToTarget),
+  MOCK_METHOD(void, beginPatternTile, (const Boxd& tileRect, const Transformd& targetFromPattern),
               (override));
   MOCK_METHOD(void, endPatternTile, (bool forStroke), (override));
   MOCK_METHOD(void, setPaint, (const PaintParams& paint), (override));
@@ -118,6 +118,7 @@ public:
                const TextParams& params),
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
+  MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
 };
 
 class RendererDriverTest : public ::testing::Test {
@@ -430,7 +431,8 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
     const Boxd intrinsicSize = Boxd::WithSize(Vector2d(loaded.image->width, loaded.image->height));
     const Transformd expectedTransform =
         PreserveAspectRatio::Default().elementContentFromViewBoxTransform(bounds, intrinsicSize);
-    EXPECT_THAT(transforms, testing::Not(testing::Contains(TransformNear(expectedTransform, 1e-6))));
+    EXPECT_THAT(transforms,
+                testing::Not(testing::Contains(TransformNear(expectedTransform, 1e-6))));
   }
 
   EXPECT_CALL(renderer, beginFrame(_)).Times(1);

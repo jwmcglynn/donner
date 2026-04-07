@@ -71,9 +71,9 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
     "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
+    "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
     "third_party/stb",
     "pixelmatch-cpp17",
-    "donner/benchmarks",
 }
 
 # Individual targets to skip entirely from CMake generation.
@@ -449,7 +449,7 @@ def generate_root() -> None:
         f.write("option(DONNER_TEXT \"Enable text rendering (stb_truetype)\" ON)\n")
         f.write("option(DONNER_TEXT_FULL \"Enable full text rendering: FreeType + HarfBuzz\" OFF)\n")
         f.write("option(DONNER_TEXT_WOFF2 \"Enable WOFF2 font support (requires DONNER_TEXT)\" ON)\n")
-        f.write("option(DONNER_FILTERS \"Enable SVG filter effects\" OFF)\n\n")
+        f.write("option(DONNER_FILTERS \"Enable SVG filter effects\" ON)\n\n")
 
         # Validation
         f.write("# Validate options\n")
@@ -881,6 +881,25 @@ def generate_all_packages() -> None:
                     f.write("endif()\n")
 
                 # Link dependencies — split into unconditional and optional
+                #
+                # Backend-specific deps are stripped from most targets because
+                # the `renderer` target pulls in the correct backend
+                # conditionally.  For skia-only targets we keep skia deps but
+                # strip tiny-skia deps (and vice-versa).
+                _SKIA_DEPS = {
+                    "donner_svg_renderer_renderer_skia",
+                    "donner_svg_renderer_skia_deps",
+                    "donner_svg_renderer_skia_deps_opt",
+                    "donner_svg_renderer_skia_deps_unconfigured",
+                }
+                _TINY_SKIA_DEPS = {
+                    "donner_svg_renderer_renderer_tiny_skia",
+                    "donner_svg_renderer_filter_graph_executor",
+                    "donner_svg_renderer_tiny_skia_deps",
+                    "donner_svg_renderer_tiny_skia_filter_deps",
+                    "tiny_skia",
+                }
+                _ALL_BACKEND_DEPS = _SKIA_DEPS | _TINY_SKIA_DEPS
                 all_deps: List[str] = []
                 for dep in query_deps(bazel_label):
                     if dep in SKIPPED_TARGETS:
@@ -928,6 +947,14 @@ def generate_all_packages() -> None:
                         f.write("endif()\n")
 
                 # Hand-written tweaks
+                if cmake_name == "donner_svg_renderer_tiny_skia_deps":
+                    f.write(
+                        f"target_link_libraries(donner_svg_renderer_tiny_skia_deps {scope} tiny_skia)\n"
+                    )
+                if cmake_name == "donner_svg_renderer_tiny_skia_filter_deps":
+                    f.write(
+                        f"target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps {scope} tiny_skia)\n"
+                    )
                 if cmake_name == "donner_svg_renderer_skia_deps":
                     f.write(
                         f"target_link_libraries(donner_svg_renderer_skia_deps {scope} skia)\n"

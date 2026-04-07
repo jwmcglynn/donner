@@ -7,6 +7,8 @@
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/core/ColorInterpolationFilters.h"
+#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -229,6 +231,25 @@ public:
   Property<Reference, PropertyCascade::None> mask{
       "mask", []() -> std::optional<Reference> { return std::nullopt; }};
 
+  //
+  // Filter
+  //
+
+  /// `filter` property, which determines the filter effect(s) to apply to the element. Defaults to
+  /// an empty list (no filter). Supports CSS filter function lists like `blur(5px) grayscale()`.
+  Property<std::vector<FilterEffect>> filter{
+      "filter",
+      []() -> std::optional<std::vector<FilterEffect>> { return std::vector<FilterEffect>(); }};
+
+  /// `color-interpolation-filters` property, which determines the color space for filter
+  /// operations. Defaults to \ref ColorInterpolationFilters::LinearRGB. Inherited.
+  Property<ColorInterpolationFilters, PropertyCascade::Inherit> colorInterpolationFilters{
+      "color-interpolation-filters",
+      []() -> std::optional<ColorInterpolationFilters> {
+        return ColorInterpolationFilters::LinearRGB;
+      }};
+
+  //
   // Interaction
   //
 
@@ -384,10 +405,11 @@ public:
     return std::forward_as_tuple(
         color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
         stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
-        strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, pointerEvents, cursor,
-        markerStart, markerMid, markerEnd, fontFamily, fontSize, fontWeight, fontStyle, fontStretch,
-        fontVariant, textAnchor, textDecoration, dominantBaseline, writingMode, letterSpacing,
-        wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation);
+        strokeDasharray, strokeDashoffset, clipPath, clipRule, mask, filter,
+        colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
+        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
+        textDecoration, dominantBaseline, writingMode, letterSpacing, wordSpacing, baselineShift,
+        alignmentBaseline, mixBlendMode, isolation);
   }
 
   /**

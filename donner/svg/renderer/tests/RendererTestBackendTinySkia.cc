@@ -36,6 +36,10 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   return false;
 }
 
+std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
+  return std::make_unique<RendererTinySkia>(verbose);
+}
+
 RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
   RendererTinySkia renderer(verbose);
   renderer.draw(document);
@@ -50,8 +54,8 @@ RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
 }
 
 bool WriteActiveRendererDebugSkp(SVGDocument& document, const std::filesystem::path& outputPath) {
-  (void)document;
-  (void)outputPath;
+  UTILS_UNUSED(document);
+  UTILS_UNUSED(outputPath);
   return false;
 }
 

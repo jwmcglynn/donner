@@ -1,7 +1,10 @@
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "components",
+    srcs = [
+        "FilterPrimitiveComponent.cc",
+    ],
     hdrs = [
         "FilterComponent.h",
         "FilterGraph.h",
@@ -14,6 +17,10 @@ donner_cc_library(
     deps = [
         ":filter_effect",
         "//donner/base",
+        "//donner/css",
+        "//donner/css/parser",
+        "//donner/svg/core",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 
@@ -44,11 +51,29 @@ donner_cc_library(
         "FilterSystem.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",
         "//donner/base",
+        "//donner/css/parser",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/resources:components",
+        "//donner/svg/components/style:components",
+        "//donner/svg/properties:property_parsing",
+    ],
+)
+
+donner_cc_test(
+    name = "filter_system_tests",
+    srcs = [
+        "tests/FilterSystem_tests.cc",
+    ],
+    deps = [
+        ":filter_system",
+        "//donner/base:base_test_utils",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
     ],
 )

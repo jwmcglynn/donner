@@ -1,13 +1,14 @@
 #pragma once
 /// @file
 
-#include <any>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
@@ -257,10 +258,23 @@ struct Image {
   int imageWidth = 0;   ///< Width of loaded image in pixels.
   int imageHeight = 0;  ///< Height of loaded image in pixels.
 
-  /// Non-owning pointer to an SVG sub-document (`std::any` containing `SVGDocument`), set when
-  /// the feImage href references an external SVG file. The renderer pre-renders this to pixel data
-  /// before filter execution. Owned by \ref SubDocumentCache.
-  std::any* svgSubDocument = nullptr;
+  /// Shared handle to an external SVG sub-document. The renderer pre-renders this to pixel data
+  /// before filter execution.
+  std::shared_ptr<Registry> svgSubDocument;
+
+  /// Fragment ID for same-document element references (e.g., href="#rect1" stores "rect1").
+  /// The renderer resolves this to pixel data before filter execution.
+  RcString fragmentId;
+
+  /// True when this image was rendered from a same-document element reference. Fragment images
+  /// are rendered in the SVG's user-space coordinate system and should be placed at 1:1 in the
+  /// filter pixmap without preserveAspectRatio scaling.
+  bool isFragmentReference = false;
+
+  /// The filter region top-left in user-space coordinates, used by fragment references to apply
+  /// a device-space post-translation that positions the fragment content at the filter primitive
+  /// subregion origin. Set by the renderer driver during pre-rendering.
+  Vector2d fragmentRegionTopLeft;
 };
 
 /// Parameters for \c feDisplacementMap.

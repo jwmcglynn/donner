@@ -224,6 +224,70 @@ bool ParseFilterPrimitiveAttributes(T element, const XMLQualifiedNameRef& name,
 #endif
 
 /**
+ * Parse the `in` attribute value into a \ref FilterInput.
+ *
+ * Standard keywords: SourceGraphic, SourceAlpha, FillPaint, StrokePaint.
+ * Any other non-empty string is treated as a named result reference.
+ *
+ * BackgroundImage and BackgroundAlpha are deprecated in SVG 2 and not supported.
+ * They are parsed as named references (which won't resolve, producing transparent black).
+ *
+ * @param value Attribute value.
+ * @return The parsed FilterInput.
+ */
+components::FilterInput ParseFilterInput(std::string_view value) {
+  using components::FilterInput;
+  using components::FilterStandardInput;
+
+  if (value == "SourceGraphic") {
+    return FilterInput{FilterStandardInput::SourceGraphic};
+  }
+  if (value == "SourceAlpha") {
+    return FilterInput{FilterStandardInput::SourceAlpha};
+  }
+  if (value == "FillPaint") {
+    return FilterInput{FilterStandardInput::FillPaint};
+  }
+  if (value == "StrokePaint") {
+    return FilterInput{FilterStandardInput::StrokePaint};
+  }
+  // BackgroundImage and BackgroundAlpha were SVG 1.1 filter inputs, deprecated in SVG 2.
+  // They fall through to Named (unresolved → transparent black), which is the correct SVG 2
+  // behavior.
+  return FilterInput{FilterInput::Named{RcString(value)}};
+}
+
+/**
+ * Parses the `in` and `result` attributes common to all filter primitives.
+ * Returns true if the attribute was handled.
+ *
+ * @tparam T Element type deriving from SVGFilterPrimitiveStandardAttributes.
+ * @param element The element to set the values on.
+ * @param name The attribute name.
+ * @param value The attribute value.
+ * @return True if the attribute was `in` or `result`.
+ */
+template <typename T>
+bool ParseFilterPrimitiveAttributes(T element, const XMLQualifiedNameRef& name,
+                                    std::string_view value) {
+  if (name == XMLQualifiedNameRef("in")) {
+    element.entityHandle().template get<components::FilterPrimitiveComponent>().in =
+        ParseFilterInput(value);
+    return true;
+  }
+  if (name == XMLQualifiedNameRef("in2")) {
+    element.entityHandle().template get<components::FilterPrimitiveComponent>().in2 =
+        ParseFilterInput(value);
+    return true;
+  }
+  if (name == XMLQualifiedNameRef("result")) {
+    element.setResult(value);
+    return true;
+  }
+  return false;
+}
+
+/**
  * Parses `viewBox` and `preserveAspectRatio` values for elements that have them. Returns true if
  * the attribute was found, so that the caller may use that information to skip other attribute
  * parsing.
@@ -453,8 +517,6 @@ std::optional<ParseError> ParseAttribute<SVGMaskElement>(SVGParserContext& conte
   return std::nullopt;
 }
 
-// Filter element parsing is intentionally disabled on the text branch cleanup path.
-#if 0
 template <>
 std::optional<ParseError> ParseAttribute<SVGFilterElement>(SVGParserContext& context,
                                                            SVGFilterElement element,
@@ -1366,71 +1428,6 @@ std::optional<ParseError> ParseAttribute<SVGFEMergeNodeElement>(SVGParserContext
                                                                 std::string_view value) {
   if (name == XMLQualifiedNameRef("in")) {
     element.entityHandle().get<components::FEMergeNodeComponent>().in = ParseFilterInput(value);
-  } else {
-    return ParseCommonAttribute(context, element, name, value);
-  }
-
-  return std::nullopt;
-}
-#endif
-
-template <>
-std::optional<ParseError> ParseAttribute<SVGFilterElement>(SVGParserContext& context,
-                                                           SVGFilterElement element,
-                                                           const XMLQualifiedNameRef& name,
-                                                           std::string_view value) {
-  if (ParseXYWidthHeight(context, element, name, value)) {
-    return std::nullopt;
-  } else if (name == XMLQualifiedNameRef("filterUnits")) {
-    if (value == "userSpaceOnUse") {
-      element.setFilterUnits(FilterUnits::UserSpaceOnUse);
-    } else if (value == "objectBoundingBox") {
-      element.setFilterUnits(FilterUnits::ObjectBoundingBox);
-    } else {
-      ParseError err;
-      err.reason = "Invalid filterUnits value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-    }
-  } else if (name == XMLQualifiedNameRef("primitiveUnits")) {
-    if (value == "userSpaceOnUse") {
-      element.setPrimitiveUnits(PrimitiveUnits::UserSpaceOnUse);
-    } else if (value == "objectBoundingBox") {
-      element.setPrimitiveUnits(PrimitiveUnits::ObjectBoundingBox);
-    } else {
-      ParseError err;
-      err.reason = "Invalid primitiveUnits value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-    }
-  } else {
-    return ParseCommonAttribute(context, element, name, value);
-  }
-
-  return std::nullopt;
-}
-
-template <>
-std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserContext& context,
-                                                                   SVGFEGaussianBlurElement element,
-                                                                   const XMLQualifiedNameRef& name,
-                                                                   std::string_view value) {
-  if (ParseXYWidthHeight(context, element, name, value)) {
-    return std::nullopt;
-  } else if (name == XMLQualifiedNameRef("stdDeviation")) {
-    const auto maybeNumber2d = Number2dParser::Parse(value);
-    if (maybeNumber2d.hasResult()) {
-      const Number2dParser::Result number2d = maybeNumber2d.result();
-      if (number2d.consumedChars == value.size()) {
-        element.setStdDeviation(number2d.numberX, number2d.numberY);
-      } else {
-        ParseError err;
-        err.reason = "Unexpected additional data in stdDeviation, '" + std::string(value) + "'";
-        context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-      }
-    } else {
-      ParseError err;
-      err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
-    }
   } else {
     return ParseCommonAttribute(context, element, name, value);
   }

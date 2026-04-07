@@ -27,6 +27,7 @@ enum class ShadowBranchType {
   OffscreenMarkerStart,  //!< For the 'marker-start' attribute.
   OffscreenMarkerMid,    //!< For the 'marker-mid' attribute.
   OffscreenMarkerEnd,    //!< For the 'marker-end' attribute.
+  OffscreenFeImage,      //!< For feImage fragment references.
 };
 
 }  // namespace donner::svg::components

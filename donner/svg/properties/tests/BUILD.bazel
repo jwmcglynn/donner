@@ -13,3 +13,16 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "property_parsing_tests",
+    srcs = [
+        "PropertyParsing_tests.cc",
+    ],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/svg/parser",
+        "//donner/svg/properties:property_parsing",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

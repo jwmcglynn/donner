@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+
 namespace donner::svg {
 
 /**
@@ -11,7 +13,7 @@ namespace donner::svg {
  *
  * This is used on \ref xml_filter element.
  */
-enum class FilterUnits {
+enum class FilterUnits : std::uint8_t {
   /**
    * If filterUnits is equal to userSpaceOnUse, `x`, `y`, `width`, `height` represent values in the
    * current user coordinate system in place at the time when the filter element is referenced
@@ -39,7 +41,7 @@ enum class FilterUnits {
  *
  * This is used on \ref xml_filter element.
  */
-enum class PrimitiveUnits {
+enum class PrimitiveUnits : std::uint8_t {
   /**
    * If primitiveUnits is equal to userSpaceOnUse, any length values within the filter definitions
    * represent values in the current local coordinate system in place at the time when the \ref

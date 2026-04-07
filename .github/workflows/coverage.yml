@@ -33,6 +33,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install -y libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev
 
       - name: Generate coverage

@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/FilterGraphExecutor.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -22,6 +23,67 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
   }
 
   return result;
+}
+
+std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
+    std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
+    const Transformd& deviceFromImage, std::optional<Boxd> userSubregion,
+    std::optional<Transformd> filterFromDevice, int outputWidth, int outputHeight) {
+  std::vector<std::uint8_t> output(static_cast<std::size_t>(outputWidth * outputHeight * 4), 0);
+  if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
+    return output;
+  }
+
+  if (NearZero(deviceFromImage.determinant(), 1e-12)) {
+    return output;
+  }
+
+  const Transformd imageFromDevice = deviceFromImage.inverse();
+
+  (void)userSubregion;
+  (void)filterFromDevice;
+
+  auto sampleSource = [&](int x, int y, int channel) -> float {
+    x = std::clamp(x, 0, sourceWidth - 1);
+    y = std::clamp(y, 0, sourceHeight - 1);
+    return premultipliedPixels[static_cast<std::size_t>((y * sourceWidth + x) * 4 + channel)] /
+           255.0f;
+  };
+
+  for (int y = 0; y < outputHeight; ++y) {
+    for (int x = 0; x < outputWidth; ++x) {
+      const Vector2d devicePoint(static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5);
+      const Vector2d imagePoint = imageFromDevice.transformPosition(devicePoint);
+      const double sourceX = imagePoint.x - 0.5;
+      const double sourceY = imagePoint.y - 0.5;
+      // Skip pixels whose sample center falls outside the source image. This prevents
+      // edge-clamped bilinear sampling from extending the image beyond its placement
+      // rectangle (important for feImage with preserveAspectRatio where the image doesn't
+      // fill the full subregion).
+      if (sourceX < -0.5 || sourceX >= sourceWidth - 0.5 ||
+          sourceY < -0.5 || sourceY >= sourceHeight - 0.5) {
+        continue;
+      }
+      const int x0 = static_cast<int>(std::floor(sourceX));
+      const int y0 = static_cast<int>(std::floor(sourceY));
+
+      const float fx = static_cast<float>(sourceX - x0);
+      const float fy = static_cast<float>(sourceY - y0);
+      const std::size_t outIndex = static_cast<std::size_t>((y * outputWidth + x) * 4);
+      for (int channel = 0; channel < 4; ++channel) {
+        const float s00 = sampleSource(x0, y0, channel);
+        const float s10 = sampleSource(x0 + 1, y0, channel);
+        const float s01 = sampleSource(x0, y0 + 1, channel);
+        const float s11 = sampleSource(x0 + 1, y0 + 1, channel);
+        const float top = s00 + (s10 - s00) * fx;
+        const float bottom = s01 + (s11 - s01) * fx;
+        const float value = std::clamp(top + (bottom - top) * fy, 0.0f, 1.0f);
+        output[outIndex + channel] = static_cast<std::uint8_t>(std::round(value * 255.0f));
+      }
+    }
+  }
+
+  return output;
 }
 
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
@@ -167,6 +229,29 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
   }();
 
+  // Inverse transform mapping pixel coordinates back to user/filter space.
+  // Used by spot light cone angle computation which must be done in user space.
+  const std::array<double, 6> pixelToUser = [&]() -> std::array<double, 6> {
+    const Transformd inv = deviceFromFilter.inverse();
+    // Layout: ux = [0]*px + [1]*py + [2], uy = [3]*px + [4]*py + [5]
+    return {inv.data[0], inv.data[2], inv.data[4], inv.data[1], inv.data[3], inv.data[5]};
+  }();
+
+  // Detect non-conformal transforms (shear/skew) that distort angles in device space.
+  // For conformal transforms (rotation + uniform scale), device-space angles match user-space.
+  const bool hasShear = [&]() -> bool {
+    const double a = deviceFromFilter.data[0];
+    const double b = deviceFromFilter.data[1];
+    const double c = deviceFromFilter.data[2];
+    const double d = deviceFromFilter.data[3];
+    // Transform axes are orthogonal iff their dot product is zero.
+    const double dot = a * c + b * d;
+    const double lenSq1 = a * a + b * b;
+    const double lenSq2 = c * c + d * d;
+    // Check if cosine of angle between axes exceeds ~1 degree.
+    return dot * dot > 0.0003 * lenSq1 * lenSq2;  // cos²(1°) ≈ 0.0003
+  }();
+
   auto convertLightSource =
       [&](const filter_primitive::LightSource& ls) -> tiny_skia::filter::LightSourceParams {
     tiny_skia::filter::LightSourceParams lp;
@@ -206,6 +291,15 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     lp.pointsAtZ = userPtZ * pixelScale;
     lp.spotExponent = ls.spotExponent;
     lp.limitingConeAngle = ls.limitingConeAngle;
+
+    // Store user-space positions for spot light cone angle computation.
+    lp.userX = userX;
+    lp.userY = userY;
+    lp.userZ = userZ;
+    lp.userPointsAtX = userPtX;
+    lp.userPointsAtY = userPtY;
+    lp.userPointsAtZ = userPtZ;
+
     return lp;
   };
 
@@ -225,6 +319,21 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
         tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
                                      pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
                                      pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+  }
+
+  // Detect rotation/skew: if the transform has off-diagonal elements, subregion clipping inside
+  // the filter graph needs per-pixel point-in-rect testing to avoid AABB overflow.
+  const bool hasRotation = !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                           !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (hasRotation && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    const Transformd inv = deviceFromFilter.inverse();
+    graph.filterFromDevice = tiny_skia::filter::AffineTransform{
+        inv.data[0], inv.data[1], inv.data[2], inv.data[3], inv.data[4], inv.data[5]};
+    if (filterRegion.has_value()) {
+      graph.userSpaceFilterRegion = tiny_skia::filter::PixelRect{
+          filterRegion->topLeft.x, filterRegion->topLeft.y,
+          filterRegion->width(), filterRegion->height()};
+    }
   }
 
   for (const FilterNode& node : filterGraph.nodes) {
@@ -264,6 +373,12 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
           tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
                                        pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
                                        pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+
+      // Store user-space subregion for rotation-aware clipping.
+      if (graph.filterFromDevice.has_value()) {
+        graphNode.userSpaceSubregion =
+            tiny_skia::filter::PixelRect{ux, uy, uw, uh};
+      }
     }
 
     std::visit(
@@ -458,18 +573,73 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
             gp::Image image;
             if (!primitive.imageData.empty() && primitive.imageWidth > 0 &&
                 primitive.imageHeight > 0) {
-              image.pixels = PremultiplyRgba(primitive.imageData);
-              image.width = primitive.imageWidth;
-              image.height = primitive.imageHeight;
+              const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
 
-              if (primitive.isFragmentReference) {
-                // Fragment references are rendered in the same coordinate space as the filter
-                // pixmap. Place the image at (0,0) with 1:1 pixel mapping — no
-                // preserveAspectRatio scaling needed.
-                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0,
+              if (primitive.isFragmentReference && graph.filterFromDevice.has_value()) {
+                // Fragment references with host transform (skew/rotation): rasterize the fragment
+                // image through the combined transform that maps from fragment pixel coordinates
+                // to device pixel coordinates, including the host's transform and filter region
+                // offset.
+                //
+                // The transform chain is:
+                //   fragment pixel → (÷ viewBoxScale) → document user space
+                //   → (+ filterRegion.topLeft) → host user space
+                //   → (× deviceFromFilter) → device pixels
+                const Transformd viewBoxScaleInv = Transformd::Scale(
+                    NearZero(filterGraph.userToPixelScale.x, 1e-12) ? 1.0
+                        : 1.0 / filterGraph.userToPixelScale.x,
+                    NearZero(filterGraph.userToPixelScale.y, 1e-12) ? 1.0
+                        : 1.0 / filterGraph.userToPixelScale.y);
+                const Transformd regionOffset = Transformd::Translate(
+                    primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
+                const Transformd deviceFromFragment =
+                    viewBoxScaleInv * regionOffset * deviceFromFilter;
+
+                image.pixels = RasterizeTransformedImagePremultiplied(
+                    premultiplied, primitive.imageWidth, primitive.imageHeight,
+                    deviceFromFragment, std::nullopt, std::nullopt, w, h);
+                image.width = w;
+                image.height = h;
+                image.targetRect = tiny_skia::filter::PixelRect{
+                    0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
+              } else if (primitive.isFragmentReference) {
+                image.pixels = premultiplied;
+                image.width = primitive.imageWidth;
+                image.height = primitive.imageHeight;
+                // Fragment references without host transform: apply a simple device-space
+                // post-translation to position content at the filter region origin.
+                const double deviceOffsetX =
+                    primitive.fragmentRegionTopLeft.x * filterGraph.userToPixelScale.x;
+                const double deviceOffsetY =
+                    primitive.fragmentRegionTopLeft.y * filterGraph.userToPixelScale.y;
+                image.targetRect = tiny_skia::filter::PixelRect{deviceOffsetX, deviceOffsetY,
                     static_cast<double>(primitive.imageWidth),
                     static_cast<double>(primitive.imageHeight)};
+              } else if (graph.filterFromDevice.has_value()) {
+                const Boxd imageBox =
+                    Boxd::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+                const Boxd userSubregion = graphNode.userSpaceSubregion.has_value()
+                                               ? Boxd::FromXYWH(graphNode.userSpaceSubregion->x,
+                                                                graphNode.userSpaceSubregion->y,
+                                                                graphNode.userSpaceSubregion->w,
+                                                                graphNode.userSpaceSubregion->h)
+                                               : filterRegion.value_or(primitiveUnitsBounds);
+                const Transformd filterFromImage =
+                    primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion,
+                                                                                     imageBox);
+                const Transformd deviceFromImage = filterFromImage * deviceFromFilter;
+
+                image.pixels = RasterizeTransformedImagePremultiplied(
+                    premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
+                    userSubregion, deviceFromFilter.inverse(), w, h);
+                image.width = w;
+                image.height = h;
+                image.targetRect = tiny_skia::filter::PixelRect{
+                    0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
               } else {
+                image.pixels = premultiplied;
+                image.width = primitive.imageWidth;
+                image.height = primitive.imageHeight;
                 double regionX = 0.0;
                 double regionY = 0.0;
                 double regionW = w;
@@ -515,6 +685,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
               diffuseLighting.params.lightG = rgba.g / 255.0;
               diffuseLighting.params.lightB = rgba.b / 255.0;
               diffuseLighting.params.light = convertLightSource(*primitive.light);
+              diffuseLighting.params.pixelToUser = pixelToUser;
+              diffuseLighting.params.hasShear = hasShear;
               graphNode.primitive = diffuseLighting;
             } else {
               graphNode.primitive = gp::Image{};
@@ -531,6 +703,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
               specularLighting.params.lightG = rgba.g / 255.0;
               specularLighting.params.lightB = rgba.b / 255.0;
               specularLighting.params.light = convertLightSource(*primitive.light);
+              specularLighting.params.pixelToUser = pixelToUser;
+              specularLighting.params.hasShear = hasShear;
               graphNode.primitive = specularLighting;
             } else {
               graphNode.primitive = gp::Image{};

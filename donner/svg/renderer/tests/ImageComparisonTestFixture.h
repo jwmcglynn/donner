@@ -72,6 +72,9 @@ struct ImageComparisonParams {
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
   std::string_view backendRequirementReason;
+  /// If true, render but skip the pixel comparison. Used for tests where the output
+  /// is implementation-defined or UB, but we still want to verify rendering stability.
+  bool renderOnly = false;
 
   /**
    * @brief Creates parameters to skip a test.
@@ -80,6 +83,19 @@ struct ImageComparisonParams {
   static ImageComparisonParams Skip() {
     ImageComparisonParams result;
     result.skip = true;
+    return result;
+  }
+
+  /**
+   * @brief Creates parameters that render the test but skip pixel comparison.
+   *
+   * Used for tests where the output is implementation-defined or has expected
+   * variance, but we want to verify that rendering completes without crashing.
+   * @return ImageComparisonParams configured for render-only mode.
+   */
+  static ImageComparisonParams RenderOnly() {
+    ImageComparisonParams result;
+    result.renderOnly = true;
     return result;
   }
 
@@ -109,6 +125,7 @@ struct ImageComparisonParams {
                                                   float threshold = kDefaultThreshold) {
     ImageComparisonParams result;
     result.overrideGoldenFilename = filename;
+    result.threshold = threshold;
     return result;
   }
 

@@ -219,9 +219,8 @@ private:
 
   // Pattern recording state, stacked for nested patterns.
   struct PatternState {
-    sk_sp<SkSurface> surface;
+    std::unique_ptr<SkPictureRecorder> recorder;
     SkCanvas* savedCanvas = nullptr;
-    Transformd patternRasterFromTile;
     Transformd targetFromPattern;
   };
   std::vector<PatternState> patternStack_;
@@ -238,9 +237,12 @@ private:
     sk_sp<SkSurface> surface;
     sk_sp<SkSurface> fillPaintSurface;
     sk_sp<SkSurface> strokePaintSurface;
+    int filterBufferOffsetX = 0;
+    int filterBufferOffsetY = 0;
     SkCanvas* parentCanvas = nullptr;
     components::FilterGraph filterGraph;
     std::optional<Boxd> filterRegion;
+    Transformd originalDeviceFromFilter;
     Transformd deviceFromFilter;
   };
 

@@ -10,6 +10,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -58,8 +59,8 @@ TEST_F(FilterSystemTest, GaussianBlur) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_FALSE(computed->effectChain.empty());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_FALSE(computed->filterGraph.empty());
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feFlood ---
@@ -79,7 +80,7 @@ TEST_F(FilterSystemTest, FeFlood) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feOffset ---
@@ -99,7 +100,7 @@ TEST_F(FilterSystemTest, FeOffset) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feComposite ---
@@ -120,7 +121,7 @@ TEST_F(FilterSystemTest, FeComposite) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(2));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
 }
 
 // --- feColorMatrix ---
@@ -140,7 +141,7 @@ TEST_F(FilterSystemTest, FeColorMatrix) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feBlend ---
@@ -161,7 +162,7 @@ TEST_F(FilterSystemTest, FeBlend) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(2));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
 }
 
 // --- feComponentTransfer ---
@@ -184,7 +185,7 @@ TEST_F(FilterSystemTest, FeComponentTransfer) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feMerge ---
@@ -208,7 +209,7 @@ TEST_F(FilterSystemTest, FeMerge) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(2));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
 }
 
 // --- feDropShadow ---
@@ -228,7 +229,37 @@ TEST_F(FilterSystemTest, FeDropShadow) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
+}
+
+TEST_F(FilterSystemTest, FeImageUsesLoadedSvgSubDocument) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <filter id="f">
+          <feImage id="img" href="external.svg"/>
+        </filter>
+      </defs>
+    </svg>
+  )");
+
+  auto imageElement = document.querySelector("#img");
+  ASSERT_TRUE(imageElement.has_value());
+  imageElement->entityHandle().emplace<LoadedSVGImageComponent>(std::make_shared<Registry>());
+
+  StyleSystem().computeAllStyles(document.registry(), nullptr);
+  filterSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+
+  auto filterElement = document.querySelector("#f");
+  ASSERT_TRUE(filterElement.has_value());
+  auto* computed = filterElement->entityHandle().try_get<ComputedFilterComponent>();
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
+
+  auto* imageNode = std::get_if<filter_primitive::Image>(&computed->filterGraph.nodes[0].primitive);
+  ASSERT_THAT(imageNode, NotNull());
+  EXPECT_TRUE(imageNode->svgSubDocument);
+  EXPECT_THAT(imageNode->imageData, IsEmpty());
 }
 
 // --- feMorphology ---
@@ -248,7 +279,7 @@ TEST_F(FilterSystemTest, FeMorphology) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feTurbulence ---
@@ -268,7 +299,7 @@ TEST_F(FilterSystemTest, FeTurbulence) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feTile ---
@@ -288,7 +319,7 @@ TEST_F(FilterSystemTest, FeTile) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feConvolveMatrix ---
@@ -308,7 +339,7 @@ TEST_F(FilterSystemTest, FeConvolveMatrix) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feDisplacementMap ---
@@ -329,7 +360,7 @@ TEST_F(FilterSystemTest, FeDisplacementMap) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(2));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(2));
 }
 
 // --- feDiffuseLighting ---
@@ -351,7 +382,7 @@ TEST_F(FilterSystemTest, FeDiffuseLighting) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- feSpecularLighting ---
@@ -373,7 +404,7 @@ TEST_F(FilterSystemTest, FeSpecularLighting) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(1));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(1));
 }
 
 // --- Empty filter ---
@@ -415,7 +446,7 @@ TEST_F(FilterSystemTest, FilterChainMultiplePrimitives) {
   ASSERT_TRUE(element.has_value());
   auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
   ASSERT_THAT(computed, NotNull());
-  EXPECT_THAT(computed->effectChain, SizeIs(3));
+  EXPECT_THAT(computed->filterGraph.nodes, SizeIs(3));
 }
 
 // --- Filter attributes ---

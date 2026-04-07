@@ -42,6 +42,7 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":property_parsing",
+        "//donner/svg/components/filter:components",
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/paint:components",
         "//donner/svg/components/shape:components",

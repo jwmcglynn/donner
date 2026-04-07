@@ -629,6 +629,26 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
   }
 
+  // If the golden image doesn't exist and UPDATE_GOLDEN_IMAGES_DIR is set, create it from the
+  // current rendering regardless of backend.
+  if (!std::filesystem::exists(goldenImageFilename)) {
+    const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
+    if (goldenImageDirToUpdate != nullptr) {
+      const std::filesystem::path goldenImagePath =
+          std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+      std::filesystem::create_directories(goldenImagePath.parent_path());
+      RendererImageIO::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(), snapshot.pixels,
+                                                width, height, strideInPixels);
+      std::cout << "Created golden image: " << goldenImagePath.string() << "\n";
+      return;
+    }
+  }
+
+  if (params.renderOnly) {
+    std::cout << "RENDER-ONLY (comparison skipped)\n";
+    return;
+  }
+
   auto maybeGoldenImage = RendererImageTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
 
