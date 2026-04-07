@@ -102,6 +102,9 @@ coverage --config=coverage
 coverage --combined_report=lcov
 coverage --instrumentation_filter="-test_utils$,//donner[:/]"
 coverage --test_tag_filters=-fuzz_target
+# Continue past build/analysis failures so coverage is collected from all tests
+# that can run (e.g. Skia backend fails ObjC analysis on macOS with LLVM toolchain).
+coverage --keep_going
 
 coverage:macos --test_env=COVERAGE_GCOV_PATH=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata
 coverage:macos --test_env=LLVM_COV=/Library/Developer/CommandLineTools/usr/bin/llvm-cov

@@ -57,13 +57,39 @@ fi
 
   GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory coverage-report"
 
+  COVERAGE_REPORT=$(bazel info output_path)/_coverage/_coverage_report.dat
+
+  # --keep_going is set in .bazelrc for coverage so that analysis failures
+  # (e.g. Skia ObjC on macOS with LLVM toolchain) don't block the rest of the
+  # run.  Record the timestamp before running so we can verify a fresh report
+  # was produced (avoid processing stale data on early exit).
+  BEFORE_TS=0
+  if [ -f "$COVERAGE_REPORT" ]; then
+    BEFORE_TS=$(stat -f %m "$COVERAGE_REPORT" 2>/dev/null || stat -c %Y "$COVERAGE_REPORT" 2>/dev/null || echo 0)
+  fi
+
   if [ "$QUIET" = true ]; then
-    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $BAZEL_TEST_ENV $TARGETS
-    python3 tools/filter_coverage.py --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
+    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $BAZEL_TEST_ENV $TARGETS || true
+  else
+    bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS || true
+  fi
+
+  if [ ! -f "$COVERAGE_REPORT" ]; then
+    echo "ERROR: Coverage report was not generated"
+    exit 1
+  fi
+
+  AFTER_TS=$(stat -f %m "$COVERAGE_REPORT" 2>/dev/null || stat -c %Y "$COVERAGE_REPORT" 2>/dev/null || echo 0)
+  if [ "$AFTER_TS" -le "$BEFORE_TS" ]; then
+    echo "ERROR: Coverage report was not updated (stale data from a previous run)"
+    exit 1
+  fi
+
+  if [ "$QUIET" = true ]; then
+    python3 tools/filter_coverage.py --input "$COVERAGE_REPORT" --output coverage-report/filtered_report.dat
     genhtml --quiet coverage-report/filtered_report.dat $GENHTML_OPTIONS
   else
-    bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS
-    python3 tools/filter_coverage.py --verbose --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
+    python3 tools/filter_coverage.py --verbose --input "$COVERAGE_REPORT" --output coverage-report/filtered_report.dat
     genhtml coverage-report/filtered_report.dat $GENHTML_OPTIONS
   fi
 )

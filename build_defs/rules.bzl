@@ -100,13 +100,20 @@ def _donner_transitioned_executable_impl(ctx):
         is_executable = True,
     )
 
-    return [
+    providers = [
         DefaultInfo(
             executable = executable,
             files = depset([executable], transitive = [dep_default_info.files]),
             runfiles = dep_default_info.default_runfiles,
         ),
     ]
+
+    # Forward InstrumentedFilesInfo so that `bazel coverage` collects coverage
+    # data for transitioned test targets.
+    if InstrumentedFilesInfo in dep_target:
+        providers.append(dep_target[InstrumentedFilesInfo])
+
+    return providers
 
 donner_transitioned_cc_test = rule(
     implementation = _donner_transitioned_executable_impl,
