@@ -76,11 +76,12 @@ The plan is split into two phases: a **local-first scaffold** you can run immedi
   - [x] Implement "catch-up" logic: if main has new commits since last run and > 2 hours have
         passed, trigger immediately
   - [x] Add git fetch/polling to detect new pushes to main
-- [ ] Milestone 6: Observability and maintenance
-  - [ ] Write run summaries to a log directory with per-fuzzer stats (coverage, corpus size,
+- [x] Milestone 6: Observability, docs, and containerization
+  - [x] Write run summaries to a log directory with per-fuzzer stats (coverage, corpus size,
         executions/sec, crashes found)
-  - [ ] Add a simple dashboard/report script that summarizes recent runs
-  - [ ] Update `docs/fuzzing.md` with continuous fuzzing documentation
+  - [x] Add dashboard script with health check, coverage trends, corpus history
+  - [x] Update `docs/fuzzing.md` with continuous fuzzing documentation
+  - [x] Dockerfile + docker-compose.yml for containerized fuzzing
 
 ## Background
 

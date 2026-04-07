@@ -1,0 +1,77 @@
+services:
+  fuzz:
+    build:
+      context: ../..
+      dockerfile: tools/fuzzing/Dockerfile
+    container_name: donner-fuzz
+    restart: unless-stopped
+
+    volumes:
+      # Persistent state: corpus, crash ledger, run history, logs
+      - fuzz-state:/home/fuzzer/.donner-fuzz
+      # Bazel cache: survives restarts, avoids full rebuilds
+      - bazel-cache:/home/fuzzer/.cache/bazel
+      # Repo checkout: persists across restarts so git fetch is incremental
+      - repo:/home/fuzzer/donner
+
+    # --- Fuzzing configuration ---
+    environment:
+      # Repo
+      - FUZZ_REPO_URL=https://github.com/jwmcglynn/donner.git
+
+      # Trigger / rate limiting
+      - FUZZ_MIN_INTERVAL=7200        # 2 hours between runs
+      - FUZZ_LOOP_INTERVAL=1800       # Check every 30 minutes
+
+      # Fuzzer execution
+      - FUZZ_WORKERS=8                # Parallel fuzzer count
+      - FUZZ_FUZZER_TIME=900          # 15 min per fuzzer
+      - FUZZ_PLATEAU=120              # 2 min plateau timeout
+      - FUZZ_MAX_TOTAL=3600           # 1 hour total cap
+
+      # Quiet hours (host contention detection)
+      - FUZZ_QUIET_MODE=reduce        # reduce | skip | ignore
+      - FUZZ_QUIET_WORKERS=2          # Workers when host is busy
+      - FUZZ_QUIET_MAX_TOTAL=1800     # 30 min cap when host is busy
+      - FUZZ_STEAL_THRESHOLD=10       # CPU steal % to trigger quiet
+
+      # GitHub integration (for crash reporting)
+      # Set GH_TOKEN for gh CLI authentication:
+      # - GH_TOKEN=${GH_TOKEN}
+
+    # Resource limits — prevent fuzzing from starving the host
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 16G
+        reservations:
+          cpus: "2"
+          memory: 4G
+
+  # One-shot run (for CI or manual triggering)
+  fuzz-once:
+    build:
+      context: ../..
+      dockerfile: tools/fuzzing/Dockerfile
+    container_name: donner-fuzz-once
+    profiles: [once]
+    environment:
+      - FUZZ_REPO_URL=https://github.com/jwmcglynn/donner.git
+      - FUZZ_ONE_SHOT=1
+      - FUZZ_WORKERS=8
+      - FUZZ_FUZZER_TIME=900
+      - FUZZ_PLATEAU=120
+      - FUZZ_MAX_TOTAL=3600
+    volumes:
+      - fuzz-state:/home/fuzzer/.donner-fuzz
+      - bazel-cache:/home/fuzzer/.cache/bazel
+      - repo:/home/fuzzer/donner
+
+volumes:
+  fuzz-state:
+    name: donner-fuzz-state
+  bazel-cache:
+    name: donner-fuzz-bazel-cache
+  repo:
+    name: donner-fuzz-repo
