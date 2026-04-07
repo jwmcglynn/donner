@@ -400,17 +400,19 @@ def process_crashes(
             print(f"    [dry-run] Would file issue for {crash.crash_type} in {crash.top_frame}")
         else:
             issue_url = file_github_issue(crash)
-            known[crash.signature] = {
-                "fuzzer": fuzzer_name,
-                "crash_type": crash.crash_type,
-                "top_frame": crash.top_frame,
-                "issue_url": issue_url,
-                "commit": commit,
-                "date": datetime.now(timezone.utc).isoformat(),
-                "crash_file": str(crash_file),
-            }
             if issue_url:
+                known[crash.signature] = {
+                    "fuzzer": fuzzer_name,
+                    "crash_type": crash.crash_type,
+                    "top_frame": crash.top_frame,
+                    "issue_url": issue_url,
+                    "commit": commit,
+                    "date": datetime.now(timezone.utc).isoformat(),
+                    "crash_file": str(crash_file),
+                }
                 print(f"    Filed: {issue_url}")
+            else:
+                print(f"    WARNING: Issue creation failed, crash will be retried next run")
 
             if webhook_url:
                 send_webhook(crash, webhook_url)

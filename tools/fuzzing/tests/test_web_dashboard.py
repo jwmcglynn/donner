@@ -211,7 +211,7 @@ class TestRenderCrashes:
         html = render_crashes(crashes)
         assert "svg_parser_fuzzer" in html
         assert "abc123" in html
-        assert "github.com" in html
+        assert "https://github.com/test/issues/1" in html
 
 
 class TestRenderLog:

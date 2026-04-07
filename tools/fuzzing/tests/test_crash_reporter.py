@@ -336,6 +336,7 @@ class TestProcessCrashes:
         known_file = tmp_path / "known.json"
         monkeypatch.setattr("crash_reporter.KNOWN_CRASHES_FILE", known_file)
         monkeypatch.setattr("crash_reporter.CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr("crash_reporter.file_github_issue", lambda crash, **kw: "https://github.com/test/issues/1")
 
         # First run — new crash
         results1 = process_crashes(run_with_crash, [fake_target], dry_run=False)

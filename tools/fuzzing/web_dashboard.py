@@ -114,9 +114,8 @@ def render_health(reports: list[dict], crashes: dict, trigger: dict) -> str:
     )
     still_growing = [
         f["name"] for f in latest.get("fuzzers", [])
-        if "plateau" not in f.get("exit_reason", "")
-        and f.get("exit_reason") not in ("completed", "deadline", "no_binary")
-        or f.get("exit_reason") == "deadline"
+        if f.get("exit_reason") not in ("plateau", "completed", "no_binary", "error", "crash")
+        and f.get("exit_reason") is not None
     ]
 
     return f"""
