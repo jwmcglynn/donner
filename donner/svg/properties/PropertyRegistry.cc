@@ -137,7 +137,7 @@ ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> compo
   }
   ParseDiagnostic err;
   err.reason = "Invalid isolation value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -248,7 +248,7 @@ ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue>
   }
   ParseDiagnostic err;
   err.reason = "Invalid mix-blend-mode value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -499,7 +499,7 @@ ParseResult<ColorInterpolationFilters> ParseColorInterpolationFilters(
 
   ParseDiagnostic err;
   err.reason = "Invalid color-interpolation-filters value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
@@ -1075,7 +1075,7 @@ ParseResult<std::vector<FilterEffect>> ParseFilter(
 
     ParseDiagnostic err;
     err.reason = "Invalid filter value";
-    err.location = component.sourceOffset();
+    err.range.start = component.sourceOffset();
     return err;
   }
 
