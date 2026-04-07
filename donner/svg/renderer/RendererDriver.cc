@@ -1223,13 +1223,13 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     // Apply the layer base transform composed with the entity's world transform.
     if (verbose_) {
-      const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
+      const Transformd combined = instance.entityFromWorldTransform * layerBaseTransform_;
       std::cout << "[traverseRange] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible << "\n  layerBase=" << layerBaseTransform_
                 << "\n  entityFromWorld=" << instance.entityFromWorldTransform
                 << "\n  combined=" << combined << "\n";
     }
-    renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
+    renderer_.setTransform(instance.entityFromWorldTransform * layerBaseTransform_);
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
@@ -1334,7 +1334,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
                             style.properties->opacity.getRequired(),
-                            layerBaseTransform_ * instance.entityFromWorldTransform);
+                            instance.entityFromWorldTransform * layerBaseTransform_);
           }
         }
       } else if (const auto* image =
@@ -1496,7 +1496,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     renderer_.pushMask(maskBounds);
 
     const Transformd savedLayerBase = layerBaseTransform_;
-    layerBaseTransform_ = instance.entityFromWorldTransform;
+    layerBaseTransform_ = instance.entityFromWorldTransform * layerBaseTransform_;
 
     if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
       const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
@@ -1515,7 +1515,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     renderer_.transitionMaskToContent();
   }
 
-  renderer_.setTransform(instance.entityFromWorldTransform);
+  renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
   return static_cast<int>(chain.size());
 }
 

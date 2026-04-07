@@ -738,11 +738,7 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-mask-017.svg", Params::Skip()},  // Not implemented: color-interpolation linearRGB
             {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
-            {"e-mask-025.svg", Params::Skip()},  // Mask-on-mask mutual recursion: cycle
-                                                 // detection breaks chain but rendering differs
             {"e-mask-026.svg", Params::Skip()},  // Non-text mask regression kept out of text stack
-            {"e-mask-027.svg", Params::Skip()},  // BUG: Mask on child — shadow tree
-                                                 // entities don't resolve nested masks
             {"e-mask-029.svg",
              Params::WithThreshold(0.1f)},  // Mask with <image> (bilinear edge diffs)
         })),
