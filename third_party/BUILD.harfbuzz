@@ -28,14 +28,13 @@ cc_library(
         "-Wno-unused-variable",
         "-Wno-unused-function",
         "-Wno-missing-field-initializers",
-        "-Wno-cast-function-type-mismatch",
+        "-Wno-cast-function-type-strict",
     ],
     # HB_TINY strips many features for binary size. We override HB_NO_DRAW
     # (set by HB_TINY) because we need the draw API for glyph outline extraction.
     # HAVE_FREETYPE enables hb-ft.cc for FreeType-backed hinted glyph outlines.
     defines = [
         "HB_TINY",
-        "HB_NO_MT",
         "HAVE_STDBOOL_H",
         "HAVE_CONFIG_OVERRIDE_H",
         "HAVE_FREETYPE",
