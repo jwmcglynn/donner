@@ -966,11 +966,11 @@ std::vector<Path::Vertex> Path::vertices() const {
     }
 
     if (command.verb == Verb::MoveTo) {
-      if (openPathCommand) {
+      if (openPathCommand && !justMoved) {
         assert(i > 0);
 
         // Place a vertex at the end of the previous segment. For open subpaths, the orientation is
-        // the direction of the line.
+        // the direction of the line. Skip if the previous command was also a MoveTo (empty subpath).
         const Vector2d point = endPointOfCommand(commands_, points_, i - 1);
         const Vector2d orientation = tangentAtEnd(commands_, points_, i - 1).normalize();
         result.push_back(Vertex{point, orientation});
@@ -1801,6 +1801,9 @@ PathBuilder& PathBuilder::arcTo(const Vector2d& radius, double rotationRadians, 
 }
 
 PathBuilder& PathBuilder::closePath() {
+  if (!hasMoveTo_) {
+    return *this;  // No open subpath — consecutive closePaths are no-ops.
+  }
   path_.commands_.push_back({Path::Verb::ClosePath, moveToPointIndex_});
   hasMoveTo_ = false;
   return *this;

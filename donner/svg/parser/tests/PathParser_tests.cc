@@ -153,12 +153,10 @@ TEST(PathParser, ConsecutiveClosePath) {
     ASSERT_THAT(result, NoParseError());
 
     Path spline = result.result();
-    // Consecutive closePaths are NOT collapsed; each emits a ClosePath command.
+    // Consecutive closePaths after the first are no-ops (no open subpath).
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero()));
     EXPECT_THAT(spline.commands(),
-                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0},
-                            Command{CommandType::ClosePath, 0}, Command{CommandType::ClosePath, 0},
-                            Command{CommandType::ClosePath, 0}));
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
   }
 
   // Consecutive z after a line.
@@ -167,11 +165,10 @@ TEST(PathParser, ConsecutiveClosePath) {
     ASSERT_THAT(result, NoParseError());
 
     Path spline = result.result();
-    // Second z also emitted.
+    // Second z is a no-op (subpath already closed).
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1, 2), Vector2d(3, 4)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                            Command{CommandType::ClosePath, 0},
                             Command{CommandType::ClosePath, 0}));
   }
 }

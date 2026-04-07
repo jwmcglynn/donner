@@ -288,19 +288,19 @@ TEST(Path, ClosePathMoveToReplace) {
                           Command{CommandType::LineTo, 3}));
 }
 
-TEST(Path, ConsecutiveClosePathEmitsBoth) {
-  // PathBuilder does not filter consecutive closePaths; both are emitted.
+TEST(Path, ConsecutiveClosePathIsNoOp) {
+  // Second closePath is a no-op since no subpath is open.
   Path spline =
       PathBuilder().moveTo(kVec1).lineTo(kVec2).closePath().closePath().build();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                          Command{CommandType::ClosePath, 0}, Command{CommandType::ClosePath, 0}));
+                          Command{CommandType::ClosePath, 0}));
 }
 
 TEST(Path, ConsecutiveClosePathThenNewSubpath) {
-  // PathBuilder emits both closePaths, then continues with a new subpath.
+  // Second closePath is a no-op, then new subpath opens normally.
   Path spline = PathBuilder()
                     .moveTo(kVec1)
                     .lineTo(kVec2)
@@ -313,24 +313,24 @@ TEST(Path, ConsecutiveClosePathThenNewSubpath) {
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                          Command{CommandType::ClosePath, 0}, Command{CommandType::ClosePath, 0},
+                          Command{CommandType::ClosePath, 0},
                           Command{CommandType::MoveTo, 2}, Command{CommandType::LineTo, 3}));
 }
 
 // Regression test: many consecutive closePath calls after a single subpath.
-// PathBuilder does not filter consecutive closePaths but should not corrupt state.
+// Extra closePaths are no-ops and should not corrupt state.
 TEST(Path, ManyConsecutiveClosePathsDoNotCorrupt) {
   PathBuilder builder;
   builder.moveTo(kVec1);
   builder.lineTo(kVec2);
   builder.closePath();
 
-  // Hammer closePath 100 times — each is emitted by PathBuilder.
+  // Hammer closePath 100 times — all are no-ops (no open subpath).
   for (int i = 0; i < 100; ++i) {
     builder.closePath();
   }
 
-  // Open a new subpath — should not crash regardless of accumulated closePaths.
+  // Open a new subpath — should work normally.
   builder.moveTo(kVec3);
   builder.lineTo(kVec4);
   builder.closePath();
@@ -338,8 +338,8 @@ TEST(Path, ManyConsecutiveClosePathsDoNotCorrupt) {
   Path spline = builder.build();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
-  // 3 initial commands + 100 extra closePaths + 3 final commands = 106.
-  EXPECT_EQ(spline.verbCount(), 106u);
+  // 3 initial commands + 3 final commands = 6 (100 no-ops produced nothing).
+  EXPECT_EQ(spline.verbCount(), 6u);
 }
 
 TEST(Path, Ellipse) {
