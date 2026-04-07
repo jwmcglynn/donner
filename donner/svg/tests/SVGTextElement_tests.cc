@@ -320,4 +320,248 @@ TEST(SVGTextElementCacheTests, TSpanPositionChangeInvalidatesParent) {
   EXPECT_NEAR(spanStartAfter.x - spanStartBefore.x, 20.0, 1.0);
 }
 
+// ── getRotationOfChar tests ─────────────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, GetRotationOfCharWithRotateAttribute) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px"
+            rotate="0 45 90">ABC</text>
+    </svg>
+  )-");
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(0), 0.0);
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(1), 45.0);
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(2), 90.0);
+}
+
+TEST(SVGTextElementPublicApiTests, GetRotationOfCharLastValueRepeats) {
+  // Per SVG spec, the last rotate value is reused for remaining characters.
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px"
+            rotate="15">ABCD</text>
+    </svg>
+  )-");
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // All characters should get the single rotate value of 15.
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(0), 15.0);
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(1), 15.0);
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(2), 15.0);
+  EXPECT_DOUBLE_EQ(textElement.getRotationOfChar(3), 15.0);
+}
+
+// ── Word-spacing tests ──────────────────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, WordSpacingAffectsCharacterPositions) {
+  SVGDocument docNoSpacing = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">Hi World</text>
+    </svg>
+  )-");
+
+  SVGDocument docWithSpacing = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px"
+            style="word-spacing: 20px">Hi World</text>
+    </svg>
+  )-");
+
+  auto textNoSpacing = docNoSpacing.querySelector("#t")->cast<SVGTextElement>();
+  auto textWithSpacing = docWithSpacing.querySelector("#t")->cast<SVGTextElement>();
+
+  // The character after the space ("W" at index 3) should be shifted right by the word-spacing.
+  const double posWithout = textNoSpacing.getStartPositionOfChar(3).x;
+  const double posWith = textWithSpacing.getStartPositionOfChar(3).x;
+
+  // Word-spacing of 20px should shift characters after the space by ~20px.
+  EXPECT_NEAR(posWith - posWithout, 20.0, 1.0);
+}
+
+// ── Letter-spacing tests ────────────────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, LetterSpacingAffectsCharacterPositions) {
+  SVGDocument docNoSpacing = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-");
+
+  SVGDocument docWithSpacing = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px"
+            style="letter-spacing: 10px">ABC</text>
+    </svg>
+  )-");
+
+  auto textNoSpacing = docNoSpacing.querySelector("#t")->cast<SVGTextElement>();
+  auto textWithSpacing = docWithSpacing.querySelector("#t")->cast<SVGTextElement>();
+
+  // The third character 'C' (index 2) should be shifted right by letter-spacing * 2 (two gaps).
+  const double posWithout = textNoSpacing.getStartPositionOfChar(2).x;
+  const double posWith = textWithSpacing.getStartPositionOfChar(2).x;
+
+  // Letter-spacing of 10px applied twice (A->B and B->C) should shift C by ~20px.
+  EXPECT_NEAR(posWith - posWithout, 20.0, 1.0);
+}
+
+// ── Text-anchor tests ───────────────────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, TextAnchorMiddleShiftsStartPosition) {
+  SVGDocument docStart = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px"
+            text-anchor="start">ABC</text>
+    </svg>
+  )-");
+
+  SVGDocument docMiddle = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px"
+            text-anchor="middle">ABC</text>
+    </svg>
+  )-");
+
+  auto textStart = docStart.querySelector("#t")->cast<SVGTextElement>();
+  auto textMiddle = docMiddle.querySelector("#t")->cast<SVGTextElement>();
+
+  const double startX = textStart.getStartPositionOfChar(0).x;
+  const double middleX = textMiddle.getStartPositionOfChar(0).x;
+
+  // With text-anchor:middle, the text is shifted left by half the text length.
+  const double textLen = textStart.getComputedTextLength();
+  EXPECT_NEAR(startX - middleX, textLen / 2.0, 1.0);
+}
+
+TEST(SVGTextElementPublicApiTests, TextAnchorEndShiftsStartPosition) {
+  SVGDocument docStart = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px"
+            text-anchor="start">ABC</text>
+    </svg>
+  )-");
+
+  SVGDocument docEnd = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px"
+            text-anchor="end">ABC</text>
+    </svg>
+  )-");
+
+  auto textStart = docStart.querySelector("#t")->cast<SVGTextElement>();
+  auto textEnd = docEnd.querySelector("#t")->cast<SVGTextElement>();
+
+  const double startX = textStart.getStartPositionOfChar(0).x;
+  const double endX = textEnd.getStartPositionOfChar(0).x;
+
+  // With text-anchor:end, the text is shifted left by the full text length.
+  const double textLen = textStart.getComputedTextLength();
+  EXPECT_NEAR(startX - endX, textLen, 1.0);
+}
+
+// ── Multiple tspan positioning tests ────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, MultipleTSpanPerCharacterPositioning) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 300 40">
+      <text id="root" x="10 30" y="20" font-family="fallback-font" font-size="12px">
+        A<tspan id="span" x="50 70">BC</tspan>
+      </text>
+    </svg>
+  )-");
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+
+  // Character 'A' should be at x=10.
+  EXPECT_NEAR(root.getStartPositionOfChar(0).x, 10.0, 0.5);
+
+  // Character 'B' (first in tspan) should be at x=50 (tspan's own x overrides).
+  EXPECT_NEAR(root.getStartPositionOfChar(1).x, 50.0, 0.5);
+
+  // Character 'C' (second in tspan) should be at x=70.
+  EXPECT_NEAR(root.getStartPositionOfChar(2).x, 70.0, 0.5);
+}
+
+// ── convertToPath tests ─────────────────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, ConvertToPathReturnsPathPerGlyph) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABCD</text>
+    </svg>
+  )-");
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  const std::vector<PathSpline> paths = textElement.convertToPath();
+  // Each character should produce one path.
+  EXPECT_EQ(static_cast<long>(paths.size()), textElement.getNumberOfChars());
+
+  // Each path should be non-empty (all of A, B, C, D have outlines).
+  for (const auto& path : paths) {
+    EXPECT_FALSE(path.empty());
+  }
+}
+
+// ── objectBoundingBox vs inkBoundingBox tests ───────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, ObjectBoundingBoxDiffersFromInkBoundingBox) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">Tg</text>
+    </svg>
+  )-");
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  const Boxd inkBounds = textElement.inkBoundingBox();
+  const Boxd objectBounds = textElement.objectBoundingBox();
+
+  // Both should be valid (non-empty) boxes.
+  EXPECT_GT(inkBounds.width(), 0.0);
+  EXPECT_GT(inkBounds.height(), 0.0);
+  EXPECT_GT(objectBounds.width(), 0.0);
+  EXPECT_GT(objectBounds.height(), 0.0);
+
+  // objectBoundingBox accounts for line-height and baseline, so it should typically
+  // be taller than the ink bounds. At minimum they should differ in some dimension.
+  EXPECT_NE(inkBounds, objectBounds);
+}
+
+// ── getCharNumAtPosition tests ──────────────────────────────────────────────
+
+TEST(SVGTextElementPublicApiTests, GetCharNumAtPositionFindsCorrectChar) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-");
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // Use the center of each character's extent to verify lookup.
+  for (long i = 0; i < textElement.getNumberOfChars(); ++i) {
+    const Boxd extent = textElement.getExtentOfChar(static_cast<std::size_t>(i));
+    const Vector2d center = (extent.topLeft + extent.bottomRight) * 0.5;
+    EXPECT_EQ(textElement.getCharNumAtPosition(center), i) << "Failed for character index " << i;
+  }
+}
+
+TEST(SVGTextElementPublicApiTests, GetCharNumAtPositionReturnsNegativeForMiss) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px">A</text>
+    </svg>
+  )-");
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // A point far away from the text should return -1.
+  EXPECT_EQ(textElement.getCharNumAtPosition(Vector2d(0.0, 0.0)), -1);
+}
+
 }  // namespace donner::svg

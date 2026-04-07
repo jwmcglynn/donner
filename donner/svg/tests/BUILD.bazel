@@ -33,6 +33,7 @@ donner_cc_test(
         "SVGUseElement_tests.cc",
         "SVGTSpanElement_tests.cc",
         "SVGTextElement_tests.cc",
+        "SVGTextPathElement_tests.cc",
     ],
     tags = ["manual"],
     deps = [
