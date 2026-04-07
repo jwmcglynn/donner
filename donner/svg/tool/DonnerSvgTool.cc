@@ -271,7 +271,7 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
   if (!options.quiet && warningSink.hasWarnings()) {
     out << "Parse warnings:\n";
     out << DiagnosticRenderer::formatAll(fileData, warningSink,
-                                        {.colorize = true, .filename = options.inputFile});
+                                        {.filename = options.inputFile, .colorize = true});
   }
 
   return std::move(result.result());
