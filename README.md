@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC) [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner) ![Product lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc.svg) ![Test lines of code](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/loc-tests.svg)
 ![Comments %](https://gist.githubusercontent.com/jwmcglynn/91f7f490a72af9c06506c8176729d218/raw/comments.svg)
 
-Donner SVG is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM with complete rendering support including text and filters. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
+Donner SVG is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM. [Try it out online!](https://jwmcglynn.github.io/donner-editor/)
 
 ![Donner splash image](donner_splash.svg)
 
@@ -32,14 +32,14 @@ const bool success = renderer.save("output.png");
 Donner supports:
 
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients
-- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.)
 - Text rendering with `<text>`, `<tspan>`, and `<textPath>`, including WOFF2 web fonts and optional HarfBuzz shaping
+- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.)
 - CSS3 parsing and cascading support, with a hand-rolled library
 - Detailed validation and diagnostics, errors point to the exact location
 - A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree, optimized for performance
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering
-- Two renderer backends: **Skia** (Chromium's renderer) and **tiny-skia** (lightweight software renderer)
+- Two renderer backends: **tiny-skia** (default, a lightweight software renderer) and **Skia** (Chromium's renderer)
 
 ## Supported Elements
 
@@ -53,13 +53,13 @@ Donner also ships an end-user CLI for rendering and previewing SVG files.
 
 ```sh
 # Render to PNG
-bazel run //donner/svg/tool -- donner_splash.svg --output output.png
+tools/donner-svg donner_splash.svg --output output.png
 
 # Show terminal preview
-bazel run //donner/svg/tool -- donner_splash.svg --preview
+tools/donner-svg donner_splash.svg --preview
 
 # Interactive terminal mode with mouse selection
-bazel run //donner/svg/tool -- donner_splash.svg --interactive
+tools/donner-svg donner_splash.svg --interactive
 ```
 
 Tool docs: [`donner/svg/tool/README.md`](donner/svg/tool/README.md)
@@ -163,23 +163,23 @@ See the source at: [experimental/viewer/svg_viewer.cc](./experimental/viewer/svg
 
 ## Documentation
 
-- [Getting started](https://jwmcglynn.github.io/donner/GettingStarted.html)
+- [Getting Started](https://jwmcglynn.github.io/donner/GettingStarted.html)
 - [API Documentation](https://jwmcglynn.github.io/donner/DonnerAPI.html)
-- [System architecture](https://jwmcglynn.github.io/donner/SystemArchitecture.html)
+- [System Architecture](https://jwmcglynn.github.io/donner/SystemArchitecture.html)
 - [Building Donner](https://jwmcglynn.github.io/donner/BuildingDonner.html)
 - [donner-svg CLI tool](https://jwmcglynn.github.io/donner/DonnerSvgTool.html)
 - [Examples](https://jwmcglynn.github.io/donner/examples.html)
 
 ## Status
 
-- [Project status](https://github.com/jwmcglynn/donner/issues/149)
-- [Build report](docs/build_report.md)
+- [Project Status](https://github.com/jwmcglynn/donner/issues/149)
+- [Build Report](docs/build_report.md)
 
 ## CMake Support
 
 CMake support is available for integrating Donner into CMake-based projects. The CMake build fetches dependencies and builds the library. Both the Skia and tiny-skia backends are supported.
 
-See the [CMake documentation](https://jwmcglynn.github.io/donner/BuildingDonner.html#cmake-build) for more details.
+See the [CMake Documentation](https://jwmcglynn.github.io/donner/BuildingDonner.html#cmake-build) for more details.
 
 ## Other Libraries
 

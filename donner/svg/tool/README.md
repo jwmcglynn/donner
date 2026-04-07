@@ -5,26 +5,26 @@
 ## Run
 
 ```sh
-bazel run //donner/svg/tool -- input.svg
+tools/donner-svg input.svg
 ```
 
-Or use the convenience wrapper:
+Or using bazel run (tools/donner-svg is a bazel alias for //donner/svg/tool):
 
 ```sh
-tools/donner-svg input.svg
+bazel run //donner/svg/tool -- input.svg
 ```
 
 ## Common usage
 
 ```sh
 # Render SVG to PNG
-bazel run //donner/svg/tool -- input.svg --output output.png
+tools/donner-svg input.svg --output output.png
 
 # Render and show terminal preview (no PNG saved)
-bazel run //donner/svg/tool -- input.svg --preview
+tools/donner-svg input.svg --preview
 
 # Interactive preview with mouse selection
-bazel run //donner/svg/tool -- input.svg --interactive
+tools/donner-svg input.svg --interactive
 ```
 
 ## Flags
