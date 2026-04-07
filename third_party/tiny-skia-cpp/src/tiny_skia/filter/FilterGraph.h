@@ -232,6 +232,9 @@ struct GraphNode {
   std::optional<std::string> result;   ///< Named output (for `result` attribute).
   std::optional<PixelRect> subregion;  ///< Pixel-space primitive subregion (AABB, for clipping).
 
+  /// User-space subregion for rotation-aware clipping.
+  std::optional<PixelRect> userSpaceSubregion;
+
   /// Per-node color space override. When set, overrides the graph-level `useLinearRGB`.
   /// true = linearRGB, false = sRGB.
   std::optional<bool> useLinearRGB;
@@ -249,6 +252,11 @@ struct FilterGraph {
   /// Filter region in pixel space (clips subregions). If not set, uses full pixmap extent.
   std::optional<PixelRect> filterRegion;
 
+  /// User-space filter region for rotation-aware source clipping.
+  std::optional<PixelRect> userSpaceFilterRegion;
+
+  /// Inverse transform (pixel -> filter/user space) for rotation-aware subregion clipping.
+  std::optional<AffineTransform> filterFromDevice;
 };
 
 /// Execute a filter graph on a source pixmap.
