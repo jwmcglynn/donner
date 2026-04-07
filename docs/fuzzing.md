@@ -34,3 +34,79 @@ mv ./crash-0f6f12d023e0ad5ed83b29763cd67315e0ee0c6b donner/css/parser/tests/decl
 ```sh
 bazel test --config=asan-fuzzer --test_tag_filters=fuzz_target //...
 ```
+
+# Continuous Fuzzing {#ContinuousFuzzing}
+
+Donner includes a continuous fuzzing harness that runs all fuzzer targets for extended periods,
+stops when coverage plateaus, manages corpus across runs, and reports crashes.
+
+See the [design doc](design_docs/continuous_fuzzing.md) for full architecture details.
+
+## Quick start
+
+```sh
+# Run all fuzzers (5 min each, 4 workers):
+python3 tools/fuzzing/run_continuous_fuzz.py
+
+# Longer run with 8 workers, 15 min per fuzzer, 1 hour total cap:
+python3 tools/fuzzing/run_continuous_fuzz.py --workers=8 --fuzzer-time=900 --max-total-time=3600
+
+# Filter to specific fuzzers:
+python3 tools/fuzzing/run_continuous_fuzz.py --filter=svg_parser
+
+# Run + auto-minimize corpus afterward:
+python3 tools/fuzzing/run_continuous_fuzz.py --minimize
+```
+
+## Plateau detection
+
+Fuzzers automatically stop when edge coverage stops growing. The `--plateau-timeout` flag
+(default: 10 minutes) sets how long to wait after the last new coverage before terminating.
+This avoids wasting compute on saturated fuzzers.
+
+## Corpus management
+
+```sh
+# Minimize the latest run into persistent corpus:
+python3 tools/fuzzing/manage_corpus.py minimize --latest
+
+# Copy persistent corpus into in-tree directories (for committing):
+python3 tools/fuzzing/manage_corpus.py update-intree
+
+# Show corpus sizes:
+python3 tools/fuzzing/manage_corpus.py stats
+```
+
+## Crash reporting
+
+```sh
+# Process crashes from the latest run (files GitHub Issues):
+python3 tools/fuzzing/crash_reporter.py report --latest
+
+# Dry run (detect + dedup only, no issue filing):
+python3 tools/fuzzing/crash_reporter.py report --latest --dry-run
+
+# List known crashes:
+python3 tools/fuzzing/crash_reporter.py list
+```
+
+## Dashboard
+
+```sh
+python3 tools/fuzzing/dashboard.py           # Summary of recent runs
+python3 tools/fuzzing/dashboard.py --json    # Machine-readable output
+```
+
+## Automated runs (Docker)
+
+The harness runs in a Docker container via docker-compose:
+
+```sh
+cd tools/fuzzing
+docker compose up -d          # Start continuous fuzzing
+docker compose logs -f fuzz   # Watch output
+docker compose exec fuzz python3 tools/fuzzing/dashboard.py  # Dashboard
+docker compose down           # Stop
+```
+
+See `tools/fuzzing/docker-compose.yml` for configuration.

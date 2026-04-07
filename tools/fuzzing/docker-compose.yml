@@ -1,0 +1,143 @@
+# Donner continuous fuzzing — multi-repo capable.
+#
+# Quick start:
+#   curl -O https://raw.githubusercontent.com/jwmcglynn/donner/main/tools/fuzzing/docker-compose.yml
+#   mkdir -p fuzz-data/donner
+#   docker compose up -d
+#
+# Web dashboard at http://localhost:8080
+#
+# To add more repos, duplicate the "donner" service block and change the
+# FUZZ_REPO_URL, container name, volume paths, and service name.
+# Then create the host dir: mkdir -p fuzz-data/<repo-name>
+#
+# Host data lives at ./fuzz-data/<repo>/ — corpus, crashes, run history.
+# Change FUZZ_HOST_DIR to relocate: FUZZ_HOST_DIR=/mnt/data docker compose up -d
+
+x-fuzz-defaults: &fuzz-defaults
+  build:
+    context: https://github.com/jwmcglynn/donner.git#main:tools/fuzzing
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "8"
+        memory: 16G
+      reservations:
+        cpus: "2"
+        memory: 4G
+
+services:
+  # -----------------------------------------------------------------------
+  # Donner — primary repo
+  # -----------------------------------------------------------------------
+  donner:
+    <<: *fuzz-defaults
+    container_name: fuzz-donner
+    environment:
+      - FUZZ_REPO_URL=https://github.com/jwmcglynn/donner.git
+      # Trigger / rate limiting
+      - FUZZ_MIN_INTERVAL=7200
+      - FUZZ_LOOP_INTERVAL=1800
+      # Fuzzer execution
+      - FUZZ_WORKERS=8
+      - FUZZ_FUZZER_TIME=900
+      - FUZZ_PLATEAU=120
+      - FUZZ_MAX_TOTAL=3600
+      # Quiet hours
+      - FUZZ_QUIET_MODE=reduce
+      - FUZZ_QUIET_WORKERS=2
+      - FUZZ_QUIET_MAX_TOTAL=1800
+      - FUZZ_STEAL_THRESHOLD=10
+      # Uncomment for crash issue filing:
+      # - GH_TOKEN=${GH_TOKEN}
+    volumes:
+      - ${FUZZ_HOST_DIR:-./fuzz-data}/donner:/home/fuzzer/.donner-fuzz
+      - donner-bazel-cache:/home/fuzzer/.cache/bazel
+      - donner-repo:/home/fuzzer/donner
+
+  # -----------------------------------------------------------------------
+  # Example: another repo (uncomment and customize)
+  # -----------------------------------------------------------------------
+  # my-other-project:
+  #   <<: *fuzz-defaults
+  #   container_name: fuzz-my-other-project
+  #   environment:
+  #     - FUZZ_REPO_URL=https://github.com/your-org/your-repo.git
+  #     - FUZZ_MIN_INTERVAL=7200
+  #     - FUZZ_LOOP_INTERVAL=1800
+  #     - FUZZ_WORKERS=4
+  #     - FUZZ_FUZZER_TIME=900
+  #     - FUZZ_PLATEAU=120
+  #     - FUZZ_MAX_TOTAL=3600
+  #     - FUZZ_QUIET_MODE=reduce
+  #     - FUZZ_QUIET_WORKERS=2
+  #     - FUZZ_STEAL_THRESHOLD=10
+  #   volumes:
+  #     - ${FUZZ_HOST_DIR:-./fuzz-data}/my-other-project:/home/fuzzer/.donner-fuzz
+  #     - my-other-project-cache:/home/fuzzer/.cache/bazel
+  #     - my-other-project-repo:/home/fuzzer/donner
+
+  # -----------------------------------------------------------------------
+  # Web dashboard — reads state from all repos
+  # -----------------------------------------------------------------------
+  dashboard:
+    <<: *fuzz-defaults
+    container_name: fuzz-dashboard
+    restart: unless-stopped
+    # Override entrypoint: clone repo for the dashboard code, then serve
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        if [ ! -d /home/fuzzer/donner/.git ]; then
+          git clone --depth=1 https://github.com/jwmcglynn/donner.git /home/fuzzer/donner
+        else
+          git -C /home/fuzzer/donner pull --ff-only -q 2>/dev/null || true
+        fi
+        exec python3 /home/fuzzer/donner/tools/fuzzing/web_dashboard.py --port=8080
+    ports:
+      - "${FUZZ_DASHBOARD_PORT:-8080}:8080"
+    volumes:
+      # Mount the primary repo's state (dashboard reads from here)
+      - ${FUZZ_HOST_DIR:-./fuzz-data}/donner:/home/fuzzer/.donner-fuzz:ro
+      - dashboard-repo:/home/fuzzer/donner
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+
+  # -----------------------------------------------------------------------
+  # One-shot run (for CI or manual)
+  #   docker compose run --rm donner-once
+  # -----------------------------------------------------------------------
+  donner-once:
+    <<: *fuzz-defaults
+    container_name: fuzz-donner-once
+    restart: "no"
+    profiles: [once]
+    environment:
+      - FUZZ_REPO_URL=https://github.com/jwmcglynn/donner.git
+      - FUZZ_ONE_SHOT=1
+      - FUZZ_WORKERS=8
+      - FUZZ_FUZZER_TIME=900
+      - FUZZ_PLATEAU=120
+      - FUZZ_MAX_TOTAL=3600
+    volumes:
+      - ${FUZZ_HOST_DIR:-./fuzz-data}/donner:/home/fuzzer/.donner-fuzz
+      - donner-bazel-cache:/home/fuzzer/.cache/bazel
+      - donner-repo:/home/fuzzer/donner
+
+volumes:
+  donner-bazel-cache:
+    name: fuzz-donner-bazel-cache
+  donner-repo:
+    name: fuzz-donner-repo
+  dashboard-repo:
+    name: fuzz-dashboard-repo
+  # Add for additional repos:
+  # my-other-project-cache:
+  #   name: fuzz-my-other-project-cache
+  # my-other-project-repo:
+  #   name: fuzz-my-other-project-repo

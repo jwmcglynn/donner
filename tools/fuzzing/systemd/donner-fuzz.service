@@ -1,0 +1,24 @@
+[Unit]
+Description=Donner continuous fuzzing trigger
+# Only run if the repo exists
+ConditionPathIsDirectory=/home/jwm/Projects/donner/.git
+
+[Service]
+Type=oneshot
+ExecStart=/home/jwm/Projects/donner/tools/fuzzing/trigger_fuzz.sh
+WorkingDirectory=/home/jwm/Projects/donner
+
+# Resource limits
+TimeoutStartSec=7200
+MemoryMax=16G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=donner-fuzz
+
+# Run as the owning user
+User=jwm
+
+[Install]
+WantedBy=default.target

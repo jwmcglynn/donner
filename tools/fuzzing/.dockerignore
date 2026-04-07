@@ -1,0 +1,8 @@
+# Exclude build artifacts and large directories from Docker context
+bazel-*
+.git
+generated-doxygen
+node_modules
+__pycache__
+*.pyc
+.pytest_cache

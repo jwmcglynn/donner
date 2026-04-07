@@ -1,0 +1,13 @@
+[Unit]
+Description=Donner continuous fuzzing trigger (every 30 minutes)
+
+[Timer]
+# Fire every 30 minutes
+OnCalendar=*:00/30
+# Randomize start within 2 minutes to avoid thundering herd
+RandomizedDelaySec=120
+# Run immediately if a scheduled time was missed (e.g., after reboot)
+Persistent=true
+
+[Install]
+WantedBy=timers.target
