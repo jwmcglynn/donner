@@ -19,6 +19,7 @@ donner_cc_test(
         "SVGEllipseElement_tests.cc",
         "SVGFilterElement_tests.cc",
         "SVGImageElement_tests.cc",
+        "SVGInvalidation_tests.cc",
         "SVGLinearGradientElement_tests.cc",
         "SVGLineElement_tests.cc",
         "SVGMarkerElement_tests.cc",
