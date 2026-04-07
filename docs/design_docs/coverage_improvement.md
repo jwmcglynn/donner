@@ -1,20 +1,29 @@
 # Design: Test Coverage Improvement (74% → 80%, stretch 90%)
 
-**Status:** Planned
+**Status:** In Progress (Round 1 complete, Round 2 in progress)
 **Updated:** 2026-04-07
 **Tracking:** v1.0 milestone
 
 ## Summary
 
-After the filter support merge, Codecov reports 74.2% line coverage (down from ~82% pre-merge).
+After the filter support merge, Codecov reports 74.3% line coverage (down from ~82% pre-merge).
 The drop comes from ~10K new lines in the filter pipeline and vendored tiny-skia filter library.
 This plan restores coverage to 80%+ and charts a path to the v1.0 target of 90%.
 
-**Immediate fix:** Exclude `third_party/` from coverage metrics — this is vendored code tested
-via integration tests (resvg suite), not unit tests. Expected impact: +3–4%.
+### Round 1 Results (PR #478, merged)
 
-**Remaining gap:** ~3–12% from undertested production code in the renderer, text engine, filter
-executor, and SVG element classes.
+- Excluded `third_party/` from coverage via `codecov.yml` and `filter_coverage.py`
+- Added 228 new tests across 8 new test files and 5 expanded files (~4,600 lines)
+- Codecov impact: 74.3% → 74.6% (+0.3%) — third_party exclusion not yet reflected in
+  codecov baseline; local measurement shows 71.5% lines with `--config=latest_llvm`
+- Note: codecov.yml must be on the default branch (main) to take effect on project-level
+  coverage; it landed with PR #478
+
+### Remaining gap
+
+~6% from undertested production code in renderer backends, text engine, and rendering context.
+The largest uncovered files are RendererTinySkia.cc (2,241 lines), RendererSkia.cc (4,232 lines),
+TextEngine.cc (1,715 lines), and RenderingContext.cc (1,148 lines).
 
 ## Current State
 
@@ -56,11 +65,11 @@ These element types have no dedicated `*_tests.cc` file:
 Remove vendored `third_party/` code from the LCOV coverage denominator. This code is tested
 via the resvg integration test suite, not unit tests.
 
-- [ ] Update `filter_coverage.py` to skip LCOV records for `third_party/` paths
+- [x] Update `filter_coverage.py` to skip LCOV records for `third_party/` paths
 - [ ] Verify coverage increases by ~3–4% after exclusion
-- [ ] Add codecov.yml with `ignore: ["third_party/**"]` for redundancy
+- [x] Add codecov.yml with `ignore: ["third_party/**"]` for redundancy
 
-**Expected impact:** 74% → ~77–78%
+**Expected impact:** 74% → ~77–78%. Landed in PR #478.
 
 ### Phase 1: Text engine tests (est. +2–3%)
 

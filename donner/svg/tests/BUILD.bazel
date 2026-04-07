@@ -29,6 +29,7 @@ donner_cc_test(
         "SVGRadialGradientElement_tests.cc",
         "SVGRectElement_tests.cc",
         "SVGSVGElement_tests.cc",
+        "SVGStyleCascade_tests.cc",
         "SVGStopElement_tests.cc",
         "SVGSymbolElement_tests.cc",
         "SVGUseElement_tests.cc",
