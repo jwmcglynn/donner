@@ -6,10 +6,12 @@ donner_cc_library(
     srcs = [
         "BezierUtils.cc",
         "ParseDiagnostic.cc",
+        "Path.cc",
     ],
     hdrs = [
         "BezierUtils.h",
         "Box.h",
+        "Path.h",
         "ChunkedString.h",
         "CompileTimeMap.h",
         "EcsRegistry.h",
@@ -91,6 +93,7 @@ donner_cc_test(
         "tests/BezierUtils_tests.cc",
         "tests/DiagnosticRenderer_tests.cc",
         "tests/Box_tests.cc",
+        "tests/Path_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
         "tests/Length_tests.cc",
