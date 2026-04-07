@@ -61,8 +61,10 @@ donner_cc_test(
         "tests/PaintSystem_tests.cc",
     ],
     deps = [
+        ":components",
         ":paint_system",
         "//donner/base:base_test_utils",
+        "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/components/style:style_system",
         "//donner/svg/parser",
