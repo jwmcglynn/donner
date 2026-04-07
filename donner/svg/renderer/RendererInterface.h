@@ -159,14 +159,27 @@ struct TextParams {
   /// If set, stretches or compresses text to fill the given length.
   std::optional<Lengthd> textLength;
   LengthAdjust lengthAdjust = LengthAdjust::Default;
-  /// @font-face declarations for custom font resolution.
+  /// `@font-face` declarations for custom font resolution.
   std::span<const css::FontFace> fontFaces;
   /// Entity of the text root element, for cached layout lookup. entt::null if unknown.
   entt::entity textRootEntity = entt::null;
 };
 
 /**
- * Backend-agnostic rendering interface consumed by the traversal driver.
+ * Backend-agnostic rendering interface consumed by RendererDriver during document traversal.
+ *
+ * Implement this interface to create a custom rendering backend. The driver calls methods in the
+ * following order:
+ *
+ * 1. **Frame lifecycle:** `draw()` → `beginFrame()` → (drawing calls) → `endFrame()`
+ * 2. **State stacks:** `pushTransform()`/`popTransform()`, `pushClip()`/`popClip()`,
+ *    `pushIsolatedLayer()`/`popIsolatedLayer()` are always paired (LIFO).
+ * 3. **Paint:** `setPaint()` is called before each draw operation.
+ * 4. **Masks:** `pushMask()` → (render mask shape) → `transitionMaskToContent()` →
+ *    (render masked content) → `popMask()`. Masks may nest.
+ *
+ * Coordinates flow through three spaces: SVG user units → document coordinates (after viewBox
+ * mapping) → device pixels (after `devicePixelRatio` scaling in \ref RenderViewport).
  */
 class RendererInterface {
 public:

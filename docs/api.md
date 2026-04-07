@@ -8,7 +8,7 @@ Donner provides several standalone APIs for core functionality which can be used
 
 - SVG Object Model (\ref donner::svg)
 - CSS Parsing and Cascading (\ref donner::css)
-- SVG Rendering (\ref donner::svg::RendererSkia)
+- SVG Rendering (\ref donner::svg::Renderer)
 - SVG Parsing (\ref donner::svg::parser::SVGParser)
 - XML Parsing (\ref donner::xml::XMLParser)
 
@@ -151,13 +151,16 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGElement               | (none, base class)      |
 | \ref donner::svg::SVGEllipseElement        | \ref xml_ellipse        |
 | \ref donner::svg::SVGFEGaussianBlurElement | \ref xml_feGaussianBlur |
+| (+ 16 other filter primitive types)        | `<feBlend>`, `<feColorMatrix>`, etc. |
 | \ref donner::svg::SVGFilterElement         | \ref xml_filter         |
 | \ref donner::svg::SVGGElement              | \ref xml_g              |
 | \ref donner::svg::SVGGeometryElement       | (none, base class)      |
 | \ref donner::svg::SVGGradientElement       | (none, base class)      |
 | \ref donner::svg::SVGGraphicsElement       | (none, base class)      |
+| \ref donner::svg::SVGImageElement          | \ref xml_image          |
 | \ref donner::svg::SVGLinearGradientElement | \ref xml_linearGradient |
 | \ref donner::svg::SVGLineElement           | \ref xml_line           |
+| \ref donner::svg::SVGMarkerElement         | \ref xml_marker         |
 | \ref donner::svg::SVGMaskElement           | \ref xml_mask           |
 | \ref donner::svg::SVGPathElement           | \ref xml_path           |
 | \ref donner::svg::SVGPatternElement        | \ref xml_pattern        |
@@ -168,6 +171,10 @@ if (element.isa<SVGCircleElement>()) {
 | \ref donner::svg::SVGStopElement           | \ref xml_stop           |
 | \ref donner::svg::SVGStyleElement          | \ref xml_style          |
 | \ref donner::svg::SVGSVGElement            | \ref xml_svg            |
+| \ref donner::svg::SVGSymbolElement         | \ref xml_symbol         |
+| \ref donner::svg::SVGTextElement           | \ref xml_text           |
+| \ref donner::svg::SVGTextPathElement       | \ref xml_textPath       |
+| \ref donner::svg::SVGTSpanElement          | \ref xml_tspan          |
 | \ref donner::svg::SVGUnknownElement        | _any unknown tag_       |
 | \ref donner::svg::SVGUseElement            | \ref xml_use            |
 
@@ -192,11 +199,11 @@ To create an element, use the element-specific `Create` method:
 
 ### Rendering
 
-To render an SVG document, use the \ref donner::svg::RendererSkia class.
+To render an SVG document, use the \ref donner::svg::Renderer class.
 
 \snippet svg_to_png.cc render
 
-`RendererSkia` is prototype-level, and has limited documentation and may be subject to change.
+`Renderer` is backend-agnostic and resolves to the active build backend (Skia or tiny-skia).
 
 The output size is determined by \ref donner::svg::SVGDocument, which can either be detected from the file itself or overridden with SVGDocument APIs:
 

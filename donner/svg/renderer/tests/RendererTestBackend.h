@@ -66,6 +66,7 @@ inline std::string_view RendererBackendFeatureName(RendererBackendFeature featur
     case RendererBackendFeature::TextFull: return "full text rendering";
     case RendererBackendFeature::FilterEffects: return "filter effects";
     case RendererBackendFeature::SkpDebug: return "SkPicture debug capture";
+    case RendererBackendFeature::AsciiSnapshot: return "ASCII snapshot";
   }
 
   return "unknown feature";

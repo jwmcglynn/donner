@@ -16,23 +16,24 @@ class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
 
 /**
- * Represents an SVG document, which holds a collection of \ref SVGElement as the document tree.
+ * Represents a parsed SVG document containing a tree of \ref SVGElement nodes.
  *
- * Each \ref SVGElement may only belong to a single document, and each document can have only one
- * root. SVGDocument is responsible for managing the lifetime of all elements in the document, by
- * storing a shared pointer to the internal Registry data-store.
+ * To create a document, parse SVG content with \ref donner::svg::parser::SVGParser::ParseSVG, or
+ * construct an empty document and build the tree programmatically. Access the root `<svg>` element
+ * with svgElement(), find elements with querySelector(), and render with \ref Renderer.
  *
- * Data is stored using the Entity Component System (\ref EcsArchitecture) pattern, which is a
- * data-oriented design optimized for fast data access and cache locality, particularly during
- * rendering.
+ * SVGDocument and \ref SVGElement expose a familiar DOM API for traversal and manipulation (e.g.,
+ * `firstChild()`, `appendChild()`, `querySelector()`). Elements are lightweight value types that
+ * can be copied and passed on the stack.
  *
- * SVGDocument and \ref SVGElement provide a facade over the ECS, and surface a familiar
- * Document Object Model (DOM) API to traverse and manipulate the document tree, which is internally
- * stored within Components in the ECS.  This makes \ref SVGElement a thin wrapper around an \ref
- * Entity, making the object lightweight and usable on the stack.
+ * SVGDocument is **not thread-safe** — do not access the same document from multiple threads
+ * concurrently.
+ *
+ * @note Internally, data is stored using an Entity Component System (ECS) for cache-friendly
+ * access during rendering. The `registry()` and `entityHandle()` accessors expose this for
+ * advanced use cases, but most users can ignore the ECS layer entirely.
  *
  * @see \ref SVGElement
- * @see \ref EcsArchitecture
  */
 class SVGDocument {
 public:
@@ -100,7 +101,11 @@ public:
   SVGSVGElement svgElement() const;
 
   /**
-   * Set the canvas size to a fixed width and height, in pixels.
+   * Set the canvas (output image) size to a fixed width and height, in pixels.
+   *
+   * This controls the rendered output dimensions and may differ from the SVG's viewBox. If not
+   * set, defaults to 512x512 or the size specified by the root `<svg>` element's `width`/`height`
+   * attributes (when using useAutomaticCanvasSize()).
    *
    * @param width Width of the canvas, in pixels.
    * @param height Height of the canvas, in pixels.
@@ -108,7 +113,8 @@ public:
   void setCanvasSize(int width, int height);
 
   /**
-   * Automatically determine the canvas size based on the size of the root \ref xml_svg element.
+   * Automatically determine the canvas size from the root `<svg>` element's `width` and `height`
+   * attributes. If those attributes are not set, falls back to the default size (512x512).
    */
   void useAutomaticCanvasSize();
 

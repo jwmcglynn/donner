@@ -25,3 +25,14 @@ graph LR
 @endmermaid
 
 */
+
+/**
+@defgroup ecs_components ECS Components
+
+Components are the data layer of the ECS architecture. Each component holds a specific piece of
+state and is attached to an entity. Components contain no logic — systems read and write them.
+
+Components are typically small structs or classes that store the results of a computation stage
+(e.g., computed styles, resolved transforms, cached geometry). They are attached to entities
+via the entt registry and accessed by systems during processing.
+*/

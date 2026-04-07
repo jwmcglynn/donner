@@ -56,7 +56,7 @@ public:
    *
    * @param document The SVG document to render.
    */
-  void draw(SVGDocument& document);
+  void draw(SVGDocument& document) override;
 
   /**
    * Begins a render pass for the given viewport.
@@ -182,10 +182,10 @@ public:
   std::span<const uint8_t> pixelData() const;
 
   /// Get the width of the rendered image in pixels.
-  int width() const { return bitmap_.width(); }
+  int width() const override { return bitmap_.width(); }
 
   /// Get the height of the rendered image in pixels.
-  int height() const { return bitmap_.height(); }
+  int height() const override { return bitmap_.height(); }
 
   /// Get the SkBitmap of the rendered image.
   const SkBitmap& bitmap() const { return bitmap_; }

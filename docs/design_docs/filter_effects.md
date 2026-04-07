@@ -1,6 +1,6 @@
 # Design: SVG Filter Effects
 
-**Status:** In Progress (Milestones 1-5 functionally complete; remaining work is debt reduction)
+**Status:** Shipped (Milestones 1-5 complete; all 17 primitives implemented)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-07
 **Last Updated:** 2026-03-17

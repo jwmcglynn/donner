@@ -47,7 +47,7 @@ public:
    *
    * @param document The SVG document to render.
    */
-  void draw(SVGDocument& document);
+  void draw(SVGDocument& document) override;
 
   /**
    * Begins a render pass for the given viewport.
@@ -205,10 +205,10 @@ public:
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
   /// Returns the rendered width in pixels.
-  int width() const;
+  int width() const override;
 
   /// Returns the rendered height in pixels.
-  int height() const;
+  int height() const override;
 
 private:
   struct PatternPaintState {

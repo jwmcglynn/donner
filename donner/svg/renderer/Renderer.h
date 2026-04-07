@@ -11,9 +11,18 @@ namespace donner::svg {
 class RendererImplementation;
 
 /**
- * Backend-agnostic renderer that resolves to the active build backend.
+ * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
  *
- * Clients should prefer this type when they do not need backend-specific APIs.
+ * Typical usage:
+ * ```cpp
+ * Renderer renderer;
+ * renderer.draw(document);
+ * renderer.save("output.png");
+ * ```
+ *
+ * The `draw()` method handles the full rendering pipeline internally: computing styles, building
+ * the render tree, and rasterizing. For frame-based rendering (e.g., in a viewer), use
+ * `beginFrame()` / `endFrame()` directly via the \ref RendererInterface API.
  */
 class Renderer : public RendererInterface {
 public:
@@ -25,7 +34,7 @@ public:
   explicit Renderer(bool verbose = false);
 
   /// Destructor.
-  ~Renderer();
+  ~Renderer() override;
 
   /// Move constructor.
   Renderer(Renderer&&) noexcept;
@@ -41,7 +50,7 @@ public:
    *
    * @param document The SVG document to render.
    */
-  void draw(SVGDocument& document);
+  void draw(SVGDocument& document) override;
 
   /**
    * Begins a render pass for the given viewport.
@@ -197,14 +206,14 @@ public:
    *
    * @return The rendered width.
    */
-  [[nodiscard]] int width() const;
+  [[nodiscard]] int width() const override;
 
   /**
    * Returns the rendered height in pixels.
    *
    * @return The rendered height.
    */
-  [[nodiscard]] int height() const;
+  [[nodiscard]] int height() const override;
 
 private:
   std::unique_ptr<RendererImplementation> impl_;

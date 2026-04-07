@@ -34,23 +34,20 @@ class SVGParserImpl;
 }  // namespace parser
 
 /**
- * Represents an SVG entity belonging to an \ref SVGDocument.
+ * Represents a single SVG element (e.g., `<rect>`, `<circle>`, `<g>`, `<text>`, etc.) within an
+ * \ref SVGDocument.
  *
- * Each \ref SVGElement may only belong to a single document, and each document can have only one
- * root. SVGDocument is responsible for managing the lifetime of all elements in the document, by
- * storing a shared pointer to the internal Registry data-store.
+ * SVGElement provides a DOM-like API for traversing the document tree (`parentElement()`,
+ * `firstChild()`, `nextSibling()`), querying and setting attributes (`getAttribute()`,
+ * `setAttribute()`), and modifying the tree structure (`appendChild()`, `removeChild()`).
  *
- * Data is stored using the Entity Component System (\ref EcsArchitecture) pattern, which is a
- * data-oriented design optimized for fast data access and cache locality, particularly during
- * rendering.
+ * Elements are lightweight value types — copying an SVGElement creates another handle to the same
+ * underlying element, not a deep copy. Use `isa<Derived>()` and `cast<Derived>()` to work with
+ * element-specific APIs (e.g., `SVGCircleElement`, `SVGPathElement`).
  *
- * SVGDocument and \ref SVGElement provide a facade over the ECS, and surface a familiar Document
- * Object Model (DOM) API to traverse and manipulate the document tree, which is internally stored
- * within Components in the ECS.  This makes \ref SVGElement a thin wrapper around an \ref Entity,
- * making the object lightweight and usable on the stack.
+ * For advanced queries like hit-testing, see \ref DonnerController.
  *
  * @see \ref SVGDocument
- * @see \ref EcsArchitecture
  */
 class SVGElement {
   friend class DonnerController;
@@ -202,10 +199,10 @@ public:
   SVGDocument ownerDocument();
 
   /**
-   * Get this element's parent, if it exists. If the parent is not set, this document is either the
-   * root element or has not been inserted into the document tree.
+   * Get this element's parent, if it exists.
    *
-   * @return The parent element, or \c std::nullopt if the parent is not set.
+   * @return The parent element, or \c std::nullopt if this is the root element or the element has
+   * not been inserted into a document tree.
    */
   std::optional<SVGElement> parentElement() const;
 
@@ -242,8 +239,10 @@ public:
    * Insert \p newNode as a child, before \p referenceNode. If \p referenceNode is std::nullopt,
    * append the child.
    *
-   * If \p newNode is already in the tree, it is first removed from its parent. However, if
-   * inserting the child will create a cycle, the behavior is undefined.
+   * If \p newNode is already in the tree, it is first removed from its parent before reinsertion.
+   *
+   * @pre \p newNode must not be an ancestor of this element (inserting a parent as a child of its
+   * descendant would create a cycle, which is undefined behavior).
    *
    * @param newNode New node to insert.
    * @param referenceNode A child of this node to insert \p newNode before, or \c std::nullopt. Must
@@ -254,8 +253,9 @@ public:
   /**
    * Append \p child as a child of the current node.
    *
-   * If child is already in the tree, it is first removed from its parent. However, if inserting
-   * the child will create a cycle, the behavior is undefined.
+   * If child is already in the tree, it is first removed from its parent before reinsertion.
+   *
+   * @pre \p child must not be an ancestor of this element (would create a cycle).
    *
    * @param child Node to append.
    */
@@ -265,8 +265,9 @@ public:
    * Replace \p oldChild with \p newChild in the tree, removing \p oldChild and inserting \p
    * newChild in its place.
    *
-   * If \p newChild is already in the tree, it is first removed from its parent. However, if
-   * inserting the child will create a cycle, the behavior is undefined.
+   * If \p newChild is already in the tree, it is first removed from its parent before reinsertion.
+   *
+   * @pre \p newChild must not be an ancestor of this element (would create a cycle).
    *
    * @param newChild New child to insert.
    * @param oldChild Old child to remove, must be a child of the current node.
@@ -393,13 +394,16 @@ public:
    * auto rectInElement = element.querySelector(":scope > rect");
    * ```
    *
-   * @param selector CSS selector to match.
+   * @param selector CSS selector to match. If the selector string is invalid, returns
+   * \c std::nullopt (no error is reported).
    * @return The first matching element, or `std::nullopt` if no element matches.
    */
   std::optional<SVGElement> querySelector(std::string_view selector);
 
   /**
-   * Get the computed CSS style of this element, after the CSS cascade.
+   * Get the computed CSS style of this element, after the CSS cascade has been applied. The
+   * returned \ref PropertyRegistry contains resolved values for all CSS properties (fill, stroke,
+   * font-size, etc.).
    */
   const PropertyRegistry& getComputedStyle() const;
 

@@ -9,11 +9,10 @@ Donner is an SVG rendering library targeting broad SVG2 compatibility, high perf
 interactive editing workflows.
 
 After v0.1 established the static rendering baseline, a large body of work landed covering renderer
-abstraction, a complete software rasterizer, text shaping, all 17 SVG filter primitives, animation,
-composited rendering, and interactivity. This is collected as **v0.5**, skipping intermediate
-milestones that were overtaken by the pace of development. The next target is **v1.0**: a
-production-quality release focused on interactive editing, conformance, parser hardening, and
-ecosystem integration.
+abstraction, a complete software rasterizer, text shaping, and all 17 SVG filter primitives. This is
+collected as **v0.5**, skipping intermediate milestones that were overtaken by the pace of
+development. The next target is **v1.0**: a production-quality release adding animation,
+interactivity, interactive editing, conformance, parser hardening, and ecosystem integration.
 
 ---
 
@@ -24,9 +23,9 @@ XML parser, CSS parser, and Skia-based renderer.
 
 ---
 
-## v0.5 — Rendering Engine (shipped)
+## v0.5 — Rendering Engine (in progress)
 
-Everything completed since v0.1, collected into a single release milestone.
+Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ### Renderer Architecture
 
@@ -42,6 +41,7 @@ Everything completed since v0.1, collected into a single release milestone.
 - Phases 1–5: stb_truetype font loading, glyph outlines, `TextLayout`, WOFF2 support,
   `dominant-baseline`.
 - Phase 6: Optional HarfBuzz text shaping tier (`--config=text-full`).
+- `<textPath>` element support for text rendered along arbitrary paths.
 - ([design](text_rendering.md))
 
 ### SVG Filter Effects
@@ -53,6 +53,18 @@ Everything completed since v0.1, collected into a single release milestone.
   transfer, flood, offset, merge, tile.
 - All 23 filter benchmarks within 1.5× of Skia; 21 of 23 are faster.
 - ([design](filter_effects.md), [perf](filter_performance.md))
+
+### Infrastructure
+
+- Auto-detect font backends, crash handling hardening.
+- Filter and render benchmark suites with perf regression tests (1.5× threshold enforcement).
+- resvg test suite integration for golden image validation.
+
+---
+
+## v1.0 — Production Release (in progress)
+
+Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
 
 ### SVG Animation
 
@@ -79,18 +91,6 @@ Everything completed since v0.1, collected into a single release milestone.
   document. CSS restyling performs differential updates: identify which elements' computed
   styles are affected by a change and re-resolve only those, propagating inherited property
   changes down the affected subtree.
-
-### Infrastructure
-
-- Auto-detect font backends, crash handling hardening.
-- Filter and render benchmark suites with perf regression tests (1.5× threshold enforcement).
-- resvg test suite integration for golden image validation.
-
----
-
-## v1.0 — Production Release (in progress)
-
-Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
 
 ### Interactive SVG Editing
 

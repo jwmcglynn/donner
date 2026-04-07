@@ -61,6 +61,8 @@ namespace donner {
  *   std::cerr << "Failed to save to file\n";
  * }
  * ```
+ *
+ * For hit-testing and spatial queries, use \ref donner::svg::DonnerController.
  */
 namespace svg {}  // namespace svg
 

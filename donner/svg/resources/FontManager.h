@@ -152,12 +152,12 @@ public:
   std::span<const uint8_t> fontData(FontHandle handle) const;
 
   /**
-   * Get the number of registered @font-face rules.
+   * Get the number of registered `@font-face` rules.
    */
   size_t numFaces() const;
 
   /**
-   * Get the family name of a registered @font-face rule by index.
+   * Get the family name of a registered `@font-face` rule by index.
    *
    * @param index Index into the registered faces (0 to numFaces()-1).
    * @return The family name, or empty string_view if index is out of range.

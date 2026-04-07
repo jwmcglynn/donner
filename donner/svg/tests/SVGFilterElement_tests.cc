@@ -36,9 +36,9 @@ MATCHER_P(FilterHas, matchers, "") {
 
 }  // namespace
 
-TEST(SVGFilterElementTests, FeatureDisabled) {
+TEST(SVGFilterElementTests, EnabledWithoutExperimental) {
   auto element = instantiateSubtreeElement("<filter />");
-  EXPECT_EQ(element->type(), ElementType::Unknown);
+  EXPECT_THAT(element->tryCast<SVGFilterElement>(), testing::Ne(std::nullopt));
 }
 
 TEST(SVGFilterElementTests, Defaults) {

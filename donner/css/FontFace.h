@@ -37,7 +37,7 @@ struct FontFaceSource {
 };
 
 /**
- * In-memory representation of a single @font-face rule.
+ * In-memory representation of a single `@font-face` rule.
  */
 struct FontFace {
   RcString familyName;                  ///< font-family descriptor

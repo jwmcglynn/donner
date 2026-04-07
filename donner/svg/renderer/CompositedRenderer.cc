@@ -7,7 +7,6 @@
 
 #include "donner/svg/components/LayerMembershipComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/renderer/LayerDecomposition.h"
@@ -266,20 +265,9 @@ std::optional<uint32_t> CompositedRenderer::findLayerForEntity(Entity entity) co
 uint32_t CompositedRenderer::invalidateAnimatedLayers() {
   assert(document_ != nullptr && "Must call prepare() before invalidateAnimatedLayers()");
 
-  auto& registry = document_->registry();
-  uint32_t dirtyCount = 0;
-
-  // Find all entities with active animated values and mark their layers dirty.
-  for (auto [entity, animValues] :
-       registry.view<components::AnimatedValuesComponent>().each()) {
-    if (!animValues.overrides.empty()) {
-      if (markEntityDirty(entity)) {
-        ++dirtyCount;
-      }
-    }
-  }
-
-  return dirtyCount;
+  // Animation support is deferred to v1.0. When the animation system is implemented,
+  // this method should find all entities with active animated values and mark their layers dirty.
+  return 0;
 }
 
 uint32_t CompositedRenderer::renderPredicted() {

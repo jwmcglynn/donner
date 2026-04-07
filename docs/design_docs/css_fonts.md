@@ -41,7 +41,7 @@ implementation plan for CSS font properties within the donner SVG renderer.
 | `font-palette` | [7.1](https://www.w3.org/TR/css-fonts-4/#font-palette-prop) | Low | Color font palette selection. |
 | `line-height` | Related (CSS Inline 3) | Medium | Not in CSS Fonts 4 but essential for multi-line text. |
 
-## @font-face Support
+## `@font-face` Support
 
 ### Current State
 

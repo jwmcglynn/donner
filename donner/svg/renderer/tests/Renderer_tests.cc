@@ -262,15 +262,9 @@ TEST_F(RendererTests, DonnerIcon) {
 TEST_F(RendererTests, DonnerSplash) {
   this->compareWithGolden(
       "donner_splash.svg", "donner/svg/renderer/testdata/golden/donner_splash.png",
-      this->optionsExperimental(),
+      parser::SVGParser::Options(),
       ImageComparisonParams::WithThreshold(0.1f).requireFeature(
-          RendererBackendFeature::FilterEffects, "experimental filter effects"));
-}
-
-TEST_F(RendererTests, DonnerSplashNoExperimental) {
-  this->compareWithGolden("donner_splash.svg",
-                          "donner/svg/renderer/testdata/golden/donner_splash_no_experimental.png",
-                          parser::SVGParser::Options(), ImageComparisonParams::WithThreshold(0.1f));
+          RendererBackendFeature::FilterEffects, "filter effects"));
 }
 
 TEST_F(RendererTests, SVG2_e_use_001) {

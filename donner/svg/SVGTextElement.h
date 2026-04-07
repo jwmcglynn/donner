@@ -50,8 +50,9 @@ namespace donner::svg {
 /**
  * DOM object for a \ref xml_text element.
  *
- * Unlike shapes (e.g., circles, rectangles), text does not produce
- * path geometry in the same way. Instead, it manages glyph placement.
+ * Text rendering supports `<text>`, \ref xml_tspan for sub-spans, and \ref xml_textPath for text
+ * along a path. Fonts are loaded from `@font-face` rules (TTF, OTF, WOFF, WOFF2) or a built-in
+ * fallback. With the `text_full` build config, HarfBuzz provides complex script shaping.
  *
  * \htmlonly
  * <svg width="300" height="120" style="background-color: white">
@@ -83,8 +84,6 @@ public:
   static constexpr ElementType Type = ElementType::Text;
   /// XML tag name, \ref xml_text.
   static constexpr std::string_view Tag{"text"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 
   static_assert(SVGTextPositioningElement::IsBaseOf(Type));
   static_assert(SVGTextContentElement::IsBaseOf(Type));
@@ -100,17 +99,23 @@ public:
   }
 
   /**
-   * Convert this text element to positioned glyph outlines.
+   * Convert this text element to positioned glyph outlines, one \ref PathSpline per glyph.
+   *
+   * Useful for custom rendering, export to path-only formats, or computing text geometry without
+   * the full rendering pipeline.
    */
   std::vector<PathSpline> convertToPath() const;
 
   /**
-   * Return the ink bounding box of the rendered text.
+   * Return the tight bounding box of the actual rendered glyphs (ink extents). This is the
+   * smallest rectangle that encloses all painted pixels.
    */
   Boxd inkBoundingBox() const;
 
   /**
-   * Return the text object bounding box used for gradient/pattern mapping.
+   * Return the object bounding box as defined by SVG2. This is used for resolving
+   * `objectBoundingBox` units in gradients, patterns, and clip paths applied to this text. It may
+   * differ from inkBoundingBox() due to line-height and baseline positioning.
    */
   Boxd objectBoundingBox() const;
 };

@@ -107,8 +107,6 @@ public:
   static constexpr ElementType Type = ElementType::TSpan;
   /// XML tag name, \ref xml_tspan.
   static constexpr std::string_view Tag{"tspan"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 
   static_assert(SVGTextPositioningElement::IsBaseOf(Type));
   static_assert(SVGTextContentElement::IsBaseOf(Type));
