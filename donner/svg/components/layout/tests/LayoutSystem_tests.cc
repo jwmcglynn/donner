@@ -433,7 +433,7 @@ TEST_F(LayoutSystemTest, InstantiateAllComputedComponentsNoWarnings) {
   )");
 
   auto& registry = document.registry();
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   layoutSystem.instantiateAllComputedComponents(registry, &warnings);
 
   EXPECT_TRUE(warnings.empty());

@@ -30,7 +30,7 @@ protected:
     auto document = std::move(maybeResult).result();
 
     auto& registry = document.registry();
-    std::vector<ParseError> warnings;
+    std::vector<ParseDiagnostic> warnings;
     StyleSystem().computeAllStyles(registry, &warnings);
     TextSystem().instantiateAllComputedComponents(registry, &warnings);
 
@@ -509,7 +509,7 @@ TEST_F(TextSystemTest, NoWarningsForValidText) {
   auto document = std::move(maybeResult).result();
 
   auto& registry = document.registry();
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   StyleSystem().computeAllStyles(registry, &warnings);
   TextSystem().instantiateAllComputedComponents(registry, &warnings);
 

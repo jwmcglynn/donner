@@ -563,7 +563,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFilterElement>(SVGParserContext
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserContext& context,
                                                                    SVGFEGaussianBlurElement element,
                                                                    const XMLQualifiedNameRef& name,
                                                                    std::string_view value) {
@@ -581,12 +581,12 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserCont
       if (number2d.consumedChars == value.size()) {
         element.setStdDeviation(number2d.numberX, number2d.numberY);
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Unexpected additional data in stdDeviation, '" + std::string(value) + "'";
         context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
       }
     } else {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Invalid stdDeviation value '" + std::string(value) + "'";
       context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
     }
@@ -607,7 +607,7 @@ std::optional<ParseError> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserCont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEBlendElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEBlendElement>(SVGParserContext& context,
                                                             SVGFEBlendElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -658,7 +658,7 @@ std::optional<ParseError> ParseAttribute<SVGFEBlendElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEComponentTransferElement>(
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEComponentTransferElement>(
     SVGParserContext& context, SVGFEComponentTransferElement element,
     const XMLQualifiedNameRef& name, std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
@@ -751,7 +751,7 @@ void ParseFuncAttributes(components::FEFuncComponent& comp, const XMLQualifiedNa
 }  // namespace
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEFuncRElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncRElement>(SVGParserContext& context,
                                                             SVGFEFuncRElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -761,7 +761,7 @@ std::optional<ParseError> ParseAttribute<SVGFEFuncRElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEFuncGElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncGElement>(SVGParserContext& context,
                                                             SVGFEFuncGElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -771,7 +771,7 @@ std::optional<ParseError> ParseAttribute<SVGFEFuncGElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEFuncBElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncBElement>(SVGParserContext& context,
                                                             SVGFEFuncBElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -781,7 +781,7 @@ std::optional<ParseError> ParseAttribute<SVGFEFuncBElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEFuncAElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncAElement>(SVGParserContext& context,
                                                             SVGFEFuncAElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -791,7 +791,7 @@ std::optional<ParseError> ParseAttribute<SVGFEFuncAElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEColorMatrixElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEColorMatrixElement>(SVGParserContext& context,
                                                                   SVGFEColorMatrixElement element,
                                                                   const XMLQualifiedNameRef& name,
                                                                   std::string_view value) {
@@ -841,7 +841,7 @@ std::optional<ParseError> ParseAttribute<SVGFEColorMatrixElement>(SVGParserConte
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFECompositeElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFECompositeElement>(SVGParserContext& context,
                                                                 SVGFECompositeElement element,
                                                                 const XMLQualifiedNameRef& name,
                                                                 std::string_view value) {
@@ -890,7 +890,7 @@ std::optional<ParseError> ParseAttribute<SVGFECompositeElement>(SVGParserContext
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEDropShadowElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEDropShadowElement>(SVGParserContext& context,
                                                                  SVGFEDropShadowElement element,
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
@@ -934,7 +934,7 @@ std::optional<ParseError> ParseAttribute<SVGFEDropShadowElement>(SVGParserContex
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEFloodElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEFloodElement>(SVGParserContext& context,
                                                             SVGFEFloodElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -951,7 +951,7 @@ std::optional<ParseError> ParseAttribute<SVGFEFloodElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEMorphologyElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEMorphologyElement>(SVGParserContext& context,
                                                                  SVGFEMorphologyElement element,
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
@@ -1005,7 +1005,7 @@ std::optional<ParseError> ParseAttribute<SVGFEMorphologyElement>(SVGParserContex
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEDisplacementMapElement>(
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEDisplacementMapElement>(
     SVGParserContext& context, SVGFEDisplacementMapElement element, const XMLQualifiedNameRef& name,
     std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
@@ -1047,7 +1047,7 @@ std::optional<ParseError> ParseAttribute<SVGFEDisplacementMapElement>(
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEImageElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEImageElement>(SVGParserContext& context,
                                                             SVGFEImageElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -1074,7 +1074,7 @@ std::optional<ParseError> ParseAttribute<SVGFEImageElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEDiffuseLightingElement>(
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEDiffuseLightingElement>(
     SVGParserContext& context, SVGFEDiffuseLightingElement element, const XMLQualifiedNameRef& name,
     std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
@@ -1099,7 +1099,7 @@ std::optional<ParseError> ParseAttribute<SVGFEDiffuseLightingElement>(
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFESpecularLightingElement>(
+std::optional<ParseDiagnostic> ParseAttribute<SVGFESpecularLightingElement>(
     SVGParserContext& context, SVGFESpecularLightingElement element,
     const XMLQualifiedNameRef& name, std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
@@ -1129,7 +1129,7 @@ std::optional<ParseError> ParseAttribute<SVGFESpecularLightingElement>(
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEDistantLightElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEDistantLightElement>(SVGParserContext& context,
                                                                    SVGFEDistantLightElement element,
                                                                    const XMLQualifiedNameRef& name,
                                                                    std::string_view value) {
@@ -1151,7 +1151,7 @@ std::optional<ParseError> ParseAttribute<SVGFEDistantLightElement>(SVGParserCont
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEPointLightElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEPointLightElement>(SVGParserContext& context,
                                                                  SVGFEPointLightElement element,
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
@@ -1176,7 +1176,7 @@ std::optional<ParseError> ParseAttribute<SVGFEPointLightElement>(SVGParserContex
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFESpotLightElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFESpotLightElement>(SVGParserContext& context,
                                                                 SVGFESpotLightElement element,
                                                                 const XMLQualifiedNameRef& name,
                                                                 std::string_view value) {
@@ -1221,7 +1221,7 @@ std::optional<ParseError> ParseAttribute<SVGFESpotLightElement>(SVGParserContext
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEConvolveMatrixElement>(
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
     SVGParserContext& context, SVGFEConvolveMatrixElement element, const XMLQualifiedNameRef& name,
     std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
@@ -1312,7 +1312,7 @@ std::optional<ParseError> ParseAttribute<SVGFEConvolveMatrixElement>(
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFETurbulenceElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFETurbulenceElement>(SVGParserContext& context,
                                                                  SVGFETurbulenceElement element,
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
@@ -1366,7 +1366,7 @@ std::optional<ParseError> ParseAttribute<SVGFETurbulenceElement>(SVGParserContex
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFETileElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFETileElement>(SVGParserContext& context,
                                                            SVGFETileElement element,
                                                            const XMLQualifiedNameRef& name,
                                                            std::string_view value) {
@@ -1382,7 +1382,7 @@ std::optional<ParseError> ParseAttribute<SVGFETileElement>(SVGParserContext& con
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEOffsetElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEOffsetElement>(SVGParserContext& context,
                                                              SVGFEOffsetElement element,
                                                              const XMLQualifiedNameRef& name,
                                                              std::string_view value) {
@@ -1406,7 +1406,7 @@ std::optional<ParseError> ParseAttribute<SVGFEOffsetElement>(SVGParserContext& c
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEMergeElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeElement>(SVGParserContext& context,
                                                             SVGFEMergeElement element,
                                                             const XMLQualifiedNameRef& name,
                                                             std::string_view value) {
@@ -1422,7 +1422,7 @@ std::optional<ParseError> ParseAttribute<SVGFEMergeElement>(SVGParserContext& co
 }
 
 template <>
-std::optional<ParseError> ParseAttribute<SVGFEMergeNodeElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeNodeElement>(SVGParserContext& context,
                                                                 SVGFEMergeNodeElement element,
                                                                 const XMLQualifiedNameRef& name,
                                                                 std::string_view value) {
@@ -1982,7 +1982,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTSpanElement>(SVGParserContext&
  * Parses attributes for \ref xml_textPath elements.
  */
 template <>
-std::optional<ParseError> ParseAttribute<SVGTextPathElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseAttribute<SVGTextPathElement>(SVGParserContext& context,
                                                              SVGTextPathElement element,
                                                              const XMLQualifiedNameRef& name,
                                                              std::string_view value) {

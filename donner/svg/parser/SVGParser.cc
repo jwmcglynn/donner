@@ -124,10 +124,10 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTSpanElement>(SVGParserConte
  * @param context The parser context.
  * @param element The textPath element to parse contents for.
  * @param node The XML node containing the text content.
- * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ * @return std::nullopt if successful, otherwise a ParseDiagnostic describing the failure.
  */
 template <>
-std::optional<ParseError> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
                                                                 SVGTextPathElement element,
                                                                 const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {

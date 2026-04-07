@@ -25,7 +25,7 @@ public:
    *
    * @param woff2Data The WOFF2 file data as a byte span.
    * @return A ParseResult containing the decompressed sfnt bytes on success,
-   *         or a ParseError on failure.
+   *         or a ParseDiagnostic on failure.
    */
   static ParseResult<std::vector<uint8_t>> Decompress(std::span<const uint8_t> woff2Data);
 };

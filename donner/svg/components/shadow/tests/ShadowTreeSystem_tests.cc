@@ -189,7 +189,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMainBranch) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main, targetEntity,
                                         RcString("#target"), &warnings);
 
@@ -213,7 +213,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceSelfRecursionWarns) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   // Passing the entity itself as lightTarget should trigger self-recursion.
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main,
                                         hostEntity.entity(), RcString("#host"), &warnings);
@@ -260,7 +260,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceParentRecursionWarns) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   // Child referencing its parent should trigger parent recursion detection.
   auto result = system.populateInstance(childEntity, shadow, ShadowBranchType::Main, parentEntity,
                                         RcString("#parent"), &warnings);
@@ -286,7 +286,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenBranchReturnsIndex) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenFill,
                                         targetEntity, RcString("#target"), &warnings);
 

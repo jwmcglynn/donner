@@ -442,7 +442,7 @@ TEST(AttributeParserTest, LengthUnitCm) {
 // --- Invalid attribute values ---
 
 TEST(AttributeParserTest, InvalidLengthIgnored) {
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   auto maybeResult = SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="abc" y="0" width="50" height="50"/>
@@ -457,7 +457,7 @@ TEST(AttributeParserTest, InvalidLengthIgnored) {
 }
 
 TEST(AttributeParserTest, ExtraDataAfterLength) {
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   auto maybeResult = SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="10xyz" y="0" width="50" height="50"/>

@@ -56,7 +56,7 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeWarnings) {
     </svg>
   )");
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, &warnings);
 }

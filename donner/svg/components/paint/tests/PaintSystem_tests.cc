@@ -163,7 +163,7 @@ TEST_F(PaintSystemTest, GradientHrefToNonGradientWarns) {
     </svg>
   )");
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   StyleSystem().computeAllStyles(document.registry(), &warnings);
   paintSystem.createShadowTrees(document.registry(), &warnings);
   paintSystem.instantiateAllComputedComponents(document.registry(), &warnings);
@@ -201,7 +201,7 @@ TEST_F(PaintSystemTest, PatternHrefToNonPatternWarns) {
     </svg>
   )");
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   StyleSystem().computeAllStyles(document.registry(), &warnings);
   paintSystem.createShadowTrees(document.registry(), &warnings);
   paintSystem.instantiateAllComputedComponents(document.registry(), &warnings);

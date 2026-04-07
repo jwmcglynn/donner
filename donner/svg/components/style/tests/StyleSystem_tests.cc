@@ -211,7 +211,7 @@ TEST_F(StyleSystemTest, WarningsCollectedForInvalidProperties) {
     </svg>
   )");
 
-  std::vector<ParseError> warnings;
+  std::vector<ParseDiagnostic> warnings;
   styleSystem.computeAllStyles(document.registry(), &warnings);
   // Invalid color should produce a warning (or be ignored gracefully).
   // We just verify it doesn't crash; the warning list may or may not be populated
