@@ -115,9 +115,9 @@ TEST(SVGFilterElementTests, PrimitiveUnits) {
 }
 
 // TODO: Move to another file
-TEST(SVGFEGaussianBlurElement, FeatureDisabled) {
+TEST(SVGFEGaussianBlurElement, EnabledWithoutExperimental) {
   auto element = instantiateSubtreeElement("<feGaussianBlur />");
-  EXPECT_EQ(element->type(), ElementType::Unknown);
+  EXPECT_THAT(element->tryCast<SVGFEGaussianBlurElement>(), testing::Ne(std::nullopt));
 }
 
 // TODO: Move to another file
