@@ -10,7 +10,7 @@
 
 Two-tier build-time text stack:
 
-- **Base tier** (`text`): stb_truetype font loading, kern-table kerning, glyph outlines, @font-face.
+- **Base tier** (`text`): stb_truetype font loading, kern-table kerning, glyph outlines, `@font-face`.
   No new dependencies (~55 KB).
 - **Full tier** (`text_full`, `--config=text-full`): HarfBuzz OpenType shaping (GSUB/GPOS),
   FreeType glyph outlines, WOFF2/Brotli, color emoji (CBDT/CBLC), cursive detection, native
@@ -24,7 +24,7 @@ Key components:
 
 | Component | Role |
 |---|---|
-| `FontManager` | ECS-backed font registry: @font-face, family matching, raw font data |
+| `FontManager` | ECS-backed font registry: `@font-face`, family matching, raw font data |
 | `TextBackend` | Abstract font operations: metrics, outlines, shaping, capabilities |
 | `TextEngine` | SVG text layout, geometry cache, public API support (in `registry.ctx()`) |
 | `TextSystem` | ECS layer: flattens DOM text into `ComputedTextComponent` |
@@ -105,7 +105,7 @@ or unit tests.
 
 ### Font Properties
 
-- [x] `font-family` — family name matching from @font-face declarations
+- [x] `font-family` — family name matching from `@font-face` declarations
 - [x] `font-size` — `<length>`, `<percentage>`, absolute/relative keywords
 - [x] `font-weight` — numeric 100-900, bold/normal keyword matching
 - [x] `font-style` — normal, italic, oblique matching
@@ -121,9 +121,9 @@ or unit tests.
   `FontManager::setGenericFamilyMapping()` *(10 of 11 resvg tests enabled; 009 skipped:
   different default fallback font)*
 
-### @font-face
+### `@font-face`
 
-- [x] `@font-face` rule parsing and registration
+- [x] ``@font-face`` rule parsing and registration
 - [x] `src: url()` with data URIs and external references
 - [x] TTF, OTF (CFF) font loading
 - [x] WOFF1 decompression (base tier)

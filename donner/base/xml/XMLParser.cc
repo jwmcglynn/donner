@@ -1197,6 +1197,24 @@ private:
       assert(peek(decl) == quote);
       decl.remove_prefix(1);  // Remove closing quote
 
+      // PUBLIC declarations have a second quoted string (system literal) after the public ID.
+      // e.g., <!ENTITY e PUBLIC "pubid" "uri">
+      if (isExternal) {
+        skipWhitespace(decl);
+        if (!decl.empty() && (decl[0] == '"' || decl[0] == '\'')) {
+          const char quote2 = decl[0];
+          decl.remove_prefix(1);
+          if (quote2 == '"') {
+            consumeMatching<QuotedStringPredicate<'"'>>(decl);
+          } else {
+            consumeMatching<QuotedStringPredicate<'\''>>(decl);
+          }
+          if (!decl.empty() && peek(decl) == quote2) {
+            decl.remove_prefix(1);
+          }
+        }
+      }
+
     } else {
       return createParseError("Expected quoted string in entity decl");
     }

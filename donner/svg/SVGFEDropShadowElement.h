@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feDropShadow "<feDropShadow>"
+ * @page xml_feDropShadow "<feDropShadow>"
  *
  * Defines a filter primitive that creates a drop shadow effect.
  *
@@ -42,8 +42,6 @@ public:
   static constexpr ElementType Type = ElementType::FeDropShadow;
   /// XML tag name, \ref xml_feDropShadow.
   static constexpr std::string_view Tag{"feDropShadow"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

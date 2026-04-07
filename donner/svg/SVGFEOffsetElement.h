@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feOffset "<feOffset>"
+ * @page xml_feOffset "<feOffset>"
  *
  * Defines a filter primitive that offsets the input image by (dx, dy).
  *
@@ -51,8 +51,6 @@ public:
   static constexpr ElementType Type = ElementType::FeOffset;
   /// XML tag name, \ref xml_feOffset.
   static constexpr std::string_view Tag{"feOffset"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 
   /// Get the horizontal offset.
   double dx() const;

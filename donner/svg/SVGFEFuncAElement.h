@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feFuncA "<feFuncA>"
+ * @page xml_feFuncA "<feFuncA>"
  *
  * A child element of \ref xml_feComponentTransfer defining the transfer function for the alpha
  * channel.
@@ -31,8 +31,6 @@ public:
   static constexpr ElementType Type = ElementType::FeFuncA;
   /// XML tag name, \ref xml_feFuncA.
   static constexpr std::string_view Tag{"feFuncA"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

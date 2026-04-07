@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feImage "<feImage>"
+ * @page xml_feImage "<feImage>"
  *
  * Fetches image data from an external resource or renders a referenced SVG element, and provides
  * the pixel data as the filter primitive output.
@@ -52,8 +52,6 @@ public:
   static constexpr ElementType Type = ElementType::FeImage;
   /// XML tag name, \ref xml_feImage.
   static constexpr std::string_view Tag{"feImage"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

@@ -555,7 +555,6 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   file.read(fileData.data(), fileLength);
 
   parser::SVGParser::Options options;
-  options.enableExperimental = true;
 
   SVGDocument::Settings settings;
   if (resourceDir) {

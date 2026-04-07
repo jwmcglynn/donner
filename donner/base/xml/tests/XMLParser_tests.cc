@@ -440,6 +440,39 @@ TEST_F(XMLParserTests, ParseDoctypeMalformed) {
   EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE html []]>)"), NoParseError());
 }
 
+/// @test PUBLIC entity declarations with two quoted strings are parsed correctly.
+TEST_F(XMLParserTests, ParseDoctypePublicEntity) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+  options.parseCustomEntities = true;
+
+  // PUBLIC declarations have both a public ID and a system literal.
+  auto result = parseAndGetFirstNode(R"(
+      <!DOCTYPE svg [
+        <!ENTITY logo PUBLIC "-//W3C//ENTITIES Logo//EN" "http://www.w3.org/logo.svg">
+      ]>
+      <root></root>
+      )",
+                                     options);
+  ASSERT_TRUE(result.has_value()) << "PUBLIC entity declaration should parse without error";
+}
+
+/// @test SYSTEM entity declarations parse correctly.
+TEST_F(XMLParserTests, ParseDoctypeSystemEntity) {
+  XMLParser::Options options;
+  options.parseDoctype = true;
+  options.parseCustomEntities = true;
+
+  auto result = parseAndGetFirstNode(R"(
+      <!DOCTYPE svg [
+        <!ENTITY logo SYSTEM "logo.svg">
+      ]>
+      <root></root>
+      )",
+                                     options);
+  ASSERT_TRUE(result.has_value()) << "SYSTEM entity declaration should parse without error";
+}
+
 TEST_F(XMLParserTests, ParseProcessingInstructions) {
   // By default PI parsing is disabled
   {

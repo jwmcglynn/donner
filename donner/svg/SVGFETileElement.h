@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feTile "<feTile>"
+ * @page xml_feTile "<feTile>"
  *
  * Defines a filter primitive that tiles the input image across the output region.
  *
@@ -52,8 +52,6 @@ public:
   static constexpr ElementType Type = ElementType::FeTile;
   /// XML tag name, \ref xml_feTile.
   static constexpr std::string_view Tag{"feTile"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

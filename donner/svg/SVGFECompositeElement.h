@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feComposite "<feComposite>"
+ * @page xml_feComposite "<feComposite>"
  *
  * Defines a filter primitive that composites two input images using Porter-Duff operators or
  * arithmetic combination.
@@ -43,8 +43,6 @@ public:
   static constexpr ElementType Type = ElementType::FeComposite;
   /// XML tag name, \ref xml_feComposite.
   static constexpr std::string_view Tag{"feComposite"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feBlend "<feBlend>"
+ * @page xml_feBlend "<feBlend>"
  *
  * Defines a filter primitive that composites two input images using blend modes.
  *
@@ -42,8 +42,6 @@ public:
   static constexpr ElementType Type = ElementType::FeBlend;
   /// XML tag name, \ref xml_feBlend.
   static constexpr std::string_view Tag{"feBlend"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

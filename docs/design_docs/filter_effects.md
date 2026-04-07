@@ -127,7 +127,6 @@ rectangle (not the AABB) to produce correct rotated boundaries.
 ### SVG Elements
 
 Each filter primitive has a corresponding `SVGFe*Element` class (e.g., `SVGFEGaussianBlurElement`).
-All are currently gated behind `IsExperimental = true`.
 
 ### Renderer Interface
 
@@ -233,7 +232,6 @@ produce transparent pixels (no edge clamping) to prevent images from bleeding be
 
 ## Limitations and Future Extensions
 
-- `<filter>` and all `<fe*>` elements are still gated behind `IsExperimental`.
 - `feImage` fragment references render through an 8-bit intermediate buffer; rendering directly
   into the float filter buffer would eliminate minor edge-pixel differences.
 - `BackgroundImage` / `BackgroundAlpha` standard inputs are not implemented (require CSS

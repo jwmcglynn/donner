@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feComponentTransfer "<feComponentTransfer>"
+ * @page xml_feComponentTransfer "<feComponentTransfer>"
  *
  * Defines a filter primitive that applies per-channel transfer functions (lookup tables)
  * to modify the RGBA components of the input image.
@@ -50,8 +50,6 @@ public:
   static constexpr ElementType Type = ElementType::FeComponentTransfer;
   /// XML tag name, \ref xml_feComponentTransfer.
   static constexpr std::string_view Tag{"feComponentTransfer"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

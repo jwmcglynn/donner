@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feColorMatrix "<feColorMatrix>"
+ * @page xml_feColorMatrix "<feColorMatrix>"
  *
  * Defines a filter primitive that applies a matrix transformation on color values.
  *
@@ -45,8 +45,6 @@ public:
   static constexpr ElementType Type = ElementType::FeColorMatrix;
   /// XML tag name, \ref xml_feColorMatrix.
   static constexpr std::string_view Tag{"feColorMatrix"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

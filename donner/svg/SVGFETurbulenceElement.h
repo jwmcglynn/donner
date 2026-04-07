@@ -6,7 +6,7 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_feTurbulence "<feTurbulence>"
+ * @page xml_feTurbulence "<feTurbulence>"
  *
  * Generates Perlin noise or fractal noise to fill the filter primitive subregion.
  *
@@ -51,8 +51,6 @@ public:
   static constexpr ElementType Type = ElementType::FeTurbulence;
   /// XML tag name, \ref xml_feTurbulence.
   static constexpr std::string_view Tag{"feTurbulence"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

@@ -99,7 +99,8 @@ public:
   /**
    * Pushes a filter layer.
    *
-   * @param effects The filter chain to apply when the layer is popped.
+   * @param filterGraph The filter graph to apply when the layer is popped.
+   * @param filterRegion Optional filter region bounds in user space.
    */
   void pushFilterLayer(const components::FilterGraph& filterGraph,
                        const std::optional<Boxd>& filterRegion) override;
