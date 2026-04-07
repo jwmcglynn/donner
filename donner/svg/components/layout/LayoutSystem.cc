@@ -1,6 +1,8 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 
 #include <array>
+
+#include "donner/base/ParseWarningSink.h"
 #include <string_view>
 
 #include "donner/base/CompileTimeMap.h"
@@ -38,7 +40,7 @@ static constexpr int kDefaultHeight = 512;
 // The maximum size supported for a rendered image.
 static constexpr int kMaxDimension = 8192;
 
-using SizedElementPresentationAttributeParseFn = std::optional<ParseError> (*)(
+using SizedElementPresentationAttributeParseFn = std::optional<ParseDiagnostic> (*)(
     SizedElementProperties& properties, const parser::PropertyParseFnParams& params);
 
 constexpr std::array<std::pair<std::string_view, SizedElementPresentationAttributeParseFn>, 4>
@@ -97,7 +99,7 @@ PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
 
 void ApplyUnparsedProperties(SizedElementProperties& properties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                             std::vector<ParseError>* outWarnings) {
+                             ParseWarningSink& warningSink) {
   for (const auto& [name, property] : unparsedProperties) {
     const SizedElementPresentationAttributeParseFn* parseFn =
         kProperties.find(static_cast<std::string_view>(name));
@@ -105,8 +107,8 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
       auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
                                         property.declaration, property.specificity,
                                         parser::PropertyParseBehavior::AllowUserUnits));
-      if (maybeError && outWarnings) {
-        outWarnings->emplace_back(std::move(maybeError.value()));
+      if (maybeError) {
+        warningSink.add(std::move(maybeError.value()));
       }
     }
   }
@@ -136,11 +138,12 @@ Boxd GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Box
       } else if (currentEntity != rootEntity &&
                  registry.all_of<SizedElementComponent>(currentEntity)) {
         const EntityHandle handle(registry, currentEntity);
-        const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(handle, nullptr);
+        ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+        const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(handle, disabledSink);
 
         const ComputedSizedElementComponent& computedSizedElement =
             LayoutSystem().createComputedSizedElementComponentWithStyle(handle, computedStyle,
-                                                                        FontMetrics(), nullptr);
+                                                                        FontMetrics(), disabledSink);
         return computedSizedElement.bounds;
       }
     }
@@ -285,19 +288,21 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
 }
 
 Transformd LayoutSystem::getRawEntityFromParentTransform(EntityHandle entity) {
-  const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, disabledSink);
 
   const ComputedLocalTransformComponent& computedTransform =
-      createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), nullptr);
+      createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), disabledSink);
 
   return computedTransform.entityFromParent;
 }
 
 Transformd LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
-  const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  const ComputedStyleComponent& style = components::StyleSystem().computeStyle(entity, disabledSink);
 
   const ComputedLocalTransformComponent& computedTransform =
-      createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), nullptr);
+      createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), disabledSink);
 
   return Transformd::Translate(computedTransform.transformOrigin) *
          computedTransform.entityFromParent *
@@ -307,11 +312,12 @@ Transformd LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
 Transformd LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
   EntityHandle rootEntity(registry, registry.ctx().get<SVGDocumentContext>().rootEntity);
   if (rootEntity.all_of<SizedElementComponent>()) {
-    const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(rootEntity, nullptr);
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(rootEntity, disabledSink);
 
     const ComputedSizedElementComponent& computedSizedElement =
         createComputedSizedElementComponentWithStyle(rootEntity, computedStyle, FontMetrics(),
-                                                     nullptr);
+                                                     disabledSink);
     return elementContentFromViewBoxTransform(rootEntity, computedSizedElement);
   } else {
     return Transformd();
@@ -356,10 +362,11 @@ Transformd LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entity
       return Transformd::Translate(entity.get<ComputedSizedElementComponent>().bounds.topLeft);
     }
 
-    const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, nullptr);
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    const ComputedStyleComponent& computedStyle = StyleSystem().computeStyle(entity, disabledSink);
 
     const ComputedSizedElementComponent& computedSizedElement =
-        createComputedSizedElementComponentWithStyle(entity, computedStyle, FontMetrics(), nullptr);
+        createComputedSizedElementComponentWithStyle(entity, computedStyle, FontMetrics(), disabledSink);
     const Transformd viewBoxTransform =
         elementContentFromViewBoxTransform(entity, computedSizedElement);
 
@@ -475,19 +482,19 @@ Transformd LayoutSystem::elementContentFromViewBoxTransform(
 }
 
 void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
-                                                    std::vector<ParseError>* outWarnings) {
+                                                    ParseWarningSink& warningSink) {
   for (auto view = registry.view<SizedElementComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [component, style] = view.get(entity);
     createComputedSizedElementComponentWithStyle(EntityHandle(registry, entity), style,
-                                                 FontMetrics(), outWarnings);
+                                                 FontMetrics(), warningSink);
   }
 
   for (auto view = registry.view<TransformComponent, ComputedStyleComponent>();
        auto entity : view) {
     auto [transform, style] = view.get(entity);
     createComputedLocalTransformComponentWithStyle(EntityHandle(registry, entity), style,
-                                                   FontMetrics(), outWarnings);
+                                                   FontMetrics(), warningSink);
   }
 
   // Now traverse the tree from the root down and compute values that inherit from the parent.
@@ -523,10 +530,10 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
 Boxd LayoutSystem::computeSizeProperties(
     EntityHandle entity, const SizedElementProperties& sizeProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Boxd& viewBox,
-    FontMetrics fontMetrics, std::vector<ParseError>* outWarnings) {
+    FontMetrics fontMetrics, ParseWarningSink& warningSink) {
   SizedElementProperties mutableSizeProperties = sizeProperties;
 
-  ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, outWarnings);
+  ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, warningSink);
   return calculateSizedElementBounds(entity, mutableSizeProperties, viewBox, fontMetrics);
 }
 
@@ -534,7 +541,7 @@ Boxd LayoutSystem::computeSizeProperties(
 // information.
 const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementComponentWithStyle(
     EntityHandle entity, const ComputedStyleComponent& style, FontMetrics fontMetrics,
-    std::vector<ParseError>* outWarnings) {
+    ParseWarningSink& warningSink) {
   SizedElementComponent& sizedElement = entity.get<SizedElementComponent>();
 
   const Entity parent = entity.get<donner::components::TreeComponent>().parent();
@@ -543,13 +550,13 @@ const ComputedSizedElementComponent& LayoutSystem::createComputedSizedElementCom
 
   const Boxd bounds =
       computeSizeProperties(entity, sizedElement.properties, style.properties->unparsedProperties,
-                            viewBox, fontMetrics, outWarnings);
+                            viewBox, fontMetrics, warningSink);
   return entity.emplace_or_replace<ComputedSizedElementComponent>(bounds, viewBox);
 }
 
 const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransformComponentWithStyle(
     EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
-    std::vector<ParseError>* outWarnings) {
+    ParseWarningSink& warningSink) {
   std::optional<TransformComponent> shadowTransform;
   EntityHandle lightEntity = handle;
   if (const auto* shadowComponent = lightEntity.try_get<ShadowEntityComponent>()) {
@@ -581,8 +588,8 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
         },
         &transform.transform);
 
-    if (maybeError && outWarnings) {
-      outWarnings->emplace_back(std::move(maybeError.value()));
+    if (maybeError) {
+      warningSink.add(std::move(maybeError.value()));
     }
   }
 
@@ -597,7 +604,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
       // For sized elements, we need to compute the size first to get the bounding box. The bounds
       // of an element are defined in the parent's coordinate system, which is what we need.
       const ComputedSizedElementComponent& sizedElement =
-          createComputedSizedElementComponentWithStyle(handle, style, fontMetrics, outWarnings);
+          createComputedSizedElementComponentWithStyle(handle, style, fontMetrics, warningSink);
       bounds = sizedElement.bounds;
     } else {
       // For other elements, transform-origin is relative to the viewBox.
@@ -802,7 +809,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
 bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,
                                                      EntityHandle useEntity, Entity symbolEntity,
                                                      ShadowBranchType branchType,
-                                                     std::vector<ParseError>* outWarnings) {
+                                                     ParseWarningSink& warningSink) {
   // TODO: Plumb FontMetrics
   FontMetrics fontMetrics;
 

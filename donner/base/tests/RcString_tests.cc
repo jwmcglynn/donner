@@ -64,6 +64,33 @@ TEST(RcString, ConstructEmptyVector) {
   EXPECT_EQ(str, "");
 }
 
+TEST(RcString, FromFormat) {
+  {
+    RcString str = RcString::fromFormat("hello {}", 42);
+    EXPECT_EQ(str, "hello 42");
+  }
+
+  {
+    RcString str = RcString::fromFormat("{} + {} = {}", 1, 2, 3);
+    EXPECT_EQ(str, "1 + 2 = 3");
+  }
+
+  {
+    RcString str = RcString::fromFormat("attr '{}'", std::string_view("my-attr"));
+    EXPECT_EQ(str, "attr 'my-attr'");
+  }
+
+  {
+    RcString str = RcString::fromFormat("{}", "a long string that exceeds the short string capacity!!");
+    EXPECT_EQ(str, "a long string that exceeds the short string capacity!!");
+  }
+
+  {
+    RcString str = RcString::fromFormat("");
+    EXPECT_TRUE(str.empty());
+  }
+}
+
 TEST(RcString, Copy) {
   // Copy from short.
   {

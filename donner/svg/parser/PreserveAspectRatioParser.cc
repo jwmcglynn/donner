@@ -12,6 +12,7 @@ public:
     PreserveAspectRatio result;
 
     {
+      const size_t alignStart = consumedChars();
       const std::string_view align = readToken();
       if (align == "none") {
         result.align = PreserveAspectRatio::Align::None;
@@ -34,10 +35,12 @@ public:
       } else if (align == "xMaxYMax") {
         result.align = PreserveAspectRatio::Align::XMaxYMax;
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = align.empty() ? std::string("Unexpected end of string instead of align")
                                    : ("Invalid align: '" + std::string(align) + "'");
-        err.location = currentOffset();
+        err.range = align.empty()
+                        ? SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()}
+                        : rangeFrom(alignStart);
         return err;
       }
     }
@@ -45,22 +48,23 @@ public:
     skipWhitespace();
 
     if (!remaining_.empty()) {
+      const size_t meetOrSliceStart = consumedChars();
       const std::string_view meetOrSlice = readToken();
       if (meetOrSlice == "meet") {
         result.meetOrSlice = PreserveAspectRatio::MeetOrSlice::Meet;
       } else if (meetOrSlice == "slice") {
         result.meetOrSlice = PreserveAspectRatio::MeetOrSlice::Slice;
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Invalid meetOrSlice: '" + std::string(meetOrSlice) + "'";
-        err.location = currentOffset();
+        err.range = rangeFrom(meetOrSliceStart);
         return err;
       }
 
       if (!remaining_.empty()) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "End of attribute expected";
-        err.location = currentOffset();
+        err.range = currentRange(0, 1);
         return err;
       }
     }

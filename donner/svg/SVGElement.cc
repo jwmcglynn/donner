@@ -1,5 +1,6 @@
 #include "donner/svg/SVGElement.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -452,8 +453,9 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
 }
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStyleComponent& computedStyle =
-      components::StyleSystem().computeStyle(handle_, nullptr);
+      components::StyleSystem().computeStyle(handle_, disabledSink);
   return computedStyle.properties.value();
 }
 

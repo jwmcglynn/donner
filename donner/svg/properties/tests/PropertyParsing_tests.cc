@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Declaration.h"
@@ -169,12 +170,13 @@ TEST(PropertyParsingTest, TryGetSingleIdentFailsOnMultiple) {
 // --- Integration: attributes parsed via SVG document ---
 
 TEST(PropertyParsingIntegrationTest, PresentationAttributesParsedCorrectly) {
+  ParseWarningSink warningSink;
   auto maybeResult = SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" width="50" height="50" fill="red" stroke="blue"
             opacity="0.5" stroke-width="2"/>
     </svg>
-  )");
+  )", warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult.result());
   auto element = document.querySelector("#r");
@@ -182,11 +184,12 @@ TEST(PropertyParsingIntegrationTest, PresentationAttributesParsedCorrectly) {
 }
 
 TEST(PropertyParsingIntegrationTest, StyleAttributeOverridesPresentation) {
+  ParseWarningSink warningSink;
   auto maybeResult = SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" width="50" height="50" fill="red" style="fill: blue"/>
     </svg>
-  )");
+  )", warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult.result());
   auto element = document.querySelector("#r");

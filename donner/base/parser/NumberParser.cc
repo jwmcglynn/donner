@@ -129,10 +129,8 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
 
   // If empty => "Unexpected end of string".
   if (str.empty()) {
-    ParseError err;
-    err.reason = "Failed to parse number: Unexpected end of string";
-    err.location = FileOffset::Offset(0);
-    return err;
+    return ParseDiagnostic::Error("Failed to parse number: Unexpected end of string",
+                                  FileOffset::EndOfString());
   }
 
   // Short-circuit for "0x" or "0X".
@@ -154,53 +152,40 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     str.remove_prefix(1);
   }
 
-  // If we consumed a sign, but there's nothing left => "Unexpected character" (vs. "Unexpected end
-  // of string").
+  // If we consumed a sign, but there's nothing left => "Unexpected character".
   if (str.empty()) {
-    ParseError err;
-    err.reason = "Failed to parse number: Unexpected character";
-    // The offset is the position of that sign in the original string (i.e. 0).
-    err.location = FileOffset::Offset(static_cast<int64_t>(originalStr.size() - str.size() - 1));
-    return err;
+    const size_t signPos = originalStr.size() - 1;
+    return ParseDiagnostic::Error(
+        "Failed to parse number: Unexpected character",
+        SourceRange{FileOffset::Offset(signPos), FileOffset::Offset(signPos + 1)});
   }
 
   // If we removed one sign and now see another => "Invalid sign", e.g. "+-0" or "-+0".
-  // This check matches the existing logic: if there's a second sign, it's invalid.
   {
     const bool secondPlus = (str.front() == '+');
     const bool secondMinus = (str.front() == '-');
     if (foundPlus && secondMinus) {
-      // We saw '+' then '-'
-      ParseError err;
-      err.reason = "Failed to parse number: Invalid sign";
-      // That '-' is at offset=1 in the original string.
-      err.location = FileOffset::Offset(1);
-      return err;
+      return ParseDiagnostic::Error("Failed to parse number: Invalid sign",
+                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(2)});
     }
     if (!foundPlus && negative && (secondPlus || secondMinus)) {
-      // We saw '-' then another sign
-      ParseError err;
-      err.reason = "Failed to parse number: Invalid sign";
-      // That second sign is offset=1 if the original started with '-'.
-      err.location = FileOffset::Offset(1);
-      return err;
+      return ParseDiagnostic::Error("Failed to parse number: Invalid sign",
+                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(2)});
     }
   }
 
   // Check for Inf or NaN (case-insensitive).
   {
     if (StringUtils::StartsWith<StringComparison::IgnoreCase>(str, std::string_view("inf"))) {
-      ParseError err;
-      err.reason = "Failed to parse number: Not finite";
-      err.location = FileOffset::Offset(static_cast<int64_t>(signChars));
-      return err;
+      return ParseDiagnostic::Error(
+          "Failed to parse number: Not finite",
+          SourceRange{FileOffset::Offset(signChars), FileOffset::Offset(signChars + 3)});
     }
 
     if (StringUtils::StartsWith<StringComparison::IgnoreCase>(str, std::string_view("nan"))) {
-      ParseError err;
-      err.reason = "Failed to parse number: Not finite";
-      err.location = FileOffset::Offset(static_cast<int64_t>(signChars));
-      return err;
+      return ParseDiagnostic::Error(
+          "Failed to parse number: Not finite",
+          SourceRange{FileOffset::Offset(signChars), FileOffset::Offset(signChars + 3)});
     }
   }
 
@@ -241,12 +226,9 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
 
   // If no digits at all => error. (Matches tests expecting "Unexpected character" for "+", "-")
   if (!anyDigits) {
-    ParseError err;
-    err.reason = "Failed to parse number: Unexpected character";
-    // The offset is the location where we started to parse digits:
-    // i.e. signChars if we had a sign, else 0
-    err.location = FileOffset::Offset(static_cast<int64_t>(signChars));
-    return err;
+    return ParseDiagnostic::Error(
+        "Failed to parse number: Unexpected character",
+        SourceRange{FileOffset::Offset(signChars), FileOffset::Offset(signChars + 1)});
   }
 
   // 3) Optionally parse exponent
@@ -343,10 +325,9 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
   // If infinite => "Out of range"
   if (!std::isfinite(finalVal)) {
     if (options.forbidOutOfRange) {
-      ParseError err;
-      err.reason = "Failed to parse number: Out of range";
-      err.location = FileOffset::Offset(static_cast<int64_t>(totalConsumed));
-      return err;
+      return ParseDiagnostic::Error("Failed to parse number: Out of range",
+                                    SourceRange{FileOffset::Offset(0),
+                                                FileOffset::Offset(totalConsumed)});
     } else {
       Result r;
       r.number = (finalVal < 0.0) ? -std::numeric_limits<double>::infinity()

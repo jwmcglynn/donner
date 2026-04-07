@@ -252,13 +252,13 @@ public:
    * </root>
    * ```
    *
-   * The FileOffsetRange for the `child` element should contain the substring
+   * The SourceRange for the `child` element should contain the substring
    * `<child>Hello, world!</child>`
    *
    * @return Start and end offsets of the node in the input string, or \c std::nullptr if source
    * locations are not available.
    */
-  std::optional<FileOffsetRange> getNodeLocation() const;
+  std::optional<SourceRange> getNodeLocation() const;
 
   /**
    * Get the location of an attribute in the input string.
@@ -270,7 +270,7 @@ public:
    * </root>
    * ```
    *
-   * The FileOffsetRange for the `attr` attribute should contain the substring `attr="Hello,
+   * The SourceRange for the `attr` attribute should contain the substring `attr="Hello,
    * world!"`
    *
    * @param xmlInput Input string to get the attribute location in.
@@ -278,7 +278,7 @@ public:
    * @return Offset of the attribute in the input string, or \c std::nullopt if the attribute does
    * not exist.
    */
-  std::optional<FileOffsetRange> getAttributeLocation(std::string_view xmlInput,
+  std::optional<SourceRange> getAttributeLocation(std::string_view xmlInput,
                                                       const XMLQualifiedNameRef& name) const;
 
   /// Get the list of attributes for this element.

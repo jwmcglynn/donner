@@ -14,10 +14,10 @@ using testing::IsEmpty;
 // Helper function to collect parsed items into a vector and check for success
 std::vector<std::string> ParseToList(std::string_view str) {
   std::vector<std::string> result;
-  std::optional<ParseError> error =
+  std::optional<ParseDiagnostic> error =
       ListParser::Parse(str, [&](std::string_view item) { result.emplace_back(item); });
   EXPECT_FALSE(error.has_value()) << "Parsing failed unexpectedly for '" << str
-                                  << "': " << error.value_or(ParseError{});
+                                  << "': " << error.value_or(ParseDiagnostic{});
   return result;
 }
 
@@ -26,7 +26,7 @@ void ExpectParseFailure(std::string_view str,
                         std::optional<std::string_view> expectedReason = std::nullopt,
                         std::optional<size_t> expectedOffset = std::nullopt) {
   std::vector<std::string> result;
-  std::optional<ParseError> error = ListParser::Parse(str, [&](std::string_view item) {
+  std::optional<ParseDiagnostic> error = ListParser::Parse(str, [&](std::string_view item) {
     result.emplace_back(item);  // Collect items even on failure for debugging
   });
   EXPECT_TRUE(error.has_value()) << "Parsing succeeded unexpectedly for: " << str;
@@ -35,7 +35,7 @@ void ExpectParseFailure(std::string_view str,
       EXPECT_EQ(error->reason, expectedReason.value());
     }
     if (expectedOffset) {
-      EXPECT_EQ(error->location.offset, expectedOffset.value());
+      EXPECT_EQ(error->range.start.offset, expectedOffset.value());
     }
   }
 }

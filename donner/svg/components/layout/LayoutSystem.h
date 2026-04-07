@@ -6,6 +6,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -165,7 +166,7 @@ public:
    * @param registry ECS registry.
    * @param outWarnings Output vector of parse errors, if any.
    */
-  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 
   /**
    * Evaluates SizedElementProperties and returns the resulting bounds, using precomputed style
@@ -182,7 +183,7 @@ public:
   Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
                              const Boxd& viewBox, FontMetrics fontMetrics,
-                             std::vector<ParseError>* outWarnings);
+                             ParseWarningSink& warningSink);
 
   /**
    * Creates a ComputedShadowSizedElementComponent for shadow trees where a parent element's size
@@ -200,7 +201,7 @@ public:
   bool createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,
                                          EntityHandle useEntity, Entity symbolEntity,
                                          ShadowBranchType branchType,
-                                         std::vector<ParseError>* outWarnings);
+                                         ParseWarningSink& warningSink);
 
   /**
    * Creates a \ref ComputedSizedElementComponent for the linked entity, using precomputed style
@@ -214,7 +215,7 @@ public:
    */
   const ComputedSizedElementComponent& createComputedSizedElementComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, FontMetrics fontMetrics,
-      std::vector<ParseError>* outWarnings);
+      ParseWarningSink& warningSink);
 
   /**
    * Creates a \ref ComputedLocalTransformComponent for the linked entity, using precomputed style
@@ -227,7 +228,7 @@ public:
    */
   const ComputedLocalTransformComponent& createComputedLocalTransformComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,
-      std::vector<ParseError>* outWarnings);
+      ParseWarningSink& warningSink);
 
   /**
    * If this element establishes a clipping context, returns the clip rect in the parent's

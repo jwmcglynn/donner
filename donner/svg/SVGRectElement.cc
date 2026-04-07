@@ -1,5 +1,6 @@
 #include "donner/svg/SVGRectElement.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -138,7 +139,8 @@ void SVGRectElement::invalidate() const {
 
 void SVGRectElement::compute() const {
   auto& rect = handle_.get_or_emplace<components::RectComponent>();
-  components::ShapeSystem().createComputedPath(handle_, rect, FontMetrics(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  components::ShapeSystem().createComputedPath(handle_, rect, FontMetrics(), disabledSink);
 }
 
 }  // namespace donner::svg

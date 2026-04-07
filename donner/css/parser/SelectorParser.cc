@@ -928,7 +928,7 @@ private:
     return std::nullopt;
   }
 
-  std::optional<ParseError>&& getError() && { return std::move(error_); }
+  std::optional<ParseDiagnostic>&& getError() && { return std::move(error_); }
 
 private:
   bool isEOF() const { return components_.empty(); }
@@ -994,21 +994,17 @@ private:
   }
 
   void setError(std::string reason) {
-    ParseError err;
-    err.reason = std::move(reason);
-    err.location =
-        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString();
-    error_ = std::move(err);
+    error_ = ParseDiagnostic::Error(
+        RcString(reason),
+        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString());
   }
 
-  void setError(ParseError&& error) { error_ = std::move(error); }
+  void setError(ParseDiagnostic&& error) { error_ = std::move(error); }
 
   void addWarning(std::string reason) {
-    ParseError err;
-    err.reason = std::move(reason);
-    err.location =
-        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString();
-    warnings_.push_back(std::move(err));
+    warnings_.push_back(ParseDiagnostic::Error(
+        RcString(reason),
+        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString()));
   }
 
   std::optional<CompoundSelector::Entry> subclassToCompoundEntry(
@@ -1023,8 +1019,8 @@ private:
   }
 
   std::span<const ComponentValue> components_;
-  std::optional<ParseError> error_;
-  std::vector<ParseError> warnings_;
+  std::optional<ParseDiagnostic> error_;
+  std::vector<ParseDiagnostic> warnings_;
 };
 
 ParseResult<Selector> SelectorParser::ParseComponents(std::span<const ComponentValue> components) {
@@ -1035,8 +1031,8 @@ ParseResult<Selector> SelectorParser::ParseComponents(std::span<const ComponentV
 ParseResult<Selector> SelectorParser::Parse(std::string_view str) {
   details::Tokenizer tokenizer_(str);
   std::vector<ComponentValue> components = details::parseListOfComponentValues(tokenizer_);
-  return ParseComponents(components).mapError<Selector>([str](ParseError&& err) {
-    err.location = err.location.resolveOffset(str);
+  return ParseComponents(components).mapError<Selector>([str](ParseDiagnostic&& err) {
+    err.range.start = err.range.start.resolveOffset(str);
     return std::move(err);
   });
 }

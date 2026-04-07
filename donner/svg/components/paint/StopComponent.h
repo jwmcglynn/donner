@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
@@ -46,7 +47,7 @@ struct ComputedStopComponent {
    */
   ComputedStopComponent(const StopProperties& inputProperties, const ComputedStyleComponent& style,
                         const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                        std::vector<ParseError>* outWarnings);
+                        ParseWarningSink& warningSink);
 
   /// Computed properties of the \ref xml_stop element.
   StopProperties properties;

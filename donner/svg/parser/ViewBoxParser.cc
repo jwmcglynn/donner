@@ -20,15 +20,15 @@ public:
     }
 
     if (numbers[2] < 0.0 || numbers[3] < 0.0) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Width and height should be positive";
       return err;
     }
 
     if (!remaining_.empty()) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected end of string";
-      err.location = currentOffset();
+      err.range = currentRange(0, 1);
       return err;
     }
 

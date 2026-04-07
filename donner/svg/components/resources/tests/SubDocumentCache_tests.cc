@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
@@ -19,19 +20,17 @@ SVGDocument MakeDocumentWithCanvas(int size) {
 
 SubDocumentCache::ParseCallback MakeDocumentCallback(int size) {
   return [size](const std::vector<uint8_t>& /*content*/,
-                std::vector<ParseError>* /*outWarnings*/) -> std::optional<SVGDocumentHandle> {
+                ParseWarningSink& /*warningSink*/) -> std::optional<SVGDocumentHandle> {
     return MakeDocumentWithCanvas(size).handle();
   };
 }
 
 SubDocumentCache::ParseCallback MakeFailingCallback() {
   return [](const std::vector<uint8_t>& /*content*/,
-            std::vector<ParseError>* outWarnings) -> std::optional<SVGDocumentHandle> {
-    if (outWarnings) {
-      ParseError err;
-      err.reason = "Parse failed";
-      outWarnings->emplace_back(err);
-    }
+            ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    ParseDiagnostic err;
+    err.reason = "Parse failed";
+    warningSink.add(std::move(err));
     return std::nullopt;
   };
 }
@@ -43,17 +42,18 @@ TEST(SubDocumentCacheTest, GetOrParseCachesResult) {
   int parseCount = 0;
   auto callback = [&parseCount](
                       const std::vector<uint8_t>& /*data*/,
-                      std::vector<ParseError>* /*warnings*/) -> std::optional<SVGDocumentHandle> {
+                      ParseWarningSink& /*warningSink*/) -> std::optional<SVGDocumentHandle> {
     ++parseCount;
     return MakeDocumentWithCanvas(101).handle();
   };
 
-  auto first = cache.getOrParse("test.svg", content, callback, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto first = cache.getOrParse("test.svg", content, callback, disabledSink);
   ASSERT_TRUE(first.has_value());
   EXPECT_EQ(SVGDocument::CreateFromHandle(*first).canvasSize(), Vector2i(101, 101));
   EXPECT_EQ(parseCount, 1);
 
-  auto second = cache.getOrParse("test.svg", content, callback, nullptr);
+  auto second = cache.getOrParse("test.svg", content, callback, disabledSink);
   ASSERT_TRUE(second.has_value());
   EXPECT_EQ(*first, *second);
   EXPECT_EQ(parseCount, 1);
@@ -65,8 +65,9 @@ TEST(SubDocumentCacheTest, DifferentUrlsCachedSeparately) {
   const std::vector<uint8_t> contentA{'a'};
   const std::vector<uint8_t> contentB{'b'};
 
-  auto a = cache.getOrParse("a.svg", contentA, MakeDocumentCallback(201), nullptr);
-  auto b = cache.getOrParse("b.svg", contentB, MakeDocumentCallback(202), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto a = cache.getOrParse("a.svg", contentA, MakeDocumentCallback(201), disabledSink);
+  auto b = cache.getOrParse("b.svg", contentB, MakeDocumentCallback(202), disabledSink);
 
   ASSERT_TRUE(a.has_value());
   ASSERT_TRUE(b.has_value());
@@ -85,7 +86,8 @@ TEST(SubDocumentCacheTest, GetReturnsCachedDocument) {
   SubDocumentCache cache;
   const std::vector<uint8_t> content{'x'};
 
-  auto parsed = cache.getOrParse("x.svg", content, MakeDocumentCallback(301), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto parsed = cache.getOrParse("x.svg", content, MakeDocumentCallback(301), disabledSink);
   ASSERT_TRUE(parsed.has_value());
 
   auto result = cache.get("x.svg");
@@ -97,11 +99,11 @@ TEST(SubDocumentCacheTest, ParseFailureReturnsNull) {
   SubDocumentCache cache;
   const std::vector<uint8_t> content{'x'};
 
-  std::vector<ParseError> warnings;
-  auto result = cache.getOrParse("fail.svg", content, MakeFailingCallback(), &warnings);
+  ParseWarningSink warnings;
+  auto result = cache.getOrParse("fail.svg", content, MakeFailingCallback(), warnings);
 
   EXPECT_FALSE(result.has_value());
-  EXPECT_FALSE(warnings.empty());
+  EXPECT_TRUE(warnings.hasWarnings());
   EXPECT_EQ(cache.size(), 0u);
 }
 
@@ -109,28 +111,28 @@ TEST(SubDocumentCacheTest, RecursionDetection) {
   SubDocumentCache cache;
   const std::vector<uint8_t> content{'r'};
 
-  std::vector<ParseError> warnings;
+  ParseWarningSink warnings;
   bool recursionDetected = false;
 
   SubDocumentCache::ParseCallback recursiveCallback =
       [&cache, &content, &recursionDetected](
           const std::vector<uint8_t>& /*data*/,
-          std::vector<ParseError>* outWarnings) -> std::optional<SVGDocumentHandle> {
-    auto nested = cache.getOrParse("circular.svg", content, MakeDocumentCallback(401), outWarnings);
+          ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    auto nested = cache.getOrParse("circular.svg", content, MakeDocumentCallback(401), warningSink);
     if (!nested.has_value()) {
       recursionDetected = true;
     }
     return MakeDocumentWithCanvas(402).handle();
   };
 
-  auto result = cache.getOrParse("circular.svg", content, recursiveCallback, &warnings);
+  auto result = cache.getOrParse("circular.svg", content, recursiveCallback, warnings);
 
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(SVGDocument::CreateFromHandle(*result).canvasSize(), Vector2i(402, 402));
   EXPECT_TRUE(recursionDetected);
 
   bool hasCircularWarning = false;
-  for (const auto& warning : warnings) {
+  for (const auto& warning : warnings.warnings()) {
     if (std::string_view(warning.reason).find("Circular") != std::string_view::npos) {
       hasCircularWarning = true;
       break;
@@ -147,13 +149,14 @@ TEST(SubDocumentCacheTest, IsLoadingDuringParse) {
   SubDocumentCache::ParseCallback callback =
       [&cache, &wasLoadingDuringParse](
           const std::vector<uint8_t>& /*data*/,
-          std::vector<ParseError>* /*warnings*/) -> std::optional<SVGDocumentHandle> {
+          ParseWarningSink& /*warningSink*/) -> std::optional<SVGDocumentHandle> {
     wasLoadingDuringParse = cache.isLoading("test.svg");
     return MakeDocumentWithCanvas(501).handle();
   };
 
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   EXPECT_FALSE(cache.isLoading("test.svg"));
-  cache.getOrParse("test.svg", content, callback, nullptr);
+  cache.getOrParse("test.svg", content, callback, disabledSink);
   EXPECT_TRUE(wasLoadingDuringParse);
   EXPECT_FALSE(cache.isLoading("test.svg"));
 }
@@ -163,27 +166,27 @@ TEST(SubDocumentCacheTest, IndirectRecursionDetection) {
   const std::vector<uint8_t> contentA{'a'};
   const std::vector<uint8_t> contentB{'b'};
 
-  std::vector<ParseError> warnings;
+  ParseWarningSink warnings;
   bool bTriedToLoadA = false;
 
   SubDocumentCache::ParseCallback callbackA;
   SubDocumentCache::ParseCallback callbackB =
       [&cache, &contentA, &bTriedToLoadA, &callbackA](
           const std::vector<uint8_t>& /*data*/,
-          std::vector<ParseError>* outWarnings) -> std::optional<SVGDocumentHandle> {
-    auto result = cache.getOrParse("a.svg", contentA, callbackA, outWarnings);
+          ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    auto result = cache.getOrParse("a.svg", contentA, callbackA, warningSink);
     bTriedToLoadA = !result.has_value();
     return MakeDocumentWithCanvas(601).handle();
   };
 
   callbackA = [&cache, &contentB, &callbackB](
                   const std::vector<uint8_t>& /*data*/,
-                  std::vector<ParseError>* outWarnings) -> std::optional<SVGDocumentHandle> {
-    cache.getOrParse("b.svg", contentB, callbackB, outWarnings);
+                  ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    cache.getOrParse("b.svg", contentB, callbackB, warningSink);
     return MakeDocumentWithCanvas(602).handle();
   };
 
-  auto result = cache.getOrParse("a.svg", contentA, callbackA, &warnings);
+  auto result = cache.getOrParse("a.svg", contentA, callbackA, warnings);
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(SVGDocument::CreateFromHandle(*result).canvasSize(), Vector2i(602, 602));
   EXPECT_TRUE(bTriedToLoadA);
@@ -230,15 +233,15 @@ protected:
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGNoResourceLoader) {
   setSvgParseCallback([](const std::vector<uint8_t>&,
-                         std::vector<ParseError>*) -> std::optional<SVGDocumentHandle> {
+                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
     return MakeDocumentWithCanvas(701).handle();
   });
 
-  std::vector<ParseError> warnings;
-  auto result = resourceManager_->loadExternalSVG("test.svg", &warnings);
+  ParseWarningSink warnings;
+  auto result = resourceManager_->loadExternalSVG("test.svg", warnings);
 
   EXPECT_FALSE(result.has_value());
-  EXPECT_FALSE(warnings.empty());
+  EXPECT_TRUE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGNoParseCallback) {
@@ -246,11 +249,11 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGNoParseCallback) {
   loader->addFile("test.svg", {'<', 's', 'v', 'g', '>'});
   setResourceLoader(std::move(loader));
 
-  std::vector<ParseError> warnings;
-  auto result = resourceManager_->loadExternalSVG("test.svg", &warnings);
+  ParseWarningSink warnings;
+  auto result = resourceManager_->loadExternalSVG("test.svg", warnings);
 
   EXPECT_FALSE(result.has_value());
-  EXPECT_FALSE(warnings.empty());
+  EXPECT_TRUE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGSecureModeBlocked) {
@@ -258,12 +261,13 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSecureModeBlocked) {
   loader->addFile("test.svg", {'<', 's', 'v', 'g', '>'});
   setResourceLoader(std::move(loader));
   setSvgParseCallback([](const std::vector<uint8_t>&,
-                         std::vector<ParseError>*) -> std::optional<SVGDocumentHandle> {
+                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
     return MakeDocumentWithCanvas(702).handle();
   });
   setProcessingMode(ProcessingMode::SecureStatic);
 
-  auto result = resourceManager_->loadExternalSVG("test.svg", nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto result = resourceManager_->loadExternalSVG("test.svg", disabledSink);
   EXPECT_FALSE(result.has_value());
 }
 
@@ -271,15 +275,15 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGFileNotFound) {
   auto loader = std::make_unique<TestResourceLoader>();
   setResourceLoader(std::move(loader));
   setSvgParseCallback([](const std::vector<uint8_t>&,
-                         std::vector<ParseError>*) -> std::optional<SVGDocumentHandle> {
+                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
     return MakeDocumentWithCanvas(703).handle();
   });
 
-  std::vector<ParseError> warnings;
-  auto result = resourceManager_->loadExternalSVG("missing.svg", &warnings);
+  ParseWarningSink warnings;
+  auto result = resourceManager_->loadExternalSVG("missing.svg", warnings);
 
   EXPECT_FALSE(result.has_value());
-  EXPECT_FALSE(warnings.empty());
+  EXPECT_TRUE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGSuccess) {
@@ -288,16 +292,16 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSuccess) {
   loader->addFile("test.svg", svgContent);
   setResourceLoader(std::move(loader));
   setSvgParseCallback([](const std::vector<uint8_t>& data,
-                         std::vector<ParseError>*) -> std::optional<SVGDocumentHandle> {
+                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
     return MakeDocumentWithCanvas(static_cast<int>(data.size()) + 700).handle();
   });
 
-  std::vector<ParseError> warnings;
-  auto result = resourceManager_->loadExternalSVG("test.svg", &warnings);
+  ParseWarningSink warnings;
+  auto result = resourceManager_->loadExternalSVG("test.svg", warnings);
 
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(SVGDocument::CreateFromHandle(*result).canvasSize(), Vector2i(705, 705));
-  EXPECT_TRUE(warnings.empty());
+  EXPECT_FALSE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGCachesResult) {
@@ -306,13 +310,14 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGCachesResult) {
   loader->addFile("test.svg", {'x'});
   setResourceLoader(std::move(loader));
   setSvgParseCallback([&parseCount](const std::vector<uint8_t>& /*data*/,
-                                    std::vector<ParseError>*) -> std::optional<SVGDocumentHandle> {
+                                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
     ++parseCount;
     return MakeDocumentWithCanvas(801).handle();
   });
 
-  auto first = resourceManager_->loadExternalSVG("test.svg", nullptr);
-  auto second = resourceManager_->loadExternalSVG("test.svg", nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto first = resourceManager_->loadExternalSVG("test.svg", disabledSink);
+  auto second = resourceManager_->loadExternalSVG("test.svg", disabledSink);
 
   ASSERT_TRUE(first.has_value());
   ASSERT_TRUE(second.has_value());

@@ -4,7 +4,8 @@
 #include <functional>
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/core/ProcessingMode.h"
@@ -39,7 +40,7 @@ class SVGDocument {
 public:
   struct Settings;
   using SvgParseCallback = std::function<std::optional<SVGDocumentHandle>(
-      const std::vector<uint8_t>& svgContent, std::vector<ParseError>* outWarnings)>;
+      const std::vector<uint8_t>& svgContent, ParseWarningSink& warningSink)>;
 
 private:
   friend class SVGElement;

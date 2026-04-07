@@ -9,7 +9,7 @@
 namespace donner::svg::components {
 namespace {
 
-using RectPresentationAttributeParseFn = std::optional<ParseError> (*)(
+using RectPresentationAttributeParseFn = std::optional<ParseDiagnostic> (*)(
     RectProperties& properties, const parser::PropertyParseFnParams& params);
 
 constexpr std::array<std::pair<std::string_view, RectPresentationAttributeParseFn>, 6>
@@ -79,7 +79,7 @@ constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
 ComputedRectComponent::ComputedRectComponent(
     const RectProperties& inputProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<ParseError>* outWarnings)
+    ParseWarningSink& warningSink)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const RectPresentationAttributeParseFn* parseFn =
@@ -88,8 +88,8 @@ ComputedRectComponent::ComputedRectComponent(
       auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
                                                    property.declaration, property.specificity,
                                                    parser::PropertyParseBehavior::AllowUserUnits));
-      if (maybeError && outWarnings) {
-        outWarnings->emplace_back(std::move(maybeError.value()));
+      if (maybeError) {
+        warningSink.add(std::move(maybeError.value()));
       }
     }
   }

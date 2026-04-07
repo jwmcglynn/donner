@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/Stylesheet.h"
 
 namespace donner::svg::components {

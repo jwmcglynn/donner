@@ -12,12 +12,13 @@
 #include <iostream>
 
 #include "donner/base/Length.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGCircleElement.h"
 #include "donner/svg/SVGPathElement.h"
 
-using donner::ParseError;
+using donner::ParseDiagnostic;
 using donner::ParseResult;
 
 int main(int argc, char* argv[]) {
@@ -33,8 +34,9 @@ int main(int argc, char* argv[]) {
 
   //! [svg_parse]
   // Call ParseSVG to load the SVG file
+  donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
   ParseResult<donner::svg::SVGDocument> maybeResult =
-      donner::svg::parser::SVGParser::ParseSVG(svgContents);
+      donner::svg::parser::SVGParser::ParseSVG(svgContents, disabled);
   //! [svg_parse]
   //! [error_handling]
   if (maybeResult.hasError()) {

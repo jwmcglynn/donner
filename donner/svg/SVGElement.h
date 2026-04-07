@@ -139,7 +139,7 @@ public:
    * @param name Name of the attribute to set.
    * @param value New value to set.
    * @return true if the attribute was set, false if the attribute is not a valid presentation
-   * attribute for this element, or a \ref ParseError if the value is invalid.
+   * attribute for this element, or a \ref ParseDiagnostic if the value is invalid.
    */
   ParseResult<bool> trySetPresentationAttribute(std::string_view name, std::string_view value);
 

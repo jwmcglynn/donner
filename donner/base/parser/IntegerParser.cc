@@ -38,9 +38,8 @@ ParseResult<IntegerParser::Result> IntegerParser::Parse(std::string_view str) {
     const unsigned char digit = kLookupDigits[static_cast<unsigned char>(str[i])];
     if (digit >= 10) {
       if (i == 0) {
-        ParseError err;
-        err.reason = "Unexpected character parsing integer";
-        return err;
+        return ParseDiagnostic::Error("Unexpected character parsing integer",
+                                      SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)});
       }
 
       Result result;
@@ -51,19 +50,17 @@ ParseResult<IntegerParser::Result> IntegerParser::Parse(std::string_view str) {
 
     // Detect overflow
     if (number > kMaxDecimal || (number == kMaxDecimal && digit > kMaxDecimalDigit)) {
-      ParseError err;
-      err.reason = "Integer overflow";
-      err.location = FileOffset::Offset(i);
-      return err;
+      return ParseDiagnostic::Error("Integer overflow",
+                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(i + 1)});
     }
 
     number = number * 10 + digit;
   }
 
   if (str.empty()) {
-    ParseError err;
-    err.reason = "Unexpected end of string";
-    return err;
+    return ParseDiagnostic::Error(
+        "Unexpected end of string",
+        SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
   }
 
   Result result;
@@ -81,9 +78,8 @@ ParseResult<IntegerParser::Result> IntegerParser::ParseHex(std::string_view str)
     const unsigned char digit = kLookupDigits[static_cast<unsigned char>(str[i])];
     if (digit == 0xFF) {
       if (i == 0) {
-        ParseError err;
-        err.reason = "Unexpected character parsing hex integer";
-        return err;
+        return ParseDiagnostic::Error("Unexpected character parsing hex integer",
+                                      SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)});
       }
 
       Result result;
@@ -94,19 +90,17 @@ ParseResult<IntegerParser::Result> IntegerParser::ParseHex(std::string_view str)
 
     // Detect overflow
     if (number > kMaxHex || (number == kMaxHex && digit > kMaxHexDigit)) {
-      ParseError err;
-      err.reason = "Integer overflow";
-      err.location = FileOffset::Offset(i);
-      return err;
+      return ParseDiagnostic::Error("Integer overflow",
+                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(i + 1)});
     }
 
     number = number * 16 + digit;
   }
 
   if (str.empty()) {
-    ParseError err;
-    err.reason = "Unexpected end of string";
-    return err;
+    return ParseDiagnostic::Error(
+        "Unexpected end of string",
+        SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
   }
 
   Result result;

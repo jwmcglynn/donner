@@ -12,7 +12,7 @@ namespace {
  * @param compressedData The data to decompress.
  * @param output The output vector to store the decompressed data.
  * @param windowBits The window bits to use for decompression, see zlib documentation for details.
- * @return \ref ParseResult with the output vector on success, or a \ref ParseError on failure.
+ * @return \ref ParseResult with the output vector on success, or a \ref ParseDiagnostic on failure.
  */
 ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int windowBits,
                                           std::optional<size_t> outputSize) {
@@ -31,7 +31,7 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
   stream.avail_in = static_cast<uInt>(compressedData.size());
 
   if (inflateInit2(&stream, windowBits) != Z_OK) {
-    return ParseError("Failed to initialize zlib");
+    return ParseDiagnostic::Error("Failed to initialize zlib", FileOffset::Offset(0));
   }
 
   if (outputSize) {
@@ -42,15 +42,15 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
     int ret = inflate(&stream, Z_FINISH);
     if (ret != Z_STREAM_END) {
       inflateEnd(&stream);
-      ParseError err;
-      err.reason = std::string("Failed to decompress zlib data: ") +
-                   (stream.msg ? stream.msg : "Unknown error");
-      return err;
+      return ParseDiagnostic::Error(
+          RcString(std::string("Failed to decompress zlib data: ") +
+                   (stream.msg ? stream.msg : "Unknown error")),
+          FileOffset::Offset(0));
     }
 
     if (stream.total_out != output.size()) {
       inflateEnd(&stream);
-      return ParseError("Zlib decompression size mismatch");
+      return ParseDiagnostic::Error("Zlib decompression size mismatch", FileOffset::Offset(0));
     }
   } else {
     // If no output buffer is provided, decompress in chunks.
@@ -70,10 +70,10 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
 
       if (ret != Z_OK) {
         inflateEnd(&stream);
-        ParseError err;
-        err.reason = std::string("Failed to decompress gzip data: ") +
-                     (stream.msg ? stream.msg : "Unknown error");
-        return err;
+        return ParseDiagnostic::Error(
+            RcString(std::string("Failed to decompress gzip data: ") +
+                     (stream.msg ? stream.msg : "Unknown error")),
+            FileOffset::Offset(0));
       }
     }
   }
@@ -86,13 +86,13 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
 
 ParseResult<std::vector<uint8_t>> Decompress::Gzip(std::string_view compressedData) {
   if (compressedData.size() < 2) {
-    return ParseError("Gzip data is too short");
+    return ParseDiagnostic::Error("Gzip data is too short", FileOffset::Offset(0));
   }
 
   const unsigned char* data = reinterpret_cast<const unsigned char*>(compressedData.data());
   if (!(data[0] == 0x1f && data[1] == 0x8b)) {
     // Not gzip data.
-    return ParseError("Invalid gzip header");
+    return ParseDiagnostic::Error("Invalid gzip header", FileOffset::Offset(0));
   }
 
   // 16 + MAX_WBITS enables gzip decoding.

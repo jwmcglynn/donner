@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -12,7 +13,8 @@ namespace donner::svg::components {
 class LayoutSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    auto maybeResult = parser::SVGParser::ParseSVG(input, disabled);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
@@ -36,7 +38,8 @@ TEST_F(LayoutSystemTest, ViewportRootWithComputedComponents) {
     </svg>
   )");
 
-  layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.rootEntityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
 }
@@ -59,7 +62,8 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
     </svg>
   )");
 
-  layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
@@ -82,7 +86,8 @@ TEST_F(LayoutSystemTest, ViewportPatternWithComputedComponents) {
     </svg>
   )");
 
-  layoutSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
@@ -428,10 +433,10 @@ TEST_F(LayoutSystemTest, InstantiateAllComputedComponentsNoWarnings) {
   )");
 
   auto& registry = document.registry();
-  std::vector<ParseError> warnings;
-  layoutSystem.instantiateAllComputedComponents(registry, &warnings);
+  ParseWarningSink warningSink;
+  layoutSystem.instantiateAllComputedComponents(registry, warningSink);
 
-  EXPECT_TRUE(warnings.empty());
+  EXPECT_FALSE(warningSink.hasWarnings());
 }
 
 // --- ClipRect ---

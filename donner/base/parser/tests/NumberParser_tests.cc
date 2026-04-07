@@ -155,6 +155,54 @@ TEST(NumberParser, AllowOutOfRange) {
               ParseResultIs(Result{-std::numeric_limits<double>::infinity(), 19}));
 }
 
+// ---------------------------------------------------------------------------
+// Range-accuracy tests: verify that error SourceRanges cover the right span.
+// ---------------------------------------------------------------------------
+
+TEST(NumberParser, RangeEmpty) {
+  // Empty string => EndOfString for both start and end.
+  EXPECT_THAT(NumberParser::Parse(""), ParseErrorEndOfString());
+}
+
+TEST(NumberParser, RangeUnexpectedCharacter) {
+  // Non-digit at position 0 => range [0,1).
+  EXPECT_THAT(NumberParser::Parse("abc"), ParseErrorRange(0, 1));
+  // "." alone => no digits, '.' is at offset 0 => [0,1).
+  EXPECT_THAT(NumberParser::Parse("."), ParseErrorRange(0, 1));
+}
+
+TEST(NumberParser, RangeSignOnly) {
+  // "+" or "-" with nothing after => sign is consumed, error points at sign position.
+  EXPECT_THAT(NumberParser::Parse("+"), ParseErrorRange(0, 1));
+  EXPECT_THAT(NumberParser::Parse("-"), ParseErrorRange(0, 1));
+}
+
+TEST(NumberParser, RangeInvalidSign) {
+  // "+-" and "-+" => Invalid sign, range covers both sign chars [0,2).
+  EXPECT_THAT(NumberParser::Parse("+-0"), ParseErrorRange(0, 2));
+  EXPECT_THAT(NumberParser::Parse("-+0"), ParseErrorRange(0, 2));
+  EXPECT_THAT(NumberParser::Parse("+-"), ParseErrorRange(0, 2));
+  EXPECT_THAT(NumberParser::Parse("-+"), ParseErrorRange(0, 2));
+}
+
+TEST(NumberParser, RangeNotFinite) {
+  // "Inf" => range covers the three letters [0,3).
+  EXPECT_THAT(NumberParser::Parse("Inf"), ParseErrorRange(0, 3));
+  // "+Inf" => sign is 1 char, so inf range is [1,4).
+  EXPECT_THAT(NumberParser::Parse("+Inf"), ParseErrorRange(1, 4));
+  EXPECT_THAT(NumberParser::Parse("-Inf"), ParseErrorRange(1, 4));
+  // NaN variants.
+  EXPECT_THAT(NumberParser::Parse("NaN"), ParseErrorRange(0, 3));
+  EXPECT_THAT(NumberParser::Parse("+NaN"), ParseErrorRange(1, 4));
+  EXPECT_THAT(NumberParser::Parse("-NaN"), ParseErrorRange(1, 4));
+}
+
+TEST(NumberParser, RangeOutOfRange) {
+  // Out-of-range number => range covers entire consumed input [0, totalConsumed).
+  EXPECT_THAT(NumberParser::Parse("99e999999999999999"), ParseErrorRange(0, 18));
+  EXPECT_THAT(NumberParser::Parse("-99e999999999999999"), ParseErrorRange(0, 19));
+}
+
 TEST(NumberParser, BigFraction) {
   EXPECT_THAT(NumberParser::Parse("59.60784313725490196078431372549"),
               ParseResultIs(Result{59.60784313725490196078431372549, 32}));

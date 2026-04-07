@@ -20,7 +20,7 @@ ParseResult<Number2dParser::Result> Number2dParser::Parse(std::string_view str) 
 
   const auto maybeResultX = NumberParser::Parse(str, options);
   if (maybeResultX.hasError()) {
-    return ParseError(maybeResultX.error());
+    return ParseDiagnostic(maybeResultX.error());
   }
 
   const double numberX = maybeResultX.result().number;
@@ -37,7 +37,7 @@ ParseResult<Number2dParser::Result> Number2dParser::Parse(std::string_view str) 
 
   const auto maybeResultY = NumberParser::Parse(remainingStr, options);
   if (maybeResultY.hasError()) {
-    return ParseError(maybeResultY.error());
+    return ParseDiagnostic(maybeResultY.error());
   }
 
   const double numberY = maybeResultY.result().number;

@@ -7,7 +7,7 @@ namespace donner::fonts {
 
 ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_t> woff2Data) {
   if (woff2Data.size() < 4) {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "WOFF2 data too short";
     return err;
   }
@@ -16,7 +16,7 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
   const size_t outSize =
       woff2::ComputeWOFF2FinalSize(woff2Data.data(), woff2Data.size());
   if (outSize == 0) {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "WOFF2: failed to compute decompressed size (invalid header)";
     return err;
   }
@@ -26,7 +26,7 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
   woff2::WOFF2MemoryOut out(output.data(), output.size());
 
   if (!woff2::ConvertWOFF2ToTTF(woff2Data.data(), woff2Data.size(), &out)) {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "WOFF2: decompression failed";
     return err;
   }

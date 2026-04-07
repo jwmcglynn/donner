@@ -3,6 +3,7 @@
 
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/Stylesheet.h"
 
 /**
@@ -18,7 +19,8 @@
  * To get started, parse a Stylesheet using \ref CSS::ParseStylesheet, and then use the returned
  * \ref Stylesheet object to match against a DOM tree:
  * ```
- * auto stylesheet = CSS::ParseStylesheet("svg { fill: red; }");
+ * ParseWarningSink warnings;
+ * auto stylesheet = CSS::ParseStylesheet("svg { fill: red; }", warnings);
  * for (const css::SelectorRule& rule : stylesheet.rules()) {
  *   if (css::SelectorMatchResult match = rule.selector.matches(domNode)) {
  *     applyDeclaration(rule.declarations, match.specificity);
@@ -38,9 +40,10 @@ public:
    * wrapped into a \ref Stylesheet object.
    *
    * @param str Input stylesheet string.
+   * @param warningSink Sink to collect warnings (e.g. invalid selectors).
    * @return Parsed stylesheet.
    */
-  static Stylesheet ParseStylesheet(std::string_view str);
+  static Stylesheet ParseStylesheet(std::string_view str, ParseWarningSink& warningSink);
 
   /**
    * Parse a `style=""` attribute into a list of \ref Declaration.

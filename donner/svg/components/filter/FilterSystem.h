@@ -2,7 +2,8 @@
 /// @file
 
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 
 namespace donner::svg::components {
@@ -25,7 +26,7 @@ public:
    * @param outWarnings Warnings generated during parsing.
    */
   void createComputedFilter(EntityHandle handle, const FilterComponent& component,
-                            std::vector<ParseError>* outWarnings);
+                            ParseWarningSink& warningSink);
 
   /**
    * Create all \ref ComputedFilterComponent in the tree.
@@ -33,7 +34,7 @@ public:
    * @param registry Registry to operate on.
    * @param outWarnings Warnings generated during parsing.
    */
-  void instantiateAllComputedComponents(Registry& registry, std::vector<ParseError>* outWarnings);
+  void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 };
 
 }  // namespace donner::svg::components

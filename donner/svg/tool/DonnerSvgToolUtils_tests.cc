@@ -2,6 +2,7 @@
 
 #include <span>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
@@ -14,7 +15,8 @@ namespace {
 using testing::Optional;
 
 SVGDocument ParseDoc(std::string_view svg) {
-  auto parsed = parser::SVGParser::ParseSVG(svg);
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svg, disabled);
   EXPECT_FALSE(parsed.hasError()) << parsed.error();
   return std::move(parsed.result());
 }

@@ -63,7 +63,7 @@ FilterNode makeFilterNode2(FilterPrimitive primitive, const FilterPrimitiveCompo
 /// Resolve flood-color and flood-opacity from the FEFloodComponent properties overlaid with CSS
 /// unparsed properties, and return a Flood primitive with the resolved values.
 filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::entity cur,
-                                               std::vector<ParseError>* outWarnings) {
+                                               ParseWarningSink& warningSink) {
   filter_primitive::Flood flood;
 
   // Start with values from the component (set via XML presentation attributes).
@@ -87,9 +87,7 @@ filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::e
                     return css::parser::ColorParser::Parse(params.components());
                   },
                   &props.floodColor)) {
-            if (outWarnings) {
-              outWarnings->emplace_back(std::move(maybeError.value()));
-            }
+            warningSink.add(std::move(maybeError.value()));
           }
         } else if (name == "flood-opacity") {
           if (auto maybeError = Parse(
@@ -98,9 +96,7 @@ filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::e
                     return parser::ParseAlphaValue(params.components());
                   },
                   &props.floodOpacity)) {
-            if (outWarnings) {
-              outWarnings->emplace_back(std::move(maybeError.value()));
-            }
+            warningSink.add(std::move(maybeError.value()));
           }
         }
       }
@@ -127,7 +123,7 @@ filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::e
 /// properties, following the same pattern as resolveFloodProperties for flood-color.
 template <typename LightingComponent>
 css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
-                                std::vector<ParseError>* outWarnings) {
+                                ParseWarningSink& warningSink) {
   // Start with values from the component (set via XML presentation attributes).
   Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
                                        return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
@@ -151,9 +147,7 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
                     return css::parser::ColorParser::Parse(params.components());
                   },
                   &lightingColor)) {
-            if (outWarnings) {
-              outWarnings->emplace_back(std::move(maybeError.value()));
-            }
+            warningSink.add(std::move(maybeError.value()));
           }
         }
       }
@@ -196,7 +190,7 @@ bool hasFilterPrimitiveChildren(const Registry& registry, EntityHandle handle) {
 }
 
 std::vector<EntityHandle> getInheritanceChain(EntityHandle handle,
-                                              std::vector<ParseError>* outWarnings) {
+                                              ParseWarningSink& warningSink) {
   Registry& registry = *handle.registry();
 
   std::vector<EntityHandle> inheritanceChain;
@@ -213,31 +207,25 @@ std::vector<EntityHandle> getInheritanceChain(EntityHandle handle,
 
     auto resolvedReference = filter->href->resolve(registry);
     if (!resolvedReference.has_value()) {
-      if (outWarnings) {
-        ParseError err;
-        err.reason = "Filter element href=\"" + filter->href->href + "\" failed to resolve";
-        outWarnings->push_back(std::move(err));
-      }
+      ParseDiagnostic err;
+      err.reason = "Filter element href=\"" + filter->href->href + "\" failed to resolve";
+      warningSink.add(std::move(err));
       break;
     }
 
     EntityHandle target = resolvedReference->handle;
     if (!target.valid() || !target.all_of<FilterComponent>()) {
-      if (outWarnings) {
-        ParseError err;
-        err.reason =
-            "Filter element href=\"" + filter->href->href + "\" does not reference a <filter>";
-        outWarnings->push_back(std::move(err));
-      }
+      ParseDiagnostic err;
+      err.reason =
+          "Filter element href=\"" + filter->href->href + "\" does not reference a <filter>";
+      warningSink.add(std::move(err));
       break;
     }
 
     if (guard.hasRecursion(target)) {
-      if (outWarnings) {
-        ParseError err;
-        err.reason = "Circular filter inheritance detected";
-        outWarnings->push_back(std::move(err));
-      }
+      ParseDiagnostic err;
+      err.reason = "Circular filter inheritance detected";
+      warningSink.add(std::move(err));
       break;
     }
 
@@ -252,12 +240,12 @@ std::vector<EntityHandle> getInheritanceChain(EntityHandle handle,
 }  // namespace
 
 void FilterSystem::createComputedFilter(EntityHandle handle, const FilterComponent& component,
-                                        std::vector<ParseError>* outWarnings) {
+                                        ParseWarningSink& warningSink) {
   (void)component;
 
   const Registry& registry = *handle.registry();
 
-  const std::vector<EntityHandle> inheritanceChain = getInheritanceChain(handle, outWarnings);
+  const std::vector<EntityHandle> inheritanceChain = getInheritanceChain(handle, warningSink);
 
   EntityHandle primitiveSource;
   for (EntityHandle candidate : inheritanceChain) {
@@ -337,7 +325,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
           },
           *primitive, primitiveCIF));
     } else if (registry.try_get<FEFloodComponent>(cur)) {
-      filterGraph.nodes.push_back(makeFilterNode(resolveFloodProperties(registry, cur, outWarnings),
+      filterGraph.nodes.push_back(makeFilterNode(resolveFloodProperties(registry, cur, warningSink),
                                                  *primitive, primitiveCIF));
     } else if (const auto* offset = registry.try_get<FEOffsetComponent>(cur)) {
       filterGraph.nodes.push_back(makeFilterNode(
@@ -446,9 +434,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
                         return css::parser::ColorParser::Parse(params.components());
                       },
                       &props.floodColor)) {
-                if (outWarnings) {
-                  outWarnings->emplace_back(std::move(maybeError.value()));
-                }
+                warningSink.add(std::move(maybeError.value()));
               }
             } else if (name == "flood-opacity") {
               if (auto maybeError = Parse(
@@ -457,9 +443,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
                         return parser::ParseAlphaValue(params.components());
                       },
                       &props.floodOpacity)) {
-                if (outWarnings) {
-                  outWarnings->emplace_back(std::move(maybeError.value()));
-                }
+                warningSink.add(std::move(maybeError.value()));
               }
             }
           }
@@ -523,7 +507,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.surfaceScale = diffuse->surfaceScale;
       prim.diffuseConstant = diffuse->diffuseConstant;
       prim.lightingColor =
-          resolveLightingColor<FEDiffuseLightingComponent>(registry, cur, outWarnings);
+          resolveLightingColor<FEDiffuseLightingComponent>(registry, cur, warningSink);
 
       // Find light source child element.
       const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
@@ -555,7 +539,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       prim.specularConstant = specular->specularConstant;
       prim.specularExponent = specular->specularExponent;
       prim.lightingColor =
-          resolveLightingColor<FESpecularLightingComponent>(registry, cur, outWarnings);
+          resolveLightingColor<FESpecularLightingComponent>(registry, cur, warningSink);
 
       // Find light source child element.
       const auto& curTree = registry.get<donner::components::TreeComponent>(cur);
@@ -634,10 +618,10 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
 }
 
 void FilterSystem::instantiateAllComputedComponents(Registry& registry,
-                                                    std::vector<ParseError>* outWarnings) {
+                                                    ParseWarningSink& warningSink) {
   for (auto entity : registry.view<FilterComponent>()) {
     createComputedFilter(EntityHandle(registry, entity), registry.get<FilterComponent>(entity),
-                         outWarnings);
+                         warningSink);
   }
 }
 

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <vector>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -13,7 +14,8 @@ namespace donner::svg {
 namespace {
 
 SVGDocument ParseDocument(std::string_view svgSource) {
-  ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource);
+  ParseWarningSink warningSink;
+  ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource, warningSink);
   EXPECT_FALSE(maybeDocument.hasError());
   return std::move(maybeDocument.result());
 }

@@ -1,5 +1,6 @@
 #include "donner/svg/SVGCircleElement.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/shape/CircleComponent.h"
@@ -72,7 +73,8 @@ void SVGCircleElement::invalidate() const {
 
 void SVGCircleElement::compute() const {
   auto& circle = handle_.get_or_emplace<components::CircleComponent>();
-  components::ShapeSystem().createComputedPath(handle_, circle, FontMetrics(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  components::ShapeSystem().createComputedPath(handle_, circle, FontMetrics(), disabledSink);
 }
 
 }  // namespace donner::svg

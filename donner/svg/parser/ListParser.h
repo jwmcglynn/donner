@@ -6,7 +6,7 @@
 #include <optional>
 #include <string_view>
 
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 
 namespace donner::svg::parser {
 
@@ -53,11 +53,11 @@ public:
    * `void(std::string_view)`.
    * @param value The string_view containing the list to parse.
    * @param fn The function to call for each parsed item.
-   * @return std::nullopt on success, or a ParseError containing the reason and position of the
+   * @return std::nullopt on success, or a ParseDiagnostic containing the reason and position of the
    * error on failure.
    */
   template <ListParserItemCallback Fn>
-  static std::optional<ParseError> Parse(std::string_view value, Fn fn) {
+  static std::optional<ParseDiagnostic> Parse(std::string_view value, Fn fn) {
     const size_t length = value.size();
     size_t i = 0;
     bool expectItem = true;               // Start expecting an item
@@ -74,7 +74,8 @@ public:
       if (value[i] == ',') {
         if (expectItem) {
           // Found a comma when an item was expected (e.g., ", item" at start, or "item1,,item2")
-          return ParseError{"Unexpected comma, expected list item", FileOffset::Offset(i)};
+          return ParseDiagnostic::Error("Unexpected comma, expected list item",
+                                        FileOffset::Offset(i));
         }
 
         i++;                // Consume comma
@@ -107,7 +108,8 @@ public:
     if (expectItem && processedNonWhitespace) {
       // This means we had a trailing comma after processing something.
       // The error occurred just before the end, where the comma was.
-      return ParseError{"Unexpected trailing comma", FileOffset::Offset(i > 0 ? i - 1 : 0)};
+      return ParseDiagnostic::Error("Unexpected trailing comma",
+                                    FileOffset::Offset(i > 0 ? i - 1 : 0));
     }
 
     return std::nullopt;  // Success

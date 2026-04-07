@@ -13,6 +13,7 @@ extern "C" {
 }
 
 #include "donner/base/FailureSignalHandler.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"  // IWYU pragma keep: Used for SVGDocument and SVGParser
@@ -53,7 +54,7 @@ struct SVGState {
   bool valid = false;
   SVGDocument document;
   std::optional<DonnerController> controller;
-  std::optional<ParseError> lastError;
+  std::optional<ParseDiagnostic> lastError;
   std::optional<SVGRectElement> boundsShape;
   std::optional<SVGPathElement> selectedPathOutline;
 
@@ -62,7 +63,11 @@ struct SVGState {
   void loadSVG(const std::string& source) {
     document = SVGDocument();
 
-    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(source);
+    SVGParser::Options options;
+    options.enableExperimental = true;  // Enable experimental features like <text> element.
+
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(source, disabled, options);
     if (maybeDocument.hasError()) {
       lastError = maybeDocument.error();
       valid = false;

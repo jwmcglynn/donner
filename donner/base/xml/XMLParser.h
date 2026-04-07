@@ -106,7 +106,7 @@ public:
    * </root>
    * ```
    *
-   * The FileOffsetRange for the `attr` attribute should contain the substring `attr="Hello,
+   * The SourceRange for the `attr` attribute should contain the substring `attr="Hello,
    * world!"`
    *
    * @param str XML data to parse. Will not be modified.
@@ -115,7 +115,7 @@ public:
    * @return std::optional<AttributeLocation> containing the start and end offsets of the attribute
    * in the input string, or std::nullopt if the attribute was not found.
    */
-  static std::optional<FileOffsetRange> GetAttributeLocation(
+  static std::optional<SourceRange> GetAttributeLocation(
       std::string_view str, FileOffset elementStartOffset,
       const XMLQualifiedNameRef& attributeName);
 };

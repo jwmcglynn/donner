@@ -7,6 +7,7 @@
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -77,7 +78,7 @@ struct ContextPaintServers {
 ShadowTreeSystem createShadowTreeSystem() {
   return ShadowTreeSystem([](Registry& registry, Entity shadowEntity, EntityHandle useEntity,
                              Entity symbolEntity, ShadowBranchType branchType,
-                             std::vector<ParseError>* outWarnings) -> bool {
+                             ParseWarningSink& warningSink) -> bool {
     // Only create shadow sized element components for the main branch
     if (branchType != ShadowBranchType::Main) {
       return false;
@@ -85,7 +86,7 @@ ShadowTreeSystem createShadowTreeSystem() {
 
     // Use LayoutSystem to handle the creation of shadow sized element components
     return LayoutSystem().createShadowSizedElementComponent(registry, shadowEntity, useEntity,
-                                                            symbolEntity, branchType, outWarnings);
+                                                            symbolEntity, branchType, warningSink);
   });
 }
 
@@ -616,7 +617,7 @@ private:
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                const PaintServer& paint, std::vector<ParseError>* outWarnings) {
+                                const PaintServer& paint, ParseWarningSink& warningSink) {
   if (paint.is<PaintServer::ElementReference>()) {
     const PaintServer::ElementReference& ref = paint.get<PaintServer::ElementReference>();
 
@@ -630,7 +631,7 @@ void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchT
 }
 
 void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Reference& reference,
-                               std::vector<ParseError>* outWarnings) {
+                               ParseWarningSink& warningSink) {
   if (auto resolvedRef = reference.resolve(registry);
       resolvedRef && resolvedRef->handle.all_of<MaskComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
@@ -639,7 +640,7 @@ void InstantiateMaskShadowTree(Registry& registry, Entity entity, const Referenc
 }
 
 void InstantiateMarkerShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
-                                 const Reference& reference, std::vector<ParseError>* outWarnings) {
+                                 const Reference& reference, ParseWarningSink& warningSink) {
   if (auto resolvedRef = reference.resolve(registry);
       resolvedRef && resolvedRef->handle.all_of<MarkerComponent>()) {
     auto& offscreenShadowComponent = registry.get_or_emplace<OffscreenShadowTreeComponent>(entity);
@@ -692,7 +693,7 @@ void RenderingContext::clearInitialContextPaint() {
   getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
-void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings) {
+void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& warningSink) {
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 
@@ -703,14 +704,14 @@ void RenderingContext::instantiateRenderTree(bool verbose, std::vector<ParseErro
     return;
   }
 
-  ensureComputedComponents(outWarnings);
+  ensureComputedComponents(warningSink);
   instantiateRenderTreeWithPrecomputedTree(verbose);
 
   renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
 }
 
-void RenderingContext::ensureComputedComponents(std::vector<ParseError>* outWarnings) {
+void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   auto& renderState = getRenderTreeState(registry_);
   const bool hasDirtyEntities = !registry_.view<DirtyFlagsComponent>().empty();
 
@@ -729,7 +730,7 @@ void RenderingContext::ensureComputedComponents(std::vector<ParseError>* outWarn
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
 
-  createComputedComponents(outWarnings);
+  createComputedComponents(warningSink);
 
   registry_.clear<DirtyFlagsComponent>();
   renderState.needsFullRebuild = false;
@@ -743,8 +744,9 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
     return false;
   }
 
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const ComputedStyleComponent& style =
-      StyleSystem().computeStyle(EntityHandle(registry_, entity), nullptr);
+      StyleSystem().computeStyle(EntityHandle(registry_, entity), disabledSink);
   const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
 
   if (pointerEvents == PointerEvents::None) {
@@ -799,7 +801,8 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
 }
 
 Entity RenderingContext::findIntersecting(const Vector2d& point) {
-  instantiateRenderTree(false, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  instantiateRenderTree(false, disabledSink);
 
   // Brute-force reverse scan.
   auto view = registry_.view<RenderingInstanceComponent>();
@@ -813,7 +816,8 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
 }
 
 std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point) {
-  instantiateRenderTree(false, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  instantiateRenderTree(false, disabledSink);
 
   std::vector<Entity> results;
 
@@ -828,7 +832,8 @@ std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point)
 }
 
 std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
-  instantiateRenderTree(false, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  instantiateRenderTree(false, disabledSink);
 
   std::vector<Entity> results;
 
@@ -853,7 +858,8 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Boxd& rect) {
 }
 
 std::optional<Boxd> RenderingContext::getWorldBounds(Entity entity) {
-  instantiateRenderTree(false, nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  instantiateRenderTree(false, disabledSink);
 
   const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
   if (!instance || instance->dataEntity == entt::null) {
@@ -879,9 +885,9 @@ void RenderingContext::invalidateRenderTree() {
 // 6. Decompose shapes to paths
 // 7. Resolve fill and stroke references (paints)
 // 8. Resolve filter references
-void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarnings) {
+void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   // Evaluate conditional components which may create shadow trees.
-  PaintSystem().createShadowTrees(registry_, outWarnings);
+  PaintSystem().createShadowTrees(registry_, warningSink);
 
   // Instantiate shadow trees.
   for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
@@ -890,7 +896,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
       auto& shadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
       createShadowTreeSystem().populateInstance(
           EntityHandle(registry_, entity), shadow, ShadowBranchType::Main, targetEntity.value(),
-          shadowTreeComponent.mainHref().value(), outWarnings);
+          shadowTreeComponent.mainHref().value(), warningSink);
 
     } else if (shadowTreeComponent.mainHref()) {
       // Same-document resolution failed. Check if this is an external reference.
@@ -899,24 +905,24 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
         // Load the external SVG document via ResourceManagerContext.
         auto& resourceManager = registry_.ctx().get<ResourceManagerContext>();
         const RcString docUrl(ref.documentUrl());
-        auto subDoc = resourceManager.loadExternalSVG(docUrl, outWarnings);
+        auto subDoc = resourceManager.loadExternalSVG(docUrl, warningSink);
         if (subDoc) {
           registry_.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
                                                              RcString(ref.fragment()));
         }
-      } else if (outWarnings) {
-        ParseError err;
+      } else {
+        ParseDiagnostic err;
         err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
                      shadowTreeComponent.mainHref().value_or("") + "'";
-        outWarnings->emplace_back(std::move(err));
+        warningSink.add(std::move(err));
       }
     }
   }
 
-  StyleSystem().computeAllStyles(registry_, outWarnings);
+  StyleSystem().computeAllStyles(registry_, warningSink);
 
   // After styles are computed, we can load fonts and other embedded resources.
-  registry_.ctx().get<components::ResourceManagerContext>().loadResources(outWarnings);
+  registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);
 
 #ifdef DONNER_TEXT_ENABLED
   // Create shared font registry + text engine in the registry context.
@@ -941,31 +947,31 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
     if (auto fill = properties.fill.get()) {
       InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenFill, fill.value(),
-                                 outWarnings);
+                                 warningSink);
     }
 
     if (auto stroke = properties.stroke.get()) {
       InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenStroke,
-                                 stroke.value(), outWarnings);
+                                 stroke.value(), warningSink);
     }
 
     if (auto mask = properties.mask.get()) {
-      InstantiateMaskShadowTree(registry_, entity, mask.value(), outWarnings);
+      InstantiateMaskShadowTree(registry_, entity, mask.value(), warningSink);
     }
 
     if (auto markerStart = properties.markerStart.get()) {
       InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerStart,
-                                  markerStart.value(), outWarnings);
+                                  markerStart.value(), warningSink);
     }
 
     if (auto markerMid = properties.markerMid.get()) {
       InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerMid,
-                                  markerMid.value(), outWarnings);
+                                  markerMid.value(), warningSink);
     }
 
     if (auto markerEnd = properties.markerEnd.get()) {
       InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerEnd,
-                                  markerEnd.value(), outWarnings);
+                                  markerEnd.value(), warningSink);
     }
   }
 
@@ -977,21 +983,21 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
         const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
             EntityHandle(registry_, entity), computedShadow, branchType, targetEntity.value(),
-            ref.href, outWarnings);
+            ref.href, warningSink);
 
         if (maybeInstanceIndex) {
           // Apply styles to the tree.
           const std::span<const Entity> shadowEntities =
               computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-          StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
+          StyleSystem().computeStylesFor(registry_, shadowEntities, warningSink);
         }
-      } else if (outWarnings) {
+      } else {
         // We had a href but it failed to resolve.
-        ParseError err;
+        ParseDiagnostic err;
         err.reason =
             std::string("Warning: Failed to resolve offscreen shadow tree target with href '") +
             ref.href + "'";
-        outWarnings->emplace_back(std::move(err));
+        warningSink.add(std::move(err));
       }
     }
   }
@@ -1046,7 +1052,7 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
 
     for (const auto& work : nestedMarkerWork) {
       InstantiateMarkerShadowTree(registry_, work.shadowEntity, work.branchType, work.reference,
-                                  outWarnings);
+                                  warningSink);
     }
 
     // Populate and style the newly-created nested marker shadow trees.
@@ -1066,32 +1072,33 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
       }
       const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
           EntityHandle(registry_, work.shadowEntity), computedShadow, work.branchType,
-          targetEntity.value(), work.reference.href, outWarnings);
+          targetEntity.value(), work.reference.href, warningSink);
       if (maybeInstanceIndex) {
         const std::span<const Entity> shadowEntities =
             computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-        StyleSystem().computeStylesFor(registry_, shadowEntities, outWarnings);
+        StyleSystem().computeStylesFor(registry_, shadowEntities, warningSink);
       }
     }
   }
 
-  LayoutSystem().instantiateAllComputedComponents(registry_, outWarnings);
+  LayoutSystem().instantiateAllComputedComponents(registry_, warningSink);
 
-  TextSystem().instantiateAllComputedComponents(registry_, outWarnings);
+  TextSystem().instantiateAllComputedComponents(registry_, warningSink);
 
-  ShapeSystem().instantiateAllComputedPaths(registry_, outWarnings);
+  ShapeSystem().instantiateAllComputedPaths(registry_, warningSink);
 
-  PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
+  PaintSystem().instantiateAllComputedComponents(registry_, warningSink);
 
-  FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
+  FilterSystem().instantiateAllComputedComponents(registry_, warningSink);
 }
 
 std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFeImageShadowTree(
     Entity hostEntity, Entity targetEntity, bool verbose) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(hostEntity);
   const std::optional<size_t> maybeIndex = createShadowTreeSystem().populateInstance(
       EntityHandle(registry_, hostEntity), computedShadow, ShadowBranchType::OffscreenFeImage,
-      targetEntity, RcString(), /*outWarnings=*/nullptr);
+      targetEntity, RcString(), disabledSink);
 
   if (!maybeIndex) {
     return std::nullopt;
@@ -1099,7 +1106,7 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
 
   const std::span<const Entity> shadowEntities =
       computedShadow.offscreenShadowEntities(maybeIndex.value());
-  StyleSystem().computeStylesFor(registry_, shadowEntities, /*outWarnings=*/nullptr);
+  StyleSystem().computeStylesFor(registry_, shadowEntities, disabledSink);
 
   const Entity shadowRoot = computedShadow.offscreenShadowRoot(maybeIndex.value());
   if (shadowRoot == entt::null) {

@@ -49,7 +49,7 @@ TEST(PropertyRegistry, ParseDeclaration) {
 }
 
 TEST(PropertyRegistry, ParseDeclarationError) {
-  std::optional<ParseError> parseProperty(const css::Declaration& declaration);
+  std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration);
 
   css::Declaration declaration("color", {ComponentValue(Token(Token::Ident("invalid-color"), 0))});
 

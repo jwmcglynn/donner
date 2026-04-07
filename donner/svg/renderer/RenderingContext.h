@@ -6,7 +6,8 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 
@@ -27,17 +28,17 @@ public:
    * deferred parts of the tree.
    *
    * @param verbose If true, enable verbose logging.
-   * @param outWarnings If non-null, warnings will be added to this vector.
+   * @param warningSink Sink to collect warnings.
    */
-  void instantiateRenderTree(bool verbose, std::vector<ParseError>* outWarnings);
+  void instantiateRenderTree(bool verbose, ParseWarningSink& warningSink);
 
   /**
    * Create all computed components needed for text/layout/style queries without instantiating
    * render instances.
    *
-   * @param outWarnings If non-null, warnings will be added to this vector.
+   * @param warningSink Sink to collect warnings.
    */
-  void ensureComputedComponents(std::vector<ParseError>* outWarnings);
+  void ensureComputedComponents(ParseWarningSink& warningSink);
 
   /**
    * Find the first entity that intersects the given point, using spatial acceleration
@@ -118,9 +119,9 @@ private:
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.
    *
-   * @param outWarnings If non-null, warnings will be added to this vector.
+   * @param warningSink Sink to collect warnings.
    */
-  void createComputedComponents(std::vector<ParseError>* outWarnings);
+  void createComputedComponents(ParseWarningSink& warningSink);
 
   /**
    * Creates all rendering instances for the document, the final step before it can be rendered.

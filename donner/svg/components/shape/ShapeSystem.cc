@@ -2,6 +2,7 @@
 
 #include <concepts>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -82,13 +83,13 @@ ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Expected string or 'none'";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 
-std::optional<ParseError> ParseDFromAttributes(PathComponent& properties,
+std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
                                                const parser::PropertyParseFnParams& params) {
   if (const std::string_view* str = std::get_if<std::string_view>(&params.valueOrComponents)) {
     properties.d.set(RcString(*str), params.specificity);
@@ -162,7 +163,7 @@ constexpr bool ForEachShape(const F& f) {
 }  // namespace
 
 ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
-    EntityHandle handle, const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    EntityHandle handle, const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   ComputedPathComponent* computedPath = handle.try_get<ComputedPathComponent>();
   if (computedPath) {
     return computedPath;
@@ -173,9 +174,9 @@ ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
     bool shouldExit = false;
 
     if (handle.all_of<ShapeComponent>()) {
-      const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
+      const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
       computedPath = createComputedShapeWithStyle(handle, handle.get<ShapeComponent>(), style,
-                                                  fontMetrics, outWarnings);
+                                                  fontMetrics, warningSink);
       // Note the computedPath may be null if the shape failed to instantiate due to an error (like
       // having zero points), when this occurs no other shapes will match and we should exit early.
       shouldExit = true;
@@ -188,13 +189,13 @@ ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
 }
 
 void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
-                                              std::vector<ParseError>* outWarnings) {
+                                              ParseWarningSink& warningSink) {
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
       const FontMetrics metrics = fontMetricsForElement(registry, style);
       createComputedShapeWithStyle(EntityHandle(registry, entity), shape, style, metrics,
-                                   outWarnings);
+                                   warningSink);
     }
 
     const bool shouldExit = false;
@@ -215,8 +216,9 @@ std::optional<Boxd> ShapeSystem::getShapeWorldBounds(EntityHandle handle) {
 
 bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
                                      FillRule fillRule) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     return computedPath->spline.isInside(point, fillRule);
   }
 
@@ -225,8 +227,9 @@ bool ShapeSystem::pathFillIntersects(EntityHandle handle, const Vector2d& point,
 
 bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& point,
                                        double strokeWidth) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     return computedPath->spline.isOnPath(point, strokeWidth);
   }
 
@@ -243,8 +246,9 @@ std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
     }
   }
 
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
-          createComputedPathIfShape(handle, FontMetrics(), nullptr)) {
+          createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     overallBounds = computedPath->transformedBounds(
         LayoutSystem().getEntityFromWorldTransform(handle) * worldFromTarget);
   }
@@ -258,8 +262,9 @@ std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
           }
         }
 
+        ParseWarningSink disabledSink = ParseWarningSink::Disabled();
         if (ComputedPathComponent* computedPath =
-                createComputedPathIfShape(child, FontMetrics(), nullptr)) {
+                createComputedPathIfShape(child, FontMetrics(), disabledSink)) {
           const Boxd bounds = computedPath->transformedBounds(
               LayoutSystem().getEntityFromWorldTransform(child) * worldFromTarget);
           overallBounds = overallBounds ? Boxd::Union(overallBounds.value(), bounds) : bounds;
@@ -271,9 +276,9 @@ std::optional<Boxd> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const CircleComponent& circle, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
-      circle.properties, style.properties->unparsedProperties, outWarnings);
+      circle.properties, style.properties->unparsedProperties, warningSink);
 
   const Boxd viewport = LayoutSystem().getViewBox(handle);
 
@@ -295,9 +300,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const EllipseComponent& ellipse, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   const ComputedEllipseComponent& computedEllipse = handle.get_or_emplace<ComputedEllipseComponent>(
-      ellipse.properties, style.properties->unparsedProperties, outWarnings);
+      ellipse.properties, style.properties->unparsedProperties, warningSink);
 
   const Boxd viewport = LayoutSystem().getViewBox(handle);
 
@@ -319,7 +324,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   const Boxd viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d start(line.x1.toPixels(viewport, fontMetrics),
@@ -335,7 +340,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const PathComponent& path, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   Property<RcString> actualD = path.d;
   const auto& properties = style.properties->unparsedProperties;
   if (auto it = properties.find("d"); it != properties.end()) {
@@ -345,9 +350,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
         [](const parser::PropertyParseFnParams& params) { return ParseD(params.components()); },
         &actualD);
     if (maybeError) {
-      if (outWarnings) {
-        outWarnings->emplace_back(std::move(maybeError.value()));
-      }
+      warningSink.add(std::move(maybeError.value()));
       return nullptr;
     }
   }
@@ -358,9 +361,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     auto maybePath = parser::PathParser::Parse(actualD.get().value());
     if (maybePath.hasError()) {
       // Propagate warnings, which may be set on success too.
-      if (outWarnings) {
-        outWarnings->emplace_back(std::move(maybePath.error()));
-      }
+      warningSink.add(std::move(maybePath.error()));
     }
 
     if (maybePath.hasResult() && !maybePath.result().empty()) {
@@ -376,7 +377,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const PolyComponent& poly, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   PathSpline path;
 
   if (!poly.points.empty()) {
@@ -396,9 +397,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const RectComponent& rect, const ComputedStyleComponent& style,
-    const FontMetrics& fontMetrics, std::vector<ParseError>* outWarnings) {
+    const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
-      rect.properties, style.properties->unparsedProperties, outWarnings);
+      rect.properties, style.properties->unparsedProperties, warningSink);
 
   const Boxd viewport = LayoutSystem().getViewBox(handle);
 

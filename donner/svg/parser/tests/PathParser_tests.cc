@@ -703,4 +703,38 @@ TEST(PathParser, NoWhitespace) {
                       Command{CommandType::LineTo, 4}, Command{CommandType::ClosePath, 0}))));
 }
 
+// ---------------------------------------------------------------------------
+// Range-accuracy tests: verify that error SourceRanges cover the right span.
+// ---------------------------------------------------------------------------
+
+TEST(PathParser, RangeInvalidInitialCommand) {
+  // "z" at offset 0 => range covers the single character [0,1).
+  // PathParser reads the character and calls rangeFrom(offset), which is [0, consumed).
+  EXPECT_THAT(PathParser::Parse("z"), ParseErrorRange(0, 1));
+  // With leading whitespace, "z" is at offset 5.
+  EXPECT_THAT(PathParser::Parse(" \t\f\r\nz"), ParseErrorRange(5, 6));
+}
+
+TEST(PathParser, RangeUnexpectedToken) {
+  // "M0 0 !" => "!" is at offset 5 => [5,6).
+  EXPECT_THAT(PathParser::Parse("M0 0 !"), ParseErrorRange(5, 6));
+}
+
+TEST(PathParser, RangeInvalidFlag) {
+  // "M0,0 a150,150 0 a" => the flag 'a' is at offset 16 => [16,17).
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 a"), ParseErrorRange(16, 17));
+  // "M0,0 a150,150 0 2" => '2' at offset 16 => [16,17).
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0 2"), ParseErrorRange(16, 17));
+}
+
+TEST(PathParser, RangeEndOfStringFlag) {
+  // "M0,0 a150,150 0" => end of string when expecting flag.
+  EXPECT_THAT(PathParser::Parse("M0,0 a150,150 0"), ParseErrorEndOfString());
+}
+
+TEST(PathParser, RangeTrailingComma) {
+  // "M1,1 h1," => comma at offset 7 => [7,8).
+  EXPECT_THAT(PathParser::Parse("M1,1 h1,"), ParseErrorRange(7, 8));
+}
+
 }  // namespace donner::svg::parser

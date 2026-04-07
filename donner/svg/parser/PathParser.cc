@@ -47,9 +47,9 @@ public:
 
       const TokenCommand command = maybeCommand.result();
       if (command.token != Token::MoveTo) {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
-        err.location = sourceOffset;
+        err.range = rangeFrom(sourceOffset.offset.value());
         return ParseResult(std::move(spline_), std::move(err));
       }
 
@@ -66,7 +66,7 @@ public:
                                          // contains a command.
 
       const TokenCommand command = maybeCommand.result();
-      std::optional<ParseError> maybeError = processUntilNextCommand(command);
+      std::optional<ParseDiagnostic> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
         return ParseResult(std::move(spline_), std::move(maybeError.value()));
       }
@@ -139,6 +139,15 @@ private:
 
   FileOffset currentOffset() { return FileOffset::Offset(remaining_.data() - d_.data()); }
 
+  SourceRange currentRange(int startIndex, int endIndex) {
+    const size_t base = remaining_.data() - d_.data();
+    return {FileOffset::Offset(base + startIndex), FileOffset::Offset(base + endIndex)};
+  }
+
+  SourceRange rangeFrom(size_t startOffset) {
+    return {FileOffset::Offset(startOffset), currentOffset()};
+  }
+
   std::optional<TokenCommand> peekCommand() {
     assert(!remaining_.empty());
 
@@ -173,9 +182,9 @@ private:
   ParseResult<TokenCommand> readCommand() {
     auto maybeCommand = peekCommand();
     if (!maybeCommand) {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = std::string("Unexpected token '") + remaining_[0] + "' in path data";
-      err.location = currentOffset();
+      err.range = currentRange(0, 1);
       return err;
     }
 
@@ -190,8 +199,9 @@ private:
 
     auto maybeResult = NumberParser::Parse(remaining_);
     if (maybeResult.hasError()) {
-      ParseError err = std::move(maybeResult.error());
-      err.location = err.location.addParentOffset(currentOffset());
+      ParseDiagnostic err = std::move(maybeResult.error());
+      err.range.start = err.range.start.addParentOffset(currentOffset());
+      err.range.end = err.range.end.addParentOffset(currentOffset());
       return err;
     }
 
@@ -200,7 +210,7 @@ private:
     return result.number;
   }
 
-  std::optional<ParseError> readNumbers(std::span<double> resultStorage) {
+  std::optional<ParseDiagnostic> readNumbers(std::span<double> resultStorage) {
     for (size_t i = 0; i < resultStorage.size(); ++i) {
       if (i != 0) {
         skipCommaWhitespace();
@@ -217,7 +227,7 @@ private:
     return std::nullopt;
   }
 
-  std::optional<ParseError> readFlag(bool* out_flag) {
+  std::optional<ParseDiagnostic> readFlag(bool* out_flag) {
     if (!remaining_.empty()) {
       const char ch = remaining_[0];
       if (ch == '1') {
@@ -225,23 +235,23 @@ private:
       } else if (ch == '0') {
         *out_flag = false;
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Unexpected character when parsing flag, expected '1' or '0'";
-        err.location = currentOffset();
+        err.range = currentRange(0, 1);
         return err;
       }
 
       remaining_.remove_prefix(1);
       return std::nullopt;
     } else {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unexpected end of string when parsing flag";
-      err.location = currentOffset();
+      err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
       return err;
     }
   }
 
-  std::optional<ParseError> processUntilNextCommand(TokenCommand command) {
+  std::optional<ParseDiagnostic> processUntilNextCommand(TokenCommand command) {
     bool firstIteration = true;
     while (firstIteration || (!remaining_.empty() && !peekCommand().has_value())) {
       firstIteration = false;
@@ -266,14 +276,14 @@ private:
         skipWhitespace();
 
         if (!remaining_.empty() && peekCommand().has_value()) {
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = "Unexpected ',' before command";
-          err.location = commaOffset;
+          err.range = {commaOffset, FileOffset::Offset(commaOffset.offset.value() + 1)};
           return err;
         } else if (remaining_.empty()) {
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = "Unexpected ',' at end of string";
-          err.location = commaOffset;
+          err.range = {commaOffset, FileOffset::Offset(commaOffset.offset.value() + 1)};
           return err;
         }
       }
@@ -291,7 +301,7 @@ private:
     return point;
   }
 
-  std::optional<ParseError> processCommand(TokenCommand command) {
+  std::optional<ParseDiagnostic> processCommand(TokenCommand command) {
     if (command.token == Token::MoveTo) {
       // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
       double coords[2];
@@ -444,9 +454,9 @@ private:
       currentPoint_ = end;
 
     } else {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Expected command";
-      err.location = currentOffset();
+      err.range = currentRange(0, 1);
       return err;
     }
 

@@ -175,4 +175,47 @@ TEST(LengthParser, ExtraCharacters) {
   EXPECT_THAT(LengthParser::Parse("8Pc,"), ParseResultIs(LengthResult(8, LengthUnit::Pc, 3)));
 }
 
+// ---------------------------------------------------------------------------
+// Range-accuracy tests: verify that error SourceRanges cover the right span.
+// ---------------------------------------------------------------------------
+
+TEST(LengthParser, RangeUnitExpectedEndOfString) {
+  // "1" with no unit and unit required => EndOfString.
+  auto result = LengthParser::Parse("1");
+  EXPECT_THAT(result, ParseErrorIs("Unit expected"));
+  EXPECT_THAT(result, ParseErrorEndOfString());
+}
+
+TEST(LengthParser, RangeUnitExpectedAtWhitespace) {
+  // "1 " => unit expected, error at the whitespace char [1,2).
+  EXPECT_THAT(LengthParser::Parse("1 "), ParseErrorIs("Unit expected"));
+  EXPECT_THAT(LengthParser::Parse("1 "), ParseErrorRange(1, 2));
+}
+
+TEST(LengthParser, RangeInvalidUnit) {
+  // "1pp" => invalid unit. 'pp' is at offset 1, length up to 4 chars but only 2 available => [1,3).
+  EXPECT_THAT(LengthParser::Parse("1pp"), ParseErrorRange(1, 3));
+  // "10abcd" => invalid unit at offset 2, 4 chars available => [2,6).
+  EXPECT_THAT(LengthParser::Parse("10abcd"), ParseErrorRange(2, 6));
+  // "10ab" => [2, 4).
+  EXPECT_THAT(LengthParser::Parse("10ab"), ParseErrorRange(2, 4));
+}
+
+TEST(LengthParser, RangeUnexpectedUnitPercentage) {
+  LengthParser::Options options;
+  options.limitUnitToPercentage = true;
+
+  // "1px" => unexpected unit, range covers the unit substring [1,3).
+  EXPECT_THAT(LengthParser::Parse("1px", options), ParseErrorRange(1, 3));
+  // "1cm" => [1,3).
+  EXPECT_THAT(LengthParser::Parse("1cm", options), ParseErrorRange(1, 3));
+  // "10rem" => [2,5).
+  EXPECT_THAT(LengthParser::Parse("10rem", options), ParseErrorRange(2, 5));
+}
+
+TEST(LengthParser, RangeNumberParseErrorPropagated) {
+  // Non-number character => propagated from NumberParser, [0,1).
+  EXPECT_THAT(LengthParser::Parse("abc"), ParseErrorRange(0, 1));
+}
+
 }  // namespace donner::parser

@@ -10,7 +10,7 @@ namespace donner::svg::components {
 
 namespace {
 
-using EllipsePresentationAttributeParseFn = std::optional<ParseError> (*)(
+using EllipsePresentationAttributeParseFn = std::optional<ParseDiagnostic> (*)(
     EllipseProperties& properties, const parser::PropertyParseFnParams& params);
 
 constexpr std::array<std::pair<std::string_view, EllipsePresentationAttributeParseFn>, 4>
@@ -62,7 +62,7 @@ constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
 ComputedEllipseComponent::ComputedEllipseComponent(
     const EllipseProperties& inputProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-    std::vector<ParseError>* outWarnings)
+    ParseWarningSink& warningSink)
     : properties(inputProperties) {
   for (const auto& [name, property] : unparsedProperties) {
     const EllipsePresentationAttributeParseFn* parseFn =
@@ -71,8 +71,8 @@ ComputedEllipseComponent::ComputedEllipseComponent(
       auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
                                                    property.declaration, property.specificity,
                                                    parser::PropertyParseBehavior::AllowUserUnits));
-      if (maybeError && outWarnings) {
-        outWarnings->emplace_back(std::move(maybeError.value()));
+      if (maybeError) {
+        warningSink.add(std::move(maybeError.value()));
       }
     }
   }

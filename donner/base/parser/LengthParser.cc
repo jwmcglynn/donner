@@ -84,10 +84,13 @@ public:
     const double number = maybeNumber.result();
     if (remaining_.empty() || isWhitespace(remaining_[0])) {
       if (unitRequired(number)) {
-        ParseError err;
-        err.reason = "Unit expected";
-        err.location = currentOffset();
-        return err;
+        if (remaining_.empty()) {
+          return ParseDiagnostic::Error(
+              "Unit expected",
+              SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
+        } else {
+          return ParseDiagnostic::Error("Unit expected", currentRange(0, 1));
+        }
       }
 
       result.length.value = number;
@@ -96,6 +99,7 @@ public:
     }
 
     size_t charsConsumed = 0;
+    const size_t unitStartOffset = consumedChars();
     if (auto maybeUnit = parseUnit(remaining_, &charsConsumed)) {
       remaining_.remove_prefix(charsConsumed);
       result.consumedChars = consumedChars();
@@ -103,20 +107,20 @@ public:
       result.length.unit = maybeUnit.value();
 
       if (options_.limitUnitToPercentage && result.length.unit != Lengthd::Unit::Percent) {
-        ParseError err;
-        err.reason = "Unexpected unit, expected percentage";
-        err.location = currentOffset();
-        return err;
+        return ParseDiagnostic::Error(
+            "Unexpected unit, expected percentage",
+            SourceRange{FileOffset::Offset(unitStartOffset), currentOffset()});
       }
 
       return result;
     }
 
     if (unitRequired(number)) {
-      ParseError err;
-      err.reason = "Invalid unit";
-      err.location = currentOffset();
-      return err;
+      // Range covers up to the end of what could be a unit (up to 4 chars for longest units).
+      const size_t unitLen = std::min(remaining_.size(), size_t{4});
+      return ParseDiagnostic::Error(
+          "Invalid unit",
+          currentRange(0, static_cast<int>(unitLen)));
     } else {
       result.length.value = number;
       result.consumedChars = consumedChars();

@@ -33,7 +33,7 @@ void PrintTo(const ParseResult<T>& result, std::ostream* os) {
 }
 
 /**
- * Matches if the result does not contain a ParseError.
+ * Matches if the result does not contain a ParseDiagnostic error.
  */
 MATCHER(NoParseError, "") {
   return !arg.hasError();
@@ -65,12 +65,12 @@ MATCHER_P(ParseErrorIs, errorMessageMatcher,
   std::string actualReason;
   bool hasError = false;
 
-  // Case 1: arg is already a ParseError.
-  if constexpr (std::is_same_v<ArgType, ParseError>) {
+  // Case 1: arg is already a ParseDiagnostic.
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
     actualReason = arg.reason;
     hasError = true;
   }
-  // Case 2: arg is an optional-like container of ParseError.
+  // Case 2: arg is an optional-like container of ParseDiagnostic.
   else if constexpr (details::IsOptionalLike<ArgType>) {
     if (arg.has_value()) {
       actualReason = arg.value().reason;
@@ -124,8 +124,8 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
     }
   };
 
-  if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return matchFileOffset(arg.location);
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
+    return matchFileOffset(arg.range.start);
   } else if constexpr (std::is_same_v<ArgType, FileOffset>) {
     return matchFileOffset(arg);
   } else {
@@ -134,7 +134,66 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
       return false;
     }
 
-    return matchFileOffset(arg.error().location);
+    return matchFileOffset(arg.error().range.start);
+  }
+}
+
+/**
+ * Given a ParseResult, matches if it contains an error whose range covers
+ * [startOffset, endOffset). Works with ParseResult<T>, ParseDiagnostic, or
+ * optional<ParseDiagnostic>.
+ *
+ * Usage:
+ * @code
+ * EXPECT_THAT(result, ParseErrorRange(0, 3));  // error spans bytes [0,3)
+ * @endcode
+ *
+ * @param startOffsetMatcher Matcher for the start offset of the error range.
+ * @param endOffsetMatcher Matcher for the end offset of the error range.
+ */
+MATCHER_P2(ParseErrorRange, startOffsetMatcher, endOffsetMatcher,
+           std::string("parse error range is [") + testing::PrintToString(startOffsetMatcher) +
+               ", " + testing::PrintToString(endOffsetMatcher) + ")") {
+  using ArgType = std::remove_cvref_t<decltype(arg)>;
+
+  const auto matchRange = [&](const SourceRange& range) -> bool {
+    if (!range.start.offset.has_value()) {
+      *result_listener << "start offset is EndOfString (no offset)";
+      return false;
+    }
+    if (!range.end.offset.has_value()) {
+      *result_listener << "end offset is EndOfString (no offset)";
+      return false;
+    }
+    bool startOk =
+        testing::ExplainMatchResult(startOffsetMatcher, range.start.offset.value(), result_listener);
+    if (!startOk) {
+      *result_listener << " (start offset mismatch)";
+      return false;
+    }
+    bool endOk =
+        testing::ExplainMatchResult(endOffsetMatcher, range.end.offset.value(), result_listener);
+    if (!endOk) {
+      *result_listener << " (end offset mismatch)";
+      return false;
+    }
+    return true;
+  };
+
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
+    return matchRange(arg.range);
+  } else if constexpr (details::IsOptionalLike<ArgType>) {
+    if (!arg.has_value()) {
+      *result_listener << "which has no error";
+      return false;
+    }
+    return matchRange(arg.value().range);
+  } else {
+    if (!arg.hasError()) {
+      *result_listener << "which has no error";
+      return false;
+    }
+    return matchRange(arg.error().range);
   }
 }
 
@@ -144,14 +203,14 @@ MATCHER_P2(ParseErrorPos, lineMatcher, offsetMatcher, "") {
 MATCHER(ParseErrorEndOfString, "") {
   using ArgType = std::remove_cvref_t<decltype(arg)>;
 
-  if constexpr (std::is_same_v<ArgType, ParseError>) {
-    return arg.offset == std::nullopt;
+  if constexpr (std::is_same_v<ArgType, ParseDiagnostic>) {
+    return arg.range.start.offset == std::nullopt;
   } else {
     if (!arg.hasError()) {
       return false;
     }
 
-    return arg.error().location.offset == std::nullopt;
+    return arg.error().range.start.offset == std::nullopt;
   }
 }
 

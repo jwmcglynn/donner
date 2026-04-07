@@ -132,9 +132,9 @@ public:
             Transformd::SkewY(maybeNumber.result() * MathConstants<double>::kDegToRad) * transform;
 
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = std::string("Unexpected function '").append(func) + "'";
-        err.location = functionStart;
+        err.range = rangeFrom(functionStart.offset.value());
         return err;
       }
 
@@ -146,9 +146,9 @@ public:
         skipWhitespace();
         allowComma = true;
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         err.reason = "Expected ')'";
-        err.location = currentOffset();
+        err.range = currentRange(0, 1);
         return err;
       }
     }
@@ -173,18 +173,17 @@ private:
           remaining_.remove_prefix(1);
           return func;
         } else {
-          ParseError err;
+          ParseDiagnostic err;
           err.reason = "Expected '(' after function name";
-          err.location = currentOffset();
-          err.location.offset.value() += i;
+          err.range = currentRange(0, 1);
           return err;
         }
       }
     }
 
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "Unexpected end of string instead of transform function";
-    err.location = currentOffset();
+    err.range = {FileOffset::EndOfString(), FileOffset::EndOfString()};
     return err;
   }
 };

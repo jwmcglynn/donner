@@ -8,7 +8,8 @@
 
 #include "donner/base/Length.h"
 #include "donner/base/MathUtils.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -673,11 +674,11 @@ RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose)
     : renderer_(renderer), verbose_(verbose) {}
 
 void RendererDriver::draw(SVGDocument& document) {
-  std::vector<ParseError> warnings;
-  RendererUtils::prepareDocumentForRendering(document, verbose_, verbose_ ? &warnings : nullptr);
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
-  if (!warnings.empty()) {
-    for (const ParseError& warning : warnings) {
+  if (warnings.hasWarnings()) {
+    for (const ParseDiagnostic& warning : warnings.warnings()) {
       std::cerr << warning << '\n';
     }
   }
@@ -1738,7 +1739,8 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
                                      const PreserveAspectRatio& aspectRatio, double opacity,
                                      const Transformd& parentAbsoluteTransform) {
   // Prepare the sub-document's render tree (styles, layout, resources).
-  RendererUtils::prepareDocumentForRendering(subDocument, verbose_);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(subDocument, verbose_, disabledSink);
 
   // Determine the sub-document's intrinsic size for preserveAspectRatio mapping.
   const Vector2i subDocSize = subDocument.canvasSize();
@@ -1792,7 +1794,8 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
                                             const Transformd& parentAbsoluteTransform,
                                             double opacity) {
   // Prepare the sub-document's render tree.
-  RendererUtils::prepareDocumentForRendering(subDocument, verbose_);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(subDocument, verbose_, disabledSink);
 
   // Find the referenced element by ID.
   auto& docCtx = subDocument.registry().ctx().get<const components::SVGDocumentContext>();

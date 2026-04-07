@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -27,15 +28,17 @@ protected:
   SVGDocument ParseSVG(std::string_view input) {
     parser::SVGParser::Options options;
     options.enableExperimental = true;
-    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink, options);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
 
   SVGDocument ParseAndComputeFilters(std::string_view input) {
     auto document = ParseSVG(input);
-    StyleSystem().computeAllStyles(document.registry(), nullptr);
-    filterSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+    ParseWarningSink warningSink;
+    StyleSystem().computeAllStyles(document.registry(), warningSink);
+    filterSystem.instantiateAllComputedComponents(document.registry(), warningSink);
     return document;
   }
 
@@ -247,8 +250,9 @@ TEST_F(FilterSystemTest, FeImageUsesLoadedSvgSubDocument) {
   ASSERT_TRUE(imageElement.has_value());
   imageElement->entityHandle().emplace<LoadedSVGImageComponent>(std::make_shared<Registry>());
 
-  StyleSystem().computeAllStyles(document.registry(), nullptr);
-  filterSystem.instantiateAllComputedComponents(document.registry(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  StyleSystem().computeAllStyles(document.registry(), disabledSink);
+  filterSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
 
   auto filterElement = document.querySelector("#f");
   ASSERT_TRUE(filterElement.has_value());

@@ -13,9 +13,9 @@ ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseO
     } else if (dimension->suffixString.equalsLowercase("turn")) {
       return dimension->value * MathConstants<double>::kPi * 2.0;
     } else {
-      ParseError err;
+      ParseDiagnostic err;
       err.reason = "Unsupported angle unit '" + dimension->suffixString + "'";
-      err.location = component.sourceOffset();
+      err.range = {component.sourceOffset(), component.sourceOffset()};
       return err;
     }
   } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
@@ -26,9 +26,9 @@ ParseResult<double> ParseAngle(const css::ComponentValue& component, AngleParseO
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid angle";
-  err.location = component.sourceOffset();
+  err.range = {component.sourceOffset(), component.sourceOffset()};
   return err;
 }
 

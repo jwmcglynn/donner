@@ -5,6 +5,7 @@
 #include <string_view>
 #include <tuple>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/base/encoding/Decompress.h"
 #include "donner/base/xml/XMLDocument.h"
@@ -28,13 +29,13 @@ concept HasPathLength =
     requires(T element, std::optional<double> value) { element.setPathLength(value); };
 
 template <typename T>
-std::optional<ParseError> ParseNodeContents(SVGParserContext& context, T element,
+std::optional<ParseDiagnostic> ParseNodeContents(SVGParserContext& context, T element,
                                             const XMLNode& node) {
   return std::nullopt;
 }
 
 template <>
-std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserContext& context,
                                                              SVGStyleElement element,
                                                              const XMLNode& node) {
   if (element.isCssType()) {
@@ -48,7 +49,7 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
           combined += value.value();
         }
       } else {
-        ParseError err;
+        ParseDiagnostic err;
         std::ostringstream ss;
         ss << "Unexpected <style> element contents, expected text or CDATA, "
               "found '"
@@ -56,7 +57,7 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
 
         err.reason = ss.str();
         if (auto sourceOffset = child->sourceStartOffset()) {
-          err.location = sourceOffset.value();
+          err.range.start = sourceOffset.value();
         }
         return err;
       }
@@ -75,10 +76,10 @@ std::optional<ParseError> ParseNodeContents<SVGStyleElement>(SVGParserContext& c
  * @param context The parser context.
  * @param element The text element to parse contents for.
  * @param node The XML node containing the text content.
- * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ * @return std::nullopt if successful, otherwise a ParseDiagnostic describing the failure.
  */
 template <>
-std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseNodeContents<SVGTextElement>(SVGParserContext& context,
                                                             SVGTextElement element,
                                                             const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
@@ -99,10 +100,10 @@ std::optional<ParseError> ParseNodeContents<SVGTextElement>(SVGParserContext& co
  * @param context The parser context.
  * @param element The tspan element to parse contents for.
  * @param node The XML node containing the text content.
- * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ * @return std::nullopt if successful, otherwise a ParseDiagnostic describing the failure.
  */
 template <>
-std::optional<ParseError> ParseNodeContents<SVGTSpanElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseNodeContents<SVGTSpanElement>(SVGParserContext& context,
                                                              SVGTSpanElement element,
                                                              const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
@@ -123,10 +124,10 @@ std::optional<ParseError> ParseNodeContents<SVGTSpanElement>(SVGParserContext& c
  * @param context The parser context.
  * @param element The textPath element to parse contents for.
  * @param node The XML node containing the text content.
- * @return std::nullopt if successful, otherwise a ParseError describing the failure.
+ * @return std::nullopt if successful, otherwise a ParseDiagnostic describing the failure.
  */
 template <>
-std::optional<ParseError> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
+std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
                                                                 SVGTextPathElement element,
                                                                 const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
@@ -162,13 +163,13 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
       } else if (value == "http://www.w3.org/1999/xlink") {
         // Allow xlink.
       } else {
-        ParseError err;
-        err.reason = "Unexpected namespace '" + value.value() + "'";
+        SourceRange range = {FileOffset::Offset(0), FileOffset::Offset(0)};
         if (auto maybeRange = context.getAttributeLocation(node, attributeName)) {
-          err.location = maybeRange->start;
+          range = *maybeRange;
         }
 
-        context.addWarning(std::move(err));
+        context.addWarning(ParseDiagnostic::Warning(
+            RcString("Unexpected namespace '" + value.value() + "'"), range));
       }
     }
   }
@@ -182,12 +183,12 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
     if (!attributeName.namespacePrefix.empty() && attributeName.namespacePrefix != "xmlns" &&
         attributeName.namespacePrefix != "xlink" &&
         node.getNamespaceUri(attributeName.namespacePrefix) != "http://www.w3.org/2000/svg") {
-      ParseError err;
+      ParseDiagnostic err;
       std::ostringstream ss;
       ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
       err.reason = ss.str();
       if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
-        err.location = maybeRange->start;
+        err.range.start = maybeRange->start;
       }
 
       context.addWarning(std::move(err));
@@ -266,7 +267,7 @@ public:
     }
   }
 
-  std::optional<ParseError> walkChildren(std::optional<SVGElement> element,
+  std::optional<ParseDiagnostic> walkChildren(std::optional<SVGElement> element,
                                          const XMLNode& rootNode) {
     bool foundRootSvg = false;
 
@@ -288,14 +289,14 @@ public:
         // TODO: Create an SVGUnknownElement if the namespace doesn't match?
         std::optional<RcString> maybeUri = child->getNamespaceUri(name.namespacePrefix);
         if (maybeUri != "http://www.w3.org/2000/svg") {
-          ParseError err;
+          ParseDiagnostic err;
           std::ostringstream ss;
           ss << "Ignored element <" << name << "> with an unsupported namespace. "
              << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix
              << "'";
           err.reason = ss.str();
           if (auto sourceOffset = child->sourceStartOffset()) {
-            err.location = sourceOffset.value();
+            err.range.start = sourceOffset.value();
           }
           context_.addWarning(std::move(err));
 
@@ -326,7 +327,7 @@ public:
               // Inline SVGs don't require the namespace to be set, default to SVG.
               child->setAttribute("xmlns", "http://www.w3.org/2000/svg");
             } else {
-              ParseError err;
+              ParseDiagnostic err;
               std::ostringstream ss;
               ss << "<" << name << "> has an ";
               if (maybeUri) {
@@ -337,7 +338,7 @@ public:
               ss << "Expected 'http://www.w3.org/2000/svg'";
               err.reason = ss.str();
               if (auto sourceOffset = child->sourceStartOffset()) {
-                err.location = sourceOffset.value();
+                err.range.start = sourceOffset.value();
               }
               return err;
             }
@@ -355,12 +356,12 @@ public:
             return error;
           }
         } else {
-          ParseError err;
+          ParseDiagnostic err;
           std::ostringstream ss;
           ss << "Unexpected element <" << name << "> at root, first element must be <svg>";
           err.reason = ss.str();
           if (auto sourceOffset = child->sourceStartOffset()) {
-            err.location = sourceOffset.value();
+            err.range.start = sourceOffset.value();
           }
           return err;
         }
@@ -374,7 +375,7 @@ public:
 };
 
 ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
-                                             std::vector<ParseError>* outWarnings,
+                                             ParseWarningSink& warningSink,
                                              SVGParser::Options options,
                                              SVGDocument::Settings settings) noexcept {
   // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
@@ -382,7 +383,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
   if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
     settings.svgParseCallback =
         [](const std::vector<uint8_t>& svgContent,
-           std::vector<ParseError>* warnings) -> std::optional<SVGDocumentHandle> {
+           ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
       SVGDocument::Settings subSettings;
       subSettings.processingMode = ProcessingMode::SecureStatic;
       // No resource loader — secure mode sub-documents cannot load external resources.
@@ -391,9 +392,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
                                        svgContent.size());
       auto result = SVGParser::ParseSVG(subSource, warnings, Options(), std::move(subSettings));
       if (result.hasError()) {
-        if (warnings) {
-          warnings->emplace_back(result.error());
-        }
+        warnings.add(ParseDiagnostic(result.error()));
         return std::nullopt;
       }
       return result.result().handle();
@@ -423,7 +422,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
 
   xml::XMLDocument xmlDocument(maybeDocument.result());
 
-  SVGParserContext context(source, outWarnings, options);
+  SVGParserContext context(source, warningSink, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
   if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
     return std::move(error.value());
@@ -432,18 +431,18 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
   if (auto maybeDocument = parser.document()) {
     return std::move(maybeDocument.value());
   } else {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "No SVG element found in document";
-    err.location = FileOffset::Offset(0);
+    err.range.start = FileOffset::Offset(0);
     return err;
   }
 }
 
 ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocument,
-                                                     std::vector<ParseError>* outWarnings,
+                                                     ParseWarningSink& warningSink,
                                                      SVGParser::Options options,
                                                      SVGDocument::Settings settings) noexcept {
-  SVGParserContext context(std::string_view(), outWarnings, options);
+  SVGParserContext context(std::string_view(), warningSink, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
   if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
     return std::move(error.value());
@@ -452,9 +451,9 @@ ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocum
   if (auto maybeDocument = parser.document()) {
     return std::move(maybeDocument.value());
   } else {
-    ParseError err;
+    ParseDiagnostic err;
     err.reason = "No SVG element found in document";
-    err.location = FileOffset::Offset(0);
+    err.range.start = FileOffset::Offset(0);
     return err;
   }
 }

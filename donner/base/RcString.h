@@ -4,6 +4,7 @@
 #include <bit>
 #include <cassert>
 #include <compare>
+#include <format>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -74,6 +75,18 @@ public:
    * @return RcString using the input data.
    */
   static RcString fromVector(std::vector<char>&& data) { return RcString(std::move(data)); }
+
+  /**
+   * Constructs an RcString using std::format-style formatting.
+   *
+   * @param fmt Format string (std::format syntax).
+   * @param args Format arguments.
+   * @return RcString containing the formatted result.
+   */
+  template <typename... Args>
+  static RcString fromFormat(std::format_string<Args...> fmt, Args&&... args) {
+    return RcString(std::format(fmt, std::forward<Args>(args)...));
+  }
 
   /// Copy constructor.
   RcString(const RcString& other) = default;

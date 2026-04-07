@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -21,7 +22,8 @@ namespace donner::svg::components {
 class ShadowTreeSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
@@ -88,11 +90,12 @@ TEST_F(ShadowTreeSystemTest, UseReferencingSymbol) {
 TEST_F(ShadowTreeSystemTest, SelfRecursionDetected) {
   // Create an SVG where a <use> tries to reference itself, which should produce a warning
   // but not crash.
+  ParseWarningSink parseSink;
   auto maybeResult = parser::SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <use id="self" href="#self"/>
     </svg>
-  )");
+  )", parseSink);
 
   // The parse should succeed (self-recursion is a warning, not a hard error).
   ASSERT_TRUE(maybeResult.hasResult());
@@ -101,12 +104,13 @@ TEST_F(ShadowTreeSystemTest, SelfRecursionDetected) {
 // --- Indirect recursion detection ---
 
 TEST_F(ShadowTreeSystemTest, IndirectRecursionDetected) {
+  ParseWarningSink parseSink;
   auto maybeResult = parser::SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <g id="a"><use href="#b"/></g>
       <g id="b"><use href="#a"/></g>
     </svg>
-  )");
+  )", parseSink);
 
   ASSERT_TRUE(maybeResult.hasResult());
 }
@@ -136,11 +140,12 @@ TEST_F(ShadowTreeSystemTest, MultipleUsesOfSameTarget) {
 // --- <use> with nonexistent href ---
 
 TEST_F(ShadowTreeSystemTest, UseWithMissingHref) {
+  ParseWarningSink parseSink;
   auto maybeResult = parser::SVGParser::ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <use href="#nonexistent"/>
     </svg>
-  )");
+  )", parseSink);
 
   // Should not crash; missing ref is a warning.
   ASSERT_TRUE(maybeResult.hasResult());
@@ -189,9 +194,9 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMainBranch) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  ParseWarningSink warningSink;
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main, targetEntity,
-                                        RcString("#target"), &warnings);
+                                        RcString("#target"), warningSink);
 
   // Main branch returns nullopt.
   EXPECT_FALSE(result.has_value());
@@ -213,14 +218,14 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceSelfRecursionWarns) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  ParseWarningSink warningSink;
   // Passing the entity itself as lightTarget should trigger self-recursion.
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main,
-                                        hostEntity.entity(), RcString("#host"), &warnings);
+                                        hostEntity.entity(), RcString("#host"), warningSink);
 
   EXPECT_FALSE(result.has_value());
   EXPECT_FALSE(shadow.mainBranch.has_value());
-  EXPECT_THAT(warnings, SizeIs(1));
+  EXPECT_THAT(warningSink.warnings(), SizeIs(1));
 }
 
 // --- <use> referencing nested group ---
@@ -260,14 +265,14 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceParentRecursionWarns) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  ParseWarningSink warningSink;
   // Child referencing its parent should trigger parent recursion detection.
   auto result = system.populateInstance(childEntity, shadow, ShadowBranchType::Main, parentEntity,
-                                        RcString("#parent"), &warnings);
+                                        RcString("#parent"), warningSink);
 
   EXPECT_FALSE(result.has_value());
   EXPECT_FALSE(shadow.mainBranch.has_value());
-  EXPECT_THAT(warnings, SizeIs(1));
+  EXPECT_THAT(warningSink.warnings(), SizeIs(1));
 }
 
 // --- Offscreen branch returns index ---
@@ -286,9 +291,9 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenBranchReturnsIndex) {
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
 
-  std::vector<ParseError> warnings;
+  ParseWarningSink warningSink;
   auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenFill,
-                                        targetEntity, RcString("#target"), &warnings);
+                                        targetEntity, RcString("#target"), warningSink);
 
   // Offscreen branch should return an index.
   ASSERT_TRUE(result.has_value());

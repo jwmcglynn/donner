@@ -50,11 +50,26 @@ protected:
   bool isWhitespace(char ch) const;
 
   /**
-   * Return the location of the parser's cursor, in characters from the start of the screen.
+   * Return the location of the parser's cursor, in characters from the start of the string.
    *
    * @param index Index of the offset relative to the cursor to return, default is 0.
    */
   FileOffset currentOffset(int index = 0) const;
+
+  /**
+   * Return a source range relative to the parser's cursor.
+   *
+   * @param startIndex Start offset relative to the cursor (inclusive).
+   * @param endIndex End offset relative to the cursor (exclusive).
+   */
+  SourceRange currentRange(int startIndex, int endIndex) const;
+
+  /**
+   * Return a source range from an absolute start offset to the current cursor position.
+   *
+   * @param startOffset Absolute start offset from the beginning of the string.
+   */
+  SourceRange rangeFrom(size_t startOffset) const;
 
   /**
    * Returns the number of characters consumed by the parser.
@@ -72,7 +87,7 @@ protected:
    * @param resultStorage Location where the numbers will be stored, the number of parameters is
    *   based on the size of the span.
    */
-  std::optional<ParseError> readNumbers(std::span<double> resultStorage);
+  std::optional<ParseDiagnostic> readNumbers(std::span<double> resultStorage);
 
   /// The original string.
   const std::string_view str_;  // NOLINT: Protected visibility for inheriting parsers to use.

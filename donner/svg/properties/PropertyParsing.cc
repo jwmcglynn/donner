@@ -112,9 +112,9 @@ ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> compone
     }
   }
 
-  ParseError err;
+  ParseDiagnostic err;
   err.reason = "Invalid alpha value";
-  err.location = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
 

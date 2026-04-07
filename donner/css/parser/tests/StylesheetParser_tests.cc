@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 #include "donner/css/tests/SelectorTestUtils.h"
 
@@ -16,15 +17,17 @@ MATCHER_P2(SelectorRuleIs, selector, declarations, "") {
 }
 
 TEST(StylesheetParser, Empty) {
-  EXPECT_THAT(StylesheetParser::Parse("").rules(), ElementsAre());
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  EXPECT_THAT(StylesheetParser::Parse("", disabled).rules(), ElementsAre());
 }
 
 TEST(StylesheetParser, WithRules) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
   EXPECT_THAT(StylesheetParser::Parse(R"(
     test, .class {
       name: value;
     }
-  )")
+  )", disabled)
                   .rules(),
               ElementsAre(SelectorRuleIs(
                   SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("test"))),
@@ -33,13 +36,14 @@ TEST(StylesheetParser, WithRules) {
 }
 
 TEST(StylesheetParser, FontFace) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
   Stylesheet sheet = StylesheetParser::Parse(R"(
     @font-face {
       font-family: test;
       src: url(test.woff);
     }
     svg { fill: red; }
-  )");
+  )", disabled);
 
   ASSERT_EQ(sheet.fontFaces().size(), 1u);
   EXPECT_EQ(sheet.fontFaces()[0].familyName, "test");
@@ -48,12 +52,13 @@ TEST(StylesheetParser, FontFace) {
 }
 
 TEST(StylesheetParser, FontFaceDataUrl) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
   Stylesheet sheet = StylesheetParser::Parse(R"(
     @font-face {
       font-family: datafont;
       src: url(data:font/woff;base64,dGVzdA==);
     }
-  )");
+  )", disabled);
 
   ASSERT_EQ(sheet.fontFaces().size(), 1u);
   EXPECT_EQ(sheet.fontFaces()[0].familyName, "datafont");

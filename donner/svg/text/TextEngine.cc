@@ -694,7 +694,7 @@ TextEngine::TextEngine(FontManager& fontManager, Registry& registry,
 
 TextEngine::~TextEngine() = default;
 
-void TextEngine::prepareForElement(EntityHandle handle, std::vector<ParseError>* outWarnings) {
+void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWarnings) {
   UTILS_RELEASE_ASSERT(handle.registry() == &registry_);
   const Entity textRootEntity = findTextRootEntity(handle);
   if (textRootEntity == entt::null) {

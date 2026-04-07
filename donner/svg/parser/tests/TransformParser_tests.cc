@@ -324,4 +324,33 @@ TEST(TransformParser, MultiplicationOrder) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Range-accuracy tests: verify that error SourceRanges cover the right span.
+// ---------------------------------------------------------------------------
+
+TEST(TransformParser, RangeUnexpectedFunction) {
+  // "invalid(" => function name "invalid" starts at 0, cursor after '(' at 8 => [0,8).
+  EXPECT_THAT(TransformParser::Parse("invalid("), ParseErrorRange(0, 8));
+  // "invalid2()" => range covers "invalid2(" => [0,9).
+  EXPECT_THAT(TransformParser::Parse("invalid2()"), ParseErrorRange(0, 9));
+}
+
+TEST(TransformParser, RangeExpectedCloseParen) {
+  // "matrix(1, 2, 3, 4, 5, 6, 7)" => after parsing 6 numbers, the comma at offset 23 is
+  // unexpected (expected ')').
+  EXPECT_THAT(TransformParser::Parse("matrix(1, 2, 3, 4, 5, 6, 7)"), ParseErrorRange(23, 24));
+}
+
+TEST(TransformParser, RangeExpectedOpenParen) {
+  // "matrix 1 2" => after "matrix", whitespace, then '1' which is not '(' => [7,8).
+  EXPECT_THAT(TransformParser::Parse("matrix 1 2"), ParseErrorRange(7, 8));
+}
+
+TEST(TransformParser, RangeEndOfString) {
+  // "matrix" => end of string when looking for function.
+  EXPECT_THAT(TransformParser::Parse("matrix"), ParseErrorEndOfString());
+  // ")" => after consuming ')', remainder is empty => EndOfString.
+  EXPECT_THAT(TransformParser::Parse(")"), ParseErrorEndOfString());
+}
+
 }  // namespace donner::svg::parser

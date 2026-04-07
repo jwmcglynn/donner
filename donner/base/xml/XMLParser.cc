@@ -8,7 +8,7 @@
 #include "donner/base/ChunkedString.h"
 #include "donner/base/FileOffset.h"
 #include "donner/base/MathUtils.h"
-#include "donner/base/ParseError.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
 #include "donner/base/Utf8.h"
@@ -22,7 +22,7 @@
 
 namespace donner::xml {
 
-using donner::ParseError;
+using donner::ParseDiagnostic;
 using donner::ParseResult;
 
 namespace {
@@ -211,15 +211,12 @@ struct NoParameterEntityPredicate {
 };
 
 /// Append a codepoint as a new string to the pieces vector.
-std::optional<ParseError> AppendUnicodeCharToNewString(char32_t codepoint,
-                                                       ChunkedString& chunkedString,
-                                                       size_t offset) {
+std::optional<ParseDiagnostic> AppendUnicodeCharToNewString(char32_t codepoint,
+                                                           ChunkedString& chunkedString,
+                                                           size_t offset) {
   // Validate the codepoint per XML specs.
   if (!Utf8::IsValidCodepoint(codepoint) || codepoint == 0xFFFE || codepoint == 0xFFFF) {
-    ParseError err;
-    err.reason = "Invalid numeric character entity";
-    err.location = FileOffset::Offset(offset);
-    return err;
+    return ParseDiagnostic::Error("Invalid numeric character entity", FileOffset::Offset(offset));
   }
 
   // Allocate a new string, append UTF-8, and record its view.
@@ -346,7 +343,7 @@ public:
    * Used by GetAttributeLocation to re-parse just the attributes of a single element
    * starting at `<element`.
    */
-  std::optional<FileOffsetRange> getElementAttributeLocation(const XMLQualifiedNameRef& name) {
+  std::optional<SourceRange> getElementAttributeLocation(const XMLQualifiedNameRef& name) {
     // We assume the caller has already consumed "<", so do it here.
     UTILS_RELEASE_ASSERT_MSG(tryConsume(remaining_, "<"), "Expected element to start with '<'");
 
@@ -375,7 +372,7 @@ public:
 
       const ParsedAttribute& attribute = maybeAttribute.result().value();
       if (attribute.name == name) {
-        return FileOffsetRange{attributeStartOffset, attributeEndOffset};
+        return SourceRange{attributeStartOffset, attributeEndOffset};
       }
     }
 
@@ -401,15 +398,13 @@ private:
     return lineOffsets().fileOffset(offset);
   }
 
-  ParseError createParseError(std::string_view reason,
-                              std::optional<FileOffset> location = std::nullopt) {
-    ParseError result;
-    result.reason = reason;
-    result.location = location.value_or(currentOffsetWithLineNumber(remaining_));
-    return result;
+  ParseDiagnostic createParseError(std::string_view reason,
+                                   std::optional<FileOffset> location = std::nullopt) {
+    return ParseDiagnostic::Error(RcString(reason),
+                                  location.value_or(currentOffsetWithLineNumber(remaining_)));
   }
 
-  [[nodiscard]] std::optional<ParseError> recordEntitySubstitution(const FileOffset& entityOffset) {
+  [[nodiscard]] std::optional<ParseDiagnostic> recordEntitySubstitution(const FileOffset& entityOffset) {
     if (entitySubstitutionCount_ >= maxEntitySubstitutions_) {
       return createParseError("Entity substitution limit exceeded", entityOffset);
     }
@@ -428,7 +423,7 @@ private:
    * inserted
    */
   template <std::output_iterator<char> OutputIterator>
-  [[nodiscard]] std::optional<ParseError> insertUtf8(char32_t ch, OutputIterator it) {
+  [[nodiscard]] std::optional<ParseDiagnostic> insertUtf8(char32_t ch, OutputIterator it) {
     // Reject bad codepoints as defined by https://www.w3.org/TR/xml/#NT-Char
     if (UTILS_PREDICT_FALSE(!Utf8::IsValidCodepoint(ch) || ch == 0xFFFE || ch == 0xFFFF)) {
       return createParseError("Invalid numeric character entity");
@@ -687,21 +682,21 @@ private:
       // Grab all digits
       const RcString digits = consumeMatching<DigitsPredicate>(sourceString).toSingleRcString();
       if (digits.empty()) {
-        ParseError err;
-        err.reason = "Invalid numeric entity syntax (missing digits)";
-        err.location = entityOffset;
-        return err;
+        return ParseDiagnostic::Error("Invalid numeric entity syntax (missing digits)",
+                                      entityOffset);
       }
 
       auto parseRes = hex ? IntegerParser::ParseHex(digits) : IntegerParser::Parse(digits);
       if (parseRes.hasError()) {
-        ParseError err = parseRes.error();
+        ParseDiagnostic err = parseRes.error();
         if (digitsOffset.offset) {
-          err.location = err.location.addParentOffset(digitsOffset);
+          err.range.start = err.range.start.addParentOffset(digitsOffset);
+          err.range.end = err.range.end.addParentOffset(digitsOffset);
         } else {
           // For recursive entity expansions, source information is lost.
           // TODO: Find a way to retain this information.
-          err.location.offset = std::nullopt;
+          err.range.start.offset = std::nullopt;
+          err.range.end.offset = std::nullopt;
         }
         return err;
       }
@@ -710,10 +705,8 @@ private:
 
       // We must see a trailing ';'
       if (!tryConsume(sourceString, ";")) {
-        ParseError semicolonErr;
-        semicolonErr.reason = "Numeric character entity missing closing ';'";
-        semicolonErr.location = currentOffsetWithLineNumber(sourceString);
-        return semicolonErr;
+        return ParseDiagnostic::Error("Numeric character entity missing closing ';'",
+                                      currentOffsetWithLineNumber(sourceString));
       }
 
       // Validate and append
@@ -1101,7 +1094,7 @@ private:
   /**
    * Read raw text (PCDATA) until `<` or `\0`
    */
-  std::optional<ParseError> parseAndAppendData(XMLNode& node) {
+  std::optional<ParseDiagnostic> parseAndAppendData(XMLNode& node) {
     // Expand all entities in the current text chunk
     auto maybeData = consumePCDataOnce();
     if (maybeData.hasError()) {
@@ -1150,7 +1143,7 @@ private:
    * what your test suite already covers. If you need more advanced expansions, you
    * can unify this with a more thorough parser approach.
    */
-  std::optional<ParseError> parseEntityDeclInDoctype(ChunkedString& decl) {
+  std::optional<ParseDiagnostic> parseEntityDeclInDoctype(ChunkedString& decl) {
     // The string starts with `<!ENTITY` ... ends with '>'
     static constexpr std::string_view kPrefix = "<!ENTITY";
     assert(decl.starts_with(kPrefix) && "Expected '<!ENTITY' in parseEntityDeclInDoctype");
@@ -1245,10 +1238,9 @@ private:
     // Extract element name
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
-      ParseError err;
-      err.reason = "Invalid element name: " + maybeName.error().reason;
-      err.location = maybeName.error().location;
-      return err;
+      return ParseDiagnostic::Error(
+          RcString("Invalid element name: " + maybeName.error().reason),
+          maybeName.error().range.start);
     }
 
     // Create element node
@@ -1354,7 +1346,7 @@ private:
   /**
    * Parse contents of the node, gather child nodes or text until `</tag>`
    */
-  [[nodiscard]] std::optional<ParseError> parseNodeContents(XMLNode& node) {
+  [[nodiscard]] std::optional<ParseDiagnostic> parseNodeContents(XMLNode& node) {
     // For all children and text
     while (true) {
       // Skip whitespace between > and node contents
@@ -1385,10 +1377,9 @@ private:
 
           auto maybeClosingName = consumeQualifiedName();
           if (maybeClosingName.hasError()) {
-            ParseError err;
-            err.reason = "Invalid closing tag name: " + maybeClosingName.error().reason;
-            err.location = maybeClosingName.error().location;
-            return err;
+            return ParseDiagnostic::Error(
+                RcString("Invalid closing tag name: " + maybeClosingName.error().reason),
+                maybeClosingName.error().range.start);
           }
 
           if (node.tagName() != maybeClosingName.result()) {
@@ -1450,10 +1441,9 @@ private:
 
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
-      ParseError err;
-      err.reason = "Invalid attribute name: " + maybeName.error().reason;
-      err.location = maybeName.error().location;
-      return err;
+      return ParseDiagnostic::Error(
+          RcString("Invalid attribute name: " + maybeName.error().reason),
+          maybeName.error().range.start);
     }
 
     const XMLQualifiedNameRef& name = maybeName.result();
@@ -1501,7 +1491,7 @@ private:
   /**
    * Parse XML attributes of the node, gather all attributes until `>` or `/>`
    */
-  [[nodiscard]] std::optional<ParseError> parseNodeAttributes(XMLNode& node) {
+  [[nodiscard]] std::optional<ParseDiagnostic> parseNodeAttributes(XMLNode& node) {
     // For all attributes
     while (true) {
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
@@ -1533,7 +1523,7 @@ ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& o
   return parser.parse();
 }
 
-std::optional<FileOffsetRange> XMLParser::GetAttributeLocation(
+std::optional<SourceRange> XMLParser::GetAttributeLocation(
     std::string_view str, FileOffset elementStartOffset, const XMLQualifiedNameRef& attributeName) {
   if (!elementStartOffset.offset) {
     return std::nullopt;
@@ -1546,7 +1536,7 @@ std::optional<FileOffsetRange> XMLParser::GetAttributeLocation(
   const std::string_view elementToEnd = str.substr(elementStartOffset.offset.value());
   XMLParserImpl parser(elementToEnd, reparseOptions);
   if (auto attributeLocationInElement = parser.getElementAttributeLocation(attributeName)) {
-    FileOffsetRange result{attributeLocationInElement->start.addParentOffset(elementStartOffset),
+    SourceRange result{attributeLocationInElement->start.addParentOffset(elementStartOffset),
                            attributeLocationInElement->end.addParentOffset(elementStartOffset)};
     return result;
   }

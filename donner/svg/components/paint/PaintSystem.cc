@@ -1,5 +1,6 @@
 #include "donner/svg/components/paint/PaintSystem.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -54,21 +55,21 @@ constexpr void ForEachShape(const F& f) {
 
 const ComputedStopComponent& PaintSystem::createComputedStop(EntityHandle handle,
                                                              const StopComponent& stop,
-                                                             std::vector<ParseError>* outWarnings) {
+                                                             ParseWarningSink& warningSink) {
   if (const auto* computedStop = handle.try_get<ComputedStopComponent>()) {
     return *computedStop;
   }
 
-  const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, outWarnings);
-  return createComputedStopWithStyle(handle, stop, style, outWarnings);
+  const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
+  return createComputedStopWithStyle(handle, stop, style, warningSink);
 }
 
 void PaintSystem::instantiateAllComputedComponents(Registry& registry,
-                                                   std::vector<ParseError>* outWarnings) {
+                                                   ParseWarningSink& warningSink) {
   // Should instantiate <stop> before gradients.
   for (auto view = registry.view<StopComponent, ComputedStyleComponent>(); auto entity : view) {
     auto [stop, style] = view.get(entity);
-    createComputedStopWithStyle(EntityHandle(registry, entity), stop, style, outWarnings);
+    createComputedStopWithStyle(EntityHandle(registry, entity), stop, style, warningSink);
   }
 
   // Create ComputedGradientComponent for all entities in the registry that have a GradientComponent
@@ -78,7 +79,7 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
 
   for (auto view = registry.view<ComputedGradientComponent>(); auto entity : view) {
     auto [computedGradient] = view.get(entity);
-    initializeComputedGradient(EntityHandle(registry, entity), computedGradient, outWarnings);
+    initializeComputedGradient(EntityHandle(registry, entity), computedGradient, warningSink);
   }
 
   // Create ComputedPatternComponent for all entities in the registry that have a PatternComponent
@@ -88,18 +89,18 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
 
   for (auto view = registry.view<ComputedPatternComponent>(); auto entity : view) {
     auto [computedPattern] = view.get(entity);
-    initializeComputedPattern(EntityHandle(registry, entity), computedPattern, outWarnings);
+    initializeComputedPattern(EntityHandle(registry, entity), computedPattern, warningSink);
   }
 }
 
-void PaintSystem::createShadowTrees(Registry& registry, std::vector<ParseError>* outWarnings) {
-  createGradientShadowTrees(registry, outWarnings);
-  createPatternShadowTrees(registry, outWarnings);
+void PaintSystem::createShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  createGradientShadowTrees(registry, warningSink);
+  createPatternShadowTrees(registry, warningSink);
 }
 
 void PaintSystem::initializeComputedGradient(EntityHandle handle,
                                              ComputedGradientComponent& computedGradient,
-                                             std::vector<ParseError>* outWarnings) {
+                                             ParseWarningSink& warningSink) {
   if (computedGradient.initialized) {
     return;
   }
@@ -112,7 +113,7 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
   // 1. Inherit attributes following the `href` attribute inheritance chain.
   //
   {
-    std::vector<Entity> inheritanceChain = getInheritanceChain(handle, outWarnings);
+    std::vector<Entity> inheritanceChain = getInheritanceChain(handle, warningSink);
 
     // Iterate over the inheritance chain backwards to propagate attributes from base -> current.
     EntityHandle base;
@@ -120,7 +121,7 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
       EntityHandle cur = EntityHandle(registry, *it);
 
       auto& curComputed = cur.get_or_emplace<ComputedGradientComponent>();
-      initializeComputedGradient(cur, curComputed, outWarnings);
+      initializeComputedGradient(cur, curComputed, warningSink);
 
       computedGradient.inheritAttributesFrom(cur, base);
 
@@ -167,7 +168,7 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
 
 void PaintSystem::initializeComputedPattern(EntityHandle handle,
                                             ComputedPatternComponent& computedPattern,
-                                            std::vector<ParseError>* outWarnings) {
+                                            ParseWarningSink& warningSink) {
   if (computedPattern.initialized) {
     return;
   }
@@ -179,7 +180,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   //
   // 1. Inherit attributes following the `href` attribute inheritance chain.
   //
-  std::vector<Entity> inheritanceChain = getInheritanceChain(handle, outWarnings);
+  std::vector<Entity> inheritanceChain = getInheritanceChain(handle, warningSink);
 
   // Iterate over the inheritance chain backwards to propagate attributes from base -> current.
   EntityHandle base;
@@ -187,7 +188,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
     EntityHandle cur = EntityHandle(registry, *it);
 
     auto& curComputed = cur.get_or_emplace<ComputedPatternComponent>();
-    initializeComputedPattern(cur, curComputed, outWarnings);
+    initializeComputedPattern(cur, curComputed, warningSink);
 
     computedPattern.inheritAttributesFrom(cur, base);
 
@@ -207,7 +208,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
 
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
       handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewBox,
-      FontMetrics(), outWarnings);
+      FontMetrics(), warningSink);
 
   //
   // 3. Apply viewBox transform
@@ -223,7 +224,7 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
 }
 
 std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
-                                                     std::vector<ParseError>* outWarnings) {
+                                                     ParseWarningSink& warningSink) {
   std::vector<Entity> inheritanceChain;
   inheritanceChain.push_back(handle);
 
@@ -234,10 +235,10 @@ std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
     EntityHandle current = handle;
     while (const auto* ref = current.try_get<EvaluatedReferenceComponent<PaintSystem>>()) {
       if (guard.hasRecursion(ref->target)) {
-        if (outWarnings) {
-          ParseError err;
+        {
+          ParseDiagnostic err;
           err.reason = "Circular paint inheritance detected";
-          outWarnings->push_back(err);
+          warningSink.add(std::move(err));
         }
 
         // Note that in the case of recursion, we simply stop evaluating the inheritance instead
@@ -257,15 +258,15 @@ std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
 
 const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
     EntityHandle handle, const StopComponent& stop, const ComputedStyleComponent& style,
-    std::vector<ParseError>* outWarnings) {
+    ParseWarningSink& warningSink) {
   return handle.emplace_or_replace<ComputedStopComponent>(
-      stop.properties, style, style.properties->unparsedProperties, outWarnings);
+      stop.properties, style, style.properties->unparsedProperties, warningSink);
 }
 
 // Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
 // the registry
 void PaintSystem::createGradientShadowTrees(Registry& registry,
-                                            std::vector<ParseError>* outWarnings) {
+                                            ParseWarningSink& warningSink) {
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
     const auto& [gradient] = view.get(entity);
 
@@ -289,13 +290,11 @@ void PaintSystem::createGradientShadowTrees(Registry& registry,
             registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(gradient.href->href);
           }
         } else {
-          if (outWarnings) {
-            ParseError err;
-            err.reason = "Gradient element href=\"" + gradient.href.value().href +
-                         "\" attribute points to a non-gradient element, inheritance "
-                         "ignored";
-            outWarnings->push_back(err);
-          }
+          ParseDiagnostic err;
+          err.reason = "Gradient element href=\"" + gradient.href.value().href +
+                       "\" attribute points to a non-gradient element, inheritance "
+                       "ignored";
+          warningSink.add(std::move(err));
         }
       }
     }
@@ -303,7 +302,7 @@ void PaintSystem::createGradientShadowTrees(Registry& registry,
 }
 
 void PaintSystem::createPatternShadowTrees(Registry& registry,
-                                           std::vector<ParseError>* outWarnings) {
+                                           ParseWarningSink& warningSink) {
   for (auto view = registry.view<PatternComponent>(); auto entity : view) {
     const auto& [pattern] = view.get(entity);
 
@@ -318,13 +317,11 @@ void PaintSystem::createPatternShadowTrees(Registry& registry,
             registry.get_or_emplace<ShadowTreeComponent>(entity).setMainHref(pattern.href->href);
           }
         } else {
-          if (outWarnings) {
-            ParseError err;
-            err.reason = "Pattern element href=\"" + pattern.href.value().href +
-                         "\" attribute points to a non-gradient element, inheritance "
-                         "ignored";
-            outWarnings->push_back(err);
-          }
+          ParseDiagnostic err;
+          err.reason = "Pattern element href=\"" + pattern.href.value().href +
+                       "\" attribute points to a non-gradient element, inheritance "
+                       "ignored";
+          warningSink.add(std::move(err));
         }
       }
     }

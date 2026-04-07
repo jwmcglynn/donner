@@ -49,10 +49,8 @@ ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String
     // NOLINTNEXTLINE: Array index is guaranteed to be in bounds.
     const uint8_t base64Value = kBase64LookupTable[static_cast<uint8_t>(ch)];
     if (base64Value == kInvalidChar) {
-      ParseError err;
-      err.reason = "Invalid base64 char '" + std::string(1, ch) + "'";
-      err.location = FileOffset::Offset(i);
-      return err;
+      return ParseDiagnostic::Error(
+          RcString::fromFormat("Invalid base64 char '{}'", ch), FileOffset::Offset(i));
     }
 
     accumulator = (accumulator << 6) + base64Value;

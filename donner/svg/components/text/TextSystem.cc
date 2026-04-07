@@ -99,7 +99,7 @@ void removeTrailingSpace(RcString& text) {
 }
 
 void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
-                     ComputedTextComponent::TextSpan& span, std::vector<ParseError>* outWarnings) {
+                     ComputedTextComponent::TextSpan& span, ParseWarningSink& warningSink) {
   if (textPath.href.empty()) {
     return;
   }
@@ -206,15 +206,15 @@ Entity findApplicableTextPathEntity(Registry& registry, Entity entity, bool& out
 }  // namespace
 
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
-                                                  std::vector<ParseError>* outWarnings) {
+                                                  ParseWarningSink& warningSink) {
   auto view = registry.view<TextRootComponent, TextComponent, TextPositioningComponent>();
   for (auto entity : view) {
-    instantiateComputedComponent(EntityHandle(registry, entity), outWarnings);
+    instantiateComputedComponent(EntityHandle(registry, entity), warningSink);
   }
 }
 
 void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
-                                              std::vector<ParseError>* outWarnings) {
+                                              ParseWarningSink& warningSink) {
   Registry& registry = *rootHandle.registry();
   UTILS_RELEASE_ASSERT(
       (rootHandle.all_of<TextRootComponent, TextComponent, TextPositioningComponent>()));
@@ -321,7 +321,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
         findApplicableTextPathEntity(registry, handle.entity(), invalidTextPathNesting);
     if (textPathEntity != entt::null) {
       const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
-      resolveTextPath(registry, textPath, span, outWarnings);
+      resolveTextPath(registry, textPath, span, warningSink);
       if (!span.pathSpline) {
         // textPath href could not be resolved — mark as failed so glyphs are hidden.
         span.textPathFailed = true;

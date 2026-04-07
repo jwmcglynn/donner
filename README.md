@@ -8,8 +8,9 @@ Donner SVG is an embeddable browser-grade SVG2 engine in C++20, providing full a
 ![Donner splash image](donner_splash.svg)
 
 ```cpp
+ParseWarningSink warnings;
 ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(
-    loadFile("donner_splash.svg"));
+    loadFile("donner_splash.svg"), warnings);
 
 if (maybeDocument.hasError()) {
   std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
@@ -85,8 +86,9 @@ const std::string_view svgContents(R"(
 )");
 
 // Call ParseSVG to load the SVG file
+donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
 donner::ParseResult<donner::svg::SVGDocument> maybeResult =
-    donner::svg::parser::SVGParser::ParseSVG(svgContents);
+    donner::svg::parser::SVGParser::ParseSVG(svgContents, disabled);
 
 if (maybeResult.hasError()) {
   std::cerr << "Parse Error " << maybeResult.error() << "\n";  // Includes line:column and reason
@@ -137,7 +139,8 @@ file.seekg(0);
 fileData.resize(fileLength);  
 file.read(fileData.data(), fileLength);
 
-ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData);
+ParseWarningSink warnings;
+ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, warnings);
 if (maybeDocument.hasError()) {
   std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
   std::abort();

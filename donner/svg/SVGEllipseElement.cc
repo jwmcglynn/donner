@@ -1,5 +1,6 @@
 #include "donner/svg/SVGEllipseElement.h"
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -94,7 +95,8 @@ void SVGEllipseElement::invalidate() const {
 
 void SVGEllipseElement::compute() const {
   auto& ellipse = handle_.get_or_emplace<components::EllipseComponent>();
-  components::ShapeSystem().createComputedPath(handle_, ellipse, FontMetrics(), nullptr);
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  components::ShapeSystem().createComputedPath(handle_, ellipse, FontMetrics(), disabledSink);
 }
 
 }  // namespace donner::svg

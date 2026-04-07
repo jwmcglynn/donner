@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -44,7 +45,8 @@ protected:
     fileData.resize(fileLength);
     file.read(fileData.data(), fileLength);
 
-    auto maybeResult = parser::SVGParser::ParseSVG(fileData, nullptr, options);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    auto maybeResult = parser::SVGParser::ParseSVG(fileData, disabled, options);
     EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
     if (maybeResult.hasError()) {
       return SVGDocument();
@@ -84,8 +86,9 @@ protected:
     settings.resourceLoader =
         std::make_unique<SandboxedFileResourceLoader>(resourceDir, filePath);
 
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
     auto maybeResult =
-        parser::SVGParser::ParseSVG(fileData, nullptr, options, std::move(settings));
+        parser::SVGParser::ParseSVG(fileData, disabled, options, std::move(settings));
     EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
     if (maybeResult.hasError()) {
       return SVGDocument();

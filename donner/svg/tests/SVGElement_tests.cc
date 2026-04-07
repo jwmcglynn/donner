@@ -5,6 +5,7 @@
 
 #include <deque>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
@@ -68,7 +69,8 @@ protected:
     parser::SVGParser::Options options;
     options.parseAsInlineSVG = true;
 
-    auto maybeResult = parser::SVGParser::ParseSVG(input, nullptr, options);
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    auto maybeResult = parser::SVGParser::ParseSVG(input, disabled, options);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
@@ -515,7 +517,7 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
   ASSERT_TRUE(child.has_value());
 
   components::StyleSystem styleSystem;
-  styleSystem.computeAllStyles(doc.registry(), nullptr);
+  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
 
   const auto* initialComputed =
       child->entityHandle().try_get<components::ComputedStyleComponent>();
@@ -528,7 +530,7 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
 
   EXPECT_EQ(child->entityHandle().try_get<components::ComputedStyleComponent>(), nullptr);
 
-  styleSystem.computeAllStyles(doc.registry(), nullptr);
+  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
 
   const auto* updatedComputed =
       child->entityHandle().try_get<components::ComputedStyleComponent>();
@@ -552,7 +554,7 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   ASSERT_TRUE(sibling.has_value());
 
   components::StyleSystem styleSystem;
-  styleSystem.computeAllStyles(doc.registry(), nullptr);
+  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
 
   if (!doc.registry().ctx().contains<components::RenderTreeState>()) {
     doc.registry().ctx().emplace<components::RenderTreeState>();
@@ -577,7 +579,7 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   target->entityHandle().get_or_emplace<components::DirtyFlagsComponent>().mark(
       components::DirtyFlagsComponent::Style);
 
-  styleSystem.computeAllStyles(doc.registry(), nullptr);
+  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
 
   const auto* targetComputed =
       target->entityHandle().try_get<components::ComputedStyleComponent>();
@@ -609,7 +611,7 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
   ASSERT_TRUE(second.has_value());
 
   components::StyleSystem styleSystem;
-  styleSystem.computeAllStyles(doc.registry(), nullptr);
+  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
 
   if (!doc.registry().ctx().contains<components::RenderTreeState>()) {
     doc.registry().ctx().emplace<components::RenderTreeState>();
@@ -629,7 +631,7 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
   first->setClassName("");
   EXPECT_TRUE(renderState.needsFullStyleRecompute);
 
-  styleSystem.computeAllStyles(doc.registry(), nullptr);
+  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
 
   const auto* updatedComputed =
       second->entityHandle().try_get<components::ComputedStyleComponent>();

@@ -4,7 +4,7 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 donner_cc_library(
     name = "base",
     srcs = [
-        "ParseError.cc",
+        "ParseDiagnostic.cc",
     ],
     hdrs = [
         "Box.h",
@@ -15,8 +15,9 @@ donner_cc_library(
         "Length.h",
         "MathUtils.h",
         "OptionalRef.h",
-        "ParseError.h",
+        "ParseDiagnostic.h",
         "ParseResult.h",
+        "ParseWarningSink.h",
         "RcString.h",
         "RcStringOrRef.h",
         "RelativeLengthMetrics.h",
@@ -30,6 +31,21 @@ donner_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "@entt",
+    ],
+)
+
+donner_cc_library(
+    name = "diagnostic_renderer",
+    srcs = [
+        "DiagnosticRenderer.cc",
+    ],
+    hdrs = [
+        "DiagnosticRenderer.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        "//donner/base/parser:line_offsets",
     ],
 )
 
@@ -70,14 +86,16 @@ donner_cc_test(
     name = "base_tests",
     srcs = [
         "tests/BaseTestUtils_tests.cc",
+        "tests/DiagnosticRenderer_tests.cc",
         "tests/Box_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
         "tests/OptionalRef_tests.cc",
-        "tests/ParseError_tests.cc",
+        "tests/ParseDiagnostic_tests.cc",
         "tests/ParseResult_tests.cc",
+        "tests/ParseWarningSink_tests.cc",
         "tests/RcStringOrRef_tests.cc",
         "tests/RcString_tests.cc",
         "tests/Runfiles_tests.cc",
@@ -95,6 +113,7 @@ donner_cc_test(
     deps = [
         ":base",
         ":base_test_utils",
+        ":diagnostic_renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )

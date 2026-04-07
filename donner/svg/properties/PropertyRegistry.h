@@ -505,7 +505,7 @@ public:
    * @param specificity Specificity of the declaration.
    * @return Error if the declaration had errors parsing or the property is not supported.
    */
-  std::optional<ParseError> parseProperty(const css::Declaration& declaration,
+  std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration,
                                           css::Specificity specificity);
 
   /**
@@ -532,7 +532,7 @@ public:
    * @param value Value of the attribute, parsed as a CSS value.
    * @param handle Entity handle, needed for `transform` attribute parsing.
    * @return true if the attribute was parsed successfully, false if not recognized, or a \ref
-   * ParseError if parsing failed.
+   * ParseDiagnostic if parsing failed.
    */
   ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
                                                EntityHandle handle = EntityHandle());

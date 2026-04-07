@@ -8,6 +8,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -34,7 +35,8 @@ namespace donner::svg::components {
 class PaintSystemTest : public ::testing::Test {
 protected:
   SVGDocument ParseSVG(std::string_view input) {
-    auto maybeResult = parser::SVGParser::ParseSVG(input);
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
   }
@@ -42,8 +44,9 @@ protected:
   SVGDocument ParseAndCompute(std::string_view input) {
     auto document = ParseSVG(input);
     auto& registry = document.registry();
-    StyleSystem().computeAllStyles(registry, nullptr);
-    paintSystem.createShadowTrees(registry, nullptr);
+    ParseWarningSink warningSink;
+    StyleSystem().computeAllStyles(registry, warningSink);
+    paintSystem.createShadowTrees(registry, warningSink);
 
     // Instantiate shadow trees (needed for gradient/pattern href inheritance).
     for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
@@ -52,15 +55,15 @@ protected:
         auto& shadow = registry.get_or_emplace<ComputedShadowTreeComponent>(entity);
         ShadowTreeSystem().populateInstance(EntityHandle(registry, entity), shadow,
                                            ShadowBranchType::Main, targetEntity.value(),
-                                           shadowTreeComponent.mainHref().value(), nullptr);
+                                           shadowTreeComponent.mainHref().value(), warningSink);
       }
     }
 
     // Re-compute styles to include shadow tree entities.
-    StyleSystem().computeAllStyles(registry, nullptr);
+    StyleSystem().computeAllStyles(registry, warningSink);
 
-    LayoutSystem().instantiateAllComputedComponents(registry, nullptr);
-    paintSystem.instantiateAllComputedComponents(registry, nullptr);
+    LayoutSystem().instantiateAllComputedComponents(registry, warningSink);
+    paintSystem.instantiateAllComputedComponents(registry, warningSink);
     return document;
   }
 
@@ -163,12 +166,12 @@ TEST_F(PaintSystemTest, GradientHrefToNonGradientWarns) {
     </svg>
   )");
 
-  std::vector<ParseError> warnings;
-  StyleSystem().computeAllStyles(document.registry(), &warnings);
-  paintSystem.createShadowTrees(document.registry(), &warnings);
-  paintSystem.instantiateAllComputedComponents(document.registry(), &warnings);
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  paintSystem.createShadowTrees(document.registry(), warningSink);
+  paintSystem.instantiateAllComputedComponents(document.registry(), warningSink);
 
-  EXPECT_THAT(warnings, Not(IsEmpty()));
+  EXPECT_THAT(warningSink.warnings(), Not(IsEmpty()));
 }
 
 // --- Pattern ---
@@ -201,12 +204,12 @@ TEST_F(PaintSystemTest, PatternHrefToNonPatternWarns) {
     </svg>
   )");
 
-  std::vector<ParseError> warnings;
-  StyleSystem().computeAllStyles(document.registry(), &warnings);
-  paintSystem.createShadowTrees(document.registry(), &warnings);
-  paintSystem.instantiateAllComputedComponents(document.registry(), &warnings);
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  paintSystem.createShadowTrees(document.registry(), warningSink);
+  paintSystem.instantiateAllComputedComponents(document.registry(), warningSink);
 
-  EXPECT_THAT(warnings, Not(IsEmpty()));
+  EXPECT_THAT(warningSink.warnings(), Not(IsEmpty()));
 }
 
 // --- Gradient spread method ---
