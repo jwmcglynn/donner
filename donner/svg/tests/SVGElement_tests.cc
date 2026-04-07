@@ -1138,4 +1138,308 @@ TEST_F(SVGElementTests, GetComputedStyleBasic) {
   EXPECT_EQ(computedStyle.numPropertiesSet(), 3);
 }
 
+TEST_F(SVGElementTests, SetAttributeGetAttributeRoundtripNamespaced) {
+  auto element = create();
+
+  // Set a namespaced attribute and verify roundtrip.
+  element.setAttribute({"xlink", "href"}, "#target");
+  EXPECT_THAT(element.getAttribute({"xlink", "href"}), Optional(RcString("#target")));
+  EXPECT_TRUE(element.hasAttribute({"xlink", "href"}));
+
+  // A different namespace with the same local name should not match.
+  EXPECT_FALSE(element.hasAttribute({"other", "href"}));
+  EXPECT_THAT(element.getAttribute({"other", "href"}), testing::Eq(std::nullopt));
+
+  // Overwrite the same namespaced attribute.
+  element.setAttribute({"xlink", "href"}, "#updated");
+  EXPECT_THAT(element.getAttribute({"xlink", "href"}), Optional(RcString("#updated")));
+}
+
+TEST_F(SVGElementTests, SetAttributePresentationAttributeRoundtrip) {
+  auto element = create();
+
+  // setAttribute with a known presentation attribute name stores it and parses it.
+  element.setAttribute("fill", "blue");
+  EXPECT_THAT(element.getAttribute("fill"), Optional(RcString("blue")));
+  EXPECT_TRUE(element.hasAttribute("fill"));
+
+  // Overwrite with a new value.
+  element.setAttribute("fill", "green");
+  EXPECT_THAT(element.getAttribute("fill"), Optional(RcString("green")));
+
+  // setAttribute with an invalid value for a presentation attribute stores as generic attribute.
+  element.setAttribute("fill", "not-a-color");
+  EXPECT_THAT(element.getAttribute("fill"), Optional(RcString("not-a-color")));
+}
+
+TEST_F(SVGElementTests, RemoveAttributePresentation) {
+  auto element = create();
+  element.setAttribute("fill", "red");
+  EXPECT_TRUE(element.hasAttribute("fill"));
+
+  element.removeAttribute("fill");
+  EXPECT_FALSE(element.hasAttribute("fill"));
+  EXPECT_THAT(element.getAttribute("fill"), testing::Eq(std::nullopt));
+}
+
+TEST_F(SVGElementTests, RemoveAttributeId) {
+  auto element = create();
+  element.setId("myId");
+  EXPECT_EQ(element.id(), "myId");
+  EXPECT_TRUE(element.hasAttribute("id"));
+
+  element.removeAttribute("id");
+  EXPECT_EQ(element.id(), "");
+  // After removing, the attribute storage should reflect removal.
+  EXPECT_FALSE(element.hasAttribute("id"));
+}
+
+TEST_F(SVGElementTests, RemoveAttributeClass) {
+  auto element = create();
+  element.setClassName("myClass");
+  EXPECT_EQ(element.className(), "myClass");
+  EXPECT_TRUE(element.hasAttribute("class"));
+
+  element.removeAttribute("class");
+  EXPECT_EQ(element.className(), "");
+  EXPECT_FALSE(element.hasAttribute("class"));
+}
+
+TEST_F(SVGElementTests, RemoveAttributeStyle) {
+  auto element = create();
+  element.setStyle("fill: red");
+  EXPECT_TRUE(element.hasAttribute("style"));
+
+  element.removeAttribute("style");
+  EXPECT_FALSE(element.hasAttribute("style"));
+}
+
+TEST_F(SVGElementTests, RemoveAttributeNamespaced) {
+  auto element = create();
+  element.setAttribute({"xlink", "href"}, "#target");
+  EXPECT_TRUE(element.hasAttribute({"xlink", "href"}));
+
+  element.removeAttribute({"xlink", "href"});
+  EXPECT_FALSE(element.hasAttribute({"xlink", "href"}));
+  EXPECT_THAT(element.getAttribute({"xlink", "href"}), testing::Eq(std::nullopt));
+}
+
+TEST_F(SVGElementTests, QuerySelectorComplexSelector) {
+  auto document = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="g1">
+        <rect id="rect1" width="10" height="10" />
+      </g>
+      <g id="g2">
+        <rect id="rect2" width="20" height="20" />
+        <rect id="rect3" width="30" height="30" />
+      </g>
+    </svg>
+  )");
+
+  auto svgElement = document.svgElement();
+
+  // svg > g:nth-child(2) > rect should match the first rect in g2
+  EXPECT_THAT(svgElement.querySelector("svg > g:nth-child(2) > rect"),
+              Optional(ElementIdEq("rect2")));
+
+  // :scope > * should match the first direct child of svgElement
+  EXPECT_THAT(svgElement.querySelector(":scope > *"), Optional(ElementIdEq("g1")));
+
+  // :scope > g:nth-child(2) should match g2
+  EXPECT_THAT(svgElement.querySelector(":scope > g:nth-child(2)"), Optional(ElementIdEq("g2")));
+}
+
+TEST_F(SVGElementTests, QuerySelectorInvalidSelector) {
+  auto element = create();
+
+  // Invalid CSS selector should return nullopt without crashing.
+  EXPECT_THAT(element.querySelector("[[[invalid"), testing::Eq(std::nullopt));
+  EXPECT_THAT(element.querySelector(""), testing::Eq(std::nullopt));
+}
+
+TEST_F(SVGElementTests, ReplaceChildVerifiesTreeStructure) {
+  auto parent = create();
+  auto child1 = createWithId("c1");
+  auto child2 = createWithId("c2");
+  auto child3 = createWithId("c3");
+  auto replacement = createWithId("replacement");
+
+  parent.appendChild(child1);
+  parent.appendChild(child2);
+  parent.appendChild(child3);
+  EXPECT_THAT(children(parent), ElementsAre(child1, child2, child3));
+
+  // Replace the middle child.
+  parent.replaceChild(replacement, child2);
+  EXPECT_THAT(children(parent), ElementsAre(child1, replacement, child3));
+
+  // The old child should no longer have a parent.
+  EXPECT_FALSE(child2.parentElement().has_value());
+
+  // The replacement should have the correct parent.
+  EXPECT_THAT(replacement.parentElement(), Optional(parent));
+}
+
+TEST_F(SVGElementTests, ReplaceChildWithExistingSibling) {
+  // When newChild is already a child of the same parent, it should be moved.
+  auto parent = create();
+  auto child1 = createWithId("c1");
+  auto child2 = createWithId("c2");
+  auto child3 = createWithId("c3");
+
+  parent.appendChild(child1);
+  parent.appendChild(child2);
+  parent.appendChild(child3);
+
+  // Replace child1 with child3 (child3 is already in the tree).
+  parent.replaceChild(child3, child1);
+  // child3 should have moved to child1's position; child1 is removed.
+  EXPECT_THAT(children(parent), ElementsAre(child3, child2));
+  EXPECT_FALSE(child1.parentElement().has_value());
+}
+
+TEST_F(SVGElementTests, InsertBeforeNulloptAppendsWithExistingChildren) {
+  auto parent = create();
+  auto child1 = createWithId("c1");
+  auto child2 = createWithId("c2");
+  auto child3 = createWithId("c3");
+
+  parent.appendChild(child1);
+  parent.appendChild(child2);
+
+  // insertBefore with nullopt reference should append at the end.
+  parent.insertBefore(child3, std::nullopt);
+  EXPECT_THAT(children(parent), ElementsAre(child1, child2, child3));
+}
+
+TEST_F(SVGElementTests, RemoveOnRootIsNoOp) {
+  // An element without a parent (acting as root) should not crash on remove().
+  auto element = create();
+  EXPECT_FALSE(element.parentElement().has_value());
+
+  // This should be a no-op, not crash or assert.
+  element.remove();
+
+  // Element should still be valid and have no parent.
+  EXPECT_FALSE(element.parentElement().has_value());
+  EXPECT_TRUE(element.entityHandle().valid());
+}
+
+TEST_F(SVGElementTests, AppendChildMovesFromAnotherParent) {
+  auto parent1 = create();
+  auto parent2 = create();
+  auto child = createWithId("child");
+
+  parent1.appendChild(child);
+  EXPECT_THAT(children(parent1), ElementsAre(child));
+  EXPECT_THAT(child.parentElement(), Optional(parent1));
+
+  // Moving child to parent2 should remove it from parent1.
+  parent2.appendChild(child);
+  EXPECT_THAT(children(parent1), testing::IsEmpty());
+  EXPECT_THAT(children(parent2), ElementsAre(child));
+  EXPECT_THAT(child.parentElement(), Optional(parent2));
+}
+
+TEST_F(SVGElementTests, InsertBeforeMovesFromAnotherParent) {
+  auto parent1 = create();
+  auto parent2 = create();
+  auto existingChild = createWithId("existing");
+  auto movedChild = createWithId("moved");
+
+  parent1.appendChild(movedChild);
+  parent2.appendChild(existingChild);
+
+  // insertBefore should remove movedChild from parent1 and insert before existingChild in parent2.
+  parent2.insertBefore(movedChild, existingChild);
+  EXPECT_THAT(children(parent1), testing::IsEmpty());
+  EXPECT_THAT(children(parent2), ElementsAre(movedChild, existingChild));
+  EXPECT_THAT(movedChild.parentElement(), Optional(parent2));
+}
+
+TEST_F(SVGElementTests, MultipleAppendRemoveCycles) {
+  auto parent = create();
+  auto child = createWithId("child");
+
+  // Cycle 1: add and remove.
+  parent.appendChild(child);
+  EXPECT_THAT(children(parent), ElementsAre(child));
+  parent.removeChild(child);
+  EXPECT_THAT(children(parent), testing::IsEmpty());
+  EXPECT_FALSE(child.parentElement().has_value());
+
+  // Cycle 2: re-add.
+  parent.appendChild(child);
+  EXPECT_THAT(children(parent), ElementsAre(child));
+  EXPECT_THAT(child.parentElement(), Optional(parent));
+
+  // Cycle 3: remove via child.remove().
+  child.remove();
+  EXPECT_THAT(children(parent), testing::IsEmpty());
+
+  // Cycle 4: re-add again.
+  parent.appendChild(child);
+  EXPECT_THAT(children(parent), ElementsAre(child));
+  EXPECT_THAT(child.parentElement(), Optional(parent));
+}
+
+TEST_F(SVGElementTests, OwnerDocumentReturnsSameDocument) {
+  auto element = create();
+  auto ownerDoc = element.ownerDocument();
+  EXPECT_EQ(ownerDoc, document_);
+
+  // Child elements also return the same document.
+  auto child = create();
+  element.appendChild(child);
+  EXPECT_EQ(child.ownerDocument(), document_);
+
+  // Elements from a parsed document return their parsed document.
+  auto parsedDoc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+  auto rect = parsedDoc.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->ownerDocument(), parsedDoc);
+  // And it should NOT equal our test fixture document.
+  EXPECT_NE(rect->ownerDocument(), document_);
+}
+
+TEST_F(SVGElementTests, TagNameForDifferentElementTypes) {
+  // Verify tagName returns the correct value for various element types created via the API.
+  auto rect = SVGRectElement::Create(document_);
+  EXPECT_EQ(rect.tagName().name, "rect");
+  EXPECT_TRUE(rect.tagName().namespacePrefix.empty());
+
+  auto group = SVGGElement::Create(document_);
+  EXPECT_EQ(group.tagName().name, "g");
+  EXPECT_TRUE(group.tagName().namespacePrefix.empty());
+
+  // Unknown element created with a custom tag name.
+  auto unknown = SVGUnknownElement::Create(document_, "custom-element");
+  EXPECT_EQ(unknown.tagName().name, "custom-element");
+  EXPECT_TRUE(unknown.tagName().namespacePrefix.empty());
+
+  // Verify tagName via a parsed document.
+  auto doc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><circle id="c"/></svg>)");
+  auto circle = doc.querySelector("#c");
+  ASSERT_TRUE(circle.has_value());
+  EXPECT_EQ(circle->tagName().name, "circle");
+}
+
+TEST_F(SVGElementTests, IsKnownTypeForVariousElements) {
+  // SVGGElement is known.
+  auto group = SVGGElement::Create(document_);
+  EXPECT_TRUE(group.isKnownType());
+  EXPECT_EQ(group.type(), ElementType::G);
+
+  // SVGRectElement is known.
+  auto rect = SVGRectElement::Create(document_);
+  EXPECT_TRUE(rect.isKnownType());
+  EXPECT_EQ(rect.type(), ElementType::Rect);
+
+  // SVGUnknownElement is NOT known.
+  auto unknown = SVGUnknownElement::Create(document_, "foobar");
+  EXPECT_FALSE(unknown.isKnownType());
+  EXPECT_EQ(unknown.type(), ElementType::Unknown);
+}
+
 }  // namespace donner::svg
