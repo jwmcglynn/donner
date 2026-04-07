@@ -449,7 +449,7 @@ def generate_root() -> None:
         f.write("option(DONNER_TEXT \"Enable text rendering (stb_truetype)\" ON)\n")
         f.write("option(DONNER_TEXT_FULL \"Enable full text rendering: FreeType + HarfBuzz\" OFF)\n")
         f.write("option(DONNER_TEXT_WOFF2 \"Enable WOFF2 font support (requires DONNER_TEXT)\" ON)\n")
-        f.write("option(DONNER_FILTERS \"Enable SVG filter effects\" OFF)\n\n")
+        f.write("option(DONNER_FILTERS \"Enable SVG filter effects\" ON)\n\n")
 
         # Validation
         f.write("# Validate options\n")
