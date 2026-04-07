@@ -75,6 +75,19 @@ public:
    */
   void invalidateRenderTree();
 
+  /// Result from createFeImageShadowTree.
+  struct FeImageSubtreeResult {
+    Entity firstEntity;  //!< First entity in the shadow subtree.
+    Entity lastEntity;   //!< Last entity in the shadow subtree.
+  };
+
+  /**
+   * Create a shadow tree for an feImage fragment reference, allowing elements inside `<defs>`
+   * to be rendered offscreen.
+   */
+  std::optional<FeImageSubtreeResult> createFeImageShadowTree(Entity hostEntity,
+                                                              Entity targetEntity, bool verbose);
+
   /**
    * Set initial context-fill and context-stroke values for sub-document rendering.
    * When a `<use>` element references an external SVG, the `<use>` element's resolved fill

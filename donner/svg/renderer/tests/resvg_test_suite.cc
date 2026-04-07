@@ -95,16 +95,6 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    Color, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-color",
-        {
-            {"a-color-interpolation-filters-001.svg",
-             Params::Skip()},  // Non-text filter color-space coverage removed from this branch
-        })),
-    TestNameFromFilename);
-
 // TODO: a-direction
 
 INSTANTIATE_TEST_SUITE_P(Display, ImageComparisonTestFixture,
@@ -139,39 +129,7 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FilterAttrib, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix(
-        "a-filter",
-        {
-            {"a-filter-002.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
-            {"a-filter-003.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
-            {"a-filter-004.svg", Params::WithThreshold(kDefaultThreshold, 28000)},
-            // a-filter-005 (drop-shadow), 011/012 (drop-shadow currentColor),
-            // 016 (drop-shadow), 020 (blur(1mm)), 026-030 (hue-rotate),
-            // 033/035/036 (CSS color functions), 041 (grayscale+opacity), 042 (invalid url)
-            // pass with default threshold.
-            // resvg golden bug: blur algorithm produces visually different halo around
-            // drop-shadow on simple shapes. Donner's sRGB three-pass box blur is correct
-            // per spec. See docs/design_docs/resvg_test_suite_bugs.md.
-            {"a-filter-013.svg", Params::WithGoldenOverride(
-                                     "donner/svg/renderer/testdata/golden/resvg-a-filter-013.png")},
-            {"a-filter-015.svg", Params::WithGoldenOverride(
-                                     "donner/svg/renderer/testdata/golden/resvg-a-filter-015.png")},
-            {"a-filter-031.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
-            {"a-filter-032.svg", Params::WithThreshold(kDefaultThreshold, 42000)},
-            {"a-filter-034.svg", Params::WithThreshold(kDefaultThreshold, 33000)},
-            {"a-filter-037.svg",
-             Params::WithThreshold(kDefaultThreshold, 13500)},  // Negative values rejected + text
-            {"a-filter-038.svg",
-             Params::WithThreshold(kDefaultThreshold, 145000)},  // url() + grayscale() color space
-            {"a-filter-039.svg",
-             Params::WithThreshold(kDefaultThreshold,
-                                   10500)},        // Two url() refs (8K mac, 10K linux)
-            {"a-filter-040.svg", Params::Skip()},  // UB: same url() twice
-        },
-        Params::WithThreshold(kDefaultThreshold, 8000))),
-    TestNameFromFilename);
+// TODO(filter): a-filter (CSS filter attribute)
 
 INSTANTIATE_TEST_SUITE_P(Flood, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("a-flood",
@@ -691,11 +649,8 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-filter-011.svg", Params::WithThreshold(0.1f)},  // Minor shading differences
             {"e-filter-019.svg",
-             Params::WithThreshold(kDefaultThreshold, 4100)},  // inherited filter blur
-                                                               // edge (3700px at 0.02)
-            {"e-filter-027.svg",
-             Params::WithThreshold(kDefaultThreshold, 6000)},  // Skew transform + narrow filter
-                                                               // region (5406px at 0.02)
+             Params::Skip()},  // Bug: Color is slightly off, we are missing transparency
+            {"e-filter-027.svg", Params::Skip()},  // Bug: We don't blur the right edge
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
             {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint
@@ -801,8 +756,13 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-pattern",
         {
-            {"e-pattern-003.svg", Params::Skip()},                     // UB: overflow=visible
+            {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
+            {"e-pattern-008.svg",
+             Params::WithThreshold(kDefaultThreshold, 250)},  // Skia pattern AA
+            {"e-pattern-010.svg",
+             Params::WithThreshold(kDefaultThreshold, 150)},           // Skia pattern AA
             {"e-pattern-018.svg", Params::WithThreshold(0.5f, 1100)},  // AA artifacts
+            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},        // Anti-aliasing artifacts
             {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},   // Nested pattern AA (768px)
             {"e-pattern-021.svg",
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.

@@ -193,6 +193,7 @@ donner_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//donner/svg/components",
+        "//donner/svg/components/filter:filter_system",
     ] + select({
         ":text_enabled": [
             "//donner/svg/resources:font_manager",
@@ -215,7 +216,6 @@ donner_perf_sensitive_cc_library(
         ":linux_fontconfig": ["-lfontconfig"],
         "//conditions:default": [],
     }),
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         "@skia//:core",
         "@skia//:pathops",

@@ -8,6 +8,7 @@
 #include "donner/css/Declaration.h"
 #include "donner/svg/core/ClipRule.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
+#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -374,17 +375,6 @@ public:
   /// Not inherited. Defaults to Auto.
   Property<Isolation> isolation{"isolation",
                                 []() -> std::optional<Isolation> { return Isolation::Auto; }};
-
-  /// `mix-blend-mode` property. Controls how an element composites with its backdrop.
-  /// Not inherited. Defaults to Normal (SourceOver).
-  Property<MixBlendMode> mixBlendMode{
-      "mix-blend-mode",
-      []() -> std::optional<MixBlendMode> { return MixBlendMode::Normal; }};
-
-  /// `isolation` property. Forces creation of a new stacking context.
-  /// Not inherited. Defaults to Auto.
-  Property<Isolation> isolation{
-      "isolation", []() -> std::optional<Isolation> { return Isolation::Auto; }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.

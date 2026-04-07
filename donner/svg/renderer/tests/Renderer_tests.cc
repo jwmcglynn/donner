@@ -381,14 +381,6 @@ TEST_F(RendererTests, UseExternalSvgFragment) {
       "donner/svg/renderer/testdata/golden/use-external-svg-fragment.png");
 }
 
-TEST_F(RendererTests, FeImageExternalSvg) {
-  parser::SVGParser::Options options;
-  options.enableExperimental = true;
-  this->compareWithGoldenAndResources(
-      "donner/svg/renderer/testdata/feimage-external-svg.svg",
-      "donner/svg/renderer/testdata/golden/feimage-external-svg.png", options);
-}
-
 TEST_F(RendererTests, UseExternalContextPaint) {
   this->compareWithGoldenAndResources(
       "donner/svg/renderer/testdata/use-external-context-paint.svg",

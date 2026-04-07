@@ -584,7 +584,7 @@ double computeBlurPadding(const components::FilterGraph& filterGraph) {
 
 RendererTinySkia::RendererTinySkia(bool verbose) : verbose_(verbose) {}
 
-RendererTinySkia::~RendererTinySkia() {}
+RendererTinySkia::~RendererTinySkia() = default;
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
 RendererTinySkia& RendererTinySkia::operator=(RendererTinySkia&&) noexcept = default;
 

@@ -12,6 +12,7 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
@@ -787,7 +788,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
+      preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -829,11 +830,6 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
         if (imageParams.has_value()) {
           renderer_.drawImage(*image->image, *imageParams);
         }
-      } else if (const auto* text =
-                     instance.dataHandle(registry)
-                         .try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
-        renderer_.drawText(*text, textParams);
       }
     }
 
@@ -1016,7 +1012,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
+      preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -1128,11 +1124,13 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             renderer_.drawImage(*image->image, *imageParams);
           }
         }
-      } else if (const auto* text =
+      } else if (auto* text =
                      instance.dataHandle(registry)
                          .try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
-        renderer_.drawText(*text, textParams);
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        renderer_.drawText(registry, *text, textParams);
       }
     }
 
@@ -1153,6 +1151,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasViewportClip = hasViewportClip;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
+      deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
       deferred.maskDepth = maskDepth;
       subtreeMarkers_.push_back(deferred);
@@ -1285,7 +1284,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     if (hasFilterLayer) {
       preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry, filterRegion);
+      preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
       renderer_.pushFilterLayer(*filterGraph, filterRegion);
     }
 
@@ -1365,11 +1364,13 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             renderer_.drawImage(*image->image, *imageParams);
           }
         }
-      } else if (const auto* text =
+      } else if (auto* text =
                      instance.dataHandle(registry)
                          .try_get<components::ComputedTextComponent>()) {
-        const TextParams textParams = toTextParams(registry, instance, style);
-        renderer_.drawText(*text, textParams);
+        const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
+        const TextParams textParams = toTextParams(registry, instance, style, textComp);
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        renderer_.drawText(registry, *text, textParams);
       }
     }
 
@@ -1377,6 +1378,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       DeferredPop deferred;
       deferred.lastEntity = instance.subtreeInfo->lastRenderedEntity;
       deferred.hasIsolatedLayer = hasIsolatedLayer;
+      deferred.hasFilterLayer = hasFilterLayer;
       deferred.hasEntityClip = hasEntityClip;
       deferred.maskDepth = maskDepth;
       localDeferred.push_back(deferred);
@@ -1922,7 +1924,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 }
 
 void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
-                                               Registry& registry,
+                                               Registry& registry, Entity hostEntity,
                                                const std::optional<Boxd>& filterRegion) {
   // Lazily create the recursion guard set if needed.
   std::unordered_set<entt::id_type> localGuard;
@@ -1976,18 +1978,32 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     const auto* targetInstance =
         registry.try_get<components::RenderingInstanceComponent>(targetEntity);
 
+    // For elements NOT in the render tree (e.g., inside <defs>), create a shadow tree
+    // to render the target subtree offscreen.
+    std::optional<components::RenderingContext::FeImageSubtreeResult> shadowResult;
     if (targetInstance == nullptr) {
+      if (!registry.ctx().contains<components::RenderingContext>()) {
+        registry.ctx().emplace<components::RenderingContext>(registry);
+      }
+      auto& renderCtx = registry.ctx().get<components::RenderingContext>();
+      shadowResult = renderCtx.createFeImageShadowTree(hostEntity, targetEntity, verbose_);
+    }
+
+    // Determine the first and last entities for traverseRange.
+    Entity firstEntity;
+    Entity lastEntity;
+    if (shadowResult) {
+      firstEntity = shadowResult->firstEntity;
+      lastEntity = shadowResult->lastEntity;
+    } else if (targetInstance) {
+      firstEntity = targetEntity;
+      lastEntity = targetInstance->subtreeInfo
+                       ? targetInstance->subtreeInfo->lastRenderedEntity
+                       : targetEntity;
+    } else {
       feImageFragmentGuard_->erase(entityId);
       imageNode->fragmentId = RcString();
       continue;
-    }
-
-    // Determine the last entity in the subtree for traverseRange.
-    Entity lastEntity;
-    if (targetInstance->subtreeInfo) {
-      lastEntity = targetInstance->subtreeInfo->lastRenderedEntity;
-    } else {
-      lastEntity = targetEntity;
     }
 
     // Begin frame with same viewport.
@@ -2013,7 +2029,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
 
     {
       RenderingInstanceView subView(registry);
-      subDriver.traverseRange(subView, registry, targetEntity, lastEntity);
+      subDriver.traverseRange(subView, registry, firstEntity, lastEntity);
     }
 
     offscreen->endFrame();

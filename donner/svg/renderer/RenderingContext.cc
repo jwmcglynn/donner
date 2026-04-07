@@ -17,6 +17,7 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
@@ -290,6 +291,11 @@ public:
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
     // isolated group.
     if (properties.opacity.getRequired() < 1.0) {
+      instance.isolatedLayer = true;
+      ++layerDepth;
+    }
+
+    if (instance.resolvedFilter) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -1078,6 +1084,42 @@ void RenderingContext::createComputedComponents(std::vector<ParseError>* outWarn
   PaintSystem().instantiateAllComputedComponents(registry_, outWarnings);
 
   FilterSystem().instantiateAllComputedComponents(registry_, outWarnings);
+}
+
+std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFeImageShadowTree(
+    Entity hostEntity, Entity targetEntity, bool verbose) {
+  auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(hostEntity);
+  const std::optional<size_t> maybeIndex = createShadowTreeSystem().populateInstance(
+      EntityHandle(registry_, hostEntity), computedShadow, ShadowBranchType::OffscreenFeImage,
+      targetEntity, RcString(), /*outWarnings=*/nullptr);
+
+  if (!maybeIndex) {
+    return std::nullopt;
+  }
+
+  const std::span<const Entity> shadowEntities =
+      computedShadow.offscreenShadowEntities(maybeIndex.value());
+  StyleSystem().computeStylesFor(registry_, shadowEntities, /*outWarnings=*/nullptr);
+
+  const Entity shadowRoot = computedShadow.offscreenShadowRoot(maybeIndex.value());
+  if (shadowRoot == entt::null) {
+    return std::nullopt;
+  }
+
+  RenderingContextImpl impl(registry_, verbose);
+  Entity lastEntity = entt::null;
+  impl.traverseTree(shadowRoot, &lastEntity);
+
+  registry_.sort<RenderingInstanceComponent>(
+      [](const RenderingInstanceComponent& lhs, const RenderingInstanceComponent& rhs) {
+        return lhs.drawOrder < rhs.drawOrder;
+      });
+
+  if (lastEntity == entt::null) {
+    return std::nullopt;
+  }
+
+  return FeImageSubtreeResult{shadowRoot, lastEntity};
 }
 
 void RenderingContext::instantiateRenderTreeWithPrecomputedTree(bool verbose) {

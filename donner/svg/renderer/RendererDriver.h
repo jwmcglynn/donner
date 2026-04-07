@@ -76,7 +76,7 @@ private:
                               const Transformd& parentAbsoluteTransform, double opacity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph);
   void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
-                                 const std::optional<Boxd>& filterRegion);
+                                 Entity hostEntity, const std::optional<Boxd>& filterRegion);
   static void setSubDocumentContextPaint(SVGDocument& subDocument,
                                          const components::ResolvedPaintServer& contextFill,
                                          const components::ResolvedPaintServer& contextStroke);

@@ -51,7 +51,7 @@ donner_cc_library(
         "FilterSystem.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",
