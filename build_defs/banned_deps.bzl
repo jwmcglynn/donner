@@ -34,7 +34,10 @@ def banned_deps_test(name, banned, allowed, scope, **kwargs):
     # Union all rdeps results, then subtract the banned labels themselves
     # and the allowed wrapper targets.
     subtract = list(banned) + list(allowed)
-    query_expr = "({union}) - set({subtract})".format(
+    # Wrap with filter to exclude external repository targets (e.g. @skia,
+    # @harfbuzz) which legitimately depend on @zlib/@freetype internally.
+    # We only care about first-party (//...) targets.
+    query_expr = "filter(\"^//\", ({union}) - set({subtract}))".format(
         union = " + ".join(parts),
         subtract = " ".join(subtract),
     )

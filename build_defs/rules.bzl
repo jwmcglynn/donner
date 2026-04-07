@@ -365,8 +365,9 @@ def _is_compilation_outputs_empty(compilation_outputs):
 def _donner_perf_sensitive_cc_library_impl(ctx):
     cc_toolchain = find_cpp_toolchain(ctx)
 
-    # Request the 'opt' feature so that this library's own sources are always
-    # compiled with optimizations, even when deps are not transitioned.
+    # Request the 'opt' feature for optimized compilation without changing the
+    # configuration of transitive deps (which would cause shared-library link
+    # conflicts between opt and fastbuild configurations of the same dep).
     feature_configuration = cc_common.configure_features(
         ctx = ctx,
         cc_toolchain = cc_toolchain,
@@ -420,7 +421,7 @@ _donner_perf_sensitive_cc_library = rule(
     attrs = {
         "srcs": attr.label_list(allow_files = [".c", ".cc", ".cpp", ".h"]),
         "hdrs": attr.label_list(allow_files = [".h"]),
-        "deps": attr.label_list(cfg = _force_opt_transition),
+        "deps": attr.label_list(),
         "includes": attr.string_list(default = []),  # Optional includes
         "defines": attr.string_list(default = []),  # Optional defines
         "local_defines": attr.string_list(default = []),  # Optional defines

@@ -86,7 +86,7 @@ donner_cc_library(
         ":text_backend",
         "//donner/base",
         "//donner/svg/resources:font_manager",
-        "@freetype",
+        "//third_party:freetype",
         "@harfbuzz",
     ],
 )
