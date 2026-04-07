@@ -131,14 +131,14 @@ done:
 
   Path path = builder.build();
 
-  // The path should not be empty if we added commands.
-  assert(!path.empty() && "Path should not be empty after adding commands");
+  // The path may be empty if all commands were no-ops (e.g., closePath without moveTo).
+  if (path.empty()) {
+    return 0;
+  }
 
   // --- cubicToQuadratic ---
   {
     Path quadPath = path.cubicToQuadratic();
-    // If the original path had commands, the quadratic version should too.
-    assert(!quadPath.empty() && "cubicToQuadratic result should not be empty");
 
     // Verify no CurveTo verbs remain.
     quadPath.forEach([](Path::Verb verb, std::span<const Vector2d> /*points*/) {

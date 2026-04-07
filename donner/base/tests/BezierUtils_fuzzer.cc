@@ -194,9 +194,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     assert(box.contains(p0) && "QuadraticBounds must contain start point p0");
     assert(box.contains(p2) && "QuadraticBounds must contain end point p2");
 
-    // The evaluated curve at the fuzzed t should also be inside bounds.
+    // The evaluated curve at the fuzzed t should also be inside bounds (with tolerance).
     const Vector2d pt = EvalQuadratic(p0, p1, p2, t);
-    assert(box.contains(pt) && "QuadraticBounds must contain EvalQuadratic(t)");
+    const Box2d expanded = Box2d(box.topLeft - Vector2d(1e-6, 1e-6),
+                                 box.bottomRight + Vector2d(1e-6, 1e-6));
+    assert(expanded.contains(pt) && "QuadraticBounds must contain EvalQuadratic(t)");
   }
 
   // --- CubicBounds ---
@@ -208,9 +210,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     assert(box.contains(p0) && "CubicBounds must contain start point p0");
     assert(box.contains(p3) && "CubicBounds must contain end point p3");
 
-    // The evaluated curve at the fuzzed t should also be inside bounds.
+    // The evaluated curve at the fuzzed t should also be inside bounds (with floating-point
+    // tolerance — bounds computation uses root-finding which can have small numerical error).
     const Vector2d pt = EvalCubic(p0, p1, p2, p3, t);
-    assert(box.contains(pt) && "CubicBounds must contain EvalCubic(t)");
+    const Box2d expanded = Box2d(box.topLeft - Vector2d(1e-6, 1e-6),
+                                 box.bottomRight + Vector2d(1e-6, 1e-6));
+    assert(expanded.contains(pt) && "CubicBounds must contain EvalCubic(t)");
   }
 
   return 0;
