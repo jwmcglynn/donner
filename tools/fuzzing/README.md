@@ -3,7 +3,9 @@
 Long-lived Docker container that continuously fuzzes all Donner parser
 targets, files GitHub Issues for crashes, and maintains a growing corpus.
 
-## Setup (Docker)
+No repo clone needed on the host — Docker pulls everything from GitHub.
+
+## Setup
 
 ### Prerequisites
 
@@ -11,57 +13,51 @@ targets, files GitHub Issues for crashes, and maintains a growing corpus.
 - At least 8 CPU cores and 16 GB RAM available for the container
 - (Optional) A GitHub personal access token for crash issue filing
 
-### 1. Clone the repo on your host
+### 1. Download the compose file
 
 ```sh
-git clone https://github.com/jwmcglynn/donner.git
-cd donner
+mkdir donner-fuzz && cd donner-fuzz
+curl -O https://raw.githubusercontent.com/jwmcglynn/donner/main/tools/fuzzing/docker-compose.yml
 ```
 
-### 2. (Optional) Configure GitHub token for crash reporting
+### 2. (Optional) Set up crash reporting
 
-Create a token at https://github.com/settings/tokens with `repo` scope,
-then uncomment and set `GH_TOKEN` in `tools/fuzzing/docker-compose.yml`:
+To have crashes automatically filed as GitHub Issues, create a token at
+https://github.com/settings/tokens with `repo` scope, then uncomment
+the `GH_TOKEN` line in `docker-compose.yml`:
 
 ```yaml
 environment:
   - GH_TOKEN=ghp_your_token_here
 ```
 
-Or pass it at runtime:
+### 3. Start
 
 ```sh
-GH_TOKEN=ghp_your_token_here docker compose -f tools/fuzzing/docker-compose.yml up -d
-```
-
-### 3. Build and start
-
-```sh
-cd tools/fuzzing
-docker compose build
 docker compose up -d
 ```
 
-That's it. The container will:
+That's it. Docker will:
 
-1. Clone the donner repo from GitHub (first start only)
-2. Check for new commits on `main` every 30 minutes
-3. When new commits arrive (and the 2-hour rate limit has elapsed):
-   - Pull the latest `main`
-   - Build all fuzzer targets with ASAN + libFuzzer
-   - Run all fuzzers in parallel until coverage plateaus
-   - Minimize and merge the corpus
-   - Report any crashes via GitHub Issues (if `GH_TOKEN` is set)
-4. If the host is under load (CPU steal > 10%), automatically
-   reduce to 2 workers
+1. Build the fuzzing image (pulls Dockerfile from GitHub, installs
+   Bazel + clang + gh CLI)
+2. Start a long-lived container that loops every 30 minutes:
+   - Clones the donner repo on first start (incremental fetches after)
+   - Checks for new commits on `main`
+   - Builds all fuzzer targets with ASAN + libFuzzer
+   - Runs all fuzzers in parallel until coverage plateaus
+   - Minimizes and merges the corpus
+   - Reports any new crashes via GitHub Issues
+3. If the host is under load (CPU steal > 10%), automatically reduces
+   to 2 workers
 
-The first run takes longer (~5-10 min) to build from scratch. Subsequent
-runs use the Bazel cache and only rebuild what changed.
+The first run takes longer (~5-10 min) to clone and build from scratch.
+Subsequent runs use the Bazel cache and only rebuild what changed.
 
 ### 4. Verify it's running
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml logs -f fuzz
+docker compose logs -f fuzz
 ```
 
 You should see the entrypoint cloning the repo, then the trigger loop
@@ -69,64 +65,60 @@ starting.
 
 ## Day-to-day usage
 
-All commands assume you're in the repo root or `tools/fuzzing/`.
-
 ### Watch logs
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml logs -f fuzz
+docker compose logs -f fuzz
 ```
 
-### Dashboard
+### Dashboard (coverage trends, run history, crash summary)
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml exec fuzz \
-  python3 tools/fuzzing/dashboard.py
+docker compose exec fuzz python3 tools/fuzzing/dashboard.py
 ```
 
 ### Trigger a run immediately
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml exec fuzz \
-  tools/fuzzing/trigger_fuzz.sh --force
+docker compose exec fuzz tools/fuzzing/trigger_fuzz.sh --force
 ```
 
-### One-shot run (CI or manual)
+### One-shot run (for CI or manual)
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml run --rm fuzz-once
+docker compose run --rm fuzz-once
 ```
 
 ### View known crashes
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml exec fuzz \
-  python3 tools/fuzzing/crash_reporter.py list
+docker compose exec fuzz python3 tools/fuzzing/crash_reporter.py list
 ```
 
 ### Corpus stats
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml exec fuzz \
-  python3 tools/fuzzing/manage_corpus.py stats
+docker compose exec fuzz python3 tools/fuzzing/manage_corpus.py stats
 ```
 
 ### Stop
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml down
+docker compose down
 ```
 
 Persistent data (corpus, crash history, Bazel cache) is stored in Docker
-volumes and survives `down` / `up` cycles. To wipe everything:
+volumes and survives `down` / `up` cycles. To wipe everything and start
+fresh:
 
 ```sh
-docker compose -f tools/fuzzing/docker-compose.yml down -v
+docker compose down -v
 ```
 
 ## Configuration
 
-Edit `docker-compose.yml` environment variables, or override at runtime:
+Edit environment variables in `docker-compose.yml`, or override at
+runtime:
 
 ```sh
 FUZZ_WORKERS=4 FUZZ_MAX_TOTAL=7200 docker compose up -d
@@ -136,7 +128,7 @@ FUZZ_WORKERS=4 FUZZ_MAX_TOTAL=7200 docker compose up -d
 |---|---|---|
 | `FUZZ_REPO_URL` | `https://github.com/jwmcglynn/donner.git` | Repo to clone and fuzz |
 | `FUZZ_MIN_INTERVAL` | 7200 (2h) | Minimum seconds between runs |
-| `FUZZ_LOOP_INTERVAL` | 1800 (30m) | How often the trigger checks for new commits |
+| `FUZZ_LOOP_INTERVAL` | 1800 (30m) | How often to check for new commits |
 | `FUZZ_WORKERS` | 8 | Parallel fuzzer count |
 | `FUZZ_FUZZER_TIME` | 900 (15m) | Max time per fuzzer |
 | `FUZZ_PLATEAU` | 120 (2m) | Stop a fuzzer after this long with no new coverage |
@@ -148,11 +140,11 @@ FUZZ_WORKERS=4 FUZZ_MAX_TOTAL=7200 docker compose up -d
 
 ## Persistent volumes
 
-| Volume | Path in container | Contents |
-|---|---|---|
-| `donner-fuzz-state` | `~/.donner-fuzz` | Corpus, crash ledger, run reports, logs |
-| `donner-fuzz-bazel-cache` | `~/.cache/bazel` | Bazel build cache (incremental builds) |
-| `donner-fuzz-repo` | `~/donner` | Git checkout (incremental fetches) |
+| Volume | Contents |
+|---|---|
+| `donner-fuzz-state` | Corpus, crash ledger, run reports, trigger logs |
+| `donner-fuzz-bazel-cache` | Bazel build cache (incremental builds) |
+| `donner-fuzz-repo` | Git checkout (incremental fetches) |
 
 ## Architecture
 

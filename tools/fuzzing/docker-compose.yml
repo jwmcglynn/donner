@@ -1,8 +1,9 @@
 services:
   fuzz:
     build:
-      context: ../..
-      dockerfile: tools/fuzzing/Dockerfile
+      # Build directly from GitHub — no local clone needed.
+      # Docker fetches tools/fuzzing/ as the build context.
+      context: https://github.com/jwmcglynn/donner.git#main:tools/fuzzing
     container_name: donner-fuzz
     restart: unless-stopped
 
@@ -52,8 +53,7 @@ services:
   # One-shot run (for CI or manual triggering)
   fuzz-once:
     build:
-      context: ../..
-      dockerfile: tools/fuzzing/Dockerfile
+      context: https://github.com/jwmcglynn/donner.git#main:tools/fuzzing
     container_name: donner-fuzz-once
     profiles: [once]
     environment:

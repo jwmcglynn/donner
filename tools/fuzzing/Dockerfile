@@ -1,14 +1,15 @@
 # Continuous fuzzing container for Donner.
 #
-# Long-lived container that clones the repo from GitHub, builds fuzzer
-# targets from the latest main, and runs continuous fuzzing on a loop.
-# Persistent state (corpus, crash ledger, run history) lives in a volume.
+# Fully self-contained — no local repo clone needed. The container pulls
+# everything from GitHub at runtime.
 #
-# Build:
-#   docker build -t donner-fuzz -f tools/fuzzing/Dockerfile .
+# Quick start (no clone required):
+#   curl -O https://raw.githubusercontent.com/jwmcglynn/donner/main/tools/fuzzing/docker-compose.yml
+#   docker compose up -d
 #
-# Run:
-#   docker compose -f tools/fuzzing/docker-compose.yml up -d
+# Or build directly:
+#   docker build -t donner-fuzz https://github.com/jwmcglynn/donner.git#main:tools/fuzzing
+#   docker run -d --name donner-fuzz donner-fuzz
 
 FROM ubuntu:24.04
 
@@ -54,6 +55,10 @@ VOLUME /home/fuzzer/.cache/bazel
 # The repo is cloned at first start by the entrypoint, then kept up to
 # date with git fetch + reset to origin/main before each fuzzing run.
 # Bazel builds happen inside run_continuous_fuzz.py on each iteration.
-COPY --chown=fuzzer:fuzzer tools/fuzzing/entrypoint.sh /home/fuzzer/entrypoint.sh
+#
+# entrypoint.sh is copied from the build context (tools/fuzzing/) so this
+# Dockerfile can be built standalone from a GitHub URL:
+#   docker build https://github.com/jwmcglynn/donner.git#main:tools/fuzzing
+COPY --chown=fuzzer:fuzzer entrypoint.sh /home/fuzzer/entrypoint.sh
 
 ENTRYPOINT ["/home/fuzzer/entrypoint.sh"]
