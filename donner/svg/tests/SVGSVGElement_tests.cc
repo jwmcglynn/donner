@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGCircleElement.h"  // For a negative cast test.
@@ -20,7 +21,8 @@ namespace {
 
 /// Parse a complete SVG string directly so we can test the root element's parsed attributes.
 SVGDocument parseSvg(std::string_view input) {
-  auto maybeResult = parser::SVGParser::ParseSVG(input);
+  ParseWarningSink warningSink;
+  auto maybeResult = parser::SVGParser::ParseSVG(input, warningSink);
   EXPECT_THAT(maybeResult, NoParseError());
   return std::move(maybeResult).result();
 }
