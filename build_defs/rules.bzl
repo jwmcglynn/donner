@@ -345,14 +345,16 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         **kwargs
     )
 
-def _force_opt_transition_impl(_settings, _attr):
+def _force_opt_transition_impl(settings, _attr):
+    if settings["//build_defs:disable_perf_opt_transition"]:
+        return {}
     return {
         "//command_line_option:compilation_mode": "opt",
     }
 
 _force_opt_transition = transition(
     implementation = _force_opt_transition_impl,
-    inputs = [],
+    inputs = ["//build_defs:disable_perf_opt_transition"],
     outputs = ["//command_line_option:compilation_mode"],
 )
 

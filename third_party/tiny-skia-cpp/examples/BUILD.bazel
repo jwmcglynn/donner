@@ -6,7 +6,7 @@ _COMMON_COPTS = ["-std=c++20"]
 
 _COMMON_DEPS = [
     "//src:tiny_skia_lib",
-    "@zlib",
+    "//third_party:zlib",
 ]
 
 cc_binary(

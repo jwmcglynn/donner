@@ -36,7 +36,7 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
-        "@zlib",
+        "//third_party:zlib",
     ],
 )
 
