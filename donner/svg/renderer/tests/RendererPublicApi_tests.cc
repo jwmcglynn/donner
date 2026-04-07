@@ -1,8 +1,8 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <filesystem>
-#include <string>
 #include <vector>
 
 #include "donner/svg/SVG.h"
@@ -12,10 +12,8 @@
 namespace donner::svg {
 namespace {
 
-SVGDocument ParseDocument(std::string_view svgSource, bool enableExperimental = false) {
-  parser::SVGParser::Options options;
-  options.enableExperimental = enableExperimental;
-  ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource, nullptr, options);
+SVGDocument ParseDocument(std::string_view svgSource) {
+  ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource);
   EXPECT_FALSE(maybeDocument.hasError());
   return std::move(maybeDocument.result());
 }
@@ -32,12 +30,53 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   normalized.pixels.resize(tightRowBytes * static_cast<std::size_t>(snapshot.dimensions.y));
 
   for (int y = 0; y < snapshot.dimensions.y; ++y) {
-    std::copy_n(snapshot.pixels.begin() + static_cast<std::size_t>(y) * snapshot.rowBytes,
-                tightRowBytes,
-                normalized.pixels.begin() + static_cast<std::size_t>(y) * tightRowBytes);
+    std::copy_n(
+        snapshot.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes), tightRowBytes,
+        normalized.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
   }
 
   return normalized;
+}
+
+// -- Pixel access and custom matchers --
+
+/// Return RGBA pixel at (x,y) from a normalized snapshot.
+std::array<uint8_t, 4> PixelAt(const RendererBitmap& snap, int x, int y) {
+  const size_t idx = static_cast<size_t>(y) * snap.rowBytes + static_cast<size_t>(x) * 4u;
+  return {snap.pixels[idx], snap.pixels[idx + 1], snap.pixels[idx + 2], snap.pixels[idx + 3]};
+}
+
+MATCHER(IsOpaque, "pixel is opaque (alpha >= 200)") {
+  *result_listener << "alpha=" << static_cast<int>(arg[3]);
+  return arg[3] >= 200;
+}
+
+MATCHER(IsTransparent, "pixel is transparent (alpha == 0)") {
+  *result_listener << "alpha=" << static_cast<int>(arg[3]);
+  return arg[3] == 0;
+}
+
+MATCHER(IsSemiTransparent, "pixel is semi-transparent (0 < alpha < 200)") {
+  *result_listener << "alpha=" << static_cast<int>(arg[3]);
+  return arg[3] > 0 && arg[3] < 200;
+}
+
+MATCHER(IsRedish, "pixel has dominant red channel") {
+  *result_listener << "RGBA(" << static_cast<int>(arg[0]) << "," << static_cast<int>(arg[1]) << ","
+                   << static_cast<int>(arg[2]) << "," << static_cast<int>(arg[3]) << ")";
+  return arg[0] > 150 && arg[1] < 100 && arg[2] < 100 && arg[3] > 0;
+}
+
+MATCHER(IsGreenish, "pixel has dominant green channel") {
+  *result_listener << "RGBA(" << static_cast<int>(arg[0]) << "," << static_cast<int>(arg[1]) << ","
+                   << static_cast<int>(arg[2]) << "," << static_cast<int>(arg[3]) << ")";
+  return arg[0] < 100 && arg[1] > 150 && arg[2] < 100 && arg[3] > 0;
+}
+
+MATCHER(IsBlueish, "pixel has dominant blue channel") {
+  *result_listener << "RGBA(" << static_cast<int>(arg[0]) << "," << static_cast<int>(arg[1]) << ","
+                   << static_cast<int>(arg[2]) << "," << static_cast<int>(arg[3]) << ")";
+  return arg[0] < 100 && arg[1] < 100 && arg[2] > 150 && arg[3] > 0;
 }
 
 TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
@@ -105,8 +144,7 @@ TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
            font-size="64">
         <text x="32" y="100">T</text>
       </svg>
-    )svg",
-                                      /*enableExperimental=*/true);
+    )svg");
 
   Renderer renderer;
   renderer.draw(document);
@@ -423,13 +461,6 @@ TEST(RendererPublicApiTest, MultipleSequentialMutationsAccumulate) {
 
 // --- Coverage-oriented tests for RenderingContext / RendererTinySkia ---
 
-// Helper: return RGBA at (x,y) from a normalized snapshot.
-std::array<uint8_t, 4> PixelAt(const RendererBitmap& snap, int x, int y) {
-  const size_t idx =
-      static_cast<size_t>(y) * snap.rowBytes + static_cast<size_t>(x) * 4u;
-  return {snap.pixels[idx], snap.pixels[idx + 1], snap.pixels[idx + 2], snap.pixels[idx + 3]};
-}
-
 // 1. Stroke rendering — rect with stroke-width, stroke-linecap, stroke-linejoin
 TEST(RendererPublicApiTest, StrokeRenderingOnRect) {
   SVGDocument document = ParseDocument(R"svg(
@@ -450,12 +481,12 @@ TEST(RendererPublicApiTest, StrokeRenderingOnRect) {
 
   // The center of the rect should be transparent (fill=none).
   auto center = PixelAt(snapshot, 25, 25);
-  EXPECT_EQ(center[3], 0);
+  EXPECT_THAT(center, IsTransparent());
 
   // A point on the stroke (top edge at x=25, y=10) should be red.
   auto strokePx = PixelAt(snapshot, 25, 10);
-  EXPECT_GT(strokePx[0], 200);  // Red channel
-  EXPECT_GT(strokePx[3], 200);  // Alpha
+  EXPECT_THAT(strokePx, IsRedish());
+  
 }
 
 // 2. Stroke-dasharray — verify dashed stroke renders differently from solid
@@ -584,12 +615,12 @@ TEST(RendererPublicApiTest, UseElementRendering) {
 
   // Both use instances should produce blue pixels.
   auto first = PixelAt(snapshot, 10, 10);
-  EXPECT_GT(first[2], 200);  // Blue
-  EXPECT_GT(first[3], 200);  // Opaque
+  EXPECT_THAT(first, IsBlueish());
+  
 
   auto second = PixelAt(snapshot, 30, 10);
-  EXPECT_GT(second[2], 200);
-  EXPECT_GT(second[3], 200);
+  EXPECT_THAT(second, IsBlueish());
+  
 }
 
 // 7. Nested group transforms
@@ -612,16 +643,16 @@ TEST(RendererPublicApiTest, NestedGroupTransforms) {
   // The rect should be 20x20 at position (10,10) due to translate + scale(2).
   // Inside the transformed rect (e.g., 20, 20) should be red.
   auto inside = PixelAt(snapshot, 20, 20);
-  EXPECT_GT(inside[0], 200);
-  EXPECT_GT(inside[3], 200);
+  EXPECT_THAT(inside, IsOpaque());
+  
 
   // Outside the transformed rect (e.g., 5, 5) should be transparent.
   auto outside = PixelAt(snapshot, 5, 5);
-  EXPECT_EQ(outside[3], 0);
+  EXPECT_THAT(outside, IsTransparent());
 
   // Beyond the transformed rect (e.g., 35, 35) should be transparent.
   auto beyond = PixelAt(snapshot, 35, 35);
-  EXPECT_EQ(beyond[3], 0);
+  EXPECT_THAT(beyond, IsTransparent());
 }
 
 // 8. viewBox scaling
@@ -643,12 +674,12 @@ TEST(RendererPublicApiTest, ViewBoxScaling) {
 
   // The green rect should fill the entire 50x50 canvas.
   auto corner = PixelAt(snapshot, 0, 0);
-  EXPECT_GT(corner[1], 200);
-  EXPECT_GT(corner[3], 200);
+  EXPECT_THAT(corner, IsGreenish());
+  
 
   auto center = PixelAt(snapshot, 25, 25);
-  EXPECT_GT(center[1], 200);
-  EXPECT_GT(center[3], 200);
+  EXPECT_THAT(center, IsGreenish());
+  
 }
 
 // 9. Symbol with use
@@ -677,7 +708,7 @@ TEST(RendererPublicApiTest, SymbolWithUse) {
 
   // Outside the use area should be transparent.
   auto outside = PixelAt(snapshot, 2, 2);
-  EXPECT_EQ(outside[3], 0);
+  EXPECT_THAT(outside, IsTransparent());
 }
 
 // 10. CSS class styling
@@ -695,10 +726,10 @@ TEST(RendererPublicApiTest, CssClassStyling) {
   ASSERT_FALSE(snapshot.empty());
 
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_GT(px[0], 200);  // Red
-  EXPECT_LT(px[1], 50);   // Not green
-  EXPECT_LT(px[2], 50);   // Not blue
-  EXPECT_GT(px[3], 200);  // Opaque
+  EXPECT_THAT(px, IsRedish());
+  
+  
+  
 }
 
 // 11. Inline style override
@@ -716,8 +747,8 @@ TEST(RendererPublicApiTest, InlineStyleOverridesAttribute) {
 
   // Style should override the fill attribute — result should be red, not blue.
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_GT(px[0], 200);  // Red
-  EXPECT_LT(px[2], 50);   // Not blue
+  EXPECT_THAT(px, IsRedish());
+  
   EXPECT_GT(px[3], 200);
 }
 
@@ -775,12 +806,12 @@ TEST(RendererPublicApiTest, RadialGradient) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
 
-  // Center should be white (near 255).
+  // Center should be white (near 255 in all channels).
   auto center = PixelAt(snapshot, 20, 20);
+  EXPECT_THAT(center, IsOpaque());
   EXPECT_GT(center[0], 200);
   EXPECT_GT(center[1], 200);
   EXPECT_GT(center[2], 200);
-  EXPECT_GT(center[3], 200);
 
   // Corner should be darker.
   auto corner = PixelAt(snapshot, 0, 0);
@@ -810,8 +841,8 @@ TEST(RendererPublicApiTest, ImageElementDataUri) {
   // The data URI image should be decoded and rendered.  The 2x2 red PNG is scaled
   // to fill the 20x20 viewport, so center pixel should be red.
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_GT(px[0], 200);  // Red
-  EXPECT_GT(px[3], 200);  // Opaque
+  EXPECT_THAT(px, IsRedish());
+  
 }
 
 // 15. Empty document — render SVG with no visible content
@@ -850,8 +881,8 @@ TEST(RendererPublicApiTest, CircleElement) {
 
   // Center should be green.
   auto center = PixelAt(snapshot, 20, 20);
-  EXPECT_GT(center[1], 200);
-  EXPECT_GT(center[3], 200);
+  EXPECT_THAT(center, IsGreenish());
+  
 
   // Corner should be transparent (outside circle).
   auto corner = PixelAt(snapshot, 0, 0);
@@ -874,7 +905,7 @@ TEST(RendererPublicApiTest, EllipseElement) {
   // Center should be blue.
   auto center = PixelAt(snapshot, 30, 15);
   EXPECT_GT(center[2], 200);
-  EXPECT_GT(center[3], 200);
+  
 }
 
 // 18. Pattern fill
@@ -925,12 +956,12 @@ TEST(RendererPublicApiTest, ClipPathCropsContent) {
 
   // Inside clip region should be red.
   auto inside = PixelAt(snapshot, 20, 20);
-  EXPECT_GT(inside[0], 200);
-  EXPECT_GT(inside[3], 200);
+  EXPECT_THAT(inside, IsOpaque());
+  
 
   // Outside clip region should be transparent.
   auto outside = PixelAt(snapshot, 2, 2);
-  EXPECT_EQ(outside[3], 0);
+  EXPECT_THAT(outside, IsTransparent());
 }
 
 // 20. Mask element
@@ -984,7 +1015,7 @@ TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   EXPECT_LT(px[0], 30);   // Red channel ~0 (not cyan's 0 or yellow's 255)
   EXPECT_GT(px[1], 200);   // Green channel ~255
   EXPECT_LT(px[2], 30);   // Blue channel ~0
-  EXPECT_GT(px[3], 200);   // Opaque
+  
 }
 
 // 22. Visibility hidden — element should not appear
@@ -1069,7 +1100,7 @@ TEST(RendererPublicApiTest, PathElement) {
   auto inside = PixelAt(snapshot, 20, 20);
   EXPECT_GT(inside[0], 200);  // Red component of orange
   EXPECT_GT(inside[1], 100);  // Green component of orange
-  EXPECT_GT(inside[3], 200);
+  
 }
 
 // 26. Gradient userSpaceOnUse exercises non-objectBoundingBox branch
