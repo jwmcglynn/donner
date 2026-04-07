@@ -130,14 +130,9 @@ TEST_F(RendererTests, SizeTooLarge) {
 }
 
 TEST_F(RendererTests, NestedSvgAspectRatio) {
-  // Golden was generated without text rendering (text was experimental). Now that text is always
-  // enabled, text elements render and cause pixel diffs. Threshold accommodates text rendering
-  // differences until the golden is regenerated.
-  this->compareWithGolden(
-      "donner/svg/renderer/testdata/nested-svg-aspectratio.svg",
-      "donner/svg/renderer/testdata/golden/nested-svg-aspectratio.png",
-      parser::SVGParser::Options(),
-      ImageComparisonParams::WithThreshold(0.1f, /*maxMismatchedPixels=*/1500));
+  this->compareWithGolden("donner/svg/renderer/testdata/nested-svg-aspectratio.svg",
+                          "donner/svg/renderer/testdata/golden/nested-svg-aspectratio.png",
+                          parser::SVGParser::Options(), ImageComparisonParams::WithThreshold(0.1f));
 }
 
 TEST_F(RendererTests, RadialFr1) {

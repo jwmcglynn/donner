@@ -617,7 +617,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   ASSERT_GT(height, 0);
   ASSERT_EQ(snapshot.pixels.size(), snapshot.rowBytes * static_cast<std::size_t>(height));
 
-  if (params.updateGoldenFromEnv && ActiveRendererBackend() == RendererBackend::Skia) {
+  if (params.updateGoldenFromEnv) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
     if (goldenImageDirToUpdate != nullptr) {
       const std::filesystem::path goldenImagePath =
