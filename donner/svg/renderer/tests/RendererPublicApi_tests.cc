@@ -556,9 +556,13 @@ TEST(RendererPublicApiTest, MarkerRendering) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
 
-  // Marker-start position (near x=10, y=20) should have red marker pixels.
-  auto markerStart = PixelAt(snapshot, 10, 20);
-  EXPECT_GT(markerStart[3], 0);  // Not transparent — marker drawn here
+  // Sample above the polyline stroke (y=20) where only the marker circle extends.
+  // The marker is a red circle with r=5 at markerUnits=strokeWidth (stroke-width=2),
+  // giving a marker diameter of 6px centered at each vertex. Sample y=17 which is
+  // 3px above the stroke center — within the marker circle but outside the 2px stroke.
+  auto markerPixel = PixelAt(snapshot, 10, 17);
+  EXPECT_GT(markerPixel[0], 150);  // Red channel from marker fill
+  EXPECT_GT(markerPixel[3], 0);    // Not transparent — marker drawn here
 }
 
 // 6. Use element rendering
@@ -960,10 +964,13 @@ TEST(RendererPublicApiTest, MaskElement) {
 
 // 21. Mix-blend-mode triggers isolated layer
 TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
+  // Use cyan (#00ffff) over yellow (#ffff00) with multiply blend.
+  // multiply(yellow, cyan) = (#00, #ff, #00) = green.
+  // Without blend-mode (normal compositing), the result would be cyan.
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">
-        <rect width="30" height="30" fill="white" />
-        <rect width="30" height="30" fill="red" style="mix-blend-mode: multiply" />
+        <rect width="30" height="30" fill="#ffff00" />
+        <rect width="30" height="30" fill="#00ffff" style="mix-blend-mode: multiply" />
       </svg>
     )svg");
 
@@ -972,10 +979,12 @@ TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
 
-  // multiply(white, red) = red
+  // multiply(#ffff00, #00ffff) = #00ff00 (green)
   auto px = PixelAt(snapshot, 15, 15);
-  EXPECT_GT(px[0], 200);  // Red channel
-  EXPECT_GT(px[3], 200);  // Opaque
+  EXPECT_LT(px[0], 30);   // Red channel ~0 (not cyan's 0 or yellow's 255)
+  EXPECT_GT(px[1], 200);   // Green channel ~255
+  EXPECT_LT(px[2], 30);   // Blue channel ~0
+  EXPECT_GT(px[3], 200);   // Opaque
 }
 
 // 22. Visibility hidden — element should not appear
