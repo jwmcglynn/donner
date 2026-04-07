@@ -7,6 +7,7 @@
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
