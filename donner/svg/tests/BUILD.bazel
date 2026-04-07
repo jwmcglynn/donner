@@ -29,7 +29,6 @@ donner_cc_test(
         "SVGTSpanElement_tests.cc",
         "SVGTextElement_tests.cc",
     ],
-    tags = ["manual"],
     deps = [
         ":parser_test_utils",
         "//donner/base:base_test_utils",

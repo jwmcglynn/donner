@@ -57,12 +57,15 @@ fi
 
   GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory coverage-report"
 
+  # --keep_going is set in .bazelrc for coverage so that analysis failures
+  # (e.g. Skia ObjC on macOS with LLVM toolchain) don't block the rest of the
+  # run.  Allow a non-zero exit code here since partial results are still useful.
   if [ "$QUIET" = true ]; then
-    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $BAZEL_TEST_ENV $TARGETS
+    bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress $BAZEL_TEST_ENV $TARGETS || true
     python3 tools/filter_coverage.py --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
     genhtml --quiet coverage-report/filtered_report.dat $GENHTML_OPTIONS
   else
-    bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS
+    bazel coverage --config=latest_llvm $BAZEL_TEST_ENV $TARGETS || true
     python3 tools/filter_coverage.py --verbose --input $(bazel info output_path)/_coverage/_coverage_report.dat --output coverage-report/filtered_report.dat
     genhtml coverage-report/filtered_report.dat $GENHTML_OPTIONS
   fi
