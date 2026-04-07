@@ -98,7 +98,7 @@ new_git_repository(
 new_git_repository(
     name = "harfbuzz",
     build_file = "//third_party:BUILD.harfbuzz",
-    tag = "10.1.0",
+    tag = "10.4.0",
     remote = "https://github.com/harfbuzz/harfbuzz.git",
     patch_cmds = [
         # Create config-override.h to re-enable the draw API (disabled by HB_LEAN/HB_TINY).
