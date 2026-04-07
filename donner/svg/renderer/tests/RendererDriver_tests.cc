@@ -452,5 +452,276 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
   EXPECT_THAT(transforms, testing::Contains(TransformNear(expectedTransform, 1e-6)));
 }
 
+TEST_F(RendererDriverTest, EmitsMaskSequenceForMaskedElement) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <mask id="m">
+        <rect x="0" y="0" width="8" height="8" fill="white" />
+      </mask>
+    </defs>
+    <rect x="0" y="0" width="8" height="8" fill="blue" mask="url(#m)" />
+  )svg",
+                                      Vector2i(8, 8));
+
+  // Track the call sequence for mask operations.
+  int pushMaskCount = 0;
+  int transitionCount = 0;
+  int popMaskCount = 0;
+  int drawPathAfterTransition = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+
+  EXPECT_CALL(renderer, pushMask(_)).WillRepeatedly([&](const std::optional<Boxd>&) {
+    ++pushMaskCount;
+  });
+  EXPECT_CALL(renderer, transitionMaskToContent()).WillRepeatedly([&]() {
+    EXPECT_GE(pushMaskCount, 1) << "transitionMaskToContent called before pushMask";
+    ++transitionCount;
+  });
+  EXPECT_CALL(renderer, popMask()).WillRepeatedly([&]() {
+    EXPECT_GE(transitionCount, 1) << "popMask called before transitionMaskToContent";
+    ++popMaskCount;
+  });
+
+  // The mask content and the masked element both emit drawPath calls.
+  EXPECT_CALL(renderer, drawPath(_, _))
+      .Times(AtLeast(1))
+      .WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+        if (transitionCount > 0) {
+          ++drawPathAfterTransition;
+        }
+      });
+
+  driver.draw(document);
+
+  EXPECT_GE(pushMaskCount, 1) << "pushMask should be called at least once";
+  EXPECT_GE(transitionCount, 1) << "transitionMaskToContent should be called at least once";
+  EXPECT_GE(popMaskCount, 1) << "popMask should be called at least once";
+  EXPECT_EQ(pushMaskCount, popMaskCount) << "pushMask and popMask should be paired";
+  EXPECT_GE(drawPathAfterTransition, 1)
+      << "The masked element should be drawn after transitionMaskToContent";
+}
+
+TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacity) {
+  SVGDocument document = makeDocument(R"svg(
+    <g opacity="0.5">
+      <rect x="0" y="0" width="6" height="6" fill="red" />
+    </g>
+  )svg",
+                                      Vector2i(8, 8));
+
+  int pushLayerCount = 0;
+  int popLayerCount = 0;
+  double capturedOpacity = -1.0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+
+  EXPECT_CALL(renderer, pushIsolatedLayer(_, _))
+      .WillRepeatedly([&](double opacity, MixBlendMode blendMode) {
+        ++pushLayerCount;
+        capturedOpacity = opacity;
+        EXPECT_EQ(blendMode, MixBlendMode::Normal)
+            << "Default blend mode should be Normal";
+      });
+  EXPECT_CALL(renderer, popIsolatedLayer()).WillRepeatedly([&]() { ++popLayerCount; });
+
+  driver.draw(document);
+
+  EXPECT_GE(pushLayerCount, 1) << "pushIsolatedLayer should be called for opacity < 1.0";
+  EXPECT_EQ(pushLayerCount, popLayerCount) << "push/pop should be paired";
+  EXPECT_NEAR(capturedOpacity, 0.5, 1e-9) << "Opacity should be 0.5";
+}
+
+TEST_F(RendererDriverTest, EmitsIsolatedLayerForMixBlendMode) {
+  SVGDocument document = makeDocument(R"svg(
+    <g style="mix-blend-mode: multiply">
+      <rect x="0" y="0" width="4" height="4" fill="green" />
+    </g>
+  )svg",
+                                      Vector2i(8, 8));
+
+  bool foundMultiplyBlend = false;
+  int pushLayerCount = 0;
+  int popLayerCount = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+
+  EXPECT_CALL(renderer, pushIsolatedLayer(_, _))
+      .WillRepeatedly([&](double opacity, MixBlendMode blendMode) {
+        ++pushLayerCount;
+        if (blendMode == MixBlendMode::Multiply) {
+          foundMultiplyBlend = true;
+          EXPECT_NEAR(opacity, 1.0, 1e-9)
+              << "Opacity should be 1.0 when only blend mode is set";
+        }
+      });
+  EXPECT_CALL(renderer, popIsolatedLayer()).WillRepeatedly([&]() { ++popLayerCount; });
+
+  driver.draw(document);
+
+  EXPECT_TRUE(foundMultiplyBlend)
+      << "A pushIsolatedLayer call with Multiply blend mode is expected";
+  EXPECT_EQ(pushLayerCount, popLayerCount) << "push/pop should be paired";
+}
+
+TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <pattern id="pat" x="0" y="0" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect x="0" y="0" width="2" height="2" fill="red" />
+      </pattern>
+    </defs>
+    <rect x="0" y="0" width="8" height="8" fill="url(#pat)" />
+  )svg",
+                                      Vector2i(8, 8));
+
+  int beginPatternCount = 0;
+  int endPatternCount = 0;
+  int drawPathInPattern = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+
+  EXPECT_CALL(renderer, beginPatternTile(_, _))
+      .WillRepeatedly([&](const Boxd& tileRect, const Transformd&) {
+        ++beginPatternCount;
+        // Pattern tile should have the specified 4x4 size.
+        EXPECT_NEAR(tileRect.width(), 4.0, 1e-6);
+        EXPECT_NEAR(tileRect.height(), 4.0, 1e-6);
+      });
+  EXPECT_CALL(renderer, endPatternTile(_)).WillRepeatedly([&](bool) { ++endPatternCount; });
+
+  EXPECT_CALL(renderer, drawPath(_, _))
+      .Times(AtLeast(1))
+      .WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+        if (beginPatternCount > 0 && endPatternCount == 0) {
+          ++drawPathInPattern;
+        }
+      });
+
+  driver.draw(document);
+
+  EXPECT_GE(beginPatternCount, 1) << "beginPatternTile should be called for pattern fill";
+  EXPECT_EQ(beginPatternCount, endPatternCount)
+      << "begin/end pattern tile should be paired";
+  EXPECT_GE(drawPathInPattern, 1)
+      << "Pattern content should be drawn between begin and end";
+}
+
+TEST_F(RendererDriverTest, DrawsEllipseAndRectAsPath) {
+  SVGDocument document = makeDocument(R"svg(
+    <ellipse cx="6" cy="6" rx="4" ry="3" fill="blue" />
+    <rect x="0" y="0" width="5" height="3" fill="red" />
+  )svg",
+                                      Vector2i(12, 12));
+
+  int drawPathCount = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+
+  // The RendererDriver converts all shapes (ellipse, rect, etc.) to paths via
+  // ComputedPathComponent, so drawPath should be called for each visible shape element.
+  EXPECT_CALL(renderer, drawPath(_, _))
+      .WillRepeatedly([&](const PathShape&, const StrokeParams&) { ++drawPathCount; });
+
+  // drawRect and drawEllipse are backend-level optimizations, not used by RendererDriver.
+  EXPECT_CALL(renderer, drawRect(_, _)).Times(0);
+  EXPECT_CALL(renderer, drawEllipse(_, _)).Times(0);
+
+  driver.draw(document);
+
+  EXPECT_GE(drawPathCount, 2)
+      << "Both the ellipse and the rect should be drawn via drawPath";
+}
+
+TEST_F(RendererDriverTest, AccumulatesTransformsForNestedGroups) {
+  SVGDocument document = makeDocument(R"svg(
+    <g transform="translate(10, 0)">
+      <g transform="translate(0, 20)">
+        <rect x="0" y="0" width="2" height="2" fill="red" />
+      </g>
+    </g>
+  )svg",
+                                      Vector2i(40, 40));
+
+  std::vector<Transformd> setTransformCalls;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+
+  EXPECT_CALL(renderer, setTransform(_))
+      .Times(AtLeast(1))
+      .WillRepeatedly(
+          [&](const Transformd& transform) { setTransformCalls.push_back(transform); });
+
+  driver.draw(document);
+
+  // The inner rect should receive a combined translate(10, 20) transform.
+  // The driver computes absolute transforms during preparation and sets them via setTransform.
+  const Transformd expectedCombined = Transformd::Translate(Vector2d(10, 20));
+  EXPECT_THAT(setTransformCalls,
+              testing::Contains(TransformNear(expectedCombined, 1e-6)))
+      << "setTransform should be called with the combined translate(10, 20) transform";
+
+  // Also verify that the outer group's translate(10, 0) transform appears separately.
+  const Transformd outerTransform = Transformd::Translate(Vector2d(10, 0));
+  EXPECT_THAT(setTransformCalls,
+              testing::Contains(TransformNear(outerTransform, 1e-6)))
+      << "setTransform should be called with translate(10, 0) for the outer group";
+}
+
+TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacityWithBlendMode) {
+  SVGDocument document = makeDocument(R"svg(
+    <g opacity="0.7" style="mix-blend-mode: screen">
+      <rect x="0" y="0" width="6" height="6" fill="blue" />
+    </g>
+  )svg",
+                                      Vector2i(8, 8));
+
+  bool foundScreenWithOpacity = false;
+  int pushLayerCount = 0;
+  int popLayerCount = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+
+  EXPECT_CALL(renderer, pushIsolatedLayer(_, _))
+      .WillRepeatedly([&](double opacity, MixBlendMode blendMode) {
+        ++pushLayerCount;
+        if (blendMode == MixBlendMode::Screen) {
+          foundScreenWithOpacity = true;
+          EXPECT_NEAR(opacity, 0.7, 1e-9);
+        }
+      });
+  EXPECT_CALL(renderer, popIsolatedLayer()).WillRepeatedly([&]() { ++popLayerCount; });
+
+  driver.draw(document);
+
+  EXPECT_TRUE(foundScreenWithOpacity)
+      << "pushIsolatedLayer should be called with Screen blend mode and opacity 0.7";
+  EXPECT_EQ(pushLayerCount, popLayerCount) << "push/pop should be paired";
+}
+
 }  // namespace
 }  // namespace donner::svg

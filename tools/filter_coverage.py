@@ -265,12 +265,23 @@ def main() -> None:
                 record_lines.append(line)
                 if line.startswith("SF:"):
                     source_path = line[3:].strip()
+                    # Skip records for third-party/vendored code entirely.
+                    if "/third_party/" in source_path or source_path.startswith("third_party/"):
+                        current_source_filter = None
+                        # Mark this record for skipping by setting a sentinel.
+                        record_lines = ["__SKIP__"]
+                        continue
                     try:
                         current_source_filter = SourceFilter(source_path, verbose)
                     except Exception as e:
                         sys.exit(f"Error reading source file {source_path}: {e}")
                 # LCOV records are terminated by the line "end_of_record"
                 if line.strip() == "end_of_record":
+                    # Skip records marked for exclusion (third-party code).
+                    if record_lines and record_lines[0] == "__SKIP__":
+                        record_lines = []
+                        current_source_filter = None
+                        continue
                     processed_record = process_record(record_lines, current_source_filter, verbose)
                     for processed_line in processed_record:
                         lcov_out_file.write(processed_line)

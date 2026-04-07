@@ -344,4 +344,256 @@ TEST_F(ShapeSystemTest, RectWithPercentageUnits) {
   EXPECT_FALSE(path->spline.empty());
 }
 
+// --- Self-intersecting path ---
+
+TEST_F(ShapeSystemTest, SelfIntersectingPath) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90 L90 10 L10 90 Z"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+  EXPECT_FALSE(path->spline.empty());
+
+  // Verify bounds encompass the full path.
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
+  EXPECT_NEAR(bounds->topLeft.y, 10.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.x, 90.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.y, 90.0, 1.0);
+}
+
+// --- Arc path edge cases ---
+
+TEST_F(ShapeSystemTest, ArcZeroRadius) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 A0 0 0 0 1 50 50"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+  EXPECT_FALSE(path->spline.empty());
+
+  // Zero-radius arc degenerates to a line; bounds should still be valid.
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_THAT(bounds->topLeft.x, Lt(bounds->bottomRight.x + 1.0));
+  EXPECT_THAT(bounds->topLeft.y, Lt(bounds->bottomRight.y + 1.0));
+}
+
+TEST_F(ShapeSystemTest, Arc360Degrees) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M50 25 A25 25 0 1 1 50 75 A25 25 0 1 1 50 25"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+  EXPECT_FALSE(path->spline.empty());
+
+  // Full circle arc should produce valid bounds.
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, 25.0, 2.0);
+  EXPECT_NEAR(bounds->topLeft.y, 25.0, 2.0);
+  EXPECT_NEAR(bounds->bottomRight.x, 75.0, 2.0);
+  EXPECT_NEAR(bounds->bottomRight.y, 75.0, 2.0);
+}
+
+TEST_F(ShapeSystemTest, ArcVerySmall) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M50 50 A0.001 0.001 0 0 1 50.001 50.001"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+  EXPECT_FALSE(path->spline.empty());
+}
+
+// --- Polyline with duplicate consecutive points ---
+
+TEST_F(ShapeSystemTest, PolylineDuplicateConsecutivePoints) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <polyline id="p" points="10,10 10,10 20,20"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+  EXPECT_FALSE(path->spline.empty());
+
+  // Should have MoveTo + 2 LineTo commands despite duplicate point.
+  EXPECT_EQ(path->spline.commands().size(), 3u);
+}
+
+// --- Polygon closure ---
+
+TEST_F(ShapeSystemTest, PolygonIsClosed) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <polygon id="p" points="10,10 90,10 50,90"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+
+  // Polygon spline must end with a ClosePath command.
+  const auto& commands = path->spline.commands();
+  ASSERT_FALSE(commands.empty());
+  EXPECT_EQ(commands.back().type, PathSpline::CommandType::ClosePath);
+}
+
+TEST_F(ShapeSystemTest, PolylineIsNotClosed) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <polyline id="p" points="10,10 90,10 50,90"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+
+  // Polyline spline must NOT end with a ClosePath command.
+  const auto& commands = path->spline.commands();
+  ASSERT_FALSE(commands.empty());
+  EXPECT_NE(commands.back().type, PathSpline::CommandType::ClosePath);
+}
+
+// --- Rect with rx/ry exceeding half dimensions ---
+
+TEST_F(ShapeSystemTest, RectRadiusClamped) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="r" x="10" y="10" width="40" height="20" rx="30" ry="15"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#r");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  ASSERT_THAT(path, NotNull());
+  EXPECT_FALSE(path->spline.empty());
+
+  // rx=30 should be clamped to width/2=20, ry=15 should be clamped to height/2=10.
+  // Bounds should match the rect position and size exactly.
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
+  EXPECT_NEAR(bounds->topLeft.y, 10.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.x, 50.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.y, 30.0, 1.0);
+}
+
+// --- Circle with zero radius ---
+
+TEST_F(ShapeSystemTest, CircleZeroRadiusProducesNoPath) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <circle id="c" cx="10" cy="10" r="0"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#c");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  EXPECT_EQ(path, nullptr);
+
+  // Bounds should not exist for a zero-radius circle.
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  EXPECT_FALSE(bounds.has_value());
+}
+
+// --- Ellipse with one zero radius ---
+
+TEST_F(ShapeSystemTest, EllipseOneZeroRadius) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <ellipse id="e" cx="10" cy="10" rx="5" ry="0"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#e");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  // Per SVG spec, if either rx or ry is zero, the ellipse is not rendered.
+  EXPECT_EQ(path, nullptr);
+}
+
+TEST_F(ShapeSystemTest, EllipseOtherZeroRadius) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <ellipse id="e" cx="10" cy="10" rx="0" ry="5"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#e");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  EXPECT_EQ(path, nullptr);
+}
+
+// --- Path with only moveTo ---
+
+TEST_F(ShapeSystemTest, PathOnlyMoveTo) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M 10 10"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  // A path with only a moveTo and no drawing commands produces no renderable geometry.
+  // The implementation may either return nullptr or a spline with a single MoveTo.
+  if (path) {
+    // If a spline exists, bounds should still be valid (degenerate point).
+    auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+    if (bounds.has_value()) {
+      EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
+      EXPECT_NEAR(bounds->topLeft.y, 10.0, 1.0);
+    }
+  }
+}
+
+TEST_F(ShapeSystemTest, PathMultipleMoveTo) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M 10 10 M 50 50"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  // Multiple moveTo without drawing commands should not crash.
+  auto* path = element->entityHandle().try_get<ComputedPathComponent>();
+  if (path) {
+    EXPECT_FALSE(path->spline.empty());
+  }
+}
+
 }  // namespace donner::svg::components

@@ -474,4 +474,300 @@ TEST_F(LayoutSystemTest, DeeplyNestedTransforms) {
   EXPECT_THAT(transform, TransformEq(Transformd::Translate({40.0, 60.0})));
 }
 
+// --- preserveAspectRatio "none" ---
+
+/**
+ * Verify that preserveAspectRatio="none" stretches non-uniformly to fill the viewport.
+ * A viewBox of 0 0 100 50 mapped onto a 200x200 region should produce scale(2, 4).
+ */
+TEST_F(LayoutSystemTest, PreserveAspectRatioNone) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="0" y="0" width="200" height="200"
+           viewBox="0 0 100 50" preserveAspectRatio="none">
+        <rect width="100" height="50"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+
+  // viewBox 100x50 mapped into 200x200 with preserveAspectRatio="none":
+  // scaleX = 200/100 = 2, scaleY = 200/50 = 4
+  // No alignment offset since "none" has alignMultiplier 0.
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  EXPECT_THAT(contentTransform, TransformEq(Transformd::Scale({2.0, 4.0})));
+}
+
+// --- viewBox with negative coordinates ---
+
+/**
+ * A viewBox with negative min-x and min-y should include a translation to shift content.
+ */
+TEST_F(LayoutSystemTest, ViewBoxNegativeCoordinates) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="0" y="0" width="100" height="100" viewBox="-50 -50 100 100">
+        <rect x="-50" y="-50" width="100" height="100"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+
+  // viewBox -50,-50 to 50,50 (size 100x100) mapped into 100x100 (size matches).
+  // scale = 100/100 = 1.0 for both axes.
+  // translation = size.topLeft - (viewBox.topLeft * scale)
+  //             = (0,0) - ((-50,-50) * 1) = (50, 50)
+  // So the transform should be scale(1) * translate(50, 50), which is just translate(50, 50).
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  EXPECT_THAT(contentTransform, TransformEq(Transformd::Translate({50.0, 50.0})));
+}
+
+/**
+ * viewBox with negative coordinates and non-uniform scaling.
+ */
+TEST_F(LayoutSystemTest, ViewBoxNegativeCoordinatesWithScaling) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+      <svg id="inner" x="0" y="0" width="200" height="200" viewBox="-50 -50 100 100">
+        <rect x="-50" y="-50" width="100" height="100"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+
+  // viewBox is -50,-50,100,100 => size 100x100 mapped into 200x200.
+  // scale = 200/100 = 2.0
+  // translation = (0,0) - ((-50,-50) * 2) = (100, 100)
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  EXPECT_THAT(contentTransform,
+              TransformEq(Transformd::Scale({2.0, 2.0}) * Transformd::Translate({100.0, 100.0})));
+}
+
+// --- Percentage width/height on root SVG ---
+
+/**
+ * Percentage width/height on the root <svg> element: these are not absolute, so the document
+ * size falls back to the viewBox or the default canvas size.
+ */
+TEST_F(LayoutSystemTest, PercentageWidthHeightOnRootFallsBackToViewBox) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="50%" height="50%" viewBox="0 0 300 200">
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  // Since width/height are percentages (not absolute), calculateDocumentSize should fall back
+  // to the viewBox dimensions via the intrinsic aspect ratio path.
+  auto size = layoutSystem.calculateDocumentSize(registry);
+  // The exact behavior depends on the default sizing algorithm. With a viewBox of 300x200
+  // and no canvas size set, the size should be derived from the viewBox.
+  EXPECT_GT(size.x, 0);
+  EXPECT_GT(size.y, 0);
+
+  // The intrinsic aspect ratio should still be determined from the viewBox.
+  auto ratio = layoutSystem.intrinsicAspectRatio(document.rootEntityHandle());
+  ASSERT_TRUE(ratio.has_value());
+  EXPECT_NEAR(ratio.value(), 1.5f, 0.01f);  // 300/200 = 1.5
+}
+
+/**
+ * Percentage width/height without viewBox — no intrinsic dimensions or ratio.
+ */
+TEST_F(LayoutSystemTest, PercentageWidthHeightNoViewBox) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="50%" height="50%">
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  // No viewBox and non-absolute sizes: returns default canvas size.
+  auto size = layoutSystem.calculateCanvasScaledDocumentSize(
+      registry, LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  EXPECT_EQ(size.x, 512);
+  EXPECT_EQ(size.y, 512);
+}
+
+// --- transform-origin with keywords ---
+
+/**
+ * transform-origin: center center should resolve to 50% 50%.
+ * For non-sized elements like <rect>, percentages are resolved against the inherited viewBox.
+ *
+ * Note: single-keyword "center" currently fails to parse (known issue in the CSS transform-origin
+ * parser), so we use the two-keyword form "center center" here.
+ */
+TEST_F(LayoutSystemTest, TransformOriginCenterKeyword) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+      <rect id="r" x="0" y="0" width="80" height="60"
+            style="transform-origin: center center; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectHandle = document.querySelector("#r")->entityHandle();
+
+  // "center center" maps to 50% 50%, resolved against the viewBox (120x80).
+  // Origin offset = (60, 40).
+  const Transformd expected = Transformd::Translate({60.0, 40.0}) *
+                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
+                              Transformd::Translate({-60.0, -40.0});
+
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
+}
+
+/**
+ * transform-origin: right bottom should resolve to 100% 100%.
+ * For non-sized elements like <rect>, percentages are resolved against the inherited viewBox.
+ */
+TEST_F(LayoutSystemTest, TransformOriginRightBottom) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 140">
+      <rect id="r" x="0" y="0" width="80" height="60"
+            style="transform-origin: right bottom; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectHandle = document.querySelector("#r")->entityHandle();
+
+  // "right" = 100% of viewBox width (200), "bottom" = 100% of viewBox height (140).
+  const Transformd expected = Transformd::Translate({200.0, 140.0}) *
+                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
+                              Transformd::Translate({-200.0, -140.0});
+
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
+}
+
+/**
+ * transform-origin: left top should resolve to 0% 0%, equivalent to origin at (0,0).
+ * Since both resolve to zero offset, the transform-origin has no effect.
+ */
+TEST_F(LayoutSystemTest, TransformOriginLeftTop) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 140">
+      <rect id="r" x="0" y="0" width="80" height="60"
+            style="transform-origin: left top; transform: rotate(90deg)" />
+    </svg>
+  )-");
+
+  auto rectHandle = document.querySelector("#r")->entityHandle();
+
+  // "left" = 0%, "top" = 0% => origin at (0, 0).
+  // translate(0,0) * rotate * translate(0,0) = just rotate.
+  EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle),
+              TransformEq(Transformd::Rotate(MathConstants<double>::kHalfPi)));
+}
+
+// --- Nested SVG with different viewBox ---
+
+/**
+ * Verify that transforms chain correctly through nested SVGs with different viewBoxes.
+ * A rect inside a nested SVG should accumulate both the nested SVG's content transform
+ * and its own entity-from-parent transform.
+ */
+TEST_F(LayoutSystemTest, NestedSvgDifferentViewBoxTransformChaining) {
+  auto document = ParseSVG(R"-(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+      <svg id="inner" x="20" y="30" width="200" height="100" viewBox="0 0 100 50">
+        <rect id="rect" transform="translate(5, 10)"/>
+      </svg>
+    </svg>
+  )-");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+  auto rectHandle = document.querySelector("#rect")->entityHandle();
+
+  // Inner SVG: viewBox 100x50 mapped into 200x100 => scale(2, 2) with default
+  // preserveAspectRatio xMidYMid meet => min(2.0, 2.0) = 2.0.
+  // translation = (20,30) - ((0,0) * 2) = (20, 30)
+  // No alignment offset since scale is uniform.
+  auto innerContent = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  EXPECT_THAT(innerContent,
+              TransformEq(Transformd::Scale({2.0, 2.0}) * Transformd::Translate({20.0, 30.0})));
+
+  // The rect's world transform should accumulate: translate(5,10) * scale(2) * translate(20,30).
+  auto rectWorld = layoutSystem.getEntityFromWorldTransform(rectHandle);
+  EXPECT_THAT(rectWorld,
+              TransformEq(Transformd::Translate({5.0, 10.0}) * Transformd::Scale({2.0, 2.0}) *
+                          Transformd::Translate({20.0, 30.0})));
+}
+
+/**
+ * Verify nested SVG where the inner viewBox is larger than the viewport, causing downscaling.
+ */
+TEST_F(LayoutSystemTest, NestedSvgDownscalingViewBox) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="0" y="0" width="50" height="50" viewBox="0 0 200 200">
+        <rect id="rect" x="100" y="100" width="100" height="100"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+
+  // viewBox 200x200 mapped into 50x50 => scale(0.25, 0.25).
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  EXPECT_THAT(contentTransform, TransformEq(Transformd::Scale({0.25, 0.25})));
+}
+
+// --- Zero-size viewBox ---
+
+/**
+ * A viewBox with zero width and height is an edge case. The system should handle it
+ * gracefully without crashing (no divide-by-zero assertion failures).
+ */
+TEST_F(LayoutSystemTest, ZeroSizeViewBoxDoesNotCrash) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="0" y="0" width="100" height="100" viewBox="0 0 0 0">
+        <rect width="50" height="50"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+
+  // The primary goal is no crash. The resulting transform may contain inf/NaN but must not abort.
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  // Just verify we survived; the exact value is not meaningful for a degenerate viewBox.
+  (void)contentTransform;
+}
+
+/**
+ * viewBox with zero width but nonzero height should also not crash.
+ */
+TEST_F(LayoutSystemTest, ZeroWidthViewBoxDoesNotCrash) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="0" y="0" width="100" height="100" viewBox="0 0 0 50">
+        <rect width="50" height="50"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  (void)contentTransform;
+}
+
+/**
+ * viewBox with zero height but nonzero width should also not crash.
+ */
+TEST_F(LayoutSystemTest, ZeroHeightViewBoxDoesNotCrash) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="0" y="0" width="100" height="100" viewBox="0 0 50 0">
+        <rect width="50" height="50"/>
+      </svg>
+    </svg>
+  )");
+
+  auto innerHandle = document.querySelector("#inner")->entityHandle();
+  auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
+  (void)contentTransform;
+}
+
 }  // namespace donner::svg::components
