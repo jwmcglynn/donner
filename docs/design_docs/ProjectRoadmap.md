@@ -70,19 +70,16 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 - Phases 1–9: timing model, interpolation engine, sandwich composition, attribute targeting,
   `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
-- ([design](animation.md))
 
 ### Composited Rendering
 
 - Layer-based caching architecture for animation and editing performance.
-- ([design](composited_rendering.md))
 
 ### Interactivity
 
 - Phases 1–6: `EventSystem` with `SpatialGrid`-accelerated hit testing, event dispatch (mouse,
   pointer), CSS cursor property, `DonnerController` public API (`addEventListener`,
   `elementFromPoint`, `findIntersectingRect`, `getWorldBounds`), incremental spatial index updates.
-- ([design](interactivity.md))
 
 ### Incremental Invalidation
 
@@ -274,8 +271,5 @@ flowchart TD
 | [Text Rendering](text_rendering.md) | Shipped (Phases 1–6) |
 | [Filter Effects](filter_effects.md) | Shipped (17/17 primitives) |
 | [Filter Performance](filter_performance.md) | Shipped (all within 1.5×) |
-| [Animation](animation.md) | Shipped (Phases 1–9) |
-| [Composited Rendering](composited_rendering.md) | Shipped |
-| [Interactivity](interactivity.md) | Shipped (Phases 1–6) |
 | [v0.5 Release](v0_5_release.md) | In Progress |
 | [External SVG References](external_svg_references.md) | Design |

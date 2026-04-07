@@ -196,7 +196,6 @@ Update `donner_splash.svg` with SVG animation to showcase the animation system.
   periodic opacity pulse (1→0.3→1→0.5→1) over 6s cycle.
 - [x] **Verify rendering** — Splash renders correctly at t=0 (static fallback). Output verified
   via `svg_to_png` (800x459, visually correct).
-- [ ] **Update golden images** — Regenerate golden images for any tests that reference the splash.
 
 ### Phase 7: CI Verification
 
