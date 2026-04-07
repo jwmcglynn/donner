@@ -61,6 +61,14 @@ struct BoxBlurPlan {
 };
 
 BoxBlurPlan computeBoxPasses(double sigma) {
+  // Guard against non-finite or excessively large sigma that would overflow the int cast below.
+  // A sigma of 10000 produces a window of ~18800 which is well within int range and more than
+  // sufficient for any practical blur.
+  constexpr double kMaxSigma = 10000.0;
+  if (!std::isfinite(sigma) || sigma > kMaxSigma) {
+    sigma = kMaxSigma;
+  }
+
   const double kWindowScale = 3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
   const int window = std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
 
