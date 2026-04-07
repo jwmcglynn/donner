@@ -31,9 +31,9 @@ TEST(SVGTSpanElementTests, CreateAndCast) {
   EXPECT_THAT(tspan->tryCast<SVGTSpanElement>(), Ne(std::nullopt));
 }
 
-TEST(SVGTSpanElementTests, DisabledWithoutExperimental) {
+TEST(SVGTSpanElementTests, EnabledWithoutExperimental) {
   auto tspan = instantiateSubtreeElement("<tspan />");
-  EXPECT_THAT(tspan->tryCast<SVGTSpanElement>(), Eq(std::nullopt));
+  EXPECT_THAT(tspan->tryCast<SVGTSpanElement>(), Ne(std::nullopt));
 }
 
 TEST(SVGTSpanElementTests, Defaults) {

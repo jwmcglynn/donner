@@ -9,11 +9,10 @@ Donner is an SVG rendering library targeting broad SVG2 compatibility, high perf
 interactive editing workflows.
 
 After v0.1 established the static rendering baseline, a large body of work landed covering renderer
-abstraction, a complete software rasterizer, text shaping, all 17 SVG filter primitives, animation,
-composited rendering, and interactivity. This is collected as **v0.5**, skipping intermediate
-milestones that were overtaken by the pace of development. The next target is **v1.0**: a
-production-quality release focused on interactive editing, conformance, parser hardening, and
-ecosystem integration.
+abstraction, a complete software rasterizer, text shaping, and all 17 SVG filter primitives. This is
+collected as **v0.5**, skipping intermediate milestones that were overtaken by the pace of
+development. The next target is **v1.0**: a production-quality release adding animation,
+interactivity, interactive editing, conformance, parser hardening, and ecosystem integration.
 
 ---
 
@@ -24,9 +23,9 @@ XML parser, CSS parser, and Skia-based renderer.
 
 ---
 
-## v0.5 — Rendering Engine (shipped)
+## v0.5 — Rendering Engine (in progress)
 
-Everything completed since v0.1, collected into a single release milestone.
+Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ### Renderer Architecture
 
@@ -42,6 +41,7 @@ Everything completed since v0.1, collected into a single release milestone.
 - Phases 1–5: stb_truetype font loading, glyph outlines, `TextLayout`, WOFF2 support,
   `dominant-baseline`.
 - Phase 6: Optional HarfBuzz text shaping tier (`--config=text-full`).
+- `<textPath>` element support for text rendered along arbitrary paths.
 - ([design](text_rendering.md))
 
 ### SVG Filter Effects
@@ -54,32 +54,6 @@ Everything completed since v0.1, collected into a single release milestone.
 - All 23 filter benchmarks within 1.5× of Skia; 21 of 23 are faster.
 - ([design](filter_effects.md), [perf](filter_performance.md))
 
-### SVG Animation
-
-- Phases 1–9: timing model, interpolation engine, sandwich composition, attribute targeting,
-  `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
-- ([design](animation.md))
-
-### Composited Rendering
-
-- Layer-based caching architecture for animation and editing performance.
-- ([design](composited_rendering.md))
-
-### Interactivity
-
-- Phases 1–6: `EventSystem` with `SpatialGrid`-accelerated hit testing, event dispatch (mouse,
-  pointer), CSS cursor property, `DonnerController` public API (`addEventListener`,
-  `elementFromPoint`, `findIntersectingRect`, `getWorldBounds`), incremental spatial index updates.
-- ([design](interactivity.md))
-
-### Incremental Invalidation
-
-- **Partial computed tree invalidation** — When DOM mutations occur, only invalidate the
-  affected subtree of the computed style/layout tree rather than recomputing the entire
-  document. CSS restyling performs differential updates: identify which elements' computed
-  styles are affected by a change and re-resolve only those, propagating inherited property
-  changes down the affected subtree.
-
 ### Infrastructure
 
 - Auto-detect font backends, crash handling hardening.
@@ -91,6 +65,29 @@ Everything completed since v0.1, collected into a single release milestone.
 ## v1.0 — Production Release (in progress)
 
 Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
+
+### SVG Animation
+
+- Phases 1–9: timing model, interpolation engine, sandwich composition, attribute targeting,
+  `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
+
+### Composited Rendering
+
+- Layer-based caching architecture for animation and editing performance.
+
+### Interactivity
+
+- Phases 1–6: `EventSystem` with `SpatialGrid`-accelerated hit testing, event dispatch (mouse,
+  pointer), CSS cursor property, `DonnerController` public API (`addEventListener`,
+  `elementFromPoint`, `findIntersectingRect`, `getWorldBounds`), incremental spatial index updates.
+
+### Incremental Invalidation
+
+- **Partial computed tree invalidation** — When DOM mutations occur, only invalidate the
+  affected subtree of the computed style/layout tree rather than recomputing the entire
+  document. CSS restyling performs differential updates: identify which elements' computed
+  styles are affected by a change and re-resolve only those, propagating inherited property
+  changes down the affected subtree.
 
 ### Interactive SVG Editing
 
@@ -274,8 +271,5 @@ flowchart TD
 | [Text Rendering](text_rendering.md) | Shipped (Phases 1–6) |
 | [Filter Effects](filter_effects.md) | Shipped (17/17 primitives) |
 | [Filter Performance](filter_performance.md) | Shipped (all within 1.5×) |
-| [Animation](animation.md) | Shipped (Phases 1–9) |
-| [Composited Rendering](composited_rendering.md) | Shipped |
-| [Interactivity](interactivity.md) | Shipped (Phases 1–6) |
 | [v0.5 Release](v0_5_release.md) | In Progress |
 | [External SVG References](external_svg_references.md) | Design |

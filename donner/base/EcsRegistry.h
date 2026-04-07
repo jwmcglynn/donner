@@ -56,7 +56,7 @@ using EntityHandle = entt::basic_handle<Registry>;
 
 namespace entt {
 
-/// Ostream output operator, outputs `#<id>` where `<id>` is the numeric value of the \ref Entity.
+/// Ostream output operator, outputs `#<id>` where `<id>` is the numeric value of the entity.
 inline std::ostream& operator<<(std::ostream& os, const entity& entity) {
   return os << "#" << static_cast<std::uint32_t>(entity);
 }

@@ -45,14 +45,6 @@ RendererBitmap MakeBlackBitmap(int width, int height) {
   return bmp;
 }
 
-// Check if a pixel is the AABB blue color (#4488ff).
-bool IsBlue(const RendererBitmap& bmp, int x, int y) {
-  const size_t stride = bmp.rowBytes / 4;
-  const size_t off = (static_cast<size_t>(y) * stride + static_cast<size_t>(x)) * 4;
-  return bmp.pixels[off + 0] == 0x44 && bmp.pixels[off + 1] == 0x88 &&
-         bmp.pixels[off + 2] == 0xff && bmp.pixels[off + 3] == 0xff;
-}
-
 // Sample the bitmap using TerminalImageViewer and return which sub-pixels are blue.
 // Returns a 2D grid of booleans indexed as [subY][subX].
 std::vector<std::vector<bool>> SampleSubPixelColors(const RendererBitmap& bmp,

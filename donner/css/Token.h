@@ -548,7 +548,7 @@ struct Token {
   };
 
   /**
-   * `<CDO-token>`, which represents `<!--` in the source.
+   * \c \<CDO-token\>, which represents the HTML comment opening \c \<\!-- in the source.
    */
   struct CDO {
     /// Equality operator.

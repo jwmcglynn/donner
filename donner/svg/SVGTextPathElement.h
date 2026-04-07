@@ -64,8 +64,6 @@ public:
   static constexpr ElementType Type = ElementType::TextPath;
   /// XML tag name, \ref xml_textPath.
   static constexpr std::string_view Tag{"textPath"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 
   static_assert(SVGTextPositioningElement::IsBaseOf(Type));
   static_assert(SVGTextContentElement::IsBaseOf(Type));

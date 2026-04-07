@@ -1,6 +1,6 @@
 # Design: Renderer Interface and Multi-Backend Support
 
-**Status:** In Progress (Phases 1-2a shipped, CMake backend selection shipped, Phase 2b-4 planned)
+**Status:** Shipped (Phases 1-2a, CMake backend selection; Phase 2b-4 planned as future work)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-05
 

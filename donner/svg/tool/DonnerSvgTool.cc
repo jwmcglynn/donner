@@ -474,8 +474,6 @@ void RunInteractiveSelection(SVGDocument document, Renderer& renderer,
   const double scaleY = static_cast<double>(bitmap.dimensions.y) /
                         static_cast<double>(std::max(1, imageInfo.rows));
 
-  const TerminalImageView originalView = MakeView(bitmap);
-
   std::string buffer;
   while (true) {
     fd_set readSet;

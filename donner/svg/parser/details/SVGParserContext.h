@@ -128,7 +128,7 @@ public:
 
   /**
    * Create a \ref ParserOrigin for the given substring, where \p substring is within the XML
-   * parser's original string, \ref input_.
+   * parser's original string.
    *
    * @param substring Substring within the XML parser's original string.
    */

@@ -49,10 +49,13 @@ public:
     bool disableUserAttributes = true;
 
     /**
-     * Enable experimental or incomplete features. This gates features which are not yet fully
-     * implemented and do not meet the quality and stability bar of the rest of the project.
+     * Enable experimental or incomplete features. When true, element types that declare
+     * `static constexpr bool IsExperimental = true` are parsed as their concrete type; when false,
+     * they are treated as unknown elements.
      *
-     * This currently gates \ref xml_filter, which has very limited support.
+     * As of v0.5, all shipping features (text, filters) have had their `IsExperimental`
+     * declarations removed, so this flag currently has no effect. It is retained for future
+     * experimental features.
      */
     bool enableExperimental = false;
 

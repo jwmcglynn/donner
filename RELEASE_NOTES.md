@@ -6,7 +6,7 @@ Donner SVG's first release!
 
 This release provides an embeddable SVG2 library, which includes CSS3 with a Skia-based renderer.
 
-Large portions of the SVG2 static spec are implemented, including all shapes, markers, gradients, `<use>`, etc. Text is not yet implemented but is planned for `v0.2.0`.
+Large portions of the SVG2 static spec are implemented, including all shapes, markers, gradients, `<use>`, etc.
 
 Included in the release are:
 

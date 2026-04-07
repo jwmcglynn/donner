@@ -34,9 +34,9 @@ TEST(SVGTextElementTests, CreateAndCast) {
   EXPECT_THAT(text->tryCast<SVGTextElement>(), Ne(std::nullopt));
 }
 
-TEST(SVGTextElementTests, DisabledWithoutExperimental) {
+TEST(SVGTextElementTests, EnabledWithoutExperimental) {
   auto text = instantiateSubtreeElement("<text />");
-  EXPECT_THAT(text->tryCast<SVGTextElement>(), Eq(std::nullopt));
+  EXPECT_THAT(text->tryCast<SVGTextElement>(), Ne(std::nullopt));
 }
 
 TEST(SVGTextElementTests, Defaults) {
@@ -308,7 +308,6 @@ TEST(SVGTextElementCacheTests, TSpanPositionChangeInvalidatesParent) {
   )-",
                                        kExperimentalOptions);
 
-  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
   auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
 
   // Prime the cache.

@@ -14,7 +14,7 @@ class StylesheetParser {
 public:
   /**
    * Parse a CSS stylesheet into a list of selectors and their associated declarations, as well as
-   * @font-face rules.
+   * `@font-face` rules.
    *
    * @param str Input stylesheet string.
    * @return Parsed stylesheet.

@@ -12,11 +12,11 @@ class RendererImplementation : public RendererInterface {
 public:
   ~RendererImplementation() override = default;
 
-  virtual void draw(SVGDocument& document) = 0;
+  void draw(SVGDocument& document) override = 0;
 
-  [[nodiscard]] virtual int width() const = 0;
+  [[nodiscard]] int width() const override = 0;
 
-  [[nodiscard]] virtual int height() const = 0;
+  [[nodiscard]] int height() const override = 0;
 };
 
 std::unique_ptr<RendererImplementation> CreateRendererImplementation(bool verbose);

@@ -617,6 +617,20 @@ def generate_root() -> None:
         )
         f.write("target_include_directories(rules_cc_runfiles PUBLIC ${CMAKE_BINARY_DIR})\n\n")
 
+        # Set up runfiles directory for CMake tests. Bazel tests use the runfiles
+        # tree automatically, but CMake tests need RUNFILES_DIR pointing to the
+        # source tree root (which already has donner/ in it). External repos need
+        # symlinks at the source root to match the Bazel runfiles layout.
+        f.write("# Runfiles setup for CMake tests\n")
+        f.write("if(DONNER_BUILD_TESTS)\n")
+        f.write("  # Symlink external repos to match Bazel runfiles layout\n")
+        f.write("  if(NOT EXISTS ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
+        f.write("    execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink\n")
+        f.write("      ${PROJECT_SOURCE_DIR}/third_party/css-parsing-tests\n")
+        f.write("      ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
+        f.write("  endif()\n")
+        f.write("endif()\n\n")
+
         # Add generated subdirectories.
         #
         # Discover every internal Bazel package that contains at least one C++
@@ -843,6 +857,10 @@ def generate_all_packages() -> None:
                     )
                     if kind == "cc_test":
                         f.write(f"add_test(NAME {cmake_name} COMMAND {cmake_name})\n")
+                        f.write(
+                            f"set_tests_properties({cmake_name} PROPERTIES\n"
+                            f'  ENVIRONMENT "RUNFILES_DIR=${{PROJECT_SOURCE_DIR}}")\n'
+                        )
                     if includes:
                         for inc in includes:
                             f.write(

@@ -1,18 +1,19 @@
 # Design: v0.5 Release
 
 **Status:** In Progress
-**Updated:** 2026-03-17
+**Updated:** 2026-04-06
 
 ## Summary
 
 Release checklist and implementation plan for shipping Donner v0.5. This release bundles all work
-since v0.1: renderer abstraction, tiny-skia software backend, text rendering (6 phases), all 17 SVG
-filter primitives with SIMD performance, animation (9 phases), composited rendering, and
-interactivity (6 phases).
+since v0.1: renderer abstraction, tiny-skia software backend, text rendering (6 phases), and all 17
+SVG filter primitives with SIMD performance.
+
+Animation (9 phases), composited rendering, and interactivity (6 phases) are scoped out of v0.5 and
+deferred to v1.0.
 
 The release requires fixing test failures, verifying builds across configurations, updating
-documentation, creating examples for new features, refreshing the splash SVG with animation, running
-fuzzers, and ensuring CI is green.
+documentation, creating examples for new features, running fuzzers, and ensuring CI is green.
 
 ## Goals
 
@@ -20,11 +21,13 @@ fuzzers, and ensuring CI is green.
 - Reduce test thresholds to <100px pixel differences where possible.
 - Verify both CMake and Bazel builds for Skia and tiny-skia backends.
 - Update README and docs to reflect current capabilities.
-- Demonstrate new features (filters, animation, text, interactivity) with examples.
+- Demonstrate new features (filters, text) with examples.
 - Harden with a full fuzzer run before release.
 
 ## Non-Goals
 
+- Animation (`<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`) — deferred to v1.0.
+- Composited rendering and interactivity — deferred to v1.0.
 - New feature work beyond `<textPath>` (that's v1.0).
 - `<a>` and `<switch>` element support (v1.0).
 - 100% resvg test suite pass rate (known gaps are documented).
@@ -193,7 +196,6 @@ Update `donner_splash.svg` with SVG animation to showcase the animation system.
   periodic opacity pulse (1→0.3→1→0.5→1) over 6s cycle.
 - [x] **Verify rendering** — Splash renders correctly at t=0 (static fallback). Output verified
   via `svg_to_png` (800x459, visually correct).
-- [ ] **Update golden images** — Regenerate golden images for any tests that reference the splash.
 
 ### Phase 7: CI Verification
 

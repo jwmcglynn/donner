@@ -64,8 +64,6 @@ public:
   static constexpr ElementType Type = ElementType::FeGaussianBlur;
   /// XML tag name, \ref xml_feGaussianBlur.
   static constexpr std::string_view Tag{"feGaussianBlur"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 
   /**
    * Create a new \ref xml_filter element.

@@ -77,7 +77,7 @@ public:
   std::span<const SelectorRule> rules() const { return rules_; }
 
   /**
-   * Get the list of @font-face rules in this stylesheet.
+   * Get the list of `@font-face` rules in this stylesheet.
    */
   std::span<const FontFace> fontFaces() const { return fontFaces_; }
 

@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-Donner is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM with complete rendering support including text, filters, and animation.
+Donner is an embeddable browser-grade SVG2 engine in C++20, providing full access to the SVG DOM with complete rendering support including text and filters.
 
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)
@@ -11,8 +11,7 @@ Donner includes:
 
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients.
 - All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.).
-- Text rendering with `<text>` and `<tspan>`, including WOFF2 web fonts and optional HarfBuzz shaping.
-- SVG animation: `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>` with full timing model.
+- Text rendering with `<text>`, `<tspan>`, and `<textPath>`, including WOFF2 web fonts and optional HarfBuzz shaping.
 - CSS3 parsing and cascading support, with a hand-rolled library.
 - A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree.
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.

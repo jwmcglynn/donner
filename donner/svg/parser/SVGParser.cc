@@ -207,6 +207,10 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
   return std::move(element);
 }
 
+/// Returns true if an element type is experimental. Element types opt in by declaring
+/// `static constexpr bool IsExperimental = true;`. When a feature ships, remove the
+/// `IsExperimental` declaration entirely rather than setting it to false — the absence of the
+/// member is the default (non-experimental) state.
 template <typename T>
 constexpr bool IsExperimental() {
   if constexpr (requires { T::IsExperimental; }) {

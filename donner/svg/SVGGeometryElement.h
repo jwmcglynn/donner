@@ -51,10 +51,12 @@ public:
   void setPathLength(std::optional<double> value);
 
   /**
-   * Get the path spline, computed by converting this shape's path to a spline. For \ref xml_path,
-   * this is the value of \ref SVGPathElement::d() parsed by \ref donner::svg::parser::PathParser.
+   * Get the computed path geometry as a \ref PathSpline — a sequence of line segments, quadratic
+   * and cubic Bezier curves that define the shape's outline. For `<path>` elements, this is parsed
+   * from the `d` attribute; for shapes like `<circle>` and `<rect>`, the shape is converted to
+   * equivalent path commands.
    *
-   * @return Path spline, or \c std::nullopt if the path data string is invalid.
+   * @return The path geometry, or \c std::nullopt if the path data is empty or invalid.
    */
   std::optional<PathSpline> computedSpline() const;
 
