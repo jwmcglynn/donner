@@ -210,4 +210,4 @@ target_compile_options(donner_svg_renderer_tiny_skia_filter_deps INTERFACE -fno-
 if(DONNER_RENDERER_BACKEND STREQUAL "tiny_skia")
   target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps INTERFACE tiny_skia)
 endif()
-target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps INTERFACE tiny_skia_filter)
+target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps INTERFACE tiny_skia)
