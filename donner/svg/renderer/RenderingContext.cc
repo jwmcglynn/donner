@@ -1094,10 +1094,11 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
 
 std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFeImageShadowTree(
     Entity hostEntity, Entity targetEntity, bool verbose) {
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(hostEntity);
   const std::optional<size_t> maybeIndex = createShadowTreeSystem().populateInstance(
       EntityHandle(registry_, hostEntity), computedShadow, ShadowBranchType::OffscreenFeImage,
-      targetEntity, RcString(), /*outWarnings=*/nullptr);
+      targetEntity, RcString(), disabledSink);
 
   if (!maybeIndex) {
     return std::nullopt;
@@ -1105,7 +1106,7 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
 
   const std::span<const Entity> shadowEntities =
       computedShadow.offscreenShadowEntities(maybeIndex.value());
-  StyleSystem().computeStylesFor(registry_, shadowEntities, /*outWarnings=*/nullptr);
+  StyleSystem().computeStylesFor(registry_, shadowEntities, disabledSink);
 
   const Entity shadowRoot = computedShadow.offscreenShadowRoot(maybeIndex.value());
   if (shadowRoot == entt::null) {
