@@ -59,7 +59,6 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@pixelmatch-cpp17//:pixelmatch-cpp17": "pixelmatch-cpp17",
     "@zlib//:z": "zlib",
     "//third_party:zlib": "zlib",
-    "//third_party:freetype": "freetype",
     "@tiny-skia-cpp//src:tiny_skia_lib": "tiny_skia",
     "@tiny-skia-cpp//src:tiny_skia_lib_native": "tiny_skia",
     "@tiny-skia-cpp//src/tiny_skia:tiny_skia_core": "tiny_skia",
@@ -78,7 +77,11 @@ SKIPPED_PACKAGES = {
 }
 
 # Individual targets to skip entirely from CMake generation.
-SKIPPED_TARGETS: Set[str] = set()
+SKIPPED_TARGETS: Set[str] = {
+    # Freetype linking is handled by EXTRA_LINK_DEPS for text_backend_full;
+    # the bare "freetype" name is not a valid CMake target.
+    "//third_party:freetype",
+}
 
 # Helper constants for CMake condition strings.
 _SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
