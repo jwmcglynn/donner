@@ -688,11 +688,11 @@ equivalent (`Box3<T>` / AABB) would use `Vector3<T>` corners and add a `depth()`
 `Vector2` is already explicitly dimensioned. Add `Vector3<T>` alongside it when 3D work begins
 (post-v1). No action needed now.
 
-### Refactor: `PathSpline` → `Path` + `PathBuilder`
+### Refactor: `PathSpline` → `Path` + `PathBuilder` (DONE)
 
-This is the most significant refactoring. `PathSpline` is currently a combined mutable
-builder + immutable container (~453 references across ~45 files). It should be split following
-the builder pattern used by tiny-skia-cpp and most modern 2D graphics libraries.
+This refactoring is complete. `PathSpline` has been replaced by `Path` (immutable, in
+`donner/base/Path.h`) and `PathBuilder` (mutable builder). `Path` is constructed via
+`PathBuilder::build()` and lives in the `donner` namespace.
 
 **New types:**
 
@@ -783,14 +783,14 @@ class PathBuilder {
 }  // namespace donner
 ```
 
-**Key changes from `PathSpline`:**
+**Key changes from the old `PathSpline`:**
 
 | Change | Rationale |
 |--------|-----------|
 | **Split into `Path` (immutable) + `PathBuilder` (mutable)** | Thread safety, cacheable, clear ownership semantics. Cached `GeodePathCacheComponent` holds a `Path` that never changes underneath it. |
 | **Add `QuadTo` verb** | Slug evaluates quadratic curves more efficiently than cubics (quadratic root-finding vs. cubic). SVG `<path>` has Q/q commands. Currently these are converted to cubics unnecessarily. |
 | **`cubicToQuadratic()` conversion** | Slug's fragment shader solves for ray-curve intersections. Quadratic = one `f32` square root; cubic = Cardano's formula with potential numerical issues. Converting to quadratics where possible reduces fragment shader cost and improves numerical stability. |
-| **`toMonotonic()` splitting** | Band decomposition requires curves that are monotonic in Y (each curve crosses any horizontal line at most once). Without this, band assignment is ambiguous. Currently missing from `PathSpline`. |
+| **`toMonotonic()` splitting** | Band decomposition requires curves that are monotonic in Y (each curve crosses any horizontal line at most once). Without this, band assignment is ambiguous. |
 | **`flatten()` method** | Useful for stroke expansion fallback and hit testing. Exists internally as `SubdivideAndMeasureCubic` but not exposed. |
 | **`strokeToFill()` method** | Replaces the open question about stroke rendering strategy — CPU stroke expansion as the initial approach, GPU expansion as future optimization. |
 | **`forEach` visitor** | Clean iteration without exposing internal indices. Useful for `GeodePathEncoder`. |
@@ -823,14 +823,8 @@ This is required for Slug band decomposition — a monotonic curve intersects an
 band boundary at most once, which simplifies the curve-to-band assignment and ensures correct
 winding number accumulation.
 
-**Migration strategy:**
-
-1. Introduce `Path` and `PathBuilder` alongside `PathSpline` (no breaking changes).
-2. Add `Path PathSpline::toPath() const` and `PathSpline Path::toPathSpline() const` bridge
-   methods.
-3. Migrate callers file-by-file, starting with the renderer layer (most Geode-relevant).
-4. Once all callers are migrated, remove `PathSpline`.
-5. `RendererInterface` methods (`drawPath`, `pushClip`) switch from `PathSpline` to `Path`.
+**Migration status:** Complete. `PathSpline` has been removed. All callers now use `Path`
+and `PathBuilder`. `RendererInterface` methods use `Path`.
 
 ### New Bézier Utilities
 
@@ -898,12 +892,10 @@ These should land as separate PRs in dependency order:
 2. **`Box` → `Box2`** — Mechanical rename, compatibility alias. No behavioral change.
 3. **New Bézier utilities** — Pure additions, no existing code changes. Add with unit tests and
    fuzz tests (per project conventions).
-4. **`Path` + `PathBuilder`** — New types alongside `PathSpline`, with bridge methods. No
-   breakage.
-5. **`RendererInterface` migration** — Switch `PathShape` and related types from `PathSpline` to
-   `Path`. Update all backend implementations.
-6. **Caller migration** — Migrate remaining `PathSpline` callers incrementally.
-7. **Remove `PathSpline`** — Final cleanup after all callers migrated.
+4. **`Path` + `PathBuilder`** — Done. New types replaced `PathSpline`.
+5. **`RendererInterface` migration** — Done. `PathShape` and related types use `Path`.
+6. **Caller migration** — Done. All callers migrated.
+7. **Remove `PathSpline`** — Done. `PathSpline` removed.
 
 PRs 1–3 can proceed in parallel. PR 4 depends on 3. PR 5 depends on 4. PRs 6–7 are follow-up
 cleanup.
@@ -912,23 +904,22 @@ cleanup.
 
 ### Phase 0: Type Refactoring (pre-Geode)
 
-- [ ] Rename `Transform<T>` → `Transform2<T>`, `Transform2d` → `Transform2d` with compatibility
+- [x] Rename `Transform<T>` → `Transform2<T>`, `Transform2d` → `Transform2d` with compatibility
   aliases.
-- [ ] Rename `Box<T>` → `Box2<T>`, `Box2d` → `Box2d` with compatibility aliases.
-- [ ] Implement Bézier utility functions: `SplitQuadratic`, `SplitCubic`,
+- [x] Rename `Box<T>` → `Box2<T>`, `Box2d` → `Box2d` with compatibility aliases.
+- [x] Implement Bézier utility functions: `SplitQuadratic`, `SplitCubic`,
   `ApproximateCubicWithQuadratics`, `QuadraticYExtrema`, `CubicYExtrema`, `QuadraticBounds`,
   `CubicBounds`, `EvalQuadratic`, `EvalCubic`.
   - [ ] Unit tests for all utilities.
   - [ ] Fuzz tests for cubic-to-quadratic approximation and monotonic splitting.
-- [ ] Implement `Path` (immutable) and `PathBuilder` (mutable) alongside `PathSpline`.
-  - [ ] Add `QuadTo` verb support.
+- [x] Implement `Path` (immutable) and `PathBuilder` (mutable), replacing `PathSpline`.
+  - [x] Add `QuadTo` verb support.
   - [ ] Implement `cubicToQuadratic()`.
   - [ ] Implement `toMonotonic()`.
   - [ ] Implement `flatten()`.
   - [ ] Implement `strokeToFill()`.
-  - [ ] Bridge methods: `PathSpline::toPath()`, `Path::toPathSpline()`.
-- [ ] Migrate `RendererInterface` from `PathSpline` to `Path`.
-- [ ] Migrate remaining callers, remove `PathSpline`.
+- [x] Migrate `RendererInterface` from `PathSpline` to `Path`.
+- [x] Migrate remaining callers, remove `PathSpline`.
 
 ### Phase 1: Foundation and Path Rendering
 

@@ -6,7 +6,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::components {
@@ -24,7 +24,7 @@ struct ComputedTextGeometryComponent {
    */
   struct GlyphGeometry {
     entt::entity sourceEntity = entt::null;  ///< Span source entity that owns this glyph.
-    PathSpline path;                         ///< Glyph outline in text-element local coordinates.
+    Path path;                         ///< Glyph outline in text-element local coordinates.
     Box2d extent;                             ///< Ink bounds in text-element local coordinates.
   };
 

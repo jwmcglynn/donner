@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -11,6 +11,7 @@ donner_cc_library(
     hdrs = [
         "BezierUtils.h",
         "Box.h",
+        "FillRule.h",
         "Path.h",
         "ChunkedString.h",
         "CompileTimeMap.h",
@@ -159,5 +160,27 @@ donner_cc_test(
     deps = [
         ":base",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "bezier_utils_fuzzer",
+    srcs = [
+        "tests/BezierUtils_fuzzer.cc",
+    ],
+    corpus = "tests/bezier_utils_corpus",
+    deps = [
+        ":base",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "path_fuzzer",
+    srcs = [
+        "tests/Path_fuzzer.cc",
+    ],
+    corpus = "tests/path_corpus",
+    deps = [
+        ":base",
     ],
 )

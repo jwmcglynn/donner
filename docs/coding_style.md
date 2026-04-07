@@ -9,7 +9,7 @@ As a baseline, Donner SVG aligns with the [Google C++ coding style](https://goog
 ### Naming
 
 - **Folders**: Names are lowercase, and one word is preferred. For multiple words, use `lower_snake_case`.
-- **Files**: `UpperCamelCase`, matching the C++ class in the file contents, e.g., `PathSpline.cc` or `SVGPathElement.h`.
+- **Files**: `UpperCamelCase`, matching the C++ class in the file contents, e.g., `Path.cc` or `SVGPathElement.h`.
   - The filename should match the principal class or struct in the file contents.
   - Use the `.cc` extension for source files, and `.h` for header files.
   - Use the `_tests.cc` suffix for test files, and `_fuzzer.cc` for fuzzing files.
@@ -52,10 +52,10 @@ namespace donner::svg {
     * Container for a spline, which is a series of points connected by lines and curves.
     *
     * This is used to represent the `d` attribute of the \ref SVGPathElement (\ref xml_path), see
-    * https://www.w3.org/TR/SVG2/paths.html#PathData. To parse SVG path data into a PathSpline, use the
+    * https://www.w3.org/TR/SVG2/paths.html#PathData. To parse SVG path data into a Path, use the
     * \ref PathParser.
     */
-   class PathSpline {
+   class Path {
      // Class implementation
    };
    ```
@@ -68,7 +68,7 @@ namespace donner::svg {
 
    ```cpp
    struct Command {
-     CommandType type;   //!< Type of command.
+     Verb verb;          //!< Verb of command.
      size_t pointIndex;  //!< Index of the first point used by this command.
    };
    ```

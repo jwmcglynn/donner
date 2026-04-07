@@ -118,23 +118,30 @@ tiny_skia::SpreadMode toTinySpreadMode(GradientSpreadMethod spreadMethod) {
   UTILS_UNREACHABLE();
 }
 
-tiny_skia::Path toTinyPath(const PathSpline& spline) {
+tiny_skia::Path toTinyPath(const Path& spline) {
   tiny_skia::PathBuilder builder(spline.commands().size(), spline.points().size());
-  const std::vector<Vector2d>& points = spline.points();
+  const auto points = spline.points();
 
-  for (const PathSpline::Command& command : spline.commands()) {
-    switch (command.type) {
-      case PathSpline::CommandType::MoveTo: {
+  for (const Path::Command& command : spline.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo: {
         const Vector2d& point = points[command.pointIndex];
         builder.moveTo(NarrowToFloat(point.x), NarrowToFloat(point.y));
         break;
       }
-      case PathSpline::CommandType::LineTo: {
+      case Path::Verb::LineTo: {
         const Vector2d& point = points[command.pointIndex];
         builder.lineTo(NarrowToFloat(point.x), NarrowToFloat(point.y));
         break;
       }
-      case PathSpline::CommandType::CurveTo: {
+      case Path::Verb::QuadTo: {
+        const Vector2d& control = points[command.pointIndex];
+        const Vector2d& endPoint = points[command.pointIndex + 1];
+        builder.quadTo(NarrowToFloat(control.x), NarrowToFloat(control.y),
+                       NarrowToFloat(endPoint.x), NarrowToFloat(endPoint.y));
+        break;
+      }
+      case Path::Verb::CurveTo: {
         const Vector2d& control1 = points[command.pointIndex];
         const Vector2d& control2 = points[command.pointIndex + 1];
         const Vector2d& endPoint = points[command.pointIndex + 2];
@@ -143,7 +150,7 @@ tiny_skia::Path toTinyPath(const PathSpline& spline) {
                         NarrowToFloat(endPoint.x), NarrowToFloat(endPoint.y));
         break;
       }
-      case PathSpline::CommandType::ClosePath: {
+      case Path::Verb::ClosePath: {
         builder.close();
         break;
       }
@@ -153,28 +160,32 @@ tiny_skia::Path toTinyPath(const PathSpline& spline) {
   return builder.finish().value_or(tiny_skia::Path());
 }
 
-PathSpline transformPathSpline(const PathSpline& spline, const Transform2d& transform) {
-  PathSpline result;
-  const std::vector<Vector2d>& points = spline.points();
+Path transformPath(const Path& spline, const Transform2d& transform) {
+  PathBuilder builder;
+  const auto points = spline.points();
 
-  for (const PathSpline::Command& command : spline.commands()) {
-    switch (command.type) {
-      case PathSpline::CommandType::MoveTo:
-        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+  for (const Path::Command& command : spline.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::LineTo:
-        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::CurveTo:
-        result.curveTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]),
-                       transform.transformPosition(points[command.pointIndex + 2]));
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]));
         break;
-      case PathSpline::CommandType::ClosePath: result.closePath(); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
+                        transform.transformPosition(points[command.pointIndex + 1]),
+                        transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
     }
   }
 
-  return result;
+  return builder.build();
 }
 
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
@@ -1568,12 +1579,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;  // .notdef glyph, skip.
       }
 
-      PathSpline glyphPath;
+      Path glyphPath;
       if (!isBitmapFont) {
         glyphPath =
             textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
         if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPathSpline(
+          glyphPath = transformPath(
               glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
         }
       }
@@ -1635,7 +1646,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             glyphFromLocal;
       }
 
-      const tiny_skia::Path tinyPath = toTinyPath(transformPathSpline(glyphPath, glyphFromLocal));
+      const tiny_skia::Path tinyPath = toTinyPath(transformPath(glyphPath, glyphFromLocal));
       auto pixmapView = currentPixmapView();
 
       // Fill.
@@ -1815,12 +1826,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
               continue;
             }
 
-            PathSpline segPath;
-            segPath.moveTo(Vector2d(0.0, decoTopY));
-            segPath.lineTo(Vector2d(segmentWidth, decoTopY));
-            segPath.lineTo(Vector2d(segmentWidth, decoTopY + decoThickness));
-            segPath.lineTo(Vector2d(0.0, decoTopY + decoThickness));
-            segPath.closePath();
+            Path segPath = PathBuilder()
+                .moveTo(Vector2d(0.0, decoTopY))
+                .lineTo(Vector2d(segmentWidth, decoTopY))
+                .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
+                .lineTo(Vector2d(0.0, decoTopY + decoThickness))
+                .closePath()
+                .build();
 
             Transform2d segTransform = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
             if (glyph.rotateDegrees != 0.0) {
@@ -1829,7 +1841,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                   segTransform;
             }
 
-            drawDecoPath(toTinyPath(transformPathSpline(segPath, segTransform)));
+            drawDecoPath(toTinyPath(transformPath(segPath, segTransform)));
           }
         } else {
           const auto isRenderedGlyph = [](const auto& glyph) {
@@ -1851,18 +1863,19 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
               });
 
           if (sameBaseline) {
-            PathSpline decoPath;
             const double x0 = firstGlyph->xPosition;
             const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
             const double y = baselineY + decoTopY;
-            decoPath.moveTo(Vector2d(x0, y));
-            decoPath.lineTo(Vector2d(x1, y));
-            decoPath.lineTo(Vector2d(x1, y + decoThickness));
-            decoPath.lineTo(Vector2d(x0, y + decoThickness));
-            decoPath.closePath();
+            Path decoPath = PathBuilder()
+                .moveTo(Vector2d(x0, y))
+                .lineTo(Vector2d(x1, y))
+                .lineTo(Vector2d(x1, y + decoThickness))
+                .lineTo(Vector2d(x0, y + decoThickness))
+                .closePath()
+                .build();
             drawDecoPath(toTinyPath(decoPath));
           } else {
-            PathSpline decoPath;
+            PathBuilder decoBuilder;
             for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
               const auto& glyph = run.glyphs[glyphIndex];
               if (!isRenderedGlyph(glyph)) {
@@ -1886,15 +1899,15 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
               }
 
               const double y = glyph.yPosition + decoTopY;
-              decoPath.moveTo(Vector2d(x0, y));
-              decoPath.lineTo(Vector2d(x1, y));
-              decoPath.lineTo(Vector2d(x1, y + decoThickness));
-              decoPath.lineTo(Vector2d(x0, y + decoThickness));
-              decoPath.closePath();
+              decoBuilder.moveTo(Vector2d(x0, y));
+              decoBuilder.lineTo(Vector2d(x1, y));
+              decoBuilder.lineTo(Vector2d(x1, y + decoThickness));
+              decoBuilder.lineTo(Vector2d(x0, y + decoThickness));
+              decoBuilder.closePath();
             }
 
-            if (!decoPath.empty()) {
-              drawDecoPath(toTinyPath(decoPath));
+            if (!decoBuilder.empty()) {
+              drawDecoPath(toTinyPath(decoBuilder.build()));
             }
           }
         }

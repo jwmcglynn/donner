@@ -83,7 +83,7 @@ The text engine is the largest gap in first-party code. `TextEngine.cc` (1,715 l
 - [ ] **text-anchor** — Test start/middle/end alignment with known text widths.
 - [ ] **dominant-baseline / alignment-baseline** — Test vertical positioning for different
   baseline values.
-- [ ] **textPath sampling** — Test `PathSpline::pointAtArcLength()` with known paths, verify
+- [ ] **textPath sampling** — Test `Path::pointAtArcLength()` with known paths, verify
   glyph rotation along curves.
 - [ ] **textLength / lengthAdjust** — Test spacing vs spacingAndGlyphs stretch modes.
 - [ ] **text-decoration** — Test underline/overline/line-through positioning.

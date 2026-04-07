@@ -18,10 +18,10 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/svg/core/FillRule.h"
+#include "donner/base/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MixBlendMode.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/WritingMode.h"
@@ -62,7 +62,7 @@ struct RendererBitmap {
  * Represents a resolved path along with its fill rule, transform, and layer index for boolean ops.
  */
 struct PathShape {
-  PathSpline path;
+  Path path;
   FillRule fillRule = FillRule::NonZero;
   /// Transform from clip path child to the clip path's coordinate system.
   Transform2d entityFromParent;

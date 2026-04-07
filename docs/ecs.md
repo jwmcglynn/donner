@@ -108,9 +108,11 @@ While StyleComponent stores user-provided style information, it does not apply t
 
 This continues for the **Computed tree** and **Render tree**.
 
-\ref donner::svg::components::PathComponent "PathComponent" and shape-specific components such as \ref donner::svg::components::RectComponent "RectComponent" store the user-provided shape information. These are transformed at the **Computed tree** stage into \ref donner::svg::components::ComputedPathComponent "ComputedPathComponent", which contains the \ref donner::svg::PathSpline "PathSpline" for the shape.
+\ref donner::svg::components::PathComponent "PathComponent" and shape-specific components such as \ref donner::svg::components::RectComponent "RectComponent" store the user-provided shape information. These are transformed at the **Computed tree** stage into \ref donner::svg::components::ComputedPathComponent "ComputedPathComponent", which contains the \ref donner::Path "Path" for the shape.
 
 This step must happen _after_ the styling phase to ensure SVG2 presentation attributes are properly propagated.
+
+\note `PathSpline` has been replaced by \ref donner::Path "Path" (immutable, in `donner/base/Path.h`) and \ref donner::PathBuilder "PathBuilder" (mutable builder). `Path` is constructed via `PathBuilder::build()`.
 
 For example, shape properties can be specified entirely in CSS:
 
@@ -181,10 +183,10 @@ void SVGPathElement::setD(RcString d) {
   path.d.set(d, css::Specificity::Override());
 }
 
-std::optional<PathSpline> SVGPathElement::computedSpline() const {
+std::optional<Path> SVGPathElement::computedPath() const {
   compute();
   if (const auto* computedPath = handle_.try_get<components::ComputedPathComponent>()) {
-    return computedPath->spline;
+    return computedPath->path;
   } else {
     return std::nullopt;
   }

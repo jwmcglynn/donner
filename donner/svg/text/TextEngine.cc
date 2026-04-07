@@ -126,28 +126,32 @@ bool isNonSpacing(uint32_t cp) {
   return false;
 }
 
-PathSpline transformPathSpline(const PathSpline& spline, const Transform2d& transform) {
-  PathSpline result;
+Path transformPath(const Path& spline, const Transform2d& transform) {
+  PathBuilder builder;
   const auto& points = spline.points();
 
   for (const auto& command : spline.commands()) {
-    switch (command.type) {
-      case PathSpline::CommandType::MoveTo:
-        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::LineTo:
-        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::CurveTo:
-        result.curveTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]),
-                       transform.transformPosition(points[command.pointIndex + 2]));
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]));
         break;
-      case PathSpline::CommandType::ClosePath: result.closePath(); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
+                        transform.transformPosition(points[command.pointIndex + 1]),
+                        transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
     }
   }
 
-  return result;
+  return builder.build();
 }
 
 Entity findTextRootEntity(EntityHandle handle) {
@@ -1422,7 +1426,7 @@ std::optional<SubSuperMetrics> TextEngine::subSuperMetrics(FontHandle font) cons
   return backend_->subSuperMetrics(font);
 }
 
-PathSpline TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+Path TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
   return backend_->glyphOutline(font, glyphIndex, scale);
 }
 
@@ -1574,11 +1578,11 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
-      PathSpline glyphPath =
+      Path glyphPath =
           glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
       if (!glyphPath.empty()) {
         if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPathSpline(
+          glyphPath = transformPath(
               glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
         }
 
@@ -1589,7 +1593,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
               glyphFromLocal;
         }
 
-        PathSpline transformed = transformPathSpline(glyphPath, glyphFromLocal);
+        Path transformed = transformPath(glyphPath, glyphFromLocal);
         const Box2d extent = transformed.bounds();
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);
@@ -1611,9 +1615,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
                                                                                  std::move(cache));
 }
 
-std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) const {
+std::vector<Path> TextEngine::computedGlyphPaths(EntityHandle handle) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
-  std::vector<PathSpline> result;
+  std::vector<Path> result;
   for (const auto& glyph : cache.glyphs) {
     if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
       result.push_back(glyph.path);

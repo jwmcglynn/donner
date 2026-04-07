@@ -5,6 +5,7 @@
 
 #include "donner/base/BezierUtils.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/Utils.h"
 
 namespace donner {
 
@@ -21,6 +22,10 @@ std::ostream& operator<<(std::ostream& os, Path::Verb verb) {
     case Path::Verb::ClosePath: return os << "ClosePath";
   }
   return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, const Path::Command& command) {
+  return os << "Command {" << command.verb << ", " << command.pointIndex << "}";
 }
 
 Box2d Path::bounds() const {
@@ -78,6 +83,971 @@ Box2d Path::transformedBounds(const Transform2d& transform) const {
 
   // Simple approach: transform the bounding box.
   return transform.transformBox(bounds());
+}
+
+namespace {
+
+constexpr double kPathLengthTolerance = 0.001;
+constexpr int kMaxSubdivisionDepth = 10;
+
+/// Approximate the arc length of a cubic Bezier via recursive subdivision.
+double subdivideCubicLength(const std::array<Vector2d, 4>& pts, double tolerance, int depth) {
+  if (depth > kMaxSubdivisionDepth) {
+    return (pts[3] - pts[0]).length();
+  }
+
+  const double chordLength = (pts[3] - pts[0]).length();
+  const double netLength =
+      (pts[1] - pts[0]).length() + (pts[2] - pts[1]).length() + (pts[3] - pts[2]).length();
+
+  if ((netLength - chordLength) <= tolerance) {
+    return (netLength + chordLength) / 2.0;
+  }
+
+  // De Casteljau subdivision at t=0.5.
+  const Vector2d p01 = (pts[0] + pts[1]) * 0.5;
+  const Vector2d p12 = (pts[1] + pts[2]) * 0.5;
+  const Vector2d p23 = (pts[2] + pts[3]) * 0.5;
+  const Vector2d p012 = (p01 + p12) * 0.5;
+  const Vector2d p123 = (p12 + p23) * 0.5;
+  const Vector2d p0123 = (p012 + p123) * 0.5;
+
+  const std::array<Vector2d, 4> left = {pts[0], p01, p012, p0123};
+  const std::array<Vector2d, 4> right = {p0123, p123, p23, pts[3]};
+
+  return subdivideCubicLength(left, tolerance, depth + 1) +
+         subdivideCubicLength(right, tolerance, depth + 1);
+}
+
+/// Measure the arc length of a cubic Bezier from t=0 to \p tEnd via De Casteljau split.
+double measureCubicPartial(const std::array<Vector2d, 4>& pts, double tEnd, double tolerance,
+                           int depth = 0) {
+  if (depth > kMaxSubdivisionDepth || tEnd <= 0.0) {
+    return 0.0;
+  }
+  if (tEnd >= 1.0) {
+    return subdivideCubicLength(pts, tolerance, 0);
+  }
+
+  // De Casteljau split at tEnd to get the left sub-curve [0, tEnd].
+  const auto lerp = [](const Vector2d& a, const Vector2d& b, double t) {
+    return a + (b - a) * t;
+  };
+  const Vector2d p01 = lerp(pts[0], pts[1], tEnd);
+  const Vector2d p12 = lerp(pts[1], pts[2], tEnd);
+  const Vector2d p23 = lerp(pts[2], pts[3], tEnd);
+  const Vector2d p012 = lerp(p01, p12, tEnd);
+  const Vector2d p123 = lerp(p12, p23, tEnd);
+  const Vector2d p0123 = lerp(p012, p123, tEnd);
+
+  const std::array<Vector2d, 4> left = {pts[0], p01, p012, p0123};
+  return subdivideCubicLength(left, tolerance, 0);
+}
+
+/// Binary-search for the t parameter on a cubic Bezier where arc length equals \p targetDist.
+double findTForArcLength(const std::array<Vector2d, 4>& pts, double targetDist, double totalSegLen,
+                         double tolerance) {
+  if (targetDist <= 0.0) {
+    return 0.0;
+  }
+  if (targetDist >= totalSegLen) {
+    return 1.0;
+  }
+
+  double lo = 0.0;
+  double hi = 1.0;
+  double mid = targetDist / totalSegLen;  // Linear initial estimate.
+
+  for (int iter = 0; iter < 30; ++iter) {
+    const double len = measureCubicPartial(pts, mid, tolerance);
+    const double error = len - targetDist;
+    if (std::abs(error) < tolerance * 0.1) {
+      break;
+    }
+    if (error > 0.0) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+    mid = (lo + hi) * 0.5;
+  }
+
+  return mid;
+}
+
+/// Evaluate a cubic Bezier at parameter \p t.
+Vector2d evalCubic(const std::array<Vector2d, 4>& pts, double t) {
+  const double s = 1.0 - t;
+  return s * s * s * pts[0] + 3.0 * s * s * t * pts[1] + 3.0 * s * t * t * pts[2] +
+         t * t * t * pts[3];
+}
+
+/// Evaluate the tangent (first derivative) of a cubic Bezier at parameter \p t.
+Vector2d evalCubicTangent(const std::array<Vector2d, 4>& pts, double t) {
+  const double s = 1.0 - t;
+  return 3.0 * (s * s * (pts[1] - pts[0]) + 2.0 * s * t * (pts[2] - pts[1]) +
+                t * t * (pts[3] - pts[2]));
+}
+
+/// Get the end point of command at index \p i.
+Vector2d endPointOfCommand(const std::vector<Path::Command>& commands,
+                           const std::vector<Vector2d>& points, size_t i) {
+  const auto& cmd = commands[i];
+  switch (cmd.verb) {
+    case Path::Verb::MoveTo: return points[cmd.pointIndex];
+    case Path::Verb::LineTo: return points[cmd.pointIndex];
+    case Path::Verb::QuadTo: return points[cmd.pointIndex + 1];
+    case Path::Verb::CurveTo: return points[cmd.pointIndex + 2];
+    case Path::Verb::ClosePath: {
+      // Walk backwards to find the last MoveTo.
+      for (size_t j = i; j-- > 0;) {
+        if (commands[j].verb == Path::Verb::MoveTo) {
+          return points[commands[j].pointIndex];
+        }
+      }
+      return points.empty() ? Vector2d() : points[0];
+    }
+  }
+  return Vector2d();
+}
+
+/// Get the start point of command at index \p i (end point of the previous command).
+Vector2d startPointOfCommand(const std::vector<Path::Command>& commands,
+                             const std::vector<Vector2d>& points, size_t i) {
+  if (i == 0) {
+    return points.empty() ? Vector2d() : points[0];
+  }
+  return endPointOfCommand(commands, points, i - 1);
+}
+
+}  // namespace
+
+double Path::pathLength() const {
+  double totalLength = 0.0;
+  Vector2d currentPoint;
+
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const auto& cmd = commands_[i];
+    switch (cmd.verb) {
+      case Verb::MoveTo: {
+        currentPoint = points_[cmd.pointIndex];
+        break;
+      }
+      case Verb::LineTo: {
+        const Vector2d& endPt = points_[cmd.pointIndex];
+        totalLength += currentPoint.distance(endPt);
+        currentPoint = endPt;
+        break;
+      }
+      case Verb::QuadTo: {
+        // Elevate quadratic to cubic for arc length measurement.
+        const Vector2d& control = points_[cmd.pointIndex];
+        const Vector2d& endPt = points_[cmd.pointIndex + 1];
+        // Quadratic-to-cubic elevation: cubic c1 = start + 2/3*(control - start),
+        // cubic c2 = end + 2/3*(control - end).
+        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
+        const std::array<Vector2d, 4> cubicPts = {currentPoint, c1, c2, endPt};
+        totalLength += subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
+        currentPoint = endPt;
+        break;
+      }
+      case Verb::CurveTo: {
+        const std::array<Vector2d, 4> cubicPts = {currentPoint, points_[cmd.pointIndex],
+                                                   points_[cmd.pointIndex + 1],
+                                                   points_[cmd.pointIndex + 2]};
+        totalLength += subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
+        currentPoint = points_[cmd.pointIndex + 2];
+        break;
+      }
+      case Verb::ClosePath: {
+        // ClosePath draws a line back to the last MoveTo point.
+        Vector2d moveToPoint;
+        for (size_t j = i; j-- > 0;) {
+          if (commands_[j].verb == Verb::MoveTo) {
+            moveToPoint = points_[commands_[j].pointIndex];
+            break;
+          }
+        }
+        totalLength += currentPoint.distance(moveToPoint);
+        currentPoint = moveToPoint;
+        break;
+      }
+    }
+  }
+
+  return totalLength;
+}
+
+Path::PointOnPath Path::pointAtArcLength(double distance) const {
+  if (commands_.empty() || distance < 0.0) {
+    return {{}, {}, 0.0, false};
+  }
+
+  double accumulated = 0.0;
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const auto& cmd = commands_[i];
+
+    switch (cmd.verb) {
+      case Verb::MoveTo: {
+        currentPoint = points_[cmd.pointIndex];
+        subpathStart = currentPoint;
+        break;
+      }
+
+      case Verb::LineTo: {
+        const Vector2d& endPt = points_[cmd.pointIndex];
+        const double segLen = currentPoint.distance(endPt);
+
+        if (accumulated + segLen >= distance) {
+          const double remaining = distance - accumulated;
+          const double t = (segLen > 0.0) ? remaining / segLen : 0.0;
+          const Vector2d pt = currentPoint + (endPt - currentPoint) * t;
+          const Vector2d tang = endPt - currentPoint;
+          return {pt, tang, std::atan2(tang.y, tang.x), true};
+        }
+
+        accumulated += segLen;
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::QuadTo: {
+        // Elevate quadratic to cubic for arc length measurement and interpolation.
+        const Vector2d& control = points_[cmd.pointIndex];
+        const Vector2d& endPt = points_[cmd.pointIndex + 1];
+        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
+        const std::array<Vector2d, 4> cubicPts = {currentPoint, c1, c2, endPt};
+        const double segLen = subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
+
+        if (accumulated + segLen >= distance) {
+          const double remaining = distance - accumulated;
+          const double t = findTForArcLength(cubicPts, remaining, segLen, kPathLengthTolerance);
+          const Vector2d pt = evalCubic(cubicPts, t);
+          const Vector2d tang = evalCubicTangent(cubicPts, t);
+          return {pt, tang, std::atan2(tang.y, tang.x), true};
+        }
+
+        accumulated += segLen;
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::CurveTo: {
+        const std::array<Vector2d, 4> cubicPts = {currentPoint, points_[cmd.pointIndex],
+                                                   points_[cmd.pointIndex + 1],
+                                                   points_[cmd.pointIndex + 2]};
+        const double segLen = subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
+
+        if (accumulated + segLen >= distance) {
+          const double remaining = distance - accumulated;
+          const double t = findTForArcLength(cubicPts, remaining, segLen, kPathLengthTolerance);
+          const Vector2d pt = evalCubic(cubicPts, t);
+          const Vector2d tang = evalCubicTangent(cubicPts, t);
+          return {pt, tang, std::atan2(tang.y, tang.x), true};
+        }
+
+        accumulated += segLen;
+        currentPoint = points_[cmd.pointIndex + 2];
+        break;
+      }
+
+      case Verb::ClosePath: {
+        // ClosePath draws a line back to the last MoveTo point.
+        const double segLen = currentPoint.distance(subpathStart);
+
+        if (accumulated + segLen >= distance) {
+          const double remaining = distance - accumulated;
+          const double t = (segLen > 0.0) ? remaining / segLen : 0.0;
+          const Vector2d pt = currentPoint + (subpathStart - currentPoint) * t;
+          const Vector2d tang = subpathStart - currentPoint;
+          return {pt, tang, std::atan2(tang.y, tang.x), true};
+        }
+
+        accumulated += segLen;
+        currentPoint = subpathStart;
+        break;
+      }
+    }
+  }
+
+  // Distance exceeds path length — return endpoint.
+  return {currentPoint, {}, 0.0, false};
+}
+
+Vector2d Path::pointAt(size_t index, double t) const {
+  assert(index < commands_.size() && "index out of range");
+  assert(t >= 0.0 && t <= 1.0 && "t out of range");
+
+  const Command& cmd = commands_.at(index);
+
+  switch (cmd.verb) {
+    case Verb::MoveTo: return points_[cmd.pointIndex];
+
+    case Verb::LineTo: [[fallthrough]];
+    case Verb::ClosePath: {
+      const Vector2d start = startPointOfCommand(commands_, points_, index);
+      const double rev_t = 1.0 - t;
+      return rev_t * start + t * points_[cmd.pointIndex];
+    }
+
+    case Verb::QuadTo: {
+      const Vector2d start = startPointOfCommand(commands_, points_, index);
+      const double rev_t = 1.0 - t;
+      return rev_t * rev_t * start                          // (1 - t)^2 * P0
+             + 2.0 * rev_t * t * points_[cmd.pointIndex]    // 2(1 - t)t * P1
+             + t * t * points_[cmd.pointIndex + 1];          // t^2 * P2
+    }
+
+    case Verb::CurveTo: {
+      const Vector2d start = startPointOfCommand(commands_, points_, index);
+      const double rev_t = 1.0 - t;
+      return rev_t * rev_t * rev_t * start                              // (1 - t)^3 * P0
+             + 3.0 * t * rev_t * rev_t * points_[cmd.pointIndex]        // 3t(1 - t)^2 * P1
+             + 3.0 * t * t * rev_t * points_[cmd.pointIndex + 1]        // 3t^2(1 - t) * P2
+             + t * t * t * points_[cmd.pointIndex + 2];                  // t^3 * P3
+    }
+  }
+
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
+}
+
+Vector2d Path::tangentAt(size_t index, double t) const {
+  assert(index < commands_.size() && "index out of range");
+  assert(t >= 0.0 && t <= 1.0 && "t out of range");
+
+  const Command& cmd = commands_.at(index);
+
+  switch (cmd.verb) {
+    case Verb::MoveTo:
+      if (index + 1 < commands_.size()) {
+        return tangentAt(index + 1, 0.0);
+      } else {
+        return Vector2d::Zero();
+      }
+
+    case Verb::LineTo: [[fallthrough]];
+    case Verb::ClosePath:
+      return points_[cmd.pointIndex] - startPointOfCommand(commands_, points_, index);
+
+    case Verb::QuadTo: {
+      const Vector2d start = startPointOfCommand(commands_, points_, index);
+      const double rev_t = 1.0 - t;
+
+      // Derivative of quadratic Bézier: 2[(1-t)(P1 - P0) + t(P2 - P1)]
+      const Vector2d p_1_0 = points_[cmd.pointIndex] - start;
+      const Vector2d p_2_1 = points_[cmd.pointIndex + 1] - points_[cmd.pointIndex];
+
+      Vector2d derivative = 2.0 * (rev_t * p_1_0 + t * p_2_1);
+
+      if (NearZero(derivative.lengthSquared())) {
+        // Degenerate: control point coincides with an endpoint.
+        derivative = points_[cmd.pointIndex + 1] - start;
+      }
+      return derivative;
+    }
+
+    case Verb::CurveTo: {
+      const Vector2d start = startPointOfCommand(commands_, points_, index);
+      const double rev_t = 1.0 - t;
+
+      // Derivative of cubic Bézier:
+      // 3[(1-t)^2 (P1 - P0) + 2(1-t)t(P2 - P1) + t^2(P3 - P2)]
+      const Vector2d p_1_0 = points_[cmd.pointIndex] - start;
+      const Vector2d p_2_1 = points_[cmd.pointIndex + 1] - points_[cmd.pointIndex];
+      const Vector2d p_3_2 = points_[cmd.pointIndex + 2] - points_[cmd.pointIndex + 1];
+
+      const Vector2d derivative = 3.0 * (rev_t * rev_t * p_1_0        // (1 - t)^2 * (P1 - P0)
+                                          + 2.0 * t * rev_t * p_2_1   // 2t(1-t) * (P2 - P1)
+                                          + t * t * p_3_2              // t^2 * (P3 - P2)
+                                         );
+
+      if (NearZero(derivative.lengthSquared())) {
+        // First derivative is zero — degenerate curve with coincident control points.
+        // Adjust t slightly and retry.
+        double adjustedT = t;
+        if (NearEquals(t, 0.0, 0.000001)) {
+          adjustedT = 0.01;
+        } else if (NearEquals(t, 1.0, 0.000001)) {
+          adjustedT = 0.99;
+        } else {
+          return derivative;
+        }
+
+        return tangentAt(index, adjustedT);
+      } else {
+        return derivative;
+      }
+    }
+  }
+
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
+}
+
+Vector2d Path::normalAt(size_t index, double t) const {
+  const Vector2d tangent = tangentAt(index, t);
+  return Vector2d(-tangent.y, tangent.x);
+}
+
+namespace {
+
+/**
+ * Expand a bounding box to account for miter join extensions at a path vertex.
+ *
+ * @param box Bounding box to expand.
+ * @param currentPoint The join vertex.
+ * @param tangent0 Tangent vector at the end of the incoming segment (un-normalized).
+ * @param tangent1 Tangent vector at the start of the outgoing segment (un-normalized).
+ * @param strokeWidth Width of the stroke.
+ * @param miterLimit Miter limit.
+ */
+void ComputeMiter(Box2d& box, const Vector2d& currentPoint, const Vector2d& tangent0,
+                  const Vector2d& tangent1, double strokeWidth, double miterLimit) {
+  const double intersectionAngle = tangent0.angleWith(-tangent1);
+
+  // If we're under the miter limit, the miter applies. However, don't apply it if the tangents are
+  // colinear, since it would not apply in a consistent direction.
+  const double miterLength = strokeWidth / std::sin(intersectionAngle * 0.5);
+  if (miterLength < miterLimit && !NearEquals(intersectionAngle, MathConstants<double>::kPi)) {
+    // We haven't exceeded the miter limit, compute the extrema.
+    const double jointAngle = (tangent0 - tangent1).angle();
+    box.addPoint(currentPoint + miterLength * Vector2d(std::cos(jointAngle), std::sin(jointAngle)));
+  }
+}
+
+}  // namespace
+
+Box2d Path::strokeMiterBounds(double strokeWidth, double miterLimit) const {
+  UTILS_RELEASE_ASSERT(!empty());
+  assert(strokeWidth > 0.0);
+  assert(miterLimit >= 0.0);
+
+  Box2d box = Box2d::CreateEmpty(points_.front());
+  Vector2d current;
+
+  constexpr size_t kNPos = ~size_t(0);
+  size_t lastIndex = kNPos;
+  size_t lastMoveToIndex = kNPos;
+
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const Command& cmd = commands_[i];
+
+    switch (cmd.verb) {
+      case Verb::MoveTo: {
+        current = points_[cmd.pointIndex];
+        box.addPoint(current);
+
+        lastIndex = kNPos;
+        lastMoveToIndex = i;
+        break;
+      }
+      case Verb::ClosePath: {
+        if (lastIndex != kNPos) {
+          // For ClosePath, start with a standard line segment.
+          const Vector2d lastTangent = tangentAt(lastIndex, 1.0);
+          const Vector2d tangent = tangentAt(i, 0.0);
+
+          ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
+          current = points_[cmd.pointIndex];
+
+          // Then "join" it to the first segment of the subpath.
+          const Vector2d joinTangent = tangentAt(lastMoveToIndex, 0.0);
+          ComputeMiter(box, current, tangent, joinTangent, strokeWidth, miterLimit);
+        }
+
+        lastIndex = kNPos;
+        break;
+      }
+      case Verb::LineTo: {
+        if (lastIndex != kNPos) {
+          const Vector2d lastTangent = tangentAt(lastIndex, 1.0);
+          const Vector2d tangent = tangentAt(i, 0.0);
+
+          ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
+        }
+
+        current = points_[cmd.pointIndex];
+        box.addPoint(current);
+        lastIndex = i;
+        break;
+      }
+      case Verb::QuadTo: {
+        if (lastIndex != kNPos) {
+          const Vector2d lastTangent = tangentAt(lastIndex, 1.0);
+          const Vector2d tangent = tangentAt(i, 0.0);
+
+          ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
+        }
+
+        current = points_[cmd.pointIndex + 1];
+        box.addPoint(current);
+        lastIndex = i;
+        break;
+      }
+      case Verb::CurveTo: {
+        if (lastIndex != kNPos) {
+          const Vector2d lastTangent = tangentAt(lastIndex, 1.0);
+          const Vector2d tangent = tangentAt(i, 0.0);
+
+          ComputeMiter(box, current, lastTangent, tangent, strokeWidth, miterLimit);
+        }
+
+        current = points_[cmd.pointIndex + 2];
+        box.addPoint(current);
+        lastIndex = i;
+        break;
+      }
+    }
+  }
+
+  return box;
+}
+
+namespace {
+
+// ---- Hit-testing helpers ----
+
+constexpr double kHitTestTolerance = 0.001;
+constexpr int kHitTestMaxDepth = 10;
+
+/// Distance from point \p p to the line segment (a, b).
+double DistanceFromPointToLine(const Vector2d& p, const Vector2d& a, const Vector2d& b) {
+  const Vector2d ab = b - a;
+  const Vector2d ap = p - a;
+  const double abLenSq = ab.lengthSquared();
+  if (NearZero(abLenSq)) {
+    return ap.length();
+  }
+  const double t = Clamp(ap.dot(ab) / abLenSq, 0.0, 1.0);
+  return (p - (a + t * ab)).length();
+}
+
+/// True when both control points are close to the chord from p0 to p3.
+bool IsCurveFlatEnough(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                       const Vector2d& p3, double tolerance) {
+  return DistanceFromPointToLine(p1, p0, p3) <= tolerance &&
+         DistanceFromPointToLine(p2, p0, p3) <= tolerance;
+}
+
+/// Winding-number contribution of a single line segment for a test point.
+int WindingNumberContribution(const Vector2d& p0, const Vector2d& p1, const Vector2d& point) {
+  if (p0.y <= point.y) {
+    if (p1.y > point.y && ((p1 - p0).cross(point - p0)) > 0) {
+      return 1;
+    }
+  } else {
+    if (p1.y <= point.y && ((p1 - p0).cross(point - p0)) < 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/// Recursive winding-number contribution for a cubic Bezier curve.
+int WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                                   const Vector2d& p3, const Vector2d& point, double tolerance,
+                                   int depth = 0) {
+  if (depth > kHitTestMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
+    return WindingNumberContribution(p0, p3, point);
+  }
+
+  const Vector2d p01 = (p0 + p1) * 0.5;
+  const Vector2d p12 = (p1 + p2) * 0.5;
+  const Vector2d p23 = (p2 + p3) * 0.5;
+  const Vector2d p012 = (p01 + p12) * 0.5;
+  const Vector2d p123 = (p12 + p23) * 0.5;
+  const Vector2d p0123 = (p012 + p123) * 0.5;
+
+  return WindingNumberContributionCurve(p0, p01, p012, p0123, point, tolerance, depth + 1) +
+         WindingNumberContributionCurve(p0123, p123, p23, p3, point, tolerance, depth + 1);
+}
+
+/// Recursive check whether a point is within \p tolerance of a cubic Bezier.
+bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vector2d& p1,
+                          const Vector2d& p2, const Vector2d& p3, double tolerance,
+                          int depth = 0) {
+  if (depth > kHitTestMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
+    return DistanceFromPointToLine(point, p0, p3) <= tolerance;
+  }
+
+  const Vector2d p01 = (p0 + p1) * 0.5;
+  const Vector2d p12 = (p1 + p2) * 0.5;
+  const Vector2d p23 = (p2 + p3) * 0.5;
+  const Vector2d p012 = (p01 + p12) * 0.5;
+  const Vector2d p123 = (p12 + p23) * 0.5;
+  const Vector2d p0123 = (p012 + p123) * 0.5;
+
+  return IsPointOnCubicBezier(point, p0, p01, p012, p0123, tolerance, depth + 1) ||
+         IsPointOnCubicBezier(point, p0123, p123, p23, p3, tolerance, depth + 1);
+}
+
+}  // namespace
+
+bool Path::isInside(const Vector2d& point, FillRule fillRule) const {
+  constexpr double kIsInsideTolerance = 0.1;
+
+  int windingNumber = 0;
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const Command& cmd = commands_[i];
+    switch (cmd.verb) {
+      case Verb::MoveTo: {
+        currentPoint = points_[cmd.pointIndex];
+        subpathStart = currentPoint;
+        break;
+      }
+
+      case Verb::LineTo: {
+        const Vector2d& endPt = points_[cmd.pointIndex];
+        if (DistanceFromPointToLine(point, currentPoint, endPt) <= kIsInsideTolerance) {
+          return true;
+        }
+        windingNumber += WindingNumberContribution(currentPoint, endPt, point);
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::QuadTo: {
+        // Elevate to cubic for hit testing.
+        const Vector2d& control = points_[cmd.pointIndex];
+        const Vector2d& endPt = points_[cmd.pointIndex + 1];
+        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
+        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, kIsInsideTolerance)) {
+          return true;
+        }
+        windingNumber +=
+            WindingNumberContributionCurve(currentPoint, c1, c2, endPt, point, kHitTestTolerance);
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::CurveTo: {
+        const Vector2d& c1 = points_[cmd.pointIndex];
+        const Vector2d& c2 = points_[cmd.pointIndex + 1];
+        const Vector2d& endPt = points_[cmd.pointIndex + 2];
+        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, kIsInsideTolerance)) {
+          return true;
+        }
+        windingNumber +=
+            WindingNumberContributionCurve(currentPoint, c1, c2, endPt, point, kHitTestTolerance);
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::ClosePath: {
+        if (DistanceFromPointToLine(point, currentPoint, subpathStart) <= kIsInsideTolerance) {
+          return true;
+        }
+        windingNumber += WindingNumberContribution(currentPoint, subpathStart, point);
+        currentPoint = subpathStart;
+        break;
+      }
+    }
+  }
+
+  if (fillRule == FillRule::NonZero) {
+    return windingNumber != 0;
+  } else if (fillRule == FillRule::EvenOdd) {
+    return (windingNumber % 2) != 0;
+  }
+
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
+}
+
+bool Path::isOnPath(const Vector2d& point, double strokeWidth) const {
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+
+  for (const Command& cmd : commands_) {
+    switch (cmd.verb) {
+      case Verb::MoveTo: {
+        currentPoint = points_[cmd.pointIndex];
+        subpathStart = currentPoint;
+        break;
+      }
+
+      case Verb::LineTo: {
+        const Vector2d& endPt = points_[cmd.pointIndex];
+        if (DistanceFromPointToLine(point, currentPoint, endPt) <= strokeWidth) {
+          return true;
+        }
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::QuadTo: {
+        // Elevate to cubic for hit testing.
+        const Vector2d& control = points_[cmd.pointIndex];
+        const Vector2d& endPt = points_[cmd.pointIndex + 1];
+        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
+        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, strokeWidth)) {
+          return true;
+        }
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::CurveTo: {
+        const Vector2d& c1 = points_[cmd.pointIndex];
+        const Vector2d& c2 = points_[cmd.pointIndex + 1];
+        const Vector2d& endPt = points_[cmd.pointIndex + 2];
+        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, strokeWidth)) {
+          return true;
+        }
+        currentPoint = endPt;
+        break;
+      }
+
+      case Verb::ClosePath: {
+        if (DistanceFromPointToLine(point, currentPoint, subpathStart) <= strokeWidth) {
+          return true;
+        }
+        currentPoint = subpathStart;
+        break;
+      }
+    }
+  }
+
+  return false;
+}
+
+namespace {
+
+/**
+ * Interpolate two tangent vectors to find the orientation at a joint.
+ *
+ * If the tangents are not opposite, returns the normalized sum (the halfway direction).
+ * If the tangents are opposite (a cusp), returns a perpendicular to prevTangent.
+ */
+Vector2d InterpolateTangents(const Vector2d& prevTangent, const Vector2d& nextTangent) {
+  const Vector2d sum = prevTangent + nextTangent;
+
+  if (!NearZero(sum.lengthSquared())) {
+    return sum.normalize();
+  } else {
+    // Tangents are opposite; choose a perpendicular vector.
+    return Vector2d(prevTangent.y, -prevTangent.x);
+  }
+}
+
+/// Compute the tangent at the start (t=0) of command \p i.
+Vector2d tangentAtStart(const std::vector<Path::Command>& commands,
+                        const std::vector<Vector2d>& points, size_t i) {
+  const auto& cmd = commands[i];
+  const Vector2d start = startPointOfCommand(commands, points, i);
+
+  switch (cmd.verb) {
+    case Path::Verb::MoveTo:
+      // Tangent of a MoveTo is the tangent at the start of the next command.
+      if (i + 1 < commands.size()) {
+        return tangentAtStart(commands, points, i + 1);
+      }
+      return Vector2d::Zero();
+
+    case Path::Verb::LineTo:
+      return points[cmd.pointIndex] - start;
+
+    case Path::Verb::QuadTo: {
+      // Derivative of quadratic at t=0: 2*(P1 - P0).
+      Vector2d tangent = 2.0 * (points[cmd.pointIndex] - start);
+      if (NearZero(tangent.lengthSquared())) {
+        // Degenerate: control == start, use (end - start).
+        tangent = points[cmd.pointIndex + 1] - start;
+      }
+      return tangent;
+    }
+
+    case Path::Verb::CurveTo: {
+      // Derivative of cubic at t=0: 3*(P1 - P0).
+      Vector2d tangent = 3.0 * (points[cmd.pointIndex] - start);
+      if (NearZero(tangent.lengthSquared())) {
+        // Degenerate: c1 == start, try c2.
+        tangent = 3.0 * (points[cmd.pointIndex + 1] - start);
+        if (NearZero(tangent.lengthSquared())) {
+          tangent = points[cmd.pointIndex + 2] - start;
+        }
+      }
+      return tangent;
+    }
+
+    case Path::Verb::ClosePath: {
+      // ClosePath is a line from current point back to the subpath start.
+      return endPointOfCommand(commands, points, i) - start;
+    }
+  }
+  return Vector2d::Zero();
+}
+
+/// Compute the tangent at the end (t=1) of command \p i.
+Vector2d tangentAtEnd(const std::vector<Path::Command>& commands,
+                      const std::vector<Vector2d>& points, size_t i) {
+  const auto& cmd = commands[i];
+  const Vector2d start = startPointOfCommand(commands, points, i);
+
+  switch (cmd.verb) {
+    case Path::Verb::MoveTo:
+      if (i + 1 < commands.size()) {
+        return tangentAtStart(commands, points, i + 1);
+      }
+      return Vector2d::Zero();
+
+    case Path::Verb::LineTo:
+      return points[cmd.pointIndex] - start;
+
+    case Path::Verb::QuadTo: {
+      // Derivative of quadratic at t=1: 2*(P2 - P1).
+      Vector2d tangent = 2.0 * (points[cmd.pointIndex + 1] - points[cmd.pointIndex]);
+      if (NearZero(tangent.lengthSquared())) {
+        tangent = points[cmd.pointIndex + 1] - start;
+      }
+      return tangent;
+    }
+
+    case Path::Verb::CurveTo: {
+      // Derivative of cubic at t=1: 3*(P3 - P2).
+      Vector2d tangent = 3.0 * (points[cmd.pointIndex + 2] - points[cmd.pointIndex + 1]);
+      if (NearZero(tangent.lengthSquared())) {
+        tangent = 3.0 * (points[cmd.pointIndex + 2] - points[cmd.pointIndex]);
+        if (NearZero(tangent.lengthSquared())) {
+          tangent = points[cmd.pointIndex + 2] - start;
+        }
+      }
+      return tangent;
+    }
+
+    case Path::Verb::ClosePath: {
+      return endPointOfCommand(commands, points, i) - start;
+    }
+  }
+  return Vector2d::Zero();
+}
+
+/// Find the index of the ClosePath command for the subpath starting at \p moveToIndex,
+/// or size_t(-1) if the subpath is open.
+size_t findClosePathIndex(const std::vector<Path::Command>& commands, size_t moveToIndex) {
+  for (size_t j = moveToIndex + 1; j < commands.size(); ++j) {
+    if (commands[j].verb == Path::Verb::ClosePath) {
+      return j;
+    }
+    if (commands[j].verb == Path::Verb::MoveTo) {
+      return size_t(-1);  // Open subpath (next subpath started before close).
+    }
+  }
+  return size_t(-1);  // Open subpath (end of path without close).
+}
+
+}  // namespace
+
+std::vector<Path::Vertex> Path::vertices() const {
+  std::vector<Vertex> result;
+  std::optional<size_t> openPathCommand;
+  size_t closePathIndex = size_t(-1);
+  bool justMoved = false;
+
+  bool wasInternal = false;
+  for (size_t i = 0; i < commands_.size(); ++i) {
+    const Command& command = commands_[i];
+
+    // Skip intermediate arc decomposition segments — only the first and last segments of an arc
+    // produce vertices for marker placement.
+    const bool shouldSkip = wasInternal;
+    wasInternal = command.isInternal;
+    if (shouldSkip) {
+      continue;
+    }
+
+    if (command.verb == Verb::MoveTo) {
+      if (openPathCommand) {
+        assert(i > 0);
+
+        // Place a vertex at the end of the previous segment. For open subpaths, the orientation is
+        // the direction of the line.
+        const Vector2d point = endPointOfCommand(commands_, points_, i - 1);
+        const Vector2d orientation = tangentAtEnd(commands_, points_, i - 1).normalize();
+        result.push_back(Vertex{point, orientation});
+      }
+
+      openPathCommand = i;
+      closePathIndex = findClosePathIndex(commands_, i);
+      justMoved = true;
+
+    } else if (command.verb == Verb::ClosePath) {
+      // If this ClosePath draws a line back to the starting point, place a vertex at the current
+      // point. Since this is a closed subpath, the orientation is interpolated between the end of
+      // the previous segment and the start of the ClosePath line.
+      assert(openPathCommand);
+      assert(i > 0);
+
+      const Vector2d startPoint = endPointOfCommand(commands_, points_, i - 1);
+      const Vector2d endPoint = endPointOfCommand(commands_, points_, i);
+
+      // Only place a vertex if the ClosePath line has non-zero length.
+      if (!NearZero((startPoint - endPoint).lengthSquared())) {
+        const Vector2d prevTangent = tangentAtEnd(commands_, points_, i - 1).normalize();
+        const Vector2d nextTangent = tangentAtStart(commands_, points_, i).normalize();
+
+        const Vector2d orientationStart = InterpolateTangents(prevTangent, nextTangent);
+        result.push_back(Vertex{startPoint, orientationStart});
+      }
+
+      // Place a vertex at the subpath start point. The orientation is interpolated between the
+      // end of the ClosePath line and the start of the first segment after MoveTo.
+      {
+        const Vector2d prevTangent = tangentAtEnd(commands_, points_, i).normalize();
+        const Vector2d nextTangent = tangentAtStart(commands_, points_, *openPathCommand).normalize();
+
+        const Vector2d orientationEnd = InterpolateTangents(prevTangent, nextTangent);
+        result.push_back(Vertex{endPoint, orientationEnd});
+      }
+
+      openPathCommand = std::nullopt;
+      justMoved = false;
+    } else {
+      // LineTo, QuadTo, or CurveTo: place a vertex at the start point.
+      assert(i > 0);
+
+      const Vector2d startPoint = startPointOfCommand(commands_, points_, i);
+      const Vector2d startOrientation = tangentAtStart(commands_, points_, i).normalize();
+
+      if (justMoved) {
+        // First drawing command after a MoveTo.
+        if (closePathIndex != size_t(-1)) {
+          // Closed subpath: interpolate between the ClosePath tangent and the first segment.
+          const Vector2d closeOrientation =
+              tangentAtEnd(commands_, points_, closePathIndex).normalize();
+          result.push_back(
+              Vertex{startPoint, InterpolateTangents(closeOrientation, startOrientation)});
+        } else {
+          // Open subpath: orientation is the direction of the first segment.
+          result.push_back(Vertex{startPoint, startOrientation});
+        }
+      } else {
+        // Interior vertex: orientation is interpolated between end of previous and start of this.
+        const Vector2d prevOrientation = tangentAtEnd(commands_, points_, i - 1).normalize();
+        result.push_back(
+            Vertex{startPoint, InterpolateTangents(prevOrientation, startOrientation)});
+      }
+
+      justMoved = false;
+    }
+  }
+
+  // If the last subpath was open, place the final vertex.
+  if (openPathCommand && commands_.size() > 1) {
+    const Vector2d point = endPointOfCommand(commands_, points_, commands_.size() - 1);
+    const Vector2d orientation = tangentAtEnd(commands_, points_, commands_.size() - 1).normalize();
+    result.push_back(Vertex{point, orientation});
+  }
+
+  return result;
 }
 
 namespace {
@@ -318,12 +1288,381 @@ Path Path::flatten(double tolerance) const {
   return builder.build();
 }
 
+namespace {
+
+/// Compute the perpendicular normal (left-hand side) of a line segment from \p a to \p b.
+/// Returns a unit vector pointing to the left of the segment direction.
+Vector2d segmentNormal(const Vector2d& a, const Vector2d& b) {
+  const Vector2d d = b - a;
+  // Rotate 90 degrees counter-clockwise: (dx, dy) -> (-dy, dx)
+  return Vector2d(-d.y, d.x).normalize();
+}
+
+/// Emit a line join between two consecutive offset segments.
+///
+/// \p prevEnd is the end of the previous offset segment on the current side.
+/// \p curStart is the start of the current offset segment on the current side.
+/// \p vertex is the original path vertex (the corner point before offset).
+/// \p prevNormal and \p curNormal are the outward normals of the previous and current segments.
+/// \p halfWidth is half the stroke width.
+/// \p join is the line join style.
+/// \p miterLimit is the SVG miter limit.
+/// \p builder is the PathBuilder to emit to.
+/// \p isLeftSide indicates whether we are building the left (forward) or right (backward) contour.
+void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d& vertex,
+              const Vector2d& prevNormal, const Vector2d& curNormal, double halfWidth,
+              LineJoin join, double miterLimit, PathBuilder& builder, bool isLeftSide) {
+  // Determine the turn direction. The cross product of the two normals tells us
+  // whether the join is on the inside or outside of the turn.
+  // For a left turn (counter-clockwise), the outside is on the left side.
+  const double cross = prevNormal.x * curNormal.y - prevNormal.y * curNormal.x;
+
+  // If the normals are nearly parallel, just connect with a line.
+  if (NearZero(cross, 1e-10)) {
+    builder.lineTo(curStart);
+    return;
+  }
+
+  // Determine if this side is the outside of the turn.
+  // For a left-side contour: outside when turning right (cross < 0).
+  // For a right-side contour: outside when turning left (cross > 0).
+  const bool isOutside = isLeftSide ? (cross < 0.0) : (cross > 0.0);
+
+  if (!isOutside) {
+    // Inside of the turn: just connect directly. The segments will overlap slightly
+    // but that's correct for fill.
+    builder.lineTo(curStart);
+    return;
+  }
+
+  // Outside of the turn: apply the join style.
+  switch (join) {
+    case LineJoin::Bevel:
+      // Simple: connect the two offset endpoints with a straight line.
+      builder.lineTo(curStart);
+      break;
+
+    case LineJoin::Round: {
+      // Approximate a circular arc from prevEnd to curStart around vertex.
+      // We subdivide the angle into segments for a smooth approximation.
+      const Vector2d fromVec = prevEnd - vertex;
+      const Vector2d toVec = curStart - vertex;
+
+      double startAngle = std::atan2(fromVec.y, fromVec.x);
+      double endAngle = std::atan2(toVec.y, toVec.x);
+
+      // Choose the shorter arc direction.
+      double sweep = endAngle - startAngle;
+      if (sweep > MathConstants<double>::kPi) {
+        sweep -= 2.0 * MathConstants<double>::kPi;
+      } else if (sweep < -MathConstants<double>::kPi) {
+        sweep += 2.0 * MathConstants<double>::kPi;
+      }
+
+      // Subdivide into small arcs.
+      const int numSteps = std::max(4, static_cast<int>(std::ceil(Abs(sweep) * halfWidth / 2.0)));
+      for (int s = 1; s <= numSteps; ++s) {
+        const double t = static_cast<double>(s) / static_cast<double>(numSteps);
+        const double angle = startAngle + sweep * t;
+        const Vector2d pt = vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth;
+        builder.lineTo(pt);
+      }
+      break;
+    }
+
+    case LineJoin::Miter: {
+      // Compute the miter point: intersection of the two offset lines.
+      // The miter point is at vertex + halfWidth * (prevNormal + curNormal) / cos(halfAngle).
+      const Vector2d miterDir = (prevNormal + curNormal);
+      const double miterDirLen = miterDir.length();
+
+      if (NearZero(miterDirLen, 1e-10)) {
+        // Degenerate: 180-degree turn, fall back to bevel.
+        builder.lineTo(curStart);
+        break;
+      }
+
+      const Vector2d miterUnit = miterDir * (1.0 / miterDirLen);
+
+      // The cosine of half the angle between the normals:
+      // cos(halfAngle) = dot(prevNormal, miterUnit) = miterDirLen / 2
+      const double cosHalfAngle = miterDirLen * 0.5;
+
+      // Miter length ratio = 1 / sin(halfAngle).
+      // sin(halfAngle) = sqrt(1 - cos^2(halfAngle)).
+      const double sinHalfAngle = std::sqrt(std::max(0.0, 1.0 - cosHalfAngle * cosHalfAngle));
+
+      double miterRatio = 0.0;
+      if (!NearZero(sinHalfAngle, 1e-10)) {
+        miterRatio = 1.0 / sinHalfAngle;
+      }
+
+      if (miterRatio > miterLimit || NearZero(sinHalfAngle, 1e-10)) {
+        // Miter limit exceeded: fall back to bevel.
+        builder.lineTo(curStart);
+      } else {
+        // Emit the miter point.
+        const double miterLength = halfWidth / sinHalfAngle;
+        const Vector2d miterPoint = vertex + miterUnit * miterLength;
+        builder.lineTo(miterPoint);
+        builder.lineTo(curStart);
+      }
+      break;
+    }
+  }
+}
+
+/// Emit a line cap at a subpath endpoint.
+///
+/// \p point is the endpoint.
+/// \p direction is the tangent direction at the endpoint (pointing outward from the subpath).
+/// \p halfWidth is half the stroke width.
+/// \p cap is the cap style.
+/// \p builder is the PathBuilder to emit to.
+void emitCap(const Vector2d& point, const Vector2d& direction, double halfWidth, LineCap cap,
+             PathBuilder& builder) {
+  const Vector2d normal = Vector2d(-direction.y, direction.x);
+  const Vector2d leftPt = point + normal * halfWidth;
+  const Vector2d rightPt = point - normal * halfWidth;
+
+  switch (cap) {
+    case LineCap::Butt:
+      // Connect left to right directly (the caller has already placed us at leftPt).
+      builder.lineTo(rightPt);
+      break;
+
+    case LineCap::Square: {
+      // Extend by halfWidth in the direction of the tangent.
+      const Vector2d extension = direction * halfWidth;
+      builder.lineTo(leftPt + extension);
+      builder.lineTo(rightPt + extension);
+      builder.lineTo(rightPt);
+      break;
+    }
+
+    case LineCap::Round: {
+      // Semicircle from leftPt around to rightPt.
+      const double startAngle = std::atan2(normal.y, normal.x);
+      // Sweep PI radians (semicircle) in the direction from left to right around the cap.
+      const double sweep = -MathConstants<double>::kPi;
+
+      const int numSteps = std::max(8, static_cast<int>(std::ceil(halfWidth * 2.0)));
+      for (int s = 1; s <= numSteps; ++s) {
+        const double t = static_cast<double>(s) / static_cast<double>(numSteps);
+        const double angle = startAngle + sweep * t;
+        const Vector2d pt = point + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth;
+        builder.lineTo(pt);
+      }
+      break;
+    }
+  }
+}
+
+/// Represents a subpath extracted from a flattened path (lines only).
+struct FlatSubpath {
+  std::vector<Vector2d> points;
+  bool closed = false;
+};
+
+/// Extract subpaths from a flattened path.
+std::vector<FlatSubpath> extractSubpaths(const Path& path) {
+  std::vector<FlatSubpath> subpaths;
+  FlatSubpath current;
+  Vector2d moveToPoint;
+
+  for (const auto& cmd : path.commands()) {
+    switch (cmd.verb) {
+      case Path::Verb::MoveTo:
+        if (current.points.size() >= 2) {
+          subpaths.push_back(std::move(current));
+        }
+        current = FlatSubpath();
+        moveToPoint = path.points()[cmd.pointIndex];
+        current.points.push_back(moveToPoint);
+        break;
+
+      case Path::Verb::LineTo:
+        current.points.push_back(path.points()[cmd.pointIndex]);
+        break;
+
+      case Path::Verb::ClosePath:
+        // Close: add closing line back to moveTo if needed.
+        if (!current.points.empty() &&
+            current.points.back().distanceSquared(moveToPoint) > 1e-20) {
+          current.points.push_back(moveToPoint);
+        }
+        current.closed = true;
+        subpaths.push_back(std::move(current));
+        current = FlatSubpath();
+        current.points.push_back(moveToPoint);
+        break;
+
+      case Path::Verb::QuadTo:
+      case Path::Verb::CurveTo:
+        // Should not appear in flattened path; ignore.
+        break;
+    }
+  }
+
+  if (current.points.size() >= 2) {
+    subpaths.push_back(std::move(current));
+  }
+
+  return subpaths;
+}
+
+/// Build the stroke outline for a single subpath.
+void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBuilder& builder) {
+  const auto& pts = subpath.points;
+  const size_t n = pts.size();
+  if (n < 2) {
+    return;
+  }
+
+  const double halfWidth = style.width * 0.5;
+
+  // Compute per-segment normals (left-side normals, pointing to the left of the direction).
+  const size_t numSegments = n - 1;
+  std::vector<Vector2d> normals(numSegments);
+  for (size_t i = 0; i < numSegments; ++i) {
+    normals[i] = segmentNormal(pts[i], pts[i + 1]);
+  }
+
+  // ---- Left contour (forward walk) ----
+  // Offset each segment to the left by halfWidth.
+
+  // Start point of the left contour.
+  const Vector2d leftStart = pts[0] + normals[0] * halfWidth;
+  builder.moveTo(leftStart);
+
+  // Emit the first segment's end on the left side.
+  builder.lineTo(pts[1] + normals[0] * halfWidth);
+
+  // For each subsequent segment, emit a join then the segment.
+  for (size_t i = 1; i < numSegments; ++i) {
+    const Vector2d prevEnd = pts[i] + normals[i - 1] * halfWidth;
+    const Vector2d curStart = pts[i] + normals[i] * halfWidth;
+
+    emitJoin(prevEnd, curStart, pts[i], normals[i - 1], normals[i], halfWidth, style.join,
+             style.miterLimit, builder, /*isLeftSide=*/true);
+
+    // Emit end of current segment on left side.
+    builder.lineTo(pts[i + 1] + normals[i] * halfWidth);
+  }
+
+  if (subpath.closed) {
+    // For closed subpaths, join the last segment to the first.
+    const Vector2d prevEnd = pts[n - 1] + normals[numSegments - 1] * halfWidth;
+    const Vector2d curStart = pts[n - 1] + normals[0] * halfWidth;
+
+    // The last point should be equal to the first point for closed subpaths.
+    emitJoin(prevEnd, curStart, pts[n - 1], normals[numSegments - 1], normals[0], halfWidth,
+             style.join, style.miterLimit, builder, /*isLeftSide=*/true);
+
+    // Now walk the right contour backward.
+    // For a closed path, we close the left contour and start a new subpath for the right.
+    builder.closePath();
+
+    // ---- Right contour (inner, wound opposite direction for closed paths) ----
+    // Walk backward, offset to the right (i.e., negate the normal).
+    const Vector2d rightStart = pts[0] - normals[0] * halfWidth;
+    builder.moveTo(rightStart);
+
+    builder.lineTo(pts[1] - normals[0] * halfWidth);
+
+    for (size_t i = 1; i < numSegments; ++i) {
+      const Vector2d prevEnd = pts[i] - normals[i - 1] * halfWidth;
+      const Vector2d curStart = pts[i] - normals[i] * halfWidth;
+
+      // On the right side, the "outside" sense is flipped.
+      emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i - 1].x, -normals[i - 1].y),
+               Vector2d(-normals[i].x, -normals[i].y), halfWidth, style.join, style.miterLimit,
+               builder, /*isLeftSide=*/true);
+
+      builder.lineTo(pts[i + 1] - normals[i] * halfWidth);
+    }
+
+    // Close the right contour with a join at the start/end point.
+    {
+      const Vector2d prevEnd = pts[n - 1] - normals[numSegments - 1] * halfWidth;
+      const Vector2d curStart = pts[n - 1] - normals[0] * halfWidth;
+
+      emitJoin(prevEnd, curStart, pts[n - 1],
+               Vector2d(-normals[numSegments - 1].x, -normals[numSegments - 1].y),
+               Vector2d(-normals[0].x, -normals[0].y), halfWidth, style.join, style.miterLimit,
+               builder, /*isLeftSide=*/true);
+    }
+
+    builder.closePath();
+  } else {
+    // ---- Open subpath: cap at end, then right contour backward, then cap at start ----
+
+    // End cap: going from the left side to the right side at the last point.
+    {
+      const Vector2d endDir = (pts[n - 1] - pts[n - 2]).normalize();
+      emitCap(pts[n - 1], endDir, halfWidth, style.cap, builder);
+    }
+
+    // ---- Right contour (backward walk) ----
+    // Walk segments in reverse, offset to the right (negate normal).
+    // We are already at the right side of the last point after the cap.
+    builder.lineTo(pts[n - 1] - normals[numSegments - 1] * halfWidth);
+
+    for (size_t i = numSegments - 1; i > 0; --i) {
+      builder.lineTo(pts[i] - normals[i] * halfWidth);
+
+      // Join between segment i and segment i-1 on the right side (walking backward).
+      // When walking backward, the "previous" is normals[i] and "current" is normals[i-1],
+      // but negated since we're on the right side.
+      const Vector2d prevEnd = pts[i] - normals[i] * halfWidth;
+      const Vector2d curStart = pts[i] - normals[i - 1] * halfWidth;
+
+      emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i].x, -normals[i].y),
+               Vector2d(-normals[i - 1].x, -normals[i - 1].y), halfWidth, style.join,
+               style.miterLimit, builder, /*isLeftSide=*/true);
+    }
+
+    builder.lineTo(pts[0] - normals[0] * halfWidth);
+
+    // Start cap: going from the right side to the left side at the first point.
+    {
+      const Vector2d startDir = (pts[0] - pts[1]).normalize();
+      emitCap(pts[0], startDir, halfWidth, style.cap, builder);
+    }
+
+    builder.closePath();
+  }
+}
+
+}  // namespace
+
+Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const {
+  if (commands_.empty() || style.width <= 0.0) {
+    return Path();
+  }
+
+  // Step 1: Flatten curves to line segments.
+  const Path flattened = flatten(flattenTolerance);
+
+  // Step 2: Extract subpaths.
+  const std::vector<FlatSubpath> subpaths = extractSubpaths(flattened);
+
+  // Step 3: Build the stroke outline for each subpath.
+  PathBuilder builder;
+  for (const auto& subpath : subpaths) {
+    strokeSubpath(subpath, style, builder);
+  }
+
+  return builder.build();
+}
+
 // ============================================================================
 // PathBuilder
 // ============================================================================
 
 PathBuilder& PathBuilder::moveTo(const Vector2d& point) {
-  path_.commands_.push_back({Path::Verb::MoveTo, static_cast<uint32_t>(path_.points_.size())});
+  moveToPointIndex_ = static_cast<uint32_t>(path_.points_.size());
+  path_.commands_.push_back({Path::Verb::MoveTo, moveToPointIndex_});
   path_.points_.push_back(point);
   lastMoveTo_ = point;
   hasMoveTo_ = true;
@@ -357,22 +1696,111 @@ PathBuilder& PathBuilder::curveTo(const Vector2d& c1, const Vector2d& c2, const 
 PathBuilder& PathBuilder::arcTo(const Vector2d& radius, double rotationRadians, bool largeArc,
                                 bool sweep, const Vector2d& end) {
   ensureMoveTo();
-  // Arc-to-cubic decomposition: delegate to a temporary PathSpline-style decomposition.
-  // For now, approximate with a cubic from current point to end.
-  // TODO(geode): Implement proper arc decomposition from PathSpline::arcTo.
   const Vector2d start = currentPoint();
 
-  // Simple arc approximation using cubic Béziers.
-  // Full implementation would use the SVG arc parameterization (Appendix F.6).
-  // For the initial implementation, we emit a simple cubic to the endpoint.
-  // TODO(geode): Implement proper arc decomposition from PathSpline::arcTo.
-  const Vector2d normal = Vector2d(-(end.y - start.y), end.x - start.x) * 0.5;
-  curveTo(start + normal * (2.0 / 3.0), end + normal * (2.0 / 3.0), end);
+  // SVG arc decomposition per Appendix F.6:
+  // https://www.w3.org/TR/SVG/implnote.html#ArcImplementationNotes
+
+  constexpr double kDistanceSqEpsilon = 1e-14;
+
+  if (NearZero(start.distanceSquared(end), kDistanceSqEpsilon)) {
+    return *this;  // No-op: end point equals start.
+  }
+
+  if (NearZero(radius.x) || NearZero(radius.y)) {
+    lineTo(end);  // Zero radius: fallback to line segment.
+    return *this;
+  }
+
+  const double sinRot = std::sin(rotationRadians);
+  const double cosRot = std::cos(rotationRadians);
+
+  // Rotate extent to find major axis.
+  const Vector2d extent = (start - end) * 0.5;
+  const Vector2d majorAxis = extent.rotate(cosRot, -sinRot);
+
+  // B.2.5 Correct out-of-range radii.
+  const Vector2d absR(Abs(radius.x), Abs(radius.y));
+  const double lambda = (majorAxis.x * majorAxis.x) / (absR.x * absR.x) +
+                        (majorAxis.y * majorAxis.y) / (absR.y * absR.y);
+  const Vector2d r = (lambda > 1.0) ? absR * std::sqrt(lambda) : absR;
+
+  // Eq 5.2: Ellipse center.
+  double k = r.x * r.x * majorAxis.y * majorAxis.y + r.y * r.y * majorAxis.x * majorAxis.x;
+  if (NearZero(k)) {
+    lineTo(end);
+    return *this;
+  }
+  k = std::sqrt(Abs((r.x * r.x * r.y * r.y) / k - 1.0));
+  if (sweep == largeArc) {
+    k = -k;
+  }
+  const Vector2d centerNoRot(k * r.x * majorAxis.y / r.y, -k * r.y * majorAxis.x / r.x);
+  const Vector2d center = centerNoRot.rotate(cosRot, sinRot) + (start + end) * 0.5;
+
+  // Compute start angle and delta.
+  const Vector2d intStart = (majorAxis - centerNoRot) / r;
+  const Vector2d intEnd = (-majorAxis - centerNoRot) / r;
+
+  double intStartLen = intStart.length();
+  if (NearZero(intStartLen)) {
+    lineTo(end);
+    return *this;
+  }
+  const double theta =
+      std::acos(Clamp(intStart.x / intStartLen, -1.0, 1.0)) * (intStart.y < 0.0 ? -1.0 : 1.0);
+
+  double crossLen = std::sqrt(intStart.lengthSquared() * intEnd.lengthSquared());
+  if (NearZero(crossLen)) {
+    lineTo(end);
+    return *this;
+  }
+
+  double deltaTheta = std::acos(Clamp(intStart.dot(intEnd) / crossLen, -1.0, 1.0));
+  if (intStart.x * intEnd.y - intEnd.x * intStart.y < 0.0) {
+    deltaTheta = -deltaTheta;
+  }
+  if (sweep && deltaTheta < 0.0) {
+    deltaTheta += MathConstants<double>::kPi * 2.0;
+  } else if (!sweep && deltaTheta > 0.0) {
+    deltaTheta -= MathConstants<double>::kPi * 2.0;
+  }
+
+  // Emit cubic Bézier segments.
+  const size_t numSegs =
+      static_cast<size_t>(std::ceil(Abs(deltaTheta / (MathConstants<double>::kPi * 0.5 + 0.001))));
+  const Vector2d dir(cosRot, sinRot);
+  const double thetaInc = deltaTheta / static_cast<double>(numSegs);
+
+  for (size_t i = 0; i < numSegs; ++i) {
+    const double ts = theta + static_cast<double>(i) * thetaInc;
+    const double te = theta + static_cast<double>(i + 1) * thetaInc;
+    const double halfTheta = 0.5 * (te - ts);
+    const double sinHalfHalf = std::sin(halfTheta * 0.5);
+    const double t = (8.0 / 3.0) * sinHalfHalf * sinHalfHalf / std::sin(halfTheta);
+
+    const double cosTs = std::cos(ts);
+    const double sinTs = std::sin(ts);
+    const Vector2d p0 = r * Vector2d(cosTs - t * sinTs, sinTs + t * cosTs);
+
+    const double cosTe = std::cos(te);
+    const double sinTe = std::sin(te);
+    const Vector2d p2 = r * Vector2d(cosTe, sinTe);
+    const Vector2d p1 = p2 + r * Vector2d(t * sinTe, -t * cosTe);
+
+    curveTo(center + p0.rotate(dir.x, dir.y), center + p1.rotate(dir.x, dir.y),
+            center + p2.rotate(dir.x, dir.y));
+    // Mark all intermediate arc segments so vertices() skips them for marker placement.
+    if (i < numSegs - 1) {
+      path_.commands_.back().isInternal = true;
+    }
+  }
+
   return *this;
 }
 
 PathBuilder& PathBuilder::closePath() {
-  path_.commands_.push_back({Path::Verb::ClosePath, static_cast<uint32_t>(path_.points_.size())});
+  path_.commands_.push_back({Path::Verb::ClosePath, moveToPointIndex_});
   hasMoveTo_ = false;
   return *this;
 }
@@ -478,6 +1906,7 @@ Path PathBuilder::build() {
   Path result = std::move(path_);
   path_ = Path();
   lastMoveTo_ = Vector2d();
+  moveToPointIndex_ = 0;
   hasMoveTo_ = false;
   return result;
 }

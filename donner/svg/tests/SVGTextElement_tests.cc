@@ -234,7 +234,7 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   EXPECT_THAT(extent, BoxEq(Vector2Near(10.4531, 11.3281), Vector2Near(18.125, 20.0)));
   EXPECT_EQ(textElement.getCharNumAtPosition((extent.topLeft + extent.bottomRight) * 0.5), 0);
 
-  const std::vector<PathSpline> paths = textElement.convertToPath();
+  const std::vector<Path> paths = textElement.convertToPath();
   EXPECT_FALSE(paths.empty());
   const Box2d inkBounds = textElement.inkBoundingBox();
   if (ActiveRendererSupportsFeature(RendererBackendFeature::TextFull)) {
@@ -530,7 +530,7 @@ TEST(SVGTextElementPublicApiTests, ConvertToPathReturnsPathPerGlyph) {
 
   auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
 
-  const std::vector<PathSpline> paths = textElement.convertToPath();
+  const std::vector<Path> paths = textElement.convertToPath();
   // Each character should produce one path.
   EXPECT_EQ(static_cast<long>(paths.size()), textElement.getNumberOfChars());
 

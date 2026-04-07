@@ -29,11 +29,11 @@ public:
    *
    * @return The parsed path data, or an error if parsing failed.
    */
-  ParseResult<PathSpline> parse() {
+  ParseResult<Path> parse() {
     skipWhitespace();
     if (remaining_.empty()) {
       // Empty string, return empty path.
-      return std::move(spline_);
+      return builder_.build();
     }
 
     // Read first command separately, since it must be a MoveTo command.
@@ -42,7 +42,7 @@ public:
 
       ParseResult<TokenCommand> maybeCommand = readCommand();
       if (maybeCommand.hasError()) {
-        return ParseResult(std::move(spline_), std::move(maybeCommand.error()));
+        return ParseResult(builder_.build(), std::move(maybeCommand.error()));
       }
 
       const TokenCommand command = maybeCommand.result();
@@ -50,11 +50,11 @@ public:
         ParseDiagnostic err;
         err.reason = "Unexpected command, first command must be 'm' or 'M'";
         err.range = rangeFrom(sourceOffset.offset.value());
-        return ParseResult(std::move(spline_), std::move(err));
+        return ParseResult(builder_.build(), std::move(err));
       }
 
       if (auto error = processUntilNextCommand(command)) {
-        return ParseResult(std::move(spline_), std::move(error.value()));
+        return ParseResult(builder_.build(), std::move(error.value()));
       }
       skipWhitespace();
     }
@@ -68,11 +68,11 @@ public:
       const TokenCommand command = maybeCommand.result();
       std::optional<ParseDiagnostic> maybeError = processUntilNextCommand(command);
       if (maybeError.has_value()) {
-        return ParseResult(std::move(spline_), std::move(maybeError.value()));
+        return ParseResult(builder_.build(), std::move(maybeError.value()));
       }
     }
 
-    return std::move(spline_);
+    return builder_.build();
   }
 
 private:
@@ -310,13 +310,13 @@ private:
       }
 
       Vector2d point = makeAbsolute(command, coords);
-      spline_.moveTo(point);
+      builder_.moveTo(point);
       initialPoint_ = point;
       currentPoint_ = point;
     } else if (command.token == Token::ClosePath) {
       // 9.3.4: "closepath": https://www.w3.org/TR/SVG/paths.html#PathDataClosePathCommand
 
-      spline_.closePath();
+      builder_.closePath();
       currentPoint_ = initialPoint_;
 
     } else if (command.token == Token::LineTo) {
@@ -327,7 +327,7 @@ private:
       }
 
       const Vector2d point = makeAbsolute(command, coords);
-      spline_.lineTo(point);
+      builder_.lineTo(point);
       currentPoint_ = point;
 
     } else if (command.token == Token::HorizontalLineTo) {
@@ -339,7 +339,7 @@ private:
 
       const Vector2d point(maybeX.result() + (command.relative ? currentPoint_.x : 0.0),
                            currentPoint_.y);
-      spline_.lineTo(point);
+      builder_.lineTo(point);
       currentPoint_ = point;
 
     } else if (command.token == Token::VerticalLineTo) {
@@ -351,7 +351,7 @@ private:
 
       const Vector2d point(currentPoint_.x,
                            maybeY.result() + (command.relative ? currentPoint_.y : 0.0));
-      spline_.lineTo(point);
+      builder_.lineTo(point);
       currentPoint_ = point;
 
     } else if (command.token == Token::CurveTo) {
@@ -367,7 +367,7 @@ private:
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<2, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<4, 2>());
 
-      spline_.curveTo(point1, point2, end);
+      builder_.curveTo(point1, point2, end);
 
       prevControlPoint_ = point2;
       currentPoint_ = end;
@@ -385,7 +385,7 @@ private:
       const Vector2d point2 = makeAbsolute(command, coordsSpan.subspan<0, 2>());
       const Vector2d end = makeAbsolute(command, coordsSpan.subspan<2, 2>());
 
-      spline_.curveTo(point1, point2, end);
+      builder_.curveTo(point1, point2, end);
 
       prevControlPoint_ = point2;
       currentPoint_ = end;
@@ -450,7 +450,7 @@ private:
       const double rotationRadians = radiusAndRotation[2] * MathConstants<double>::kDegToRad;
       const Vector2d end = makeAbsolute(command, endCoords);
 
-      spline_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end);
+      builder_.arcTo(radius, rotationRadians, largeArcFlag, sweepFlag, end);
       currentPoint_ = end;
 
     } else {
@@ -465,14 +465,7 @@ private:
   }
 
   void quadCurveTo(const Vector2d& point1, const Vector2d& end) {
-    // Raise quadratic bezier to cubic.
-    // See https://stackoverflow.com/questions/3162645/convert-a-quadratic-bezier-to-a-cubic-one
-
-    // Generate a quadratic bezier with the control point.
-    const Vector2d cubicPoint1 = (currentPoint_ + point1 * 2.0) * (1.0 / 3.0);
-    const Vector2d cubicPoint2 = (end + point1 * 2.0) * (1.0 / 3.0);
-
-    spline_.curveTo(cubicPoint1, cubicPoint2, end);
+    builder_.quadTo(point1, end);
   }
 
   Vector2d reflectedControlPoint() const {
@@ -488,7 +481,7 @@ private:
     return lastToken_ == Token::QuadCurveTo || lastToken_ == Token::SmoothQuadCurveTo;
   }
 
-  PathSpline spline_;
+  PathBuilder builder_;
 
   std::string_view d_;
   std::string_view remaining_;
@@ -502,7 +495,7 @@ private:
 
 }  // namespace
 
-ParseResult<PathSpline> PathParser::Parse(std::string_view d) {
+ParseResult<Path> PathParser::Parse(std::string_view d) {
   PathParserImpl parser(d);
   return parser.parse();
 }

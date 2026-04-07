@@ -144,30 +144,34 @@ SkFontStyle toSkiaFontStyle(int fontWeight, FontStyle fontStyle, FontStretch fon
   return SkFontStyle(fontWeight, skWidth, skSlant);
 }
 
-SkPath toSkia(const PathSpline& spline);
+SkPath toSkia(const Path& spline);
 
-PathSpline transformPathSpline(const PathSpline& spline, const Transform2d& transform) {
-  PathSpline result;
-  const std::vector<Vector2d>& points = spline.points();
+Path transformPath(const Path& spline, const Transform2d& transform) {
+  const auto points = spline.points();
+  PathBuilder builder;
 
-  for (const PathSpline::Command& command : spline.commands()) {
-    switch (command.type) {
-      case PathSpline::CommandType::MoveTo:
-        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+  for (const Path::Command& command : spline.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::LineTo:
-        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::CurveTo:
-        result.curveTo(transform.transformPosition(points[command.pointIndex]),
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
                        transform.transformPosition(points[command.pointIndex + 1]),
                        transform.transformPosition(points[command.pointIndex + 2]));
         break;
-      case PathSpline::CommandType::ClosePath: result.closePath(); break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                      transform.transformPosition(points[command.pointIndex + 1]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
     }
   }
 
-  return result;
+  return builder.build();
 }
 
 SkTileMode toSkia(GradientSpreadMethod spreadMethod);
@@ -2410,18 +2414,18 @@ SkPaint::Join toSkia(StrokeLinejoin lineJoin) {
   UTILS_UNREACHABLE();
 }
 
-SkPath toSkia(const PathSpline& spline) {
+SkPath toSkia(const Path& spline) {
   SkPath path;
 
-  const std::vector<Vector2d>& points = spline.points();
-  for (const PathSpline::Command& command : spline.commands()) {
-    switch (command.type) {
-      case PathSpline::CommandType::MoveTo: {
+  const auto points = spline.points();
+  for (const Path::Command& command : spline.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo: {
         auto pt = points[command.pointIndex];
         path.moveTo(static_cast<SkScalar>(pt.x), static_cast<SkScalar>(pt.y));
         break;
       }
-      case PathSpline::CommandType::CurveTo: {
+      case Path::Verb::CurveTo: {
         auto c0 = points[command.pointIndex];
         auto c1 = points[command.pointIndex + 1];
         auto end = points[command.pointIndex + 2];
@@ -2430,12 +2434,19 @@ SkPath toSkia(const PathSpline& spline) {
                      static_cast<SkScalar>(end.x), static_cast<SkScalar>(end.y));
         break;
       }
-      case PathSpline::CommandType::LineTo: {
+      case Path::Verb::QuadTo: {
+        auto ctrl = points[command.pointIndex];
+        auto end = points[command.pointIndex + 1];
+        path.quadTo(static_cast<SkScalar>(ctrl.x), static_cast<SkScalar>(ctrl.y),
+                    static_cast<SkScalar>(end.x), static_cast<SkScalar>(end.y));
+        break;
+      }
+      case Path::Verb::LineTo: {
         auto pt = points[command.pointIndex];
         path.lineTo(static_cast<SkScalar>(pt.x), static_cast<SkScalar>(pt.y));
         break;
       }
-      case PathSpline::CommandType::ClosePath: {
+      case Path::Verb::ClosePath: {
         path.close();
         break;
       }
@@ -3816,14 +3827,14 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
             continue;
           }
 
-          PathSpline glyphPath =
+          Path glyphPath =
               textEngine.glyphOutline(run.font, glyph.glyphIndex, glyphScale * glyph.fontSizeScale);
           if (glyphPath.empty()) {
             continue;
           }
 
           if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-            glyphPath = transformPathSpline(
+            glyphPath = transformPath(
                 glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
           }
 
@@ -3834,7 +3845,7 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
                 glyphFromLocal;
           }
 
-          const SkPath skPath = toSkia(transformPathSpline(glyphPath, glyphFromLocal));
+          const SkPath skPath = toSkia(transformPath(glyphPath, glyphFromLocal));
           if (spanFillPaint.has_value()) {
             currentCanvas_->drawPath(skPath, *spanFillPaint);
           }
@@ -4051,7 +4062,7 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
             }
           }
 
-          auto drawDecoPath = [&](const PathSpline& spline) {
+          auto drawDecoPath = [&](const Path& spline) {
             const SkPath path = toSkia(spline);
             if (decoFillPaint.has_value()) {
               currentCanvas_->drawPath(path, *decoFillPaint);
@@ -4087,12 +4098,13 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
                 continue;
               }
 
-              PathSpline segmentPath;
-              segmentPath.moveTo(Vector2d(0.0, decoTopY));
-              segmentPath.lineTo(Vector2d(segmentWidth, decoTopY));
-              segmentPath.lineTo(Vector2d(segmentWidth, decoTopY + decoThickness));
-              segmentPath.lineTo(Vector2d(0.0, decoTopY + decoThickness));
-              segmentPath.closePath();
+              Path segmentPath = PathBuilder()
+                  .moveTo(Vector2d(0.0, decoTopY))
+                  .lineTo(Vector2d(segmentWidth, decoTopY))
+                  .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
+                  .lineTo(Vector2d(0.0, decoTopY + decoThickness))
+                  .closePath()
+                  .build();
 
               Transform2d segmentFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
               if (glyph.rotateDegrees != 0.0) {
@@ -4101,7 +4113,7 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
                     segmentFromLocal;
               }
 
-              drawDecoPath(transformPathSpline(segmentPath, segmentFromLocal));
+              drawDecoPath(transformPath(segmentPath, segmentFromLocal));
             }
           } else {
             const auto firstGlyph =
@@ -4119,18 +4131,19 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
                 });
 
             if (sameBaseline) {
-              PathSpline decoPath;
               const double x0 = firstGlyph->xPosition;
               const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
               const double y = baselineY + decoTopY;
-              decoPath.moveTo(Vector2d(x0, y));
-              decoPath.lineTo(Vector2d(x1, y));
-              decoPath.lineTo(Vector2d(x1, y + decoThickness));
-              decoPath.lineTo(Vector2d(x0, y + decoThickness));
-              decoPath.closePath();
+              Path decoPath = PathBuilder()
+                  .moveTo(Vector2d(x0, y))
+                  .lineTo(Vector2d(x1, y))
+                  .lineTo(Vector2d(x1, y + decoThickness))
+                  .lineTo(Vector2d(x0, y + decoThickness))
+                  .closePath()
+                  .build();
               drawDecoPath(decoPath);
             } else {
-              PathSpline decoPath;
+              PathBuilder decoBuilder;
               for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
                 const auto& glyph = run.glyphs[glyphIndex];
                 if (!isRenderedGlyph(glyph)) {
@@ -4155,15 +4168,15 @@ void RendererSkia::drawText(Registry& registry, const components::ComputedTextCo
                 }
 
                 const double y = glyph.yPosition + decoTopY;
-                decoPath.moveTo(Vector2d(x0, y));
-                decoPath.lineTo(Vector2d(x1, y));
-                decoPath.lineTo(Vector2d(x1, y + decoThickness));
-                decoPath.lineTo(Vector2d(x0, y + decoThickness));
-                decoPath.closePath();
+                decoBuilder.moveTo(Vector2d(x0, y));
+                decoBuilder.lineTo(Vector2d(x1, y));
+                decoBuilder.lineTo(Vector2d(x1, y + decoThickness));
+                decoBuilder.lineTo(Vector2d(x0, y + decoThickness));
+                decoBuilder.closePath();
               }
 
-              if (!decoPath.empty()) {
-                drawDecoPath(decoPath);
+              if (!decoBuilder.empty()) {
+                drawDecoPath(decoBuilder.build());
               }
             }
           }

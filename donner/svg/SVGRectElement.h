@@ -3,7 +3,7 @@
 
 #include "donner/base/Length.h"
 #include "donner/svg/SVGGeometryElement.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 
 namespace donner::svg {
 
@@ -279,7 +279,7 @@ public:
    * @return Computed path, or `std::nullopt` if the element is invalid (e.g. if the width or height
    * are zero).
    */
-  std::optional<PathSpline> computedSpline() const;
+  std::optional<Path> computedSpline() const;
 
 private:
   void invalidate() const;

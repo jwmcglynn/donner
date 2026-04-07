@@ -255,13 +255,13 @@ struct Transform2 {
    *
    * @param box Box to transform.
    */
-  Box<T> transformBox(const Box<T>& box) const {
+  Box2<T> transformBox(const Box2<T>& box) const {
     const Vector2<T> corners[4] = {box.topLeft,                                    //
                                    Vector2<T>(box.bottomRight.x, box.topLeft.y),   // topRight
                                    box.bottomRight,                                //
                                    Vector2<T>(box.topLeft.x, box.bottomRight.y)};  // bottomLeft
 
-    Box<T> result = Box<T>::CreateEmpty(transformPosition(corners[0]));
+    Box2<T> result = Box2<T>::CreateEmpty(transformPosition(corners[0]));
     result.addPoint(transformPosition(corners[1]));
     result.addPoint(transformPosition(corners[2]));
     result.addPoint(transformPosition(corners[3]));
@@ -308,16 +308,6 @@ using Transform2f = Transform2<float>;
 
 /// Shorthand for \c Transform2<double>
 using Transform2d = Transform2<double>;
-
-/// @}
-
-/// @name Compatibility aliases
-/// @{
-
-template <typename T>
-using Transform = Transform2<T>;
-using Transformf = Transform2f;
-using Transformd = Transform2d;
 
 /// @}
 

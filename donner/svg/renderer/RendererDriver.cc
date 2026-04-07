@@ -1615,10 +1615,10 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   }
 
   const RenderingInstanceView::SavedState viewSnapshot = view.save();
-  const std::vector<PathSpline::Vertex> vertices = path.spline.vertices();
+  const std::vector<Path::Vertex> vertices = path.spline.vertices();
 
   for (size_t i = 0; i < vertices.size(); ++i) {
-    const PathSpline::Vertex& vertex = vertices[i];
+    const Path::Vertex& vertex = vertices[i];
 
     if (i == 0) {
       if (hasMarkerStart) {

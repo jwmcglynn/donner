@@ -99,12 +99,12 @@ public:
   }
 
   /**
-   * Convert this text element to positioned glyph outlines, one \ref PathSpline per glyph.
+   * Convert this text element to positioned glyph outlines, one \ref Path per glyph.
    *
    * Useful for custom rendering, export to path-only formats, or computing text geometry without
    * the full rendering pipeline.
    */
-  std::vector<PathSpline> convertToPath() const;
+  std::vector<Path> convertToPath() const;
 
   /**
    * Return the tight bounding box of the actual rendered glyphs (ink extents). This is the

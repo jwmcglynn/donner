@@ -142,24 +142,28 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
     const Transform2d& parentFromEntity = localTransform->entityFromParent;
     const auto& srcPoints = computedPath->spline.points();
     const auto& srcCommands = computedPath->spline.commands();
-    PathSpline transformed;
+    PathBuilder builder;
     for (const auto& cmd : srcCommands) {
-      switch (cmd.type) {
-        case PathSpline::CommandType::MoveTo:
-          transformed.moveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
+      switch (cmd.verb) {
+        case Path::Verb::MoveTo:
+          builder.moveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
           break;
-        case PathSpline::CommandType::LineTo:
-          transformed.lineTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
+        case Path::Verb::LineTo:
+          builder.lineTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]));
           break;
-        case PathSpline::CommandType::CurveTo:
-          transformed.curveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]),
-                              parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 1]),
-                              parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 2]));
+        case Path::Verb::QuadTo:
+          builder.quadTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]),
+                         parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 1]));
           break;
-        case PathSpline::CommandType::ClosePath: transformed.closePath(); break;
+        case Path::Verb::CurveTo:
+          builder.curveTo(parentFromEntity.transformPosition(srcPoints[cmd.pointIndex]),
+                          parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 1]),
+                          parentFromEntity.transformPosition(srcPoints[cmd.pointIndex + 2]));
+          break;
+        case Path::Verb::ClosePath: builder.closePath(); break;
       }
     }
-    span.pathSpline = std::move(transformed);
+    span.pathSpline = builder.build();
   } else {
     span.pathSpline = computedPath->spline;
   }

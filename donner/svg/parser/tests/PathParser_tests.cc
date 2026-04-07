@@ -5,7 +5,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
-#include "donner/svg/core/tests/PathSplineTestUtils.h"
+#include "donner/svg/core/tests/PathTestUtils.h"
 
 using testing::AllOf;
 using testing::ElementsAre;
@@ -13,11 +13,11 @@ using testing::HasSubstr;
 
 namespace donner::svg::parser {
 
-using Command = PathSpline::Command;
-using CommandType = PathSpline::CommandType;
+using Command = Path::Command;
+using CommandType = Path::Verb;
 
 TEST(PathParser, Empty) {
-  ParseResult<PathSpline> result = PathParser::Parse("");
+  ParseResult<Path> result = PathParser::Parse("");
   EXPECT_TRUE(result.hasResult());
   EXPECT_FALSE(result.hasError());
 
@@ -38,19 +38,19 @@ TEST(PathParser, InitialMoveTo) {
   EXPECT_THAT(PathParser::Parse("M0\n,\t0"), NoParseError());
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1.2 -5");
+    ParseResult<Path> result = PathParser::Parse("M 1.2 -5");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.2, -5)));
     EXPECT_THAT(spline.commands(), ElementsAre(Command{CommandType::MoveTo, 0}));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 1e2");
+    ParseResult<Path> result = PathParser::Parse("M 0 1e2");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(0.0, 100.0)));
     EXPECT_THAT(spline.commands(), ElementsAre(Command{CommandType::MoveTo, 0}));
   }
@@ -58,10 +58,10 @@ TEST(PathParser, InitialMoveTo) {
 
 TEST(PathParser, MoveTo) {
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 M 2 2 0 0");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 1 1 M 2 2 0 0");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0),
                                              Vector2d(2.0, 2.0), Vector2d::Zero()));
     EXPECT_THAT(spline.commands(),
@@ -73,7 +73,7 @@ TEST(PathParser, MoveTo) {
 TEST(PathParser, ParseErrors) {
   // Comma before a command is a parse error.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0,Z");
+    ParseResult<Path> result = PathParser::Parse("M0,0,Z");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
@@ -94,10 +94,10 @@ TEST(PathParser, ClosePath) {
 
   // Immediate ClosePath.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 z");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero()));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
@@ -105,10 +105,10 @@ TEST(PathParser, ClosePath) {
 
   // ClosePath without any additional commands should have the last MoveTo stripped.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 Z");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 1 1 Z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
@@ -117,24 +117,26 @@ TEST(PathParser, ClosePath) {
 
   // ClosePath followed by a line, contains a MoveTo then a LineTo.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 z L -1 -1");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 1 1 z L -1 -1");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
+    // After closePath, ensureMoveTo() adds a new point at the moveTo position (0,0).
     EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0), Vector2d(-1.0, -1.0)));
+                ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0), Vector2d::Zero(),
+                            Vector2d(-1.0, -1.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                            Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 0},
-                            Command{CommandType::LineTo, 2}));
+                            Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
+                            Command{CommandType::LineTo, 3}));
   }
 
   // ClosePath with the MoveTo overridden.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 1 1 Z M -2 -2 -1 -1");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 1 1 Z M -2 -2 -1 -1");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0),
                                              Vector2d(-2.0, -2.0), Vector2d(-1.0, -1.0)));
     EXPECT_THAT(spline.commands(),
@@ -147,24 +149,29 @@ TEST(PathParser, ClosePath) {
 TEST(PathParser, ConsecutiveClosePath) {
   // Multiple consecutive z commands should not crash (regression test for fuzzer crash).
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 z z z z");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 z z z z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
+    // Consecutive closePaths are NOT collapsed; each emits a ClosePath command.
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero()));
     EXPECT_THAT(spline.commands(),
-                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0}));
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::ClosePath, 0},
+                            Command{CommandType::ClosePath, 0}, Command{CommandType::ClosePath, 0},
+                            Command{CommandType::ClosePath, 0}));
   }
 
   // Consecutive z after a line.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 2 L 3 4 z z");
+    ParseResult<Path> result = PathParser::Parse("M 1 2 L 3 4 z z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
+    // Second z also emitted.
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1, 2), Vector2d(3, 4)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                            Command{CommandType::ClosePath, 0},
                             Command{CommandType::ClosePath, 0}));
   }
 }
@@ -172,7 +179,7 @@ TEST(PathParser, ConsecutiveClosePath) {
 TEST(PathParser, ClosePathParseErrors) {
   // Comma at end is a parse error.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z,");
+    ParseResult<Path> result = PathParser::Parse("M0,0Z,");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
@@ -183,7 +190,7 @@ TEST(PathParser, ClosePathParseErrors) {
 
   // No numbers at end, there is no implicit command after.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0Z1");
+    ParseResult<Path> result = PathParser::Parse("M0,0Z1");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d::Zero()),
@@ -196,10 +203,10 @@ TEST(PathParser, ClosePathParseErrors) {
 TEST(PathParser, LineTo) {
   // Uppercase L -> absolute LineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 L 2 3");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 L 2 3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -207,10 +214,10 @@ TEST(PathParser, LineTo) {
 
   // Lowercase l -> relative LineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("m 1 1 l 2 3");
+    ParseResult<Path> result = PathParser::Parse("m 1 1 l 2 3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(3.0, 4.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -218,10 +225,10 @@ TEST(PathParser, LineTo) {
 
   // Chain without additional letters.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 L 1 0 0 1");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 L 1 0 0 1");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
                 ElementsAre(Vector2d::Zero(), Vector2d(1.0, 0.0), Vector2d(0.0, 1.0)));
     EXPECT_THAT(spline.commands(),
@@ -231,10 +238,10 @@ TEST(PathParser, LineTo) {
 
   // Chain with commas.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M0,0L1,0,0,1");
+    ParseResult<Path> result = PathParser::Parse("M0,0L1,0,0,1");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
                 ElementsAre(Vector2d::Zero(), Vector2d(1.0, 0.0), Vector2d(0.0, 1.0)));
     EXPECT_THAT(spline.commands(),
@@ -244,10 +251,10 @@ TEST(PathParser, LineTo) {
 
   // Chain switching relative/absolute
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 0 0 L 1 0 l 1 1 L 0 0");
+    ParseResult<Path> result = PathParser::Parse("M 0 0 L 1 0 l 1 1 L 0 0");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 0.0),
                                              Vector2d(2.0, 1.0), Vector2d::Zero()));
     EXPECT_THAT(spline.commands(),
@@ -265,10 +272,10 @@ TEST(PathParser, LineToImplicit) {
 
   // Uppercase M -> absolute LineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 2 3");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -276,10 +283,10 @@ TEST(PathParser, LineToImplicit) {
 
   // Lowercase m -> relative LineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("m 1 1 2 3");
+    ParseResult<Path> result = PathParser::Parse("m 1 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(3.0, 4.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -288,7 +295,7 @@ TEST(PathParser, LineToImplicit) {
 
 TEST(PathParser, LineToPartialParse) {
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3,");
+    ParseResult<Path> result = PathParser::Parse("M1,1 2,3,");
 
     EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
@@ -298,7 +305,7 @@ TEST(PathParser, LineToPartialParse) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1 2,3, 4,");
+    ParseResult<Path> result = PathParser::Parse("M1,1 2,3, 4,");
 
     EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 3.0)),
@@ -311,10 +318,10 @@ TEST(PathParser, LineToPartialParse) {
 TEST(PathParser, HorizontalLineTo) {
   // Uppercase H -> absolute HorizontalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 H 2");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 H 2");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -322,10 +329,10 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Lowercase h -> relative HorizontalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 h 2");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 h 2");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(3.0, 1.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -333,10 +340,10 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Chain between multiple types.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 h 1 h -6 H 0 H -2 h -1");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 h 1 h -6 H 0 H -2 h -1");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0), Vector2d(-4.0, 1.0),
                             Vector2d(0.0, 1.0), Vector2d(-2.0, 1.0), Vector2d(-3.0, 1.0)));
@@ -348,10 +355,10 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Chain without additional letters.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 h 1 2 3");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 h 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0),
                                              Vector2d(4.0, 1.0), Vector2d(7.0, 1.0)));
     EXPECT_THAT(spline.commands(),
@@ -361,10 +368,10 @@ TEST(PathParser, HorizontalLineTo) {
 
   // Chain with commas.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1h1,2,3");
+    ParseResult<Path> result = PathParser::Parse("M1,1h1,2,3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0),
                                              Vector2d(4.0, 1.0), Vector2d(7.0, 1.0)));
     EXPECT_THAT(spline.commands(),
@@ -375,7 +382,7 @@ TEST(PathParser, HorizontalLineTo) {
 
 TEST(PathParser, HorizontalLineToParseError) {
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1 h1,");
+    ParseResult<Path> result = PathParser::Parse("M1,1 h1,");
 
     EXPECT_THAT(result, ParseResultAndError(PointsAndCommandsAre(
                                                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(2.0, 1.0)),
@@ -385,7 +392,7 @@ TEST(PathParser, HorizontalLineToParseError) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h");
+    ParseResult<Path> result = PathParser::Parse("M1 1 h");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
@@ -394,7 +401,7 @@ TEST(PathParser, HorizontalLineToParseError) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 h,");
+    ParseResult<Path> result = PathParser::Parse("M1 1 h,");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
@@ -406,10 +413,10 @@ TEST(PathParser, HorizontalLineToParseError) {
 TEST(PathParser, VerticalLineTo) {
   // Uppercase V -> absolute VerticalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 V 2");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 V 2");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
@@ -417,17 +424,17 @@ TEST(PathParser, VerticalLineTo) {
 
   // Lowercase v -> relative VerticalLineTo
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 2");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 v 2");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 3.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v");
+    ParseResult<Path> result = PathParser::Parse("M1 1 v");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
@@ -436,7 +443,7 @@ TEST(PathParser, VerticalLineTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1 1 v,");
+    ParseResult<Path> result = PathParser::Parse("M1 1 v,");
 
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(1.0, 1.0)),
@@ -446,10 +453,10 @@ TEST(PathParser, VerticalLineTo) {
 
   // Chain between multiple types.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 1 v -6 V 0 V -2 v -1");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 v 1 v -6 V 0 V -2 v -1");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
                 ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0), Vector2d(1.0, -4.0),
                             Vector2d(1.0, 0.0), Vector2d(1.0, -2.0), Vector2d(1.0, -3.0)));
@@ -461,10 +468,10 @@ TEST(PathParser, VerticalLineTo) {
 
   // Chain without additional letters.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M 1 1 v 1 2 3");
+    ParseResult<Path> result = PathParser::Parse("M 1 1 v 1 2 3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0),
                                              Vector2d(1.0, 4.0), Vector2d(1.0, 7.0)));
     EXPECT_THAT(spline.commands(),
@@ -474,10 +481,10 @@ TEST(PathParser, VerticalLineTo) {
 
   // Chain with commas.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M1,1v1,2,3");
+    ParseResult<Path> result = PathParser::Parse("M1,1v1,2,3");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(1.0, 1.0), Vector2d(1.0, 2.0),
                                              Vector2d(1.0, 4.0), Vector2d(1.0, 7.0)));
     EXPECT_THAT(spline.commands(),
@@ -488,11 +495,11 @@ TEST(PathParser, VerticalLineTo) {
 
 TEST(PathParser, CurveTo) {
   {
-    ParseResult<PathSpline> result =
+    ParseResult<Path> result =
         PathParser::Parse("M100,200 C100,100 250,100 250,200 S400,300 400,200");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(), ElementsAre(Vector2d(100.0, 200.0), Vector2d(100.0, 100.0),
                                              Vector2d(250.0, 100.0), Vector2d(250.0, 200.0),
                                              /* auto control point */ Vector2d(250.0, 300.0),
@@ -503,7 +510,7 @@ TEST(PathParser, CurveTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M100,200 C100");
+    ParseResult<Path> result = PathParser::Parse("M100,200 C100");
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
@@ -511,7 +518,7 @@ TEST(PathParser, CurveTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M100,200 S100");
+    ParseResult<Path> result = PathParser::Parse("M100,200 S100");
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(100.0, 200.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
@@ -521,22 +528,24 @@ TEST(PathParser, CurveTo) {
 
 TEST(PathParser, QuadCurveTo) {
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M200,300 Q400,50 600,300 T1000,300");
+    ParseResult<Path> result = PathParser::Parse("M200,300 Q400,50 600,300 T1000,300");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
+    // QuadCurveTo now emits QuadTo directly (no degree elevation to cubic).
+    // Q400,50 600,300 -> QuadTo with control=(400,50), end=(600,300)
+    // T1000,300 -> reflected control=(800,550), end=(1000,300)
     EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2d(200.0, 300.0), Vector2Near(333.333, 133.333),
-                            Vector2Near(466.667, 133.333), Vector2d(600.0, 300.0),
-                            Vector2Near(733.333, 466.667), Vector2Near(866.667, 466.667),
+                ElementsAre(Vector2d(200.0, 300.0), Vector2d(400.0, 50.0),
+                            Vector2d(600.0, 300.0), Vector2d(800.0, 550.0),
                             Vector2d(1000.0, 300.0)));
     EXPECT_THAT(spline.commands(),
-                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
-                            Command{CommandType::CurveTo, 4}));
+                ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::QuadTo, 1},
+                            Command{CommandType::QuadTo, 3}));
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M200,300 Q400,50 600,");
+    ParseResult<Path> result = PathParser::Parse("M200,300 Q400,50 600,");
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
@@ -544,7 +553,7 @@ TEST(PathParser, QuadCurveTo) {
   }
 
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M200,300 T400");
+    ParseResult<Path> result = PathParser::Parse("M200,300 T400");
     EXPECT_THAT(result, ParseResultAndError(
                             PointsAndCommandsAre(ElementsAre(Vector2d(200.0, 300.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0})),
@@ -563,20 +572,23 @@ TEST(PathParser, EllipticalArc) {
               C450,117 382,50 300,50 z" />
     */
 
-    ParseResult<PathSpline> result = PathParser::Parse("M300,200 h-150 a150,150 0 1,0 150,-150 z");
+    ParseResult<Path> result = PathParser::Parse("M300,200 h-150 a150,150 0 1,0 150,-150 z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
-    EXPECT_THAT(
-        spline.points(),
-        ElementsAre(Vector2Near(300, 200), Vector2Near(150, 200), Vector2Near(150, 282.843),
-                    Vector2Near(217.157, 350), Vector2Near(300, 350), Vector2Near(382.843, 350),
-                    Vector2Near(450, 282.843), Vector2Near(450, 200), Vector2Near(450, 117.157),
-                    Vector2Near(382.843, 50), Vector2Near(300, 50)));
+    Path spline = result.result();
+    // Proper SVG arc decomposition: 270-degree arc produces 3 cubic Bezier segments.
+    EXPECT_THAT(spline.points(),
+                ElementsAre(Vector2Near(300, 200), Vector2Near(150, 200),
+                            Vector2Near(150, 282.84), Vector2Near(217.16, 350),
+                            Vector2Near(300, 350), Vector2Near(382.84, 350),
+                            Vector2Near(450, 282.84), Vector2Near(450, 200),
+                            Vector2Near(450, 117.16), Vector2Near(382.84, 50),
+                            Vector2Near(300, 50)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::CurveTo, 2}, Command{CommandType::CurveTo, 5},
-                            Command{CommandType::CurveTo, 8}, Command{CommandType::ClosePath, 0}));
+                            Command{CommandType::CurveTo, 8},
+                            Command{CommandType::ClosePath, 0}));
   }
 
   {
@@ -586,13 +598,14 @@ TEST(PathParser, EllipticalArc) {
             d="M275,175 v-150 C192,25 125,92 125,175 z" />
     */
 
-    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A150,150 0 0,0 125,175 z");
+    ParseResult<Path> result = PathParser::Parse("M275,175 v-150 A150,150 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
+    // Proper SVG arc decomposition: 90-degree arc produces 1 cubic Bezier segment.
     EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(192.157, 25),
-                            Vector2Near(125, 92.1573), Vector2Near(125, 175)));
+                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(192.16, 25),
+                            Vector2Near(125, 92.16), Vector2Near(125, 175)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::CurveTo, 2}, Command{CommandType::ClosePath, 0}));
@@ -603,12 +616,12 @@ TEST(PathParser, EllipticalArtOutOfRangeRadii) {
   // Per https://www.w3.org/TR/SVG/implnote.html#ArcCorrectionOutOfRangeRadii, out-of-range radii
   // should be corrected.
 
-  // Zero radii -> treat as straight line.
+  // Zero radii -> degenerates to a straight line per SVG spec.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A150,0 0 0,0 125,175 z");
+    ParseResult<Path> result = PathParser::Parse("M275,175 v-150 A150,0 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
                 ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(125, 175)));
     EXPECT_THAT(spline.commands(),
@@ -616,33 +629,31 @@ TEST(PathParser, EllipticalArtOutOfRangeRadii) {
                             Command{CommandType::LineTo, 2}, Command{CommandType::ClosePath, 0}));
   }
 
-  // Negative radii -> take absolute value.
+  // Negative radii -> take absolute value. Proper SVG arc decomposition.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A-150,150 0 0,0 125,175 z");
+    ParseResult<Path> result = PathParser::Parse("M275,175 v-150 A-150,150 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(192.157, 25),
-                            Vector2Near(125, 92.1573), Vector2Near(125, 175)));
+                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(192.16, 25),
+                            Vector2Near(125, 92.16), Vector2Near(125, 175)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::CurveTo, 2}, Command{CommandType::ClosePath, 0}));
   }
 
-  // Radii too small -> scale them up. Note that this produces a larger arc per the SVG algorithm
-  // than the original 150,150 radius, since it minimizes the radius the solution is closer to 2/3
-  // of a circle.
+  // Radii too small -> scale them up. Proper SVG arc decomposition produces 2 cubic segments.
   {
-    ParseResult<PathSpline> result = PathParser::Parse("M275,175 v-150 A50,50 0 0,0 125,175 z");
+    ParseResult<Path> result = PathParser::Parse("M275,175 v-150 A50,50 0 0,0 125,175 z");
     ASSERT_THAT(result, NoParseError());
 
-    PathSpline spline = result.result();
+    Path spline = result.result();
     EXPECT_THAT(spline.points(),
                 ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25),
-                            Vector2Near(233.579, -16.4214), Vector2Near(166.421, -16.4214),
-                            Vector2Near(125, 25), Vector2Near(83.5786, 66.4214),
-                            Vector2Near(83.5786, 133.579), Vector2Near(125, 175)));
+                            Vector2Near(233.58, -16.42), Vector2Near(166.42, -16.42),
+                            Vector2Near(125, 25), Vector2Near(83.58, 66.42),
+                            Vector2Near(83.58, 133.58), Vector2Near(125, 175)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::CurveTo, 2}, Command{CommandType::CurveTo, 5},
@@ -684,11 +695,12 @@ TEST(PathParser, NoWhitespace) {
               ParseResultIs(PointsAndCommandsAre(ElementsAre(Vector2d(-5.0, -5.0)),
                                                  ElementsAre(Command{CommandType::MoveTo, 0}))));
 
+  // Proper SVG arc decomposition produces two cubic Bezier segments.
   EXPECT_THAT(PathParser::Parse("M10-20A5.5.3-4 110-.1"),
               ParseResultIs(PointsAndCommandsAre(
-                  ElementsAre(Vector2d(10.0, -20.0), Vector2Near(106.745, -26.5935),
-                              Vector2Near(182.933, -27.4838), Vector2Near(180.172, -21.9885),
-                              Vector2Near(177.41, -16.4933), Vector2Near(96.7448, -6.69347),
+                  ElementsAre(Vector2d(10.0, -20.0), Vector2Near(106.745, -26.59),
+                              Vector2Near(182.933, -27.48), Vector2Near(180.172, -21.99),
+                              Vector2Near(177.41, -16.49), Vector2Near(96.74, -6.69),
                               Vector2Near(0, -0.1)),
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
                               Command{CommandType::CurveTo, 4}))));

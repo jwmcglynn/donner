@@ -349,7 +349,7 @@ std::optional<SubSuperMetrics> TextBackendFull::subSuperMetrics(FontHandle font)
 // Glyph outline
 // ---------------------------------------------------------------------------
 
-PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return {};
@@ -378,33 +378,33 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
     return {};
   }
 
-  // Decompose the outline into a PathSpline.
+  // Decompose the outline into a Path via PathBuilder.
   // FreeType outline coordinates are in 26.6 fixed-point pixels at the set size.
   // Dividing by 64 gives the pixel coordinates, which match the caller's expected scale
   // because we set FreeType's size to `scale * upem`.
-  PathSpline spline;
+  PathBuilder builder;
   const double ftScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
   const double ftScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
 
   FT_Outline_Funcs funcs{};
   struct FtCtx {
-    PathSpline* spline;
+    PathBuilder* builder;
     double scaleX;
     double scaleY;
     double curX = 0.0;
     double curY = 0.0;
     bool contourOpen = false;
   };
-  FtCtx ctx{&spline, ftScaleX, ftScaleY};
+  FtCtx ctx{&builder, ftScaleX, ftScaleY};
 
   funcs.move_to = [](const FT_Vector* to, void* user) -> int {
     auto* c = static_cast<FtCtx*>(user);
     if (c->contourOpen) {
-      c->spline->closePath();
+      c->builder->closePath();
     }
     const double x = static_cast<double>(to->x) * c->scaleX;
     const double y = -static_cast<double>(to->y) * c->scaleY;
-    c->spline->moveTo(Vector2d(x, y));
+    c->builder->moveTo(Vector2d(x, y));
     c->curX = x;
     c->curY = y;
     c->contourOpen = true;
@@ -414,7 +414,7 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
     auto* c = static_cast<FtCtx*>(user);
     const double x = static_cast<double>(to->x) * c->scaleX;
     const double y = -static_cast<double>(to->y) * c->scaleY;
-    c->spline->lineTo(Vector2d(x, y));
+    c->builder->lineTo(Vector2d(x, y));
     c->curX = x;
     c->curY = y;
     return 0;
@@ -425,12 +425,8 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
     const double cy = -static_cast<double>(ctrl->y) * c->scaleY;
     const double ex = static_cast<double>(to->x) * c->scaleX;
     const double ey = -static_cast<double>(to->y) * c->scaleY;
-    // Convert quadratic bezier to cubic.
-    const double c1x = c->curX + (2.0 / 3.0) * (cx - c->curX);
-    const double c1y = c->curY + (2.0 / 3.0) * (cy - c->curY);
-    const double c2x = ex + (2.0 / 3.0) * (cx - ex);
-    const double c2y = ey + (2.0 / 3.0) * (cy - ey);
-    c->spline->curveTo(Vector2d(c1x, c1y), Vector2d(c2x, c2y), Vector2d(ex, ey));
+    // Use native quadratic curve instead of elevating to cubic.
+    c->builder->quadTo(Vector2d(cx, cy), Vector2d(ex, ey));
     c->curX = ex;
     c->curY = ey;
     return 0;
@@ -440,11 +436,11 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
     auto* c = static_cast<FtCtx*>(user);
     const double ex = static_cast<double>(to->x) * c->scaleX;
     const double ey = -static_cast<double>(to->y) * c->scaleY;
-    c->spline->curveTo(Vector2d(static_cast<double>(ctrl1->x) * c->scaleX,
-                                -static_cast<double>(ctrl1->y) * c->scaleY),
-                       Vector2d(static_cast<double>(ctrl2->x) * c->scaleX,
-                                -static_cast<double>(ctrl2->y) * c->scaleY),
-                       Vector2d(ex, ey));
+    c->builder->curveTo(Vector2d(static_cast<double>(ctrl1->x) * c->scaleX,
+                                 -static_cast<double>(ctrl1->y) * c->scaleY),
+                        Vector2d(static_cast<double>(ctrl2->x) * c->scaleX,
+                                 -static_cast<double>(ctrl2->y) * c->scaleY),
+                        Vector2d(ex, ey));
     c->curX = ex;
     c->curY = ey;
     return 0;
@@ -453,10 +449,10 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
   FT_Outline_Decompose(&ftFace->glyph->outline, &funcs, &ctx);
 
   if (ctx.contourOpen) {
-    spline.closePath();
+    builder.closePath();
   }
 
-  return spline;
+  return builder.build();
 }
 
 // ---------------------------------------------------------------------------

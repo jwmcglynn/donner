@@ -3,20 +3,20 @@
 
 #include <optional>
 
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 
 namespace donner::svg::components {
 
 /**
- * Stores a PathSpline used for rendering a shape, which may be generated from the parameters of
+ * Stores a Path used for rendering a shape, which may be generated from the parameters of
  * shapes such as circle, rect, line, poly, and path.
  *
  * All shapes create computed paths, and these paths can be rendered using a unified rendering
  * pipeline.
  */
 struct ComputedPathComponent {
-  /// PathSpline used for rendering the shape.
-  PathSpline spline;
+  /// Path used for rendering the shape.
+  Path spline;
 
   /**
    * Returns the tight bounds of the shape, transformed to the target coordinate system.

@@ -215,13 +215,4 @@ using Box2d = Box2<double>;
 
 /// @}
 
-/// @name Compatibility aliases
-/// @{
-
-template <typename T>
-using Box = Box2<T>;
-using Boxd = Box2d;
-
-/// @}
-
 }  // namespace donner

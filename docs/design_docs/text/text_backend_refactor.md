@@ -229,9 +229,9 @@ public:
 
   // ── Glyph operations ─────────────────────────────────────────
 
-  /// Extract a glyph outline as a PathSpline. Coordinates are in font units
+  /// Extract a glyph outline as a Path. Coordinates are in font units
   /// scaled by `scale`, with Y flipped for SVG's y-down convention.
-  virtual PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const = 0;
+  virtual Path glyphOutline(FontHandle font, int glyphIndex, float scale) const = 0;
 
   /// Returns true if the font is bitmap-only (no vector outlines).
   virtual bool isBitmapOnly(FontHandle font) const = 0;
@@ -323,7 +323,7 @@ public:
                               const TextParams& params);
 
   FontVMetrics fontVMetrics(FontHandle font) const;
-  PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const;
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const;
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const;
   std::optional<TextBackend::BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                                       float scale) const;
@@ -405,7 +405,7 @@ void RendererTinySkia::drawText(Registry& registry, const ComputedTextComponent&
 
   // --- Glyph outlines: use engine, not stbtt/shaper ---
   for (const auto& glyph : run.glyphs) {
-    PathSpline path = textEngine.glyphOutline(run.font, glyph.glyphIndex, scale);
+    Path path = textEngine.glyphOutline(run.font, glyph.glyphIndex, scale);
     // ... no #ifdef needed ...
   }
 
@@ -554,7 +554,7 @@ namespace donner::svg::components {
 struct ComputedTextGeometryComponent {
   struct GlyphGeometry {
     entt::entity sourceEntity = entt::null;
-    PathSpline path;
+    Path path;
     Box2d extent;
   };
 
@@ -610,8 +610,8 @@ without going through the renderer. New methods on `SVGTextElement`:
 class SVGTextElement : public SVGGraphicsElement {
 public:
   /// Convert all text content to path outlines, suitable for export or hit-testing.
-  /// Returns one PathSpline per glyph run, with glyph positions baked in.
-  std::vector<PathSpline> convertToPath() const;
+  /// Returns one Path per glyph run, with glyph positions baked in.
+  std::vector<Path> convertToPath() const;
 
   /// Get the ink bounding box of the rendered text (actual glyph outlines).
   Box2d inkBoundingBox() const;

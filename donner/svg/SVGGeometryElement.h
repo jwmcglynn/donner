@@ -2,7 +2,7 @@
 /// @file
 
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 
 namespace donner::svg {
 
@@ -51,14 +51,14 @@ public:
   void setPathLength(std::optional<double> value);
 
   /**
-   * Get the computed path geometry as a \ref PathSpline — a sequence of line segments, quadratic
+   * Get the computed path geometry as a \ref Path — a sequence of line segments, quadratic
    * and cubic Bezier curves that define the shape's outline. For `<path>` elements, this is parsed
    * from the `d` attribute; for shapes like `<circle>` and `<rect>`, the shape is converted to
    * equivalent path commands.
    *
    * @return The path geometry, or \c std::nullopt if the path data is empty or invalid.
    */
-  std::optional<PathSpline> computedSpline() const;
+  std::optional<Path> computedSpline() const;
 
   /**
    * Get the bounding box of the element, in world coordinates. If this is an invalid shape, returns

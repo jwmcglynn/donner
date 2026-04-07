@@ -116,7 +116,7 @@ Run every fuzzer for 10 minutes, debug and fix any crashes.
 - [x] **Run each fuzzer for 10 minutes** — All 21 fuzzers ran with `--max_total_time=600`.
   Script: `tools/run_all_fuzzers.sh` (4 parallel, ~50 min total).
 - [x] **Triage crashes** — 1 crash found:
-  - `path_parser_fuzzer`: Assertion failure in `PathSpline::closePath()` when consecutive
+  - `path_parser_fuzzer`: Assertion failure in `Path::closePath()` when consecutive
     `z` commands issued (e.g., `M6 6 z z z`). `currentSegmentStartCommandIndex_` was `kNPos`
     on second close. Fixed by making consecutive `closePath()` a no-op when subpath is
     already closed.
@@ -281,7 +281,7 @@ Detailed design in [text_rendering.md](text_rendering.md#textpath-implementation
 
 - [x] **SVGTextPathElement class** — Element class, ElementType enum, AllSVGElements, parser
   registration for href, startOffset, method, side, spacing attributes.
-- [x] **Path-based text layout** — `PathSpline::pointAtArcLength()` for path sampling, glyph
+- [x] **Path-based text layout** — `Path::pointAtArcLength()` for path sampling, glyph
   repositioning in both TextLayout and TextShaper, per-glyph tangent rotation.
 - [x] **Renderer support** — Per-glyph transforms in TinySkia backend.
 - [x] **Tests** — 37 resvg `e-textPath-*` tests passing with thresholds. 8 tests skipped for

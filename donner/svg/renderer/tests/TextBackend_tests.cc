@@ -149,13 +149,13 @@ TEST_P(TextBackendTest, GlyphOutlineProducesNonEmptyPath) {
   ASSERT_GT(shaped.glyphs[0].glyphIndex, 0);
 
   const float scale = backend().scaleForEmToPixels(font, 16.0f);
-  const PathSpline path = backend().glyphOutline(font, shaped.glyphs[0].glyphIndex, scale);
+  const Path path = backend().glyphOutline(font, shaped.glyphs[0].glyphIndex, scale);
   EXPECT_FALSE(path.empty());
   EXPECT_GT(path.commands().size(), 0u);
 }
 
 TEST_P(TextBackendTest, GlyphOutlineEmptyForInvalidFont) {
-  const PathSpline path = backend().glyphOutline(FontHandle{}, 1, 1.0f);
+  const Path path = backend().glyphOutline(FontHandle{}, 1, 1.0f);
   EXPECT_TRUE(path.empty());
 }
 
@@ -304,7 +304,7 @@ TEST_P(TextBackendTest, GlyphOutlineForNotdefDoesNotCrash) {
 
   const float scale = backend().scaleForEmToPixels(font, 16.0f);
   // Glyph index 0 is .notdef — may or may not have an outline. Just verify no crash.
-  const PathSpline path = backend().glyphOutline(font, 0, scale);
+  const Path path = backend().glyphOutline(font, 0, scale);
   EXPECT_GE(path.commands().size(), 0u);
 }
 

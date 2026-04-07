@@ -2,13 +2,13 @@
 
 #include <gmock/gmock.h>
 
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
 
 /**
- * Matches the points and commands of a PathSpline.
+ * Matches the points and commands of a Path.
  *
  * @param pointsMatcher Points array matcher.
  * @param commandsMatcher Commands array matcher.
@@ -19,7 +19,7 @@ MATCHER_P2(PointsAndCommandsAre, pointsMatcher, commandsMatcher, "") {
 }
 
 /**
- * Matches the points of a from the PathSpline vertices list.
+ * Matches the points of a from the Path vertices list.
  */
 MATCHER_P(VertexPointsAre, pointsMatcher, "") {
   std::vector<Vector2d> vertexPoints;
@@ -31,7 +31,7 @@ MATCHER_P(VertexPointsAre, pointsMatcher, "") {
 }
 
 /**
- * Matches the points of a from the PathSpline vertices list. Variadic template function that
+ * Matches the points of a from the Path vertices list. Variadic template function that
  * accepts matchers or expected values for each vertex point.
  */
 template <typename... Matchers>

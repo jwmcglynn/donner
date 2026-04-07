@@ -52,7 +52,7 @@ MATCHER_P(PathCommandsAre, expected, "path commands match") {
     return false;
   }
   for (size_t i = 0; i < expected.size(); ++i) {
-    if (commands[i].type != expected[i]) {
+    if (commands[i].verb != expected[i]) {
       return false;
     }
   }
@@ -141,10 +141,10 @@ TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
   snapshot.rowBytes = snapshot.dimensions.x * 4;
   snapshot.pixels.resize(snapshot.rowBytes * snapshot.dimensions.y, 255);
 
-  const std::array<PathSpline::CommandType, 5> rectCommands = {
-      PathSpline::CommandType::MoveTo, PathSpline::CommandType::LineTo,
-      PathSpline::CommandType::LineTo, PathSpline::CommandType::LineTo,
-      PathSpline::CommandType::ClosePath};
+  const std::array<Path::Verb, 5> rectCommands = {
+      Path::Verb::MoveTo, Path::Verb::LineTo,
+      Path::Verb::LineTo, Path::Verb::LineTo,
+      Path::Verb::ClosePath};
 
   const auto viewportSizeMatcher = Field(&RenderViewport::size, Vector2dEq(Vector2d(16, 16)));
 

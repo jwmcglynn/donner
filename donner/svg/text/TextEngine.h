@@ -60,7 +60,7 @@ public:
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const;
   std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const;
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const;
-  PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const;
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const;
   bool isBitmapOnly(FontHandle font) const;
   std::optional<TextBackend::BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                                       float scale) const;
@@ -77,7 +77,7 @@ public:
       EntityHandle handle) const;
 
   /// Return glyph outlines for the text subtree rooted at \p handle.
-  std::vector<PathSpline> computedGlyphPaths(EntityHandle handle) const;
+  std::vector<Path> computedGlyphPaths(EntityHandle handle) const;
 
   /// Return the ink bounds for the text subtree rooted at \p handle.
   Box2d computedInkBounds(EntityHandle handle) const;

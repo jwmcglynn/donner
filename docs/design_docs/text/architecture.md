@@ -123,7 +123,7 @@ Single-header C/C++ OpenType shaper (~22K LOC). Supports GSUB/GPOS.
   |         |
 Skia     TinySkia
   |         |
-SkFont   stbtt_GetGlyphShape → PathSpline → tiny-skia fill/stroke
+SkFont   stbtt_GetGlyphShape → Path → tiny-skia fill/stroke
 ```
 
 ### FontManager
@@ -244,14 +244,14 @@ When HarfBuzz is enabled:
 
 For TinySkia, glyphs are rendered as filled/stroked paths. stb_truetype's
 `stbtt_GetGlyphShape()` returns an array of move/line/curve commands directly convertible to
-`PathSpline`.
+`Path`.
 
 ```cpp
-PathSpline glyphToPath(const stbtt_fontinfo* info, int glyphIndex, float scale) {
+Path glyphToPath(const stbtt_fontinfo* info, int glyphIndex, float scale) {
   stbtt_vertex* vertices = nullptr;
   const int numVertices = stbtt_GetGlyphShape(info, glyphIndex, &vertices);
 
-  PathSpline::Builder builder;
+  PathBuilder builder;
   for (int i = 0; i < numVertices; ++i) {
     const float x = vertices[i].x * scale;
     const float y = -vertices[i].y * scale;  // stb_truetype Y is up, SVG Y is down
@@ -284,7 +284,7 @@ PathSpline glyphToPath(const stbtt_fontinfo* info, int glyphIndex, float scale) 
 ```
 
 Each laid-out glyph is:
-1. Converted to a `PathSpline` via `glyphToPath()`.
+1. Converted to a `Path` via `glyphToPath()`.
 2. Translated to the glyph's computed position.
 3. Drawn via `tiny_skia::Pixmap::fill_path()` / `stroke_path()`.
 
@@ -381,9 +381,9 @@ struct TextParams {
   - [x] `text-anchor` adjustment (measure total advance, shift origin).
   - [x] Unit tests with embedded Public Sans.
 - [x] Implement glyph outline extraction via `stbtt_GetGlyphShape()`.
-  - [x] stb_truetype vertex array → `PathSpline::Builder`.
+  - [x] stb_truetype vertex array → `PathBuilder`.
   - [x] Y-axis flip (stb_truetype Y-up → SVG Y-down).
-  - [x] Glyph path cache (`{FontHandle, glyphIndex}` → `PathSpline`).
+  - [x] Glyph path cache (`{FontHandle, glyphIndex}` → `Path`).
 - [x] Implement `RendererTinySkia::drawText()`.
   - [x] Lay out text via `TextLayout`.
   - [x] For each glyph: extract outline, translate to position, fill via `fill_path()`.
@@ -481,7 +481,7 @@ at minimal binary cost.
 **FreeType for glyph outlines:**
 Rejected. stb_truetype covers font parsing/outlines at ~55 KB vs FreeType's ~767 KB (full) or
 ~30 KB (aggressively stripped). stb_truetype is already vendored and its outline API maps
-directly to `PathSpline`. FreeType's hinting is irrelevant for vector-path rendering.
+directly to `Path`. FreeType's hinting is irrelevant for vector-path rendering.
 
 **Skia's text APIs only (no shared font loading for TinySkia):**
 Not viable. TinySkia has no text APIs. A shared font loading layer is needed regardless of

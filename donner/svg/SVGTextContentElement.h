@@ -9,7 +9,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/LengthAdjust.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 
 namespace donner::svg {
 
@@ -36,7 +36,7 @@ protected:
   /**
    * Return glyph outlines for this text subtree, in local coordinates.
    */
-  std::vector<PathSpline> computedGlyphPaths() const;
+  std::vector<Path> computedGlyphPaths() const;
 
   /**
    * Return the ink bounds for this text subtree, in local coordinates.

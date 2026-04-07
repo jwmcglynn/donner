@@ -15,7 +15,7 @@ public:
   MOCK_METHOD(std::optional<UnderlineMetrics>, underlineMetrics, (FontHandle), (const, override));
   MOCK_METHOD(std::optional<UnderlineMetrics>, strikeoutMetrics, (FontHandle), (const, override));
   MOCK_METHOD(std::optional<SubSuperMetrics>, subSuperMetrics, (FontHandle), (const, override));
-  MOCK_METHOD(PathSpline, glyphOutline, (FontHandle, int, float), (const, override));
+  MOCK_METHOD(Path, glyphOutline, (FontHandle, int, float), (const, override));
   MOCK_METHOD(bool, isBitmapOnly, (FontHandle), (const, override));
   MOCK_METHOD(bool, isCursive, (uint32_t), (const, override));
   MOCK_METHOD(bool, hasSmallCapsFeature, (FontHandle), (const, override));

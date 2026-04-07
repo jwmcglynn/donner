@@ -122,7 +122,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   }
 
   const float scale = engine.scaleForEmToPixels(runs[0].font, 64.0f);
-  const PathSpline firstGlyphPath =
+  const Path firstGlyphPath =
       engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
   ASSERT_FALSE(firstGlyphPath.empty());
 
@@ -222,9 +222,7 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   auto span3 = MakeSpan(" text");
   span3.startsNewChunk = false;
 
-  PathSpline path;
-  path.moveTo(Vector2d(0.0, 0.0));
-  path.lineTo(Vector2d(200.0, 0.0));
+  Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
 
   span1.pathSpline = path;
   span1.textPathSourceEntity = Entity{1};
@@ -269,9 +267,7 @@ TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   auto trailingSpan = MakeSpan(" tail");
   trailingSpan.startsNewChunk = false;
 
-  PathSpline path;
-  path.moveTo(Vector2d(0.0, 0.0));
-  path.lineTo(Vector2d(200.0, 0.0));
+  Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
   pathSpan.pathSpline = path;
   pathSpan.textPathSourceEntity = Entity{1};
 

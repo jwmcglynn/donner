@@ -409,10 +409,11 @@ TEST_F(ShapeSystemTest, Arc360Degrees) {
   // Full circle arc should produce valid bounds.
   auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
   ASSERT_TRUE(bounds.has_value());
-  EXPECT_NEAR(bounds->topLeft.x, 25.0, 2.0);
-  EXPECT_NEAR(bounds->topLeft.y, 25.0, 2.0);
-  EXPECT_NEAR(bounds->bottomRight.x, 75.0, 2.0);
-  EXPECT_NEAR(bounds->bottomRight.y, 75.0, 2.0);
+  // Proper SVG arc decomposition gives accurate bounds for the full circle.
+  EXPECT_NEAR(bounds->topLeft.x, 25.0, 1.0);
+  EXPECT_NEAR(bounds->topLeft.y, 25.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.x, 75.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.y, 75.0, 1.0);
 }
 
 TEST_F(ShapeSystemTest, ArcVerySmall) {
@@ -465,7 +466,7 @@ TEST_F(ShapeSystemTest, PolygonIsClosed) {
   // Polygon spline must end with a ClosePath command.
   const auto& commands = path->spline.commands();
   ASSERT_FALSE(commands.empty());
-  EXPECT_EQ(commands.back().type, PathSpline::CommandType::ClosePath);
+  EXPECT_EQ(commands.back().verb, Path::Verb::ClosePath);
 }
 
 TEST_F(ShapeSystemTest, PolylineIsNotClosed) {
@@ -483,7 +484,7 @@ TEST_F(ShapeSystemTest, PolylineIsNotClosed) {
   // Polyline spline must NOT end with a ClosePath command.
   const auto& commands = path->spline.commands();
   ASSERT_FALSE(commands.empty());
-  EXPECT_NE(commands.back().type, PathSpline::CommandType::ClosePath);
+  EXPECT_NE(commands.back().verb, Path::Verb::ClosePath);
 }
 
 // --- Rect with rx/ry exceeding half dimensions ---

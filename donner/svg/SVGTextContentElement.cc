@@ -54,7 +54,7 @@ void SVGTextContentElement::invalidateTextGeometry() {
   }
 }
 
-std::vector<PathSpline> SVGTextContentElement::computedGlyphPaths() const {
+std::vector<Path> SVGTextContentElement::computedGlyphPaths() const {
   if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
     return engine->computedGlyphPaths(handle_);
   }

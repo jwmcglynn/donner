@@ -14,7 +14,7 @@ SVGTextElement SVGTextElement::CreateOn(EntityHandle handle) {
   return SVGTextElement(handle);
 }
 
-std::vector<PathSpline> SVGTextElement::convertToPath() const {
+std::vector<Path> SVGTextElement::convertToPath() const {
   return computedGlyphPaths();
 }
 

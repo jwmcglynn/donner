@@ -32,7 +32,7 @@ void SVGPathElement::setD(RcString d) {
   path.splineOverride.reset();
 }
 
-void SVGPathElement::setSpline(const PathSpline& spline) {
+void SVGPathElement::setSpline(const Path& spline) {
   invalidate();
 
   auto& path = handle_.get_or_emplace<components::PathComponent>();

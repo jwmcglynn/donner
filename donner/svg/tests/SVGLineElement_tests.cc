@@ -5,7 +5,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGRectElement.h"  // For a negative cast test.
-#include "donner/svg/core/tests/PathSplineTestUtils.h"
+#include "donner/svg/core/tests/PathTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
@@ -15,8 +15,8 @@ using testing::Ne;
 
 namespace donner::svg {
 
-using Command = PathSpline::Command;
-using CommandType = PathSpline::CommandType;
+using Command = Path::Command;
+using CommandType = Path::Verb;
 
 namespace {
 

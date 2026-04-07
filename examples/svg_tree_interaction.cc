@@ -59,7 +59,7 @@ int main(int argc, char* argv[]) {
   // it. If the cast fails, an assertion will be triggered.
   donner::svg::SVGPathElement path = maybePath->cast<donner::svg::SVGPathElement>();
   //! [get_path]
-  if (std::optional<donner::svg::PathSpline> spline = path.computedSpline()) {
+  if (std::optional<donner::Path> spline = path.computedSpline()) {
     std::cout << "Path: " << *spline << "\n";
     std::cout << "Length: " << spline->pathLength() << " userspace units\n";
   } else {

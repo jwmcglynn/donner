@@ -12,7 +12,7 @@
 #include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/svg/core/FillRule.h"
+#include "donner/base/FillRule.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"

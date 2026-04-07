@@ -131,7 +131,7 @@ public:
    *
    * @param spline Path spline.
    */
-  void setSpline(const PathSpline& spline);
+  void setSpline(const Path& spline);
 };
 
 }  // namespace donner::svg
