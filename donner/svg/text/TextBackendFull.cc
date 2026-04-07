@@ -235,7 +235,7 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
   if (!hbFont) {
     return {};
   }
-  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return {};
   }
@@ -307,7 +307,7 @@ std::optional<UnderlineMetrics> TextBackendFull::strikeoutMetrics(FontHandle fon
     return std::nullopt;
   }
 
-  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return std::nullopt;
   }
@@ -329,7 +329,7 @@ std::optional<SubSuperMetrics> TextBackendFull::subSuperMetrics(FontHandle font)
     return std::nullopt;
   }
 
-  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return std::nullopt;
   }
@@ -361,7 +361,7 @@ PathSpline TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float 
   const float fontSizePx = scale * static_cast<float>(upem);
 
   // Get the FreeType face and set it to the correct size.
-  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return {};
   }
@@ -587,7 +587,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
     return {};
   }
 
-  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return {};
   }
@@ -784,7 +784,7 @@ TextBackend::ShapedRun TextBackendFull::shapeRun(FontHandle font, float fontSize
         glyph.xOffset = 0.0;
         glyph.yOffset = 0.0;
       } else {
-        FT_Face verticalFace = hb_ft_font_get_face(hbFont);
+        FT_Face verticalFace = hb_ft_font_get_ft_face(hbFont);
         if (verticalFace && verticalFace->units_per_EM > 0) {
           double vertOriginY = glyph.yOffset;
           const double emScale = fontSizePx / static_cast<double>(verticalFace->units_per_EM);
@@ -828,7 +828,7 @@ double TextBackendFull::crossSpanKern(FontHandle prevFont, float prevSizePx, Fon
     return 0.0;
   }
 
-  FT_Face ftFace = hb_ft_font_get_face(hbFont);
+  FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return 0.0;
   }
