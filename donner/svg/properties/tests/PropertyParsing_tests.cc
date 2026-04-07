@@ -19,13 +19,19 @@ using testing::Eq;
 
 namespace donner::svg::parser {
 
+namespace {
+
+css::ComponentValue makeToken(css::Token::TokenValue&& value) {
+  return css::ComponentValue(css::Token(std::move(value), 0));
+}
+
+}  // namespace
+
 // --- ParseAlphaValue ---
 
 TEST(PropertyParsingTest, ParseAlphaValueNumber) {
-  css::Declaration decl;
-  decl.name = "opacity";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Number(0.5, "0.5", css::NumberType::Number))));
+  css::Declaration decl("opacity");
+  decl.values.push_back(makeToken(css::Token::Number(0.5, "0.5", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
                                                PropertyParseBehavior::AllowUserUnits);
@@ -35,10 +41,8 @@ TEST(PropertyParsingTest, ParseAlphaValueNumber) {
 }
 
 TEST(PropertyParsingTest, ParseAlphaValuePercentage) {
-  css::Declaration decl;
-  decl.name = "opacity";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Percentage(50.0, "50", css::NumberType::Number))));
+  css::Declaration decl("opacity");
+  decl.values.push_back(makeToken(css::Token::Percentage(50.0, "50", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
                                                PropertyParseBehavior::AllowUserUnits);
@@ -48,10 +52,8 @@ TEST(PropertyParsingTest, ParseAlphaValuePercentage) {
 }
 
 TEST(PropertyParsingTest, ParseAlphaValueClampedHigh) {
-  css::Declaration decl;
-  decl.name = "opacity";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Number(2.0, "2.0", css::NumberType::Number))));
+  css::Declaration decl("opacity");
+  decl.values.push_back(makeToken(css::Token::Number(2.0, "2.0", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
                                                PropertyParseBehavior::AllowUserUnits);
@@ -61,10 +63,8 @@ TEST(PropertyParsingTest, ParseAlphaValueClampedHigh) {
 }
 
 TEST(PropertyParsingTest, ParseAlphaValueClampedLow) {
-  css::Declaration decl;
-  decl.name = "opacity";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Number(-1.0, "-1.0", css::NumberType::Number))));
+  css::Declaration decl("opacity");
+  decl.values.push_back(makeToken(css::Token::Number(-1.0, "-1.0", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
                                                PropertyParseBehavior::AllowUserUnits);
@@ -74,10 +74,8 @@ TEST(PropertyParsingTest, ParseAlphaValueClampedLow) {
 }
 
 TEST(PropertyParsingTest, ParseAlphaValueInvalid) {
-  css::Declaration decl;
-  decl.name = "opacity";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("auto")))));
+  css::Declaration decl("opacity");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("auto"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
                                                PropertyParseBehavior::AllowUserUnits);
@@ -88,40 +86,32 @@ TEST(PropertyParsingTest, ParseAlphaValueInvalid) {
 // --- CSS-wide keyword detection ---
 
 TEST(PropertyParsingTest, CssWideKeywordInitial) {
-  css::Declaration decl;
-  decl.name = "fill";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("initial")))));
+  css::Declaration decl("fill");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("initial"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   EXPECT_EQ(params.explicitState, PropertyState::ExplicitInitial);
 }
 
 TEST(PropertyParsingTest, CssWideKeywordInherit) {
-  css::Declaration decl;
-  decl.name = "fill";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("inherit")))));
+  css::Declaration decl("fill");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("inherit"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   EXPECT_EQ(params.explicitState, PropertyState::Inherit);
 }
 
 TEST(PropertyParsingTest, CssWideKeywordUnset) {
-  css::Declaration decl;
-  decl.name = "fill";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("unset")))));
+  css::Declaration decl("fill");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("unset"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   EXPECT_EQ(params.explicitState, PropertyState::ExplicitUnset);
 }
 
 TEST(PropertyParsingTest, NonCssWideKeyword) {
-  css::Declaration decl;
-  decl.name = "fill";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("red")))));
+  css::Declaration decl("fill");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("red"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   EXPECT_EQ(params.explicitState, PropertyState::NotSet);
@@ -148,10 +138,8 @@ TEST(PropertyParsingTest, CreateForAttributeNormalValue) {
 // --- TryGetSingleIdent ---
 
 TEST(PropertyParsingTest, TryGetSingleIdentSuccess) {
-  css::Declaration decl;
-  decl.name = "display";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("none")))));
+  css::Declaration decl("display");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("none"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   auto ident = TryGetSingleIdent(params.components());
@@ -160,10 +148,8 @@ TEST(PropertyParsingTest, TryGetSingleIdentSuccess) {
 }
 
 TEST(PropertyParsingTest, TryGetSingleIdentFailsOnNumber) {
-  css::Declaration decl;
-  decl.name = "opacity";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Number(0.5, "0.5", css::NumberType::Number))));
+  css::Declaration decl("opacity");
+  decl.values.push_back(makeToken(css::Token::Number(0.5, "0.5", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   auto ident = TryGetSingleIdent(params.components());
@@ -171,12 +157,9 @@ TEST(PropertyParsingTest, TryGetSingleIdentFailsOnNumber) {
 }
 
 TEST(PropertyParsingTest, TryGetSingleIdentFailsOnMultiple) {
-  css::Declaration decl;
-  decl.name = "fill";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("url")))));
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("none")))));
+  css::Declaration decl("fill");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("url"))));
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("none"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{});
   auto ident = TryGetSingleIdent(params.components());
@@ -213,10 +196,8 @@ TEST(PropertyParsingIntegrationTest, StyleAttributeOverridesPresentation) {
 // --- ParseLengthPercentageOrAuto ---
 
 TEST(PropertyParsingTest, ParseLengthPercentageOrAutoWithAuto) {
-  css::Declaration decl;
-  decl.name = "width";
-  decl.values.push_back(css::ComponentValue(
-      css::Token(css::Token::Ident(RcString("auto")))));
+  css::Declaration decl("width");
+  decl.values.push_back(makeToken(css::Token::Ident(RcString("auto"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
                                                PropertyParseBehavior::AllowUserUnits);
