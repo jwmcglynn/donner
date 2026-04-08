@@ -32,6 +32,9 @@ jobs:
           restore-keys: |
             cmake-deps-linux-${{ matrix.backend }}-
 
+      - name: Validate generated CMakeLists.txt
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
       - name: Build with CMake (${{ matrix.backend }})
         run: |
           python3 tools/cmake/gen_cmakelists.py
@@ -56,6 +59,9 @@ jobs:
           key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py') }}
           restore-keys: |
             cmake-deps-macos-${{ matrix.backend }}-
+
+      - name: Validate generated CMakeLists.txt
+        run: python3 tools/cmake/gen_cmakelists.py --check
 
       - name: Build with CMake (${{ matrix.backend }})
         run: |
