@@ -155,6 +155,12 @@ public:
       return;
     }
 
+    // ShadowOnlyChildren elements (e.g., <mask>, <pattern>) don't render content in the light
+    // tree — only when instantiated as shadow trees. Track this so we can skip mask/clippath
+    // resolution on them (which would wastefully consume shadow tree entities needed by the
+    // actual users of those masks).
+    bool isShadowOnlyInLightTree = false;
+
     if (const auto* behavior = dataHandle.try_get<RenderingBehaviorComponent>()) {
       if (behavior->behavior == RenderingBehavior::Nonrenderable && !ignoreNonrenderable_) {
         return;
@@ -163,6 +169,7 @@ public:
       } else if (behavior->behavior == RenderingBehavior::ShadowOnlyChildren) {
         if (!shadowEntityComponent) {
           traverseChildren = false;
+          isShadowOnlyInLightTree = true;
         }
       }
     }
@@ -238,25 +245,27 @@ public:
       instance.resolvedFilter = resolveFilter(dataHandle, filterEffects);
     }
 
-    if (properties.clipPath.get()) {
-      if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.getRequired());
-          resolved.valid()) {
-        instance.clipPath = resolved;
+    if (!isShadowOnlyInLightTree) {
+      if (properties.clipPath.get()) {
+        if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.getRequired());
+            resolved.valid()) {
+          instance.clipPath = resolved;
 
-        // Get the paths and store them in a ComputedClipPaths component.
-        auto& clipPaths = registry_.emplace<ComputedClipPathsComponent>(styleEntity);
+          // Get the paths and store them in a ComputedClipPaths component.
+          auto& clipPaths = registry_.emplace<ComputedClipPathsComponent>(styleEntity);
 
-        RecursionGuard guard;
-        guard.add(styleEntity);
-        collectClipPaths(resolved.reference.handle, clipPaths.clipPaths, guard);
+          RecursionGuard guard;
+          guard.add(styleEntity);
+          collectClipPaths(resolved.reference.handle, clipPaths.clipPaths, guard);
+        }
       }
-    }
 
-    if (properties.mask.get()) {
-      if (auto resolved =
-              resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
-          resolved.valid()) {
-        instance.mask = std::move(resolved);
+      if (properties.mask.get()) {
+        if (auto resolved =
+                resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
+            resolved.valid()) {
+          instance.mask = std::move(resolved);
+        }
       }
     }
 
@@ -480,11 +489,11 @@ public:
 
     Entity firstEntity = computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value());
 
-    // Check if this subtree was already traversed (e.g., for mask-on-mask chains where the
-    // same mask element's shadow tree is referenced multiple times). If the first entity
-    // already has RenderingInstanceComponent, skip re-traversal to avoid assertion failures.
+    // If this subtree was already traversed (e.g., multiple shadow entities sharing the same
+    // light entity's offscreen branch), reuse the cached SubtreeInfo to avoid re-traversal
+    // and assertion failures from duplicate RenderingInstanceComponent emplacement. Mask
+    // recursion is detected at a higher level by activeMaskElements_ in resolveMask().
     if (registry_.try_get<RenderingInstanceComponent>(firstEntity)) {
-      // Already traversed — find the last entity from the cached SubtreeInfo on the root.
       const auto& rootInst = registry_.get<RenderingInstanceComponent>(firstEntity);
       if (rootInst.subtreeInfo) {
         return SubtreeInfo{firstEntity, rootInst.subtreeInfo->lastRenderedEntity, 0};
@@ -552,13 +561,49 @@ public:
     // there was recursion and we treat the reference as invalid.
     if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMask(resolvedRef->handle)) {
-      if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
+      // Check for mutual recursion: if the referenced mask element is already being rendered
+      // as mask content higher up the call stack (e.g., mask1→mask2→mask1), break the cycle.
+      const Entity maskElement = resolvedRef->handle.entity();
+      if (activeMaskElements_.count(maskElement)) {
+        return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
+                            MaskContentUnits::Default};
+      }
+
+      // One-step lookahead: if the referenced mask element itself has a mask property that
+      // references an already-active mask element, applying this mask would create a cycle
+      // one level deeper. Break the cycle now to match SVG spec behavior where all masks
+      // in a mutual recursion cycle have their mask attributes treated as "none".
+      if (const auto* maskStyle =
+              resolvedRef->handle.try_get<ComputedStyleComponent>()) {
+        if (maskStyle->properties.has_value()) {
+          if (auto nestedMask = maskStyle->properties->mask.get()) {
+            if (auto nestedRef = nestedMask->resolve(*styleHandle.registry());
+                nestedRef && activeMaskElements_.count(nestedRef->handle.entity())) {
+              return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
+                                  MaskContentUnits::Default};
+            }
+          }
+        }
+      }
+
+      // When the style entity is a shadow entity (e.g. a child inside a mask's shadow tree),
+      // the ComputedShadowTreeComponent lives on the corresponding light entity, not on the
+      // shadow entity itself. Fall back to the light entity for lookup.
+      EntityHandle shadowTreeHost = styleHandle;
+      if (const auto* shadowEntity = styleHandle.try_get<ShadowEntityComponent>()) {
+        shadowTreeHost = EntityHandle(*styleHandle.registry(), shadowEntity->lightEntity);
+      }
+
+      if (const auto* computedShadow = shadowTreeHost.try_get<ComputedShadowTreeComponent>();
           computedShadow &&
           computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
-        return ResolvedMask{
-            resolvedRef.value(),
-            instantiateOffscreenSubtree(styleHandle, ShadowBranchType::OffscreenMask),
-            resolvedRef->handle.get<MaskComponent>().maskContentUnits};
+        activeMaskElements_.insert(maskElement);
+        auto subtree =
+            instantiateOffscreenSubtree(shadowTreeHost, ShadowBranchType::OffscreenMask);
+        activeMaskElements_.erase(maskElement);
+
+        return ResolvedMask{resolvedRef.value(), std::move(subtree),
+                            resolvedRef->handle.get<MaskComponent>().maskContentUnits};
       }
     }
 
@@ -614,6 +659,11 @@ private:
 
   /// Transform from the canvas to the SVG document root, for the current canvas scale.
   Transformd documentWorldFromCanvasTransform_;
+
+  /// Tracks mask elements currently being rendered to detect mutual recursion
+  /// (e.g., mask1→mask2→mask1). When a mask reference resolves to an element already in this
+  /// set, the cycle is broken by treating the mask attribute as "none".
+  std::set<Entity> activeMaskElements_;
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
