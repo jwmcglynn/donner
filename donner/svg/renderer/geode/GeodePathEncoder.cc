@@ -207,9 +207,9 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
       continue;  // Skip empty bands entirely.
     }
 
-    EncodedPath::Band band;
-    band.curveStart = static_cast<uint16_t>(result.curves.size());
-    band.curveCount = static_cast<uint16_t>(indices.size());
+    EncodedPath::Band band = {};
+    band.curveStart = static_cast<uint32_t>(result.curves.size());
+    band.curveCount = static_cast<uint32_t>(indices.size());
     band.yMin = yBase + static_cast<float>(b) * bandHeight;
     band.yMax = yBase + static_cast<float>(b + 1) * bandHeight;
 

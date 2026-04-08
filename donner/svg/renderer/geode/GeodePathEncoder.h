@@ -37,15 +37,23 @@ struct EncodedPath {
     float p2x, p2y;  ///< End point.
   };
 
-  /// Metadata for one horizontal band. Packed as 2×16-bit in the GPU SSBO.
+  /// Metadata for one horizontal band.
+  ///
+  /// Layout matches the WGSL `Band` struct in shaders/slug_fill.wgsl exactly
+  /// (8 × 4 bytes = 32 bytes per band). Two trailing pad fields are required
+  /// because storage buffer struct stride must be 16-byte aligned, and
+  /// without them WGSL would round the struct to 32 bytes anyway.
   struct Band {
-    uint16_t curveStart;  ///< Index of the first curve in this band's curve range.
-    uint16_t curveCount;  ///< Number of curves intersecting this band.
+    uint32_t curveStart;  ///< Index of the first curve in this band's curve range.
+    uint32_t curveCount;  ///< Number of curves intersecting this band.
     float yMin;           ///< Bottom edge of the band (in path space).
     float yMax;           ///< Top edge of the band (in path space).
     float xMin;           ///< Left extent of curves in this band.
     float xMax;           ///< Right extent of curves in this band.
+    float _pad0;          ///< Padding to match WGSL stride.
+    float _pad1;          ///< Padding to match WGSL stride.
   };
+  static_assert(sizeof(Band) == 32, "Band struct must match WGSL layout");
 
   /// Vertex for the band bounding quad (input to the Slug vertex shader).
   struct Vertex {
