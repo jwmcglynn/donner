@@ -25,7 +25,10 @@ filegroup(
 )
 
 exports_files(
-    ["donner_splash.svg"],
+    [
+        "donner_splash.svg",
+        "MODULE.bazel",
+    ],
     visibility = ["//visibility:public"],
 )
 

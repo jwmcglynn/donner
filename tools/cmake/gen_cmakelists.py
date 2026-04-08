@@ -21,11 +21,15 @@ retaining the original dependency graph.
 
 from __future__ import annotations
 
+import argparse
+import filecmp
 import subprocess
 import sys
 import re
+import shutil
+import tempfile
 from pathlib import Path
-from typing import DefaultDict, Dict, List, Set, Tuple
+from typing import DefaultDict, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 import json
 import os
@@ -37,6 +41,10 @@ import xml.etree.ElementTree as ElementTree
 
 # Use bzlmod-aware queries since this repository relies on MODULE.bazel.
 BAZEL_PREFIX = ["bazel"]
+
+# When running in --check mode, warn about unmapped deps instead of silently dropping them.
+_check_mode = False
+_unmapped_deps: List[str] = []
 
 #
 # Global state collected while emitting libraries
@@ -64,6 +72,23 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
     "@tiny-skia-cpp//src/tiny_skia:tiny_skia_core": "tiny_skia",
     "@tiny-skia-cpp//src/tiny_skia/filter:filter": "tiny_skia",
     "@woff2//:woff2_decode": "woff2dec",
+    "@brotli//:brotlidec": "brotlidec",
+    # @re2 is a test-only transitive dep via googletest; not linked separately
+    # in CMake (googletest already handles it via FetchContent).
+}
+
+# Bazel external labels that appear in the dep graph but have no corresponding
+# CMake target (either because they're internal implementation details of a
+# FetchContent'd library, or they're test-only transitive deps). Silently drop
+# these without warning.
+_IGNORED_EXTERNAL_DEPS: Set[str] = {
+    # re2 is pulled in as a test-only dep by googletest; FetchContent handles it.
+    "@re2//:re2",
+    # Skia internal module targets - the "skia" FetchContent target covers all of them.
+    "@skia//src/core:core",
+    "@skia//src/pathops:pathops",
+    "@skia//src/ports:fontmgr_empty_freetype",
+    "@skia//src/ports:fontmgr_fontconfig_freetype",
 }
 
 # Packages whose CMake build is provided manually or by FetchContent and must
@@ -82,6 +107,50 @@ SKIPPED_TARGETS: Set[str] = {
     # the bare "freetype" name is not a valid CMake target.
     "//third_party:freetype",
 }
+
+# Bazel toolchain-internal deps that are not real C++ libraries and should not
+# trigger "unmapped external dep" warnings. These are implicit deps that Bazel
+# adds to cc_test/cc_binary targets but are handled by the CMake toolchain itself.
+_BAZEL_INTERNAL_DEPS: Set[str] = {
+    "@bazel_tools//tools/cpp:link_extra_lib",
+    "@bazel_tools//tools/cpp:malloc",
+    "@rules_cc//:link_extra_lib",
+}
+
+# External deps that are handled via EXTRA_LINK_DEPS / pkg-config in CMake
+# and shouldn't warn as "unmapped". Linking happens through system find_package.
+_DEPS_HANDLED_EXTERNALLY: Set[str] = {
+    "@harfbuzz//:harfbuzz",
+    "@freetype//:freetype",
+}
+
+
+def _is_known_bazel_internal(dep: str) -> bool:
+    """Return True if *dep* is a Bazel toolchain-internal label that should be ignored."""
+    return (dep in _BAZEL_INTERNAL_DEPS
+            or dep in _DEPS_HANDLED_EXTERNALLY
+            or dep in _IGNORED_EXTERNAL_DEPS)
+
+
+# Regex patterns for auto-mapping well-known external repos to CMake targets.
+# Used as a fallback before the "unmapped" warning is emitted.
+_AUTO_MAP_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    # Abseil: @@abseil-cpp+//absl/container:flat_hash_set -> absl::flat_hash_set
+    # Also matches @com_google_absl//absl/container:flat_hash_set (legacy form).
+    (re.compile(r"^@+(?:abseil-cpp\+?|com_google_absl)//absl/[^:]+:(.+)$"), "absl::{0}"),
+]
+
+
+def _auto_map_external_dep(dep: str) -> Optional[str]:
+    """Attempt to auto-map an external Bazel dep to a CMake target name.
+
+    Returns the CMake target name or None if no pattern matches.
+    """
+    for pattern, template in _AUTO_MAP_PATTERNS:
+        m = pattern.match(dep)
+        if m:
+            return template.format(*m.groups())
+    return None
 
 # Helper constants for CMake condition strings.
 _SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
@@ -180,6 +249,130 @@ EXTRA_INCLUDE_DIRS: List[Tuple[str, str, str]] = [
     ("donner_svg_text_text_backend_full", _TEXT_FULL,
      "${FREETYPE_INCLUDE_DIRS} ${HARFBUZZ_INCLUDE_DIRS}"),
 ]
+
+#
+# MODULE.bazel version extraction
+#
+
+
+def _find_module_bazel() -> Path:
+    """Locate MODULE.bazel relative to the script or working directory."""
+    # Try working directory first, then script directory
+    for base in [Path.cwd(), Path(__file__).resolve().parent.parent.parent]:
+        p = base / "MODULE.bazel"
+        if p.exists():
+            return p
+    raise FileNotFoundError("Cannot find MODULE.bazel")
+
+
+def extract_versions_from_module_bazel() -> Dict[str, str]:
+    """Parse MODULE.bazel to extract canonical dependency versions/commits.
+
+    Returns a dict mapping dependency name to version string or git commit/tag.
+    This is used to keep FetchContent declarations in sync with Bazel.
+    """
+    module_path = _find_module_bazel()
+    content = module_path.read_text()
+
+    versions: Dict[str, str] = {}
+
+    # Match bazel_dep(name = "...", version = "...")
+    for m in re.finditer(
+        r'bazel_dep\(\s*name\s*=\s*"([^"]+)"\s*,\s*(?:repo_name\s*=\s*"[^"]+"\s*,\s*)?version\s*=\s*"([^"]+)"',
+        content,
+    ):
+        versions[m.group(1)] = m.group(2)
+
+    # Match git_repository / new_git_repository blocks. We split on the
+    # closing paren to avoid greedy matches across multiple blocks.
+    for m in re.finditer(
+        r'(?:new_)?git_repository\(([^)]+)\)',
+        content,
+    ):
+        block = m.group(1)
+        name_m = re.search(r'name\s*=\s*"([^"]+)"', block)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        tag_m = re.search(r'tag\s*=\s*"([^"]+)"', block)
+        commit_m = re.search(r'commit\s*=\s*"([^"]+)"', block)
+        if tag_m:
+            versions[name] = tag_m.group(1)
+        elif commit_m:
+            versions[name] = commit_m.group(1)
+
+    return versions
+
+
+# Map from MODULE.bazel dep name to (FetchContent name, git URL, use_v_prefix).
+# use_v_prefix: True for repos whose git tags have a 'v' prefix (e.g., v1.17.0),
+#               False for repos that use bare versions (e.g., 0.2.17).
+_MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, bool]] = {
+    "entt": ("entt", "https://github.com/skypjack/entt.git", True),
+    "googletest": ("googletest", "https://github.com/google/googletest.git", True),
+    "nlohmann_json": ("nlohmann_json", "https://github.com/nlohmann/json.git", True),
+    "zlib": ("zlib", "https://github.com/madler/zlib.git", True),
+    "rules_cc": ("rules_cc", "https://github.com/bazelbuild/rules_cc.git", False),
+    "pixelmatch-cpp17": (
+        "pixelmatch-cpp17",
+        "https://github.com/jwmcglynn/pixelmatch-cpp17.git",
+        True,
+    ),
+}
+
+# These don't map cleanly from MODULE.bazel and keep their hardcoded values
+_HARDCODED_FETCHCONTENT = {
+    "absl": ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
+}
+
+
+def _normalize_version(version: str, use_v_prefix: bool) -> str:
+    """Normalize a MODULE.bazel version to a git tag.
+
+    - Strip BCR-specific suffixes like '.bcr.1'
+    - Add 'v' prefix if requested and not a commit hash
+    """
+    # Strip .bcr.N suffix (Bazel Central Registry revision)
+    version = re.sub(r"\.bcr\.\d+$", "", version)
+
+    # Commit hashes (40 hex chars) and tags that already start with 'v' pass through
+    if re.fullmatch(r"[0-9a-f]{40}", version):
+        return version
+    if version.startswith("v") and re.match(r"^v\d", version):
+        return version
+
+    if use_v_prefix and re.match(r"^\d+\.\d+", version):
+        return f"v{version}"
+    return version
+
+
+def get_fetchcontent_externals() -> List[Tuple[str, str, str]]:
+    """Build the FetchContent externals list, pulling versions from MODULE.bazel
+    where possible and falling back to hardcoded values otherwise.
+
+    Returns list of (name, git_url, tag_or_commit).
+    """
+    module_versions = extract_versions_from_module_bazel()
+    result: List[Tuple[str, str, str]] = []
+
+    for module_name, (fc_name, git_url, use_v_prefix) in _MODULE_TO_FETCHCONTENT.items():
+        version = module_versions.get(module_name)
+        if version is None:
+            print(f"WARNING: Could not find version for '{module_name}' in MODULE.bazel")
+            continue
+
+        tag = _normalize_version(version, use_v_prefix)
+        result.append((fc_name, git_url, tag))
+
+    # Add hardcoded entries
+    for fc_name, git_url, tag in _HARDCODED_FETCHCONTENT.values():
+        result.append((fc_name, git_url, tag))
+
+    # Sort for deterministic output
+    result.sort(key=lambda x: x[0])
+
+    return result
+
 
 #
 # Helper functions
@@ -465,16 +658,8 @@ def generate_root() -> None:
 
         f.write("set(BUILD_GMOCK ON CACHE BOOL \"\" FORCE)\n\n")
 
-        # External dependencies via FetchContent
-        externals = [
-            ("entt", "https://github.com/skypjack/entt.git", "v3.13.2"),
-            ("googletest", "https://github.com/google/googletest.git", "v1.17.0"),
-            ("nlohmann_json", "https://github.com/nlohmann/json.git", "v3.12.0"),
-            ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
-            ("rules_cc", "https://github.com/bazelbuild/rules_cc.git", "0.1.1"),
-            ("pixelmatch-cpp17", "https://github.com/jwmcglynn/pixelmatch-cpp17.git", "ad7b103b746c9b23c61b4ce629fea64ae802df15"),
-            ("zlib", "https://github.com/madler/zlib.git", "v1.3.1"),
-        ]
+        # External dependencies via FetchContent (versions from MODULE.bazel)
+        externals = get_fetchcontent_externals()
         for name, repo, tag in externals:
             f.write(f"FetchContent_Declare(\n  {name}\n  GIT_REPOSITORY {repo}\n")
             f.write(f"  GIT_TAG        {tag}\n)\n")
@@ -578,10 +763,12 @@ def generate_root() -> None:
 
         f.write("# woff2 font decoding\n")
         f.write("set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING \"\" FORCE)\n")
+        module_versions = extract_versions_from_module_bazel()
+        woff2_commit = module_versions.get("woff2", "1f184d05566b3e25827a1f8e68eb82b9ccf54f3b")
         f.write(
             "FetchContent_Declare(woff2\n"
             "  GIT_REPOSITORY https://github.com/google/woff2.git\n"
-            "  GIT_TAG        1bccf208bca986e53a647dfe4811322adb06ecf8\n"
+            f"  GIT_TAG        {woff2_commit}\n"
             ")\n"
         )
         f.write("FetchContent_MakeAvailable(woff2)\n")
@@ -636,6 +823,9 @@ def generate_root() -> None:
         f.write("      ${PROJECT_SOURCE_DIR}/css-parsing-tests)\n")
         f.write("  endif()\n")
         f.write("endif()\n\n")
+
+        # Python3 is needed for embed_resources custom commands.
+        f.write("find_package(Python3 REQUIRED)\n\n")
 
         # Add generated subdirectories.
         #
@@ -904,10 +1094,19 @@ def generate_all_packages() -> None:
                 for dep in query_deps(bazel_label):
                     if dep in SKIPPED_TARGETS:
                         continue
+                    if _is_known_bazel_internal(dep):
+                        continue
                     mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
                     if not mapped and dep.startswith("//"):
                         p, n = dep.removeprefix("//").split(":", 1)
                         mapped = cmake_target_name(p, n)
+                    if not mapped and not dep.startswith("//"):
+                        mapped = _auto_map_external_dep(dep)
+                        if not mapped:
+                            msg = f"Unmapped external dep: {dep} (needed by {bazel_label})"
+                            if msg not in _unmapped_deps:
+                                _unmapped_deps.append(msg)
+                                print(f"WARNING: {msg}")
                     if mapped and mapped != cmake_name:
                         all_deps.append(mapped)
 
@@ -964,29 +1163,33 @@ def generate_all_packages() -> None:
                         "${skia_SOURCE_DIR})\n"
                     )
 
-                    if sys.platform == "darwin":
-                        f.write(
-                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
-                            "DONNER_USE_CORETEXT)\n"
-                        )
-                    elif sys.platform.startswith("linux"):
-                        f.write(
-                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
-                            "DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
-                        )
-                        f.write(
-                            f"target_link_libraries(donner_svg_renderer_skia_deps {scope} "
-                            "${FREETYPE_LIBRARIES} ${FONTCONFIG_LIBRARIES})\n"
-                        )
-                        f.write(
-                            f"target_include_directories(donner_svg_renderer_skia_deps {scope} "
-                            "${FREETYPE_INCLUDE_DIRS} ${FONTCONFIG_INCLUDE_DIRS})\n"
-                        )
-                    else:
-                        f.write(
-                            f"target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
-                            "DONNER_USE_FREETYPE)\n"
-                        )
+                    # Use CMake platform detection instead of sys.platform so that
+                    # the generated file is correct regardless of which OS runs the
+                    # generator script.
+                    f.write("if(APPLE)\n")
+                    f.write(
+                        f"  target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
+                        "DONNER_USE_CORETEXT)\n"
+                    )
+                    f.write("elseif(UNIX)\n")
+                    f.write(
+                        f"  target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
+                        "DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
+                    )
+                    f.write(
+                        f"  target_link_libraries(donner_svg_renderer_skia_deps {scope} "
+                        "${FREETYPE_LIBRARIES} ${FONTCONFIG_LIBRARIES})\n"
+                    )
+                    f.write(
+                        f"  target_include_directories(donner_svg_renderer_skia_deps {scope} "
+                        "${FREETYPE_INCLUDE_DIRS} ${FONTCONFIG_INCLUDE_DIRS})\n"
+                    )
+                    f.write("else()\n")
+                    f.write(
+                        f"  target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
+                        "DONNER_USE_FREETYPE)\n"
+                    )
+                    f.write("endif()\n")
 
                 # Extra link deps (e.g. system FreeType/HarfBuzz for text_backend_full)
                 for extra_target, extra_cond, extra_libs in EXTRA_LINK_DEPS:
@@ -1008,11 +1211,12 @@ def generate_all_packages() -> None:
         f.write("if(NOT TARGET donner)\n")
         f.write("  add_library(donner INTERFACE)\n")
         for dep in query_deps("//:donner"):
-            mapped = (
-                KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
-                if not dep.startswith("//")
-                else cmake_target_name(*dep.removeprefix("//").split(":", 1))
-            )
+            if _is_known_bazel_internal(dep):
+                continue
+            if dep.startswith("//"):
+                mapped = cmake_target_name(*dep.removeprefix("//").split(":", 1))
+            else:
+                mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep) or _auto_map_external_dep(dep)
             if mapped and mapped != "donner":
                 if mapped in OPTIONAL_DEPS:
                     dep_cond = CONDITIONAL_TARGETS.get(mapped)
@@ -1029,24 +1233,292 @@ def generate_all_packages() -> None:
 #
 
 
+def _collect_cmake_files(root: Path) -> List[Path]:
+    """Collect all CMakeLists.txt files under *root* (relative paths)."""
+    return sorted(p.relative_to(root) for p in root.rglob("CMakeLists.txt"))
+
+
+# Known targets that are provided by FetchContent, find_package, or hand-written
+# parts of the generator (i.e., not defined by add_library in per-package files).
+# The validator accepts references to these targets without flagging them.
+_KNOWN_EXTERNAL_TARGETS: Set[str] = {
+    # FetchContent
+    "EnTT::EnTT",
+    "gmock", "gmock_main", "gtest", "gtest_main",
+    "nlohmann_json::nlohmann_json",
+    "pixelmatch-cpp17",
+    "zlib", "zlibstatic",
+    "rules_cc_runfiles",
+    # Abseil (pattern: absl::*)
+    # Skia/tiny-skia backends
+    "skia", "tiny_skia",
+    # STB hand-written targets
+    "stb_image", "stb_image_write", "stb_truetype",
+    # Brotli / WOFF2
+    "brotlidec", "brotlienc", "woff2dec",
+    # System libraries
+    "${FREETYPE_LIBRARIES}", "${HARFBUZZ_LIBRARIES}",
+    "${FONTCONFIG_LIBRARIES}",
+    # Fallback umbrella
+    "donner",
+}
+
+
+def _extract_cmake_targets_and_refs(
+    root: Path,
+    allowed_files: Optional[Set[Path]] = None,
+) -> Tuple[Set[str], Dict[str, List[Tuple[str, Path]]], Dict[str, List[Tuple[str, Path]]]]:
+    """Parse all CMakeLists.txt files under *root* and extract:
+    - defined_targets: set of target names defined via add_library/add_executable
+    - linked_targets: dict of target -> list of (referenced_target, file_path) from target_link_libraries
+    - source_refs: dict of target -> list of (source_file, cmake_file_path) from add_library/add_executable/target_sources
+    """
+    defined: Set[str] = set()
+    linked: Dict[str, List[Tuple[str, Path]]] = {}
+    sources: Dict[str, List[Tuple[str, Path]]] = {}
+
+    # Patterns to match CMake commands. Intentionally conservative.
+    add_lib_re = re.compile(
+        r"add_(?:library|executable)\s*\(\s*([A-Za-z0-9_:-]+)(?:\s+(?:STATIC|SHARED|MODULE|INTERFACE|OBJECT))?\s*([^)]*)\)",
+        re.DOTALL,
+    )
+    tgt_sources_re = re.compile(
+        r"target_sources\s*\(\s*([A-Za-z0-9_:-]+)\s+(?:PRIVATE|PUBLIC|INTERFACE)\s+([^)]*)\)",
+        re.DOTALL,
+    )
+    tgt_link_re = re.compile(
+        r"target_link_libraries\s*\(\s*([A-Za-z0-9_:-]+)\s+(?:PRIVATE|PUBLIC|INTERFACE|LINK_PUBLIC|LINK_PRIVATE)\s+([^)]*)\)",
+        re.DOTALL,
+    )
+
+    for cmake_file in root.rglob("CMakeLists.txt"):
+        if allowed_files is not None:
+            if cmake_file.relative_to(root) not in allowed_files:
+                continue
+        text = cmake_file.read_text()
+
+        # Strip comment lines so they don't interfere with regex matching.
+        text = re.sub(r"#[^\n]*", "", text)
+
+        for m in add_lib_re.finditer(text):
+            name = m.group(1)
+            defined.add(name)
+            body = m.group(2).strip()
+            srcs_list = sources.setdefault(name, [])
+            for tok in body.split():
+                tok = tok.strip()
+                if not tok:
+                    continue
+                # Skip CMake keywords
+                if tok in ("INTERFACE", "STATIC", "SHARED", "OBJECT", "PUBLIC", "PRIVATE"):
+                    continue
+                # Skip generator expressions and variable refs
+                if tok.startswith("$") or tok.startswith("${"):
+                    continue
+                srcs_list.append((tok, cmake_file))
+
+        for m in tgt_sources_re.finditer(text):
+            name = m.group(1)
+            body = m.group(2).strip()
+            srcs_list = sources.setdefault(name, [])
+            for tok in body.split():
+                tok = tok.strip()
+                if not tok or tok.startswith("$"):
+                    continue
+                srcs_list.append((tok, cmake_file))
+
+        for m in tgt_link_re.finditer(text):
+            name = m.group(1)
+            body = m.group(2).strip()
+            refs = linked.setdefault(name, [])
+            for tok in body.split():
+                tok = tok.strip()
+                if not tok or tok.startswith("$"):
+                    continue
+                refs.append((tok, cmake_file))
+
+    return defined, linked, sources
+
+
+def _validate_generated_output(gen_root: Path, workspace: Path, generated_files: Set[Path]) -> List[str]:
+    """Statically validate the generated CMakeLists.txt files.
+
+    Only the files in *generated_files* (relative paths) are validated — this
+    excludes vendored/untouched third-party CMakeLists.txt files.
+
+    Checks:
+    - Every source file referenced in add_library/add_executable/target_sources exists.
+    - Every target referenced in target_link_libraries is either defined or known external.
+
+    Returns a list of human-readable error messages. Empty = valid.
+    """
+    errors: List[str] = []
+    defined, linked, sources = _extract_cmake_targets_and_refs(gen_root, allowed_files=generated_files)
+
+    # Combine defined targets with known external targets for linkage validation.
+    all_targets = defined | _KNOWN_EXTERNAL_TARGETS
+
+    # 1. Check source files exist (resolved relative to the CMakeLists.txt file's directory)
+    for target, refs in sources.items():
+        for src_ref, cmake_file in refs:
+            # Source files are relative to the containing CMakeLists.txt's dir
+            # but resolved against the workspace (since the gen temp dir symlinks to workspace)
+            cmake_dir_rel = cmake_file.parent.relative_to(gen_root)
+            # For the root CMakeLists.txt, sources are relative to workspace root.
+            candidate = workspace / cmake_dir_rel / src_ref
+            if not candidate.exists():
+                errors.append(
+                    f"{cmake_file.relative_to(gen_root)}: target '{target}' "
+                    f"references missing source '{src_ref}' (expected at {candidate})"
+                )
+
+    # 2. Check linked targets are defined
+    for target, refs in linked.items():
+        for ref_target, cmake_file in refs:
+            # Allow absl::* pattern and anything matching known externals
+            if ref_target.startswith("absl::"):
+                continue
+            if ref_target in all_targets:
+                continue
+            errors.append(
+                f"{cmake_file.relative_to(gen_root)}: target '{target}' links "
+                f"against undefined target '{ref_target}'"
+            )
+
+    return errors
+
+
 def main() -> None:
     """Main entry point to generate all CMakeLists.txt files."""
-    print("Generating CMakeLists.txt files for Donner libraries...")
-    print("This may take a while, please wait...\n")
+    global _check_mode
 
-    generate_root()
-    generate_all_packages()
+    parser = argparse.ArgumentParser(
+        description="Generate CMakeLists.txt files for Donner from Bazel targets."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=("Generate CMakeLists.txt files and statically validate the output. "
+              "Exits 1 if any referenced source is missing, any target is undefined, "
+              "or any external dep is unmapped. Does not modify the workspace."),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Write generated files to this directory instead of the workspace.",
+    )
+    args = parser.parse_args()
+    _check_mode = args.check
 
-    print("\nCMakeLists.txt generation complete.")
-    print("You can now build Donner with CMake as follows:")
-    print("  cmake -S . -B build && cmake --build build -j$(nproc)")
-    print("\nOptions:")
-    print("  -DDONNER_RENDERER_BACKEND=tiny_skia  (default)")
-    print("  -DDONNER_RENDERER_BACKEND=skia")
-    print("  -DDONNER_TEXT=OFF                     Disable text rendering")
-    print("  -DDONNER_TEXT_FULL=ON                 Enable FreeType + HarfBuzz shaping")
-    print("  -DDONNER_TEXT_WOFF2=OFF               Disable WOFF2 support")
-    print("  -DDONNER_FILTERS=OFF                  Disable filter effects")
+    if args.check:
+        # Generate in-place to the workspace, capturing original contents first.
+        # Since CMakeLists.txt files are gitignored, we snapshot them and restore
+        # after validation so the workspace is unchanged on exit.
+        workspace = Path.cwd()
+
+        # Vendored third-party dirs that ship with their own CMakeLists.txt and
+        # are NOT touched by gen_cmakelists.py. These are excluded from both
+        # cleanup and validation.
+        vendored_prefixes = (
+            "bazel-",
+            "third_party/tiny-skia-cpp",
+            "third_party/stb",
+            "third_party/frozen",
+            "third_party/skia_user_config",
+            "third_party/css-parsing-tests",
+        )
+
+        def _is_generated_cmake(rel: Path) -> bool:
+            """Return True if this CMakeLists.txt is part of the generated output."""
+            return not any(str(rel).startswith(s) for s in vendored_prefixes)
+
+        # Snapshot existing files so we can restore the workspace after validation
+        existing_files: Dict[Path, bytes] = {}
+        for p in workspace.rglob("CMakeLists.txt"):
+            rel = p.relative_to(workspace)
+            if _is_generated_cmake(rel):
+                existing_files[rel] = p.read_bytes()
+
+        # Delete existing (potentially stale) generated CMakeLists.txt files before
+        # regeneration, so the fresh output isn't contaminated by leftover files
+        # whose corresponding targets no longer exist.
+        for rel in existing_files:
+            (workspace / rel).unlink()
+
+        print("Generating and validating CMakeLists.txt files...")
+        errors: List[str] = []
+        try:
+            generate_root()
+            generate_all_packages()
+
+            # Track which files were actually generated (so the validator only
+            # scans generator output, not vendored third-party files).
+            generated_set: Set[Path] = set()
+            for p in workspace.rglob("CMakeLists.txt"):
+                rel = p.relative_to(workspace)
+                if _is_generated_cmake(rel):
+                    generated_set.add(rel)
+
+            # Statically validate the generated output
+            errors = _validate_generated_output(workspace, workspace, generated_set)
+        finally:
+            # Remove anything newly created then restore originals
+            for p in list(workspace.rglob("CMakeLists.txt")):
+                rel = p.relative_to(workspace)
+                if _is_generated_cmake(rel) and rel not in existing_files:
+                    p.unlink()
+            for rel, content in existing_files.items():
+                p = workspace / rel
+                p.write_bytes(content)
+
+        had_errors = bool(errors) or bool(_unmapped_deps)
+        if errors:
+            print(f"\n{'='*60}")
+            print(f"CMakeLists.txt VALIDATION FAILED ({len(errors)} error(s))")
+            print(f"{'='*60}")
+            for e in errors:
+                print(f"  {e}")
+        if _unmapped_deps:
+            print(f"\nUnmapped external dependencies ({len(_unmapped_deps)}):")
+            for msg in _unmapped_deps:
+                print(f"  {msg}")
+            print(
+                "\nAdd these to KNOWN_BAZEL_TO_CMAKE_DEPS or _IGNORED_EXTERNAL_DEPS "
+                "in tools/cmake/gen_cmakelists.py"
+            )
+
+        if had_errors:
+            sys.exit(1)
+        print("CMakeLists.txt validation passed.")
+        sys.exit(0)
+    else:
+        output_dir = args.output_dir
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            os.chdir(output_dir)
+
+        print("Generating CMakeLists.txt files for Donner libraries...")
+        print("This may take a while, please wait...\n")
+
+        generate_root()
+        generate_all_packages()
+
+        if _unmapped_deps:
+            print(f"\nWARNING: Unmapped external dependencies:")
+            for msg in _unmapped_deps:
+                print(f"  {msg}")
+
+        print("\nCMakeLists.txt generation complete.")
+        print("You can now build Donner with CMake as follows:")
+        print("  cmake -S . -B build && cmake --build build -j$(nproc)")
+        print("\nOptions:")
+        print("  -DDONNER_RENDERER_BACKEND=tiny_skia  (default)")
+        print("  -DDONNER_RENDERER_BACKEND=skia")
+        print("  -DDONNER_TEXT=OFF                     Disable text rendering")
+        print("  -DDONNER_TEXT_FULL=ON                 Enable FreeType + HarfBuzz shaping")
+        print("  -DDONNER_TEXT_WOFF2=OFF               Disable WOFF2 support")
+        print("  -DDONNER_FILTERS=OFF                  Disable filter effects")
 
 
 if __name__ == "__main__":
