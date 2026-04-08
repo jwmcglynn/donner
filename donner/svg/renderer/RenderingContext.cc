@@ -489,13 +489,16 @@ public:
 
     Entity firstEntity = computedShadowTree->offscreenShadowRoot(maybeShadowIndex.value());
 
-    // Check if this subtree was already traversed (e.g., for mask-on-mask chains where the
-    // same mask element's shadow tree is referenced multiple times). If the first entity
-    // already has RenderingInstanceComponent, this is a recursive reference — break the chain
-    // by returning std::nullopt so the mask is not applied. Per the SVG spec, circular mask
-    // references should be treated as if the mask attribute were not specified.
+    // If this subtree was already traversed (e.g., multiple shadow entities sharing the same
+    // light entity's offscreen branch), reuse the cached SubtreeInfo to avoid re-traversal
+    // and assertion failures from duplicate RenderingInstanceComponent emplacement. Mask
+    // recursion is detected at a higher level by activeMaskElements_ in resolveMask().
     if (registry_.try_get<RenderingInstanceComponent>(firstEntity)) {
-      return std::nullopt;
+      const auto& rootInst = registry_.get<RenderingInstanceComponent>(firstEntity);
+      if (rootInst.subtreeInfo) {
+        return SubtreeInfo{firstEntity, rootInst.subtreeInfo->lastRenderedEntity, 0};
+      }
+      return SubtreeInfo{firstEntity, firstEntity, 0};
     }
 
     Entity lastEntity = entt::null;
