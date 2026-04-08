@@ -757,7 +757,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(kDefaultThreshold, 250)},  // Skia pattern AA
             {"e-pattern-010.svg",
              Params::WithThreshold(kDefaultThreshold, 150)},           // Skia pattern AA
-            {"e-pattern-018.svg", Params::WithThreshold(0.5f, 1100)},  // AA artifacts
+            {"e-pattern-018.svg", Params::WithThreshold(0.5f, 1150)},  // AA artifacts + quad glyph outlines
             {"e-pattern-019.svg", Params::WithThreshold(0.2f)},        // Anti-aliasing artifacts
             {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},   // Nested pattern AA (768px)
             {"e-pattern-021.svg",

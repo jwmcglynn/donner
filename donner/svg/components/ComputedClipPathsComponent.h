@@ -3,7 +3,7 @@
 
 #include "donner/base/Transform.h"
 #include "donner/svg/core/ClipRule.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 
 namespace donner::svg::components {
 
@@ -16,10 +16,10 @@ struct ComputedClipPathsComponent {
   /// Information about a specific shape within a clip path.
   struct ClipPath {
     /// The path of the clip path.
-    PathSpline path;
+    Path path;
 
     /// Transform to the clip path from the parent entity.
-    Transformd entityFromParent;
+    Transform2d entityFromParent;
 
     /// Computed clip rule for this path.
     ClipRule clipRule = ClipRule::NonZero;

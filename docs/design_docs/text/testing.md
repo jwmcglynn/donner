@@ -337,7 +337,7 @@ other textPath tests.
 | 004 | 985 | startOffset=10% (percentage) |
 | 005 | 284 | startOffset=-100 (negative) |
 
-**Root cause**: Arc-length parameterization accuracy. The `PathSpline::parameterForArcLength`
+**Root cause**: Arc-length parameterization accuracy. The `Path::parameterForArcLength`
 binary search may have insufficient precision for cubic Bezier segments, leading to
 systematic glyph placement offsets. The consistent 774--1,086px range (except 005 at 284)
 suggests a small but consistent positioning error.
@@ -462,7 +462,7 @@ transform must be applied to the path geometry before glyph placement.
 per-test thresholds matching current pixel diffs. This prevents regressions.
 
 **Phase 2 -- Core positioning** (fixes ~5 tests from Category 1): Improve arc-length
-parameterization precision in `PathSpline`. Target: tests 001--005 under threshold.
+parameterization precision in `Path`. Target: tests 001--005 under threshold.
 
 **Phase 3 -- Path geometry** (fixes ~5 tests from Category 2): Handle ClosePath
 segments correctly (Z contributes path length back to start). Handle subpaths (text

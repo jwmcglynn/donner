@@ -9,7 +9,7 @@ As a baseline, Donner SVG aligns with the [Google C++ coding style](https://goog
 ### Naming
 
 - **Folders**: Names are lowercase, and one word is preferred. For multiple words, use `lower_snake_case`.
-- **Files**: `UpperCamelCase`, matching the C++ class in the file contents, e.g., `PathSpline.cc` or `SVGPathElement.h`.
+- **Files**: `UpperCamelCase`, matching the C++ class in the file contents, e.g., `Path.cc` or `SVGPathElement.h`.
   - The filename should match the principal class or struct in the file contents.
   - Use the `.cc` extension for source files, and `.h` for header files.
   - Use the `_tests.cc` suffix for test files, and `_fuzzer.cc` for fuzzing files.
@@ -52,10 +52,10 @@ namespace donner::svg {
     * Container for a spline, which is a series of points connected by lines and curves.
     *
     * This is used to represent the `d` attribute of the \ref SVGPathElement (\ref xml_path), see
-    * https://www.w3.org/TR/SVG2/paths.html#PathData. To parse SVG path data into a PathSpline, use the
+    * https://www.w3.org/TR/SVG2/paths.html#PathData. To parse SVG path data into a Path, use the
     * \ref PathParser.
     */
-   class PathSpline {
+   class Path {
      // Class implementation
    };
    ```
@@ -68,7 +68,7 @@ namespace donner::svg {
 
    ```cpp
    struct Command {
-     CommandType type;   //!< Type of command.
+     Verb verb;          //!< Verb of command.
      size_t pointIndex;  //!< Index of the first point used by this command.
    };
    ```
@@ -229,13 +229,13 @@ Suppose we have an SVG element that needs to be transformed from its local coord
 
 ```cpp
 // Transform from user space to local coordinate system
-Transformd localFromUserSpace = ...;
+Transform2d localFromUserSpace = ...;
 
 // Transform from viewport to user space
-Transformd userSpaceFromViewport = ...;
+Transform2d userSpaceFromViewport = ...;
 
 // Combined transform from local coordinate system to viewport
-Transformd viewportFromLocal = userSpaceFromViewport * localFromUserSpace;
+Transform2d viewportFromLocal = userSpaceFromViewport * localFromUserSpace;
 
 // Applying the transform to a point in the local coordinate system
 Vector2d pointInLocal = ...;
@@ -269,8 +269,8 @@ When defining transformations:
 
 ```cpp
 // Transform from mask content coordinate system to user space
-Transformd userSpaceFromMaskContent = Transformd::Translate(contentUnitsBounds.topLeft)
-                                    * Transformd::Scale(contentUnitsBounds.size());
+Transform2d userSpaceFromMaskContent = Transform2d::Translate(contentUnitsBounds.topLeft)
+                                    * Transform2d::Scale(contentUnitsBounds.size());
 
 // Update the layer base transform
 layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
@@ -285,11 +285,11 @@ layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
 
 ```cpp
 // When gradientUnits is 'objectBoundingBox'
-Transformd gradientUnitsFromObjectBoundingBox = Transformd::Translate(pathBounds.topLeft)
-                                              * Transformd::Scale(pathBounds.size());
+Transform2d gradientUnitsFromObjectBoundingBox = Transform2d::Translate(pathBounds.topLeft)
+                                              * Transform2d::Scale(pathBounds.size());
 
 // Combined transform from gradient units to gradient's local coordinate system
-Transformd gradientLocalFromGradientUnits = gradientLocalFromGradientTransform
+Transform2d gradientLocalFromGradientUnits = gradientLocalFromGradientTransform
                                           * gradientUnitsFromObjectBoundingBox;
 ```
 

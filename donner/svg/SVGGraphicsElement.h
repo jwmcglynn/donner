@@ -35,14 +35,14 @@ public:
   }
 
   /// Get the 2d transformation for this element, element-from-parent.
-  Transformd transform() const;
+  Transform2d transform() const;
 
   /// Set the 2d transformation for this element, element-from-parent. This is a no-op if the
   /// transform is identity.
-  void setTransform(const Transformd& transform);
+  void setTransform(const Transform2d& transform);
 
   /// Get the absolute element-from-world transform for this element.
-  Transformd elementFromWorld() const;
+  Transform2d elementFromWorld() const;
 };
 
 }  // namespace donner::svg

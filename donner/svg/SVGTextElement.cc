@@ -14,15 +14,15 @@ SVGTextElement SVGTextElement::CreateOn(EntityHandle handle) {
   return SVGTextElement(handle);
 }
 
-std::vector<PathSpline> SVGTextElement::convertToPath() const {
+std::vector<Path> SVGTextElement::convertToPath() const {
   return computedGlyphPaths();
 }
 
-Boxd SVGTextElement::inkBoundingBox() const {
+Box2d SVGTextElement::inkBoundingBox() const {
   return computedInkBounds();
 }
 
-Boxd SVGTextElement::objectBoundingBox() const {
+Box2d SVGTextElement::objectBoundingBox() const {
   return computedObjectBoundingBox();
 }
 

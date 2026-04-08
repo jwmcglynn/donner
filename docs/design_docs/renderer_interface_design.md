@@ -152,8 +152,8 @@ class RendererInterface {
 
   // Transform stack: setTransform replaces the matrix (absolute entity transforms),
   // push/popTransform use save/concat/restore (local relative transforms).
-  virtual void setTransform(const Transformd& transform) = 0;
-  virtual void pushTransform(const Transformd& transform) = 0;
+  virtual void setTransform(const Transform2d& transform) = 0;
+  virtual void pushTransform(const Transform2d& transform) = 0;
   virtual void popTransform() = 0;
 
   // Clip stack
@@ -167,13 +167,13 @@ class RendererInterface {
   virtual void popFilterLayer() = 0;
 
   // Mask compositing (3-layer technique: isolation + luma + srcIn)
-  virtual void pushMask(const std::optional<Boxd>& maskBounds) = 0;
+  virtual void pushMask(const std::optional<Box2d>& maskBounds) = 0;
   virtual void transitionMaskToContent() = 0;
   virtual void popMask() = 0;
 
   // Pattern tile recording (stacked for nested patterns)
-  virtual void beginPatternTile(const Boxd& tileRect,
-                                const Transformd& patternToTarget) = 0;
+  virtual void beginPatternTile(const Box2d& tileRect,
+                                const Transform2d& patternToTarget) = 0;
   virtual void endPatternTile(bool forStroke) = 0;
 
   // Paint state
@@ -181,8 +181,8 @@ class RendererInterface {
 
   // Primitive drawing
   virtual void drawPath(const PathShape& path, const StrokeParams& stroke) = 0;
-  virtual void drawRect(const Boxd& rect, const StrokeParams& stroke) = 0;
-  virtual void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) = 0;
+  virtual void drawRect(const Box2d& rect, const StrokeParams& stroke) = 0;
+  virtual void drawEllipse(const Box2d& bounds, const StrokeParams& stroke) = 0;
   virtual void drawImage(const ImageResource& image, const ImageParams& params) = 0;
   virtual void drawText(const components::ComputedTextComponent& text,
                         const TextParams& params) = 0;

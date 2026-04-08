@@ -230,13 +230,13 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   EXPECT_NEAR(start.x, 10.0, 0.5);
   EXPECT_NEAR(start.y, 20.0, 0.5);
 
-  const Boxd extent = textElement.getExtentOfChar(0);
+  const Box2d extent = textElement.getExtentOfChar(0);
   EXPECT_THAT(extent, BoxEq(Vector2Near(10.4531, 11.3281), Vector2Near(18.125, 20.0)));
   EXPECT_EQ(textElement.getCharNumAtPosition((extent.topLeft + extent.bottomRight) * 0.5), 0);
 
-  const std::vector<PathSpline> paths = textElement.convertToPath();
+  const std::vector<Path> paths = textElement.convertToPath();
   EXPECT_FALSE(paths.empty());
-  const Boxd inkBounds = textElement.inkBoundingBox();
+  const Box2d inkBounds = textElement.inkBoundingBox();
   if (ActiveRendererSupportsFeature(RendererBackendFeature::TextFull)) {
     // HarfBuzz v14 + FreeType produces slightly wider glyph advances.
     EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.20), Vector2Near(34.375, 20.125)));
@@ -244,7 +244,7 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
     EXPECT_THAT(inkBounds, BoxEq(Vector2Near(10.45, 11.204), Vector2Near(34.36, 20.12)));
   }
 
-  const Boxd objectBounds = textElement.objectBoundingBox();
+  const Box2d objectBounds = textElement.objectBoundingBox();
   if (ActiveRendererSupportsFeature(RendererBackendFeature::TextFull)) {
     EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(35.0, 22.7)));
   } else {
@@ -530,7 +530,7 @@ TEST(SVGTextElementPublicApiTests, ConvertToPathReturnsPathPerGlyph) {
 
   auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
 
-  const std::vector<PathSpline> paths = textElement.convertToPath();
+  const std::vector<Path> paths = textElement.convertToPath();
   // Each character should produce one path.
   EXPECT_EQ(static_cast<long>(paths.size()), textElement.getNumberOfChars());
 
@@ -551,8 +551,8 @@ TEST(SVGTextElementPublicApiTests, ObjectBoundingBoxDiffersFromInkBoundingBox) {
 
   auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
 
-  const Boxd inkBounds = textElement.inkBoundingBox();
-  const Boxd objectBounds = textElement.objectBoundingBox();
+  const Box2d inkBounds = textElement.inkBoundingBox();
+  const Box2d objectBounds = textElement.objectBoundingBox();
 
   // Both should be valid (non-empty) boxes.
   EXPECT_GT(inkBounds.width(), 0.0);
@@ -578,7 +578,7 @@ TEST(SVGTextElementPublicApiTests, GetCharNumAtPositionFindsCorrectChar) {
 
   // Use the center of each character's extent to verify lookup.
   for (long i = 0; i < textElement.getNumberOfChars(); ++i) {
-    const Boxd extent = textElement.getExtentOfChar(static_cast<std::size_t>(i));
+    const Box2d extent = textElement.getExtentOfChar(static_cast<std::size_t>(i));
     const Vector2d center = (extent.topLeft + extent.bottomRight) * 0.5;
     EXPECT_EQ(textElement.getCharNumAtPosition(center), i) << "Failed for character index " << i;
   }

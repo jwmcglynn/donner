@@ -4,7 +4,7 @@
 #include <optional>
 
 #include "donner/svg/core/FontVariant.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
@@ -72,9 +72,9 @@ public:
 
   // ── Glyph operations ─────────────────────────────────────────
 
-  /// Extract a glyph outline as a PathSpline. Coordinates are in font units
+  /// Extract a glyph outline as a Path. Coordinates are in font units
   /// scaled by \p scale, with Y flipped for SVG's y-down convention.
-  virtual PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const = 0;
+  virtual Path glyphOutline(FontHandle font, int glyphIndex, float scale) const = 0;
 
   /// Returns true if the font is bitmap-only (no vector outlines).
   virtual bool isBitmapOnly(FontHandle font) const = 0;

@@ -78,8 +78,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       continue;
     }
 
-    const Boxd viewBox =
-        textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Boxd();
+    const Box2d viewBox =
+        textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
     const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
 
     // Walk up to the nearest ancestor with computed style so inherited paint and decoration
@@ -193,7 +193,7 @@ StrokeParams toStrokeParams(Registry& registry,
   StrokeParams stroke;
   const auto& properties = style.properties.value();
 
-  const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
   const double fontSizePx = properties.fontSize.getRequired().toPixels(viewBox, baseFontMetrics);
   const FontMetrics fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
@@ -254,9 +254,9 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
     if (instance.clipPath && instance.clipPath->units == ClipPathUnits::ObjectBoundingBox) {
       if (auto maybeBounds =
               components::ShapeSystem().getShapeBounds(instance.dataHandle(registry))) {
-        const Boxd bounds = maybeBounds.value();
+        const Box2d bounds = maybeBounds.value();
         clip.clipPathUnitsTransform =
-            Transformd::Scale(bounds.size()) * Transformd::Translate(bounds.topLeft);
+            Transform2d::Scale(bounds.size()) * Transform2d::Translate(bounds.topLeft);
       }
     }
 
@@ -290,17 +290,17 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
 
 /// Convert a Lengthd to pixel value, resolving relative units (em, ex, rem, etc.) via font
 /// metrics.
-double lengthToPixels(const Lengthd& length, const Boxd& viewBox, const FontMetrics& fontMetrics) {
+double lengthToPixels(const Lengthd& length, const Box2d& viewBox, const FontMetrics& fontMetrics) {
   return length.toPixels(viewBox, fontMetrics);
 }
 
 std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
                                                  const components::FilterNode& node) {
-  const Boxd defaultSubregion =
-      filterGraph.filterRegion.value_or(Boxd::FromXYWH(0.0, 0.0, 1.0, 1.0));
+  const Box2d defaultSubregion =
+      filterGraph.filterRegion.value_or(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0));
   const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                      filterGraph.elementBoundingBox.has_value();
-  const Boxd referenceBox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
+  const Box2d referenceBox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
 
   auto resolveSize = [&](const std::optional<Lengthd>& len, Lengthd::Extent extent) -> double {
     if (!len.has_value()) {
@@ -332,7 +332,7 @@ std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& 
 
 std::optional<components::FilterGraph> resolveFilterGraph(
     Registry& registry, const components::ResolvedFilterEffect& filter, css::RGBA currentColor,
-    const Boxd& viewBox, const FontMetrics& fontMetrics) {
+    const Box2d& viewBox, const FontMetrics& fontMetrics) {
   if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&filter)) {
     // Convert CSS filter functions to a FilterGraph.
     // CSS Filter Effects Level 1 §8: shorthand filter functions use sRGB color space for
@@ -498,7 +498,7 @@ std::optional<components::FilterGraph> resolveFilterGraph(
 }
 
 /// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
-std::optional<Boxd> computeFilterRegion(Registry& registry,
+std::optional<Box2d> computeFilterRegion(Registry& registry,
                                         const components::ResolvedFilterEffect& filter,
                                         const components::RenderingInstanceComponent& instance) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
@@ -518,7 +518,7 @@ std::optional<Boxd> computeFilterRegion(Registry& registry,
     }
 
     // Mixed list with url() references: use the default filter region.
-    const std::optional<Boxd> shapeBounds =
+    const std::optional<Box2d> shapeBounds =
         components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
     if (!shapeBounds) {
       return std::nullopt;
@@ -527,7 +527,7 @@ std::optional<Boxd> computeFilterRegion(Registry& registry,
     const double by = shapeBounds->topLeft.y;
     const double bw = shapeBounds->width();
     const double bh = shapeBounds->height();
-    return Boxd::FromXYWH(bx - 0.1 * bw, by - 0.1 * bh, 1.2 * bw, 1.2 * bh);
+    return Box2d::FromXYWH(bx - 0.1 * bw, by - 0.1 * bh, 1.2 * bw, 1.2 * bh);
   }
 
   const auto* computed = registry.try_get<components::ComputedFilterComponent>(*reference);
@@ -536,8 +536,8 @@ std::optional<Boxd> computeFilterRegion(Registry& registry,
   }
 
   // Determine the bounds reference for resolving percentages.
-  const Boxd shapeBounds =
-      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
+  const Box2d shapeBounds =
+      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -555,15 +555,15 @@ std::optional<Boxd> computeFilterRegion(Registry& registry,
     const double yPx = resolveOBB(computed->y, shapeBounds.height()) + shapeBounds.topLeft.y;
     const double wPx = resolveOBB(computed->width, shapeBounds.width());
     const double hPx = resolveOBB(computed->height, shapeBounds.height());
-    return Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+    return Box2d::FromXYWH(xPx, yPx, wPx, hPx);
   }
 
-  const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   const double xPx = computed->x.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
   const double yPx = computed->y.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
   const double wPx = computed->width.toPixels(viewBox, FontMetrics(), Lengthd::Extent::X);
   const double hPx = computed->height.toPixels(viewBox, FontMetrics(), Lengthd::Extent::Y);
-  return Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+  return Box2d::FromXYWH(xPx, yPx, wPx, hPx);
 }
 
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
@@ -663,7 +663,7 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
 
   ImageParams params;
   params.opacity = style.properties->opacity.getRequired();
-  params.targetRect = Boxd::WithSize(Vector2d(image.image->width, image.image->height));
+  params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
 
   return params;
 }
@@ -696,7 +696,7 @@ void RendererDriver::draw(SVGDocument& document) {
 
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
-                                     const Transformd& baseTransform) {
+                                     const Transform2d& baseTransform) {
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
   layerBaseTransform_ = baseTransform;
 
@@ -741,7 +741,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Box2d filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -753,7 +753,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
                                  style.properties->color.getRequired().rgba(), filterViewBox,
                                  filterFontMetrics)
             : std::nullopt;
-    const std::optional<Boxd> filterRegion =
+    const std::optional<Box2d> filterRegion =
         instance.resolvedFilter.has_value()
             ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
             : std::nullopt;
@@ -907,7 +907,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   }
 
   renderer_.endFrame();
-  layerBaseTransform_ = Transformd();
+  layerBaseTransform_ = Transform2d();
 }
 
 RendererBitmap RendererDriver::takeSnapshot() const {
@@ -940,7 +940,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // layerBaseTransform_ is composed with the entity's transform to support sub-document
     // rendering where a base transform maps from the parent document's coordinate space.
     if (verbose_) {
-      const Transformd combined = layerBaseTransform_ * instance.entityFromWorldTransform;
+      const Transform2d combined = layerBaseTransform_ * instance.entityFromWorldTransform;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible << " maskDepth=" << instance.mask.has_value()
                 << " hasSubtree=" << instance.subtreeInfo.has_value() << " transform=" << combined
@@ -957,7 +957,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Box2d filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -969,7 +969,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                  style.properties->color.getRequired().rgba(), filterViewBox,
                                  filterFontMetrics)
             : std::nullopt;
-    const std::optional<Boxd> filterRegion =
+    const std::optional<Box2d> filterRegion =
         instance.resolvedFilter.has_value()
             ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
             : std::nullopt;
@@ -1083,13 +1083,13 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           setSubDocumentContextPaint(subDoc, instance.resolvedFill, instance.resolvedStroke);
 
           if (!externalUse->fragment.empty()) {
-            const Transformd parentAbsoluteTransform =
+            const Transform2d parentAbsoluteTransform =
                 layerBaseTransform_ * instance.entityFromWorldTransform;
             drawSubDocumentElement(subDoc, externalUse->fragment, parentAbsoluteTransform,
                                    style.properties->opacity.getRequired());
           } else {
             const Vector2i subDocSize = subDoc.canvasSize();
-            const Boxd viewportBounds = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+            const Box2d viewportBounds = Box2d::WithSize(Vector2d(subDocSize.x, subDocSize.y));
             drawSubDocument(subDoc, viewportBounds, PreserveAspectRatio::Default(),
                             style.properties->opacity.getRequired(),
                             layerBaseTransform_ * instance.entityFromWorldTransform);
@@ -1115,7 +1115,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const PreserveAspectRatio aspectRatio = preserveAspectRatio != nullptr
                                                         ? preserveAspectRatio->preserveAspectRatio
                                                         : PreserveAspectRatio::Default();
-            const Transformd imageFromLocal = aspectRatio.elementContentFromViewBoxTransform(
+            const Transform2d imageFromLocal = aspectRatio.elementContentFromViewBoxTransform(
                 sizedElement->bounds, imageParams->targetRect);
             renderer_.pushTransform(imageFromLocal);
             renderer_.drawImage(*image->image, *imageParams);
@@ -1223,7 +1223,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     // Apply the layer base transform composed with the entity's world transform.
     if (verbose_) {
-      const Transformd combined = instance.entityFromWorldTransform * layerBaseTransform_;
+      const Transform2d combined = instance.entityFromWorldTransform * layerBaseTransform_;
       std::cout << "[traverseRange] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible << "\n  layerBase=" << layerBaseTransform_
                 << "\n  entityFromWorld=" << instance.entityFromWorldTransform
@@ -1240,7 +1240,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Boxd filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Box2d filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -1252,7 +1252,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                  style.properties->color.getRequired().rgba(), filterViewBox,
                                  filterFontMetrics)
             : std::nullopt;
-    const std::optional<Boxd> filterRegion =
+    const std::optional<Box2d> filterRegion =
         instance.resolvedFilter.has_value()
             ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
             : std::nullopt;
@@ -1355,7 +1355,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             const PreserveAspectRatio par = preserveAspectRatio != nullptr
                                                 ? preserveAspectRatio->preserveAspectRatio
                                                 : PreserveAspectRatio::Default();
-            const Transformd imageFromLocal = par.elementContentFromViewBoxTransform(
+            const Transform2d imageFromLocal = par.elementContentFromViewBoxTransform(
                 sizedElement->bounds, imageParams->targetRect);
             renderer_.pushTransform(imageFromLocal);
             renderer_.drawImage(*image->image, *imageParams);
@@ -1448,8 +1448,8 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   SmallVector<const components::ResolvedMask*, 3> chain;
   chain.push_back(&mask);
 
-  const Boxd shapeLocalBounds =
-      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
+  const Box2d shapeLocalBounds =
+      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Box2d());
 
   for (const auto* m : chain) {
     if (!m->subtreeInfo || !m->reference.handle.valid()) {
@@ -1461,9 +1461,9 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       continue;
     }
 
-    std::optional<Boxd> maskBounds;
+    std::optional<Box2d> maskBounds;
     if (!mc->useAutoBounds()) {
-      Boxd maskUnitsBounds;
+      Box2d maskUnitsBounds;
       if (mc->maskUnits == MaskUnits::ObjectBoundingBox) {
         maskUnitsBounds = shapeLocalBounds;
       } else {
@@ -1480,7 +1480,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       const double wPx = width.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::X);
       const double hPx = height.toPixels(maskUnitsBounds, FontMetrics(), Lengthd::Extent::Y);
 
-      maskBounds = Boxd::FromXYWH(xPx, yPx, wPx, hPx);
+      maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
     }
 
     if (verbose_) {
@@ -1495,12 +1495,12 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     }
     renderer_.pushMask(maskBounds);
 
-    const Transformd savedLayerBase = layerBaseTransform_;
+    const Transform2d savedLayerBase = layerBaseTransform_;
     layerBaseTransform_ = instance.entityFromWorldTransform * layerBaseTransform_;
 
     if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
-      const Transformd userSpaceFromMaskContent = Transformd::Scale(shapeLocalBounds.size()) *
-                                                  Transformd::Translate(shapeLocalBounds.topLeft);
+      const Transform2d userSpaceFromMaskContent = Transform2d::Scale(shapeLocalBounds.size()) *
+                                                  Transform2d::Translate(shapeLocalBounds.topLeft);
       layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
     }
 
@@ -1536,15 +1536,15 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     return;
   }
 
-  Boxd rect = computedPattern->tileRect;
+  Box2d rect = computedPattern->tileRect;
   if (NearZero(rect.width()) || NearZero(rect.height())) {
     skipUntil(view, ref.subtreeInfo->lastRenderedEntity);
     return;
   }
 
-  const Boxd viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  const Boxd pathBounds =
-      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Boxd());
+  const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  const Box2d pathBounds =
+      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Box2d());
 
   const bool objectBoundingBox = computedPattern->patternUnits == PatternUnits::ObjectBoundingBox;
   const bool patternContentObjectBoundingBox =
@@ -1561,32 +1561,32 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
   }
 
-  Transformd patternContentFromPatternTile;
+  Transform2d patternContentFromPatternTile;
   if (computedPattern->viewBox) {
     patternContentFromPatternTile =
         computedPattern->preserveAspectRatio.elementContentFromViewBoxTransform(
             rect.toOrigin(), computedPattern->viewBox);
   } else if (patternContentObjectBoundingBox) {
-    patternContentFromPatternTile = Transformd::Scale(pathBounds.size());
+    patternContentFromPatternTile = Transform2d::Scale(pathBounds.size());
   }
 
   // Resolve the pattern's own transform (patternTransform attribute).
   const auto* maybeTransformComponent =
       target.try_get<components::ComputedLocalTransformComponent>();
-  Transformd patternTransform;
+  Transform2d patternTransform;
   if (maybeTransformComponent) {
     const Vector2d origin = maybeTransformComponent->transformOrigin;
-    patternTransform = Transformd::Translate(origin) *
+    patternTransform = Transform2d::Translate(origin) *
                        maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics()) *
-                       Transformd::Translate(-origin);
+                       Transform2d::Translate(-origin);
   }
 
-  const Transformd patternTileFromTarget = Transformd::Translate(rect.topLeft) * patternTransform;
+  const Transform2d patternTileFromTarget = Transform2d::Translate(rect.topLeft) * patternTransform;
 
   renderer_.beginPatternTile(rect.toOrigin(), patternTileFromTarget);
 
   // Save and override layerBaseTransform for pattern content rendering.
-  const Transformd savedLayerBase = layerBaseTransform_;
+  const Transform2d savedLayerBase = layerBaseTransform_;
   layerBaseTransform_ = patternContentFromPatternTile;
 
   traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
@@ -1615,10 +1615,10 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   }
 
   const RenderingInstanceView::SavedState viewSnapshot = view.save();
-  const std::vector<PathSpline::Vertex> vertices = path.spline.vertices();
+  const std::vector<Path::Vertex> vertices = path.spline.vertices();
 
   for (size_t i = 0; i < vertices.size(); ++i) {
-    const PathSpline::Vertex& vertex = vertices[i];
+    const Path::Vertex& vertex = vertices[i];
 
     if (i == 0) {
       if (hasMarkerStart) {
@@ -1668,13 +1668,13 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
     return;
   }
 
-  const Boxd markerSize =
-      Boxd::FromXYWH(0, 0, markerComponent->markerWidth, markerComponent->markerHeight);
+  const Box2d markerSize =
+      Box2d::FromXYWH(0, 0, markerComponent->markerWidth, markerComponent->markerHeight);
 
   components::LayoutSystem layoutSystem;
-  const std::optional<Boxd> markerViewBox =
+  const std::optional<Box2d> markerViewBox =
       layoutSystem.overridesViewBox(markerHandle)
-          ? std::optional<Boxd>(layoutSystem.getViewBox(markerHandle))
+          ? std::optional<Box2d>(layoutSystem.getViewBox(markerHandle))
           : std::nullopt;
   const PreserveAspectRatio preserveAspectRatio =
       markerHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
@@ -1688,26 +1688,26 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
     markerScale = strokeWidth;
   }
 
-  const Transformd markerUnitsFromViewBox =
+  const Transform2d markerUnitsFromViewBox =
       preserveAspectRatio.elementContentFromViewBoxTransform(markerSize, markerViewBox);
 
-  const Transformd markerOffsetFromVertex =
-      Transformd::Translate(-markerComponent->refX * markerUnitsFromViewBox.data[0],
+  const Transform2d markerOffsetFromVertex =
+      Transform2d::Translate(-markerComponent->refX * markerUnitsFromViewBox.data[0],
                             -markerComponent->refY * markerUnitsFromViewBox.data[3]);
 
-  const Transformd vertexFromEntity = Transformd::Scale(markerScale) *
-                                      Transformd::Rotate(angleRadians) *
-                                      Transformd::Translate(vertexPosition);
+  const Transform2d vertexFromEntity = Transform2d::Scale(markerScale) *
+                                      Transform2d::Rotate(angleRadians) *
+                                      Transform2d::Translate(vertexPosition);
 
-  const Transformd vertexFromWorld =
+  const Transform2d vertexFromWorld =
       vertexFromEntity * layerBaseTransform_ * instance.entityFromWorldTransform;
 
-  const Transformd markerUserSpaceFromWorld =
-      Transformd::Scale(markerUnitsFromViewBox.data[0], markerUnitsFromViewBox.data[3]) *
+  const Transform2d markerUserSpaceFromWorld =
+      Transform2d::Scale(markerUnitsFromViewBox.data[0], markerUnitsFromViewBox.data[3]) *
       markerOffsetFromVertex * vertexFromWorld;
 
   // Save the current layer base transform and override it for the marker subtree.
-  const Transformd savedLayerBase = layerBaseTransform_;
+  const Transform2d savedLayerBase = layerBaseTransform_;
   layerBaseTransform_ = markerUserSpaceFromWorld;
 
   // Apply overflow clipping if needed. The clip rect is in world coordinates,
@@ -1717,7 +1717,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   const bool needsClip = overflow != Overflow::Visible && overflow != Overflow::Auto;
 
   if (needsClip) {
-    renderer_.setTransform(Transformd());
+    renderer_.setTransform(Transform2d());
     ResolvedClip markerClip;
     markerClip.clipRect = markerUserSpaceFromWorld.transformBox(markerViewBox.value_or(markerSize));
     renderer_.pushClip(markerClip);
@@ -1735,16 +1735,16 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   layerBaseTransform_ = savedLayerBase;
 }
 
-void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewportBounds,
+void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                                      const PreserveAspectRatio& aspectRatio, double opacity,
-                                     const Transformd& parentAbsoluteTransform) {
+                                     const Transform2d& parentAbsoluteTransform) {
   // Prepare the sub-document's render tree (styles, layout, resources).
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(subDocument, verbose_, disabledSink);
 
   // Determine the sub-document's intrinsic size for preserveAspectRatio mapping.
   const Vector2i subDocSize = subDocument.canvasSize();
-  const Boxd subDocRect = Boxd::WithSize(Vector2d(subDocSize.x, subDocSize.y));
+  const Box2d subDocRect = Box2d::WithSize(Vector2d(subDocSize.x, subDocSize.y));
 
   // Clip to the <image> element's bounds.
   ResolvedClip imageClip;
@@ -1763,18 +1763,18 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
   //   2. preserveAspectRatio mapping from sub-doc viewport to the <image> bounds
   //   3. The sub-document's own viewBox-to-document transform
   // traverse() will compose this with each sub-document entity's entityFromWorldTransform.
-  const Transformd subDocFromLocal =
+  const Transform2d subDocFromLocal =
       aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
-  const Transformd docFromCanvas = subDocument.documentFromCanvasTransform();
-  // Compose the transform chain. Transformd operator* uses left-first order: A * B = "apply A,
+  const Transform2d docFromCanvas = subDocument.documentFromCanvasTransform();
+  // Compose the transform chain. Transform2d operator* uses left-first order: A * B = "apply A,
   // then B". The sub-doc root entity's entityFromWorldTransform already includes docFromCanvas^-1
   // (mapping from document to canvas/device space). Including docFromCanvas here cancels that out,
   // so the net result maps sub-doc element coordinates through subDocFromLocal (to parent document
   // space), then through parentAbsoluteTransform (to device space).
-  const Transformd baseTransform = subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
+  const Transform2d baseTransform = subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
 
   // Save and override layerBaseTransform for sub-document rendering.
-  const Transformd savedLayerBase = layerBaseTransform_;
+  const Transform2d savedLayerBase = layerBaseTransform_;
   layerBaseTransform_ = baseTransform;
 
   // Traverse the sub-document's render tree, emitting draw calls to the same renderer.
@@ -1791,7 +1791,7 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Boxd& viewp
 }
 
 void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
-                                            const Transformd& parentAbsoluteTransform,
+                                            const Transform2d& parentAbsoluteTransform,
                                             double opacity) {
   // Prepare the sub-document's render tree.
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
@@ -1835,7 +1835,7 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   // For each entity in the subtree:
   //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute *
   //   entityFromTarget
-  const Transformd savedLayerBase = layerBaseTransform_;
+  const Transform2d savedLayerBase = layerBaseTransform_;
   layerBaseTransform_ =
       parentAbsoluteTransform * targetInstance->entityFromWorldTransform.inverse();
 
@@ -1893,8 +1893,8 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 
     RendererDriver subDriver(*offscreen, verbose_);
     subDriver.renderingSize_ = targetSize;
-    subDriver.drawSubDocument(subDoc, Boxd::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
-                              imageNode->preserveAspectRatio, 1.0, Transformd());
+    subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
+                              imageNode->preserveAspectRatio, 1.0, Transform2d());
     offscreen->endFrame();
 
     // Determine the rendered size from the sub-document's canvas size.
@@ -1928,7 +1928,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 
 void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGraph,
                                                Registry& registry, Entity hostEntity,
-                                               const std::optional<Boxd>& filterRegion) {
+                                               const std::optional<Box2d>& filterRegion) {
   // Lazily create the recursion guard set if needed.
   std::unordered_set<entt::id_type> localGuard;
   const bool ownsGuard = (feImageFragmentGuard_ == nullptr);

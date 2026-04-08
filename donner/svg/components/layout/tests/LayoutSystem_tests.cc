@@ -105,17 +105,17 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
   auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Test getting the transform for the group
-  const Transformd groupTransform = layoutSystem.getRawEntityFromParentTransform(groupEntityHandle);
-  EXPECT_THAT(groupTransform, TransformEq(Transformd::Translate({10.0, 20.0})));
+  const Transform2d groupTransform = layoutSystem.getRawEntityFromParentTransform(groupEntityHandle);
+  EXPECT_THAT(groupTransform, TransformEq(Transform2d::Translate({10.0, 20.0})));
 
   // Test setting a new transform for the rectangle
-  const Transformd newRectTransform = Transformd::Translate({30.0, 40.0});
+  const Transform2d newRectTransform = Transform2d::Translate({30.0, 40.0});
   layoutSystem.setRawEntityFromParentTransform(rectEntityHandle, newRectTransform);
 
   // Verify the new transform
-  const Transformd updatedRectTransform =
+  const Transform2d updatedRectTransform =
       layoutSystem.getRawEntityFromParentTransform(rectEntityHandle);
-  EXPECT_THAT(updatedRectTransform, TransformEq(Transformd::Translate({30.0, 40.0})));
+  EXPECT_THAT(updatedRectTransform, TransformEq(Transform2d::Translate({30.0, 40.0})));
 }
 
 TEST_F(LayoutSystemTest, GetSetEntityFromParentTransformWithScale) {
@@ -130,16 +130,16 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransformWithScale) {
   auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Set a transform with scale and translation
-  const Transformd scaleTransform =
-      Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0});
+  const Transform2d scaleTransform =
+      Transform2d::Scale({2.0, 3.0}) * Transform2d::Translate({10.0, 20.0});
   layoutSystem.setRawEntityFromParentTransform(rectEntityHandle, scaleTransform);
 
   // Verify the new transform
-  const Transformd updatedTransform =
+  const Transform2d updatedTransform =
       layoutSystem.getRawEntityFromParentTransform(rectEntityHandle);
 
   EXPECT_THAT(updatedTransform,
-              TransformEq(Transformd::Scale({2.0, 3.0}) * Transformd::Translate({10.0, 20.0})));
+              TransformEq(Transform2d::Scale({2.0, 3.0}) * Transform2d::Translate({10.0, 20.0})));
 }
 
 TEST_F(LayoutSystemTest, GetEntityContentTransform) {
@@ -154,7 +154,7 @@ TEST_F(LayoutSystemTest, GetEntityContentTransform) {
   auto innerSvgEntity = document.querySelector("#inner")->entityHandle();
 
   EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(innerSvgEntity),
-              TransformEq(Transformd::Scale({2.0, 2.0}) * Transformd::Translate({50.0, 50.0})));
+              TransformEq(Transform2d::Scale({2.0, 2.0}) * Transform2d::Translate({50.0, 50.0})));
 }
 
 TEST_F(LayoutSystemTest, GetEntityFromWorldTransform) {
@@ -175,13 +175,13 @@ TEST_F(LayoutSystemTest, GetEntityFromWorldTransform) {
   auto rect3 = document.querySelector("#rect3")->entityHandle();
 
   EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(rect1),
-              TransformEq(Transformd::Translate({10.0, 20.0})));
+              TransformEq(Transform2d::Translate({10.0, 20.0})));
   EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(rect2),
-              TransformEq(Transformd::Translate({10.0, 20.0}) * Transformd::Scale({5.0, 5.0})));
+              TransformEq(Transform2d::Translate({10.0, 20.0}) * Transform2d::Scale({5.0, 5.0})));
 
   EXPECT_THAT(layoutSystem.getEntityFromWorldTransform(rect3),
-              TransformEq(Transformd::Translate({10.0, 20.0}) * Transformd::Scale({2.0, 2.0}) *
-                          Transformd::Translate({50.0, 50.0})));
+              TransformEq(Transform2d::Translate({10.0, 20.0}) * Transform2d::Scale({2.0, 2.0}) *
+                          Transform2d::Translate({50.0, 50.0})));
 }
 
 TEST_F(LayoutSystemTest, TransformOriginSupport) {
@@ -195,14 +195,14 @@ TEST_F(LayoutSystemTest, TransformOriginSupport) {
   auto rectA = document.querySelector("#a")->entityHandle();
   auto rectB = document.querySelector("#b")->entityHandle();
 
-  const Transformd expectedOrigin50Percent = Transformd::Translate({50.0, 50.0}) *
-                                             Transformd::Rotate(MathConstants<double>::kHalfPi) *
-                                             Transformd::Translate({-50.0, -50.0});
+  const Transform2d expectedOrigin50Percent = Transform2d::Translate({50.0, 50.0}) *
+                                             Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                                             Transform2d::Translate({-50.0, -50.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectA),
               TransformEq(expectedOrigin50Percent));
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectB),
-              TransformEq(Transformd::Rotate(MathConstants<double>::kHalfPi)));
+              TransformEq(Transform2d::Rotate(MathConstants<double>::kHalfPi)));
 }
 
 /**
@@ -218,9 +218,9 @@ TEST_F(LayoutSystemTest, TransformOriginBottomRight) {
 
   auto rectC = document.querySelector("#c")->entityHandle();
 
-  const Transformd expected = Transformd::Translate({100.0, 100.0}) *
-                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
-                              Transformd::Translate({-100.0, -100.0});
+  const Transform2d expected = Transform2d::Translate({100.0, 100.0}) *
+                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                              Transform2d::Translate({-100.0, -100.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectC), TransformEq(expected));
 }
@@ -238,9 +238,9 @@ TEST_F(LayoutSystemTest, TransformOriginQuarterThreeQuarter) {
 
   auto rectD = document.querySelector("#d")->entityHandle();
 
-  const Transformd expected = Transformd::Translate({25.0, 75.0}) *
-                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
-                              Transformd::Translate({-25.0, -75.0});
+  const Transform2d expected = Transform2d::Translate({25.0, 75.0}) *
+                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                              Transform2d::Translate({-25.0, -75.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectD), TransformEq(expected));
 }
@@ -258,9 +258,9 @@ TEST_F(LayoutSystemTest, TransformOriginPixels) {
 
   auto rectE = document.querySelector("#e")->entityHandle();
 
-  const Transformd expected = Transformd::Translate({10.0, 20.0}) *
-                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
-                              Transformd::Translate({-10.0, -20.0});
+  const Transform2d expected = Transform2d::Translate({10.0, 20.0}) *
+                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                              Transform2d::Translate({-10.0, -20.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectE), TransformEq(expected));
 }
@@ -378,12 +378,12 @@ TEST_F(LayoutSystemTest, InvalidateAndRecompute) {
 
   // Get initial transform.
   auto transform1 = layoutSystem.getEntityFromWorldTransform(rectHandle);
-  EXPECT_THAT(transform1, TransformEq(Transformd::Translate({10.0, 20.0})));
+  EXPECT_THAT(transform1, TransformEq(Transform2d::Translate({10.0, 20.0})));
 
   // Invalidate and verify we can still get the transform.
   layoutSystem.invalidate(rectHandle);
   auto transform2 = layoutSystem.getEntityFromWorldTransform(rectHandle);
-  EXPECT_THAT(transform2, TransformEq(Transformd::Translate({10.0, 20.0})));
+  EXPECT_THAT(transform2, TransformEq(Transform2d::Translate({10.0, 20.0})));
 }
 
 // --- Nested SVG viewBox transform ---
@@ -402,7 +402,7 @@ TEST_F(LayoutSystemTest, NestedSvgContentTransform) {
   // viewBox 200x200 mapped to 100x100 = scale(0.5) + translate(10, 10).
   auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
   EXPECT_THAT(contentTransform,
-              TransformEq(Transformd::Scale({0.5, 0.5}) * Transformd::Translate({10.0, 10.0})));
+              TransformEq(Transform2d::Scale({0.5, 0.5}) * Transform2d::Translate({10.0, 10.0})));
 }
 
 // --- Document from canvas transform ---
@@ -476,7 +476,7 @@ TEST_F(LayoutSystemTest, DeeplyNestedTransforms) {
 
   auto rectHandle = document.querySelector("#r")->entityHandle();
   auto transform = layoutSystem.getEntityFromWorldTransform(rectHandle);
-  EXPECT_THAT(transform, TransformEq(Transformd::Translate({40.0, 60.0})));
+  EXPECT_THAT(transform, TransformEq(Transform2d::Translate({40.0, 60.0})));
 }
 
 // --- preserveAspectRatio "none" ---
@@ -501,7 +501,7 @@ TEST_F(LayoutSystemTest, PreserveAspectRatioNone) {
   // scaleX = 200/100 = 2, scaleY = 200/50 = 4
   // No alignment offset since "none" has alignMultiplier 0.
   auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
-  EXPECT_THAT(contentTransform, TransformEq(Transformd::Scale({2.0, 4.0})));
+  EXPECT_THAT(contentTransform, TransformEq(Transform2d::Scale({2.0, 4.0})));
 }
 
 // --- viewBox with negative coordinates ---
@@ -526,7 +526,7 @@ TEST_F(LayoutSystemTest, ViewBoxNegativeCoordinates) {
   //             = (0,0) - ((-50,-50) * 1) = (50, 50)
   // So the transform should be scale(1) * translate(50, 50), which is just translate(50, 50).
   auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
-  EXPECT_THAT(contentTransform, TransformEq(Transformd::Translate({50.0, 50.0})));
+  EXPECT_THAT(contentTransform, TransformEq(Transform2d::Translate({50.0, 50.0})));
 }
 
 /**
@@ -548,7 +548,7 @@ TEST_F(LayoutSystemTest, ViewBoxNegativeCoordinatesWithScaling) {
   // translation = (0,0) - ((-50,-50) * 2) = (100, 100)
   auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
   EXPECT_THAT(contentTransform,
-              TransformEq(Transformd::Scale({2.0, 2.0}) * Transformd::Translate({100.0, 100.0})));
+              TransformEq(Transform2d::Scale({2.0, 2.0}) * Transform2d::Translate({100.0, 100.0})));
 }
 
 // --- Percentage width/height on root SVG ---
@@ -616,9 +616,9 @@ TEST_F(LayoutSystemTest, TransformOriginCenterKeyword) {
 
   // "center center" maps to 50% 50%, resolved against the viewBox (120x80).
   // Origin offset = (60, 40).
-  const Transformd expected = Transformd::Translate({60.0, 40.0}) *
-                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
-                              Transformd::Translate({-60.0, -40.0});
+  const Transform2d expected = Transform2d::Translate({60.0, 40.0}) *
+                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                              Transform2d::Translate({-60.0, -40.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
 }
@@ -638,9 +638,9 @@ TEST_F(LayoutSystemTest, TransformOriginRightBottom) {
   auto rectHandle = document.querySelector("#r")->entityHandle();
 
   // "right" = 100% of viewBox width (200), "bottom" = 100% of viewBox height (140).
-  const Transformd expected = Transformd::Translate({200.0, 140.0}) *
-                              Transformd::Rotate(MathConstants<double>::kHalfPi) *
-                              Transformd::Translate({-200.0, -140.0});
+  const Transform2d expected = Transform2d::Translate({200.0, 140.0}) *
+                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                              Transform2d::Translate({-200.0, -140.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
 }
@@ -662,7 +662,7 @@ TEST_F(LayoutSystemTest, TransformOriginLeftTop) {
   // "left" = 0%, "top" = 0% => origin at (0, 0).
   // translate(0,0) * rotate * translate(0,0) = just rotate.
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle),
-              TransformEq(Transformd::Rotate(MathConstants<double>::kHalfPi)));
+              TransformEq(Transform2d::Rotate(MathConstants<double>::kHalfPi)));
 }
 
 // --- Nested SVG with different viewBox ---
@@ -690,13 +690,13 @@ TEST_F(LayoutSystemTest, NestedSvgDifferentViewBoxTransformChaining) {
   // No alignment offset since scale is uniform.
   auto innerContent = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
   EXPECT_THAT(innerContent,
-              TransformEq(Transformd::Scale({2.0, 2.0}) * Transformd::Translate({20.0, 30.0})));
+              TransformEq(Transform2d::Scale({2.0, 2.0}) * Transform2d::Translate({20.0, 30.0})));
 
   // The rect's world transform should accumulate: translate(5,10) * scale(2) * translate(20,30).
   auto rectWorld = layoutSystem.getEntityFromWorldTransform(rectHandle);
   EXPECT_THAT(rectWorld,
-              TransformEq(Transformd::Translate({5.0, 10.0}) * Transformd::Scale({2.0, 2.0}) *
-                          Transformd::Translate({20.0, 30.0})));
+              TransformEq(Transform2d::Translate({5.0, 10.0}) * Transform2d::Scale({2.0, 2.0}) *
+                          Transform2d::Translate({20.0, 30.0})));
 }
 
 /**
@@ -715,7 +715,7 @@ TEST_F(LayoutSystemTest, NestedSvgDownscalingViewBox) {
 
   // viewBox 200x200 mapped into 50x50 => scale(0.25, 0.25).
   auto contentTransform = layoutSystem.getEntityContentFromEntityTransform(innerHandle);
-  EXPECT_THAT(contentTransform, TransformEq(Transformd::Scale({0.25, 0.25})));
+  EXPECT_THAT(contentTransform, TransformEq(Transform2d::Scale({0.25, 0.25})));
 }
 
 // --- Zero-size viewBox ---

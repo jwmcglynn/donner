@@ -51,7 +51,7 @@ SVG DOM                    Filter System              Renderer
 ```cpp
 FilterGraph {
   nodes: vector<FilterNode>     // One per primitive, in document order
-  filterRegion: optional<Boxd>  // Computed filter region in user space
+  filterRegion: optional<Box2d>  // Computed filter region in user space
   primitiveUnits: PrimitiveUnits
   colorInterpolationFilters: ColorInterpolationFilters
   userToPixelScale: Vector2d    // viewBox -> device pixel scale
@@ -132,7 +132,7 @@ Each filter primitive has a corresponding `SVGFe*Element` class (e.g., `SVGFEGau
 
 ```cpp
 // Push/pop filter layer bracketing source graphic rendering
-void pushFilterLayer(const FilterGraph& filterGraph, const optional<Boxd>& filterRegion);
+void pushFilterLayer(const FilterGraph& filterGraph, const optional<Box2d>& filterRegion);
 void popFilterLayer();
 ```
 

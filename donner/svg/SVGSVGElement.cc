@@ -23,7 +23,7 @@ SVGSVGElement SVGSVGElement::CreateOn(EntityHandle handle) {
   return SVGSVGElement(handle);
 }
 
-std::optional<Boxd> SVGSVGElement::viewBox() const {
+std::optional<Box2d> SVGSVGElement::viewBox() const {
   return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
@@ -47,7 +47,7 @@ std::optional<Lengthd> SVGSVGElement::height() const {
   return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
 }
 
-void SVGSVGElement::setViewBox(std::optional<Boxd> viewBox) {
+void SVGSVGElement::setViewBox(std::optional<Box2d> viewBox) {
   handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 

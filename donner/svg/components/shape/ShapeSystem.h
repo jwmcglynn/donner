@@ -81,14 +81,14 @@ public:
    *
    * @param handle Entity handle to get the bounds for
    */
-  std::optional<Boxd> getShapeBounds(EntityHandle handle);
+  std::optional<Box2d> getShapeBounds(EntityHandle handle);
 
   /**
    * Get the bounds for the given entity in world space, if it has a shape component.
    *
    * @param handle Entity handle to get the bounds for
    */
-  std::optional<Boxd> getShapeWorldBounds(EntityHandle handle);
+  std::optional<Box2d> getShapeWorldBounds(EntityHandle handle);
 
   /**
    * Returns true if the shape's path fill intersects the given point.
@@ -121,8 +121,8 @@ private:
    * @param worldFromTarget Transform to the world coordinate system from the target coordinate
    * system
    */
-  std::optional<Boxd> getTransformedShapeBounds(EntityHandle handle,
-                                                const Transformd& worldFromTarget);
+  std::optional<Box2d> getTransformedShapeBounds(EntityHandle handle,
+                                                const Transform2d& worldFromTarget);
 
   ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
                                                       const CircleComponent& circle,

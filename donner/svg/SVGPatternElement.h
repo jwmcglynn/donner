@@ -131,7 +131,7 @@ public:
    * Get the parsed value of the `viewBox` attribute, if specified, which defines a rectangle in
    * userspace that should be mapped to the SVG viewport bounds established by the pattern.
    */
-  std::optional<Boxd> viewBox() const;
+  std::optional<Box2d> viewBox() const;
 
   /**
    * The value of the `preserveAspectRatio` attribute, which defines how to scale the viewport to
@@ -181,7 +181,7 @@ public:
    * pattern coordinate system onto the target coordinate system, allowing transformations such as
    * skewing the pattern tiles.
    */
-  Transformd patternTransform() const;
+  Transform2d patternTransform() const;
 
   /**
    * Get the value of the `href` attribute, if specified, which is a reference to another pattern
@@ -195,7 +195,7 @@ public:
    *
    * @param viewBox The viewBox value to set.
    */
-  void setViewBox(OptionalRef<Boxd> viewBox);
+  void setViewBox(OptionalRef<Box2d> viewBox);
 
   /**
    * Set the `preserveAspectRatio` attribute, which defines how to scale the viewport to fit the
@@ -259,7 +259,7 @@ public:
    *
    * @param transform The patternTransform value to set.
    */
-  void setPatternTransform(Transformd transform);
+  void setPatternTransform(Transform2d transform);
 
   /**
    * Set the `href` attribute, which is a reference to another pattern element to use as a template.

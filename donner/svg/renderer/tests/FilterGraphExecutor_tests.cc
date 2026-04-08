@@ -28,7 +28,7 @@ Pixel GetPixel(const tiny_skia::Pixmap& pixmap, int x, int y) {
   return Pixel{data[index + 0], data[index + 1], data[index + 2], data[index + 3]};
 }
 
-tiny_skia::Pixmap CreateBlurredDotPixmap(const Transformd& filterTransform) {
+tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& filterTransform) {
   auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
   EXPECT_TRUE(maybePixmap.has_value());
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
@@ -61,7 +61,7 @@ TEST(FilterGraphExecutorTest, AppliesOffsetsUsingCapturedFilterTransform) {
   node.primitive = components::filter_primitive::Offset{.dx = 1.0, .dy = 0.0};
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd::Scale(2.0), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d::Scale(2.0), std::nullopt);
 
   EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
   EXPECT_EQ(GetPixel(pixmap, 3, 1), Pixel({255, 0, 0, 255}));
@@ -80,7 +80,7 @@ TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
   node.primitive = components::filter_primitive::Offset{.dx = 5.0, .dy = 0.0};
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd::Scale(2.5), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d::Scale(2.5), std::nullopt);
 
   // dx=5.0 with Scale(2.5) → pixel offset = lround(12.5) = 13.
   // Pixel at (1,1) moves to (14,1).
@@ -99,7 +99,7 @@ TEST(FilterGraphExecutorTest, ClipsFilterOutputUsingCapturedFilterTransform) {
     }
   }
 
-  ClipFilterOutputToRegion(pixmap, Boxd::FromXYWH(1.0, 1.0, 2.0, 2.0), Transformd::Scale(2.0));
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(1.0, 1.0, 2.0, 2.0), Transform2d::Scale(2.0));
 
   EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
   EXPECT_EQ(GetPixel(pixmap, 2, 2), Pixel({255, 255, 255, 255}));
@@ -118,7 +118,7 @@ TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
     }
   }
 
-  ClipFilterOutputToRegion(pixmap, Boxd::FromXYWH(-10.0, -10.0, 2.0, 2.0), Transformd());
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(-10.0, -10.0, 2.0, 2.0), Transform2d());
 
   for (int y = 0; y < 8; ++y) {
     for (int x = 0; x < 8; ++x) {
@@ -128,8 +128,8 @@ TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
 }
 
 TEST(FilterGraphExecutorTest, RotationDoesNotChangeBlurSigma) {
-  const tiny_skia::Pixmap identityBlurred = CreateBlurredDotPixmap(Transformd());
-  const tiny_skia::Pixmap rotatedBlurred = CreateBlurredDotPixmap(Transformd::Rotate(M_PI / 4.0));
+  const tiny_skia::Pixmap identityBlurred = CreateBlurredDotPixmap(Transform2d());
+  const tiny_skia::Pixmap rotatedBlurred = CreateBlurredDotPixmap(Transform2d::Rotate(M_PI / 4.0));
 
   EXPECT_EQ(identityBlurred.data().size(), rotatedBlurred.data().size());
   for (std::size_t i = 0; i < identityBlurred.data().size(); ++i) {
@@ -155,7 +155,7 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseUserSpaceAndFilter
   node.height = Lengthd(50.0, Lengthd::Unit::Percent);
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(4.0, 4.0, 16.0, 16.0));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(4.0, 4.0, 16.0, 16.0));
 
   EXPECT_EQ(GetPixel(pixmap, 7, 7), Pixel({0, 0, 0, 0}));
   EXPECT_EQ(GetPixel(pixmap, 8, 8), Pixel({255, 0, 0, 255}));
@@ -170,7 +170,7 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseElementBoundsInObj
 
   components::FilterGraph graph;
   graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
-  graph.elementBoundingBox = Boxd::FromXYWH(10.0, 10.0, 20.0, 20.0);
+  graph.elementBoundingBox = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
 
   components::FilterNode node;
   node.inputs.push_back(components::FilterInput{});
@@ -182,7 +182,7 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseElementBoundsInObj
   node.height = Lengthd(50.0, Lengthd::Unit::Percent);
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   EXPECT_EQ(GetPixel(pixmap, 9, 9), Pixel({0, 0, 0, 0}));
   EXPECT_EQ(GetPixel(pixmap, 10, 10), Pixel({0, 255, 0, 255}));
@@ -217,7 +217,7 @@ TEST(FilterGraphExecutorTest, GaussianBlurExpandsDefaultPrimitiveSubregion) {
   };
   graph.nodes.push_back(std::move(blurNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 32.0, 32.0));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 32.0, 32.0));
 
   // Flood at (16,16) size 1x1, blur σ=2 → subregion expands by ceil(2*3)=6.
   // Expanded subregion: x=[10,23], y=[10,23]. Pixel (9,16) is outside.
@@ -246,7 +246,7 @@ TEST(FilterGraphExecutorTest, FilterRegionClipsInitialSourceGraphic) {
   };
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 8.0, 8.0), true);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), true);
 
   EXPECT_GT(GetPixel(pixmap, 7, 4)[3], 0);
   EXPECT_LT(GetPixel(pixmap, 7, 4)[3], 255);
@@ -270,7 +270,7 @@ TEST(FilterGraphExecutorTest, UsesFillPaintInputWhenRequested) {
   node.primitive = components::filter_primitive::Offset{.dx = 0.0, .dy = 0.0};
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt, false, &fillPaintPixmap);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt, false, &fillPaintPixmap);
 
   EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
   EXPECT_EQ(GetPixel(pixmap, 2, 2), Pixel({0, 255, 0, 255}));
@@ -289,7 +289,7 @@ TEST(FilterGraphExecutorTest, MissingStrokePaintInputDefaultsToTransparent) {
   node.primitive = components::filter_primitive::Offset{.dx = 0.0, .dy = 0.0};
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
 }
@@ -330,7 +330,7 @@ TEST(FilterGraphExecutorTest, ThreeNodeChainBlurOffsetFlood) {
   };
   graph.nodes.push_back(std::move(blurNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 32.0, 32.0));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 32.0, 32.0));
 
   // After offset by 4, columns 0-3 should be transparent. Column 0 should remain zero even after
   // the small blur because sigma=1 doesn't spread 4 pixels.
@@ -380,7 +380,7 @@ TEST(FilterGraphExecutorTest, FourNodeChainFloodOffsetBlurMerge) {
   mergeNode.primitive = components::filter_primitive::Merge{};
   graph.nodes.push_back(std::move(mergeNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 16.0, 16.0));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 16.0, 16.0));
 
   // The green source pixel at (8,8) should still be present.
   const Pixel greenPixel = GetPixel(pixmap, 8, 8);
@@ -438,7 +438,7 @@ TEST(FilterGraphExecutorTest, NamedResultRoutesCorrectBuffer) {
   offsetNode.primitive = components::filter_primitive::Offset{.dx = 0.0, .dy = 0.0};
   graph.nodes.push_back(std::move(offsetNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // The final output should be the red flood (from the named buffer), not the green one.
   EXPECT_EQ(GetPixel(pixmap, 4, 4), Pixel({255, 0, 0, 255}));
@@ -470,7 +470,7 @@ TEST(FilterGraphExecutorTest, NamedResultCanBeReusedMultipleTimes) {
   mergeNode.primitive = components::filter_primitive::Merge{};
   graph.nodes.push_back(std::move(mergeNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // Output should be blue (merged blue over blue = blue).
   EXPECT_EQ(GetPixel(pixmap, 8, 8), Pixel({0, 0, 255, 255}));
@@ -501,7 +501,7 @@ TEST(FilterGraphExecutorTest, DropShadowProducesOffsetAndBlurredCopy) {
   };
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 32.0, 32.0));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 32.0, 32.0));
 
   // The original white dot should still be present.
   const Pixel orig = GetPixel(pixmap, 16, 16);
@@ -527,7 +527,7 @@ TEST(FilterGraphExecutorTest, EmptyFilterGraphLeavesPixmapUnchanged) {
   components::FilterGraph graph;
   // graph.nodes is empty.
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // The pixel should remain unchanged.
   EXPECT_EQ(GetPixel(pixmap, 3, 3), Pixel({42, 100, 200, 255}));
@@ -549,7 +549,7 @@ TEST(FilterGraphExecutorTest, FilterWithNoSourceGraphicContent) {
   };
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // Even though SourceGraphic was transparent, the flood should fill the pixmap.
   EXPECT_EQ(GetPixel(pixmap, 4, 4), Pixel({128, 64, 32, 255}));
@@ -570,7 +570,7 @@ TEST(FilterGraphExecutorTest, SourceAlphaInputExtractsAlphaChannel) {
   node.primitive = components::filter_primitive::Offset{.dx = 0.0, .dy = 0.0};
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   const Pixel result = GetPixel(pixmap, 4, 4);
   // SourceAlpha produces (0, 0, 0, alpha).
@@ -620,7 +620,7 @@ TEST(FilterGraphExecutorTest, SRGBColorInterpolationProducesDifferentResultThanL
     };
     graph.nodes.push_back(std::move(blendNode));
 
-    ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+    ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
     return pixmap;
   };
 
@@ -661,7 +661,7 @@ TEST(FilterGraphExecutorTest, PerNodeColorInterpolationOverridesGraphDefault) {
 
   // This should execute without crashing. For a uniform pixmap, blur is a no-op, but the
   // color-space conversion path is exercised.
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // Center pixel should still be mid-gray (blur of uniform input is identity).
   const Pixel center = GetPixel(pixmap, 4, 4);
@@ -712,7 +712,7 @@ TEST(FilterGraphExecutorTest, CompositeInOperatorKeepsOverlapOnly) {
   };
   graph.nodes.push_back(std::move(compositeNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), Boxd::FromXYWH(0.0, 0.0, 8.0, 8.0));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0));
 
   // (2,2) is outside the green region → should be transparent.
   EXPECT_EQ(GetPixel(pixmap, 2, 2), Pixel({0, 0, 0, 0}));
@@ -761,7 +761,7 @@ TEST(FilterGraphExecutorTest, BlendMultiplyDarkensColors) {
   };
   graph.nodes.push_back(std::move(blendNode));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, Transformd(), std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   const Pixel result = GetPixel(pixmap, 4, 4);
   // Multiply: white * 128/255 ≈ 128. Allow tolerance for rounding.

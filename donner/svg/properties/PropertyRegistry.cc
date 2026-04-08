@@ -1940,7 +1940,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
           if (const std::string_view* str =
                   std::get_if<std::string_view>(&params.valueOrComponents)) {
             return parser::TransformParser::Parse(*str).map<CssTransform>(
-                [](const Transformd& transform) { return CssTransform(transform); });
+                [](const Transform2d& transform) { return CssTransform(transform); });
           } else {
             return parser::CssTransformParser::Parse(params.components());
           }
@@ -1995,7 +1995,7 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
       break;
     default:
       // Absolute units (px, pt, cm, etc.) — resolve with empty context.
-      resolvedPx = fs.toPixels(Boxd(), FontMetrics(), Lengthd::Extent::Mixed);
+      resolvedPx = fs.toPixels(Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
       break;
   }
   fontSize.value = Lengthd(resolvedPx, Lengthd::Unit::Px);

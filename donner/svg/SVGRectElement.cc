@@ -123,7 +123,7 @@ Lengthd SVGRectElement::computedRy() const {
       components::LayoutSystem().getViewBox(handle_), FontMetrics()));
 }
 
-std::optional<PathSpline> SVGRectElement::computedSpline() const {
+std::optional<Path> SVGRectElement::computedSpline() const {
   compute();
   if (const auto* computedPath = handle_.try_get<components::ComputedPathComponent>()) {
     return computedPath->spline;

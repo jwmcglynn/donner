@@ -156,7 +156,7 @@ std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle fon
   return metrics;
 }
 
-PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};
@@ -165,13 +165,11 @@ PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, floa
   stbtt_vertex* vertices = nullptr;
   const int numVertices = stbtt_GetGlyphShape(info, glyphIndex, &vertices);
 
-  PathSpline spline;
   if (numVertices <= 0 || vertices == nullptr) {
-    return spline;
+    return {};
   }
 
-  double curX = 0;
-  double curY = 0;
+  PathBuilder builder;
   bool hasContour = false;
 
   for (int i = 0; i < numVertices; ++i) {
@@ -182,31 +180,20 @@ PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, floa
     switch (vertices[i].type) {
       case STBTT_vmove:
         if (hasContour) {
-          spline.closePath();
+          builder.closePath();
         }
-        spline.moveTo(Vector2d(x, y));
+        builder.moveTo(Vector2d(x, y));
         hasContour = true;
-        curX = x;
-        curY = y;
         break;
 
       case STBTT_vline:
-        spline.lineTo(Vector2d(x, y));
-        curX = x;
-        curY = y;
+        builder.lineTo(Vector2d(x, y));
         break;
 
       case STBTT_vcurve: {
-        // Quadratic bezier → convert to cubic.
         const double cx = static_cast<double>(vertices[i].cx) * scale;
         const double cy = -static_cast<double>(vertices[i].cy) * scale;
-        const double cp1x = curX + (2.0 / 3.0) * (cx - curX);
-        const double cp1y = curY + (2.0 / 3.0) * (cy - curY);
-        const double cp2x = x + (2.0 / 3.0) * (cx - x);
-        const double cp2y = y + (2.0 / 3.0) * (cy - y);
-        spline.curveTo(Vector2d(cp1x, cp1y), Vector2d(cp2x, cp2y), Vector2d(x, y));
-        curX = x;
-        curY = y;
+        builder.quadTo(Vector2d(cx, cy), Vector2d(x, y));
         break;
       }
 
@@ -215,9 +202,7 @@ PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, floa
         const double cy1 = -static_cast<double>(vertices[i].cy) * scale;
         const double cx2 = static_cast<double>(vertices[i].cx1) * scale;
         const double cy2 = -static_cast<double>(vertices[i].cy1) * scale;
-        spline.curveTo(Vector2d(cx1, cy1), Vector2d(cx2, cy2), Vector2d(x, y));
-        curX = x;
-        curY = y;
+        builder.curveTo(Vector2d(cx1, cy1), Vector2d(cx2, cy2), Vector2d(x, y));
         break;
       }
 
@@ -226,11 +211,11 @@ PathSpline TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, floa
   }
 
   if (hasContour) {
-    spline.closePath();
+    builder.closePath();
   }
 
   stbtt_FreeShape(info, vertices);
-  return spline;
+  return builder.build();
 }
 
 bool TextBackendSimple::isBitmapOnly(FontHandle font) const {

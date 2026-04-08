@@ -25,7 +25,7 @@ struct TransformComponent {
  * entity.
  */
 struct ComputedLocalTransformComponent {
-  Transformd entityFromParent;   //!< Transform from the entity from its parent.
+  Transform2d entityFromParent;   //!< Transform from the entity from its parent.
   CssTransform rawCssTransform;  //!< Raw CSS transform value, before resolving percentages relative
                                  //!< to the viewport.
   Vector2d transformOrigin;      //!< Resolved transform origin in pixels.
@@ -37,7 +37,7 @@ struct ComputedLocalTransformComponent {
  * root.
  */
 struct ComputedAbsoluteTransformComponent {
-  Transformd entityFromWorld;  //!< Transform from the entity from the world.
+  Transform2d entityFromWorld;  //!< Transform from the entity from the world.
   bool worldIsCanvas =
       true;  //<!< Set to false if this entity rebases the coordinate system and is not relative to the canvas.
 };

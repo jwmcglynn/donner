@@ -27,7 +27,7 @@ components::ComputedTextComponent::TextSpan MakeSpan(const std::string& str) {
 TextLayoutParams MakeTextParams(double fontSize) {
   TextLayoutParams params;
   params.fontSize = Lengthd(fontSize, Lengthd::Unit::Px);
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   return params;
 }
@@ -122,11 +122,11 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   }
 
   const float scale = engine.scaleForEmToPixels(runs[0].font, 64.0f);
-  const PathSpline firstGlyphPath =
+  const Path firstGlyphPath =
       engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
   ASSERT_FALSE(firstGlyphPath.empty());
 
-  Boxd positionedBounds = firstGlyphPath.bounds();
+  Box2d positionedBounds = firstGlyphPath.bounds();
   positionedBounds += Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
   const double centerX = (positionedBounds.topLeft.x + positionedBounds.bottomRight.x) * 0.5;
   EXPECT_NEAR(centerX, 100.0, 2.0);
@@ -222,9 +222,7 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   auto span3 = MakeSpan(" text");
   span3.startsNewChunk = false;
 
-  PathSpline path;
-  path.moveTo(Vector2d(0.0, 0.0));
-  path.lineTo(Vector2d(200.0, 0.0));
+  Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
 
   span1.pathSpline = path;
   span1.textPathSourceEntity = Entity{1};
@@ -269,9 +267,7 @@ TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   auto trailingSpan = MakeSpan(" tail");
   trailingSpan.startsNewChunk = false;
 
-  PathSpline path;
-  path.moveTo(Vector2d(0.0, 0.0));
-  path.lineTo(Vector2d(200.0, 0.0));
+  Path path = PathBuilder().moveTo(Vector2d(0.0, 0.0)).lineTo(Vector2d(200.0, 0.0)).build();
   pathSpan.pathSpline = path;
   pathSpan.textPathSourceEntity = Entity{1};
 

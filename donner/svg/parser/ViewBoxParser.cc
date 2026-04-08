@@ -13,7 +13,7 @@ public:
   explicit ViewBoxParserImpl(std::string_view str) : ParserBase(str) {}
 
   /// Parse the viewBox string.
-  ParseResult<Boxd> parse() {
+  ParseResult<Box2d> parse() {
     double numbers[4];
     if (auto error = readNumbers(numbers)) {
       return std::move(error.value());
@@ -32,13 +32,13 @@ public:
       return err;
     }
 
-    return Boxd({numbers[0], numbers[1]}, {numbers[0] + numbers[2], numbers[1] + numbers[3]});
+    return Box2d({numbers[0], numbers[1]}, {numbers[0] + numbers[2], numbers[1] + numbers[3]});
   }
 };
 
 }  // namespace
 
-ParseResult<Boxd> ViewBoxParser::Parse(std::string_view str) {
+ParseResult<Box2d> ViewBoxParser::Parse(std::string_view str) {
   ViewBoxParserImpl parser(str);
   return parser.parse();
 }

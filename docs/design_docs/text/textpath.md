@@ -31,7 +31,7 @@ When a `<textPath>` span is encountered during `instantiateComputedComponent`:
    empty, the reference is invalid, or the target has no path data, the span is marked
    `textPathFailed = true` and its glyphs are hidden (SVG spec §10.12.1).
 
-2. **Extract path geometry** — Get the `PathSpline` from the target's `ComputedPathComponent`,
+2. **Extract path geometry** — Get the `Path` from the target's `ComputedPathComponent`,
    or parse it from the `PathComponent`'s `d` attribute as a fallback.
 
 3. **Apply referenced element transform** — If the referenced `<path>` element has a
@@ -41,12 +41,12 @@ When a `<textPath>` span is encountered during `instantiateComputedComponent`:
 4. **Resolve startOffset** — Convert the `startOffset` attribute to pixels. Percentages are
    resolved against the (potentially transformed) path length.
 
-5. **Store results** — The resolved `PathSpline` and `pathStartOffset` (in pixels) are stored
+5. **Store results** — The resolved `Path` and `pathStartOffset` (in pixels) are stored
    on the `ComputedTextComponent::TextSpan`.
 
 ### Glyph Positioning (`TextEngine::layout`)
 
-During the per-span layout loop, spans with `pathSpline` set enter the text-on-path branch:
+During the per-span layout loop, spans with `pathData` set enter the text-on-path branch:
 
 1. **text-anchor** — Compute total text advance (including kerning and inter-glyph
    letter-spacing) and shift the effective startOffset: `middle` shifts by `-advance/2`,

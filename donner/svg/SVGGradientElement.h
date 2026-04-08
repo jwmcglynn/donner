@@ -107,7 +107,7 @@ public:
    *
    * The default is the identity transform.
    */
-  Transformd gradientTransform() const;
+  Transform2d gradientTransform() const;
 
   /**
    * `spreadMethod` attribute to specify how to fill the area outside the gradient.
@@ -145,7 +145,7 @@ public:
    *
    * @param value The transform to apply to the gradient.
    */
-  void setGradientTransform(const Transformd& value);
+  void setGradientTransform(const Transform2d& value);
 
   /**
    * `spreadMethod` attribute to specify how to fill the area outside the gradient.

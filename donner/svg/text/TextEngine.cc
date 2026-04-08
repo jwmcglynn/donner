@@ -126,28 +126,32 @@ bool isNonSpacing(uint32_t cp) {
   return false;
 }
 
-PathSpline transformPathSpline(const PathSpline& spline, const Transformd& transform) {
-  PathSpline result;
+Path transformPath(const Path& spline, const Transform2d& transform) {
+  PathBuilder builder;
   const auto& points = spline.points();
 
   for (const auto& command : spline.commands()) {
-    switch (command.type) {
-      case PathSpline::CommandType::MoveTo:
-        result.moveTo(transform.transformPosition(points[command.pointIndex]));
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::LineTo:
-        result.lineTo(transform.transformPosition(points[command.pointIndex]));
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
         break;
-      case PathSpline::CommandType::CurveTo:
-        result.curveTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]),
-                       transform.transformPosition(points[command.pointIndex + 2]));
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]));
         break;
-      case PathSpline::CommandType::ClosePath: result.closePath(); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
+                        transform.transformPosition(points[command.pointIndex + 1]),
+                        transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
     }
   }
 
-  return result;
+  return builder.build();
 }
 
 Entity findTextRootEntity(EntityHandle handle) {
@@ -214,7 +218,7 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
 }
 
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
-                                const Boxd& viewBox, const FontMetrics& fontMetrics) {
+                                const Box2d& viewBox, const FontMetrics& fontMetrics) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
 
   for (auto& span : text.spans) {
@@ -652,7 +656,7 @@ using namespace text_engine_detail;  // NOLINT(google-build-using-namespace)
 
 namespace {
 
-void addBox(Boxd& accum, bool& initialized, const Boxd& box) {
+void addBox(Box2d& accum, bool& initialized, const Box2d& box) {
   if (box.isEmpty()) {
     return;
   }
@@ -1422,7 +1426,7 @@ std::optional<SubSuperMetrics> TextEngine::subSuperMetrics(FontHandle font) cons
   return backend_->subSuperMetrics(font);
 }
 
-PathSpline TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+Path TextEngine::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
   return backend_->glyphOutline(font, glyphIndex, scale);
 }
 
@@ -1544,8 +1548,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     }
 
     if (!run.glyphs.empty()) {
-      Boxd runEmBounds =
-          Boxd::FromXYWH(run.glyphs.front().xPosition, run.glyphs.front().yPosition - emTop, 0.0,
+      Box2d runEmBounds =
+          Box2d::FromXYWH(run.glyphs.front().xPosition, run.glyphs.front().yPosition - emTop, 0.0,
                          emTop + emBottom);
       for (const auto& glyph : run.glyphs) {
         runEmBounds.addPoint(Vector2d(glyph.xPosition, glyph.yPosition - emTop));
@@ -1574,30 +1578,30 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
-      PathSpline glyphPath =
+      Path glyphPath =
           glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
       if (!glyphPath.empty()) {
         if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPathSpline(
-              glyphPath, Transformd::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+          glyphPath = transformPath(
+              glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
         }
 
-        Transformd glyphFromLocal = Transformd::Translate(glyph.xPosition, glyph.yPosition);
+        Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
         if (glyph.rotateDegrees != 0.0) {
           glyphFromLocal =
-              Transformd::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+              Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
               glyphFromLocal;
         }
 
-        PathSpline transformed = transformPathSpline(glyphPath, glyphFromLocal);
-        const Boxd extent = transformed.bounds();
+        Path transformed = transformPath(glyphPath, glyphFromLocal);
+        const Box2d extent = transformed.bounds();
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
       } else if (auto bitmap = bitmapGlyph(run.font, glyph.glyphIndex, emScale)) {
         const double targetX = glyph.xPosition + bitmap->bearingX;
         const double targetY = glyph.yPosition - bitmap->bearingY;
-        const Boxd extent = Boxd::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
+        const Box2d extent = Box2d::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
                                            bitmap->height * bitmap->scale);
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
@@ -1611,9 +1615,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
                                                                                  std::move(cache));
 }
 
-std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) const {
+std::vector<Path> TextEngine::computedGlyphPaths(EntityHandle handle) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
-  std::vector<PathSpline> result;
+  std::vector<Path> result;
   for (const auto& glyph : cache.glyphs) {
     if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
       result.push_back(glyph.path);
@@ -1622,9 +1626,9 @@ std::vector<PathSpline> TextEngine::computedGlyphPaths(EntityHandle handle) cons
   return result;
 }
 
-Boxd TextEngine::computedInkBounds(EntityHandle handle) const {
+Box2d TextEngine::computedInkBounds(EntityHandle handle) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
-  Boxd result;
+  Box2d result;
   bool initialized = false;
   for (const auto& glyph : cache.glyphs) {
     if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
@@ -1634,7 +1638,7 @@ Boxd TextEngine::computedInkBounds(EntityHandle handle) const {
   return result;
 }
 
-Boxd TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
+Box2d TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
   const Entity rootEntity = findTextRootEntity(handle);
   const auto& cache = ensureComputedTextGeometryComponent(handle);
   return handle.entity() == rootEntity ? cache.emBoxBounds : computedInkBounds(handle);
@@ -1683,11 +1687,11 @@ Vector2d TextEngine::getEndPositionOfChar(EntityHandle handle, std::size_t charn
   return characters[charnum]->endPosition;
 }
 
-Boxd TextEngine::getExtentOfChar(EntityHandle handle, std::size_t charnum) const {
+Box2d TextEngine::getExtentOfChar(EntityHandle handle, std::size_t charnum) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   if (charnum >= characters.size()) {
-    return Boxd();
+    return Box2d();
   }
   return characters[charnum]->extent;
 }

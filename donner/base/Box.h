@@ -13,24 +13,24 @@ namespace donner {
  *
  * For example, to construct a box, add points to it, and query its size:
  * ```
- * Boxd box(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
+ * Box2d box(Vector2d(-1.0, -1.0), Vector2d(1.0, 1.0));
  * box.addPoint(Vector2d(2.0, 0.0));
  *
- * assert(box == Boxd(Vector2d(-1.0, -1.0), Vector2d(2.0, 1.0)));
+ * assert(box == Box2d(Vector2d(-1.0, -1.0), Vector2d(2.0, 1.0)));
  * assert(box.size() == Vector2d(3.0, 2.0));
  * ```
  *
  * @tparam T Element type, e.g. double, float, int, etc.
  */
 template <typename T>
-struct Box {
+struct Box2 {
   /// The top-left corner of the box.
   Vector2<T> topLeft;
   /// The bottom-right corner of the box.
   Vector2<T> bottomRight;
 
   /// Default constructor: Creates an empty box centered on (0, 0).
-  Box() : topLeft(Vector2<T>()), bottomRight(Vector2<T>()) {}
+  Box2() : topLeft(Vector2<T>()), bottomRight(Vector2<T>()) {}
 
   /**
    * Construct a new box with the given top-left and bottom-right corners.
@@ -38,22 +38,22 @@ struct Box {
    * @param topLeft Top-left corner.
    * @param bottomRight Bottom-right corner.
    */
-  Box(const Vector2<T>& topLeft, const Vector2<T>& bottomRight)
+  Box2(const Vector2<T>& topLeft, const Vector2<T>& bottomRight)
       : topLeft(topLeft), bottomRight(bottomRight) {}
 
   /// Destructor.
-  ~Box() = default;
+  ~Box2() = default;
 
   /**
-   * Creates a Box from x, y, width, and height.
+   * Creates a Box2 from x, y, width, and height.
    *
    * @param x X coordinate of the top-left corner.
    * @param y Y coordinate of the top-left corner.
    * @param width Width of the box.
    * @param height Height of the box.
    */
-  static Box<T> FromXYWH(T x, T y, T width, T height) {
-    return Box<T>(Vector2<T>(x, y), Vector2<T>(x + width, y + height));
+  static Box2<T> FromXYWH(T x, T y, T width, T height) {
+    return Box2<T>(Vector2<T>(x, y), Vector2<T>(x + width, y + height));
   }
 
   /**
@@ -61,42 +61,42 @@ struct Box {
    *
    * @param other Other box.
    */
-  Box(const Box<T>& other) = default;
+  Box2(const Box2<T>& other) = default;
 
   /**
    * Copy assignment operator.
    *
    * @param other Other box.
    */
-  Box<T>& operator=(const Box<T>& other) = default;
+  Box2<T>& operator=(const Box2<T>& other) = default;
 
   /**
    * Move constructor.
    *
    * @param other Other box.
    */
-  Box(Box<T>&& other) noexcept = default;
+  Box2(Box2<T>&& other) noexcept = default;
 
   /**
    * Move assignment operator.
    *
    * @param other Other box.
    */
-  Box<T>& operator=(Box<T>&& other) noexcept = default;
+  Box2<T>& operator=(Box2<T>&& other) noexcept = default;
 
   /**
    * Create an empty box that is centered on the given point.
    *
    * @param point Center point.
    */
-  static Box<T> CreateEmpty(const Vector2<T>& point) { return Box<T>(point, point); }
+  static Box2<T> CreateEmpty(const Vector2<T>& point) { return Box2<T>(point, point); }
 
   /**
    * Create a box with the given size, with the top-left corner at the origin.
    *
    * @param size Size of the box.
    */
-  static Box<T> WithSize(const Vector2<T>& size) { return Box<T>(Vector2<T>(), size); }
+  static Box2<T> WithSize(const Vector2<T>& size) { return Box2<T>(Vector2<T>(), size); }
 
   /**
    * Create a new box that is expanded to include both boxes.
@@ -104,8 +104,8 @@ struct Box {
    * @param a First box.
    * @param b Second box.
    */
-  static Box<T> Union(const Box<T>& a, const Box<T>& b) {
-    Box<T> result = a;
+  static Box2<T> Union(const Box2<T>& a, const Box2<T>& b) {
+    Box2<T> result = a;
     result.addBox(b);
     return result;
   }
@@ -127,7 +127,7 @@ struct Box {
    *
    * @param box Box to add.
    */
-  void addBox(const Box<T>& box) {
+  void addBox(const Box2<T>& box) {
     addPoint(box.topLeft);
     addPoint(box.bottomRight);
   }
@@ -136,7 +136,7 @@ struct Box {
    * Return a box with the same size but moved to the origin, i.e. with the top-left corner at (0,
    * 0).
    */
-  Box toOrigin() const { return Box(Vector2d(), size()); }
+  Box2 toOrigin() const { return Box2(Vector2<T>(), size()); }
 
   /// Returns the box width.
   T width() const { return bottomRight.x - topLeft.x; }
@@ -164,25 +164,25 @@ struct Box {
    *
    * @param amount Amount to inflate the box by.
    */
-  Box<T> inflatedBy(T amount) const {
-    return Box<T>(topLeft - Vector2<T>(amount, amount), bottomRight + Vector2<T>(amount, amount));
+  Box2<T> inflatedBy(T amount) const {
+    return Box2<T>(topLeft - Vector2<T>(amount, amount), bottomRight + Vector2<T>(amount, amount));
   }
 
   /// Return the box moved by subtracting the given vector.
-  Box<T> operator-(const Vector2<T>& vec) const { return Box<T>(topLeft - vec, bottomRight - vec); }
+  Box2<T> operator-(const Vector2<T>& vec) const { return Box2<T>(topLeft - vec, bottomRight - vec); }
 
   /// Move the box by subtracting the given vector.
-  Box<T>& operator-=(const Vector2<T>& vec) {
+  Box2<T>& operator-=(const Vector2<T>& vec) {
     topLeft -= vec;
     bottomRight -= vec;
     return *this;
   }
 
   /// Return the box moved by adding the given vector.
-  Box<T> operator+(const Vector2<T>& vec) const { return Box<T>(topLeft + vec, bottomRight + vec); }
+  Box2<T> operator+(const Vector2<T>& vec) const { return Box2<T>(topLeft + vec, bottomRight + vec); }
 
   /// Move the box by adding the given vector.
-  Box<T>& operator+=(const Vector2<T>& vec) {
+  Box2<T>& operator+=(const Vector2<T>& vec) {
     topLeft += vec;
     bottomRight += vec;
     return *this;
@@ -192,22 +192,27 @@ struct Box {
   /// @{
 
   /// Equality operator.
-  bool operator==(const Box<T>& other) const {
+  bool operator==(const Box2<T>& other) const {
     return topLeft == other.topLeft && bottomRight == other.bottomRight;
   }
 
   /// Inequality operator.
-  bool operator!=(const Box<T>& rhs) const { return !operator==(rhs); }
+  bool operator!=(const Box2<T>& rhs) const { return !operator==(rhs); }
   /// @}
 
   /// Ostream output operator.
-  friend std::ostream& operator<<(std::ostream& os, const Box<T>& box) {
+  friend std::ostream& operator<<(std::ostream& os, const Box2<T>& box) {
     os << box.topLeft << " => " << box.bottomRight;
     return os;
   }
 };
 
-/// Shorthand for \ref Box<double>.
-using Boxd = Box<double>;
+/// @name Typedefs
+/// @{
+
+/// Shorthand for \ref Box2<double>.
+using Box2d = Box2<double>;
+
+/// @}
 
 }  // namespace donner

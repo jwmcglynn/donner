@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
-#include "donner/svg/core/tests/PathSplineTestUtils.h"
+#include "donner/svg/core/tests/PathTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
@@ -14,8 +14,8 @@ using testing::Optional;
 
 namespace donner::svg {
 
-using Command = PathSpline::Command;
-using CommandType = PathSpline::CommandType;
+using Command = Path::Command;
+using CommandType = Path::Verb;
 
 namespace {
 

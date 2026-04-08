@@ -153,7 +153,7 @@ struct Length {
    * @param extent Which extent of the viewBox to use for percentage and viewBox-relative length.
    * @return Length in pixels.
    */
-  T toPixels(const Box<T>& viewBox, const FontMetrics& fontMetrics,
+  T toPixels(const Box2<T>& viewBox, const FontMetrics& fontMetrics,
              Extent extent = Extent::Mixed) const {
     switch (unit) {
       // Absolute units.
@@ -214,7 +214,7 @@ struct Length {
   }
 
 private:
-  static T diagonalExtent(const Box<T>& box) {
+  static T diagonalExtent(const Box2<T>& box) {
     // Using the SVG spec's definition of normalized diagonal length:
     // > The normalized diagonal length must be calculated with
     // > `sqrt((width)**2 + (height)**2)/sqrt(2)`.

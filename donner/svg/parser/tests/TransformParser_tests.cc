@@ -166,7 +166,7 @@ TEST(TransformParser, Rotate_WithCenter) {
     auto maybeTransform = TransformParser::Parse("rotate(180 50 50)");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(-1, 0, 0, -1, 100, 100)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformPosition({50, 50}), Vector2Near(50, 50));
     EXPECT_THAT(t.transformPosition({100, 50}), Vector2Near(0, 50));
     EXPECT_THAT(t.transformPosition({-100, -100}), Vector2Near(200, 200));
@@ -176,7 +176,7 @@ TEST(TransformParser, Rotate_WithCenter) {
     auto maybeTransform = TransformParser::Parse("rotate ( \t 90 \r\n -50    50 ) ");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(0, 1, -1, 0, 0, 100)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformPosition({-50, 50}), Vector2Near(-50, 50));
     EXPECT_THAT(t.transformPosition({100, 50}), Vector2Near(-50, 200));
     EXPECT_THAT(t.transformPosition({-100, -100}), Vector2Near(100, 0));
@@ -213,7 +213,7 @@ TEST(TransformParser, SkewX) {
     auto maybeTransform = TransformParser::Parse("skewX(45)");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, 0, 1, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(100, 50));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(150, 100));
@@ -227,7 +227,7 @@ TEST(TransformParser, SkewX) {
     auto maybeTransform = TransformParser::Parse("skewX( \t -45 ) ");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, 0, -1, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(0, 50));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(-50, 100));
@@ -263,7 +263,7 @@ TEST(TransformParser, SkewY) {
     auto maybeTransform = TransformParser::Parse("skewY(45)");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, 1, 0, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(50, 100));
     EXPECT_THAT(t.transformVector({50, 100}), Vector2Near(50, 150));
@@ -277,7 +277,7 @@ TEST(TransformParser, SkewY) {
     auto maybeTransform = TransformParser::Parse("skewY( \t -45 ) ");
     EXPECT_THAT(maybeTransform, ParseResultIs(TransformIs(1, -1, 0, 1, 0, 0)));
 
-    const Transformd t = maybeTransform.result();
+    const Transform2d t = maybeTransform.result();
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(50, 0));
     EXPECT_THAT(t.transformVector({100, 50}), Vector2Near(100, -50));
@@ -308,16 +308,16 @@ TEST(TransformParser, SkewY_ParseErrors) {
 
 TEST(TransformParser, MultiplicationOrder) {
   {
-    const Transformd t = Transformd::Translate({-50, 100}) * Transformd::Scale({2, 2}) *
-                         Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5);
+    const Transform2d t = Transform2d::Translate({-50, 100}) * Transform2d::Scale({2, 2}) *
+                         Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
 
     EXPECT_THAT(TransformParser::Parse("rotate(45) scale(2) translate(-50, 100)"),
                 ParseResultIs(TransformEq(t)));
   }
 
   {
-    const Transformd t = Transformd::Rotate(MathConstants<double>::kHalfPi * 0.5) *
-                         Transformd::Scale({1.5, 1.5}) * Transformd::Translate({80, 80});
+    const Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
+                         Transform2d::Scale({1.5, 1.5}) * Transform2d::Translate({80, 80});
 
     EXPECT_THAT(TransformParser::Parse("translate(80, 80), scale(1.5, 1.5) \t,\n rotate(45) "),
                 ParseResultIs(TransformEq(t)));

@@ -13,7 +13,7 @@
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
@@ -213,7 +213,7 @@ struct ComputedTextComponent {
     bool hasExplicitY() const { return !yList.empty() && yList[0].has_value(); }
 
     /// If set, glyphs in this span are positioned along this path (for \ref xml_textPath).
-    std::optional<PathSpline> pathSpline;
+    std::optional<Path> pathSpline;
     /// The \ref xml_textPath entity that supplied \ref pathSpline, if any.
     entt::entity textPathSourceEntity = entt::null;
     /// Start offset along the path (resolved to pixels).

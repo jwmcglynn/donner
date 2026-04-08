@@ -3,7 +3,6 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "core",
     srcs = [
-        "PathSpline.cc",
         "PreserveAspectRatio.cc",
     ],
     hdrs = [
@@ -27,7 +26,6 @@ cc_library(
         "MaskUnits.h",
         "MixBlendMode.h",
         "Overflow.h",
-        "PathSpline.h",
         "Pattern.h",
         "PointerEvents.h",
         "PreserveAspectRatio.h",

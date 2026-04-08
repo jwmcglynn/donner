@@ -27,11 +27,11 @@ void Renderer::endFrame() {
   impl_->endFrame();
 }
 
-void Renderer::setTransform(const Transformd& transform) {
+void Renderer::setTransform(const Transform2d& transform) {
   impl_->setTransform(transform);
 }
 
-void Renderer::pushTransform(const Transformd& transform) {
+void Renderer::pushTransform(const Transform2d& transform) {
   impl_->pushTransform(transform);
 }
 
@@ -56,7 +56,7 @@ void Renderer::popIsolatedLayer() {
 }
 
 void Renderer::pushFilterLayer(const components::FilterGraph& filterGraph,
-                               const std::optional<Boxd>& filterRegion) {
+                               const std::optional<Box2d>& filterRegion) {
   impl_->pushFilterLayer(filterGraph, filterRegion);
 }
 
@@ -64,7 +64,7 @@ void Renderer::popFilterLayer() {
   impl_->popFilterLayer();
 }
 
-void Renderer::pushMask(const std::optional<Boxd>& maskBounds) {
+void Renderer::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->pushMask(maskBounds);
 }
 
@@ -76,7 +76,7 @@ void Renderer::popMask() {
   impl_->popMask();
 }
 
-void Renderer::beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) {
+void Renderer::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
   impl_->beginPatternTile(tileRect, targetFromPattern);
 }
 
@@ -92,11 +92,11 @@ void Renderer::drawPath(const PathShape& path, const StrokeParams& stroke) {
   impl_->drawPath(path, stroke);
 }
 
-void Renderer::drawRect(const Boxd& rect, const StrokeParams& stroke) {
+void Renderer::drawRect(const Box2d& rect, const StrokeParams& stroke) {
   impl_->drawRect(rect, stroke);
 }
 
-void Renderer::drawEllipse(const Boxd& bounds, const StrokeParams& stroke) {
+void Renderer::drawEllipse(const Box2d& bounds, const StrokeParams& stroke) {
   impl_->drawEllipse(bounds, stroke);
 }
 

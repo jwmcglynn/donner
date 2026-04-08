@@ -34,7 +34,7 @@ void SVGGeometryElement::setPathLength(std::optional<double> value) {
   }
 }
 
-std::optional<PathSpline> SVGGeometryElement::computedSpline() const {
+std::optional<Path> SVGGeometryElement::computedSpline() const {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (const components::ComputedPathComponent* computedPath =
           components::ShapeSystem().createComputedPathIfShape(handle_, FontMetrics(), disabledSink)) {
@@ -44,7 +44,7 @@ std::optional<PathSpline> SVGGeometryElement::computedSpline() const {
   }
 }
 
-std::optional<Boxd> SVGGeometryElement::worldBounds() const {
+std::optional<Box2d> SVGGeometryElement::worldBounds() const {
   return components::ShapeSystem().getShapeWorldBounds(handle_);
 }
 

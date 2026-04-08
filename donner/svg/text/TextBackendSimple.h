@@ -24,7 +24,7 @@ public:
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const override;
   std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const override;
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const override;
-  PathSpline glyphOutline(FontHandle font, int glyphIndex, float scale) const override;
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const override;
   bool isBitmapOnly(FontHandle font) const override;
   bool isCursive(uint32_t codepoint) const override;
   bool hasSmallCapsFeature(FontHandle font) const override;

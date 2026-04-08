@@ -114,7 +114,7 @@ TEST(CompositeAABBRect, RectIsExactlyOneSubPixelWide) {
   // AABB from (20, 20) to (70, 70) — should land on sub-pixel boundaries exactly.
   // Sub-pixel 4 covers pixels [20, 25), sub-pixel 13 covers [65, 70).
   RendererBitmap bmp = MakeBlackBitmap(kImgSize, kImgSize);
-  CompositeAABBRect(bmp, Boxd(Vector2d(20.0, 20.0), Vector2d(70.0, 70.0)), info);
+  CompositeAABBRect(bmp, Box2d(Vector2d(20.0, 20.0), Vector2d(70.0, 70.0)), info);
 
   auto grid = SampleSubPixelColors(bmp, info);
   ASSERT_EQ(grid.size(), 20u);
@@ -172,7 +172,7 @@ TEST(CompositeAABBRect, NonAlignedBoundsSnapToNearestSubPixel) {
   SampledImageInfo info{kCells, kCells, 5.0, 5.0};
 
   RendererBitmap bmp = MakeBlackBitmap(kImgSize, kImgSize);
-  CompositeAABBRect(bmp, Boxd(Vector2d(22.0, 22.0), Vector2d(67.0, 67.0)), info);
+  CompositeAABBRect(bmp, Box2d(Vector2d(22.0, 22.0), Vector2d(67.0, 67.0)), info);
 
   auto grid = SampleSubPixelColors(bmp, info);
 

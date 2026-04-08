@@ -58,7 +58,7 @@ public:
    *
    * @param entity Current entity.
    */
-  Boxd getViewBox(EntityHandle entity);
+  Box2d getViewBox(EntityHandle entity);
 
   /**
    * Returns true if the given entity overrides the viewBox.
@@ -82,21 +82,21 @@ public:
    *
    * @param entity Current entity.
    */
-  Transformd getRawEntityFromParentTransform(EntityHandle entity);
+  Transform2d getRawEntityFromParentTransform(EntityHandle entity);
 
   /**
    * Returns the entityFromParent transform with modifiers.
    *
    * @param entity Current entity.
    */
-  Transformd getEntityFromParentTransform(EntityHandle entity);
+  Transform2d getEntityFromParentTransform(EntityHandle entity);
 
   /**
    * Get the scale transform from the canvas to the SVG document.
    *
    * @param registry ECS registry
    */
-  Transformd getDocumentFromCanvasTransform(Registry& registry);
+  Transform2d getDocumentFromCanvasTransform(Registry& registry);
 
   /**
    * Get the transform for entityContent-from-entity, which is an additional transform for specific
@@ -118,7 +118,7 @@ public:
    *
    * @param entity Current entity.
    */
-  Transformd getEntityContentFromEntityTransform(EntityHandle entity);
+  Transform2d getEntityContentFromEntityTransform(EntityHandle entity);
 
   /**
    * Set the entityFromParent transform for the current entity. This will be transformed with
@@ -127,7 +127,7 @@ public:
    * @param entity Current entity.
    * @param entityFromParent New transform.
    */
-  void setRawEntityFromParentTransform(EntityHandle entity, const Transformd& entityFromParent);
+  void setRawEntityFromParentTransform(EntityHandle entity, const Transform2d& entityFromParent);
 
   /**
    * Get the computed absolute transform for the current entity. This is the same as \ref
@@ -144,7 +144,7 @@ public:
    *
    * @param entity Current entity.
    */
-  Transformd getEntityFromWorldTransform(EntityHandle entity);
+  Transform2d getEntityFromWorldTransform(EntityHandle entity);
 
   /**
    * Invalidate cached state for the current entity, such as the computed viewBox and
@@ -180,9 +180,9 @@ public:
    * @param outWarnings Output vector of parse errors, if any.
    * @return Computed bounds.
    */
-  Boxd computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
+  Box2d computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
                              const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                             const Boxd& viewBox, FontMetrics fontMetrics,
+                             const Box2d& viewBox, FontMetrics fontMetrics,
                              ParseWarningSink& warningSink);
 
   /**
@@ -235,10 +235,10 @@ public:
    * coordinate system.
    *
    * @param handle Entity handle.
-   * @return std::optional<Boxd> Clip rect, or std::nullopt if this element does not establish a
+   * @return std::optional<Box2d> Clip rect, or std::nullopt if this element does not establish a
    *   clipping context.
    */
-  std::optional<Boxd> clipRect(EntityHandle handle) const;
+  std::optional<Box2d> clipRect(EntityHandle handle) const;
 
   /**
    * Computes the elementContent-from-viewBox transform (using dest-from-source notation), from the
@@ -247,9 +247,9 @@ public:
    *
    * @param handle Entity handle.
    * @param computedSizedElement Precomputed sized element information.
-   * @return Transformd Transformation from viewBox (source) to element content (destination).
+   * @return Transform2d Transformation from viewBox (source) to element content (destination).
    */
-  Transformd elementContentFromViewBoxTransform(
+  Transform2d elementContentFromViewBoxTransform(
       EntityHandle handle, const ComputedSizedElementComponent& computedSizedElement) const;
 
   /// @}
@@ -264,8 +264,8 @@ private:
    * @param inheritedViewBox The viewBox of the parent element.
    * @param fontMetrics Font metrics, used to calculate the size of text elements.
    */
-  Boxd calculateSizedElementBounds(EntityHandle entity, const SizedElementProperties& properties,
-                                   const Boxd& inheritedViewBox, FontMetrics fontMetrics);
+  Box2d calculateSizedElementBounds(EntityHandle entity, const SizedElementProperties& properties,
+                                   const Box2d& inheritedViewBox, FontMetrics fontMetrics);
 
   /**
    * Get the document size scaled to fit the canvas, as a floating-point number without rounding.

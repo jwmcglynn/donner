@@ -108,9 +108,9 @@ UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
 // it. If the cast fails, an assertion will be triggered.
 donner::svg::SVGPathElement path = maybePath->cast<donner::svg::SVGPathElement>();
 
-if (std::optional<donner::svg::PathSpline> spline = path.computedSpline()) {
-  std::cout << "Path: " << *spline << "\n";
-  std::cout << "Length: " << spline->pathLength() << " userspace units\n";
+if (std::optional<donner::Path> computedPath = path.computedPath()) {
+  std::cout << "Path: " << *computedPath << "\n";
+  std::cout << "Length: " << computedPath->pathLength() << " userspace units\n";
 } else {
   std::cout << "Path is empty\n";
 }

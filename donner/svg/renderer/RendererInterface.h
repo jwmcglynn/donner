@@ -18,10 +18,10 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/svg/core/FillRule.h"
+#include "donner/base/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MixBlendMode.h"
-#include "donner/svg/core/PathSpline.h"
+#include "donner/base/Path.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/WritingMode.h"
@@ -62,10 +62,10 @@ struct RendererBitmap {
  * Represents a resolved path along with its fill rule, transform, and layer index for boolean ops.
  */
 struct PathShape {
-  PathSpline path;
+  Path path;
   FillRule fillRule = FillRule::NonZero;
   /// Transform from clip path child to the clip path's coordinate system.
-  Transformd entityFromParent;
+  Transform2d entityFromParent;
   /// Layer index for boolean combination: paths on the same layer are unioned, layers are
   /// intersected.
   int layer = 0;
@@ -84,7 +84,7 @@ struct PaintParams {
   /// CurrentColor value for paint server resolution.
   css::Color currentColor = css::Color(css::RGBA());
   /// View box used for unit resolution and gradient coordinate conversion.
-  Boxd viewBox;
+  Box2d viewBox;
   StrokeParams strokeParams;
 };
 
@@ -92,10 +92,10 @@ struct PaintParams {
  * Clip stack entry combining rectangles, paths, and optional masks.
  */
 struct ResolvedClip {
-  std::optional<Boxd> clipRect;
+  std::optional<Box2d> clipRect;
   std::vector<PathShape> clipPaths;
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
-  Transformd clipPathUnitsTransform;
+  Transform2d clipPathUnitsTransform;
   std::optional<components::ResolvedMask> mask;
 
   ResolvedClip() = default;
@@ -129,7 +129,7 @@ struct ResolvedClip {
  */
 struct ImageParams {
   /// Destination rectangle in device-independent units.
-  Boxd targetRect;
+  Box2d targetRect;
   double opacity = 1.0;
   /// Whether to favor nearest-neighbor sampling for pixelated rendering.
   bool imageRenderingPixelated = false;
@@ -145,7 +145,7 @@ struct TextParams {
   StrokeParams strokeParams;
   SmallVector<RcString, 1> fontFamilies;
   Lengthd fontSize;
-  Boxd viewBox;
+  Box2d viewBox;
   FontMetrics fontMetrics;
   TextAnchor textAnchor = TextAnchor::Start;
   TextDecoration textDecoration = TextDecoration::None;
@@ -212,12 +212,12 @@ public:
    * Sets the absolute transform on the renderer, replacing the current matrix.
    * Unlike pushTransform, this does not interact with the save/restore stack.
    */
-  virtual void setTransform(const Transformd& transform) = 0;
+  virtual void setTransform(const Transform2d& transform) = 0;
 
   /**
    * Pushes a transform onto the renderer stack, composing with the current transform.
    */
-  virtual void pushTransform(const Transformd& transform) = 0;
+  virtual void pushTransform(const Transform2d& transform) = 0;
 
   /**
    * Pops the most recent transform from the renderer stack.
@@ -254,7 +254,7 @@ public:
    *   output. If nullopt, the filter operates on the full surface.
    */
   virtual void pushFilterLayer(const components::FilterGraph& filterGraph,
-                               const std::optional<Boxd>& filterRegion) = 0;
+                               const std::optional<Box2d>& filterRegion) = 0;
 
   /**
    * Pops the most recent filter layer.
@@ -268,7 +268,7 @@ public:
    *
    * @param maskBounds Optional clip rect for the mask region.
    */
-  virtual void pushMask(const std::optional<Boxd>& maskBounds) = 0;
+  virtual void pushMask(const std::optional<Box2d>& maskBounds) = 0;
 
   /**
    * Transitions from rendering mask content to rendering masked content.
@@ -288,7 +288,7 @@ public:
    * @param tileRect The tile rectangle in pattern coordinate space.
    * @param targetFromPattern Transform from pattern tile space to target element space.
    */
-  virtual void beginPatternTile(const Boxd& tileRect, const Transformd& targetFromPattern) = 0;
+  virtual void beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) = 0;
 
   /**
    * Ends pattern tile recording and sets the resulting tiled shader as the current fill or stroke
@@ -311,12 +311,12 @@ public:
   /**
    * Convenience helper for drawing axis-aligned rectangles.
    */
-  virtual void drawRect(const Boxd& rect, const StrokeParams& stroke) = 0;
+  virtual void drawRect(const Box2d& rect, const StrokeParams& stroke) = 0;
 
   /**
    * Convenience helper for drawing ellipses bounded by the provided box.
    */
-  virtual void drawEllipse(const Boxd& bounds, const StrokeParams& stroke) = 0;
+  virtual void drawEllipse(const Box2d& bounds, const StrokeParams& stroke) = 0;
 
   /**
    * Draws an image resource into the given target rectangle.

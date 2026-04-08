@@ -6,15 +6,15 @@ namespace donner::svg {
 
 SVGGraphicsElement::SVGGraphicsElement(EntityHandle handle) : SVGElement(handle) {}
 
-Transformd SVGGraphicsElement::transform() const {
+Transform2d SVGGraphicsElement::transform() const {
   return components::LayoutSystem().getRawEntityFromParentTransform(handle_);
 }
 
-void SVGGraphicsElement::setTransform(const Transformd& transform) {
+void SVGGraphicsElement::setTransform(const Transform2d& transform) {
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, transform);
 }
 
-Transformd SVGGraphicsElement::elementFromWorld() const {
+Transform2d SVGGraphicsElement::elementFromWorld() const {
   return components::LayoutSystem().getEntityFromWorldTransform(handle_);
 }
 

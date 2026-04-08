@@ -21,11 +21,11 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
   return SVGSymbolElement(handle);
 }
 
-void SVGSymbolElement::setViewBox(OptionalRef<Boxd> viewBox) {
+void SVGSymbolElement::setViewBox(OptionalRef<Box2d> viewBox) {
   handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
 }
 
-std::optional<Boxd> SVGSymbolElement::viewBox() const {
+std::optional<Box2d> SVGSymbolElement::viewBox() const {
   return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 

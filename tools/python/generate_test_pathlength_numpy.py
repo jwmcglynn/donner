@@ -1,5 +1,5 @@
 """
-Uses numpy to compute the high-precision path length of the PathLength testcases in PathSpline_tests.cc
+Uses numpy to compute the high-precision path length of the PathLength testcases in PathSpline_tests.cc (now Path_tests.cc)
 
 Run with: bazel run //donner/svg/core:generate_test_pathlength_numpy
 """

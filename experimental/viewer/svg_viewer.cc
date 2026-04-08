@@ -95,7 +95,7 @@ struct SVGState {
     valid = true;
   }
 
-  void setBounds(const donner::Boxd& box) {
+  void setBounds(const donner::Box2d& box) {
     if (boundsShape) {
       boundsShape->setStyle("display: inline");
       boundsShape->setX(donner::Lengthd(box.topLeft.x));

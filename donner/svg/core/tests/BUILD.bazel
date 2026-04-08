@@ -4,7 +4,7 @@ donner_cc_library(
     name = "core_test_utils",
     testonly = 1,
     hdrs = [
-        "PathSplineTestUtils.h",
+        "PathTestUtils.h",
     ],
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
@@ -31,7 +31,7 @@ donner_cc_test(
         "MaskUnits_tests.cc",
         "MixBlendMode_tests.cc",
         "Overflow_tests.cc",
-        "PathSpline_tests.cc",
+        "Path_tests.cc",
         "PointerEvents_tests.cc",
         "PreserveAspectRatio_tests.cc",
         "Stroke_tests.cc",

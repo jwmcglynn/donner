@@ -258,7 +258,7 @@ TEST(ApplyTextLengthTest, SpacingAdjustmentDistributesEvenly) {
 
   std::vector<RunPenExtent> extents = {{0.0, 0.0, 30.0, 0.0}};
   TextLayoutParams params;
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
 
   applyTextLength(runs, text, extents, params, false, 30.0, 0.0);
@@ -281,7 +281,7 @@ TEST(ApplyTextLengthTest, SpacingAndScalingAdjustmentScalesPositions) {
 
   std::vector<RunPenExtent> extents = {{0.0, 0.0, 20.0, 0.0}};
   TextLayoutParams params;
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
 
   applyTextLength(runs, text, extents, params, false, 20.0, 0.0);
@@ -309,7 +309,7 @@ TEST(ApplyTextLengthTest, GlobalTextLengthAppliesWhenNoSpanTextLength) {
 
   std::vector<RunPenExtent> extents = {{10.0, 0.0, 30.0, 0.0}};
   TextLayoutParams params;
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   params.textLength = Lengthd(40.0, Lengthd::Unit::None);
   params.lengthAdjust = LengthAdjust::Spacing;
@@ -330,7 +330,7 @@ TEST(ComputeSpanBaselineShiftPxTest, LengthBasedShift) {
   span.baselineShift = Lengthd(10.0, Lengthd::Unit::Px);
 
   TextLayoutParams params;
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   params.fontSize = Lengthd(16.0, Lengthd::Unit::Px);
 
@@ -349,7 +349,7 @@ TEST(ComputeSpanBaselineShiftPxTest, SubKeywordUsesOS2Metrics) {
   span.baselineShift = Lengthd(-0.33, Lengthd::Unit::Em);
 
   TextLayoutParams params;
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   params.fontSize = Lengthd(16.0, Lengthd::Unit::Px);
 
@@ -369,7 +369,7 @@ TEST(ComputeSpanBaselineShiftPxTest, SuperKeywordUsesOS2Metrics) {
   span.baselineShift = Lengthd(0.4, Lengthd::Unit::Em);
 
   TextLayoutParams params;
-  params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   params.fontSize = Lengthd(16.0, Lengthd::Unit::Px);
 
@@ -445,7 +445,7 @@ protected:
   TextLayoutParams makeParams(double fontSize = 16.0) {
     TextLayoutParams params;
     params.fontSize = Lengthd(fontSize, Lengthd::Unit::Px);
-    params.viewBox = Boxd(Vector2d::Zero(), Vector2d(200, 200));
+    params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
     params.fontMetrics = FontMetrics();
     return params;
   }

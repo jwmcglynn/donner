@@ -78,7 +78,7 @@ In the glyph rendering loop, after attempting `glyphOutline`:
 
 ```cpp
 #ifdef DONNER_TEXT_FULL
-PathSpline glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex, scale);
+Path glyphPath = shaper.glyphOutline(run.font, glyph.glyphIndex, scale);
 if (glyphPath.empty()) {
   // Try bitmap glyph (color emoji).
   if (auto bitmap = shaper.bitmapGlyph(run.font, glyph.glyphIndex, scale)) {
