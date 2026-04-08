@@ -1,0 +1,101 @@
+"""Geode: GPU-native SVG rendering backend.
+
+This is an experimental backend gated behind a build flag. The default is OFF
+so existing CI does not attempt to build Dawn (~7 minutes clean).
+
+To enable:
+
+    bazel build --//donner/svg/renderer/geode:enable_dawn=true \\
+        //donner/svg/renderer/geode/...
+"""
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+
+# Build flag controlling whether Geode's Dawn-backed targets are compiled.
+bool_flag(
+    name = "enable_dawn",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "dawn_enabled",
+    flag_values = {":enable_dawn": "True"},
+    visibility = ["//visibility:public"],
+)
+
+# Targets below are only compatible when --//donner/svg/renderer/geode:enable_dawn=true.
+_DAWN_ONLY = select({
+    ":dawn_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+donner_cc_library(
+    name = "geode_device",
+    srcs = ["GeodeDevice.cc"],
+    hdrs = ["GeodeDevice.h"],
+    # Frameworks needed by Dawn's Metal backend on macOS. These cannot live
+    # on the @dawn//:webgpu_dawn cmake() rule because rules_foreign_cc applies
+    # linkopts during Dawn's own CMake compiler test.
+    linkopts = select({
+        "@platforms//os:macos": [
+            "-framework",
+            "Metal",
+            "-framework",
+            "Foundation",
+            "-framework",
+            "QuartzCore",
+            "-framework",
+            "IOKit",
+            "-framework",
+            "IOSurface",
+            "-framework",
+            "CoreGraphics",
+        ],
+        "@platforms//os:linux": [
+            "-ldl",
+            "-lpthread",
+        ],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_device_tests",
+    srcs = ["tests/GeodeDevice_tests.cc"],
+    target_compatible_with = _DAWN_ONLY,
+    deps = [
+        ":geode_device",
+        "//donner/base",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "geode_shaders",
+    srcs = ["GeodeShaders.cc"],
+    hdrs = ["GeodeShaders.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_shaders_tests",
+    srcs = ["tests/GeodeShaders_tests.cc"],
+    target_compatible_with = _DAWN_ONLY,
+    deps = [
+        ":geode_device",
+        ":geode_shaders",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

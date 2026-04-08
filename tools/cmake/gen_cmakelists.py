@@ -72,6 +72,7 @@ SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
     "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
     "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
+    "donner/svg/renderer/geode",  # Geode (WebGPU) — Bazel-only, gated behind --enable_dawn flag
     "third_party/stb",
     "pixelmatch-cpp17",
 }
