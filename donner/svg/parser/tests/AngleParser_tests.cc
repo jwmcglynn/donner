@@ -25,7 +25,8 @@ css::ComponentValue ParseComponentValue(std::string_view str) {
 }
 
 // Create a string suffix operator with _cv for parsing a string as a single ComponentValue.
-css::ComponentValue operator""_cv(const char* str, size_t len) {
+css::ComponentValue operator""_cv(const char* str,
+                                  size_t len) {  // NOLINT(banned_patterns: test-only helper)
   return ParseComponentValue(std::string_view(str, len));
 }
 
