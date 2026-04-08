@@ -48,6 +48,8 @@ template <>
 struct AddUnsigned<long> {
   typedef unsigned long type;
 };
+// long long is a distinct type from long even when both are 64-bit (e.g. macOS).
+// Only define this specialization when long long is not the same type as long.
 template <>
 struct AddUnsigned<long long> {
   typedef unsigned long long type;
