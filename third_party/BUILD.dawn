@@ -1,0 +1,74 @@
+"""Bazel build overlay for Dawn (WebGPU) used by the Geode renderer.
+
+Dawn's upstream Bazel build only covers Tint (the WGSL compiler). To get the
+full WebGPU native implementation we drive Dawn's CMake build through
+rules_foreign_cc's cmake() rule.
+
+Third-party dependencies (Abseil, SPIRV-Tools, etc.) are already populated
+at repo-fetch time by the patch_cmds entry in MODULE.bazel, so we configure
+CMake with DAWN_FETCH_DEPENDENCIES=OFF to keep the Bazel sandbox hermetic.
+"""
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "all_srcs",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            # Exclude bazel files we might create to avoid self-referencing.
+            "bazel-*",
+            "build/**",
+        ],
+    ),
+)
+
+cmake(
+    name = "webgpu_dawn",
+    build_args = [
+        # Parallelize the build; rules_foreign_cc defaults to single-threaded.
+        "--",
+        "-j8",
+    ],
+    cache_entries = {
+        "CMAKE_BUILD_TYPE": "Release",
+        # Single monolithic shared library containing Dawn + Tint + Abseil +
+        # SPIRV-Tools. Hides internal ABI so it doesn't clash with other deps.
+        "DAWN_BUILD_MONOLITHIC_LIBRARY": "SHARED",
+        # Dependencies already populated by fetch_dawn_dependencies.py at
+        # repo-fetch time; don't try to re-fetch inside the sandbox.
+        "DAWN_FETCH_DEPENDENCIES": "OFF",
+        # Enable CMake install step so rules_foreign_cc can copy outputs.
+        "DAWN_ENABLE_INSTALL": "ON",
+        # Headless: no window system integration.
+        "DAWN_USE_GLFW": "OFF",
+        "DAWN_USE_WAYLAND": "OFF",
+        "DAWN_USE_X11": "OFF",
+        # Skip samples and tests to cut build time.
+        "DAWN_BUILD_SAMPLES": "OFF",
+        "DAWN_BUILD_TESTS": "OFF",
+        "TINT_BUILD_CMD_TOOLS": "OFF",
+        "TINT_BUILD_TESTS": "OFF",
+        "TINT_BUILD_DOCS": "OFF",
+    },
+    generate_args = ["-G Ninja"],
+    lib_source = ":all_srcs",
+    out_include_dir = "include",
+    out_shared_libs = select({
+        "@platforms//os:macos": ["libwebgpu_dawn.dylib"],
+        "@platforms//os:linux": ["libwebgpu_dawn.so"],
+        "//conditions:default": [],
+    }),
+    # The CMake build is huge (~7 min clean). Tag for slow jobs.
+    tags = [
+        "manual",
+        "requires-network",
+    ],
+    # NOTE: Platform-specific linkopts (Metal frameworks on macOS, pthread on
+    # Linux) are added by the consuming cc_library targets in
+    # //donner/svg/renderer/geode — NOT here. Adding them to the cmake() rule
+    # causes rules_foreign_cc to apply them during CMake's own compiler test,
+    # which breaks the Dawn build itself.
+)

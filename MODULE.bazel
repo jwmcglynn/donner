@@ -23,6 +23,9 @@ bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 
+# rules_foreign_cc is used to wrap CMake-based third-party projects (Dawn/WebGPU).
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+
 ##
 ## Third-party dependencies
 ##
@@ -143,6 +146,39 @@ new_git_repository(
     build_file = "//third_party:BUILD.resvg-test-suite",
     commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
     remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
+)
+
+# Dawn (WebGPU implementation) for the Geode GPU renderer.
+# Only fetched when --//donner/svg/renderer/geode:enable_dawn=true.
+# `patch_cmds` runs `fetch_dawn_dependencies.py` at repository fetch time
+# (which has network access) to populate third_party/ submodules, so the
+# downstream CMake build can run with DAWN_FETCH_DEPENDENCIES=OFF inside
+# Bazel's sandbox.
+new_git_repository(
+    name = "dawn",
+    build_file = "//third_party:BUILD.dawn",
+    # Pinned to a specific commit for reproducibility. Bump deliberately.
+    # From v20260403.135149 (2026-04-03).
+    commit = "fa93dacdf3931ec29ff8f42facf51db632c45308",
+    remote = "https://dawn.googlesource.com/dawn",
+    patch_cmds = [
+        "python3 tools/fetch_dawn_dependencies.py",
+        # Strip nested .git directories so Bazel's file tracking sees the
+        # submodule contents as regular source files.
+        "find third_party -name .git -type d -exec rm -rf {} + 2>/dev/null || true",
+        # Strip nested BUILD.bazel/BUILD/WORKSPACE files throughout the tree.
+        # Otherwise they create Bazel package boundaries and glob(['**']) stops
+        # recursing, leaving CMake unable to find many source subdirectories.
+        # Dawn has ~114 BUILD.bazel files under src/tint alone (Tint's upstream
+        # Bazel support for WGSL parsing), plus more in third_party submodules.
+        # The root BUILD file is provided by our overlay so the top-level one
+        # is not needed.
+        "find . -mindepth 2 \\( -name BUILD.bazel -o -name BUILD -o -name WORKSPACE -o -name WORKSPACE.bazel -o -name MODULE.bazel \\) -type f -delete 2>/dev/null || true",
+        # Remove the top-level WORKSPACE/MODULE files that Dawn ships with.
+        # (Keep our BUILD.bazel overlay which is placed at the root by Bazel's
+        # new_git_repository build_file attribute — don't remove that one.)
+        "rm -f WORKSPACE WORKSPACE.bazel MODULE.bazel",
+    ],
 )
 
 bazel_dep(name = "rules_python", version = "1.9.0", dev_dependency = True)
