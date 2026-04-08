@@ -77,3 +77,25 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_library(
+    name = "geode_shaders",
+    srcs = ["GeodeShaders.cc"],
+    hdrs = ["GeodeShaders.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_shaders_tests",
+    srcs = ["tests/GeodeShaders_tests.cc"],
+    target_compatible_with = _DAWN_ONLY,
+    deps = [
+        ":geode_device",
+        ":geode_shaders",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

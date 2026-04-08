@@ -1,8 +1,28 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Planned
+**Status:** Phase 0 complete (#481 merged); Phase 1 MVP in progress (#484)
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
+**Last updated:** 2026-04-08
+
+## Implementation status
+
+- **Phase 0** (Type refactoring): ✅ complete, merged in #481.
+  Replaces `PathSpline` with immutable `Path` + `PathBuilder`, moves `FillRule`
+  into `donner/base`, adds `BezierUtils`, migrates all renderers/systems.
+- **Phase 1** (Foundation + path rendering): 🚧 in progress. #484 is the
+  MVP covering Dawn vendoring and `GeodeDevice`. Landed pieces:
+  - ✅ Dawn WebGPU vendored via `rules_foreign_cc` + CMake (see Phase 1 section).
+  - ✅ `GeodeDevice`: headless WebGPU device/queue factory.
+  - ✅ End-to-end GPU draw verified (clear-to-red + texture readback).
+  - ✅ Slug WGSL fill shader compiles via Dawn's Tint compiler.
+  - ⏳ `GeodePathEncoder` Slug band decomposition — next PR
+  - ⏳ `GeoEncoder` drawing API — next PR
+  - ⏳ `RendererGeode` skeleton + `RendererInterface` adapter — later
+  - ⏳ Golden image tests for solid-fill SVGs — later
+  - ⏳ SwiftShader integration for Linux CI — follow-up
+- **Phase 2+**: not yet started.
+
 
 ## Summary
 
@@ -161,6 +181,57 @@ backend gives us:
 - Modern GPU features (compute shaders for v2 filters, storage buffers)
 - No platform-specific code in the renderer
 - Future path to native Vulkan/Metal for applications that need it
+
+#### Bazel vendoring strategy
+
+Dawn does not publish itself to the Bazel Central Registry, and Dawn's upstream
+`BUILD.bazel` only covers Tint (the WGSL compiler). The actual WebGPU native
+implementation has zero Bazel files — upstream's own `WORKSPACE.bazel` says:
+
+> NOTE: The Bazel build is best-effort and currently only support Tint
+> targets. There is no support for Dawn targets at this time.
+
+After surveying community projects, **every existing Dawn embedding goes
+through CMake**. We use `rules_foreign_cc`'s `cmake()` rule to drive Dawn's
+upstream CMake build from inside Bazel. The full pipeline:
+
+1. **Repository fetch**: `new_git_repository` clones a pinned Dawn commit.
+2. **Dependency population**: `patch_cmds` runs `tools/fetch_dawn_dependencies.py`
+   at fetch time. This Python script is Dawn's lightweight alternative to
+   depot_tools — it parses `DEPS` files and shallow-clones Abseil, SPIRV-Tools,
+   Vulkan-Headers, etc. into `third_party/`. Unlike the build sandbox, the
+   fetch phase has network access.
+3. **Bazel package flattening**: `patch_cmds` strips nested `.git` directories
+   and nested `BUILD.bazel` files throughout the tree. This is critical —
+   Tint's upstream Bazel support ships 114+ `BUILD.bazel` files under
+   `src/tint`, and cloned submodules like Abseil have their own too. Every
+   nested `BUILD.bazel` creates a Bazel package boundary that `glob(["**"])`
+   stops recursing at, making the affected subdirectories invisible to the
+   `rules_foreign_cc` filegroup.
+4. **Monolithic CMake build**: `cmake()` configures Dawn with
+   `DAWN_BUILD_MONOLITHIC_LIBRARY=SHARED` → a single `libwebgpu_dawn.dylib`
+   (~10 MB on macOS) containing Dawn native, Tint, Abseil, and SPIRV-Tools
+   with hidden internal symbols. This avoids ODR/ABI clashes with other
+   project dependencies and simplifies the consumer's link step.
+5. **Framework linkopts**: Metal/Foundation/QuartzCore/etc. linkopts live on
+   the **consuming `cc_library`**, not on the `cmake()` rule. Adding them to
+   the `cmake()` rule makes `rules_foreign_cc` apply them during Dawn's own
+   compiler-test step and breaks the build with "unknown argument:
+   `-framework Metal`".
+
+This is opt-in: Geode's entire directory is gated behind
+`--//donner/svg/renderer/geode:enable_dawn=true` (default: false). Default
+`bazel test //...` never builds Dawn, so existing CI and contributors not
+working on Geode pay zero time/disk cost for WebGPU.
+
+**Build time:** ~4.5 min clean on macOS arm64 via Bazel (vs ~7 min standalone
+CMake — Bazel's parallelism tuning is slightly better). Incremental rebuilds
+of downstream Geode code do not rebuild Dawn.
+
+**Future pivot**: if `rules_foreign_cc` friction becomes painful, the
+fallback is to vendor a prebuilt monolithic `libwebgpu_dawn` per platform
+and wrap it with `http_archive` + `cc_import`. This loses reproducibility
+benefits but avoids the nested-BUILD-file hackery.
 
 ## Proposed Architecture
 
@@ -923,22 +994,57 @@ cleanup.
 
 ### Phase 1: Foundation and Path Rendering
 
-- [ ] Vendor Dawn (WebGPU) as a third-party dependency with Bazel build.
-- [ ] Implement `GeodeDevice`: device/queue creation, surface management, buffer allocator.
-- [ ] Implement `GeodePathEncoder`: `Path` → Slug band decomposition.
+- [x] Vendor Dawn (WebGPU) as a third-party dependency with Bazel build. **(#484)**
+  - Uses `rules_foreign_cc`'s `cmake()` rule to drive Dawn's upstream CMake
+    build (Dawn has no usable native Bazel support — the root `BUILD.bazel`
+    only exposes Tint).
+  - `new_git_repository` with `patch_cmds` runs
+    `tools/fetch_dawn_dependencies.py` at fetch time (network is available
+    there but not in the sandbox), then strips nested `.git` dirs and
+    nested `BUILD.bazel` files so Bazel's `glob(["**"])` sees every
+    submodule as regular sources.
+  - CMake builds a single monolithic shared library
+    (`DAWN_BUILD_MONOLITHIC_LIBRARY=SHARED`, ~10 MB dylib) that hides
+    Abseil/Tint/SPIRV-Tools symbols internally to avoid ODR/ABI clashes.
+  - Platform linkopts (`-framework Metal` etc. on macOS) live on the
+    consuming `cc_library`, NOT on the `cmake()` rule — adding them to
+    `cmake()` makes `rules_foreign_cc` apply them during Dawn's own
+    compiler-test step and breaks the build.
+  - Clean build takes ~4.5 min on macOS via Bazel's parallelism.
+  - Gated behind `--//donner/svg/renderer/geode:enable_dawn=true`
+    (default: false) so existing CI is unaffected.
+- [x] Implement `GeodeDevice`: headless device/queue factory.
+  - Uses `dawn::native::Instance::EnumerateAdapters()` + `wgpu::Adapter(ptr)`
+    (adds a ref — do NOT use `Acquire` here, which steals the ref and causes
+    double-free when the `dawn::native::Adapter` vector destructs).
+  - No window system integration — purely offscreen rendering into textures.
+  - `DeviceLostCallback` is intentionally not set — Dawn fires it during
+    normal device destruction which interacts poorly with gtest teardown.
+  - **4 tests passing on macOS Metal**, including end-to-end clear+readback
+    verifying that the first pixel of a cleared texture is `(255, 0, 0, 255)`.
+- [x] Implement Slug vertex shader: MVP transform, dynamic half-pixel
+  dilation. **(WGSL in `shaders/slug_fill.wgsl`, compiles via Tint.)**
+- [x] Implement Slug fragment shader: ray-curve intersection, winding
+  number, coverage. **(compiles via Tint; end-to-end rendering not yet
+  wired up.)**
+  - [x] Non-zero fill rule.
+  - [x] Even-odd fill rule.
+- [ ] Implement `GeodePathEncoder`: `Path` → Slug band decomposition. **(next PR)**
   - [ ] Call `path.cubicToQuadratic()` then `path.toMonotonic()` as preprocessing.
-  - [ ] Band decomposition algorithm (adaptive band count).
-  - [ ] Vertex buffer generation (bounding quads with dilation data + inverse Jacobian).
-  - [ ] Curve data packing (quadratic control points, 2×16-bit band metadata).
-- [ ] Implement Slug vertex shader: MVP transform, dynamic half-pixel dilation.
-- [ ] Implement Slug fragment shader: ray-curve intersection, winding number, coverage.
-  - [ ] Non-zero fill rule.
-  - [ ] Even-odd fill rule.
-- [ ] Implement `GeoEncoder` core: transform stack, solid color fill, path rendering.
-- [ ] Implement `RendererGeode` skeleton: `beginFrame`/`endFrame`, `setTransform`,
-  `drawPath` with solid fill.
+  - [ ] Adaptive band decomposition (1 band for small paths, ~32px per band
+    otherwise, capped at 256).
+  - [ ] Vertex buffer generation: bounding quads (6 vertices / band) with
+    outward normals for dilation.
+  - [ ] Curve data packing: quadratic control points `(p0, p1, p2)` as flat f32,
+    `(curveStart, curveCount)` band metadata.
+- [ ] Implement `GeoEncoder` core: transform stack, solid color fill, path
+  rendering. **(next PR)**
+- [ ] Implement `RendererGeode` skeleton: `beginFrame`/`endFrame`,
+  `setTransform`, `drawPath` with solid fill.
 - [ ] Add Bazel `--config=geode` backend selection.
 - [ ] Run basic renderer tests (solid-fill SVGs) against golden images.
+- [ ] SwiftShader integration for Linux CI. **(MVP is macOS-only; Linux
+  needs SwiftShader as a headless Vulkan ICD to run the same tests.)**
 
 ### Phase 2: Complete SVG Painting
 
