@@ -24,13 +24,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
 
+      # Cache key includes both gen_cmakelists.py AND MODULE.bazel because the
+      # generated CMakeLists.txt embeds FetchContent versions extracted from
+      # MODULE.bazel. A version bump must invalidate the cached build/_deps
+      # tree -- otherwise FetchContent's git stash/unstash dance fails when it
+      # tries to retarget a cached source checkout to the new tag.
+      # restore-keys is intentionally absent: a partial-match restore would
+      # bring in incompatible state.
       - name: Cache CMake dependencies
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py') }}
-          restore-keys: |
-            cmake-deps-linux-${{ matrix.backend }}-
+          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'MODULE.bazel') }}
 
       - name: Validate generated CMakeLists.txt
         run: python3 tools/cmake/gen_cmakelists.py --check
@@ -52,13 +57,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # See linux job above for why restore-keys is absent.
       - name: Cache CMake dependencies
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py') }}
-          restore-keys: |
-            cmake-deps-macos-${{ matrix.backend }}-
+          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'MODULE.bazel') }}
 
       - name: Validate generated CMakeLists.txt
         run: python3 tools/cmake/gen_cmakelists.py --check
