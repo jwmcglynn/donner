@@ -31,6 +31,30 @@ _DAWN_ONLY = select({
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
+# CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
+# always built regardless of the enable_dawn flag. Downstream Geode targets
+# (GeoEncoder, RendererGeode) consume the EncodedPath struct this produces
+# and upload it to GPU buffers.
+donner_cc_library(
+    name = "geode_path_encoder",
+    srcs = ["GeodePathEncoder.cc"],
+    hdrs = ["GeodePathEncoder.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_path_encoder_tests",
+    srcs = ["tests/GeodePathEncoder_tests.cc"],
+    deps = [
+        ":geode_path_encoder",
+        "//donner/base",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_library(
     name = "geode_device",
     srcs = ["GeodeDevice.cc"],
