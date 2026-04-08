@@ -57,9 +57,17 @@ Stages transform components through the ECS:
 When creating a pull request:
 
 1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
-2. **`bazel test //...` must pass** before opening the PR.
-3. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
-4. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits.
+2. **Run `tools/presubmit.sh`** before opening the PR. It runs everything CI runs:
+   - `bazel test //...` — covers unit tests AND the per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators directly at test time.
+   - `tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
+   - `clang-format --dry-run` on modified files.
+   Fast iteration: `tools/presubmit.sh --fast` skips `bazel test`.
+3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
+4. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
+5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits.
+6. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
+
+See `docs/design_docs/ci_escape_prevention.md` for the full rationale behind these checks and the taxonomy of CI escapes they prevent.
 
 ## General Practices
 

@@ -8,16 +8,26 @@ on:
   pull_request:
     branches: [main]
 
+# Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
+# are retried to survive transient GitHub/registry outages. Build/test steps
+# are NOT retried -- a real test failure should surface immediately.
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
 
       - name: Cache Bazel
         uses: actions/cache@v5
@@ -28,18 +38,28 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-
 
+      # bazelisk fetch downloads the toolchain and module dependencies. We retry
+      # this step specifically to tolerate GitHub / BCR / Chromium rate limits,
+      # without masking actual compilation errors in the subsequent build step.
+      - name: Fetch Bazel dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 15
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: bazelisk fetch //...
+
       - name: Build
-        run: |
-          bazelisk build //...
+        run: bazelisk build //...
 
       - name: Test
-        run: |
-          bazelisk test --test_output=errors --local_test_jobs=2 //...
+        run: bazelisk test --test_output=errors --local_test_jobs=2 //...
 
   macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Cache Bazel
         uses: actions/cache@v5
@@ -50,10 +70,32 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bazel-
 
+      - name: Fetch Bazel dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 15
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: bazelisk fetch //...
+
       - name: Build
-        run: |
-          bazelisk build //...
+        run: bazelisk build //...
 
       - name: Test
+        run: bazelisk test --test_output=errors //...
+
+      # Run fuzzers on macOS via the LLVM 21 toolchain (Apple Clang lacks
+      # libclang_rt.fuzzer_osx.a, but --config=asan-fuzzer activates
+      # --config=latest_llvm which does provide it). This closes the gap where
+      # bazel test //... on macOS skips fuzzer targets.
+      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
         run: |
-          bazelisk test --test_output=errors //...
+          bazelisk test \
+            --config=asan-fuzzer \
+            --test_output=errors \
+            --test_tag_filters=fuzz_target \
+            --build_tag_filters=fuzz_target \
+            //... || true
+        # Marked informational for now: fuzzer tests were previously macOS-disabled
+        # so we don't want to break macOS CI during the rollout. Remove `|| true`
+        # and the comment once the fuzzer corpus passes cleanly on macOS.

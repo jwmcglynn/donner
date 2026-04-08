@@ -28,12 +28,14 @@ css::ComponentValue ParseComponentValue(std::string_view str) {
 }
 
 // Create a string suffix operator with _cv for parsing a string as a single ComponentValue.
-css::ComponentValue operator""_cv(const char* str, size_t len) {
+css::ComponentValue operator""_cv(const char* str,
+                                  size_t len) {  // NOLINT(banned_patterns: test-only helper)
   return ParseComponentValue(std::string_view(str, len));
 }
 
 // Parse a string into a list of component values.
-std::vector<css::ComponentValue> operator""_cv_list(const char* str, size_t len) {
+std::vector<css::ComponentValue> operator""_cv_list(
+    const char* str, size_t len) {  // NOLINT(banned_patterns: test-only helper)
   css::parser::details::Tokenizer tokenizer(std::string_view(str, len));
   return css::parser::details::parseListOfComponentValues(
       tokenizer, css::parser::details::WhitespaceHandling::Keep);

@@ -1,0 +1,47 @@
+name: Lint
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+    branches: [main]
+
+# Fast lint job covering checks that don't live inside `bazel test //...`:
+#
+# - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
+#   prevents running --check from inside bazel test; see Phase 3 design doc)
+# - banned source patterns lint is NOT here: it runs automatically as a
+#   py_test emitted by donner_cc_library/test/binary, so it's covered by
+#   the main CI bazel test step.
+jobs:
+  cmake-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache Bazel
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-lint-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-lint-
+            ${{ runner.os }}-bazel-
+
+      - name: gen_cmakelists.py unit tests
+        run: python3 -m unittest tools.cmake.gen_cmakelists_test -v
+
+      - name: gen_cmakelists.py --check (validates output)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 2
+          retry_wait_seconds: 30
+          command: python3 tools/cmake/gen_cmakelists.py --check

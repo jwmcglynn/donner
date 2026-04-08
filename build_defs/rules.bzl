@@ -4,6 +4,53 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_python//python:defs.bzl", "py_test")
+
+# Script that enforces banned source patterns (no `long long`, no
+# `std::aligned_storage`, no user-defined literal operators). See
+# docs/coding_style.md "Language and Library Features".
+_BANNED_PATTERNS_SCRIPT = "//build_defs:check_banned_patterns.py"
+
+def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
+    """Emit a py_test that runs check_banned_patterns.py on srcs + hdrs.
+
+    One lint test is emitted per donner_cc_{library,test,binary} via this
+    helper, so `bazel test //...` catches new banned patterns automatically.
+    The test is tagged `lint` so it can be filtered if desired.
+
+    Args:
+      name: Parent target name. The lint test is named `{name}_lint`.
+      srcs: Source files to lint.
+      hdrs: Header files to lint.
+      tags: Tags from the parent rule. `manual` is propagated so libraries
+        tagged manual don't pull their lint into `bazel test //...`.
+    """
+
+    # select()-valued srcs/hdrs can't be enumerated at load time; skip linting
+    # them here. Those files are still linted whenever another target references
+    # them as a plain list.
+    if type(srcs) != "list" or type(hdrs) != "list":
+        return
+
+    # Only lint files we own in this package (string entries). Label-form
+    # srcs (e.g. ":generated_header") come from other rules and are skipped.
+    lintable = [f for f in (srcs + hdrs) if type(f) == "string" and not f.startswith(":") and not f.startswith("//")]
+    if not lintable:
+        return
+
+    propagated_tags = ["lint", "banned_patterns"]
+    if "manual" in tags:
+        propagated_tags.append("manual")
+
+    py_test(
+        name = name + "_lint",
+        srcs = [_BANNED_PATTERNS_SCRIPT],
+        main = "check_banned_patterns.py",
+        args = ["$(rootpath {})".format(f) for f in lintable],
+        data = lintable,
+        tags = propagated_tags,
+        size = "small",
+    )
 
 def llvm21_macos_workaround_linkopts():
     """
@@ -217,42 +264,66 @@ def donner_variant_cc_test(name, dep, variants, **kwargs):
         testonly = 1,
     )
 
-def donner_cc_binary(name, linkopts = [], **kwargs):
+def donner_cc_binary(name, srcs = [], linkopts = [], tags = [], **kwargs):
     """
     Create a cc_binary with donner-specific defaults including LLVM 21 workaround.
 
     Args:
       name: Rule name.
+      srcs: Source files.
       linkopts: List of linker options.
+      tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
     cc_binary(
         name = name,
+        srcs = srcs,
         linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        tags = tags,
         **kwargs
     )
 
-def donner_cc_test(name, linkopts = [], **kwargs):
+    _banned_patterns_lint_test(
+        name = name,
+        srcs = srcs,
+        hdrs = kwargs.get("hdrs", []),
+        tags = tags,
+    )
+
+def donner_cc_test(name, srcs = [], linkopts = [], tags = [], **kwargs):
     """
     Create a cc_test with donner-specific defaults including LLVM 21 workaround.
 
     Args:
       name: Rule name.
+      srcs: Source files.
       linkopts: List of linker options.
+      tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     cc_test(
         name = name,
+        srcs = srcs,
         linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        tags = tags,
         **kwargs
     )
 
-def donner_cc_library(name, copts = [], tags = [], visibility = None, **kwargs):
+    _banned_patterns_lint_test(
+        name = name,
+        srcs = srcs,
+        hdrs = kwargs.get("hdrs", []),
+        tags = tags,
+    )
+
+def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, **kwargs):
     """
     Create a cc_library with donner-specific defaults.
 
     Args:
       name: Rule name.
+      srcs: Source files.
+      hdrs: Header files.
       copts: List of copts.
       tags: List of tags.
       visibility: Visibility.
@@ -277,11 +348,20 @@ def donner_cc_library(name, copts = [], tags = [], visibility = None, **kwargs):
 
     cc_library(
         name = name,
+        srcs = srcs,
+        hdrs = hdrs,
         include_prefix = "/".join(package_path),
         copts = copts + ["-I."],
         tags = tags,
         visibility = visibility,
         **kwargs
+    )
+
+    _banned_patterns_lint_test(
+        name = name,
+        srcs = srcs,
+        hdrs = hdrs,
+        tags = tags,
     )
 
 def donner_cc_fuzzer(name, corpus, **kwargs):

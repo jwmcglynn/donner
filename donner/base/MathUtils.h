@@ -51,8 +51,8 @@ struct AddUnsigned<long> {
 // long long is a distinct type from long even when both are 64-bit (e.g. macOS).
 // Only define this specialization when long long is not the same type as long.
 template <>
-struct AddUnsigned<long long> {
-  typedef unsigned long long type;
+struct AddUnsigned<long long> {     // NOLINT(banned_patterns: primitive template specialization)
+  typedef unsigned long long type;  // NOLINT(banned_patterns: primitive template specialization)
 };
 
 // Don't define these, these don't have an unsigned counterpart.
