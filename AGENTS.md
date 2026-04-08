@@ -52,6 +52,15 @@ Stages transform components through the ECS:
 3. **Rendering Instantiation** (`RenderingContext`): Traverses computed tree, creates `RenderingInstanceComponent` per visible element with resolved references (paint, clip, mask, marker, filter), offscreen subtrees, layer isolation (opacity < 1, filters, masks), and `drawOrder`.
 4. **Backend** (TinySkia or Skia): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
 
+## Pull Request Workflow
+
+When creating a pull request:
+
+1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
+2. **`bazel test //...` must pass** before opening the PR.
+3. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
+4. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits.
+
 ## General Practices
 
 - Prefer existing Donner utilities (`Transformd`, `RcString`, `StringUtils`) before adding dependencies.
