@@ -125,32 +125,29 @@ _DEPS_HANDLED_EXTERNALLY: Set[str] = {
 }
 
 
+# Pattern for identifying abseil-cpp deps in either the canonical
+# (@@abseil-cpp+//) or legacy (@com_google_absl//) form.
+_ABSL_DEP_RE = re.compile(r"^@+(?:abseil-cpp\+?|com_google_absl)//absl/")
+
+
 def _is_known_bazel_internal(dep: str) -> bool:
-    """Return True if *dep* is a Bazel toolchain-internal label that should be ignored."""
-    return (dep in _BAZEL_INTERNAL_DEPS
-            or dep in _DEPS_HANDLED_EXTERNALLY
-            or dep in _IGNORED_EXTERNAL_DEPS)
-
-
-# Regex patterns for auto-mapping well-known external repos to CMake targets.
-# Used as a fallback before the "unmapped" warning is emitted.
-_AUTO_MAP_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    # Abseil: @@abseil-cpp+//absl/container:flat_hash_set -> absl::flat_hash_set
-    # Also matches @com_google_absl//absl/container:flat_hash_set (legacy form).
-    (re.compile(r"^@+(?:abseil-cpp\+?|com_google_absl)//absl/[^:]+:(.+)$"), "absl::{0}"),
-]
-
-
-def _auto_map_external_dep(dep: str) -> Optional[str]:
-    """Attempt to auto-map an external Bazel dep to a CMake target name.
-
-    Returns the CMake target name or None if no pattern matches.
-    """
-    for pattern, template in _AUTO_MAP_PATTERNS:
-        m = pattern.match(dep)
-        if m:
-            return template.format(*m.groups())
-    return None
+    """Return True if *dep* is a Bazel toolchain-internal label or otherwise
+    handled outside the normal target_link_libraries() path."""
+    if dep in _BAZEL_INTERNAL_DEPS or dep in _DEPS_HANDLED_EXTERNALLY:
+        return True
+    if dep in _IGNORED_EXTERNAL_DEPS:
+        return True
+    # Abseil deps are silently dropped unless they appear in
+    # KNOWN_BAZEL_TO_CMAKE_DEPS. Auto-mapping the rule name to absl::<rulename>
+    # is unreliable: some abseil rules export under a different CMake target
+    # (e.g. //absl/flags:parse → absl::flags_parse, not absl::parse), and
+    # several rules don't export a CMake target at all when absl is built as
+    # a subproject via FetchContent. The downstream cc_library/cc_test
+    # historically pulls absl in transitively or only uses header-only parts,
+    # so dropping these matches the pre-existing CMake build behavior.
+    if _ABSL_DEP_RE.match(dep) and dep not in KNOWN_BAZEL_TO_CMAKE_DEPS:
+        return True
+    return False
 
 # Helper constants for CMake condition strings.
 _SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
@@ -1094,19 +1091,24 @@ def generate_all_packages() -> None:
                 for dep in query_deps(bazel_label):
                     if dep in SKIPPED_TARGETS:
                         continue
+                    # KNOWN_BAZEL_TO_CMAKE_DEPS wins first so explicit
+                    # mappings override the silently-dropped internal/abseil
+                    # categories below.
+                    mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
+                    if mapped:
+                        if mapped != cmake_name:
+                            all_deps.append(mapped)
+                        continue
                     if _is_known_bazel_internal(dep):
                         continue
-                    mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
-                    if not mapped and dep.startswith("//"):
+                    if dep.startswith("//"):
                         p, n = dep.removeprefix("//").split(":", 1)
                         mapped = cmake_target_name(p, n)
-                    if not mapped and not dep.startswith("//"):
-                        mapped = _auto_map_external_dep(dep)
-                        if not mapped:
-                            msg = f"Unmapped external dep: {dep} (needed by {bazel_label})"
-                            if msg not in _unmapped_deps:
-                                _unmapped_deps.append(msg)
-                                print(f"WARNING: {msg}")
+                    else:
+                        msg = f"Unmapped external dep: {dep} (needed by {bazel_label})"
+                        if msg not in _unmapped_deps:
+                            _unmapped_deps.append(msg)
+                            print(f"WARNING: {msg}")
                     if mapped and mapped != cmake_name:
                         all_deps.append(mapped)
 
@@ -1211,12 +1213,12 @@ def generate_all_packages() -> None:
         f.write("if(NOT TARGET donner)\n")
         f.write("  add_library(donner INTERFACE)\n")
         for dep in query_deps("//:donner"):
-            if _is_known_bazel_internal(dep):
-                continue
-            if dep.startswith("//"):
-                mapped = cmake_target_name(*dep.removeprefix("//").split(":", 1))
-            else:
-                mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep) or _auto_map_external_dep(dep)
+            mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
+            if not mapped:
+                if _is_known_bazel_internal(dep):
+                    continue
+                if dep.startswith("//"):
+                    mapped = cmake_target_name(*dep.removeprefix("//").split(":", 1))
             if mapped and mapped != "donner":
                 if mapped in OPTIONAL_DEPS:
                     dep_cond = CONDITIONAL_TARGETS.get(mapped)

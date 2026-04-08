@@ -76,21 +76,33 @@ class FetchContentExternalsTest(unittest.TestCase):
             self.assertNotIn(".bcr.", tag, f"{name} has BCR suffix: {tag}")
 
 
-class AutoMapExternalDepTest(unittest.TestCase):
-    def test_absl_canonical_form(self):
-        self.assertEqual(
-            g._auto_map_external_dep("@@abseil-cpp+//absl/container:flat_hash_set"),
-            "absl::flat_hash_set",
+class AbslDepHandlingTest(unittest.TestCase):
+    def test_absl_dep_pattern_canonical(self):
+        self.assertTrue(
+            g._ABSL_DEP_RE.match("@@abseil-cpp+//absl/container:flat_hash_set")
         )
 
-    def test_absl_legacy_form(self):
-        self.assertEqual(
-            g._auto_map_external_dep("@com_google_absl//absl/types:any"),
-            "absl::any",
+    def test_absl_dep_pattern_legacy(self):
+        self.assertTrue(g._ABSL_DEP_RE.match("@com_google_absl//absl/types:any"))
+
+    def test_non_absl_does_not_match(self):
+        self.assertFalse(g._ABSL_DEP_RE.match("@foo//bar:baz"))
+
+    def test_unmapped_absl_dep_is_internal(self):
+        # Unmapped abseil deps are silently dropped (matches pre-existing
+        # behavior; some absl rules don't export under absl::<rulename>).
+        self.assertTrue(
+            g._is_known_bazel_internal("@@abseil-cpp+//absl/flags:flag")
         )
 
-    def test_unknown_returns_none(self):
-        self.assertIsNone(g._auto_map_external_dep("@foo//bar:baz"))
+    def test_mapped_absl_dep_is_not_internal(self):
+        # Explicitly mapped absl deps must NOT be ignored as internal.
+        # failure_signal_handler is in KNOWN_BAZEL_TO_CMAKE_DEPS.
+        self.assertFalse(
+            g._is_known_bazel_internal(
+                "@com_google_absl//absl/debugging:failure_signal_handler"
+            )
+        )
 
 
 class IsKnownBazelInternalTest(unittest.TestCase):
