@@ -21,6 +21,10 @@ MODULE.bazel.lock
 !.vscode/mcp.json
 *.code-workspace
 
+# Claude Code harness state (worktrees, scheduled task locks, etc.)
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
 # macOS
 .DS_Store
 
