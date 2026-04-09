@@ -12,6 +12,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/parser/SVGParser.h"
 
+using testing::ElementsAre;
 using testing::Gt;
 using testing::NotNull;
 
@@ -91,7 +92,7 @@ TEST_F(RenderingContextTest, FindIntersectingHitsRect) {
   ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
-  EXPECT_NE(hit, entt::null);
+  EXPECT_TRUE(hit != entt::null);
 }
 
 TEST_F(RenderingContextTest, FindIntersectingMissesEmptyArea) {
@@ -105,7 +106,7 @@ TEST_F(RenderingContextTest, FindIntersectingMissesEmptyArea) {
   ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(5, 5));
-  EXPECT_EQ(hit, entt::null);
+  EXPECT_TRUE(hit == entt::null);
 }
 
 TEST_F(RenderingContextTest, FindAllIntersecting) {
@@ -175,13 +176,13 @@ TEST_F(RenderingContextTest, InvalidateAndReinstantiate) {
 // --- Complex documents ---
 
 TEST_F(RenderingContextTest, GroupedElements) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <g transform="translate(50, 50)">
         <rect id="r" x="0" y="0" width="50" height="50" fill="red"/>
       </g>
     </svg>
-  )");
+  )svg");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
@@ -193,7 +194,7 @@ TEST_F(RenderingContextTest, GroupedElements) {
 }
 
 TEST_F(RenderingContextTest, GradientAndClipPath) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <linearGradient id="g">
@@ -206,7 +207,7 @@ TEST_F(RenderingContextTest, GradientAndClipPath) {
       </defs>
       <rect width="100" height="100" fill="url(#g)" clip-path="url(#cp)"/>
     </svg>
-  )");
+  )svg");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
@@ -227,7 +228,7 @@ TEST_F(RenderingContextTest, UseElement) {
 }
 
 TEST_F(RenderingContextTest, FilterElement) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <filter id="blur">
@@ -236,7 +237,7 @@ TEST_F(RenderingContextTest, FilterElement) {
       </defs>
       <rect width="80" height="80" fill="red" filter="url(#blur)"/>
     </svg>
-  )");
+  )svg");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
@@ -253,7 +254,7 @@ TEST_F(RenderingContextTest, DisplayNoneNotIntersectable) {
   ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
-  EXPECT_EQ(hit, entt::null);
+  EXPECT_TRUE(hit == entt::null);
 }
 
 TEST_F(RenderingContextTest, RectIntersection) {
@@ -271,7 +272,7 @@ TEST_F(RenderingContextTest, RectIntersection) {
 }
 
 TEST_F(RenderingContextTest, MaskElement) {
-  auto document = ParseSVG(R"(
+  auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <defs>
         <mask id="m">
@@ -280,10 +281,95 @@ TEST_F(RenderingContextTest, MaskElement) {
       </defs>
       <rect width="100" height="100" fill="red" mask="url(#m)"/>
     </svg>
-  )");
+  )svg");
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, PointerEventsBoundingBoxHitsWithoutPaint) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="r" x="10" y="10" width="80" height="80"
+            fill="none" stroke="none" pointer-events="bounding-box"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  const Entity rectEntity = document.querySelector("#r")->entityHandle().entity();
+  EXPECT_EQ(ctx.findIntersecting(Vector2d(50, 50)), rectEntity);
+}
+
+TEST_F(RenderingContextTest, PointerEventsVisibleFillHitsTransparentFill) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="r" x="10" y="10" width="80" height="80"
+            fill="red" fill-opacity="0" stroke="none" pointer-events="visibleFill"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  const Entity rectEntity = document.querySelector("#r")->entityHandle().entity();
+  EXPECT_EQ(ctx.findIntersecting(Vector2d(50, 50)), rectEntity);
+}
+
+TEST_F(RenderingContextTest, PointerEventsPaintedRequiresVisiblePaint) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect x="10" y="10" width="80" height="80"
+            fill="none" stroke="none" pointer-events="painted"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  EXPECT_TRUE(ctx.findIntersecting(Vector2d(50, 50)) == entt::null);
+}
+
+TEST_F(RenderingContextTest, PointerEventsVisibleStrokeRequiresVisibility) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect x="10" y="10" width="80" height="80"
+            fill="none" stroke="black" stroke-width="20"
+            visibility="hidden" pointer-events="visibleStroke"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  EXPECT_TRUE(ctx.findIntersecting(Vector2d(15, 50)) == entt::null);
+}
+
+TEST_F(RenderingContextTest, PointerEventsStrokeHitsHiddenStrokeGeometry) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="r" x="10" y="10" width="80" height="80"
+            fill="none" stroke="black" stroke-width="20"
+            visibility="hidden" pointer-events="stroke"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  const Entity rectEntity = document.querySelector("#r")->entityHandle().entity();
+  EXPECT_EQ(ctx.findIntersecting(Vector2d(15, 50)), rectEntity);
+  EXPECT_TRUE(ctx.findIntersecting(Vector2d(50, 50)) == entt::null);
+}
+
+TEST_F(RenderingContextTest, FindIntersectingRectReturnsFrontToBackOrder) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="back" x="0" y="0" width="100" height="100" fill="red"/>
+      <rect id="front" x="25" y="25" width="50" height="50" fill="blue"/>
+      <rect id="outside" x="80" y="80" width="10" height="10" fill="green"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  const Entity backEntity = document.querySelector("#back")->entityHandle().entity();
+  const Entity frontEntity = document.querySelector("#front")->entityHandle().entity();
+
+  const std::vector<Entity> hits = ctx.findIntersectingRect(Box2d::FromXYWH(30, 30, 10, 10));
+  ASSERT_THAT(hits.size(), Gt(1u));
+  EXPECT_EQ(hits.front(), frontEntity);
+  EXPECT_THAT(hits, testing::Contains(backEntity));
 }
 
 }  // namespace donner::svg::components
