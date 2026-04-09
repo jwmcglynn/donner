@@ -206,15 +206,6 @@ OPTIONAL_DEPS: Set[str] = {
     "donner_svg_renderer_renderer_skia",
     "donner_svg_renderer_renderer_tiny_skia",
     "donner_svg_renderer_renderer_geode",
-    # Geode subpackage targets — Bazel-only, the geode/ package is in
-    # SKIPPED_PACKAGES so these CMake targets are never declared. Wrap any
-    # accidental references in if(TARGET ...) guards so the build doesn't
-    # error out on a missing target name.
-    "donner_svg_renderer_geode_geo_encoder",
-    "donner_svg_renderer_geode_geode_device",
-    "donner_svg_renderer_geode_geode_pipeline",
-    "donner_svg_renderer_geode_geode_path_encoder",
-    "donner_svg_renderer_geode_geode_shaders",
     "donner_svg_renderer_filter_graph_executor",
     "donner_svg_resources_font_manager",
     "donner_base_fonts_woff2_parser",
@@ -225,6 +216,23 @@ OPTIONAL_DEPS: Set[str] = {
     "donner_svg_renderer_tests_renderer_test_utils",
     "donner_svg_text_text_backend_full",
 }
+
+# Bazel-only targets that live in packages intentionally skipped by the CMake
+# generator. These must never be emitted as link dependencies, because the
+# validator treats every target_link_libraries() reference as real even when it
+# sits under an unreachable CMake guard.
+SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
+    "donner_svg_renderer_geode_geo_encoder",
+    "donner_svg_renderer_geode_geode_device",
+    "donner_svg_renderer_geode_geode_pipeline",
+    "donner_svg_renderer_geode_geode_path_encoder",
+    "donner_svg_renderer_geode_geode_shaders",
+}
+
+
+def _should_skip_cmake_dep(cmake_dep: Optional[str]) -> bool:
+    """Return True when a mapped CMake dep should be omitted entirely."""
+    return bool(cmake_dep) and cmake_dep in SKIPPED_CMAKE_TARGET_DEPS
 
 # Sources that must be conditionally compiled. Maps cmake target name → dict of
 # source filename → CMake condition. Matched sources are removed from the main
@@ -1153,6 +1161,8 @@ def generate_all_packages() -> None:
                         if msg not in _unmapped_deps:
                             _unmapped_deps.append(msg)
                             print(f"WARNING: {msg}")
+                    if _should_skip_cmake_dep(mapped):
+                        continue
                     if mapped and mapped != cmake_name:
                         all_deps.append(mapped)
 
@@ -1263,6 +1273,8 @@ def generate_all_packages() -> None:
                     continue
                 if dep.startswith("//"):
                     mapped = cmake_target_name(*dep.removeprefix("//").split(":", 1))
+            if _should_skip_cmake_dep(mapped):
+                continue
             if mapped and mapped != "donner":
                 if mapped in OPTIONAL_DEPS:
                     dep_cond = CONDITIONAL_TARGETS.get(mapped)
