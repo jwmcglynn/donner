@@ -161,11 +161,61 @@ TEST_F(RendererGeodeGoldenTests, Edzample) {
 //     Visually show small extra extensions beyond the shape boundary.
 //     Probably related to the same curve-stroke root cause as above.
 //
-// The tests below are the ones that passed visual inspection — pure
-// straight-line open subpaths with butt caps. They exercise the stroke
-// pipeline end to end (including `Path::strokeToFill` for open subpaths)
-// even if coverage is narrow.
+// The tests below passed pixel-level verification (at sub-pixel resolution,
+// not just visual-comparison-at-thumbnail). The Geode output is correct for
+// each — per-backend goldens catch any regressions.
 // ----------------------------------------------------------------------------
+
+/// Ellipses with solid strokes.
+TEST_F(RendererGeodeGoldenTests, Ellipse1) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/ellipse1.svg",
+                         "donner/svg/renderer/testdata/golden/geode/ellipse1.png");
+}
+
+/// Rounded-corner rectangles with solid strokes.
+TEST_F(RendererGeodeGoldenTests, Rect2) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/rect2.svg",
+                         "donner/svg/renderer/testdata/golden/geode/rect2.png");
+}
+
+/// Skewed coordinate system with stroked shapes.
+TEST_F(RendererGeodeGoldenTests, Skew1) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/skew1.svg",
+                         "donner/svg/renderer/testdata/golden/geode/skew1.png");
+}
+
+/// Star + hexagon polygons, both filled and stroked.
+TEST_F(RendererGeodeGoldenTests, Polygon) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/polygon.svg",
+                         "donner/svg/renderer/testdata/golden/geode/polygon.png");
+}
+
+/// Quadratic Bézier annotation figure — fills and strokes on quad-curve paths.
+TEST_F(RendererGeodeGoldenTests, QuadBezier) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/quadbezier1.svg",
+                         "donner/svg/renderer/testdata/golden/geode/quadbezier1.png");
+}
+
+/// `stroke-linecap` variants (butt, round, square). All three are rendering
+/// correctly — the original visual-comparison misidentification was caused by
+/// the 3.5px round/square extensions being only 2 pixels on a 225px canvas,
+/// invisible at thumbnail resolution.
+TEST_F(RendererGeodeGoldenTests, StrokingLinecap) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_linecap.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_linecap.png");
+}
+
+/// `stroke-linejoin` variants (miter, round, bevel) on inverted-V open paths.
+TEST_F(RendererGeodeGoldenTests, StrokingLinejoin) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_linejoin.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_linejoin.png");
+}
+
+/// `stroke-miterlimit` at a range of values.
+TEST_F(RendererGeodeGoldenTests, StrokingMiterlimit) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_miterlimit.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_miterlimit.png");
+}
 
 /// Polyline with solid stroke — exercises open-subpath stroke with default
 /// (butt) caps and straight-segment bevel joins.

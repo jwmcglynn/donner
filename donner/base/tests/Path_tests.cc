@@ -855,6 +855,20 @@ TEST(Path, StrokeToFillRoundCap) {
   style.cap = LineCap::Round;
   Path filled = path.strokeToFill(style);
   EXPECT_FALSE(filled.empty());
+
+  // A round cap produces a semicircle of arc points at each end, versus
+  // butt which is a single lineTo. With two round caps the total point
+  // count should be substantially larger than a butt-capped stroke.
+  Path butt = path.strokeToFill({.width = 2.0, .cap = LineCap::Butt});
+  EXPECT_GT(filled.points().size(), butt.points().size())
+      << "Round caps should add arc points beyond the butt-cap baseline";
+
+  // The bounding box should extend ±halfWidth past the line endpoints in
+  // the line's travel direction (the round cap's outermost extent).
+  const Box2d bounds = filled.bounds();
+  EXPECT_LT(bounds.topLeft.x, 0.0) << "Round cap should extend left of x=0";
+  EXPECT_GT(bounds.bottomRight.x, 10.0)
+      << "Round cap should extend right of x=10";
 }
 
 TEST(Path, StrokeToFillSquareCap) {
@@ -864,6 +878,15 @@ TEST(Path, StrokeToFillSquareCap) {
   style.cap = LineCap::Square;
   Path filled = path.strokeToFill(style);
   EXPECT_FALSE(filled.empty());
+
+  // Square caps extend halfWidth past each endpoint in the line direction.
+  // For a horizontal line (0,0)→(10,0) with width 2, the bounds should
+  // reach x=-1 and x=11.
+  const Box2d bounds = filled.bounds();
+  EXPECT_LE(bounds.topLeft.x, -1.0 + 1e-9)
+      << "Square cap should extend halfWidth left of x=0";
+  EXPECT_GE(bounds.bottomRight.x, 11.0 - 1e-9)
+      << "Square cap should extend halfWidth right of x=10";
 }
 
 TEST(Path, StrokeToFillRoundJoin) {
