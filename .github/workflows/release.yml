@@ -72,12 +72,16 @@ jobs:
   # bazelbuild/bazel-central-registry from a maintainer's fork.
   #
   # One-time setup required:
-  #   1. Install the Publish-to-BCR GitHub App on jwmcglynn/donner
-  #   2. Fork bazelbuild/bazel-central-registry as jwmcglynn/bazel-central-registry
-  #   3. Install the app on that fork too
-  #   4. Create a Classic PAT with `repo` + `workflow` scopes and save as
-  #      the BCR_PUBLISH_TOKEN repo secret (fine-grained PATs are not
-  #      currently supported for opening PRs against public repos)
+  #   1. Fork bazelbuild/bazel-central-registry as jwmcglynn/bazel-central-registry
+  #   2. Create a Classic PAT with `repo` + `workflow` scopes and save it as
+  #      the BCR_PUBLISH_TOKEN repo secret (fine-grained PATs still cannot
+  #      open PRs against public repos)
+  #   3. Optional but recommended for org-owned releases: use a dedicated
+  #      machine user PAT instead of a maintainer's personal token
+  #
+  # This workflow intentionally does not use the legacy Publish-to-BCR GitHub
+  # App, which upstream has marked deprecated and scheduled for discontinuation
+  # after June 30, 2026.
   #
   # See docs/design_docs/bcr_release.md for the full runbook.
   publish-to-bcr:

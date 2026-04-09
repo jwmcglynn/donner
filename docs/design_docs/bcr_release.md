@@ -88,20 +88,32 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
 
 ## Publish-to-BCR flow details
 
-The [Publish-to-BCR GitHub App](https://github.com/bazel-contrib/publish-to-bcr) handles the mechanical pieces:
+The
+[Publish-to-BCR reusable GitHub Actions workflow](https://github.com/bazel-contrib/publish-to-bcr)
+handles the mechanical pieces:
 
 1. On GitHub Release publish, `release.yml` invokes `bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0` with `tag_name: ${{ github.event.release.tag_name }}`, `registry_fork: jwmcglynn/bazel-central-registry`, and `secrets.publish_token = secrets.BCR_PUBLISH_TOKEN`. The calling job must also set `id-token: write`, `attestations: write`, and `contents: write` permissions.
 2. The reusable workflow pulls the release tarball, computes the SHA256 integrity, reads `.bcr/metadata.template.json` + `.bcr/source.template.json` + `.bcr/presubmit.yml`, substitutes `{VERSION}` and `{TAG}` placeholders, and writes a new `modules/donner/X.Y.Z/` entry in the maintainer's BCR fork.
-3. It opens a PR from `jwmcglynn/bazel-central-registry` to `bazelbuild/bazel-central-registry` on the maintainer's behalf.
+3. It opens a PR from `jwmcglynn/bazel-central-registry` to
+   `bazelbuild/bazel-central-registry` on the maintainer's behalf.
 
-The app needs its own install + a PAT; this is a one-time setup per maintainer, not per release.
+This flow does **not** use the legacy Publish-to-BCR GitHub App. Upstream marks
+that app as legacy and says it will be discontinued after **June 30, 2026**, so
+new Donner releases should stay on the reusable-workflow path. The only
+one-time setup for this workflow is a BCR fork plus a Classic PAT (or a machine
+user PAT) with `repo` + `workflow` scopes.
 
 Bump the reusable workflow pin (`@v1.2.0`) when new releases of Publish-to-BCR land — see [the releases page](https://github.com/bazel-contrib/publish-to-bcr/releases). Prefer exact version tags over floating refs like `@v1`, because Publish-to-BCR does not publish floating major-version tags.
 
 ### One-time Publish-to-BCR setup
-1. Install the [Publish-to-BCR GitHub App](https://github.com/apps/publish-to-bcr) on `jwmcglynn/donner`.
-2. Fork `bazelbuild/bazel-central-registry` to `jwmcglynn/bazel-central-registry`. Install the app on the fork too.
-3. Create a **Classic** PAT with `repo` + `workflow` scopes. Add as `BCR_PUBLISH_TOKEN` in the `jwmcglynn/donner` repo secrets. Fine-grained PATs are not currently supported for opening PRs against public repos — see [github/roadmap#600](https://github.com/github/roadmap/issues/600).
+1. Fork `bazelbuild/bazel-central-registry` to
+   `jwmcglynn/bazel-central-registry`.
+2. Create a **Classic** PAT with `repo` + `workflow` scopes. Add it as
+   `BCR_PUBLISH_TOKEN` in the `jwmcglynn/donner` repo secrets. Fine-grained
+   PATs are not currently supported for opening PRs against public repos; see
+   [github/roadmap#600](https://github.com/github/roadmap/issues/600).
+3. If Donner releases move to an org-owned or shared-maintainer model, prefer a
+   dedicated machine user PAT over a maintainer's personal token.
 
 ### Where to watch
 - Release workflow logs: `https://github.com/jwmcglynn/donner/actions` (Release workflow)
@@ -119,7 +131,7 @@ Update this section with real-world lessons as they happen.
 | BCR PR presubmit: integrity hash mismatch | GitHub regenerated the source tarball or the tag moved | Re-upload the release tarball verbatim; never force-push tags |
 | `source.template.json` URL 404 | `strip_prefix` doesn't match GitHub's tarball layout | Confirm pattern is `donner-{VERSION}` (GitHub uses repo name + version) |
 | Release workflow: `publish-to-bcr` skipped | `BCR_PUBLISH_TOKEN` secret missing or PAT expired | Regenerate PAT, re-save secret |
-| Release workflow: `publish-to-bcr` fails with "fork not found" | Maintainer BCR fork hasn't been created yet | Fork `bazelbuild/bazel-central-registry` and install the app on it |
+| Release workflow: `publish-to-bcr` fails with "fork not found" | Maintainer BCR fork hasn't been created yet | Fork `bazelbuild/bazel-central-registry` to the `registry_fork` configured in `release.yml` |
 
 ## Adding a new top-level library
 
