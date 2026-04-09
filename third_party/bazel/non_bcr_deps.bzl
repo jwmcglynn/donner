@@ -113,7 +113,7 @@ HBEOF""",
     new_git_repository(
         name = "resvg-test-suite",
         build_file = "//third_party:BUILD.resvg-test-suite",
-        commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
+        commit = "d8e064337faf01bc5a9579187a56dbdbe3eacc72",
         remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
     )
 
