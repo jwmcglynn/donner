@@ -4,6 +4,7 @@ tools/python
 
 # Ignore subtree repos with their own Bazel workspace
 third_party/tiny-skia-cpp
+third_party/entt
 
 # Ignore CMake-generated files
 build
