@@ -1,0 +1,142 @@
+"""Third-party license declarations and aggregated NOTICE targets.
+
+Provides one `license()` target per embedded third-party component plus a
+`donner_notice_file` target per build variant. The notice targets are what
+application authors consume to obtain a legally-sufficient attribution file
+they can embed into their binary (e.g. via `cc_embed_data`).
+
+Only dependencies whose upstream BUILD files do not already declare a
+`license()` target are redeclared here. `libpng`, `skia`, and `zlib` ship
+their own `license()` in their module overlays, so we reference them
+directly in the variant lists below.
+
+Keep the variant lists below in sync with
+`tools/generate_build_report.py`'s `_DEPENDENCY_VARIANTS`.
+"""
+
+load("@rules_license//rules:license.bzl", "license")
+load("//build_defs:licenses.bzl", "donner_notice_file")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["freetype.LICENSE.txt"])
+
+license(
+    name = "entt",
+    package_name = "EnTT",
+    package_url = "https://github.com/skypjack/entt",
+    package_version = "3.16.0",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "@entt//:LICENSE",
+)
+
+license(
+    name = "stb",
+    package_name = "stb",
+    package_url = "https://github.com/nothings/stb",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "@stb//:LICENSE",
+)
+
+license(
+    name = "tiny-skia-cpp",
+    package_name = "tiny-skia-cpp",
+    package_url = "https://github.com/jwmcglynn/tiny-skia-cpp",
+    license_kinds = ["@rules_license//licenses/spdx:BSD-3-Clause"],
+    license_text = "@tiny-skia-cpp//:LICENSE",
+)
+
+# Brotli ships `@brotli//:LICENSE` as an exported source file but no
+# `license()` rule, so declare one here.
+license(
+    name = "brotli",
+    package_name = "brotli",
+    package_url = "https://github.com/google/brotli",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "@brotli//:LICENSE",
+)
+
+license(
+    name = "harfbuzz",
+    package_name = "HarfBuzz",
+    package_url = "https://github.com/harfbuzz/harfbuzz",
+    # HarfBuzz uses the "Old MIT" license; SPDX lists it as MIT with a
+    # historical notice.
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "@harfbuzz//:COPYING",
+)
+
+license(
+    name = "woff2",
+    package_name = "woff2",
+    package_url = "https://github.com/google/woff2",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "@woff2//:LICENSE",
+)
+
+# Skia's upstream `@skia//:license` uses the generic `notice` kind and does
+# not export `LICENSE` for outside packages to reference. The build report's
+# `generate_build_report.py` maps the resulting "notice" kind back to the
+# real SPDX id (BSD-3-Clause) for display; the NOTICE.txt still ships the
+# verbatim license text because `@skia//:license` embeds it.
+
+# FreeType's upstream BUILD.bazel overlay only uses the legacy
+# `licenses(["notice"])` declaration and does not export `LICENSE.TXT`, so we
+# ship a local copy of FreeType's combined LICENSE.TXT + FTL.TXT text.
+license(
+    name = "freetype",
+    package_name = "FreeType",
+    package_url = "https://freetype.org/",
+    package_version = "2.13.3",
+    license_kinds = ["@rules_license//licenses/spdx:FTL"],
+    license_text = "freetype.LICENSE.txt",
+)
+
+# Canonical per-variant license lists. These match the build-report
+# variants in `tools/generate_build_report.py` so a Python script can
+# correlate cquery results with the aggregated manifest.
+
+DEFAULT_LICENSES = [
+    ":entt",
+    ":stb",
+    ":tiny-skia-cpp",
+    "@libpng//:license",
+    "@zlib//:license",
+]
+
+TEXT_FULL_LICENSES = DEFAULT_LICENSES + [
+    ":brotli",
+    ":freetype",
+    ":harfbuzz",
+    ":woff2",
+]
+
+SKIA_TEXT_FULL_LICENSES = [
+    ":entt",
+    ":stb",
+    ":brotli",
+    ":freetype",
+    ":harfbuzz",
+    ":woff2",
+    "@libpng//:license",
+    "@skia//:license",
+    "@zlib//:license",
+]
+
+donner_notice_file(
+    name = "notice_default",
+    variant = "Default (tiny-skia)",
+    licenses = DEFAULT_LICENSES,
+)
+
+donner_notice_file(
+    name = "notice_text_full",
+    variant = "tiny-skia + text-full",
+    licenses = TEXT_FULL_LICENSES,
+)
+
+donner_notice_file(
+    name = "notice_skia_text_full",
+    variant = "skia + text-full",
+    licenses = SKIA_TEXT_FULL_LICENSES,
+)

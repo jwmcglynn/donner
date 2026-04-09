@@ -1,5 +1,7 @@
 import io
 import importlib.util
+import json
+import tempfile
 from pathlib import Path
 import sys
 import unittest
@@ -50,8 +52,29 @@ class GenerateBuildReportTests(unittest.TestCase):
             )
         )
 
+    def _notice_build_result(self, label: str) -> "generate_build_report.CommandResult":
+        # The external-dependencies section also runs `bazel build
+        # //third_party/licenses:notice_*` to materialize each variant's
+        # license manifest. Tests don't have a live Bazel workspace, so we
+        # mock these calls as successful: the subsequent manifest file read
+        # will fail gracefully (empty lookup) because the JSON doesn't exist.
+        return generate_build_report.CommandResult(
+            label=label,
+            args=(),
+            returncode=0,
+            stdout="",
+            stderr="",
+            duration_sec=0.1,
+        )
+
     def test_external_dependencies_section_uses_expected_categories(self):
         results = {
+            ("bazel", "build", "//third_party/licenses:notice_default"):
+                self._notice_build_result("notice-default"),
+            ("bazel", "build", "//third_party/licenses:notice_text_full"):
+                self._notice_build_result("notice-text-full"),
+            ("bazel", "build", "//third_party/licenses:notice_skia_text_full"):
+                self._notice_build_result("notice-skia-text-full"),
             (
                 "bazel",
                 "cquery",
@@ -116,7 +139,10 @@ class GenerateBuildReportTests(unittest.TestCase):
                 duration_sec=3.0,
             ),
         }
-        section = generate_build_report.make_external_dependencies_section(FakeRunner(results))
+        section = generate_build_report.make_external_dependencies_section(
+            FakeRunner(results),
+            bazel_bin=Path("/nonexistent-bazel-bin"),
+        )
 
         self.assertEqual(section.status, "success")
         self.assertIn("### Default (tiny-skia)", section.content)
@@ -129,6 +155,67 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("- woff2", section.content)
         self.assertIn("### skia + text-full", section.content)
         self.assertIn("- skia", section.content)
+
+    def test_external_dependencies_section_annotates_with_licenses(self):
+        """When a license manifest is available, each dep is annotated with
+        its SPDX kind and a link to the upstream license URL."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bazel_bin = Path(tmp)
+            manifest_dir = bazel_bin / "third_party/licenses"
+            manifest_dir.mkdir(parents=True)
+            manifest_payload = {
+                "variant": "Default (tiny-skia)",
+                "licenses": [
+                    {
+                        "package_name": "EnTT",
+                        "license_kinds": ["MIT"],
+                        "package_url": "https://github.com/skypjack/entt",
+                        "label": "@@//third_party/licenses:entt",
+                        "license_text": "../+_repo_rules+entt/LICENSE",
+                    },
+                ],
+            }
+            (manifest_dir / "notice_default.json").write_text(
+                json.dumps(manifest_payload)
+            )
+            # Provide only the default-variant manifest; the other variants
+            # will legitimately return empty lookups because their JSON files
+            # don't exist, which is fine for this test.
+            results = {
+                ("bazel", "build", "//third_party/licenses:notice_default"):
+                    self._notice_build_result("notice-default"),
+                ("bazel", "build", "//third_party/licenses:notice_text_full"):
+                    self._notice_build_result("notice-text-full"),
+                ("bazel", "build", "//third_party/licenses:notice_skia_text_full"):
+                    self._notice_build_result("notice-skia-text-full"),
+            }
+            for configs in ([], ["--config=text-full"],
+                            ["--config=skia", "--config=text-full"]):
+                key = (
+                    "bazel",
+                    "cquery",
+                    "deps(//examples:svg_to_png)",
+                    "--output=starlark",
+                    "--starlark:expr=target.label",
+                    *configs,
+                )
+                results[key] = generate_build_report.CommandResult(
+                    label="cquery",
+                    args=(),
+                    returncode=0,
+                    stdout="@+_repo_rules+entt//:entt",
+                    stderr="",
+                    duration_sec=0.1,
+                )
+
+            section = generate_build_report.make_external_dependencies_section(
+                FakeRunner(results),
+                bazel_bin=bazel_bin,
+            )
+            self.assertIn(
+                "- [entt](https://github.com/skypjack/entt) — MIT",
+                section.content,
+            )
 
     def test_create_build_report_renders_summary_and_dirty_status(self):
         runner = FakeRunner(

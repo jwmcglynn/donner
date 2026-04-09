@@ -1,3 +1,5 @@
+exports_files(["LICENSE"])
+
 cc_library(
     name = "woff2_decode",
     srcs = [

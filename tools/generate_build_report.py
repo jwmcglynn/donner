@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import platform
 import shlex
 import shutil
@@ -164,9 +165,18 @@ def _normalize_external_dependency_repo(label: str) -> typing.Optional[str]:
         return None
 
     repo = label.split("//", 1)[0].lstrip("@")
+    # Bazel canonical repo labels take several shapes:
+    #   @@zlib+//:foo                          (BCR direct module)
+    #   @@+_repo_rules+entt//src:entt          (local_repository via extension)
+    #   @@non_bcr_deps+harfbuzz//:harfbuzz     (module extension override)
+    # Strip a trailing "+" and take the last non-empty "+"-delimited
+    # component so we end up with the human-readable repo name in each case.
+    # Previously the normalizer dropped BCR-canonical labels like
+    # `@zlib+//:...` entirely because `"zlib+".split("+")[-1]` is empty.
+    repo = repo.rstrip("+")
     if "+" in repo:
-        repo = repo.split("+")[-1]
-    repo = repo.strip("+")
+        parts = [part for part in repo.split("+") if part]
+        repo = parts[-1] if parts else ""
     if not repo:
         return None
 
@@ -188,6 +198,108 @@ def _normalize_external_dependency_repo(label: str) -> typing.Optional[str]:
         return None
 
     return repo
+
+
+@dataclass(frozen=True)
+class LicenseEntry:
+    package_name: str
+    license_kinds: tuple[str, ...]
+    license_url: str  # Markdown-ready link target (may be empty).
+
+
+# Fallback upstream URLs for packages whose BCR `license()` overlays do not
+# set `package_url`. Keyed by the lowercase package name we write into the
+# manifest (which is either the explicit `package_name` or the repo name
+# derived by `_fallback_package_name` in `build_defs/licenses.bzl`).
+_PACKAGE_URL_FALLBACKS: dict[str, str] = {
+    "libpng": "http://www.libpng.org/pub/png/libpng.html",
+    "zlib": "https://zlib.net/",
+    "skia": "https://skia.org/",
+}
+
+
+# Override the `license_kinds` reported for packages whose upstream overlay
+# uses the generic `@rules_license//licenses/generic:notice` placeholder
+# instead of a specific SPDX identifier. The NOTICE.txt still carries the
+# verbatim license text from upstream; this only affects the display in the
+# build report.
+_PACKAGE_LICENSE_KIND_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "skia": ("BSD-3-Clause",),
+}
+
+
+def load_license_manifest(
+    runner: CommandRunner,
+    notice_target: str,
+    *,
+    bazel_bin: Path,
+) -> tuple[dict[str, LicenseEntry], CommandResult]:
+    """Build the given `donner_notice_file` target and parse its JSON manifest.
+
+    Returns a `{repo_name: LicenseEntry}` dict keyed by a normalized repo name
+    (matching what `_normalize_external_dependency_repo` produces) so the
+    external-dependencies section can look up license info per dep.
+    """
+    args = ["bazel", "build", notice_target]
+    result = runner.run(f"licenses:{notice_target}", args)
+    if not result.success:
+        return {}, result
+
+    # Resolve the manifest path: `//third_party/licenses:notice_default`
+    # → `bazel-bin/third_party/licenses/notice_default.json`.
+    if not notice_target.startswith("//"):
+        return {}, result
+    package, _, name = notice_target[2:].partition(":")
+    manifest_path = bazel_bin / package / f"{name}.json"
+    if not manifest_path.exists():
+        return {}, result
+
+    try:
+        data = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}, result
+
+    out: dict[str, LicenseEntry] = {}
+    for raw in data.get("licenses", []):
+        package_name = raw.get("package_name") or ""
+        kinds = tuple(raw.get("license_kinds") or [])
+        override_kinds = _PACKAGE_LICENSE_KIND_OVERRIDES.get(package_name.lower())
+        if override_kinds is not None:
+            kinds = override_kinds
+        license_url = raw.get("package_url") or _PACKAGE_URL_FALLBACKS.get(
+            package_name.lower(), ""
+        )
+
+        # Keys the dep list might use to look this entry up. The build
+        # report's dependency normalizer yields a repo name (e.g. "entt",
+        # "libpng"), so register both the package_name and several label-
+        # derived candidates to maximize hit rate.
+        candidates: set[str] = set()
+        if package_name:
+            candidates.add(package_name.lower())
+        label = raw.get("label") or ""
+        if label.startswith("@@"):
+            repo = label[2:].split("//", 1)[0].rstrip("+")
+            if repo:
+                candidates.add(repo.lower())
+        # license_text short_path often encodes the repo directory, e.g.
+        # "../libpng+/LICENSE" or "../+_repo_rules+entt/LICENSE".
+        short = raw.get("license_text") or ""
+        if short.startswith("../"):
+            first = short[3:].split("/", 1)[0]
+            normalized = _normalize_external_dependency_repo("@@" + first + "//:_")
+            if normalized:
+                candidates.add(normalized.lower())
+
+        entry = LicenseEntry(
+            package_name=package_name,
+            license_kinds=kinds,
+            license_url=license_url,
+        )
+        for key in candidates:
+            out[key] = entry
+
+    return out, result
 
 
 def query_external_dependencies(
@@ -401,35 +513,95 @@ def make_public_targets_section(runner: CommandRunner) -> SectionResult:
     )
 
 
-def make_external_dependencies_section(runner: CommandRunner) -> SectionResult:
-    category_specs = [
-        ("Default (tiny-skia)", []),
-        ("tiny-skia + text-full", ["--config=text-full"]),
-        ("skia + text-full", ["--config=skia", "--config=text-full"]),
-    ]
+@dataclass(frozen=True)
+class DependencyVariant:
+    category_name: str
+    configs: tuple[str, ...]
+    notice_target: str
+
+
+_DEPENDENCY_VARIANTS: tuple[DependencyVariant, ...] = (
+    DependencyVariant(
+        category_name="Default (tiny-skia)",
+        configs=(),
+        notice_target="//third_party/licenses:notice_default",
+    ),
+    DependencyVariant(
+        category_name="tiny-skia + text-full",
+        configs=("--config=text-full",),
+        notice_target="//third_party/licenses:notice_text_full",
+    ),
+    DependencyVariant(
+        category_name="skia + text-full",
+        configs=("--config=skia", "--config=text-full"),
+        notice_target="//third_party/licenses:notice_skia_text_full",
+    ),
+)
+
+
+def _resolve_bazel_bin() -> Path:
+    try:
+        out = subprocess.check_output(
+            ["bazel", "info", "bazel-bin"], text=True
+        ).strip()
+        return Path(out)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return Path("bazel-bin")
+
+
+def _format_dependency_line(dependency: str, entry: typing.Optional[LicenseEntry]) -> str:
+    if entry is None:
+        return f"- {dependency}"
+
+    name = f"[{dependency}]({entry.license_url})" if entry.license_url else dependency
+    kinds = ", ".join(entry.license_kinds)
+    if kinds:
+        return f"- {name} — {kinds}"
+    return f"- {name}"
+
+
+def make_external_dependencies_section(
+    runner: CommandRunner,
+    *,
+    bazel_bin: typing.Optional[Path] = None,
+) -> SectionResult:
+    if bazel_bin is None:
+        bazel_bin = _resolve_bazel_bin()
 
     status = "success"
     total_duration_sec = 0.0
     lines = []
 
-    for category_name, configs in category_specs:
+    for variant in _DEPENDENCY_VARIANTS:
         command = [
             "bazel",
             "cquery",
             "deps(//examples:svg_to_png)",
-        ] + list(configs)
+        ] + list(variant.configs)
         command_display = format_command(command)
-        dependencies, result = query_external_dependencies(runner, configs)
+        dependencies, result = query_external_dependencies(runner, variant.configs)
         total_duration_sec += result.duration_sec
 
-        lines.append(f"### {category_name}")
+        license_lookup, license_result = load_license_manifest(
+            runner, variant.notice_target, bazel_bin=bazel_bin
+        )
+        total_duration_sec += license_result.duration_sec
+        if not license_result.success:
+            status = "failed"
+
+        lines.append(f"### {variant.category_name}")
         lines.append(f"Generated with: `{command_display}`")
+        lines.append(
+            f"Licenses aggregated from: `{variant.notice_target}` "
+            "(embed the generated NOTICE.txt for attribution)."
+        )
         lines.append("")
 
         if result.success:
             if dependencies:
                 for dependency in dependencies:
-                    lines.append(f"- {dependency}")
+                    entry = license_lookup.get(dependency.lower())
+                    lines.append(_format_dependency_line(dependency, entry))
             else:
                 lines.append("(no external dependencies found)")
         else:

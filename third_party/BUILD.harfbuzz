@@ -7,6 +7,8 @@ This target uses the amalgamated single-file build for simplicity and enables
 HB_TINY for minimal binary size (~400-600 KB).
 """
 
+exports_files(["COPYING"])
+
 cc_library(
     name = "harfbuzz",
     srcs = ["src/harfbuzz.cc"],

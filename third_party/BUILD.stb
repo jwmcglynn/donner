@@ -1,5 +1,7 @@
 load("@donner//third_party:stb.bzl", "stb_library")
 
+exports_files(["LICENSE"])
+
 STB_COPTS = [
     "-Wno-unused-function",
     "-Wno-self-assign",
