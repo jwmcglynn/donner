@@ -16,6 +16,15 @@ namespace donner::svg {
  * - DOM object: SVGRectElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#RectElement
  *
+ * The `<rect>` element draws an axis-aligned rectangle. You give it a top-left corner
+ * (`x`, `y`) and a `width` and `height`, and SVG fills the enclosed area with `fill` and
+ * outlines it with `stroke`. Set the optional `rx` and `ry` attributes to round the corners —
+ * useful for buttons, badges, and card backgrounds. To rotate or skew a rectangle, wrap it in a
+ * \ref xml_g with a `transform` attribute, or apply `transform` directly.
+ *
+ * Use `<rect>` for backgrounds, panels, buttons, bars in a bar chart, or any other rectangular
+ * region. For arbitrary quadrilaterals, use \ref xml_polygon or \ref xml_path.
+ *
  * ```xml
  * <rect x="10" y="50" width="280" height="200" fill="none" stroke="black" />
  * ```
@@ -59,8 +68,8 @@ namespace donner::svg {
  * | --------: | :-----: | :----------- |
  * | `x`       | `0`     | Top-left corner X coordinate. |
  * | `y`       | `0`     | Top-left corner Y coordinate. |
- * | `width`   | `0`     | Horizontal radius, along the X axis. |
- * | `height`  | `0`     | Vertical radius, along the Y axis. |
+ * | `width`   | `0`     | Width of the rectangle. |
+ * | `height`  | `0`     | Height of the rectangle. |
  * | `rx`      | `auto` (\ref xy_auto) | For rounded corners, the radius of the curve along the X axis. |
  * | `ry`      | `auto` (\ref xy_auto) | For rounded corners, the radius of the curve along the Y axis. |
  */

@@ -23,6 +23,33 @@ namespace donner::svg {
  *   <feMorphology in="SourceGraphic" operator="dilate" radius="5" />
  * </filter>
  * ```
+ *
+ * \htmlonly
+ * <svg id="xml_feMorphology_diagram" width="320" height="160" viewBox="0 0 320 160" style="background-color: white" font-family="sans-serif" font-size="12">
+ *   <defs>
+ *     <filter id="xml_feMorphology_dilate" x="-20%" y="-20%" width="140%" height="140%">
+ *       <feMorphology operator="dilate" radius="3" />
+ *     </filter>
+ *     <filter id="xml_feMorphology_erode" x="-20%" y="-20%" width="140%" height="140%">
+ *       <feMorphology operator="erode" radius="2" />
+ *     </filter>
+ *   </defs>
+ *   <rect x="20" y="30" width="60" height="60" rx="10" fill="#4a90e2" />
+ *   <text x="20" y="110" fill="black">Source</text>
+ *   <rect x="120" y="30" width="60" height="60" rx="10" fill="#4a90e2" filter="url(#xml_feMorphology_dilate)" />
+ *   <text x="115" y="110" fill="black">dilate r=3</text>
+ *   <rect x="220" y="30" width="60" height="60" rx="10" fill="#4a90e2" filter="url(#xml_feMorphology_erode)" />
+ *   <text x="220" y="110" fill="black">erode r=2</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * | Attribute  | Default  | Description  |
+ * | ---------: | :------: | :----------- |
+ * | `operator` | `erode`  | `erode` (minimum) or `dilate` (maximum). |
+ * | `radius`   | `0`      | Kernel radius; may be one or two numbers (x, y). |
+ *
+ * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
+ * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
  */
 
 /**

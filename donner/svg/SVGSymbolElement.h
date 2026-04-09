@@ -21,6 +21,17 @@ namespace donner::svg {
  * - DOM object: SVGSymbolElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html#SymbolElement
  *
+ * A `<symbol>` is a named graphical template, designed from the ground up to be instantiated
+ * by one or more \ref xml_use elements. Like \ref xml_defs content, a `<symbol>` is not drawn
+ * where it appears; unlike a plain `<defs>` group, a `<symbol>` brings its own `viewBox` and
+ * `preserveAspectRatio`, so each `<use>` can resize it to fit a target rectangle without
+ * distortion — just like a nested \ref xml_svg element.
+ *
+ * Use `<symbol>` when you have an icon, glyph, or repeated graphic that needs to be reused at
+ * different sizes or positions (think of an icon sprite sheet). For content that does not need
+ * its own viewport and is referenced only as raw geometry, a `<defs>` + `<g>` combination is
+ * usually simpler.
+ *
  * ```xml
  * <symbol id="icon" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"
  *         x="0" y="0" width="100" height="100" refX="50" refY="50">
@@ -51,6 +62,9 @@ namespace donner::svg {
  * | `height`              | `auto`          | The height of the symbol's viewport. A value of auto is interpreted as 100% when instantiated. |
  * | `refX`                | `0`             | The reference x coordinate used when the symbol is instantiated via a \ref xml_use element. |
  * | `refY`                | `0`             | The reference y coordinate used when the symbol is instantiated via a \ref xml_use element. |
+ *
+ * For details on `<symbol>` sizing, viewport behavior, and coordinate system rules, see
+ * \subpage SymbolElementUsage.
  */
 
 /**

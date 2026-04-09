@@ -14,8 +14,15 @@ namespace donner::svg {
  * - DOM object: SVGRadialGradientElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#RadialGradients
  *
- * These elements are typically placed within a \ref xml_defs element, and then referenced by id
- * from a `fill` or `stroke` attribute.
+ * A `<radialGradient>` is a **paint server** that interpolates colors outward from a focal
+ * point to an outer circle, producing effects like spotlights, glows, and soft spherical
+ * shading. Like \ref xml_linearGradient, it does not draw anything itself; you declare it with
+ * an `id` (usually inside \ref xml_defs) and reference it from another shape's `fill` or
+ * `stroke` via `url(#id)`. Its child \ref xml_stop elements define the color ramp, and SVG
+ * smoothly interpolates between them based on each pixel's distance from the focal point to
+ * the outer circle.
+ *
+ * For a straight-line color ramp, use \ref xml_linearGradient instead.
  *
  * ```xml
  * <radialGradient id="MyGradient">
@@ -30,16 +37,62 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg width="300" height="300">
+ * <svg id="xml_radialGradient_basic" width="300" height="300">
  *   <defs>
- *     <radialGradient id="MyGradient">
+ *     <radialGradient id="xml_radialGradient_basic_grad">
  *       <stop offset="0%" stop-color="blue" />
  *       <stop offset="100%" stop-color="yellow" />
  *     </radialGradient>
  *   </defs>
- *   <rect fill="url(#MyGradient)" width="300" height="300" />
+ *   <rect fill="url(#xml_radialGradient_basic_grad)" width="300" height="300" />
  * </svg>
  * \endhtmlonly
+ *
+ * # Focal point (fx, fy, fr)
+ *
+ * By default a radial gradient is symmetric: the colors radiate from the center `(cx, cy)` out
+ * to the outer circle of radius `r`. Offsetting the focal point with `fx`/`fy` shifts the "inner
+ * circle" of the gradient, which is how you get a lens-like or spotlight effect — the 0% color
+ * appears at `(fx, fy)` instead of the geometric center, but the 100% color still lives on the
+ * outer circle at `(cx, cy)` with radius `r`. `fr` lets the inner circle have its own radius
+ * greater than 0, creating an annular (ring-shaped) gradient.
+ *
+ * \htmlonly
+ * <svg id="xml_radialGradient_focal" width="400" height="160" viewBox="0 0 400 160" style="background-color: white" font-family="sans-serif" font-size="11">
+ *   <defs>
+ *     <radialGradient id="xml_radialGradient_focal_centered" cx="50%" cy="50%" r="50%">
+ *       <stop offset="0%" stop-color="white" />
+ *       <stop offset="100%" stop-color="#1f5a8a" />
+ *     </radialGradient>
+ *     <radialGradient id="xml_radialGradient_focal_offset" cx="50%" cy="50%" r="50%" fx="30%" fy="30%">
+ *       <stop offset="0%" stop-color="white" />
+ *       <stop offset="100%" stop-color="#1f5a8a" />
+ *     </radialGradient>
+ *     <radialGradient id="xml_radialGradient_focal_ring" cx="50%" cy="50%" r="50%" fx="50%" fy="50%" fr="25%">
+ *       <stop offset="0%" stop-color="white" />
+ *       <stop offset="100%" stop-color="#1f5a8a" />
+ *     </radialGradient>
+ *   </defs>
+ *   <text x="70"  y="15" text-anchor="middle" font-weight="bold">default (centered)</text>
+ *   <circle cx="70"  cy="80" r="55" fill="url(#xml_radialGradient_focal_centered)" stroke="#555" />
+ *   <text x="70"  y="150" text-anchor="middle" font-family="monospace" font-size="10">fx=cx fy=cy fr=0</text>
+ *   <text x="200" y="15" text-anchor="middle" font-weight="bold">offset focal point</text>
+ *   <circle cx="200" cy="80" r="55" fill="url(#xml_radialGradient_focal_offset)" stroke="#555" />
+ *   <text x="200" y="150" text-anchor="middle" font-family="monospace" font-size="10">fx=30% fy=30%</text>
+ *   <text x="330" y="15" text-anchor="middle" font-weight="bold">annular (fr > 0)</text>
+ *   <circle cx="330" cy="80" r="55" fill="url(#xml_radialGradient_focal_ring)" stroke="#555" />
+ *   <text x="330" y="150" text-anchor="middle" font-family="monospace" font-size="10">fr=25%</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * # gradientUnits
+ *
+ * Like `<pattern>`, `gradientUnits` decides whether `cx`, `cy`, `r`, `fx`, `fy`, and `fr` are
+ * interpreted as **fractions of the filled shape's bounding box** (`objectBoundingBox`, the
+ * default) or **absolute user-space coordinates** (`userSpaceOnUse`). In the default mode a
+ * single gradient definition automatically adapts to any shape's size; in `userSpaceOnUse`
+ * mode the gradient's size and position are fixed in page coordinates regardless of which
+ * shape it fills.
  *
  * Valid child elements: \ref xml_stop
  *
@@ -52,7 +105,8 @@ namespace donner::svg {
  * | `r`       | `50%`   | Radius of the outer circle. |
  * | `fx`      | `cx`    | Focal point X coordinate. |
  * | `fy`      | `cy`    | Focal point Y coordinate. |
- * | `fr`      | `0`       | Focal point radius. | * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
+ * | `fr`      | `0`     | Focal point radius. |
+ * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
  * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
  * | `href`    | (none)  | A URL reference to a template gradient element, which is then used as a template for this gradient. Example: `<radialGradient id="MyGradient" href="#MyGradient2" />` |

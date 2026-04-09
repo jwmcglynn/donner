@@ -1,0 +1,19 @@
+/**
+@page elements_text Elements: Text
+
+\details Text elements render strings of glyphs using fonts loaded from `@font-face` rules.
+Donner supports per-character positioning, text-anchor, text-decoration, baseline control, and
+text layout along arbitrary paths via `<textPath>`. An optional HarfBuzz tier
+(`--config=text-full`) adds complex-script shaping.
+
+- SVG2 spec: https://www.w3.org/TR/SVG2/text.html
+
+The DOM base classes for text are
+\ref donner::svg::SVGTextContentElement "SVGTextContentElement" and
+\ref donner::svg::SVGTextPositioningElement "SVGTextPositioningElement".
+
+- \subpage xml_text (\ref donner::svg::SVGTextElement "SVGTextElement")
+- \subpage xml_tspan (\ref donner::svg::SVGTSpanElement "SVGTSpanElement")
+- \subpage xml_textPath (\ref donner::svg::SVGTextPathElement "SVGTextPathElement")
+
+*/

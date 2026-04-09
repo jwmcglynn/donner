@@ -1,0 +1,61 @@
+/**
+@page elements_filters Elements: Filters
+
+\details Filter effects apply graphical operations (blur, color transforms, lighting,
+displacement, compositing, etc.) to rendered content. A `<filter>` element defines a graph of
+filter primitives (`fe*`) that are applied in sequence to produce the final output.
+
+- SVG2 / Filter Effects spec: https://www.w3.org/TR/filter-effects-1/
+- Developer guide: \ref FilterEffectsGuide
+
+The filter container element:
+
+- \subpage xml_filter (\ref donner::svg::SVGFilterElement "SVGFilterElement")
+
+# Filter Primitives
+
+All 17 SVG filter primitives are supported. Primitives are composed into a graph via the
+`in`, `in2`, and `result` attributes defined on
+\ref donner::svg::SVGFilterPrimitiveStandardAttributes "SVGFilterPrimitiveStandardAttributes".
+
+## Blur, Shadow, and Geometry
+
+- \subpage xml_feGaussianBlur (\ref donner::svg::SVGFEGaussianBlurElement "SVGFEGaussianBlurElement")
+- \subpage xml_feDropShadow (\ref donner::svg::SVGFEDropShadowElement "SVGFEDropShadowElement")
+- \subpage xml_feOffset (\ref donner::svg::SVGFEOffsetElement "SVGFEOffsetElement")
+- \subpage xml_feMorphology (\ref donner::svg::SVGFEMorphologyElement "SVGFEMorphologyElement")
+- \subpage xml_feDisplacementMap (\ref donner::svg::SVGFEDisplacementMapElement "SVGFEDisplacementMapElement")
+- \subpage xml_feTile (\ref donner::svg::SVGFETileElement "SVGFETileElement")
+
+## Color and Component Transforms
+
+- \subpage xml_feColorMatrix (\ref donner::svg::SVGFEColorMatrixElement "SVGFEColorMatrixElement")
+- \subpage xml_feComponentTransfer (\ref donner::svg::SVGFEComponentTransferElement "SVGFEComponentTransferElement")
+  - \subpage xml_feFuncR (\ref donner::svg::SVGFEFuncRElement "SVGFEFuncRElement")
+  - \subpage xml_feFuncG (\ref donner::svg::SVGFEFuncGElement "SVGFEFuncGElement")
+  - \subpage xml_feFuncB (\ref donner::svg::SVGFEFuncBElement "SVGFEFuncBElement")
+  - \subpage xml_feFuncA (\ref donner::svg::SVGFEFuncAElement "SVGFEFuncAElement")
+
+## Compositing and Merging
+
+- \subpage xml_feBlend (\ref donner::svg::SVGFEBlendElement "SVGFEBlendElement")
+- \subpage xml_feComposite (\ref donner::svg::SVGFECompositeElement "SVGFECompositeElement")
+- \subpage xml_feMerge (\ref donner::svg::SVGFEMergeElement "SVGFEMergeElement")
+  - \subpage xml_feMergeNode (\ref donner::svg::SVGFEMergeNodeElement "SVGFEMergeNodeElement")
+
+## Sources: Flood, Image, Turbulence, Convolution
+
+- \subpage xml_feFlood (\ref donner::svg::SVGFEFloodElement "SVGFEFloodElement")
+- \subpage xml_feImage (\ref donner::svg::SVGFEImageElement "SVGFEImageElement")
+- \subpage xml_feTurbulence (\ref donner::svg::SVGFETurbulenceElement "SVGFETurbulenceElement")
+- \subpage xml_feConvolveMatrix (\ref donner::svg::SVGFEConvolveMatrixElement "SVGFEConvolveMatrixElement")
+
+## Lighting
+
+- \subpage xml_feDiffuseLighting (\ref donner::svg::SVGFEDiffuseLightingElement "SVGFEDiffuseLightingElement")
+- \subpage xml_feSpecularLighting (\ref donner::svg::SVGFESpecularLightingElement "SVGFESpecularLightingElement")
+- \subpage xml_feDistantLight (\ref donner::svg::SVGFEDistantLightElement "SVGFEDistantLightElement")
+- \subpage xml_fePointLight (\ref donner::svg::SVGFEPointLightElement "SVGFEPointLightElement")
+- \subpage xml_feSpotLight (\ref donner::svg::SVGFESpotLightElement "SVGFESpotLightElement")
+
+*/

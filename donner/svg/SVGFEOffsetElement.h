@@ -23,6 +23,29 @@ namespace donner::svg {
  *   <feOffset in="SourceGraphic" dx="10" dy="10" />
  * </filter>
  * ```
+ *
+ * \htmlonly
+ * <svg id="xml_feOffset_diagram" width="320" height="160" viewBox="0 0 320 160" style="background-color: white" font-family="sans-serif" font-size="12">
+ *   <defs>
+ *     <filter id="xml_feOffset_filter" x="-20%" y="-20%" width="160%" height="160%">
+ *       <feOffset in="SourceGraphic" dx="12" dy="8" />
+ *     </filter>
+ *   </defs>
+ *   <rect x="30" y="30" width="70" height="60" fill="#4a90e2" />
+ *   <text x="30" y="110" fill="black">Source</text>
+ *   <rect x="170" y="30" width="70" height="60" fill="#4a90e2" fill-opacity="0.25" stroke="#4a90e2" stroke-dasharray="3,2" />
+ *   <rect x="170" y="30" width="70" height="60" fill="#4a90e2" filter="url(#xml_feOffset_filter)" />
+ *   <text x="170" y="130" fill="black">dx=12 dy=8</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * | Attribute | Default | Description  |
+ * | --------: | :-----: | :----------- |
+ * | `dx`      | `0`     | Horizontal offset in user units. |
+ * | `dy`      | `0`     | Vertical offset in user units. |
+ *
+ * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
+ * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
  */
 
 /**

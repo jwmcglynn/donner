@@ -16,8 +16,15 @@ namespace donner::svg {
  * - DOM object: SVGLinearGradientElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#LinearGradients
  *
- * These elements are typically placed within a `<defs>` element, and then referenced by id from a
- * `fill` or `stroke` attribute.
+ * A `<linearGradient>` is a **paint server**: it does not draw anything on its own, but
+ * describes a color ramp that other shapes can use as their `fill` or `stroke`. The ramp
+ * interpolates smoothly between a list of \ref xml_stop child elements along a straight line
+ * from `(x1, y1)` to `(x2, y2)`. At render time, every pixel of the filled shape is colored
+ * by projecting it onto that line and looking up the interpolated stop color at that position.
+ *
+ * Gradients are almost always declared inside a \ref xml_defs block with an `id`, then
+ * referenced by that id from a paint attribute like `fill="url(#MyGradient)"`. For a radial
+ * (circular) color ramp instead of a linear one, use \ref xml_radialGradient.
  *
  * ```xml
  * <linearGradient id="MyGradient">

@@ -24,6 +24,30 @@ namespace donner::svg {
  *   <feDisplacementMap in="SourceGraphic" in2="noise" scale="20" />
  * </filter>
  * ```
+ *
+ * \htmlonly
+ * <svg id="xml_feDisplacementMap_diagram" width="320" height="160" viewBox="0 0 320 160" style="background-color: white" font-family="sans-serif" font-size="12">
+ *   <defs>
+ *     <filter id="xml_feDisplacementMap_filter" x="-10%" y="-10%" width="120%" height="120%">
+ *       <feTurbulence type="turbulence" baseFrequency="0.05" numOctaves="2" result="xml_feDisplacementMap_noise" />
+ *       <feDisplacementMap in="SourceGraphic" in2="xml_feDisplacementMap_noise" scale="20" />
+ *     </filter>
+ *   </defs>
+ *   <rect x="20" y="30" width="100" height="70" fill="#3498db" />
+ *   <text x="20" y="120" fill="black">Source</text>
+ *   <rect x="180" y="30" width="100" height="70" fill="#3498db" filter="url(#xml_feDisplacementMap_filter)" />
+ *   <text x="180" y="120" fill="black">scale="20"</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * | Attribute    | Default | Description  |
+ * | -----------: | :-----: | :----------- |
+ * | `scale`      | `0`     | Maximum displacement in user units. |
+ * | `xChannelSelector` | `A` | Channel (`R`, `G`, `B`, `A`) of `in2` used for x displacement. |
+ * | `yChannelSelector` | `A` | Channel (`R`, `G`, `B`, `A`) of `in2` used for y displacement. |
+ *
+ * Inherits standard filter primitive attributes (`in`, `in2`, `result`, `x`, `y`, `width`,
+ * `height`) from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
  */
 
 /**
