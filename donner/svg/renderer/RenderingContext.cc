@@ -7,10 +7,11 @@
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
-#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
@@ -18,8 +19,6 @@
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
-#include "donner/svg/components/filter/FilterComponent.h"
-#include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -573,8 +572,7 @@ public:
       // references an already-active mask element, applying this mask would create a cycle
       // one level deeper. Break the cycle now to match SVG spec behavior where all masks
       // in a mutual recursion cycle have their mask attributes treated as "none".
-      if (const auto* maskStyle =
-              resolvedRef->handle.try_get<ComputedStyleComponent>()) {
+      if (const auto* maskStyle = resolvedRef->handle.try_get<ComputedStyleComponent>()) {
         if (maskStyle->properties.has_value()) {
           if (auto nestedMask = maskStyle->properties->mask.get()) {
             if (auto nestedRef = nestedMask->resolve(*styleHandle.registry());
@@ -598,8 +596,7 @@ public:
           computedShadow &&
           computedShadow->findOffscreenShadow(ShadowBranchType::OffscreenMask).has_value()) {
         activeMaskElements_.insert(maskElement);
-        auto subtree =
-            instantiateOffscreenSubtree(shadowTreeHost, ShadowBranchType::OffscreenMask);
+        auto subtree = instantiateOffscreenSubtree(shadowTreeHost, ShadowBranchType::OffscreenMask);
         activeMaskElements_.erase(maskElement);
 
         return ResolvedMask{resolvedRef.value(), std::move(subtree),
@@ -614,10 +611,19 @@ public:
                                ShadowBranchType branchType) {
     if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMarker(resolvedRef->handle)) {
+      const Entity markerElement = resolvedRef->handle.entity();
+      if (activeMarkerElements_.count(markerElement)) {
+        return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt,
+                              MarkerUnits::Default};
+      }
+
       if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
           computedShadow && computedShadow->findOffscreenShadow(branchType).has_value()) {
-        return ResolvedMarker{resolvedRef.value(),
-                              instantiateOffscreenSubtree(styleHandle, branchType),
+        activeMarkerElements_.insert(markerElement);
+        auto subtree = instantiateOffscreenSubtree(styleHandle, branchType);
+        activeMarkerElements_.erase(markerElement);
+
+        return ResolvedMarker{resolvedRef.value(), std::move(subtree),
                               resolvedRef->handle.get<MarkerComponent>().markerUnits};
       }
     }
@@ -664,6 +670,10 @@ private:
   /// (e.g., mask1→mask2→mask1). When a mask reference resolves to an element already in this
   /// set, the cycle is broken by treating the mask attribute as "none".
   std::set<Entity> activeMaskElements_;
+
+  /// Tracks marker elements currently being instantiated so recursive marker references stop
+  /// after the first level instead of repeatedly expanding the same cycle.
+  std::set<Entity> activeMarkerElements_;
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,
