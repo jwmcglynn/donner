@@ -83,10 +83,13 @@ single_version_override(
     patch_strip = 1,
 )
 
-git_repository(
+# entt is vendored as a git subtree under third_party/entt (pinned at upstream
+# tag v3.16.0). Using local_repository keeps entt's own BUILD.bazel, which
+# already exposes an `//:entt` alias to `//src:entt`. When we need to bump
+# entt, use `git subtree pull --prefix=third_party/entt https://github.com/skypjack/entt <tag> --squash`.
+local_repository(
     name = "entt",
-    remote = "https://github.com/skypjack/entt",
-    tag = "v3.16.0",
+    path = "third_party/entt",
 )
 
 local_repository(

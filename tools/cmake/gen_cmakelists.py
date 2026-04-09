@@ -323,7 +323,6 @@ def extract_versions_from_module_bazel() -> Dict[str, str]:
 # use_v_prefix: True for repos whose git tags have a 'v' prefix (e.g., v1.17.0),
 #               False for repos that use bare versions (e.g., 0.2.17).
 _MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, bool]] = {
-    "entt": ("entt", "https://github.com/skypjack/entt.git", True),
     "googletest": ("googletest", "https://github.com/google/googletest.git", True),
     "nlohmann_json": ("nlohmann_json", "https://github.com/nlohmann/json.git", True),
     "zlib": ("zlib", "https://github.com/madler/zlib.git", True),
@@ -335,9 +334,16 @@ _MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, bool]] = {
     ),
 }
 
-# These don't map cleanly from MODULE.bazel and keep their hardcoded values
+# These don't map cleanly from MODULE.bazel and keep their hardcoded values.
+# - absl: not a direct bazel_dep (pulled in transitively) so no version in MODULE.bazel
+# - entt: vendored as a git subtree under third_party/entt, so there's no
+#   bazel_dep/git_repository block for gen_cmakelists.py to read the version
+#   from. Keep this tag in sync with the `git subtree add/pull` command when
+#   bumping entt. CMake users still FetchContent entt as before; only Bazel
+#   uses the vendored tree.
 _HARDCODED_FETCHCONTENT = {
     "absl": ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
+    "entt": ("entt", "https://github.com/skypjack/entt.git", "v3.16.0"),
 }
 
 

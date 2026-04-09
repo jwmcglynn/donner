@@ -40,16 +40,24 @@ class NormalizeVersionTest(unittest.TestCase):
 class ModuleBazelExtractionTest(unittest.TestCase):
     def test_extracts_known_deps(self):
         versions = g.extract_versions_from_module_bazel()
-        # These dependencies must exist in MODULE.bazel with a version
-        required = ["entt", "googletest", "nlohmann_json", "zlib",
+        # These dependencies must exist in MODULE.bazel with a version.
+        # entt is intentionally absent: it is vendored as a git subtree under
+        # third_party/entt, so there's no bazel_dep/git_repository block to
+        # read. The CMake FetchContent entry comes from _HARDCODED_FETCHCONTENT.
+        required = ["googletest", "nlohmann_json", "zlib",
                     "rules_cc", "pixelmatch-cpp17", "woff2", "skia"]
         for dep in required:
             self.assertIn(dep, versions, f"Missing dep: {dep}")
 
-    def test_entt_is_tag(self):
+    def test_entt_is_hardcoded(self):
+        # entt is vendored as a git subtree, so it's not in MODULE.bazel.
+        # CMake users get it via _HARDCODED_FETCHCONTENT; Bazel users get the
+        # vendored tree via local_repository(path = "third_party/entt").
         versions = g.extract_versions_from_module_bazel()
-        # entt uses tag = "v3.16.0" (git_repository)
-        self.assertTrue(versions["entt"].startswith("v"), f"Got: {versions['entt']}")
+        self.assertNotIn("entt", versions,
+                         "entt should be vendored, not declared as a bazel_dep/git_repository")
+        self.assertIn("entt", g._HARDCODED_FETCHCONTENT,
+                      "entt must have a hardcoded FetchContent entry")
 
     def test_woff2_is_commit(self):
         versions = g.extract_versions_from_module_bazel()
