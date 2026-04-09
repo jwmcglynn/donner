@@ -11,7 +11,10 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/Specificity.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -141,10 +144,9 @@ TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
   snapshot.rowBytes = snapshot.dimensions.x * 4;
   snapshot.pixels.resize(snapshot.rowBytes * snapshot.dimensions.y, 255);
 
-  const std::array<Path::Verb, 5> rectCommands = {
-      Path::Verb::MoveTo, Path::Verb::LineTo,
-      Path::Verb::LineTo, Path::Verb::LineTo,
-      Path::Verb::ClosePath};
+  const std::array<Path::Verb, 5> rectCommands = {Path::Verb::MoveTo, Path::Verb::LineTo,
+                                                  Path::Verb::LineTo, Path::Verb::LineTo,
+                                                  Path::Verb::ClosePath};
 
   const auto viewportSizeMatcher = Field(&RenderViewport::size, Vector2dEq(Vector2d(16, 16)));
 
@@ -216,9 +218,8 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
 
     const Vector2i canvasSize = document.canvasSize();
     document.registry().emplace<components::ComputedViewBoxComponent>(
-        textEntity,
-        Box2d(Vector2d(),
-             Vector2d(static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y))));
+        textEntity, Box2d(Vector2d(), Vector2d(static_cast<double>(canvasSize.x),
+                                               static_cast<double>(canvasSize.y))));
 
     components::ComputedStyleComponent style;
     PropertyRegistry properties;
@@ -428,7 +429,8 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
     loaded.image->data = std::vector<uint8_t>(
         static_cast<size_t>(loaded.image->width * loaded.image->height * 4), 255);
 
-    const Box2d intrinsicSize = Box2d::WithSize(Vector2d(loaded.image->width, loaded.image->height));
+    const Box2d intrinsicSize =
+        Box2d::WithSize(Vector2d(loaded.image->width, loaded.image->height));
     const Transform2d expectedTransform =
         PreserveAspectRatio::Default().elementContentFromViewBoxTransform(bounds, intrinsicSize);
     EXPECT_THAT(transforms,
@@ -527,8 +529,7 @@ TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacity) {
       .WillRepeatedly([&](double opacity, MixBlendMode blendMode) {
         ++pushLayerCount;
         capturedOpacity = opacity;
-        EXPECT_EQ(blendMode, MixBlendMode::Normal)
-            << "Default blend mode should be Normal";
+        EXPECT_EQ(blendMode, MixBlendMode::Normal) << "Default blend mode should be Normal";
       });
   EXPECT_CALL(renderer, popIsolatedLayer()).WillRepeatedly([&]() { ++popLayerCount; });
 
@@ -562,8 +563,7 @@ TEST_F(RendererDriverTest, EmitsIsolatedLayerForMixBlendMode) {
         ++pushLayerCount;
         if (blendMode == MixBlendMode::Multiply) {
           foundMultiplyBlend = true;
-          EXPECT_NEAR(opacity, 1.0, 1e-9)
-              << "Opacity should be 1.0 when only blend mode is set";
+          EXPECT_NEAR(opacity, 1.0, 1e-9) << "Opacity should be 1.0 when only blend mode is set";
         }
       });
   EXPECT_CALL(renderer, popIsolatedLayer()).WillRepeatedly([&]() { ++popLayerCount; });
@@ -615,10 +615,8 @@ TEST_F(RendererDriverTest, EmitsPatternTileForPatternFill) {
   driver.draw(document);
 
   EXPECT_GE(beginPatternCount, 1) << "beginPatternTile should be called for pattern fill";
-  EXPECT_EQ(beginPatternCount, endPatternCount)
-      << "begin/end pattern tile should be paired";
-  EXPECT_GE(drawPathInPattern, 1)
-      << "Pattern content should be drawn between begin and end";
+  EXPECT_EQ(beginPatternCount, endPatternCount) << "begin/end pattern tile should be paired";
+  EXPECT_GE(drawPathInPattern, 1) << "Pattern content should be drawn between begin and end";
 }
 
 TEST_F(RendererDriverTest, DrawsEllipseAndRectAsPath) {
@@ -637,8 +635,9 @@ TEST_F(RendererDriverTest, DrawsEllipseAndRectAsPath) {
 
   // The RendererDriver converts all shapes (ellipse, rect, etc.) to paths via
   // ComputedPathComponent, so drawPath should be called for each visible shape element.
-  EXPECT_CALL(renderer, drawPath(_, _))
-      .WillRepeatedly([&](const PathShape&, const StrokeParams&) { ++drawPathCount; });
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
 
   // drawRect and drawEllipse are backend-level optimizations, not used by RendererDriver.
   EXPECT_CALL(renderer, drawRect(_, _)).Times(0);
@@ -646,8 +645,7 @@ TEST_F(RendererDriverTest, DrawsEllipseAndRectAsPath) {
 
   driver.draw(document);
 
-  EXPECT_GE(drawPathCount, 2)
-      << "Both the ellipse and the rect should be drawn via drawPath";
+  EXPECT_GE(drawPathCount, 2) << "Both the ellipse and the rect should be drawn via drawPath";
 }
 
 TEST_F(RendererDriverTest, AccumulatesTransformsForNestedGroups) {
@@ -677,14 +675,12 @@ TEST_F(RendererDriverTest, AccumulatesTransformsForNestedGroups) {
   // The inner rect should receive a combined translate(10, 20) transform.
   // The driver computes absolute transforms during preparation and sets them via setTransform.
   const Transform2d expectedCombined = Transform2d::Translate(Vector2d(10, 20));
-  EXPECT_THAT(setTransformCalls,
-              testing::Contains(TransformNear(expectedCombined, 1e-6)))
+  EXPECT_THAT(setTransformCalls, testing::Contains(TransformNear(expectedCombined, 1e-6)))
       << "setTransform should be called with the combined translate(10, 20) transform";
 
   // Also verify that the outer group's translate(10, 0) transform appears separately.
   const Transform2d outerTransform = Transform2d::Translate(Vector2d(10, 0));
-  EXPECT_THAT(setTransformCalls,
-              testing::Contains(TransformNear(outerTransform, 1e-6)))
+  EXPECT_THAT(setTransformCalls, testing::Contains(TransformNear(outerTransform, 1e-6)))
       << "setTransform should be called with translate(10, 0) for the outer group";
 }
 
@@ -721,6 +717,412 @@ TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacityWithBlendMode) {
   EXPECT_TRUE(foundScreenWithOpacity)
       << "pushIsolatedLayer should be called with Screen blend mode and opacity 0.7";
   EXPECT_EQ(pushLayerCount, popLayerCount) << "push/pop should be paired";
+}
+
+TEST_F(RendererDriverTest, DrawEntityRangeDefersSubtreeCleanupAndAppliesBaseTransform) {
+  SVGDocument document = makeDocument(R"svg(
+    <g opacity="0.5">
+      <rect x="1" y="2" width="6" height="4" fill="red" />
+    </g>
+  )svg",
+                                      Vector2i(20, 20));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  Entity subtreeRoot = entt::null;
+  Entity subtreeLast = entt::null;
+  for (auto view = document.registry().view<components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    if (instance.subtreeInfo.has_value()) {
+      subtreeRoot = entity;
+      subtreeLast = instance.subtreeInfo->lastRenderedEntity;
+      break;
+    }
+  }
+
+  ASSERT_TRUE(subtreeRoot != entt::null);
+  ASSERT_TRUE(subtreeLast != entt::null);
+
+  std::vector<Transform2d> transforms;
+  int pushLayerCount = 0;
+  int popLayerCount = 0;
+  const Transform2d baseTransform = Transform2d::Translate(Vector2d(5, 7));
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_))
+      .Times(AtLeast(1))
+      .WillRepeatedly([&](const Transform2d& transform) { transforms.push_back(transform); });
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, pushIsolatedLayer(0.5, MixBlendMode::Normal))
+      .WillOnce([&](double, MixBlendMode) { ++pushLayerCount; });
+  EXPECT_CALL(renderer, popIsolatedLayer()).WillOnce([&]() { ++popLayerCount; });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(20, 20);
+  viewport.devicePixelRatio = 1.0;
+
+  driver.drawEntityRange(document.registry(), subtreeRoot, subtreeLast, viewport, baseTransform);
+
+  EXPECT_EQ(pushLayerCount, 1);
+  EXPECT_EQ(popLayerCount, 1);
+  EXPECT_THAT(transforms, testing::Contains(TransformNear(baseTransform, 1e-6)));
+}
+
+TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGraph) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect x="10" y="20" width="40" height="10" fill="red" />
+  )svg",
+                                      Vector2i(200, 100));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  Entity rectEntity = entt::null;
+  for (auto view = document.registry().view<components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    if (instance.dataHandle(document.registry()).all_of<components::ComputedPathComponent>()) {
+      rectEntity = entity;
+      break;
+    }
+  }
+
+  ASSERT_TRUE(rectEntity != entt::null);
+
+  auto& instance = document.registry().get<components::RenderingInstanceComponent>(rectEntity);
+  auto& style = document.registry().get<components::ComputedStyleComponent>(rectEntity);
+  ASSERT_TRUE(style.properties.has_value());
+
+  const css::Specificity inlineSpecificity = css::Specificity::FromABC(1, 0, 0);
+  style.properties->color.set(css::Color(css::RGBA(12, 34, 56, 255)), inlineSpecificity);
+
+  FilterEffect::DropShadow shadow;
+  shadow.offsetX = Lengthd(3.0, Lengthd::Unit::Px);
+  shadow.offsetY = Lengthd(4.0, Lengthd::Unit::Px);
+  shadow.stdDeviation = Lengthd(5.0, Lengthd::Unit::Px);
+  shadow.color = css::Color(css::Color::CurrentColor{});
+
+  instance.resolvedFilter = std::vector<FilterEffect>{
+      FilterEffect(
+          FilterEffect::Blur{Lengthd(2.0, Lengthd::Unit::Px), Lengthd(3.0, Lengthd::Unit::Px)}),
+      FilterEffect(FilterEffect::HueRotate{90.0}),
+      FilterEffect(FilterEffect::Brightness{1.25}),
+      FilterEffect(FilterEffect::Contrast{0.5}),
+      FilterEffect(FilterEffect::Grayscale{0.25}),
+      FilterEffect(FilterEffect::Invert{0.2}),
+      FilterEffect(FilterEffect::FilterOpacity{0.4}),
+      FilterEffect(FilterEffect::Saturate{0.3}),
+      FilterEffect(FilterEffect::Sepia{0.6}),
+      FilterEffect(shadow),
+  };
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .WillOnce([&](const components::FilterGraph& filterGraph,
+                    const std::optional<Box2d>& filterRegion) {
+        EXPECT_FALSE(filterRegion.has_value());
+        EXPECT_EQ(filterGraph.colorInterpolationFilters, ColorInterpolationFilters::SRGB);
+        ASSERT_EQ(filterGraph.nodes.size(), 10u);
+
+        const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
+            &filterGraph.nodes[0].primitive);
+        ASSERT_NE(blur, nullptr);
+        EXPECT_DOUBLE_EQ(blur->stdDeviationX, 2.0);
+        EXPECT_DOUBLE_EQ(blur->stdDeviationY, 3.0);
+
+        const auto* hue =
+            std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[1].primitive);
+        ASSERT_NE(hue, nullptr);
+        EXPECT_EQ(hue->type, components::filter_primitive::ColorMatrix::Type::HueRotate);
+        EXPECT_THAT(hue->values, testing::ElementsAre(90.0));
+
+        const auto* brightness = std::get_if<components::filter_primitive::ComponentTransfer>(
+            &filterGraph.nodes[2].primitive);
+        ASSERT_NE(brightness, nullptr);
+        EXPECT_EQ(brightness->funcR.type,
+                  components::filter_primitive::ComponentTransfer::FuncType::Linear);
+        EXPECT_DOUBLE_EQ(brightness->funcR.slope, 1.25);
+        EXPECT_DOUBLE_EQ(brightness->funcR.intercept, 0.0);
+
+        const auto* contrast = std::get_if<components::filter_primitive::ComponentTransfer>(
+            &filterGraph.nodes[3].primitive);
+        ASSERT_NE(contrast, nullptr);
+        EXPECT_DOUBLE_EQ(contrast->funcR.slope, 0.5);
+        EXPECT_DOUBLE_EQ(contrast->funcR.intercept, 0.25);
+
+        const auto* grayscale =
+            std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[4].primitive);
+        ASSERT_NE(grayscale, nullptr);
+        EXPECT_EQ(grayscale->type, components::filter_primitive::ColorMatrix::Type::Saturate);
+        EXPECT_THAT(grayscale->values, testing::ElementsAre(0.75));
+
+        const auto* invert = std::get_if<components::filter_primitive::ComponentTransfer>(
+            &filterGraph.nodes[5].primitive);
+        ASSERT_NE(invert, nullptr);
+        EXPECT_EQ(invert->funcR.type,
+                  components::filter_primitive::ComponentTransfer::FuncType::Table);
+        EXPECT_THAT(invert->funcR.tableValues, testing::ElementsAre(0.2, 0.8));
+
+        const auto* filterOpacity = std::get_if<components::filter_primitive::ComponentTransfer>(
+            &filterGraph.nodes[6].primitive);
+        ASSERT_NE(filterOpacity, nullptr);
+        EXPECT_DOUBLE_EQ(filterOpacity->funcA.slope, 0.4);
+        EXPECT_DOUBLE_EQ(filterOpacity->funcA.intercept, 0.0);
+
+        const auto* saturate =
+            std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[7].primitive);
+        ASSERT_NE(saturate, nullptr);
+        EXPECT_EQ(saturate->type, components::filter_primitive::ColorMatrix::Type::Saturate);
+        EXPECT_THAT(saturate->values, testing::ElementsAre(0.3));
+
+        const auto* sepia =
+            std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[8].primitive);
+        ASSERT_NE(sepia, nullptr);
+        EXPECT_EQ(sepia->type, components::filter_primitive::ColorMatrix::Type::Matrix);
+        ASSERT_EQ(sepia->values.size(), 20u);
+
+        const auto* dropShadow =
+            std::get_if<components::filter_primitive::DropShadow>(&filterGraph.nodes[9].primitive);
+        ASSERT_NE(dropShadow, nullptr);
+        EXPECT_DOUBLE_EQ(dropShadow->dx, 3.0);
+        EXPECT_DOUBLE_EQ(dropShadow->dy, 4.0);
+        EXPECT_DOUBLE_EQ(dropShadow->stdDeviationX, 5.0);
+        EXPECT_DOUBLE_EQ(dropShadow->stdDeviationY, 5.0);
+        EXPECT_EQ(dropShadow->floodColor, css::Color(css::RGBA(12, 34, 56, 255)));
+        EXPECT_DOUBLE_EQ(dropShadow->floodOpacity, 1.0);
+      });
+  EXPECT_CALL(renderer, popFilterLayer()).Times(1);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 100);
+  viewport.devicePixelRatio = 1.0;
+
+  driver.drawEntityRange(document.registry(), rectEntity, rectEntity, viewport, Transform2d());
+}
+
+TEST_F(RendererDriverTest, DrawEntityRangeUsesResolvedFilterReferenceObjectBoundingBoxRegion) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect x="10" y="20" width="40" height="10" fill="red" />
+  )svg",
+                                      Vector2i(200, 100));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  Entity rectEntity = entt::null;
+  for (auto view = document.registry().view<components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    if (instance.dataHandle(document.registry()).all_of<components::ComputedPathComponent>()) {
+      rectEntity = entity;
+      break;
+    }
+  }
+  ASSERT_TRUE(rectEntity != entt::null);
+
+  Entity filterEntity = document.registry().create();
+  components::ComputedFilterComponent computedFilter;
+  computedFilter.x = Lengthd(-0.25, Lengthd::Unit::None);
+  computedFilter.y = Lengthd(-0.5, Lengthd::Unit::None);
+  computedFilter.width = Lengthd(1.5, Lengthd::Unit::None);
+  computedFilter.height = Lengthd(2.0, Lengthd::Unit::None);
+  computedFilter.filterUnits = FilterUnits::ObjectBoundingBox;
+  computedFilter.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+  computedFilter.filterGraph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
+  components::FilterNode blurNode;
+  blurNode.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 1.0,
+      .stdDeviationY = 2.0,
+  };
+  blurNode.inputs.push_back(components::FilterInput{});
+  computedFilter.filterGraph.nodes.push_back(std::move(blurNode));
+  document.registry().emplace<components::ComputedFilterComponent>(filterEntity,
+                                                                   std::move(computedFilter));
+
+  auto& instance = document.registry().get<components::RenderingInstanceComponent>(rectEntity);
+  instance.resolvedFilter = ResolvedReference{EntityHandle(document.registry(), filterEntity)};
+
+  std::vector<Transform2d> transforms;
+  const Transform2d baseTransform = Transform2d::Translate(Vector2d(3, 4));
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_))
+      .Times(AtLeast(1))
+      .WillRepeatedly([&](const Transform2d& transform) { transforms.push_back(transform); });
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .WillOnce([&](const components::FilterGraph& filterGraph,
+                    const std::optional<Box2d>& filterRegion) {
+        ASSERT_TRUE(filterRegion.has_value());
+        EXPECT_NEAR(filterRegion->topLeft.x, 0.0, 1e-6);
+        EXPECT_NEAR(filterRegion->topLeft.y, 15.0, 1e-6);
+        EXPECT_NEAR(filterRegion->width(), 60.0, 1e-6);
+        EXPECT_NEAR(filterRegion->height(), 20.0, 1e-6);
+
+        ASSERT_TRUE(filterGraph.elementBoundingBox.has_value());
+        EXPECT_NEAR(filterGraph.elementBoundingBox->topLeft.x, 10.0, 1e-6);
+        EXPECT_NEAR(filterGraph.elementBoundingBox->topLeft.y, 20.0, 1e-6);
+        EXPECT_NEAR(filterGraph.elementBoundingBox->width(), 40.0, 1e-6);
+        EXPECT_NEAR(filterGraph.elementBoundingBox->height(), 10.0, 1e-6);
+        EXPECT_NEAR(filterGraph.userToPixelScale.x, 1.0, 1e-6);
+        EXPECT_NEAR(filterGraph.userToPixelScale.y, 1.0, 1e-6);
+      });
+  EXPECT_CALL(renderer, popFilterLayer()).Times(1);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 100);
+  viewport.devicePixelRatio = 1.0;
+
+  driver.drawEntityRange(document.registry(), rectEntity, rectEntity, viewport, baseTransform);
+
+  EXPECT_THAT(transforms, testing::Contains(TransformNear(baseTransform, 1e-6)));
+}
+
+TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect x="10" y="20" width="40" height="10" fill="red" />
+  )svg",
+                                      Vector2i(200, 100));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  Entity rectEntity = entt::null;
+  for (auto view = document.registry().view<components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    if (instance.dataHandle(document.registry()).all_of<components::ComputedPathComponent>()) {
+      rectEntity = entity;
+      break;
+    }
+  }
+  ASSERT_TRUE(rectEntity != entt::null);
+
+  Entity filterEntity = document.registry().create();
+  document.registry().emplace<components::IdComponent>(filterEntity, RcString("refFilter"));
+  components::ComputedFilterComponent computedFilter;
+  computedFilter.filterGraph.colorInterpolationFilters = ColorInterpolationFilters::LinearRGB;
+  components::FilterNode referencedNode;
+  referencedNode.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 6.0,
+      .stdDeviationY = 7.0,
+  };
+  referencedNode.inputs.push_back(components::FilterInput{});
+  computedFilter.filterGraph.nodes.push_back(std::move(referencedNode));
+  document.registry().emplace<components::ComputedFilterComponent>(filterEntity,
+                                                                   std::move(computedFilter));
+
+  auto& instance = document.registry().get<components::RenderingInstanceComponent>(rectEntity);
+  instance.resolvedFilter = std::vector<FilterEffect>{
+      FilterEffect(FilterEffect::ElementReference(Reference("#refFilter"))),
+      FilterEffect(FilterEffect::HueRotate{45.0}),
+  };
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .WillOnce([&](const components::FilterGraph& filterGraph,
+                    const std::optional<Box2d>& filterRegion) {
+        ASSERT_TRUE(filterRegion.has_value());
+        EXPECT_NEAR(filterRegion->topLeft.x, 6.0, 1e-6);
+        EXPECT_NEAR(filterRegion->topLeft.y, 19.0, 1e-6);
+        EXPECT_NEAR(filterRegion->width(), 48.0, 1e-6);
+        EXPECT_NEAR(filterRegion->height(), 12.0, 1e-6);
+
+        ASSERT_EQ(filterGraph.nodes.size(), 2u);
+        const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
+            &filterGraph.nodes[0].primitive);
+        ASSERT_NE(blur, nullptr);
+        EXPECT_DOUBLE_EQ(blur->stdDeviationX, 6.0);
+        EXPECT_DOUBLE_EQ(blur->stdDeviationY, 7.0);
+        ASSERT_TRUE(filterGraph.nodes[0].colorInterpolationFilters.has_value());
+        EXPECT_EQ(filterGraph.nodes[0].colorInterpolationFilters.value(),
+                  ColorInterpolationFilters::LinearRGB);
+
+        const auto* hue =
+            std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[1].primitive);
+        ASSERT_NE(hue, nullptr);
+        EXPECT_THAT(hue->values, testing::ElementsAre(45.0));
+      });
+  EXPECT_CALL(renderer, popFilterLayer()).Times(1);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 100);
+  viewport.devicePixelRatio = 1.0;
+
+  driver.drawEntityRange(document.registry(), rectEntity, rectEntity, viewport, Transform2d());
+}
+
+TEST_F(RendererDriverTest, ResolvesSpanFallbackPaintFromAncestorStyle) {
+  SVGDocument document = makeDocument(R"svg(
+    <text x="10" y="20">
+      <tspan>Text</tspan>
+    </text>
+  )svg",
+                                      Vector2i(120, 40));
+
+  const css::RGBA fallbackFill(200, 10, 20, 255);
+  const css::RGBA fallbackStroke(10, 120, 30, 255);
+
+  EXPECT_CALL(renderer, beginFrame(_)).WillOnce([&](const RenderViewport&) {
+    auto maybeText = document.querySelector("text");
+    auto maybeTspan = document.querySelector("tspan");
+    ASSERT_TRUE(maybeText.has_value());
+    ASSERT_TRUE(maybeTspan.has_value());
+
+    const Entity textEntity = maybeText->entityHandle().entity();
+    const Entity tspanEntity = maybeTspan->entityHandle().entity();
+    document.registry().remove<components::ComputedStyleComponent>(tspanEntity);
+
+    auto& textStyle = document.registry().get<components::ComputedStyleComponent>(textEntity);
+    ASSERT_TRUE(textStyle.properties.has_value());
+
+    const css::Specificity inlineSpecificity = css::Specificity::FromABC(1, 0, 0);
+    textStyle.properties->fill.set(
+        PaintServer(PaintServer::ElementReference(Reference("#missing"), css::Color(fallbackFill))),
+        inlineSpecificity);
+    textStyle.properties->stroke.set(PaintServer(PaintServer::ElementReference(
+                                         Reference("#missing"), css::Color(fallbackStroke))),
+                                     inlineSpecificity);
+  });
+
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillOnce([&](Registry&, const components::ComputedTextComponent& text, const TextParams&) {
+        const auto spanIt =
+            std::find_if(text.spans.begin(), text.spans.end(), [](const auto& span) {
+              return std::string_view(span.text).substr(span.start, span.end - span.start) ==
+                     "Text";
+            });
+        ASSERT_NE(spanIt, text.spans.end());
+        const auto* fill = std::get_if<PaintServer::Solid>(&spanIt->resolvedFill);
+        const auto* stroke = std::get_if<PaintServer::Solid>(&spanIt->resolvedStroke);
+        ASSERT_NE(fill, nullptr);
+        ASSERT_NE(stroke, nullptr);
+        EXPECT_EQ(fill->color.resolve(css::RGBA(0, 0, 0, 255), 1.0f), fallbackFill);
+        EXPECT_EQ(stroke->color.resolve(css::RGBA(0, 0, 0, 255), 1.0f), fallbackStroke);
+      });
+
+  driver.draw(document);
 }
 
 }  // namespace

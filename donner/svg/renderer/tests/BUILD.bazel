@@ -124,15 +124,15 @@ donner_cc_test(
 
 donner_transitioned_cc_test(
     name = "renderer_public_api_tests_skia",
+    testonly = 1,
     dep = ":renderer_public_api_tests_impl",
     renderer_backend = "skia",
-    testonly = 1,
 )
 
 alias(
     name = "renderer_public_api_tests",
-    actual = ":renderer_public_api_tests_impl",
     testonly = 1,
+    actual = ":renderer_public_api_tests_impl",
 )
 
 donner_cc_test(
@@ -225,8 +225,10 @@ donner_cc_test(
     name = "renderer_driver_tests",
     srcs = [
         "RendererDriver_tests.cc",
+        "RenderingContext_tests.cc",
     ],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:rendering_context",
@@ -264,8 +266,14 @@ donner_variant_cc_test(
     name = "resvg_test_suite",
     dep = ":resvg_test_suite_impl",
     variants = [
-        ["tiny_skia", "skia"],
-        ["text", "text_full"],
+        [
+            "tiny_skia",
+            "skia",
+        ],
+        [
+            "text",
+            "text_full",
+        ],
     ],
 )
 
