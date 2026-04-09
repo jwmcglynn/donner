@@ -8,3 +8,7 @@ third_party/tiny-skia-cpp
 # Ignore CMake-generated files
 build
 CMakeFiles
+
+# Ignore Claude Code harness worktrees — their BUILD files are stale copies
+# and break wildcard bazel queries like //...
+.claude

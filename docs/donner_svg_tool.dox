@@ -5,12 +5,12 @@
  * @section DonnerSvgToolOverview Overview
  *
  * `donner-svg` is a command line utility for rendering SVG files to PNG and previewing output in
- * terminal environments.
+ * terminal environments. A convenience wrapper is checked in at `tools/donner-svg`, which is the
+ * recommended way to invoke it from inside the repository.
  *
  * Build and run:
  * ```sh
- * bazel build //donner/svg/tool:donner-svg
- * bazel run //donner/svg/tool -- input.svg
+ * tools/donner-svg input.svg
  * ```
  *
  * @section DonnerSvgToolFlags Common flags
@@ -28,12 +28,30 @@
  *
  * ```sh
  * # Render to PNG
- * bazel run //donner/svg/tool -- input.svg --output output.png
+ * tools/donner-svg input.svg --output output.png
  *
  * # Terminal preview mode
- * bazel run //donner/svg/tool -- input.svg --preview
+ * tools/donner-svg input.svg --preview
  *
  * # Interactive mode
- * bazel run //donner/svg/tool -- input.svg --interactive
+ * tools/donner-svg input.svg --interactive
  * ```
+ *
+ * @note `tools/donner-svg` is a thin shell wrapper that invokes
+ *       `bazel run //donner/svg/tool:donner-svg -- <args>` with Bazel's progress/info output
+ *       suppressed so the tool behaves like a normal CLI. You can invoke the underlying Bazel
+ *       target directly if you prefer.
+ *
+ * @section DonnerSvgToolPreview Terminal preview
+ *
+ * `--preview` renders the SVG directly in your terminal using Unicode quadrant block characters
+ * with 24-bit truecolor foreground/background, giving 2×2 sub-pixels per character cell.
+ *
+ * @image html donner_svg_preview_icon.svg width=640
+ *
+ * @section DonnerSvgToolInteractive Interactive mode
+ *
+ * `--interactive` implies `--preview` and additionally enables mouse-driven selection: hover
+ * over the terminal image to see the element under the cursor, and click to lock the selection.
+ * The right-hand pane shows the DOM path and computed style of the selected element.
  */
