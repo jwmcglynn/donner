@@ -16,6 +16,7 @@ namespace donner::svg {
 enum class RendererBackend {
   Skia,
   TinySkia,
+  Geode,
 };
 
 /**
@@ -49,6 +50,7 @@ inline std::string_view RendererBackendName(RendererBackend backend) {
   switch (backend) {
     case RendererBackend::Skia: return "Skia";
     case RendererBackend::TinySkia: return "TinySkia";
+    case RendererBackend::Geode: return "Geode";
   }
 
   return "Unknown";

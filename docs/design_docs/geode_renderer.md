@@ -25,8 +25,16 @@
   - ✅ `--config=geode` backend selection — sets both
     `renderer_backend=geode` and `enable_dawn=true`. Default builds are
     unaffected (Dawn still gated off).
-  - ⏳ Golden image tests for solid-fill SVGs — infrastructure wired up
-    next.
+  - ✅ Golden image tests for solid-fill SVGs — 5/5 green.
+    `renderer_geode_golden_tests` uses per-backend goldens under
+    `testdata/golden/geode/` (the Skia/tiny-skia goldens in `golden/`
+    don't match Slug's winding-number AA at edge pixels, so Geode has
+    its own). Curated suite: `MinimalClosedCubic2x2`,
+    `MinimalClosedCubic5x3`, `BigLightningGlowNoFilterCrop`, `Lion`,
+    `Edzample`. Strict identity check (`threshold=0`, `max=0`,
+    `includeAntiAliasingDifferences`) catches any Geode-side regressions.
+    Regenerate with `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace)
+    bazel run --config=geode //donner/svg/renderer/tests:renderer_geode_golden_tests`.
   - 🚧 Linux CI via Mesa `llvmpipe` — switched from SwiftShader plan.
     Ubuntu's `mesa-vulkan-drivers` package provides `llvmpipe`, a
     maintained software Vulkan ICD that's apt-installable (no vendoring

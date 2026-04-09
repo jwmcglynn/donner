@@ -359,6 +359,7 @@ bool isActiveBackendAllowed(const ImageComparisonParams& params) {
   switch (ActiveRendererBackend()) {
     case RendererBackend::Skia: return params.allowSkia;
     case RendererBackend::TinySkia: return params.allowTinySkia;
+    case RendererBackend::Geode: return params.allowGeode;
   }
 
   return false;
