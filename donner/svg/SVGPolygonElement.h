@@ -15,6 +15,15 @@ namespace donner::svg {
  * - DOM object: SVGPolygonElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#PolygonElement
  *
+ * The `<polygon>` element draws a closed shape defined by a list of vertex coordinates. SVG
+ * connects the points in order with straight line segments, then automatically closes the shape
+ * by drawing one final segment from the last point back to the first. Use it for triangles,
+ * stars, arrows, speech-bubble tails, and any other straight-edged closed figure.
+ *
+ * The only difference between `<polygon>` and \ref xml_polyline is that closing segment: a
+ * polyline stays open (it looks like a connected sequence of line segments), while a polygon is
+ * always a closed region that can be filled. For curved shapes, use \ref xml_path instead.
+ *
  * ```xml
  * <polygon points="50,50 250,50 150,150 250,250 50,250" />
  * ```

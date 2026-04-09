@@ -23,6 +23,38 @@ namespace donner::svg {
  *   <feColorMatrix type="saturate" values="0" />
  * </filter>
  * ```
+ *
+ * \htmlonly
+ * <svg id="xml_feColorMatrix_diagram" width="320" height="200" viewBox="0 0 320 200" style="background-color: white" font-family="sans-serif" font-size="12">
+ *   <defs>
+ *     <linearGradient id="xml_feColorMatrix_grad" x1="0" y1="0" x2="1" y2="0">
+ *       <stop offset="0%" stop-color="#e74c3c" />
+ *       <stop offset="50%" stop-color="#f1c40f" />
+ *       <stop offset="100%" stop-color="#2ecc71" />
+ *     </linearGradient>
+ *     <filter id="xml_feColorMatrix_gray" x="-5%" y="-5%" width="110%" height="110%">
+ *       <feColorMatrix in="SourceGraphic" type="saturate" values="0" />
+ *     </filter>
+ *     <filter id="xml_feColorMatrix_hue" x="-5%" y="-5%" width="110%" height="110%">
+ *       <feColorMatrix in="SourceGraphic" type="hueRotate" values="90" />
+ *     </filter>
+ *   </defs>
+ *   <rect x="20" y="20" width="80" height="50" fill="url(#xml_feColorMatrix_grad)" />
+ *   <text x="20" y="85" fill="black">Source</text>
+ *   <rect x="120" y="20" width="80" height="50" fill="url(#xml_feColorMatrix_grad)" filter="url(#xml_feColorMatrix_gray)" />
+ *   <text x="115" y="85" fill="black">saturate="0"</text>
+ *   <rect x="220" y="20" width="80" height="50" fill="url(#xml_feColorMatrix_grad)" filter="url(#xml_feColorMatrix_hue)" />
+ *   <text x="215" y="85" fill="black">hueRotate="90"</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * | Attribute | Default  | Description  |
+ * | --------: | :------: | :----------- |
+ * | `type`    | `matrix` | One of `matrix`, `saturate`, `hueRotate`, `luminanceToAlpha`. |
+ * | `values`  | (none)   | Matrix values or scalar parameter depending on `type`. |
+ *
+ * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
+ * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
  */
 
 /**

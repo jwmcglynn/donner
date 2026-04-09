@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-## Adding to your bazel project
+## Adding to Your Bazel Project
 
 Add the following to your `MODULE.bazel` (bazel 7.0.0 required):
 
@@ -15,7 +15,7 @@ git_override(
 )
 ```
 
-## Adding a dependency
+## Adding a Dependency
 
 Donner with the default renderer is available through the `@donner` dependency, add to your rule like so:
 

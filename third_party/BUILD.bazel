@@ -6,6 +6,10 @@ exports_files(
         "BUILD.cmark-gfm",
         "BUILD.css-parsing-tests",
         "BUILD.stb",
+        # tools/cmake/gen_cmakelists.py reads this at runtime to discover the
+        # versions of deps that are hidden from BCR consumers behind a
+        # dev_dependency module extension.
+        "bazel/non_bcr_deps.bzl",
     ],
 )
 

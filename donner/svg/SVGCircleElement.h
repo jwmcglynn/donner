@@ -14,6 +14,16 @@ namespace donner::svg {
  * - DOM object: SVGCircleElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#CircleElement
  *
+ * The `<circle>` element draws a perfect circle: pick a center point and a radius, and SVG
+ * renders it. It is one of the simplest \ref elements_basic_shapes and is a convenient shortcut
+ * for a shape you could otherwise express with \ref xml_ellipse (by setting `rx == ry`) or
+ * \ref xml_path. Like all basic shapes, circles can be filled with a solid color, a gradient, or
+ * a pattern via the `fill` attribute, and outlined via `stroke`.
+ *
+ * Use `<circle>` whenever you need a round shape — dots, bullets, pie-chart bases, icon
+ * backgrounds, or decorative elements. For an oval shape with independent horizontal and vertical
+ * radii, use \ref xml_ellipse instead.
+ *
  * \htmlonly
  * <svg id="xml_circle" width="300" height="300" style="background-color: white">
  *   <style>

@@ -15,6 +15,15 @@ namespace donner::svg {
  * - DOM object: SVGPolylineElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#PolylineElement
  *
+ * The `<polyline>` element draws an open sequence of connected straight-line segments, given a
+ * list of vertex coordinates. Unlike \ref xml_polygon, a polyline is not automatically closed,
+ * so it typically renders as a chain of strokes rather than a filled region. (You can still set
+ * a `fill`, but the result is the path filled as if it were implicitly closed, which is rarely
+ * what you want — for closed shapes use `<polygon>`.)
+ *
+ * Use `<polyline>` for line charts, breadcrumb trails, zig-zag connectors, or any multi-segment
+ * path that should remain open.
+ *
  * ```xml
  * <polyline points="50,50 250,50 150,150 250,250 50,250" />
  * ```

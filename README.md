@@ -44,7 +44,41 @@ Donner supports:
 
 ## Supported Elements
 
-[`<circle>`](https://jwmcglynn.github.io/donner/xml_circle.html) [`<clipPath>`](https://jwmcglynn.github.io/donner/xml_clipPath.html) [`<defs>`](https://jwmcglynn.github.io/donner/xml_defs.html) [`<ellipse>`](https://jwmcglynn.github.io/donner/xml_ellipse.html) [`<feBlend>`](https://jwmcglynn.github.io/donner/xml_feBlend.html) [`<feColorMatrix>`](https://jwmcglynn.github.io/donner/xml_feColorMatrix.html) [`<feComponentTransfer>`](https://jwmcglynn.github.io/donner/xml_feComponentTransfer.html) [`<feComposite>`](https://jwmcglynn.github.io/donner/xml_feComposite.html) [`<feConvolveMatrix>`](https://jwmcglynn.github.io/donner/xml_feConvolveMatrix.html) [`<feDiffuseLighting>`](https://jwmcglynn.github.io/donner/xml_feDiffuseLighting.html) [`<feDisplacementMap>`](https://jwmcglynn.github.io/donner/xml_feDisplacementMap.html) [`<feDistantLight>`](https://jwmcglynn.github.io/donner/xml_feDistantLight.html) [`<feDropShadow>`](https://jwmcglynn.github.io/donner/xml_feDropShadow.html) [`<feFlood>`](https://jwmcglynn.github.io/donner/xml_feFlood.html) [`<feFuncA>`](https://jwmcglynn.github.io/donner/xml_feFuncA.html) [`<feFuncB>`](https://jwmcglynn.github.io/donner/xml_feFuncB.html) [`<feFuncG>`](https://jwmcglynn.github.io/donner/xml_feFuncG.html) [`<feFuncR>`](https://jwmcglynn.github.io/donner/xml_feFuncR.html) [`<feGaussianBlur>`](https://jwmcglynn.github.io/donner/xml_feGaussianBlur.html) [`<feImage>`](https://jwmcglynn.github.io/donner/xml_feImage.html) [`<feMerge>`](https://jwmcglynn.github.io/donner/xml_feMerge.html) [`<feMergeNode>`](https://jwmcglynn.github.io/donner/xml_feMergeNode.html) [`<feMorphology>`](https://jwmcglynn.github.io/donner/xml_feMorphology.html) [`<feOffset>`](https://jwmcglynn.github.io/donner/xml_feOffset.html) [`<fePointLight>`](https://jwmcglynn.github.io/donner/xml_fePointLight.html) [`<feSpecularLighting>`](https://jwmcglynn.github.io/donner/xml_feSpecularLighting.html) [`<feSpotLight>`](https://jwmcglynn.github.io/donner/xml_feSpotLight.html) [`<feTile>`](https://jwmcglynn.github.io/donner/xml_feTile.html) [`<feTurbulence>`](https://jwmcglynn.github.io/donner/xml_feTurbulence.html) [`<filter>`](https://jwmcglynn.github.io/donner/xml_filter.html) [`<g>`](https://jwmcglynn.github.io/donner/xml_g.html) [`<image>`](https://jwmcglynn.github.io/donner/group__xml__image.html) [`<line>`](https://jwmcglynn.github.io/donner/xml_line.html) [`<linearGradient>`](https://jwmcglynn.github.io/donner/xml_linearGradient.html) [`<marker>`](https://jwmcglynn.github.io/donner/xml_marker.html) [`<mask>`](https://jwmcglynn.github.io/donner/xml_mask.html) [`<path>`](https://jwmcglynn.github.io/donner/xml_path.html) [`<pattern>`](https://jwmcglynn.github.io/donner/xml_pattern.html) [`<polygon>`](https://jwmcglynn.github.io/donner/xml_polygon.html) [`<polyline>`](https://jwmcglynn.github.io/donner/xml_polyline.html) [`<radialGradient>`](https://jwmcglynn.github.io/donner/xml_radialGradient.html) [`<rect>`](https://jwmcglynn.github.io/donner/xml_rect.html) [`<stop>`](https://jwmcglynn.github.io/donner/xml_stop.html) [`<style>`](https://jwmcglynn.github.io/donner/group__xml__style.html) [`<svg>`](https://jwmcglynn.github.io/donner/xml_svg.html) [`<symbol>`](https://jwmcglynn.github.io/donner/xml_symbol.html) [`<text>`](https://jwmcglynn.github.io/donner/xml_text.html) [`<textPath>`](https://jwmcglynn.github.io/donner/xml_textPath.html) [`<tspan>`](https://jwmcglynn.github.io/donner/xml_tspan.html) [`<use>`](https://jwmcglynn.github.io/donner/xml_use.html)
+**Structural:**
+[`<svg>`](https://jwmcglynn.github.io/donner/xml_svg.html)
+[`<g>`](https://jwmcglynn.github.io/donner/xml_g.html)
+[`<defs>`](https://jwmcglynn.github.io/donner/xml_defs.html)
+[`<symbol>`](https://jwmcglynn.github.io/donner/xml_symbol.html)
+[`<use>`](https://jwmcglynn.github.io/donner/xml_use.html)
+[`<style>`](https://jwmcglynn.github.io/donner/xml_style.html)
+[`<image>`](https://jwmcglynn.github.io/donner/xml_image.html)
+
+**Shapes:**
+[`<circle>`](https://jwmcglynn.github.io/donner/xml_circle.html)
+[`<ellipse>`](https://jwmcglynn.github.io/donner/xml_ellipse.html)
+[`<line>`](https://jwmcglynn.github.io/donner/xml_line.html)
+[`<path>`](https://jwmcglynn.github.io/donner/xml_path.html)
+[`<polygon>`](https://jwmcglynn.github.io/donner/xml_polygon.html)
+[`<polyline>`](https://jwmcglynn.github.io/donner/xml_polyline.html)
+[`<rect>`](https://jwmcglynn.github.io/donner/xml_rect.html)
+
+**Text:**
+[`<text>`](https://jwmcglynn.github.io/donner/xml_text.html)
+[`<tspan>`](https://jwmcglynn.github.io/donner/xml_tspan.html)
+[`<textPath>`](https://jwmcglynn.github.io/donner/xml_textPath.html)
+
+**Paint servers and markers:**
+[`<linearGradient>`](https://jwmcglynn.github.io/donner/xml_linearGradient.html)
+[`<radialGradient>`](https://jwmcglynn.github.io/donner/xml_radialGradient.html)
+[`<stop>`](https://jwmcglynn.github.io/donner/xml_stop.html)
+[`<pattern>`](https://jwmcglynn.github.io/donner/xml_pattern.html)
+[`<marker>`](https://jwmcglynn.github.io/donner/xml_marker.html)
+
+**Masking and clipping:**
+[`<mask>`](https://jwmcglynn.github.io/donner/xml_mask.html)
+[`<clipPath>`](https://jwmcglynn.github.io/donner/xml_clipPath.html)
+
+**Filters:** [`<filter>`](https://jwmcglynn.github.io/donner/xml_filter.html) and the full `<fe*>` primitive suite (`<feGaussianBlur>`, `<feColorMatrix>`, `<feDiffuseLighting>`, `<feTurbulence>`, …). See the [filter element reference](https://jwmcglynn.github.io/donner/elements_filters.html) for the complete list.
 
 **Not yet supported:** `<a>` `<switch>`
 
@@ -54,16 +88,16 @@ Donner also ships an end-user CLI for rendering and previewing SVG files.
 
 ```sh
 # Render to PNG
-tools/donner-svg donner_splash.svg --output output.png
+bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --output output.png
 
-# Show terminal preview
-tools/donner-svg donner_splash.svg --preview
+# Show a terminal preview
+bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --preview
 
 # Interactive terminal mode with mouse selection
-tools/donner-svg donner_splash.svg --interactive
+bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --interactive
 ```
 
-Tool docs: [`donner/svg/tool/README.md`](donner/svg/tool/README.md)
+Tool docs: [donner-svg CLI tool](https://jwmcglynn.github.io/donner/DonnerSvgTool.html)
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jwmcglynn/donner)
 

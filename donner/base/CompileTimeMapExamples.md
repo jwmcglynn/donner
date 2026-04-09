@@ -1,4 +1,4 @@
-# CompileTimeMap usage examples
+# CompileTimeMap Usage Examples {#CompileTimeMapExamples}
 
 This guide shows how to build constexpr lookup tables with `CompileTimeMap` and
 reuse them across translation units.

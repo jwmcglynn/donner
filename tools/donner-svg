@@ -1,5 +1,11 @@
 #!/bin/bash
 # Convenience wrapper for running donner-svg via Bazel.
 # Usage: tools/donner-svg input.svg --preview
+#
+# Bazel progress/info output is suppressed so the tool behaves like a normal
+# CLI. Output from donner-svg itself still passes through on stdout.
 set -euo pipefail
-exec bazel run //donner/svg/tool -- "$@"
+exec bazel run \
+    --ui_event_filters=-info,-stderr \
+    --noshow_progress \
+    //donner/svg/tool -- "$@"

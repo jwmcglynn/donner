@@ -17,12 +17,33 @@ namespace donner::svg {
  * - DOM object: SVGTextPathElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TextPathElement
  *
- * ```svg
+ * A `<textPath>` lets text flow along the curve of any \ref xml_path instead of in a straight
+ * horizontal line — think of a label hugging the edge of a circle, a headline bent along a
+ * wave, or caption text tracking the outline of a shape. You reference the target path by its
+ * `id` via the `href` attribute, and SVG lays out each glyph along the path's geometry,
+ * automatically rotating it to follow the local tangent. The `startOffset` attribute controls
+ * where along the path the text begins, allowing fine adjustment or animation.
+ *
+ * `<textPath>` must always live inside a \ref xml_text element; it cannot be used on its own.
+ *
+ * \htmlonly
+ * <svg id="xml_textPath" width="320" height="160" viewBox="0 0 320 160" style="background-color: white">
+ *   <defs>
+ *     <path id="xml_textPath_path" d="M 20 110 Q 160 -10 300 110" fill="none" />
+ *   </defs>
+ *   <use href="#xml_textPath_path" fill="none" stroke="#bbb" stroke-width="1" stroke-dasharray="4,3" />
+ *   <text font-family="sans-serif" font-size="22" fill="#1f5a8a">
+ *     <textPath href="#xml_textPath_path">Text flows along the path</textPath>
+ *   </text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * ```xml
  * <defs>
- *   <path id="myPath" d="M 20 80 Q 150 0 280 80" fill="none"/>
+ *   <path id="myPath" d="M 20 110 Q 160 -10 300 110" fill="none"/>
  * </defs>
- * <text font-size="20">
- *   <textPath href="#myPath">Text along a path</textPath>
+ * <text font-size="22">
+ *   <textPath href="#myPath">Text flows along the path</textPath>
  * </text>
  * ```
  *

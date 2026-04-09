@@ -25,6 +25,27 @@ namespace donner::svg {
  *   <feTile/>
  * </filter>
  * ```
+ *
+ * \htmlonly
+ * <svg id="xml_feTile_diagram" width="320" height="160" viewBox="0 0 320 160" style="background-color: white" font-family="sans-serif" font-size="12">
+ *   <defs>
+ *     <pattern id="xml_feTile_pat" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+ *       <rect width="20" height="20" fill="#ecf0f1" />
+ *       <circle cx="10" cy="10" r="6" fill="#e74c3c" />
+ *     </pattern>
+ *   </defs>
+ *   <rect x="30" y="40" width="20" height="20" fill="#ecf0f1" />
+ *   <circle cx="40" cy="50" r="6" fill="#e74c3c" />
+ *   <text x="20" y="85" fill="black">Source tile</text>
+ *   <rect x="140" y="30" width="160" height="80" fill="url(#xml_feTile_pat)" stroke="#888" />
+ *   <text x="170" y="130" fill="black">feTile output region</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * This element takes no attributes of its own.
+ *
+ * Inherits standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`)
+ * from \ref donner::svg::SVGFilterPrimitiveStandardAttributes.
  */
 
 /**

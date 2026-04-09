@@ -42,7 +42,7 @@ stops when coverage plateaus, manages corpus across runs, and reports crashes.
 
 See the [design doc](design_docs/continuous_fuzzing.md) for full architecture details.
 
-## Quick start
+## Quick Start
 
 ```sh
 # Run all fuzzers (5 min each, 4 workers):
@@ -58,13 +58,13 @@ python3 tools/fuzzing/run_continuous_fuzz.py --filter=svg_parser
 python3 tools/fuzzing/run_continuous_fuzz.py --minimize
 ```
 
-## Plateau detection
+## Plateau Detection
 
 Fuzzers automatically stop when edge coverage stops growing. The `--plateau-timeout` flag
 (default: 10 minutes) sets how long to wait after the last new coverage before terminating.
 This avoids wasting compute on saturated fuzzers.
 
-## Corpus management
+## Corpus Management
 
 ```sh
 # Minimize the latest run into persistent corpus:
@@ -77,7 +77,7 @@ python3 tools/fuzzing/manage_corpus.py update-intree
 python3 tools/fuzzing/manage_corpus.py stats
 ```
 
-## Crash reporting
+## Crash Reporting
 
 ```sh
 # Process crashes from the latest run (files GitHub Issues):
@@ -97,7 +97,7 @@ python3 tools/fuzzing/dashboard.py           # Summary of recent runs
 python3 tools/fuzzing/dashboard.py --json    # Machine-readable output
 ```
 
-## Automated runs (Docker)
+## Automated Runs (Docker)
 
 The harness runs in a Docker container via docker-compose:
 

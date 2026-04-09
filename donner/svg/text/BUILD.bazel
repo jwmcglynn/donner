@@ -77,10 +77,19 @@ donner_cc_library(
     }),
 )
 
+# text_backend_full is only pulled in from text_engine via a select() on
+# :text_full_enabled. Gate the target itself so its @harfbuzz dep is only
+# resolved when text_full is enabled — required for BCR consumers, where
+# @harfbuzz is not declared (it lives in the dev-only non_bcr_deps module
+# extension).
 donner_cc_library(
     name = "text_backend_full",
     srcs = ["TextBackendFull.cc"],
     hdrs = ["TextBackendFull.h"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":text_backend",

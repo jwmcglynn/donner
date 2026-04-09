@@ -14,6 +14,16 @@ namespace donner::svg {
  * - DOM object: SVGLineElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#LineElement
  *
+ * The `<line>` element draws a single straight-line segment from one point `(x1, y1)` to another
+ * `(x2, y2)`. Because a line has no interior, only the `stroke` attribute is visible — setting
+ * `fill` on a `<line>` has no effect. For multi-segment open paths use \ref xml_polyline, and
+ * for closed multi-point shapes use \ref xml_polygon. Arrowheads and other end decorations can
+ * be attached via the `marker-start` / `marker-end` CSS properties and a \ref xml_marker
+ * definition.
+ *
+ * Use `<line>` for rulers, axes, dividers, connectors between diagram nodes, or any simple
+ * one-segment stroke.
+ *
  * ```xml
  * <line x1="100" y1="100" x2="200" y2="200" stroke="black" stroke-width="2" />
  * ```

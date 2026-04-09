@@ -263,11 +263,36 @@ def _find_module_bazel() -> Path:
     raise FileNotFoundError("Cannot find MODULE.bazel")
 
 
+def _parse_git_repositories(content: str, versions: Dict[str, str]) -> None:
+    """Mutate `versions` by scanning `content` for git_repository /
+    new_git_repository blocks. Used for both MODULE.bazel and the
+    third_party/bazel/non_bcr_deps.bzl module extension (which hides
+    non-BCR deps behind dev_dependency).
+    """
+    for m in re.finditer(r'(?:new_)?git_repository\(([^)]+)\)', content):
+        block = m.group(1)
+        name_m = re.search(r'name\s*=\s*"([^"]+)"', block)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        tag_m = re.search(r'tag\s*=\s*"([^"]+)"', block)
+        commit_m = re.search(r'commit\s*=\s*"([^"]+)"', block)
+        if tag_m:
+            versions[name] = tag_m.group(1)
+        elif commit_m:
+            versions[name] = commit_m.group(1)
+
+
 def extract_versions_from_module_bazel() -> Dict[str, str]:
     """Parse MODULE.bazel to extract canonical dependency versions/commits.
 
     Returns a dict mapping dependency name to version string or git commit/tag.
     This is used to keep FetchContent declarations in sync with Bazel.
+
+    Also parses third_party/bazel/non_bcr_deps.bzl (the dev-only module
+    extension that hides Skia/HarfBuzz/WOFF2/Dawn/etc. from BCR consumers)
+    so that gen_cmakelists.py can still discover the version pins for those
+    deps when emitting FetchContent declarations for CMake users.
     """
     module_path = _find_module_bazel()
     content = module_path.read_text()
@@ -281,23 +306,15 @@ def extract_versions_from_module_bazel() -> Dict[str, str]:
     ):
         versions[m.group(1)] = m.group(2)
 
-    # Match git_repository / new_git_repository blocks. We split on the
-    # closing paren to avoid greedy matches across multiple blocks.
-    for m in re.finditer(
-        r'(?:new_)?git_repository\(([^)]+)\)',
-        content,
-    ):
-        block = m.group(1)
-        name_m = re.search(r'name\s*=\s*"([^"]+)"', block)
-        if not name_m:
-            continue
-        name = name_m.group(1)
-        tag_m = re.search(r'tag\s*=\s*"([^"]+)"', block)
-        commit_m = re.search(r'commit\s*=\s*"([^"]+)"', block)
-        if tag_m:
-            versions[name] = tag_m.group(1)
-        elif commit_m:
-            versions[name] = commit_m.group(1)
+    # git_repository / new_git_repository blocks in MODULE.bazel proper.
+    _parse_git_repositories(content, versions)
+
+    # Also scan the non_bcr_deps module extension, which is where
+    # skia/harfbuzz/woff2/dawn/resvg-test-suite/bazel_clang_tidy live now
+    # that they are hidden from BCR consumers.
+    non_bcr_path = module_path.parent / "third_party" / "bazel" / "non_bcr_deps.bzl"
+    if non_bcr_path.exists():
+        _parse_git_repositories(non_bcr_path.read_text(), versions)
 
     return versions
 

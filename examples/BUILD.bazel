@@ -25,3 +25,19 @@ donner_cc_binary(
         "@donner",
     ],
 )
+
+donner_cc_binary(
+    name = "svg_text_interaction",
+    srcs = ["svg_text_interaction.cc"],
+    deps = [
+        "@donner",
+    ],
+)
+
+donner_cc_binary(
+    name = "svg_filter_interaction",
+    srcs = ["svg_filter_interaction.cc"],
+    deps = [
+        "@donner",
+    ],
+)
