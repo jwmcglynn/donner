@@ -169,6 +169,8 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
     "donner_svg_renderer_tests_renderer_test_utils": _SKIA,
     "donner_svg_renderer_tests_renderer_ascii_tests": _SKIA,
     "donner_svg_tests_svg_renderer_ascii_tests": _SKIA,
+    # Geode backend (Bazel-only: requires Dawn vendored via rules_foreign_cc)
+    "donner_svg_renderer_renderer_geode": "FALSE",
     # TinySkia backend
     "donner_svg_renderer_renderer_tiny_skia": _TINY_SKIA,
     # tiny-skia lib
@@ -198,6 +200,7 @@ OPTIONAL_DEPS: Set[str] = {
     "tiny_skia",
     "donner_svg_renderer_renderer_skia",
     "donner_svg_renderer_renderer_tiny_skia",
+    "donner_svg_renderer_renderer_geode",
     "donner_svg_renderer_filter_graph_executor",
     "donner_svg_resources_font_manager",
     "donner_base_fonts_woff2_parser",
