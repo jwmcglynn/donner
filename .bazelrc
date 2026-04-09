@@ -41,6 +41,13 @@ build --copt=-Wno-switch-default
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
+# Enable the resvg-test-suite-dependent internal tests unconditionally for
+# local dev and CI. The flag defaults to False in the BUILD file so that
+# downstream consumers (who pull Donner via BCR and do NOT read this
+# .bazelrc) cleanly skip those tests instead of failing to resolve
+# @resvg-test-suite, which lives in the dev-only non_bcr_deps extension.
+common --//donner/svg/renderer:resvg_test_suite_available=true
+
 # Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
 common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
 common:latest_llvm --//build_defs:llvm_latest=1

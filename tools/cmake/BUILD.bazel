@@ -3,14 +3,22 @@ load("@rules_python//python:defs.bzl", "py_library", "py_test")
 py_library(
     name = "gen_cmakelists_lib",
     srcs = ["gen_cmakelists.py"],
-    data = ["//:MODULE.bazel"],
+    data = [
+        "//:MODULE.bazel",
+        # Read at runtime to discover git_repository versions that are
+        # hidden behind the dev-only non_bcr_deps module extension.
+        "//third_party:bazel/non_bcr_deps.bzl",
+    ],
     visibility = ["//visibility:private"],
 )
 
 py_test(
     name = "gen_cmakelists_test",
     srcs = ["gen_cmakelists_test.py"],
-    data = ["//:MODULE.bazel"],
+    data = [
+        "//:MODULE.bazel",
+        "//third_party:bazel/non_bcr_deps.bzl",
+    ],
     deps = [":gen_cmakelists_lib"],
     # Needs the workspace root for MODULE.bazel discovery
     env = {"BAZEL_WORKSPACE_TEST": "1"},

@@ -36,10 +36,19 @@ donner_cc_test(
     ],
 )
 
+# woff2_parser is only used from the text-full path
+# (donner/svg/resources/BUILD.bazel selects it under :text_full_enabled).
+# Gate the target itself so its @woff2 dep is only resolved when text_full is
+# enabled — this is a prerequisite for BCR consumers, where @woff2 is not
+# declared (it lives in the dev-only non_bcr_deps module extension).
 donner_cc_library(
     name = "woff2_parser",
     srcs = ["Woff2Parser.cc"],
     hdrs = ["Woff2Parser.h"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",
@@ -51,6 +60,10 @@ donner_cc_test(
     name = "woff2_parser_tests",
     srcs = ["tests/Woff2Parser_tests.cc"],
     data = ["testdata/valid-001.woff2"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         ":woff2_parser",
         "//donner/base:base_test_utils",

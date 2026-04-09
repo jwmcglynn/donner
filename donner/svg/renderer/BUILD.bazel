@@ -43,6 +43,21 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Gate targets that read `@resvg-test-suite` at analysis/runtime.
+#
+# The upstream repo is fetched only for local development / CI (via the
+# non_bcr_deps dev module extension), and is not available when Donner is
+# consumed as a dep from BCR. Defaults to False so BCR consumers' broad
+# `bazel build @donner//...` cleanly skips those tests instead of failing
+# to resolve `@resvg-test-suite`. Donner's own `.bazelrc` sets this to
+# True unconditionally so local dev and CI continue to build/run the
+# tests exactly as before.
+bool_flag(
+    name = "resvg_test_suite_available",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "renderer_backend_skia",
     flag_values = {":renderer_backend": "skia"},
@@ -89,6 +104,12 @@ config_setting(
 config_setting(
     name = "config_skia_debug",
     flag_values = {":skia_debug": "true"},
+)
+
+config_setting(
+    name = "resvg_test_suite_enabled",
+    flag_values = {":resvg_test_suite_available": "True"},
+    visibility = ["//visibility:public"],
 )
 
 donner_cc_library(
