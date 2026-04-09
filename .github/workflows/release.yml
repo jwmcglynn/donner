@@ -75,15 +75,21 @@ jobs:
   #   1. Install the Publish-to-BCR GitHub App on jwmcglynn/donner
   #   2. Fork bazelbuild/bazel-central-registry as jwmcglynn/bazel-central-registry
   #   3. Install the app on that fork too
-  #   4. Create a PAT with `repo` + `workflow` scopes and save as the
-  #      BCR_PUBLISH_TOKEN repo secret
+  #   4. Create a Classic PAT with `repo` + `workflow` scopes and save as
+  #      the BCR_PUBLISH_TOKEN repo secret (fine-grained PATs are not
+  #      currently supported for opening PRs against public repos)
   #
   # See docs/design_docs/bcr_release.md for the full runbook.
   publish-to-bcr:
     if: github.event_name == 'release' && github.event.action == 'published'
     needs: [linux, macos]
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yml@v0
+    permissions:
+      id-token: write       # Needed to attest provenance
+      attestations: write   # Needed to attest provenance
+      contents: write       # Needed to upload release files
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0
     with:
       tag_name: ${{ github.event.release.tag_name }}
+      registry_fork: jwmcglynn/bazel-central-registry
     secrets:
       publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}

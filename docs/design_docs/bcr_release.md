@@ -76,7 +76,7 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
 
 ### Scaffolding sanity
 - [ ] `.bcr/config.yml`, `.bcr/metadata.template.json`, `.bcr/source.template.json`, `.bcr/presubmit.yml` all valid YAML/JSON
-- [ ] `.github/workflows/release.yml` still references `bazel-contrib/publish-to-bcr/.github/workflows/publish.yml@v0` (pin the major version, don't chase `@main`)
+- [ ] `.github/workflows/release.yml` references a real `bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@vX.Y.Z` tag (Publish-to-BCR does not publish floating major tags; pin exact versions)
 
 ### Ship
 - [ ] Merge release PR → push tag `vX.Y.Z` → GitHub Release auto-created
@@ -90,16 +90,18 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
 
 The [Publish-to-BCR GitHub App](https://github.com/bazel-contrib/publish-to-bcr) handles the mechanical pieces:
 
-1. On GitHub Release publish, `release.yml` invokes `bazel-contrib/publish-to-bcr/.github/workflows/publish.yml@v0` with `tag_name: ${{ github.event.release.tag_name }}` and `secrets.publish_token = secrets.BCR_PUBLISH_TOKEN`.
+1. On GitHub Release publish, `release.yml` invokes `bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.2.0` with `tag_name: ${{ github.event.release.tag_name }}`, `registry_fork: jwmcglynn/bazel-central-registry`, and `secrets.publish_token = secrets.BCR_PUBLISH_TOKEN`. The calling job must also set `id-token: write`, `attestations: write`, and `contents: write` permissions.
 2. The reusable workflow pulls the release tarball, computes the SHA256 integrity, reads `.bcr/metadata.template.json` + `.bcr/source.template.json` + `.bcr/presubmit.yml`, substitutes `{VERSION}` and `{TAG}` placeholders, and writes a new `modules/donner/X.Y.Z/` entry in the maintainer's BCR fork.
 3. It opens a PR from `jwmcglynn/bazel-central-registry` to `bazelbuild/bazel-central-registry` on the maintainer's behalf.
 
 The app needs its own install + a PAT; this is a one-time setup per maintainer, not per release.
 
+Bump the reusable workflow pin (`@v1.2.0`) when new releases of Publish-to-BCR land — see [the releases page](https://github.com/bazel-contrib/publish-to-bcr/releases). Prefer exact version tags over floating refs like `@v1`, because Publish-to-BCR does not publish floating major-version tags.
+
 ### One-time Publish-to-BCR setup
 1. Install the [Publish-to-BCR GitHub App](https://github.com/apps/publish-to-bcr) on `jwmcglynn/donner`.
 2. Fork `bazelbuild/bazel-central-registry` to `jwmcglynn/bazel-central-registry`. Install the app on the fork too.
-3. Create a PAT with `repo` + `workflow` scopes. Add as `BCR_PUBLISH_TOKEN` in the `jwmcglynn/donner` repo secrets.
+3. Create a **Classic** PAT with `repo` + `workflow` scopes. Add as `BCR_PUBLISH_TOKEN` in the `jwmcglynn/donner` repo secrets. Fine-grained PATs are not currently supported for opening PRs against public repos — see [github/roadmap#600](https://github.com/github/roadmap/issues/600).
 
 ### Where to watch
 - Release workflow logs: `https://github.com/jwmcglynn/donner/actions` (Release workflow)
