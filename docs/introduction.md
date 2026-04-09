@@ -7,20 +7,21 @@ Donner is an embeddable browser-grade SVG2 engine in C++20, providing full acces
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)
 
-Donner includes:
+Donner supports:
 
 - SVG2 core functionality, such as shapes, fills, strokes, and gradients.
-- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.).
 - Text rendering with `<text>`, `<tspan>`, and `<textPath>`, including WOFF2 web fonts and optional HarfBuzz shaping.
+- All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.).
 - CSS3 parsing and cascading support, with a hand-rolled library.
-- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree.
+- Detailed validation and diagnostics, errors point to the exact location.
+- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree, optimized for performance.
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
-- Two renderer backends: **Skia** (Chromium's renderer) and **tiny-skia** (lightweight software renderer).
+- Two renderer backends: **tiny-skia** (default, a lightweight software renderer) and **Skia** (Chromium's renderer).
 
 Donner focuses on security and performance, which is validated with code coverage and fuzz testing.
 
-## Try it out: Render an SVG to PNG
+## Try It Out: Render an SVG to PNG
 
 ```sh
 bazel run //examples:svg_to_png -- donner_splash.svg
@@ -39,10 +40,9 @@ Detailed docs: \ref svg_tree_interaction.cc
 ## Documentation
 
 - \subpage GettingStarted
-- \ref SystemArchitecture
-- \ref Devtools
 - \ref DonnerAPI
-- [Examples](Examples.html)
+- [Examples](examples.html)
+- \subpage DeveloperDocs
 
 ## Project Goals
 
@@ -52,8 +52,8 @@ Detailed docs: \ref svg_tree_interaction.cc
 
 ## Status
 
-- [Project status](https://github.com/jwmcglynn/donner/issues/149) (github)
-- [Build report](build_report.md)
+- [Project Status](https://github.com/jwmcglynn/donner/issues/149) (github)
+- [Build Report](build_report.md)
 
 ## Building
 
@@ -65,6 +65,6 @@ See more details in the \ref BuildingDonner instructions.
 
 | Previous |                                   Next |
 | :------- | -------------------------------------: |
-|          | [Getting started](GettingStarted.html) |
+|          | [Getting Started](GettingStarted.html) |
 
 </div>

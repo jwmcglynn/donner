@@ -1,4 +1,4 @@
-# <symbol> Usage: Coordinate System and Sizing Behavior
+# `<symbol>` Usage: Coordinate System and Sizing Behavior {#SymbolElementUsage}
 
 ## Overview
 
@@ -15,6 +15,27 @@ A `<symbol>` element establishes an **SVG viewport** for its contents.
 - If neither the symbol nor the use specifies width/height, the symbol's viewport defaults to 100% of the parent container or viewport (effectively covering the container). 
 
 `<symbol>` elements are not rendered directly, their `width` and `height` purely define the **symbol's own viewport dimensions**. By default, the User Agent applies `overflow: hidden` to symbols, so any content outside the symbol's viewport rectangle is clipped. If a symbol has no explicit size, its viewport will auto-expand (100%) in whatever context it's placed, and overflow clipping will occur at the bounds of that region.
+
+\htmlonly
+<svg id="symbol_usage_sizing" width="360" height="180" viewBox="0 0 360 180" style="background-color: white" font-family="sans-serif" font-size="11">
+  <defs>
+    <symbol id="symbol_usage_sizing_noSize" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="40" fill="#4a90e2" stroke="#1f5a8a" stroke-width="3" />
+    </symbol>
+    <symbol id="symbol_usage_sizing_withSize" viewBox="0 0 100 100" width="60" height="60">
+      <circle cx="50" cy="50" r="40" fill="#e27a4a" stroke="#8a411f" stroke-width="3" />
+    </symbol>
+  </defs>
+  <rect x="20"  y="30" width="120" height="120" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_sizing_noSize" x="20" y="30" width="120" height="120" />
+  <text x="80" y="165" text-anchor="middle">Symbol with no width/height →</text>
+  <text x="80" y="20" text-anchor="middle">stretches to &lt;use&gt; box</text>
+  <rect x="200" y="30" width="120" height="120" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_sizing_withSize" x="200" y="30" width="120" height="120" />
+  <text x="260" y="165" text-anchor="middle">Symbol with explicit 60×60 →</text>
+  <text x="260" y="20" text-anchor="middle">keeps its authored size</text>
+</svg>
+\endhtmlonly
 
 ### No viewBox (Unitless Coordinates)
 
@@ -65,7 +86,61 @@ When a symbol *does* have a viewBox, it behaves much like a mini SVG file. The v
 
 This scenario is less common in usage – typically either the symbol or the use will provide an explicit size – but it's defined for completeness.
 
+\htmlonly
+<svg id="symbol_usage_viewBox" width="360" height="180" viewBox="0 0 360 180" style="background-color: white" font-family="sans-serif" font-size="11">
+  <defs>
+    <symbol id="symbol_usage_viewBox_star" viewBox="0 0 100 100">
+      <polygon points="50,5 62,40 98,40 68,62 78,95 50,75 22,95 32,62 2,40 38,40" fill="#e0a63a" stroke="#7a5a1a" stroke-width="3" />
+    </symbol>
+  </defs>
+  <text x="180" y="15" text-anchor="middle" font-weight="bold">Same symbol at 3 different &lt;use&gt; sizes</text>
+  <rect x="20"  y="30" width="40" height="40" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_viewBox_star" x="20" y="30" width="40" height="40" />
+  <text x="40" y="90" text-anchor="middle">40×40</text>
+  <rect x="100" y="30" width="80" height="80" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_viewBox_star" x="100" y="30" width="80" height="80" />
+  <text x="140" y="130" text-anchor="middle">80×80</text>
+  <rect x="220" y="30" width="120" height="120" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_viewBox_star" x="220" y="30" width="120" height="120" />
+  <text x="280" y="170" text-anchor="middle">120×120</text>
+</svg>
+\endhtmlonly
+
 ### preserveAspectRatio on <symbol>
+
+\htmlonly
+<svg id="symbol_usage_par" width="400" height="180" viewBox="0 0 400 180" style="background-color: white" font-family="sans-serif" font-size="11">
+  <defs>
+    <symbol id="symbol_usage_par_star" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
+      <rect x="0" y="0" width="100" height="100" fill="#e0a63a" opacity="0.3" />
+      <polygon points="50,5 62,40 98,40 68,62 78,95 50,75 22,95 32,62 2,40 38,40" fill="#e0a63a" stroke="#7a5a1a" stroke-width="3" />
+    </symbol>
+    <symbol id="symbol_usage_par_slice" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">
+      <rect x="0" y="0" width="100" height="100" fill="#e0a63a" opacity="0.3" />
+      <polygon points="50,5 62,40 98,40 68,62 78,95 50,75 22,95 32,62 2,40 38,40" fill="#e0a63a" stroke="#7a5a1a" stroke-width="3" />
+    </symbol>
+    <symbol id="symbol_usage_par_none" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <rect x="0" y="0" width="100" height="100" fill="#e0a63a" opacity="0.3" />
+      <polygon points="50,5 62,40 98,40 68,62 78,95 50,75 22,95 32,62 2,40 38,40" fill="#e0a63a" stroke="#7a5a1a" stroke-width="3" />
+    </symbol>
+  </defs>
+  <text x="200" y="15" text-anchor="middle" font-weight="bold">Wide 2:1 &lt;use&gt; box with each preserveAspectRatio mode</text>
+  <rect x="10"  y="30" width="120" height="60" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_par_star"  x="10"  y="30" width="120" height="60" />
+  <text x="70"  y="105" text-anchor="middle" font-family="monospace">xMidYMid meet</text>
+  <text x="70"  y="120" text-anchor="middle">(letterbox)</text>
+  <rect x="145" y="30" width="120" height="60" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_par_slice" x="145" y="30" width="120" height="60" clip-path="inset(0)" />
+  <text x="205" y="105" text-anchor="middle" font-family="monospace">xMidYMid slice</text>
+  <text x="205" y="120" text-anchor="middle">(crop)</text>
+  <rect x="280" y="30" width="120" height="60" fill="none" stroke="#bbb" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_par_none"  x="280" y="30" width="120" height="60" />
+  <text x="340" y="105" text-anchor="middle" font-family="monospace">none</text>
+  <text x="340" y="120" text-anchor="middle">(stretch)</text>
+</svg>
+\endhtmlonly
+
+
 
 `<symbol>` has the `preserveAspectRatio` attribute, just like an `<svg>` element. By default (if not specified), it uses the standard `xMidYMid meet` behavior, meaning the symbol's content is uniformly scaled to *fit* the viewport while preserving aspect ratio (centering the content and possibly letterboxing if aspect ratios differ).
 
@@ -82,6 +157,30 @@ When a `<use>` instantiates a symbol, several coordinate system transformations 
 2. **Symbol's Transform (if any):** The `<symbol>` element can have a `transform` attribute (since it's a container element). If present, this transform is applied to the symbol's content **within the symbol's viewport**. For example, `transform="scale(-1,1)"` on the symbol will flip its contents horizontally around the symbol's own origin. This happens after the viewBox mapping.
 
 3. **Reference Point Alignment (refX/refY):** New in SVG 2, the `refX` and `refY` attributes on `<symbol>` allow shifting the content's position by defining a reference point. By default (if `refX/refY` are not specified), the **top-left corner** of the symbol's viewport is aligned to the placement point (we'll define this placement point shortly). If `refX`/`refY` are set, they specify a point in the symbol's content coordinate system (after any viewBox scaling) that should align with the placement point. For example, `refX="50%" refY="50%"` would center the symbol's content on the use's x,y location, whereas `refX="right" refY="bottom"` would align the symbol's bottom-right corner to the use's x,y. Internally, applying refX/refY is effectively a translation of the content within the symbol such that the specified reference point moves to the origin (0,0) of the symbol's viewport. (This behavior is analogous to the reference point in `<marker>` elements.) Notably, if `refX/refY` are omitted, it's **not** the same as specifying `0` – the default alignment (top-left) differs for backward-compatibility reasons.
+
+\htmlonly
+<svg id="symbol_usage_ref" width="400" height="180" viewBox="0 0 400 180" style="background-color: white" font-family="sans-serif" font-size="11">
+  <defs>
+    <symbol id="symbol_usage_ref_default" viewBox="0 0 100 100" width="80" height="80">
+      <circle cx="50" cy="50" r="45" fill="#4a90e2" fill-opacity="0.6" stroke="#1f5a8a" stroke-width="2" />
+    </symbol>
+    <symbol id="symbol_usage_ref_center" viewBox="0 0 100 100" width="80" height="80" refX="50" refY="50">
+      <circle cx="50" cy="50" r="45" fill="#e27a4a" fill-opacity="0.6" stroke="#8a411f" stroke-width="2" />
+    </symbol>
+  </defs>
+  <text x="200" y="15" text-anchor="middle" font-weight="bold">The same &lt;use x="100" y="90"/&gt; with different refX/refY</text>
+  <line x1="100" y1="30"  x2="100" y2="160" stroke="#c33" stroke-dasharray="3,3" />
+  <line x1="20"  y1="90"  x2="180" y2="90"  stroke="#c33" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_ref_default" x="100" y="90" />
+  <circle cx="100" cy="90" r="3" fill="#c33" />
+  <text x="100" y="175" text-anchor="middle">default (top-left at x,y)</text>
+  <line x1="300" y1="30"  x2="300" y2="160" stroke="#c33" stroke-dasharray="3,3" />
+  <line x1="220" y1="90"  x2="380" y2="90"  stroke="#c33" stroke-dasharray="3,3" />
+  <use href="#symbol_usage_ref_center" x="300" y="90" />
+  <circle cx="300" cy="90" r="3" fill="#c33" />
+  <text x="300" y="175" text-anchor="middle">refX=50 refY=50 (centered at x,y)</text>
+</svg>
+\endhtmlonly
 
 4. **Positioning via `<use>`:** The `<use>` element has its own optional `x` and `y` attributes. These provide an *additional translation* that moves the symbol instance in the parent SVG's coordinate system. Conceptually, the `<use>` creates a copy of the symbol's content (after all symbol-internal transformations above) and then shifts it by (x, y). According to the SVG2 spec, the symbol's reference point (after applying refX/refY) will be placed exactly at the `<use>` element's (x,y) coordinates. For example, if a `<use>` has `x="100" y="50"`, the symbol's content will be positioned such that its aligned reference point appears at (100,50) in the outer SVG.
 
