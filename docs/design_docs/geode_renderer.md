@@ -1,6 +1,6 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phase 0 complete (#481 merged); Phase 1 MVP in progress (#484)
+**Status:** Phase 0 complete (#481 merged); Phase 1 MVP in progress (#484, follow-ups landing on `geo-encoder` branch)
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
 **Last updated:** 2026-04-08
@@ -16,11 +16,23 @@
   - ✅ `GeodeDevice`: headless WebGPU device/queue factory.
   - ✅ End-to-end GPU draw verified (clear-to-red + texture readback).
   - ✅ Slug WGSL fill shader compiles via Dawn's Tint compiler.
-  - ⏳ `GeodePathEncoder` Slug band decomposition — next PR
-  - ⏳ `GeoEncoder` drawing API — next PR
-  - ⏳ `RendererGeode` skeleton + `RendererInterface` adapter — later
-  - ⏳ Golden image tests for solid-fill SVGs — later
-  - ⏳ SwiftShader integration for Linux CI — follow-up
+  - ✅ `GeodePathEncoder` Slug band decomposition (commit `e42f3f75`).
+  - ✅ `GeoEncoder` + `GeodePipeline` — first GPU-rendered SVG paths
+    (clear, fillRect, fillTriangle, fillCircle all green; commit `ddbcda6b`).
+  - ✅ `RendererGeode` skeleton — solid-fill `drawPath`/`drawRect`/
+    `drawEllipse` through the `RendererInterface` adapter, stubs for
+    clip/mask/layer/filter/pattern/image/text.
+  - ✅ `--config=geode` backend selection — sets both
+    `renderer_backend=geode` and `enable_dawn=true`. Default builds are
+    unaffected (Dawn still gated off).
+  - ⏳ Golden image tests for solid-fill SVGs — infrastructure wired up
+    next.
+  - 🚧 Linux CI via Mesa `llvmpipe` — switched from SwiftShader plan.
+    Ubuntu's `mesa-vulkan-drivers` package provides `llvmpipe`, a
+    maintained software Vulkan ICD that's apt-installable (no vendoring
+    required). Dawn auto-discovers it via the standard Vulkan loader.
+    Added as an experimental `linux-geode` CI job
+    (`continue-on-error: true` until the first run confirms it works).
 - **Phase 2+**: not yet started.
 
 
@@ -1043,8 +1055,11 @@ cleanup.
   `setTransform`, `drawPath` with solid fill.
 - [ ] Add Bazel `--config=geode` backend selection.
 - [ ] Run basic renderer tests (solid-fill SVGs) against golden images.
-- [ ] SwiftShader integration for Linux CI. **(MVP is macOS-only; Linux
-  needs SwiftShader as a headless Vulkan ICD to run the same tests.)**
+- [x] Linux CI headless Vulkan via Mesa `llvmpipe`. **(Switched from
+  SwiftShader: Ubuntu's `mesa-vulkan-drivers` apt package ships llvmpipe,
+  a maintained pure-software Vulkan ICD. No vendoring/CMake work
+  required. Added as experimental `linux-geode` CI job —
+  `continue-on-error: true` until first run proves it out.)**
 
 ### Phase 2: Complete SVG Painting
 

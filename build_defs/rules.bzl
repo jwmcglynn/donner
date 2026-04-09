@@ -87,7 +87,8 @@ def renderer_backend_compatible_with(backends):
     Returns compatibility constraints for renderer backend-specific targets.
 
     Args:
-      backends: List of supported backend names. Valid values are "skia" and "tiny_skia".
+      backends: List of supported backend names. Valid values are "skia",
+        "tiny_skia", and "geode".
     """
     conditions = {}
     remaining = list(backends)
@@ -99,6 +100,10 @@ def renderer_backend_compatible_with(backends):
     if "tiny_skia" in remaining:
         conditions["//donner/svg/renderer:renderer_backend_tiny_skia"] = []
         remaining.remove("tiny_skia")
+
+    if "geode" in remaining:
+        conditions["//donner/svg/renderer:renderer_backend_geode"] = []
+        remaining.remove("geode")
 
     if remaining:
         fail("Unknown renderer backend(s): " + ", ".join(remaining))
@@ -173,7 +178,7 @@ donner_transitioned_cc_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["skia", "tiny_skia"],
+            values = ["skia", "tiny_skia", "geode"],
         ),
     },
 )
@@ -214,7 +219,7 @@ donner_multi_transitioned_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["skia", "tiny_skia"],
+            values = ["skia", "tiny_skia", "geode"],
         ),
         "text_full": attr.string(
             default = "false",

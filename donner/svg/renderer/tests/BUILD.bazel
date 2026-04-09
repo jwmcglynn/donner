@@ -222,6 +222,26 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "renderer_geode_tests",
+    srcs = ["RendererGeode_tests.cc"],
+    # Geode pulls in Dawn; gate behind the same enable_dawn flag the rest of
+    # the geode/ targets use.
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:dawn_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:stroke_params",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_driver_tests",
     srcs = [
         "RendererDriver_tests.cc",

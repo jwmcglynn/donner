@@ -55,6 +55,57 @@ jobs:
       - name: Test
         run: bazelisk test --test_output=errors --local_test_jobs=2 //...
 
+  # Experimental Geode (WebGPU + Slug) backend build/test on Linux.
+  #
+  # Runs `--config=geode`, which enables Dawn and Geode. The Linux CI host has
+  # no GPU, so Dawn's Vulkan backend is paired with Mesa `llvmpipe` (a
+  # software Vulkan ICD that Ubuntu ships in `mesa-vulkan-drivers`). Dawn
+  # auto-discovers llvmpipe via the standard Vulkan loader and runs against
+  # it — no env vars needed.
+  #
+  # Marked `continue-on-error: true` for now: first run against llvmpipe is
+  # unproven locally (macOS uses Metal), and the Dawn compile is ~10 min on a
+  # cold cache. Once we verify it works we can flip this to a blocking job.
+  #
+  # Scope: only the native Geode unit/integration tests. The
+  # `renderer_geode_golden_tests` target is intentionally excluded because
+  # the skeleton's Slug AA produces edge-pixel differences against the
+  # tiny-skia goldens (Geode-specific goldens are a separate decision).
+  linux-geode:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+            mesa-vulkan-drivers libvulkan1 libvulkan-dev
+
+      - name: Cache Bazel
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-geode-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-geode-
+            ${{ runner.os }}-bazel-
+
+      - name: Build Geode targets
+        run: |
+          bazelisk build --config=geode \
+            //donner/svg/renderer/geode/... \
+            //donner/svg/renderer:renderer_geode \
+            //donner/svg/renderer/tests:renderer_geode_tests
+
+      - name: Run Geode tests
+        run: |
+          bazelisk test --config=geode --test_output=errors --local_test_jobs=2 \
+            //donner/svg/renderer/geode/... \
+            //donner/svg/renderer/tests:renderer_geode_tests
+
   macos:
     runs-on: macos-15
     steps:

@@ -57,6 +57,10 @@ build:latest_llvm --copt=-Wno-nrvo
 # Renderer backend selection
 common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
+# Geode (experimental WebGPU + Slug). Also toggles enable_dawn so that Dawn
+# is compiled; default bazel builds without --config=geode never touch Dawn.
+common:geode --//donner/svg/renderer:renderer_backend=geode
+common:geode --//donner/svg/renderer/geode:enable_dawn=true
 common:dev --//build_defs:disable_backend_test_transition=true
 # Disable forced opt compilation of perf-sensitive deps (Skia, etc.) to avoid
 # cross-configuration link conflicts.  Use: --config=no-perf-opt
