@@ -6,7 +6,7 @@ Donner implements CSS3 through a hand-rolled CSS library, \ref donner::css. Donn
 
 \ref donner::css::CSS provides a high-level API surface for parsing CSS constructs, which is implemented on top of lower-level parser APIs which provide finer-grained control over the parsing process and better error handling.
 
-## Anatomy of CSS strings
+## Anatomy of CSS Strings
 
 <img src="css_anatomy.svg" title="CSS stylesheet anatomy diagram" width="600" />
 

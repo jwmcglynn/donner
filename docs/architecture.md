@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-## Why is Donner different?
+## Why Is Donner Different?
 
 At its core, Donner is an SVG "engine". Instead of treating SVGs as static images, they are dynamic scenes which can be modified, animated, or transformed.
 
@@ -15,7 +15,7 @@ Donner intends to provide browser-level functionality as a standalone C++ librar
 
 Donner currently renders with Skia, which is the core rendering library used by Chrome and Firefox. Skia is a high-performance, hardware-accelerated 2D graphics library that provides a common API for drawing text, shapes, and images.
 
-## System context
+## System Context
 
 ![System context diagram, Donner SVG Library](/docs/img/arch_system_context.svg)
 
@@ -69,7 +69,7 @@ Consumes information from the CSS parser and implements the SVG style model. Thi
 
 \ref donner::svg::components::StyleSystem "StyleSystem" is the top-level component that manages the styling of the document tree.
 
-#### Data model
+#### Data Model
 
 Style information is held on each entity inside \ref donner::svg::components::StyleComponent. During the rendering process, CSS cascading and inheritance is performed and cached on \ref donner::svg::components::ComputedStyleComponent.
 
@@ -100,7 +100,7 @@ The rendering backend traverses the internal ECS document model and instantiates
 
 Rendering components are attached to the same entities as the document model components, allowing for easy synchronization between the document model and the rendering backend. When the document model is modified, the associated rendering components are invalidated.
 
-## Base library
+## Base Library
 
 The `//donner/base` library contains common utility code used by the other libraries. This includes:
 
@@ -114,15 +114,15 @@ This library also contains common parsers such as \ref donner::parser::NumberPar
 
 The base library has minimal dependencies and the types within it may be suitable for other libraries, however the base library is not publicly exported.
 
-## Testing strategy
+## Testing Strategy
 
 Donner has a multi-level testing strategy and aims to make the library production-grade and suitable for parsing untrusted inputs (eventually).
 
-### Unit tests
+### Unit Tests
 
 All components should be unit-tested, and test coverage is measured using [Codecov](https://app.codecov.io/gh/jwmcglynn/donner).
 
-### Image comparison tests
+### Image Comparison Tests
 
 As SVG is a visual format, image comparison tests are used to validate the rendered output.
 

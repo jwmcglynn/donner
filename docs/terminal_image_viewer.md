@@ -1,17 +1,17 @@
-# Terminal image previews {#TerminalImageViewerGuide}
+# Terminal Image Previews {#TerminalImageViewerGuide}
 
 TerminalImageViewer renders RGBA buffers directly to the terminal for debugging test failures.
 It is enabled by default for `ImageComparisonTestFixture` failures and can be adjusted at runtime
 without recompiling tests.
 
-## Usage in tests
+## Usage in Tests
 
 - `ImageComparisonParams::showTerminalPreview` gates whether the fixture emits the 2x2 grid of
   Actual/Expected/Diff panels.
 - The fixture scales each panel to fit the current terminal width while preserving aspect ratios.
 - Captions appear above each panel; the bottom-right cell remains empty to keep alignment stable.
 
-## Environment controls
+## Environment Controls
 
 - `DONNER_ENABLE_TERMINAL_IMAGES` (default: `1`): set to `0` to disable previews in all tests.
 - `DONNER_TERMINAL_PIXEL_MODE`: override sampling granularity. Accepts `quarter` (default) or

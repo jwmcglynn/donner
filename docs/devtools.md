@@ -2,7 +2,7 @@
 
 \tableofcontents
 
-## Generating documentation
+## Generating Documentation
 
 Doxygen may be generated with:
 
@@ -16,7 +16,7 @@ Tools required to generate the documentation are:
 - `doxygen`
 - `graphviz` (for class diagrams)
 
-## Code coverage
+## Code Coverage
 
 To generate code coverage locally:
 
@@ -26,7 +26,7 @@ tools/coverage.sh
 
 Thn open `coverage-report/index.html` in a browser.
 
-## Binary size
+## Binary Size
 
 To generate a binary size report, run:
 
@@ -36,7 +36,7 @@ tools/binary_size.sh
 
 Then open `build-binary-size/binary_size_report.html` in a browser.
 
-## Clang tidy
+## Clang Tidy
 
 clang-tidy may be invoked by building with `--config=clang-tidy`:
 
@@ -44,7 +44,7 @@ clang-tidy may be invoked by building with `--config=clang-tidy`:
 bazel build --config clang-tidy //...
 ```
 
-## Lines of code
+## Lines of Code
 
 ```sh
 tools/cloc.sh

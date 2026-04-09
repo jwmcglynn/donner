@@ -1,6 +1,6 @@
-# Updating dependencies {#UpdatingDependencies}
+# Updating Dependencies {#UpdatingDependencies}
 
-## Bazel llvm_toolchain
+## Bazel LLVM Toolchain
 
 Donner uses a modified version of llvm_toolchain to prototype libclang-based tools (such as the archived [hdoc](https://github.com/jwmcglynn/donner/blob/hdoc-archive/docs/devtools/generating_documentation.md) experiment, in the `hdoc-archive` branch).
 
@@ -28,7 +28,7 @@ To locally test changes, assuming repro is cloned locally next to the `donner` d
 + )
 ```
 
-## Skia version
+## Skia Version
 
 There's a fork of the skia library at https://github.com/jwmcglynn/skia, which contains fixes for build errors compared to the upstream version.
 

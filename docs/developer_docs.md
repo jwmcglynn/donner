@@ -14,3 +14,7 @@
 - \subpage TerminalImageViewerGuide
 - \subpage ReSvgTestSuite
 - \subpage DataFormats
+- \subpage DonnerProjectRoadmap
+- \subpage FilterEffectsGuide
+- \subpage ParserDiagnostics
+- \subpage CompileTimeMap

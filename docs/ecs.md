@@ -81,7 +81,7 @@ In Donner, each Entity corresponds to a single SVGElement.
 
 Donner groups its components into categories, based on transformations that occur as the document is parsed and rendered.
 
-## Component transformations
+## Component Transformations
 
 The rendering pipeline performs a series of operations:
 
@@ -146,7 +146,7 @@ This is a new feature in SVG2 which strongly influences this pipeline.
 
 The details above have been simplified, see \ref donner::svg::components::RenderingContext "RenderingContext" as the source of truth and full list of operations.
 
-## Render tree instantiation
+## Render Tree Instantiation
 
 The final transformation occurs to instantiate the render tree, which occurs within \ref donner::svg::components::RenderingContext::instantiateRenderTree "RenderingContext::instantiateRenderTree".
 

@@ -1,5 +1,9 @@
 # CompileTimeMap {#CompileTimeMap}
 
+\tableofcontents
+
+- \subpage CompileTimeMapExamples
+
 ## Overview
 - `CompileTimeMap` provides a header-only, constexpr associative container for fixed key/value
   sets in Donner. Perfect hashing guarantees collision-free lookup without allocations while

@@ -40,7 +40,7 @@ The first build downloads LLVM and other external dependencies, and builds all d
 - **Apple Silicon M1**: ~2 minutes (tiny-skia), ~5 minutes (Skia)
 - **GitHub Codespaces (4-core)**: ~10 minutes (tiny-skia), ~20 minutes (Skia)
 
-## Running tests
+## Running Tests
 
 To run the tests, run:
 
@@ -54,7 +54,7 @@ To include experimental code as well, run:
 bazel test //...
 ```
 
-## Build reports
+## Build Reports
 
 See the latest [Build report](./build_report.md).
 

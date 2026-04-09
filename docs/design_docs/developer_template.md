@@ -1,10 +1,31 @@
-# <Feature Name> Developer Guide {#AnchorIdOptional}
+# Feature Name {#AnchorIdOptional}
 
-# <instructions>
-# NOTE: Remove these instructions before submitting the doc for review.
-#
-# Use present tense; describe the shipped state. No TODOs or prior-state notes.
-# </instructions>
+<!--
+Remove this comment block before submitting the doc for review.
+
+## Authoring rules
+
+- **Title**: Use Title Case, no "Developer Guide" / "Design Doc" / "Documentation"
+  suffix — the page's presence under the Developer Docs sidebar already signals
+  that. Bad: "Filter Effects Developer Guide". Good: "Filter Effects".
+- **Angle brackets in titles**: wrap element names in backticks, e.g.
+  `` # `<symbol>` Usage {#SymbolElementUsage} `` — doxygen's markdown-to-HTML
+  converter will otherwise emit literal `<tt>` tags that don't render in H1/H2.
+- **Doxygen anchor**: always set a `{#PageAnchor}` in Title Case after the `#`
+  heading so the page gets a stable short URL (e.g. `FilterEffectsGuide.html`
+  instead of `md_docs_2filter__effects.html`) and can be referenced via
+  `\ref PageAnchor` from other doc comments.
+- **Subpage vs. standalone**: if this doc logically belongs under another page,
+  add `- \subpage PageAnchor` to that parent's list **and** make sure it is
+  reached from the main nav. Loose top-level pages clutter the sidebar.
+- **Avoid H2 backticks**: doxygen 1.9.x has a rendering bug where backticks in
+  `## Subheading` become literal `<tt>` tags. Use plain prose or HTML entities
+  (`&lt;symbol&gt;`) in headings.
+- **Tone**: present tense, describe the shipped state. No TODOs, no "was
+  previously", no design-in-progress phrasing. This is reference documentation.
+-->
+
+\tableofcontents
 
 ## Overview (Required)
 - Current behavior and problem the feature solves.
