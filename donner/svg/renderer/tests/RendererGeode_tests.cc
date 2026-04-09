@@ -29,6 +29,27 @@ PaintParams solidFill(const css::RGBA& rgba) {
   return paint;
 }
 
+/// Build a `PaintParams` with only a solid stroke (fill=none).
+PaintParams solidStroke(const css::RGBA& rgba) {
+  PaintParams paint;
+  paint.fill = PaintServer::None{};
+  paint.stroke = PaintServer::Solid{css::Color(rgba)};
+  paint.strokeOpacity = 1.0;
+  paint.opacity = 1.0;
+  return paint;
+}
+
+/// Build a `PaintParams` with both a solid fill and a solid stroke.
+PaintParams solidFillAndStroke(const css::RGBA& fill, const css::RGBA& stroke) {
+  PaintParams paint;
+  paint.fill = PaintServer::Solid{css::Color(fill)};
+  paint.stroke = PaintServer::Solid{css::Color(stroke)};
+  paint.fillOpacity = 1.0;
+  paint.strokeOpacity = 1.0;
+  paint.opacity = 1.0;
+  return paint;
+}
+
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap.
 std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
   const size_t off = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
@@ -169,6 +190,101 @@ TEST_F(RendererGeodeTest, PushPopTransform) {
 
   auto outside = pixelAt(snap, 12, 12);
   EXPECT_EQ(outside[3], 0u) << "Original rect position should be empty";
+}
+
+/// Stroke a rectangle outline with no fill: the stroke band should be the
+/// stroke color and the interior / exterior should be transparent.
+TEST_F(RendererGeodeTest, StrokeRectOutline) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 4.0;
+  stroke.lineCap = StrokeLinecap::Butt;
+  stroke.lineJoin = StrokeLinejoin::Miter;
+
+  PathShape shape;
+  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.fillRule = FillRule::NonZero;
+  renderer.drawPath(shape, stroke);
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+
+  // On the top edge (y=16), well inside the horizontal extent, the stroke
+  // should contribute red. The stroke extends outward by width/2 = 2, so
+  // any pixel with y in [14, 18) and x in [14, 50) should be touched.
+  auto top = pixelAt(snap, 32, 16);
+  EXPECT_EQ(top[0], 255u) << "Top edge R";
+  EXPECT_EQ(top[1], 0u) << "Top edge G";
+  EXPECT_EQ(top[2], 0u) << "Top edge B";
+
+  // The interior of the rect (center) should be transparent — fill=none.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[3], 0u) << "Interior should be transparent (fill=none)";
+
+  // Far corner: outside everything.
+  auto corner = pixelAt(snap, 2, 2);
+  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
+}
+
+/// Fill and stroke together: interior should be the fill color, the stroke
+/// ring around the edge should be the stroke color.
+TEST_F(RendererGeodeTest, FillAndStrokeRect) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  renderer.setPaint(
+      solidFillAndStroke(css::RGBA(0, 255, 0, 255), css::RGBA(0, 0, 255, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 4.0;
+
+  PathShape shape;
+  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.fillRule = FillRule::NonZero;
+  renderer.drawPath(shape, stroke);
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+
+  // Deep inside: fill (green) only.
+  auto inside = pixelAt(snap, 32, 32);
+  EXPECT_EQ(inside[0], 0u) << "Interior R";
+  EXPECT_EQ(inside[1], 255u) << "Interior G";
+  EXPECT_EQ(inside[2], 0u) << "Interior B";
+
+  // Exactly on the top edge of the rect (y=16), the stroke straddles both
+  // sides by width/2 = 2, so this pixel is inside the stroke ring → blue.
+  auto topEdge = pixelAt(snap, 32, 16);
+  EXPECT_EQ(topEdge[2], 255u) << "Top edge should be in stroke (B)";
+
+  // Far outside the rect is still transparent.
+  auto corner = pixelAt(snap, 2, 2);
+  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
+}
+
+/// Stroke with stroke-width 0 should no-op (neither stroke nor warning).
+TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 0.0;  // Must skip stroke path entirely.
+
+  PathShape shape;
+  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.fillRule = FillRule::NonZero;
+  renderer.drawPath(shape, stroke);
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[3], 0u) << "Zero-width stroke should draw nothing";
 }
 
 /// Stubbed methods (clip/mask/layer/filter/pattern/image/text) should be

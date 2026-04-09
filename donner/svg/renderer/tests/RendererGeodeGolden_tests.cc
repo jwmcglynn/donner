@@ -125,5 +125,61 @@ TEST_F(RendererGeodeGoldenTests, Edzample) {
                          "donner/svg/renderer/testdata/golden/geode/Edzample_Anim3.png");
 }
 
+// ----------------------------------------------------------------------------
+// Solid-color stroke SVGs. Exercise Path::strokeToFill through the Geode
+// pipeline.
+//
+// Visual inspection during bring-up surfaced several bugs in `strokeToFill`
+// that make stroke golden coverage narrower than we'd like. Each has a
+// follow-up task; re-enable the corresponding tests once the root cause is
+// fixed. Deferred:
+//
+//   - **Dashes** — stroking_dasharray / stroking_dashoffset /
+//     stroking_pathlength / stroking_complex. `strokeToFill` ignores
+//     `dashArray`; the Geode adapter warns once in verbose mode and draws
+//     the undashed stroke. Needs dash support in `strokeToFill`.
+//
+//   - **Round / square caps** — stroking_linecap. Visual output renders all
+//     three cap styles as butt. Either `emitCap` isn't producing the extra
+//     geometry or it's being produced but mis-rendered. (Task #34.)
+//
+//   - **Sharp concave corners on open subpaths** — stroking_linejoin. The
+//     inverted-V path hits `emitJoin`'s "inside-turn" branch, which just
+//     draws a line across the two offset endpoints. That creates a
+//     self-intersecting polygon that neither NonZero nor EvenOdd renders
+//     cleanly. Needs proper inner-corner intersection handling in
+//     `Path::strokeToFill`. (Task #32.)
+//
+//   - **Curved flattened strokes on closed subpaths** — rect2 (rounded
+//     rect), ellipse1, skew1 (rounded parallelogram), quadbezier1,
+//     size-too-large. These produce diagonal streaks inside the stroke
+//     ring. Root cause is not yet identified — possibly flattened inner
+//     contours with crossing-count inconsistencies that defeat EvenOdd, or
+//     a Slug band encoder issue with multi-subpath inputs. (Task #33.)
+//
+//   - **Mixed stroke/miter artifacts** — polygon, stroking_miterlimit.
+//     Visually show small extra extensions beyond the shape boundary.
+//     Probably related to the same curve-stroke root cause as above.
+//
+// The tests below are the ones that passed visual inspection — pure
+// straight-line open subpaths with butt caps. They exercise the stroke
+// pipeline end to end (including `Path::strokeToFill` for open subpaths)
+// even if coverage is narrow.
+// ----------------------------------------------------------------------------
+
+/// Polyline with solid stroke — exercises open-subpath stroke with default
+/// (butt) caps and straight-segment bevel joins.
+TEST_F(RendererGeodeGoldenTests, Polyline) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/polyline.svg",
+                         "donner/svg/renderer/testdata/golden/geode/polyline.png");
+}
+
+/// `stroke-width` across a range of values on horizontal lines. Butt caps,
+/// no curves, no joins — smallest possible exercise of variable widths.
+TEST_F(RendererGeodeGoldenTests, StrokingStrokewidth) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_strokewidth.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_strokewidth.png");
+}
+
 }  // namespace
 }  // namespace donner::svg

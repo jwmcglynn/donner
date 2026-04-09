@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
@@ -23,6 +24,42 @@ constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 constexpr uint32_t alignBytesPerRow(uint32_t unpadded) {
   constexpr uint32_t kAlign = 256u;
   return (unpadded + kAlign - 1u) & ~(kAlign - 1u);
+}
+
+/// Convert an SVG stroke-linecap enum to the donner::LineCap used by
+/// Path::strokeToFill.
+LineCap toLineCap(StrokeLinecap cap) {
+  switch (cap) {
+    case StrokeLinecap::Butt: return LineCap::Butt;
+    case StrokeLinecap::Round: return LineCap::Round;
+    case StrokeLinecap::Square: return LineCap::Square;
+  }
+  return LineCap::Butt;
+}
+
+/// Convert an SVG stroke-linejoin enum to the donner::LineJoin used by
+/// Path::strokeToFill. MiterClip and Arcs are specialized SVG2 variants that
+/// strokeToFill does not yet distinguish; fall back to Miter (matching the
+/// tiny-skia backend's handling of these values).
+LineJoin toLineJoin(StrokeLinejoin join) {
+  switch (join) {
+    case StrokeLinejoin::Miter: return LineJoin::Miter;
+    case StrokeLinejoin::MiterClip: return LineJoin::Miter;
+    case StrokeLinejoin::Round: return LineJoin::Round;
+    case StrokeLinejoin::Bevel: return LineJoin::Bevel;
+    case StrokeLinejoin::Arcs: return LineJoin::Miter;
+  }
+  return LineJoin::Miter;
+}
+
+/// Build a donner::StrokeStyle from the SVG StrokeParams.
+StrokeStyle toStrokeStyle(const StrokeParams& params) {
+  StrokeStyle style;
+  style.width = params.strokeWidth;
+  style.cap = toLineCap(params.lineCap);
+  style.join = toLineJoin(params.lineJoin);
+  style.miterLimit = params.miterLimit;
+  return style;
 }
 
 }  // namespace
@@ -70,6 +107,24 @@ struct RendererGeode::Impl {
     const float fillOpacity = static_cast<float>(paint.fillOpacity * paint.opacity);
     if (const auto* solid = std::get_if<PaintServer::Solid>(&paint.fill)) {
       return solid->color.resolve(currentColor, fillOpacity);
+    }
+    if (verbose && !warnedGradient) {
+      std::cerr << "RendererGeode: gradient/pattern paint servers not yet supported\n";
+      warnedGradient = true;
+    }
+    return std::nullopt;
+  }
+
+  /// Resolve the current `paint_.stroke` to a solid RGBA color, or nullopt if
+  /// the stroke is None or a paint server we don't yet support.
+  std::optional<css::RGBA> resolveSolidStroke() {
+    if (std::holds_alternative<PaintServer::None>(paint.stroke)) {
+      return std::nullopt;
+    }
+    const css::RGBA currentColor = paint.currentColor.rgba();
+    const float strokeOpacity = static_cast<float>(paint.strokeOpacity * paint.opacity);
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&paint.stroke)) {
+      return solid->color.resolve(currentColor, strokeOpacity);
     }
     if (verbose && !warnedGradient) {
       std::cerr << "RendererGeode: gradient/pattern paint servers not yet supported\n";
@@ -235,13 +290,46 @@ void RendererGeode::setPaint(const PaintParams& paint) { impl_->paint = paint; }
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
   impl_->fillResolved(path.path, path.fillRule);
 
-  if (stroke.strokeWidth > 0.0 &&
-      !std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
-    if (impl_->verbose && !impl_->warnedStroke) {
-      std::cerr << "RendererGeode: stroke rendering not yet implemented (Phase 2)\n";
-      impl_->warnedStroke = true;
-    }
+  if (stroke.strokeWidth <= 0.0 ||
+      std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
+    return;
   }
+
+  // Dashes are not yet wired up. Warn once per verbose session and fall back
+  // to drawing the undashed stroke outline so the frame isn't silently wrong.
+  if (!stroke.dashArray.empty() && impl_->verbose && !impl_->warnedStroke) {
+    std::cerr << "RendererGeode: stroke-dasharray not yet implemented, "
+                 "rendering as undashed stroke\n";
+    impl_->warnedStroke = true;
+  }
+
+  auto strokeColor = impl_->resolveSolidStroke();
+  if (!strokeColor.has_value()) {
+    return;
+  }
+
+  // Expand the stroked outline into a filled path and reuse the Slug fill
+  // pipeline. `strokeToFill` handles flattening, cap/join generation, and
+  // miter-limit fallback to bevel internally.
+  //
+  // Fill rule note: for closed subpaths, strokeToFill emits the outer and
+  // inner contours as two *same-winding* closed subpaths (not opposite), so
+  // NonZero would over-fill the interior and EvenOdd is required to get a
+  // hollow ring. For OPEN subpaths with sharp concave corners (e.g., the
+  // apex of an inverted V), the single output polygon self-intersects at
+  // the inner side of the join — emitJoin's "inside-turn" branch just draws
+  // a line across the overlap, which neither NonZero nor EvenOdd can resolve
+  // cleanly. EvenOdd is still preferable because closed subpaths are far
+  // more common in real SVGs; the open-sharp-corner case is a known
+  // limitation of Path::strokeToFill and will need inner-corner intersection
+  // handling in a follow-up.
+  const Path strokedOutline = path.path.strokeToFill(toStrokeStyle(stroke));
+  if (strokedOutline.empty()) {
+    return;
+  }
+
+  impl_->syncTransform();
+  impl_->encoder->fillPath(strokedOutline, *strokeColor, FillRule::EvenOdd);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
