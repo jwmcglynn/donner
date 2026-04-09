@@ -76,6 +76,12 @@ To regenerate the checked-in build report at `docs/build_report.md`:
 python3 tools/generate_build_report.py --all --save docs/build_report.md
 ```
 
+To collect coverage without generating the local HTML report:
+
+```sh
+tools/coverage.sh --quiet --no-html
+```
+
 ## CMake build {#cmake-build}
 
 Bazel is the primary build system, but CMake support is also available through a Bazel-to-CMake converter. This is for users who want to integrate Donner into their CMake-based projects.
