@@ -34,6 +34,37 @@ namespace donner::svg {
  * ```xml
  * <rect filter="url(#MyFilter)" width="300" height="300" />
  * ```
+ *
+ * \htmlonly
+ * <svg id="xml_filter_diagram" width="400" height="220" viewBox="0 0 400 220" style="background-color: white" font-family="sans-serif" font-size="12">
+ *   <defs>
+ *     <filter id="xml_filter_userSpace" filterUnits="userSpaceOnUse" x="40" y="50" width="120" height="90">
+ *       <feGaussianBlur in="SourceGraphic" stdDeviation="3" />
+ *     </filter>
+ *     <filter id="xml_filter_objBBox" filterUnits="objectBoundingBox" x="-10%" y="-10%" width="120%" height="120%">
+ *       <feGaussianBlur in="SourceGraphic" stdDeviation="3" />
+ *     </filter>
+ *   </defs>
+ *   <text x="10" y="22" fill="#555" font-weight="bold">&lt;filter&gt; region (dashed)</text>
+ *   <rect x="40" y="50" width="120" height="90" fill="none" stroke="gray" stroke-dasharray="4,3" />
+ *   <rect x="55" y="68" width="90" height="55" fill="#4a90e2" filter="url(#xml_filter_userSpace)" />
+ *   <text x="100" y="165" text-anchor="middle" fill="#333" font-weight="bold">filterUnits =</text>
+ *   <text x="100" y="182" text-anchor="middle" fill="#333" font-family="monospace">"userSpaceOnUse"</text>
+ *   <rect x="240" y="50" width="120" height="90" fill="none" stroke="gray" stroke-dasharray="4,3" />
+ *   <rect x="255" y="68" width="90" height="55" fill="#e27a4a" filter="url(#xml_filter_objBBox)" />
+ *   <text x="300" y="165" text-anchor="middle" fill="#333" font-weight="bold">filterUnits =</text>
+ *   <text x="300" y="182" text-anchor="middle" fill="#333" font-family="monospace">"objectBoundingBox"</text>
+ * </svg>
+ * \endhtmlonly
+ *
+ * | Attribute        | Default              | Description  |
+ * | ---------------: | :------------------: | :----------- |
+ * | `filterUnits`    | `objectBoundingBox`  | Coordinate system for `x`, `y`, `width`, `height`. |
+ * | `primitiveUnits` | `userSpaceOnUse`     | Coordinate system for child filter primitives. |
+ * | `x`              | `-10%`               | X position of the filter region. |
+ * | `y`              | `-10%`               | Y position of the filter region. |
+ * | `width`          | `120%`               | Width of the filter region. |
+ * | `height`         | `120%`               | Height of the filter region. |
  */
 
 /**

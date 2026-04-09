@@ -16,8 +16,17 @@ namespace donner::svg {
  * - DOM object: SVGMaskElement
  * - SVG2 spec: https://drafts.fxtf.org/css-masking-1/#MaskElement
  *
- * These elements are typically placed within a `<defs>` element, and then referenced by id from a
- * `mask` attribute.
+ * A `<mask>` defines a **luminance-based soft mask**. You fill the `<mask>` with arbitrary SVG
+ * graphics — shapes, gradients, even images — and at render time SVG uses the brightness
+ * (luminance) of each pixel of the mask as the alpha value for the corresponding pixel of the
+ * masked element. White pixels in the mask leave the target fully visible, black pixels hide
+ * it completely, and gray pixels produce partial transparency, so you can author smooth fades
+ * and soft edges that \ref xml_clipPath cannot express.
+ *
+ * Declare a `<mask>` inside \ref xml_defs with an `id`, then apply it to any shape via the
+ * `mask="url(#id)"` attribute or CSS property. Reach for `<mask>` when you need soft edges,
+ * gradients of visibility, or image-based cutouts; use \ref xml_clipPath when a crisp,
+ * geometry-only "in or out" clip is sufficient (and faster).
  *
  * Example usage:
  * ```xml
@@ -50,6 +59,15 @@ namespace donner::svg {
  *   <rect mask="url(#MyMask)" width="100" height="100" fill="green" />
  * </svg>
  * \endhtmlonly
+ *
+ * | Attribute          | Default             | Description  |
+ * | -----------------: | :-----------------: | :----------- |
+ * | `x`                | `-10%`              | Top-left X coordinate of the mask region. |
+ * | `y`                | `-10%`              | Top-left Y coordinate of the mask region. |
+ * | `width`            | `120%`              | Width of the mask region. |
+ * | `height`           | `120%`              | Height of the mask region. |
+ * | `maskUnits`        | `objectBoundingBox` | Coordinate system for `x`, `y`, `width`, and `height`. Either `userSpaceOnUse` or `objectBoundingBox`. |
+ * | `maskContentUnits` | `userSpaceOnUse`    | Coordinate system for the contents of the mask. Either `userSpaceOnUse` or `objectBoundingBox`. |
  */
 
 /**

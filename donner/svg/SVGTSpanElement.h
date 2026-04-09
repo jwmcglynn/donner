@@ -18,6 +18,13 @@ namespace donner::svg {
  * - DOM object: SVGTSpanElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TextElement
  *
+ * A `<tspan>` is a text run nested inside a \ref xml_text (or inside another `<tspan>`) — very
+ * similar in spirit to how HTML's `<span>` subdivides a `<p>`. Any text that isn't wrapped in
+ * a `<tspan>` simply inherits the parent `<text>`'s styling; wrapping a portion in `<tspan>`
+ * lets you override properties like `fill`, `font-weight`, or `font-size`, or explicitly move
+ * that portion using the per-glyph positioning attributes `x`, `y`, `dx`, `dy`, and `rotate`.
+ * `<tspan>` does not exist on its own — it must always be a descendant of `<text>`.
+ *
  * ```svg
  * <text x="20" y="40">
  *   You are

@@ -8,12 +8,22 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_image "<image>"
+ * @page xml_image "<image>"
  *
  * Embeds an image into the SVG document.
  *
  * - DOM object: SVGImageElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/embedded.html#ImageElement
+ *
+ * The `<image>` element embeds an external raster image (PNG, JPEG, etc.) or another SVG file
+ * into the current document at a specified rectangle. You point it at a source file via the
+ * `href` attribute — this can be a normal URL, a relative path, or an inline `data:` URL
+ * containing base64-encoded pixel data — and set `x`, `y`, `width`, and `height` to place it
+ * on the canvas. When the image's intrinsic aspect ratio differs from the target rectangle,
+ * `preserveAspectRatio` controls how the image is scaled or letterboxed to fit.
+ *
+ * Use `<image>` when you need to combine bitmap artwork (photos, pre-rendered icons, texture
+ * maps) with vector SVG content in a single document.
  *
  * If `width` or `height` are omitted, the sizes will be inferred using the image's intrinsic size,
  * using the CSS default sizing algorithm, https://www.w3.org/TR/css-images-3/#default-sizing.
