@@ -14,7 +14,6 @@ use_repo(donner, "donner_config")
 local_repository = use_repo_rule("//third_party:bazel/local.bzl", "local_repository")
 new_local_repository = use_repo_rule("//third_party:bazel/local.bzl", "new_local_repository")
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 
 # Build dependencies
 bazel_dep(name = "apple_support", version = "2.5.2", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
@@ -25,6 +24,32 @@ bazel_dep(name = "platforms", version = "1.0.0")
 
 # rules_foreign_cc is used to wrap CMake-based third-party projects (Dawn/WebGPU).
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+
+##
+## Non-BCR dependencies (dev-only extension)
+##
+# skia, harfbuzz, woff2, dawn, resvg-test-suite, and bazel_clang_tidy all live
+# behind `git_repository`/`new_git_repository` calls that are not permitted in
+# modules published to the Bazel Central Registry. We hide them behind a
+# module extension flagged `dev_dependency = True`, so downstream BCR consumers
+# never see them. When donner is the root module (local dev or CI), the
+# extension runs and fetches everything exactly as before.
+#
+# Every target in donner that references one of these repos MUST be behind a
+# `target_compatible_with` guard on the corresponding config_setting, so that
+# BCR consumers doing `bazel build @donner//...` simply skip those targets
+# rather than failing to resolve the missing repos. See
+# third_party/bazel/non_bcr_deps.bzl for the list.
+non_bcr_deps = use_extension("//third_party:bazel/non_bcr_deps.bzl", "non_bcr_deps", dev_dependency = True)
+use_repo(
+    non_bcr_deps,
+    "bazel_clang_tidy",
+    "dawn",
+    "harfbuzz",
+    "resvg-test-suite",
+    "skia",
+    "woff2",
+)
 
 ##
 ## Third-party dependencies
@@ -43,16 +68,6 @@ local_repository(
     name = "skia_user_config",
     path = "third_party/skia_user_config",
 )
-
-git_repository(
-    name = "skia",
-    commit = "d945cbcbbb5834245256e883803c2704f3a32e18",
-    remote = "https://github.com/google/skia",
-)
-
-bazel_deps = use_repo_rule("@skia//bazel:deps.bzl", "bazel_deps")
-c_plus_plus_deps = use_repo_rule("@skia//bazel:deps.bzl", "c_plus_plus_deps")
-header_based_configs = use_repo_rule("@skia//bazel:deps.bzl", "header_based_configs")
 
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
 bazel_dep(name = "libpng", version = "1.6.54")
@@ -87,39 +102,8 @@ new_local_repository(
 
 bazel_dep(name = "zlib", version = "1.3.2")
 
-# WOFF2 text support (gated by text_full flag)
+# brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
 bazel_dep(name = "brotli", version = "1.2.0")
-
-new_git_repository(
-    name = "woff2",
-    build_file = "//third_party:BUILD.woff2",
-    commit = "1f184d05566b3e25827a1f8e68eb82b9ccf54f3b",
-    remote = "https://github.com/google/woff2.git",
-)
-
-# HarfBuzz text shaping (gated by text_full flag)
-new_git_repository(
-    name = "harfbuzz",
-    build_file = "//third_party:BUILD.harfbuzz",
-    tag = "14.1.0",
-    remote = "https://github.com/harfbuzz/harfbuzz.git",
-    patch_cmds = [
-        # Create config-override.h to re-enable the draw API (disabled by HB_LEAN/HB_TINY).
-        # We need hb_font_draw_glyph() for glyph outline extraction.
-        """cat > src/config-override.h << 'HBEOF'
-// Re-enable the draw API for glyph outline extraction.
-// HB_TINY -> HB_LEAN -> HB_NO_DRAW -> HB_NO_OUTLINE, which strips these.
-#undef HB_NO_DRAW
-#undef HB_NO_OUTLINE
-// Re-enable CFF outlines (our fallback font Public Sans is OTF/CFF).
-#undef HB_NO_CFF
-#undef HB_NO_OT_FONT_CFF
-// Re-enable file I/O (hb_face_create_from_file_or_fail references
-// hb_blob_create_from_file_or_fail which is guarded by HB_NO_OPEN).
-#undef HB_NO_OPEN
-HBEOF""",
-    ],
-)
 
 ##
 ## Test dependencies
@@ -141,45 +125,8 @@ new_local_repository(
     path = "third_party/css-parsing-tests",
 )
 
-new_git_repository(
-    name = "resvg-test-suite",
-    build_file = "//third_party:BUILD.resvg-test-suite",
-    commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
-    remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
-)
-
-# Dawn (WebGPU implementation) for the Geode GPU renderer.
-# Only fetched when --//donner/svg/renderer/geode:enable_dawn=true.
-# `patch_cmds` runs `fetch_dawn_dependencies.py` at repository fetch time
-# (which has network access) to populate third_party/ submodules, so the
-# downstream CMake build can run with DAWN_FETCH_DEPENDENCIES=OFF inside
-# Bazel's sandbox.
-new_git_repository(
-    name = "dawn",
-    build_file = "//third_party:BUILD.dawn",
-    # Pinned to a specific commit for reproducibility. Bump deliberately.
-    # From v20260403.135149 (2026-04-03).
-    commit = "fa93dacdf3931ec29ff8f42facf51db632c45308",
-    remote = "https://dawn.googlesource.com/dawn",
-    patch_cmds = [
-        "python3 tools/fetch_dawn_dependencies.py",
-        # Strip nested .git directories so Bazel's file tracking sees the
-        # submodule contents as regular source files.
-        "find third_party -name .git -type d -exec rm -rf {} + 2>/dev/null || true",
-        # Strip nested BUILD.bazel/BUILD/WORKSPACE files throughout the tree.
-        # Otherwise they create Bazel package boundaries and glob(['**']) stops
-        # recursing, leaving CMake unable to find many source subdirectories.
-        # Dawn has ~114 BUILD.bazel files under src/tint alone (Tint's upstream
-        # Bazel support for WGSL parsing), plus more in third_party submodules.
-        # The root BUILD file is provided by our overlay so the top-level one
-        # is not needed.
-        "find . -mindepth 2 \\( -name BUILD.bazel -o -name BUILD -o -name WORKSPACE -o -name WORKSPACE.bazel -o -name MODULE.bazel \\) -type f -delete 2>/dev/null || true",
-        # Remove the top-level WORKSPACE/MODULE files that Dawn ships with.
-        # (Keep our BUILD.bazel overlay which is placed at the root by Bazel's
-        # new_git_repository build_file attribute — don't remove that one.)
-        "rm -f WORKSPACE WORKSPACE.bazel MODULE.bazel",
-    ],
-)
+# resvg-test-suite and dawn are fetched via the non_bcr_deps module extension
+# declared above — they are not available when donner is consumed from BCR.
 
 bazel_dep(name = "rules_python", version = "1.9.0", dev_dependency = True)
 
@@ -220,12 +167,6 @@ git_override(
     module_name = "hedron_compile_commands",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor",
     commit = "abb61a688167623088f8768cc9264798df6a9d10",
-)
-
-git_repository(
-    name = "bazel_clang_tidy",
-    commit = "c4d35e0d0b838309358e57a2efed831780f85cd0",
-    remote = "https://github.com/erenon/bazel_clang_tidy.git",
 )
 
 bazel_dep(name = "rules_proto", version = "7.1.0", dev_dependency = True)
