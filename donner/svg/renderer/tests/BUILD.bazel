@@ -175,6 +175,10 @@ donner_cc_test(
     data = [
         "@resvg-test-suite//:fonts",
     ],
+    target_compatible_with = select({
+        "//donner/svg/renderer:resvg_test_suite_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         "//donner/base:base_test_utils",
         "//donner/svg/text:text_backend_full",
@@ -204,6 +208,10 @@ donner_cc_test(
     data = [
         "@resvg-test-suite//:fonts",
     ],
+    target_compatible_with = select({
+        "//donner/svg/renderer:resvg_test_suite_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         "//donner/base:base_test_utils",
         "//donner/svg/text:text_backend",
@@ -241,6 +249,10 @@ donner_cc_test(
         "@resvg-test-suite//:svg",
     ],
     shard_count = 16,
+    target_compatible_with = select({
+        "//donner/svg/renderer:resvg_test_suite_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
