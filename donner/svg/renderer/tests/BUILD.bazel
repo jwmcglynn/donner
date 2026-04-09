@@ -45,6 +45,9 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_backend_skia": [
             "RendererTestBackendSkia.cc",
         ],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "RendererTestBackendGeode.cc",
+        ],
         "//conditions:default": [
             "RendererTestBackendTinySkia.cc",
         ],
@@ -54,7 +57,12 @@ donner_cc_library(
     ],
     deps = [
         "//donner/svg/renderer",
-    ],
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
@@ -102,6 +110,11 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
+    # Geode is skeleton-stage: stroke/gradient/text/filter/image all stubbed,
+    # so the existing golden suite fails across the board. `--config=geode`
+    # runs the curated :renderer_geode_golden_tests target instead, which
+    # only exercises pure solid-fill SVGs.
+    target_compatible_with = renderer_backend_compatible_with(["skia", "tiny_skia"]),
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
@@ -217,6 +230,44 @@ donner_cc_test(
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_backend_full",
         "//donner/svg/text:text_backend_simple",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_geode_golden_tests",
+    srcs = ["RendererGeodeGolden_tests.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+    ],
+    # Only valid when the Geode backend is the active one. Requires the
+    # --//donner/svg/renderer/geode:enable_dawn flag to be set, which
+    # `--config=geode` takes care of.
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_geode_tests",
+    srcs = ["RendererGeode_tests.cc"],
+    # Geode pulls in Dawn; gate behind the same enable_dawn flag the rest of
+    # the geode/ targets use.
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:dawn_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:stroke_params",
         "@com_google_gtest//:gtest_main",
     ],
 )

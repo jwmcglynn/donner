@@ -10,6 +10,7 @@ To enable:
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 # Build flag controlling whether Geode's Dawn-backed targets are compiled.
@@ -30,6 +31,30 @@ _DAWN_ONLY = select({
     ":dawn_enabled": [],
     "//conditions:default": ["@platforms//:incompatible"],
 })
+
+# CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
+# always built regardless of the enable_dawn flag. Downstream Geode targets
+# (GeoEncoder, RendererGeode) consume the EncodedPath struct this produces
+# and upload it to GPU buffers.
+donner_cc_library(
+    name = "geode_path_encoder",
+    srcs = ["GeodePathEncoder.cc"],
+    hdrs = ["GeodePathEncoder.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_path_encoder_tests",
+    srcs = ["tests/GeodePathEncoder_tests.cc"],
+    deps = [
+        ":geode_path_encoder",
+        "//donner/base",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
 
 donner_cc_library(
     name = "geode_device",
@@ -78,6 +103,17 @@ donner_cc_test(
     ],
 )
 
+# Embed the WGSL shader source as a C++ resource. The generated header
+# exposes `donner::embedded::kSlugFillWgsl` as a `std::span<const unsigned char>`.
+embed_resources(
+    name = "slug_fill_wgsl",
+    header_output = "embed_resources/SlugFillWgsl.h",
+    resources = {
+        "kSlugFillWgsl": "shaders/slug_fill.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -85,6 +121,7 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":slug_fill_wgsl",
         "@dawn//:webgpu_dawn",
     ],
 )
@@ -96,6 +133,48 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_shaders",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "geode_pipeline",
+    srcs = ["GeodePipeline.cc"],
+    hdrs = ["GeodePipeline.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_shaders",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_library(
+    name = "geo_encoder",
+    srcs = ["GeoEncoder.cc"],
+    hdrs = ["GeoEncoder.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_device",
+        ":geode_path_encoder",
+        ":geode_pipeline",
+        "//donner/base",
+        "//donner/css",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_test(
+    name = "geo_encoder_tests",
+    srcs = ["tests/GeoEncoder_tests.cc"],
+    target_compatible_with = _DAWN_ONLY,
+    deps = [
+        ":geo_encoder",
+        ":geode_device",
+        ":geode_pipeline",
+        "//donner/base",
+        "//donner/css",
         "@com_google_gtest//:gtest_main",
     ],
 )

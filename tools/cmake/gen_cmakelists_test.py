@@ -132,6 +132,15 @@ class IsKnownBazelInternalTest(unittest.TestCase):
         self.assertFalse(g._is_known_bazel_internal("//donner/base:base"))
 
 
+class SkipCmakeDepTest(unittest.TestCase):
+    def test_geode_subpackage_dep_is_skipped(self):
+        self.assertTrue(g._should_skip_cmake_dep("donner_svg_renderer_geode_geo_encoder"))
+
+    def test_normal_dep_is_not_skipped(self):
+        self.assertFalse(g._should_skip_cmake_dep("donner_svg_renderer_renderer_skia"))
+        self.assertFalse(g._should_skip_cmake_dep(None))
+
+
 class CmakeTargetNameTest(unittest.TestCase):
     def test_root_package(self):
         self.assertEqual(g.cmake_target_name("", "donner"), "donner")

@@ -70,6 +70,15 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Geode (WebGPU + Slug) backend selection. Using this backend also requires
+# --//donner/svg/renderer/geode:enable_dawn=true so that Dawn is compiled;
+# `--config=geode` in .bazelrc sets both flags together.
+config_setting(
+    name = "renderer_backend_geode",
+    flag_values = {":renderer_backend": "geode"},
+    visibility = ["//visibility:public"],
+)
+
 config_setting(
     name = "filters_enabled",
     flag_values = {":filters": "true"},
@@ -294,6 +303,30 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "renderer_geode",
+    srcs = ["RendererGeode.cc"],
+    hdrs = ["RendererGeode.h"],
+    # Geode pulls in Dawn via GeoEncoder. Gate behind the same enable_dawn
+    # build flag that the rest of the geode/ targets use.
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:dawn_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_driver",
+        ":renderer_interface",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/renderer/geode:geo_encoder",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_pipeline",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_tiny_skia",
     srcs = ["RendererTinySkia.cc"],
     hdrs = ["RendererTinySkia.h"],
@@ -340,6 +373,9 @@ donner_cc_library(
         ":renderer_backend_tiny_skia": [
             "RendererTinySkiaBackend.cc",
         ],
+        ":renderer_backend_geode": [
+            "RendererGeodeBackend.cc",
+        ],
         "//conditions:default": [
             "RendererSkiaBackend.cc",
         ],
@@ -352,6 +388,7 @@ donner_cc_library(
         ":renderer_interface",
     ] + select({
         ":renderer_backend_tiny_skia": [":renderer_tiny_skia"],
+        ":renderer_backend_geode": [":renderer_geode"],
         "//conditions:default": [":renderer_skia"],
     }),
 )

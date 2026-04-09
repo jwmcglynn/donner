@@ -68,6 +68,8 @@ struct ImageComparisonParams {
   bool allowSkia = true;
   /// If false, skip the test when the active backend is TinySkia.
   bool allowTinySkia = true;
+  /// If false, skip the test when the active backend is Geode.
+  bool allowGeode = true;
   /// Bitmask of required backend features, built from \ref RendererBackendFeatureMask.
   uint32_t requiredFeatures = 0;
   /// Human-readable reason used when backend restrictions cause a skip.
@@ -180,6 +182,7 @@ struct ImageComparisonParams {
     switch (backend) {
       case RendererBackend::Skia: allowSkia = false; break;
       case RendererBackend::TinySkia: allowTinySkia = false; break;
+      case RendererBackend::Geode: allowGeode = false; break;
     }
 
     if (!reason.empty()) {

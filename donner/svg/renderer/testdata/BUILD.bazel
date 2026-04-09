@@ -3,6 +3,9 @@ filegroup(
     srcs = glob([
         "*.svg",
         "golden/*.png",
+        # Per-backend goldens (e.g., Geode's Slug output differs from the
+        # scanline rasterizer goldens in `golden/`, so it has its own set).
+        "golden/*/*.png",
     ]) + [
         "//:logo_svgs",
     ],

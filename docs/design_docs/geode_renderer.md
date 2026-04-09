@@ -1,6 +1,6 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phase 0 complete (#481 merged); Phase 1 MVP in progress (#484)
+**Status:** Phase 0 complete (#481 merged); Phase 1 MVP in progress (#484, follow-ups landing on `geo-encoder` branch)
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
 **Last updated:** 2026-04-08
@@ -16,11 +16,37 @@
   - ✅ `GeodeDevice`: headless WebGPU device/queue factory.
   - ✅ End-to-end GPU draw verified (clear-to-red + texture readback).
   - ✅ Slug WGSL fill shader compiles via Dawn's Tint compiler.
-  - ⏳ `GeodePathEncoder` Slug band decomposition — next PR
-  - ⏳ `GeoEncoder` drawing API — next PR
-  - ⏳ `RendererGeode` skeleton + `RendererInterface` adapter — later
-  - ⏳ Golden image tests for solid-fill SVGs — later
-  - ⏳ SwiftShader integration for Linux CI — follow-up
+  - ✅ `GeodePathEncoder` Slug band decomposition (commit `e42f3f75`).
+  - ✅ `GeoEncoder` + `GeodePipeline` — first GPU-rendered SVG paths
+    (clear, fillRect, fillTriangle, fillCircle all green; commit `ddbcda6b`).
+  - ✅ `RendererGeode` skeleton — solid-fill `drawPath`/`drawRect`/
+    `drawEllipse` through the `RendererInterface` adapter, stubs for
+    clip/mask/layer/filter/pattern/image/text.
+  - 🚧 Stroke rendering via `Path::strokeToFill()` → Slug fill pipeline.
+    Basic plumbing landed (axis-aligned rects, open-subpath polylines,
+    variable widths); multiple `Path::strokeToFill` limitations remain
+    (dashes, round/square caps, sharp concave corners on open subpaths,
+    curved flattened strokes on closed subpaths). See Phase 2 checklist
+    for details and follow-up tasks.
+  - ✅ `--config=geode` backend selection — sets both
+    `renderer_backend=geode` and `enable_dawn=true`. Default builds are
+    unaffected (Dawn still gated off).
+  - ✅ Golden image tests for solid-fill SVGs — 5/5 green.
+    `renderer_geode_golden_tests` uses per-backend goldens under
+    `testdata/golden/geode/` (the Skia/tiny-skia goldens in `golden/`
+    don't match Slug's winding-number AA at edge pixels, so Geode has
+    its own). Curated suite: `MinimalClosedCubic2x2`,
+    `MinimalClosedCubic5x3`, `BigLightningGlowNoFilterCrop`, `Lion`,
+    `Edzample`. Strict identity check (`threshold=0`, `max=0`,
+    `includeAntiAliasingDifferences`) catches any Geode-side regressions.
+    Regenerate with `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace)
+    bazel run --config=geode //donner/svg/renderer/tests:renderer_geode_golden_tests`.
+  - 🚧 Linux CI via Mesa `llvmpipe` — switched from SwiftShader plan.
+    Ubuntu's `mesa-vulkan-drivers` package provides `llvmpipe`, a
+    maintained software Vulkan ICD that's apt-installable (no vendoring
+    required). Dawn auto-discovers it via the standard Vulkan loader.
+    Added as an experimental `linux-geode` CI job
+    (`continue-on-error: true` until the first run confirms it works).
 - **Phase 2+**: not yet started.
 
 
@@ -985,10 +1011,13 @@ cleanup.
   - [ ] Fuzz tests for cubic-to-quadratic approximation and monotonic splitting.
 - [x] Implement `Path` (immutable) and `PathBuilder` (mutable), replacing `PathSpline`.
   - [x] Add `QuadTo` verb support.
-  - [ ] Implement `cubicToQuadratic()`.
-  - [ ] Implement `toMonotonic()`.
-  - [ ] Implement `flatten()`.
-  - [ ] Implement `strokeToFill()`.
+  - [x] Implement `cubicToQuadratic()`.
+  - [x] Implement `toMonotonic()`.
+  - [x] Implement `flatten()`.
+  - [x] Implement `strokeToFill()` — flattens curves, offsets each segment
+    by width/2, applies cap/join with miter-limit fallback to bevel.
+    Produces two same-winding closed contours per closed subpath, so
+    callers must fill with `EvenOdd` to get the expected hollow ring.
 - [x] Migrate `RendererInterface` from `PathSpline` to `Path`.
 - [x] Migrate remaining callers, remove `PathSpline`.
 
@@ -1029,26 +1058,49 @@ cleanup.
   wired up.)**
   - [x] Non-zero fill rule.
   - [x] Even-odd fill rule.
-- [ ] Implement `GeodePathEncoder`: `Path` → Slug band decomposition. **(next PR)**
-  - [ ] Call `path.cubicToQuadratic()` then `path.toMonotonic()` as preprocessing.
-  - [ ] Adaptive band decomposition (1 band for small paths, ~32px per band
-    otherwise, capped at 256).
-  - [ ] Vertex buffer generation: bounding quads (6 vertices / band) with
-    outward normals for dilation.
-  - [ ] Curve data packing: quadratic control points `(p0, p1, p2)` as flat f32,
-    `(curveStart, curveCount)` band metadata.
-- [ ] Implement `GeoEncoder` core: transform stack, solid color fill, path
-  rendering. **(next PR)**
-- [ ] Implement `RendererGeode` skeleton: `beginFrame`/`endFrame`,
+- [x] Implement `GeodePathEncoder`: `Path` → Slug band decomposition. **(commit `e42f3f75`)**
+- [x] Implement `GeoEncoder` core: transform stack, solid color fill, path
+  rendering. **(commit `ddbcda6b`)**
+- [x] Implement `RendererGeode` skeleton: `beginFrame`/`endFrame`,
   `setTransform`, `drawPath` with solid fill.
-- [ ] Add Bazel `--config=geode` backend selection.
-- [ ] Run basic renderer tests (solid-fill SVGs) against golden images.
-- [ ] SwiftShader integration for Linux CI. **(MVP is macOS-only; Linux
-  needs SwiftShader as a headless Vulkan ICD to run the same tests.)**
+- [x] Add Bazel `--config=geode` backend selection.
+- [x] Run basic renderer tests (solid-fill SVGs) against golden images —
+  `renderer_geode_golden_tests` with per-backend goldens under
+  `testdata/golden/geode/`; 5/5 green on macOS Metal.
+- [x] Linux CI headless Vulkan via Mesa `llvmpipe`. **(Switched from
+  SwiftShader: Ubuntu's `mesa-vulkan-drivers` apt package ships llvmpipe,
+  a maintained pure-software Vulkan ICD. No vendoring/CMake work
+  required. Added as experimental `linux-geode` CI job —
+  `continue-on-error: true` until first run proves it out.)**
 
 ### Phase 2: Complete SVG Painting
 
-- [ ] Implement stroke rendering via `Path::strokeToFill()` → Slug fill pipeline.
+- [🚧] Stroke rendering via `Path::strokeToFill()` → Slug fill pipeline.
+  Basic plumbing landed: `RendererGeode::drawPath` expands the stroked
+  outline on the CPU and fills it via the existing Slug pipeline with
+  `FillRule::EvenOdd`. Verified working cases (covered by
+  `renderer_geode_golden_tests` and unit tests): axis-aligned rectangles
+  (closed subpaths), polyline (open subpath, straight segments, butt
+  caps), variable-width horizontal lines. Known limitations requiring
+  follow-up work on `Path::strokeToFill`:
+    1. **Dashes** — `dashArray`/`dashOffset`/`pathLength` ignored. Verbose
+       warning + falls back to undashed stroke.
+    2. **Round / square caps** — all caps visually render as butt (see
+       `stroking_linecap` reference diff). Either `emitCap` isn't emitting
+       the extra geometry or the geometry is mis-rendered.
+    3. **Sharp concave corners on open subpaths** — the inverted-V test
+       (`stroking_linejoin`) hits `emitJoin`'s inside-turn branch, which
+       draws a line across the two offset endpoints. That creates a
+       self-intersecting polygon that neither NonZero nor EvenOdd renders
+       cleanly. Needs proper inner-corner intersection handling.
+    4. **Curved flattened strokes on closed subpaths** — rounded rects,
+       ellipses, quad curves with thick strokes (`rect2`, `ellipse1`,
+       `skew1`, `quadbezier1`) produce diagonal streaks inside the stroke
+       ring. Root cause not yet identified; possibly flattened inner
+       contour has crossing-count inconsistencies that defeat EvenOdd, or
+       a Slug band encoder issue with multi-subpath inputs. **Also:**
+       `Path::strokeMiterBounds` should be audited for correctness at the
+       same time (tracked separately).
 - [ ] Implement `GeodeGradientEncoder`: linear, radial, and sweep gradients.
   - [ ] Fragment shader gradient evaluation.
   - [ ] Spread modes: pad, reflect, repeat.
