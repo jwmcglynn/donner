@@ -290,6 +290,14 @@ void RendererGeode::setPaint(const PaintParams& paint) { impl_->paint = paint; }
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
   impl_->fillResolved(path.path, path.fillRule);
 
+  // Mirror fillResolved's no-op safety: if there's no encoder (headless
+  // device init failed, zero-pixel viewport, or draw-before-beginFrame),
+  // the stroke branch must bail too. Otherwise the encoder dereference
+  // below crashes.
+  if (!impl_->encoder) {
+    return;
+  }
+
   if (stroke.strokeWidth <= 0.0 ||
       std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
     return;
@@ -410,13 +418,46 @@ RendererBitmap RendererGeode::takeSnapshot() const {
 
   const uint8_t* mapped = static_cast<const uint8_t*>(readback.GetConstMappedRange());
 
-  // Strip row padding so the consumer gets a tightly packed RGBA buffer.
+  // Strip row padding and unpremultiply alpha so the consumer gets a tightly
+  // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
+  // paint RGB by alpha before upload to match the blend pipeline's
+  // premultiplied storage, but `RendererBitmap` — like Skia's and
+  // tiny-skia's `takeSnapshot()` outputs — is defined as straight RGBA.
+  // Returning raw texture bytes would darken semi-transparent content and
+  // break cross-backend parity.
   bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
   bitmap.rowBytes = static_cast<size_t>(width) * 4u;
   bitmap.pixels.resize(bitmap.rowBytes * height);
   for (uint32_t y = 0; y < height; ++y) {
-    const uint8_t* row = mapped + static_cast<size_t>(y) * bytesPerRow;
-    std::copy_n(row, bitmap.rowBytes, bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes);
+    const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
+    uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
+    for (uint32_t x = 0; x < width; ++x) {
+      const uint8_t srcR = srcRow[x * 4 + 0];
+      const uint8_t srcG = srcRow[x * 4 + 1];
+      const uint8_t srcB = srcRow[x * 4 + 2];
+      const uint8_t srcA = srcRow[x * 4 + 3];
+      if (srcA == 0u) {
+        dstRow[x * 4 + 0] = 0u;
+        dstRow[x * 4 + 1] = 0u;
+        dstRow[x * 4 + 2] = 0u;
+        dstRow[x * 4 + 3] = 0u;
+        continue;
+      }
+      if (srcA == 255u) {
+        dstRow[x * 4 + 0] = srcR;
+        dstRow[x * 4 + 1] = srcG;
+        dstRow[x * 4 + 2] = srcB;
+        dstRow[x * 4 + 3] = 255u;
+        continue;
+      }
+      // Round-nearest unpremultiply: straight = (premul * 255 + alpha/2) / alpha.
+      const unsigned a = srcA;
+      const unsigned half = a >> 1u;
+      dstRow[x * 4 + 0] = static_cast<uint8_t>(std::min(255u, (srcR * 255u + half) / a));
+      dstRow[x * 4 + 1] = static_cast<uint8_t>(std::min(255u, (srcG * 255u + half) / a));
+      dstRow[x * 4 + 2] = static_cast<uint8_t>(std::min(255u, (srcB * 255u + half) / a));
+      dstRow[x * 4 + 3] = srcA;
+    }
   }
   readback.Unmap();
   return bitmap;

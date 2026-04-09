@@ -266,6 +266,53 @@ TEST_F(RendererGeodeTest, FillAndStrokeRect) {
   EXPECT_EQ(corner[3], 0u) << "Corner should be transparent";
 }
 
+/// A semi-transparent fill must round-trip through `takeSnapshot` in
+/// straight alpha, not premultiplied. Regression guard for #492 review
+/// comment P2: `GeoEncoder::fillPath` premultiplies the paint color by
+/// alpha before upload (because the pipeline blend state is
+/// premultiplied-source-over), so `takeSnapshot` must unpremultiply when
+/// building the straight-alpha `RendererBitmap` — otherwise semi-transparent
+/// content comes out darkened and cross-backend parity breaks.
+TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  // 50% red: R=255, A=128. A straight-alpha round-trip should preserve
+  // R~=255 and A~=128. A broken read-back would return the premultiplied
+  // RGB (~128,0,0,128) instead — exactly the regression we're guarding.
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 255u, 2u) << "Straight-alpha R should be ~255";
+  EXPECT_EQ(center[1], 0u) << "G";
+  EXPECT_EQ(center[2], 0u) << "B";
+  EXPECT_NEAR(center[3], 128u, 2u) << "Alpha preserved";
+}
+
+/// Drawing a stroked path when `impl_->encoder` is null (e.g.,
+/// draw-before-beginFrame) must be a safe no-op. Regression guard for
+/// #492 review comment P1: the stroke branch of `drawPath` previously
+/// dereferenced `impl_->encoder` unconditionally, which crashed when the
+/// encoder hadn't been created yet. Before the fix, this test would
+/// segfault; after the fix, it returns cleanly.
+TEST_F(RendererGeodeTest, StrokeBeforeBeginFrameIsNoOp) {
+  RendererGeode renderer;
+  // Intentionally skip beginFrame — encoder remains null.
+  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 4.0;
+
+  PathShape shape;
+  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.fillRule = FillRule::NonZero;
+  // Before the fix, this call crashes with a null pointer dereference.
+  renderer.drawPath(shape, stroke);
+  // No explicit assertion — reaching this line means we didn't crash.
+}
+
 /// Stroke with stroke-width 0 should no-op (neither stroke nor warning).
 TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
   RendererGeode renderer;

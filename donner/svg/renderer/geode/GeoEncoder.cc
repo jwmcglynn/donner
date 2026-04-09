@@ -153,10 +153,16 @@ void GeoEncoder::clear(const css::RGBA& color) {
   if (impl_->passOpen) {
     return;
   }
-  impl_->clearColor.r = color.r / 255.0;
-  impl_->clearColor.g = color.g / 255.0;
-  impl_->clearColor.b = color.b / 255.0;
-  impl_->clearColor.a = color.a / 255.0;
+  // Premultiply the clear color by alpha to match the pipeline's
+  // premultiplied blend state. `fillPath` premultiplies its paint color the
+  // same way, and the read-back in `RendererGeode::takeSnapshot` assumes the
+  // texture contents are premultiplied throughout. Clearing with a straight-
+  // alpha value would break that invariant for any semi-transparent clear.
+  const double alpha = color.a / 255.0;
+  impl_->clearColor.r = (color.r / 255.0) * alpha;
+  impl_->clearColor.g = (color.g / 255.0) * alpha;
+  impl_->clearColor.b = (color.b / 255.0) * alpha;
+  impl_->clearColor.a = alpha;
   impl_->hasExplicitClear = true;
 }
 
