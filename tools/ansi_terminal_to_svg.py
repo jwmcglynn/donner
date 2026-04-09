@@ -250,7 +250,10 @@ def render_svg(
                         current_color = color
                         x_start = pixel_x
             if current_color is not None:
-                run_w = (cols * 2 - x_start) * subpx_w
+                # Flush trailing run using *this row's* width, not the global
+                # max `cols` — otherwise shorter rows smear their last color
+                # across the missing trailing cells.
+                run_w = (len(row) * 2 - x_start) * subpx_w
                 out.append(
                     _rect(
                         grid_ox + x_start * subpx_w,
