@@ -110,24 +110,21 @@ INSTANTIATE_TEST_SUITE_P(DominantBaseline, ImageComparisonTestFixture,
 
 // a-enable-background: Deprecated in SVG 2, not implemented. See docs/unsupported_svg1_features.md.
 
-INSTANTIATE_TEST_SUITE_P(
-    Fill, ImageComparisonTestFixture,
-    ValuesIn(getTestsWithPrefix("a-fill",  //
-                                {
-                                    {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
-                                    {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
-                                    {"a-fill-027.svg",
-                                     Params::Skip()},  // Not impl: Fallback with icc-color
-                                    // Text fill tests: Skia's native glyph rendering produces
-                                    // different outlines than stb_truetype, causing pixel diffs.
-                                    {"a-fill-031.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 500)},
-                                    {"a-fill-032.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 500)},
-                                    {"a-fill-033.svg",
-                                     Params::WithThreshold(kDefaultThreshold, 2100)},
-                                })),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(Fill, ImageComparisonTestFixture,
+                         ValuesIn(getTestsWithPrefix(
+                             "a-fill",  //
+                             {
+                                 {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
+                                 {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
+                                 {"a-fill-027.svg",
+                                  Params::Skip()},  // Not impl: Fallback with icc-color
+                                 // Text fill tests: Skia's native glyph rendering produces
+                                 // different outlines than stb_truetype, causing pixel diffs.
+                                 {"a-fill-031.svg", Params::WithThreshold(kDefaultThreshold, 500)},
+                                 {"a-fill-032.svg", Params::WithThreshold(kDefaultThreshold, 500)},
+                                 {"a-fill-033.svg", Params::WithThreshold(kDefaultThreshold, 2100)},
+                             })),
+                         TestNameFromFilename);
 
 // TODO(filter): a-filter (CSS filter attribute)
 
@@ -715,12 +712,8 @@ INSTANTIATE_TEST_SUITE_P(
                                         "resvg-e-marker-019.png")},  // We (correctly)
                                                                      // apply opacity
                                                                      // on image
-            {"e-marker-022.svg", Params::Skip()},                    // Bug: Recursive marker rendering
-            {"e-marker-023.svg", Params::Skip()},                    // Bug: Recursive markers
-            {"e-marker-024.svg", Params::Skip()},                    // Bug: Recursive markers
             {"e-marker-032.svg", Params::Skip()},                    // UB: Target with subpaths
             {"e-marker-044.svg", Params::Skip()},                    // Bug: Multiple closepaths
-            {"e-marker-057.svg", Params::Skip()},                    // Bug: Recursive markers
             // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
             {"e-marker-045.svg", Params::WithGoldenOverride(
                                      "donner/svg/renderer/testdata/golden/resvg-e-marker-045.png")},
@@ -756,10 +749,11 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-pattern-008.svg",
              Params::WithThreshold(kDefaultThreshold, 250)},  // Skia pattern AA
             {"e-pattern-010.svg",
-             Params::WithThreshold(kDefaultThreshold, 150)},           // Skia pattern AA
-            {"e-pattern-018.svg", Params::WithThreshold(0.5f, 1150)},  // AA artifacts + quad glyph outlines
-            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},        // Anti-aliasing artifacts
-            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},   // Nested pattern AA (768px)
+             Params::WithThreshold(kDefaultThreshold, 150)},  // Skia pattern AA
+            {"e-pattern-018.svg",
+             Params::WithThreshold(0.5f, 1150)},  // AA artifacts + quad glyph outlines
+            {"e-pattern-019.svg", Params::WithThreshold(0.2f)},       // Anti-aliasing artifacts
+            {"e-pattern-020.svg", Params::WithThreshold(0.6f, 800)},  // Nested pattern AA (768px)
             {"e-pattern-021.svg",
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.
             {"e-pattern-022.svg",

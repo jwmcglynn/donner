@@ -32,9 +32,9 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   normalized.pixels.resize(tightRowBytes * static_cast<std::size_t>(snapshot.dimensions.y));
 
   for (int y = 0; y < snapshot.dimensions.y; ++y) {
-    std::copy_n(
-        snapshot.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes), tightRowBytes,
-        normalized.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
+    std::copy_n(snapshot.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes),
+                tightRowBytes,
+                normalized.pixels.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
   }
 
   return normalized;
@@ -120,8 +120,7 @@ TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
   target->setAttribute("fill", "#0000ff");
 
   incrementalRenderer.draw(incrementalDocument);
-  const RendererBitmap incrementalSnapshot =
-      NormalizeSnapshot(incrementalRenderer.takeSnapshot());
+  const RendererBitmap incrementalSnapshot = NormalizeSnapshot(incrementalRenderer.takeSnapshot());
   ASSERT_FALSE(incrementalSnapshot.empty());
 
   SVGDocument fullDocument = ParseDocument(R"svg(
@@ -156,8 +155,7 @@ TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
   ASSERT_EQ(snapshot.dimensions, Vector2i(500, 500));
 
   const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
-    const size_t index =
-        (static_cast<size_t>(y) * snapshot.rowBytes) + static_cast<size_t>(x) * 4u;
+    const size_t index = (static_cast<size_t>(y) * snapshot.rowBytes) + static_cast<size_t>(x) * 4u;
     return {snapshot.pixels[index], snapshot.pixels[index + 1], snapshot.pixels[index + 2],
             snapshot.pixels[index + 3]};
   };
@@ -488,7 +486,6 @@ TEST(RendererPublicApiTest, StrokeRenderingOnRect) {
   // A point on the stroke (top edge at x=25, y=10) should be red.
   auto strokePx = PixelAt(snapshot, 25, 10);
   EXPECT_THAT(strokePx, IsRedish());
-  
 }
 
 // 2. Stroke-dasharray — verify dashed stroke renders differently from solid
@@ -537,9 +534,9 @@ TEST(RendererPublicApiTest, ShapeOpacity) {
 
   // The pixel should be semi-transparent red (~128 alpha).
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_GT(px[0], 100);   // Red present
-  EXPECT_LT(px[3], 200);   // Not fully opaque
-  EXPECT_GT(px[3], 50);    // Not fully transparent
+  EXPECT_GT(px[0], 100);  // Red present
+  EXPECT_LT(px[3], 200);  // Not fully opaque
+  EXPECT_GT(px[3], 50);   // Not fully transparent
 }
 
 // 4. Fill-opacity + stroke-opacity
@@ -598,6 +595,30 @@ TEST(RendererPublicApiTest, MarkerRendering) {
   EXPECT_GT(markerPixel[3], 0);    // Not transparent — marker drawn here
 }
 
+TEST(RendererPublicApiTest, RecursiveMarkerStopsAtOneLevel) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="32" viewBox="0 0 64 32">
+        <defs>
+          <marker id="recursive" viewBox="0 0 10 10" refX="0" refY="0"
+                  markerWidth="10" markerHeight="10" orient="0" style="overflow:visible">
+            <rect x="0" y="0" width="4" height="4" fill="red" />
+            <polyline points="0,0 8,0" fill="none" stroke="black" stroke-opacity="0"
+                      marker-end="url(#recursive)" />
+          </marker>
+        </defs>
+        <polyline points="8,16 24,16" fill="none" stroke="black" marker-end="url(#recursive)" />
+      </svg>
+    )svg");
+
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+
+  EXPECT_THAT(PixelAt(snapshot, 26, 18), IsRedish());
+  EXPECT_THAT(PixelAt(snapshot, 34, 18), IsTransparent());
+}
+
 // 6. Use element rendering
 TEST(RendererPublicApiTest, UseElementRendering) {
   SVGDocument document = ParseDocument(R"svg(
@@ -618,11 +639,9 @@ TEST(RendererPublicApiTest, UseElementRendering) {
   // Both use instances should produce blue pixels.
   auto first = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(first, IsBlueish());
-  
 
   auto second = PixelAt(snapshot, 30, 10);
   EXPECT_THAT(second, IsBlueish());
-  
 }
 
 // 7. Nested group transforms
@@ -646,7 +665,6 @@ TEST(RendererPublicApiTest, NestedGroupTransforms) {
   // Inside the transformed rect (e.g., 20, 20) should be red.
   auto inside = PixelAt(snapshot, 20, 20);
   EXPECT_THAT(inside, IsOpaque());
-  
 
   // Outside the transformed rect (e.g., 5, 5) should be transparent.
   auto outside = PixelAt(snapshot, 5, 5);
@@ -677,11 +695,9 @@ TEST(RendererPublicApiTest, ViewBoxScaling) {
   // The green rect should fill the entire 50x50 canvas.
   auto corner = PixelAt(snapshot, 0, 0);
   EXPECT_THAT(corner, IsGreenish());
-  
 
   auto center = PixelAt(snapshot, 25, 25);
   EXPECT_THAT(center, IsGreenish());
-  
 }
 
 // 9. Symbol with use
@@ -729,9 +745,6 @@ TEST(RendererPublicApiTest, CssClassStyling) {
 
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsRedish());
-  
-  
-  
 }
 
 // 11. Inline style override
@@ -750,7 +763,7 @@ TEST(RendererPublicApiTest, InlineStyleOverridesAttribute) {
   // Style should override the fill attribute — result should be red, not blue.
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsRedish());
-  
+
   EXPECT_GT(px[3], 200);
 }
 
@@ -844,7 +857,6 @@ TEST(RendererPublicApiTest, ImageElementDataUri) {
   // to fill the 20x20 viewport, so center pixel should be red.
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsRedish());
-  
 }
 
 // 15. Empty document — render SVG with no visible content
@@ -884,7 +896,6 @@ TEST(RendererPublicApiTest, CircleElement) {
   // Center should be green.
   auto center = PixelAt(snapshot, 20, 20);
   EXPECT_THAT(center, IsGreenish());
-  
 
   // Corner should be transparent (outside circle).
   auto corner = PixelAt(snapshot, 0, 0);
@@ -907,7 +918,6 @@ TEST(RendererPublicApiTest, EllipseElement) {
   // Center should be blue.
   auto center = PixelAt(snapshot, 30, 15);
   EXPECT_GT(center[2], 200);
-  
 }
 
 // 18. Pattern fill
@@ -959,7 +969,6 @@ TEST(RendererPublicApiTest, ClipPathCropsContent) {
   // Inside clip region should be red.
   auto inside = PixelAt(snapshot, 20, 20);
   EXPECT_THAT(inside, IsOpaque());
-  
 
   // Outside clip region should be transparent.
   auto outside = PixelAt(snapshot, 2, 2);
@@ -1015,9 +1024,8 @@ TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   // multiply(#ffff00, #00ffff) = #00ff00 (green)
   auto px = PixelAt(snapshot, 15, 15);
   EXPECT_LT(px[0], 30);   // Red channel ~0 (not cyan's 0 or yellow's 255)
-  EXPECT_GT(px[1], 200);   // Green channel ~255
+  EXPECT_GT(px[1], 200);  // Green channel ~255
   EXPECT_LT(px[2], 30);   // Blue channel ~0
-  
 }
 
 // 22. Visibility hidden — element should not appear
@@ -1081,8 +1089,8 @@ TEST(RendererPublicApiTest, GradientWithTransform) {
   auto top = PixelAt(snapshot, 20, 1);
   auto bottom = PixelAt(snapshot, 20, 38);
   // Top should be more red, bottom more blue.
-  EXPECT_GT(top[0], bottom[0]);   // More red at top
-  EXPECT_LT(top[2], bottom[2]);   // Less blue at top
+  EXPECT_GT(top[0], bottom[0]);  // More red at top
+  EXPECT_LT(top[2], bottom[2]);  // Less blue at top
 }
 
 // 25. Path element (exercises drawPath code path)
@@ -1102,7 +1110,6 @@ TEST(RendererPublicApiTest, PathElement) {
   auto inside = PixelAt(snapshot, 20, 20);
   EXPECT_GT(inside[0], 200);  // Red component of orange
   EXPECT_GT(inside[1], 100);  // Green component of orange
-  
 }
 
 // 26. Gradient userSpaceOnUse exercises non-objectBoundingBox branch
@@ -1127,9 +1134,9 @@ TEST(RendererPublicApiTest, GradientUserSpaceOnUse) {
 
   // Left edge should be cyan (R=0, G=255, B=255).
   auto left = PixelAt(snapshot, 1, 20);
-  EXPECT_LT(left[0], 50);    // Low red (cyan)
-  EXPECT_GT(left[1], 200);   // High green
-  EXPECT_GT(left[2], 200);   // High blue
+  EXPECT_LT(left[0], 50);   // Low red (cyan)
+  EXPECT_GT(left[1], 200);  // High green
+  EXPECT_GT(left[2], 200);  // High blue
 
   // Right edge should be magenta (R=255, G=0, B=255).
   auto right = PixelAt(snapshot, 38, 20);
