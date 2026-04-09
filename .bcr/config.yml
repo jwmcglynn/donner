@@ -1,0 +1,9 @@
+# Publish-to-BCR app configuration.
+# See: https://github.com/bazel-contrib/publish-to-bcr
+#
+# fixedReleaser pins the "releaser" identity used on BCR PRs opened by the
+# app. This should be a maintainer who is comfortable landing BCR entries
+# on behalf of the project.
+fixedReleaser:
+  login: jwmcglynn
+  email: jeff@mcglynn.dev

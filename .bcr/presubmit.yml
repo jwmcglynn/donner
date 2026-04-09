@@ -1,0 +1,42 @@
+# BCR presubmit configuration. Exercised when Publish-to-BCR opens a PR on
+# bazelbuild/bazel-central-registry for a new Donner release.
+#
+# IMPORTANT: The target allowlist below must only contain targets that are
+# buildable with the dependencies that BCR consumers see — i.e. NOT including
+# @skia, @harfbuzz, @woff2, @dawn, @resvg-test-suite, or @bazel_clang_tidy
+# (all of which are hidden behind a dev_dependency module extension at
+# //third_party:bazel/non_bcr_deps.bzl). If you add a new top-level library
+# under //donner, add it here too; if your library references one of the
+# hidden deps, it must be guarded with `target_compatible_with` so BCR
+# consumers can skip it cleanly.
+#
+# See docs/design_docs/bcr_release.md for the fuller release checklist.
+
+matrix:
+  platform:
+    - debian11
+    - ubuntu2204
+    - macos
+  bazel:
+    - 7.x
+    - 8.x
+
+tasks:
+  verify_targets:
+    name: "Build core Donner library (tiny-skia backend, text-base)"
+    platform: ${{ platform }}
+    bazel: ${{ bazel }}
+    build_targets:
+      - "@donner//donner/base/..."
+      - "@donner//donner/css/..."
+      - "@donner//donner/svg:svg"
+      - "@donner//donner/svg/parser/..."
+      - "@donner//donner/svg/components/..."
+      - "@donner//donner/svg/core/..."
+      - "@donner//donner/svg/properties/..."
+      - "@donner//donner/svg/graph/..."
+      - "@donner//donner/svg/resources/..."
+      - "@donner//donner/svg/renderer:rendering_context"
+      - "@donner//donner/svg/renderer:renderer_driver"
+      - "@donner//donner/svg/renderer:renderer_interface"
+      - "@donner//donner/svg/renderer:renderer_tiny_skia"

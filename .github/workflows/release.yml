@@ -64,3 +64,26 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
           file: ./release/donner-svg_darwin_arm64
+
+  # Publish a new entry to the Bazel Central Registry when a GitHub Release
+  # is published. Uses the bazel-contrib Publish-to-BCR reusable workflow,
+  # which reads .bcr/ templates from this repo (config.yml, metadata.template.json,
+  # source.template.json, presubmit.yml) and opens a PR on
+  # bazelbuild/bazel-central-registry from a maintainer's fork.
+  #
+  # One-time setup required:
+  #   1. Install the Publish-to-BCR GitHub App on jwmcglynn/donner
+  #   2. Fork bazelbuild/bazel-central-registry as jwmcglynn/bazel-central-registry
+  #   3. Install the app on that fork too
+  #   4. Create a PAT with `repo` + `workflow` scopes and save as the
+  #      BCR_PUBLISH_TOKEN repo secret
+  #
+  # See docs/design_docs/bcr_release.md for the full runbook.
+  publish-to-bcr:
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: [linux, macos]
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yml@v0
+    with:
+      tag_name: ${{ github.event.release.tag_name }}
+    secrets:
+      publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}

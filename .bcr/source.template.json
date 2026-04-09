@@ -1,0 +1,5 @@
+{
+  "integrity": "",
+  "strip_prefix": "donner-{VERSION}",
+  "url": "https://github.com/jwmcglynn/donner/archive/refs/tags/v{VERSION}.tar.gz"
+}

@@ -1,0 +1,15 @@
+{
+  "homepage": "https://github.com/jwmcglynn/donner",
+  "maintainers": [
+    {
+      "name": "Jeff McGlynn",
+      "email": "jeff@mcglynn.dev",
+      "github": "jwmcglynn"
+    }
+  ],
+  "repository": [
+    "github:jwmcglynn/donner"
+  ],
+  "versions": [],
+  "yanked_versions": {}
+}
