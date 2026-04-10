@@ -1739,7 +1739,14 @@ double subpathLength(const FlatSubpath& subpath) {
 ///
 /// \p rawDashes is the raw stroke-dasharray.
 /// \p dashOffset is the raw stroke-dashoffset.
-/// \p actualLength is the arc length of the subpath being dashed.
+/// \p actualLength is the arc length of the subpath being dashed. Returning
+///   nullopt for `actualLength <= 0` keeps callers from emitting zero-length
+///   dashes.
+/// \p totalPathArc is the total arc length of the ENTIRE path (sum of all
+///   subpath lengths). This is the reference length used together with
+///   \p pathLength to compute the spec's dash-scaling ratio; per SVG2
+///   pathLength refers to the whole path, so multi-subpath strokes must
+///   share one scale factor rather than rescaling per subpath.
 /// \p pathLength is the SVG pathLength attribute (0 means unused).
 struct ResolvedDashPattern {
   std::vector<double> lengths;  ///< Even-length sequence: on, off, on, off, ...
@@ -1749,7 +1756,7 @@ struct ResolvedDashPattern {
 
 std::optional<ResolvedDashPattern> resolveDashPattern(const std::vector<double>& rawDashes,
                                                       double dashOffset, double actualLength,
-                                                      double pathLength) {
+                                                      double totalPathArc, double pathLength) {
   if (rawDashes.empty() || actualLength <= 0.0) {
     return std::nullopt;
   }
@@ -1788,11 +1795,14 @@ std::optional<ResolvedDashPattern> resolveDashPattern(const std::vector<double>&
   }
 
   // Apply pathLength scaling. When pathLength is set, dash distances are
-  // expressed relative to pathLength, so we scale by actual/pathLength so
-  // the same spec-relative distances walk the actual geometry.
+  // expressed relative to pathLength (the author-declared total length of
+  // the ENTIRE path), so we scale by totalPathArc/pathLength. The same
+  // scale factor applies to every subpath — otherwise, multi-subpath
+  // strokes would get inconsistent dash sizes. Per SVG2 §12.2 ("moving
+  // along a path", stroke-dasharray + pathLength).
   double effectiveOffset = dashOffset;
-  if (pathLength > 0.0) {
-    const double scale = actualLength / pathLength;
+  if (pathLength > 0.0 && totalPathArc > 0.0) {
+    const double scale = totalPathArc / pathLength;
     for (double& v : result.lengths) {
       v *= scale;
     }
@@ -1888,10 +1898,10 @@ FlatSubpath extractPolylineRange(const FlatSubpath& subpath, double startDist, d
 /// true if any dashes were emitted, false if the pattern was invalid or the
 /// subpath was too degenerate to dash.
 bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
-                         PathBuilder& builder) {
+                         double totalPathArc, PathBuilder& builder) {
   const double totalArc = subpathLength(subpath);
   auto maybePattern = resolveDashPattern(style.dashArray, style.dashOffset, totalArc,
-                                         style.pathLength);
+                                         totalPathArc, style.pathLength);
   if (!maybePattern.has_value()) {
     return false;
   }
@@ -2025,11 +2035,24 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
   // Step 3: Build the stroke outline for each subpath. When a dash pattern
   // is set, each subpath is split into on-dash sub-polylines (each treated
   // as an open subpath with its own caps) before offsetting.
+  //
+  // We compute the TOTAL arc length (sum across all subpaths) up front and
+  // pass it into the per-subpath dasher. This is the reference length for
+  // the SVG `pathLength` attribute — pathLength describes the entire
+  // `<path>`'s length, so the scaling ratio must be consistent for every
+  // subpath. Computing it per-subpath would give different-sized dashes on
+  // different subpaths of the same stroke.
   PathBuilder builder;
   const bool hasDashes = !style.dashArray.empty();
+  double totalPathArc = 0.0;
+  if (hasDashes && style.pathLength > 0.0) {
+    for (const auto& subpath : subpaths) {
+      totalPathArc += subpathLength(subpath);
+    }
+  }
   for (const auto& subpath : subpaths) {
     if (hasDashes) {
-      if (strokeDashedSubpath(subpath, style, builder)) {
+      if (strokeDashedSubpath(subpath, style, totalPathArc, builder)) {
         continue;
       }
       // Fallback: dash pattern was degenerate (all-zero, etc.) — SVG says

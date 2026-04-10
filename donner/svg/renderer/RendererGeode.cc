@@ -295,11 +295,24 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
   return params;
 }
 
+/// Result of resolving a radial gradient against a path. Either a fully
+/// specified radial gradient ready for the GPU, OR — per SVG2 — a degenerate
+/// radial gradient that should be painted as a solid color equal to the
+/// last stop. Returning nullopt means "not a radial gradient" (caller should
+/// fall through to the next resolver).
+struct ResolvedRadialGradient {
+  std::optional<geode::RadialGradientParams> gradient;
+  std::optional<css::RGBA> solidFallback;
+};
+
 /// Same shape as @ref resolveLinearGradientParams, but for radial gradients.
-/// Returns `nullopt` if the referenced entity isn't a radial gradient or if
-/// the gradient is degenerate (zero radius, singular transform, focal point
-/// outside the outer circle in a way that yields an empty annulus).
-std::optional<geode::RadialGradientParams> resolveRadialGradientParams(
+/// Returns `nullopt` if the referenced entity isn't a radial gradient. If it
+/// IS a radial gradient but is degenerate (zero outer radius), returns a
+/// populated `solidFallback` with the last stop's color — matching
+/// RendererSkia (see `RendererSkia.cc:2354`). If the focal circle fully
+/// contains the outer circle, returns an empty result (both fields unset)
+/// so the caller drops the draw.
+std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     const components::PaintResolvedReference& ref, const Box2d& pathBounds,
     const Box2d& viewBox, const css::RGBA currentColor, float opacity,
     std::vector<geode::RadialGradientParams::Stop>& stopsStorage, bool* outStopsTruncated) {
@@ -322,18 +335,33 @@ std::optional<geode::RadialGradientParams> resolveRadialGradientParams(
 
   auto frame = resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox);
   if (!frame.has_value()) {
-    return std::nullopt;
+    // Recognized as radial but frame is degenerate (singular transform, etc).
+    // Drop the draw — no meaningful output possible.
+    return ResolvedRadialGradient{};
+  }
+
+  if (computedGradient->stops.empty()) {
+    return ResolvedRadialGradient{};
   }
 
   const double radius =
       resolveGradientCoord(radial->r, frame->coordBounds, frame->numbersArePercent);
-  // SVG: a radius of zero collapses the gradient to a single point. Match the
-  // tiny-skia / Skia behavior of falling back to the last-stop color, which
-  // here means dropping the gradient and letting the caller paint nothing
-  // (the fallback solid color, if any, is handled one level up).
+  // SVG2: a radius of zero collapses the gradient to a single point. Match
+  // RendererSkia's behavior of painting a solid color equal to the LAST
+  // stop in the gradient — this keeps elements visible for valid degenerate
+  // radial gradients (e.g., `r="0"` with a single visible color).
   if (radius <= 0.0) {
-    return std::nullopt;
+    ResolvedRadialGradient out;
+    const auto& lastStop = computedGradient->stops.back();
+    const css::RGBA base = lastStop.color.resolve(currentColor, opacity);
+    // Multiply in stop-opacity per SVG2 (stop-color * stop-opacity) and then
+    // the overall paint opacity factor that `buildGradientStops` also honors.
+    const double stopOpacity = std::clamp<double>(lastStop.opacity, 0.0, 1.0);
+    out.solidFallback =
+        css::RGBA(base.r, base.g, base.b, static_cast<uint8_t>(std::round(base.a * stopOpacity)));
+    return out;
   }
+
   const double focalRadius =
       resolveGradientCoord(radial->fr, frame->coordBounds, frame->numbersArePercent);
   const Vector2d center =
@@ -350,11 +378,7 @@ std::optional<geode::RadialGradientParams> resolveRadialGradientParams(
   // (no shader can produce meaningful colors).
   const double centerDistance = (center - focalCenter).length();
   if (centerDistance + radius <= focalRadius) {
-    return std::nullopt;
-  }
-
-  if (computedGradient->stops.empty()) {
-    return std::nullopt;
+    return ResolvedRadialGradient{};
   }
 
   buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, outStopsTruncated);
@@ -367,7 +391,10 @@ std::optional<geode::RadialGradientParams> resolveRadialGradientParams(
   params.gradientFromPath = frame->gradientFromPath;
   params.spreadMode = toGeoSpreadMode(computedGradient->spreadMethod);
   params.stops = std::span<const geode::RadialGradientParams::Stop>(stopsStorage);
-  return params;
+
+  ResolvedRadialGradient out;
+  out.gradient = std::move(params);
+  return out;
 }
 
 }  // namespace
@@ -596,8 +623,20 @@ struct RendererGeode::Impl {
                     << " stops; truncating (follow-up: texture-based stop lookup)\n";
           warnedGradient = true;
         }
-        syncTransform();
-        encoder->fillPathRadialGradient(drawPath, *radial, rule);
+        if (radial->gradient.has_value()) {
+          syncTransform();
+          encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule);
+          return;
+        }
+        if (radial->solidFallback.has_value()) {
+          // SVG2 degenerate radial (r=0): paint the last stop color as a
+          // solid fill so the element remains visible.
+          syncTransform();
+          encoder->fillPath(drawPath, *radial->solidFallback, rule);
+          return;
+        }
+        // Recognized as radial but otherwise unusable (empty stops, focal
+        // circle containing outer, singular transform). Drop the draw.
         return;
       }
 
