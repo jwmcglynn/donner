@@ -229,11 +229,23 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
   }
   stopsStorage.clear();
   stopsStorage.reserve(stopCount);
+
+  // Per SVG 1.1 §13.2.4 / SVG 2 §12.6.2: each stop's `offset` must be
+  // monotonically non-decreasing. If a stop specifies an offset less than
+  // the largest previous stop's offset, the offset is clamped up to that
+  // largest previous value. Missing offsets effectively default to the
+  // previous stop's offset via the same rule. The shader's
+  // `sample_stops` assumes monotonic offsets — violating the invariant
+  // produces wrong colors on the affected range (e-stop-003, e-stop-024).
+  float minOffset = 0.0f;
   for (size_t i = 0; i < stopCount; ++i) {
     const GradientStop& stop = computedGradient.stops[i];
     const css::RGBA rgba = stop.color.resolve(currentColor, stop.opacity * opacity);
     geode::LinearGradientParams::Stop out;
-    out.offset = stop.offset;
+    const float clampedOffset =
+        std::clamp<float>(static_cast<float>(stop.offset), 0.0f, 1.0f);
+    out.offset = std::max(clampedOffset, minOffset);
+    minOffset = out.offset;
     out.rgba[0] = rgba.r / 255.0f;
     out.rgba[1] = rgba.g / 255.0f;
     out.rgba[2] = rgba.b / 255.0f;
