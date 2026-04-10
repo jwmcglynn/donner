@@ -298,9 +298,8 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
         "@resvg-test-suite//:fonts",
-        "@resvg-test-suite//:images",
-        "@resvg-test-suite//:png",
-        "@resvg-test-suite//:svg",
+        "@resvg-test-suite//:resources",
+        "@resvg-test-suite//:tests",
     ],
     shard_count = 16,
     target_compatible_with = select({
