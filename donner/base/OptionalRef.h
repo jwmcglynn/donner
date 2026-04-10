@@ -103,7 +103,7 @@ public:
   constexpr explicit operator bool() const noexcept { return ptr_ != nullptr; }
 
   /**
-   * Returns `true` if the `OptionalRef` contains a reference..
+   * Returns `true` if the `OptionalRef` contains a reference.
    *
    * @return `true` if the `OptionalRef` is not empty.
    */

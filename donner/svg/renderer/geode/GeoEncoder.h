@@ -57,10 +57,12 @@ struct LinearGradientParams {
   /// fixed-size uniform buffer layout in `slug_gradient.wgsl`. Stops beyond
   /// the cap are silently truncated — a follow-up will move stop storage to
   /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
+  /// A single gradient stop: normalized offset and premultiplied linear RGBA.
   struct Stop {
-    float offset = 0.0f;
-    float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    float offset = 0.0f;  ///< Stop offset in [0, 1].
+    float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};  ///< Premultiplied linear RGBA color.
   };
+  /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
   std::span<const Stop> stops;
 };
 
@@ -73,7 +75,7 @@ struct LinearGradientParams {
  * one-circle radial gradient (`t = distance(P, center) / radius`).
  *
  * All geometry fields are in the gradient's own coordinate system, same
- * convention as @ref LinearGradientParams: the caller has already folded
+ * convention as \ref LinearGradientParams — the caller has already folded
  * `gradientUnits` and `gradientTransform` into `gradientFromPath`.
  */
 struct RadialGradientParams {
@@ -94,6 +96,7 @@ struct RadialGradientParams {
   /// kept as a sibling struct so each gradient kind's C++ API reflects its
   /// natural parameter set without `std::variant`-style dispatch.
   using Stop = LinearGradientParams::Stop;
+  /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
   std::span<const Stop> stops;
 };
 
@@ -139,7 +142,9 @@ public:
 
   GeoEncoder(const GeoEncoder&) = delete;
   GeoEncoder& operator=(const GeoEncoder&) = delete;
+  /// Move constructor.
   GeoEncoder(GeoEncoder&&) noexcept;
+  /// Move assignment operator.
   GeoEncoder& operator=(GeoEncoder&&) noexcept;
 
   /**

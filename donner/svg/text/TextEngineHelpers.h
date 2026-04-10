@@ -23,8 +23,8 @@ double computeBaselineShift(DominantBaseline baseline, const FontVMetrics& vm, f
 
 /// Byte range within a span representing a shaping chunk.
 struct ChunkRange {
-  size_t byteStart = 0;
-  size_t byteEnd = 0;
+  size_t byteStart = 0;  ///< Inclusive start byte offset within the span text.
+  size_t byteEnd = 0;    ///< Exclusive end byte offset within the span text.
 };
 
 /// Pre-scan span text to find chunk byte boundaries. A new chunk starts when a non-first
@@ -44,17 +44,17 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText);
 
 /// Text chunk boundary for per-chunk text-anchor adjustment.
 struct ChunkBoundary {
-  size_t runIndex = 0;
-  size_t glyphIndex = 0;
-  TextAnchor textAnchor = TextAnchor::Start;
+  size_t runIndex = 0;  ///< Index of the run that starts this chunk.
+  size_t glyphIndex = 0;  ///< Glyph index within the run where the chunk begins.
+  TextAnchor textAnchor = TextAnchor::Start;  ///< Effective text-anchor for the chunk.
 };
 
 /// Per-run pen start/end position for textLength calculation.
 struct RunPenExtent {
-  double startX = 0.0;
-  double startY = 0.0;
-  double endX = 0.0;
-  double endY = 0.0;
+  double startX = 0.0;  ///< Pen X position at the start of the run.
+  double startY = 0.0;  ///< Pen Y position at the start of the run.
+  double endX = 0.0;    ///< Pen X position at the end of the run.
+  double endY = 0.0;    ///< Pen Y position at the end of the run.
 };
 
 /// Apply per-span and global textLength adjustments to positioned runs.

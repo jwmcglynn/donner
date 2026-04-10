@@ -19,8 +19,8 @@ namespace donner::css {
 using TokenIndex = size_t;
 
 /**
- * Indicates if a number is an integer or a floating point number, used for number-containing tokens
- * such as \ref `Token::Number` and \ref Token::Dimension.
+ * Indicates if a number is an integer or a floating point number, used for number-containing
+ * tokens such as `Token::Number` and `Token::Dimension`.
  */
 enum class NumberType {
   Integer,  ///< Integer number (no decimal point).
@@ -38,7 +38,7 @@ struct Token {
    * Raw CSS tokens, which are created as a first step when parsing a CSS string. See
    * https://www.w3.org/TR/css-syntax-3/#tokenization for more details.
    *
-   * Tokens are created by \ref donner::css::parser::details::Tokenizer, which is automatically used
+   * Tokens are created by `donner::css::parser::details::Tokenizer`, which is automatically used
    * within the CSS parser suite.
    *
    * A full list of tokens can be found in the \ref TokenValue variant list.

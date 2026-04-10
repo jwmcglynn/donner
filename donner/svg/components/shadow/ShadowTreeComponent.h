@@ -22,7 +22,7 @@ namespace donner::svg::components {
  *
  * To use, create and call \ref ShadowTreeComponent::setMainHref.
  *
- * When instantiated, creates a \ref BranchType::Main shadow tree, which is the main render graph.
+ * When instantiated, creates a \ref ShadowBranchType::Main shadow tree, which is the main render graph.
  * For other shadow trees, see \ref OffscreenShadowTreeComponent.
  */
 class ShadowTreeComponent {

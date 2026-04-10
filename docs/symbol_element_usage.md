@@ -1,4 +1,4 @@
-# `<symbol>` Usage: Coordinate System and Sizing Behavior {#SymbolElementUsage}
+# &lt;symbol&gt; Usage: Coordinate System and Sizing Behavior {#SymbolElementUsage}
 
 ## Overview
 
@@ -106,7 +106,7 @@ This scenario is less common in usage – typically either the symbol or the use
 </svg>
 \endhtmlonly
 
-### preserveAspectRatio on <symbol>
+### preserveAspectRatio on `<symbol>`
 
 \htmlonly
 <svg id="symbol_usage_par" width="400" height="180" viewBox="0 0 400 180" style="background-color: white" font-family="sans-serif" font-size="11">
@@ -148,7 +148,7 @@ If `preserveAspectRatio="none"` is on the symbol, the content will be stretched 
 
 This attribute is considered when scaling the symbol's viewBox to the viewport (whether the viewport came from the symbol's own width/height or from the `<use>`). It does not inherit from any outer context; it's a property of the symbol itself.
 
-## Coordinate System Transformation via <use>
+## Coordinate System Transformation via `<use>`
 
 When a `<use>` instantiates a symbol, several coordinate system transformations occur in sequence:
 

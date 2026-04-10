@@ -55,7 +55,7 @@ public:
   static std::string format(std::string_view source, const ParseDiagnostic& diag,
                             const Options& options);
 
-  /// @overload Format with default options.
+  /// Format with default options.
   static std::string format(std::string_view source, const ParseDiagnostic& diag) {
     return format(source, diag, Options{});
   }
@@ -71,7 +71,7 @@ public:
   static std::string formatAll(std::string_view source, const ParseWarningSink& sink,
                                const Options& options);
 
-  /// @overload Format all with default options.
+  /// Format all with default options.
   static std::string formatAll(std::string_view source, const ParseWarningSink& sink) {
     return formatAll(source, sink, Options{});
   }

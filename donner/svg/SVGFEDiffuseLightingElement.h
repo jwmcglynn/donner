@@ -264,7 +264,7 @@ namespace donner::svg {
  * \par What you'd actually use this for
  *
  * `<feDiffuseLighting>` on its own just produces a lit grayscale image. In practice it's
- * chained with \ref xml_feComposite: `<feComposite in2="SourceGraphic" operator="in">` to
+ * chained with \ref xml_feComposite — `<feComposite in2="SourceGraphic" operator="in">` to
  * clip the lighting to the silhouette of your shape, or `<feComposite operator="arithmetic"
  * k1="1" k2="0" k3="0" k4="0">` to multiply the lighting onto your source colors. For glossy
  * highlights added on top, use the companion \ref xml_feSpecularLighting primitive.

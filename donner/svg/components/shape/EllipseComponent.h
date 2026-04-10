@@ -65,7 +65,7 @@ struct ComputedEllipseComponent {
    * @param inputProperties The input properties for the ellipse.
    * @param unparsedProperties The unparsed properties for the ellipse, which may contain
    * presentation attributes set in the CSS stylesheet which need to be applied to the element.
-   * @param outWarnings A vector to append any warnings to.
+   * @param warningSink A vector to append any warnings to.
    */
   ComputedEllipseComponent(const EllipseProperties& inputProperties,
                            const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,

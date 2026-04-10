@@ -164,7 +164,7 @@ public:
    * ComputedSizedElementComponent.
    *
    * @param registry ECS registry.
-   * @param outWarnings Output vector of parse errors, if any.
+   * @param warningSink Output vector of parse errors, if any.
    */
   void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 
@@ -177,7 +177,7 @@ public:
    * @param unparsedProperties Unparsed properties to evaluate.
    * @param viewBox ViewBox to use when converting size percentages.
    * @param fontMetrics Font metrics, used to scale lengths.
-   * @param outWarnings Output vector of parse errors, if any.
+   * @param warningSink Output vector of parse errors, if any.
    * @return Computed bounds.
    */
   Box2d computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
@@ -195,7 +195,7 @@ public:
    * @param useEntity The source \ref xml_use that may provide size override.
    * @param symbolEntity The target \ref xml_symbol entity whose properties might be overridden.
    * @param branchType The type of branch being created.
-   * @param outWarnings Output vector of parse errors, if any.
+   * @param warningSink Output vector of parse errors, if any.
    * @return true if a component was created, false otherwise.
    */
   bool createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,
@@ -210,7 +210,7 @@ public:
    * @param handle Entity handle.
    * @param style Precomputed style information for this element
    * @param fontMetrics Font metrics, used to scale lengths
-   * @param outWarnings Output vector of parse errors, if any.
+   * @param warningSink Output vector of parse errors, if any.
    * @return reference to the computed component
    */
   const ComputedSizedElementComponent& createComputedSizedElementComponentWithStyle(
@@ -224,7 +224,7 @@ public:
    * @param handle Entity handle.
    * @param style Precomputed style information for this element
    * @param fontMetrics Font metrics, used to scale lengths
-   * @param outWarnings Output vector of parse errors, if any.
+   * @param warningSink Output vector of parse errors, if any.
    */
   const ComputedLocalTransformComponent& createComputedLocalTransformComponentWithStyle(
       EntityHandle handle, const ComputedStyleComponent& style, const FontMetrics& fontMetrics,

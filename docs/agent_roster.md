@@ -3,7 +3,7 @@
 \tableofcontents
 
 Donner ships a roster of domain-expert **subagents** that live under
-[`.claude/agents/`](../../.claude/agents/). Each one is a Markdown file with a
+[`.claude/agents/`](https://github.com/jwmcglynn/donner/tree/main/.claude/agents). Each one is a Markdown file with a
 YAML frontmatter block (`name`, `description`) followed by a prompt that gives
 the agent its voice, its source-of-truth pointers, and its handoff rules.
 
@@ -36,7 +36,7 @@ zone. The roster solves that by:
   differently from SecurityBot's threat-modeling stance. The voices are
   deliberate — they cue you to what *kind* of feedback you're getting.
 
-See [`AGENTS.md`](../../AGENTS.md) for the repo-wide coding and workflow rules
+See [`AGENTS.md`](https://github.com/jwmcglynn/donner/blob/main/AGENTS.md) for the repo-wide coding and workflow rules
 that every agent inherits.
 
 ## Quick Reference {#AgentRosterTable}
@@ -60,7 +60,7 @@ that every agent inherits.
 | **TextBot** | Text rendering across all three tiers (`--config=text`, `--config=text-full`, Skia text) | Any text bug, font matching, `@font-face`, WOFF2, shaping, cross-tier mismatches |
 | **TinySkiaBot** | Vendored `tiny-skia-cpp` + `RendererTinySkia` (the default backend) | Pixel diffs in the default backend, SIMD parity, stroke/dash edge cases |
 
-Each agent file in [`.claude/agents/`](../../.claude/agents/) starts with the
+Each agent file in [`.claude/agents/`](https://github.com/jwmcglynn/donner/tree/main/.claude/agents) starts with the
 same YAML frontmatter shape:
 
 ```markdown
@@ -139,7 +139,7 @@ through three bots, that's usually a sign the work itself should be split.
 
 ## Reading a Bot's File {#AgentRosterAnatomy}
 
-Every file in [`.claude/agents/`](../../.claude/agents/) follows roughly the
+Every file in [`.claude/agents/`](https://github.com/jwmcglynn/donner/tree/main/.claude/agents) follows roughly the
 same shape:
 
 1. **Frontmatter** — `name` + `description`, used by the router.
@@ -156,7 +156,7 @@ same shape:
    read the file."
 
 If you want to see a representative example, open
-[`.claude/agents/BazelBot.md`](../../.claude/agents/BazelBot.md). The
+[`.claude/agents/BazelBot.md`](https://github.com/jwmcglynn/donner/blob/main/.claude/agents/BazelBot.md). The
 longer-form bots (TextBot, SecurityBot, PerfBot) follow the same structure but
 with more worked examples.
 
@@ -204,5 +204,5 @@ bot is getting too broad — follow the pattern:
 Removing or renaming a bot works in reverse: grep the other bot files for any
 outgoing handoff to the old name and update them in the same PR.
 
-See the repo-wide [`AGENTS.md`](../../AGENTS.md) for the coding, workflow,
+See the repo-wide [`AGENTS.md`](https://github.com/jwmcglynn/donner/blob/main/AGENTS.md) for the coding, workflow,
 and review conventions every bot inherits.

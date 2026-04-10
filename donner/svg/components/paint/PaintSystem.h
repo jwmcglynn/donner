@@ -25,7 +25,7 @@ public:
    *
    * @param handle Entity handle to create the computed gradient for
    * @param stop Stop component attached to \p handle
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   const ComputedStopComponent& createComputedStop(EntityHandle handle, const StopComponent& stop,
                                                   ParseWarningSink& warningSink);
@@ -40,7 +40,7 @@ public:
    * API pattern.
    *
    * @param registry Registry used to find all \ref GradientComponent
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 
@@ -52,7 +52,7 @@ public:
    *
    * @param registry Registry used to find all \ref GradientComponent and \ref PatternComponent
    * components to compute shadow trees
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void createShadowTrees(Registry& registry, ParseWarningSink& warningSink);
 
@@ -68,7 +68,7 @@ private:
    *
    * @param handle Entity handle to initialize
    * @param computedGradient Computed gradient component to initialize
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void initializeComputedGradient(EntityHandle handle, ComputedGradientComponent& computedGradient,
                                   ParseWarningSink& warningSink);
@@ -83,7 +83,7 @@ private:
    *
    * @param handle Entity handle to initialize
    * @param computedPattern Computed pattern component to initialize
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void initializeComputedPattern(EntityHandle handle, ComputedPatternComponent& computedPattern,
                                  ParseWarningSink& warningSink);
@@ -96,7 +96,7 @@ private:
    * first recursion is returned as-is.
    *
    * @param handle Entity handle to start the inheritance chain from
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   std::vector<Entity> getInheritanceChain(EntityHandle handle,
                                           ParseWarningSink& warningSink);
@@ -108,7 +108,7 @@ private:
    * @param handle Entity handle to create the computed stop for
    * @param stop Stop component attached to \ref handle
    * @param style Computed style component for the entity, created from \ref StyleSystem
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   const ComputedStopComponent& createComputedStopWithStyle(EntityHandle handle,
                                                            const StopComponent& stop,
@@ -161,7 +161,7 @@ private:
    * valid gradient element.
    *
    * @param registry Registry used to find all \ref GradientComponent to compute shadow trees
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void createGradientShadowTrees(Registry& registry, ParseWarningSink& warningSink);
 
@@ -211,7 +211,7 @@ private:
    * valid gradient element.
    *
    * @param registry Registry used to find all \ref PatternComponent to compute shadow trees
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void createPatternShadowTrees(Registry& registry, ParseWarningSink& warningSink);
 };

@@ -38,7 +38,9 @@ public:
   ~GeodeImagePipeline() = default;
   GeodeImagePipeline(const GeodeImagePipeline&) = delete;
   GeodeImagePipeline& operator=(const GeodeImagePipeline&) = delete;
+  /// Move constructor.
   GeodeImagePipeline(GeodeImagePipeline&&) noexcept = default;
+  /// Move assignment operator.
   GeodeImagePipeline& operator=(GeodeImagePipeline&&) noexcept = default;
 
   /// The compiled render pipeline.

@@ -466,8 +466,9 @@ for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
   ```cpp
   auto maybeResult = NumberParser::Parse(remaining_);
   if (maybeResult.hasError()) {
-    ParseError err = std::move(maybeResult.error());
-    err.location = err.location.addParentOffset(currentOffset());
+    ParseDiagnostic err = std::move(maybeResult.error());
+    err.range.start = err.range.start.addParentOffset(currentOffset());
+    err.range.end = err.range.end.addParentOffset(currentOffset());
     return err;
   }
 

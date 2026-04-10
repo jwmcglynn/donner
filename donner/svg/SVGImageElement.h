@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_image "<image>"
+ * @page xml_image "&lt;image&gt;"
  *
  * Embeds an image into the SVG document.
  *

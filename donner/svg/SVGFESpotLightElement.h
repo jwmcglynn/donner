@@ -187,8 +187,10 @@ class SVGFESpotLightElement : public SVGElement {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFESpotLightElement wrapper from an entity.
   explicit SVGFESpotLightElement(EntityHandle handle) : SVGElement(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFESpotLightElement CreateOn(EntityHandle handle);
 
 public:

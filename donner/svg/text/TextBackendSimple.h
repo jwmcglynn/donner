@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+/// Declares stb_truetype functions with external linkage so they can be defined
+/// exactly once in the matching .cc file.
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
 
@@ -16,6 +18,7 @@ namespace donner::svg {
  */
 class TextBackendSimple final : public TextBackend {
 public:
+  /// Construct a simple text backend using the provided font manager and ECS registry.
   TextBackendSimple(FontManager& fontManager, Registry& registry);
 
   FontVMetrics fontVMetrics(FontHandle font) const override;

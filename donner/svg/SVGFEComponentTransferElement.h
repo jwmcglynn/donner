@@ -68,9 +68,11 @@ class SVGFEComponentTransferElement : public SVGFilterPrimitiveStandardAttribute
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEComponentTransferElement wrapper from an entity.
   explicit SVGFEComponentTransferElement(EntityHandle handle)
       : SVGFilterPrimitiveStandardAttributes(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEComponentTransferElement CreateOn(EntityHandle handle);
 
 public:

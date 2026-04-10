@@ -22,6 +22,8 @@ static constexpr std::uint32_t kEmptySlot = std::numeric_limits<std::uint32_t>::
 static constexpr std::uint32_t kDirectSlotLimit = kEmptySlot / 2U;
 static constexpr std::uint32_t kMaxSeedSearch = 1024U;
 
+/// Mix a base hash value with a seed to produce a new hash. Used to construct
+/// perfect-hash bucket seeds during CompileTimeMap construction.
 constexpr std::size_t mixHash(std::size_t baseHash, std::uint32_t seed) {
   const std::size_t seedMix = static_cast<std::size_t>(seed) * 0x9e3779b97f4a7c15ULL;
   std::size_t value = baseHash ^ seedMix;
@@ -33,6 +35,8 @@ constexpr std::size_t mixHash(std::size_t baseHash, std::uint32_t seed) {
   return value;
 }
 
+/// Returns true when the provided key type can be hashed in a constexpr
+/// context by \ref constexprHashValue.
 template <typename Key>
 constexpr bool supportsConstexprHash() {
   if constexpr (std::is_integral_v<Key>) {
@@ -47,6 +51,7 @@ constexpr bool supportsConstexprHash() {
   return false;
 }
 
+/// Compute a constexpr-friendly hash of \p key for supported key types.
 template <typename Key>
 constexpr std::size_t constexprHashValue(const Key& key) {
   if constexpr (std::is_integral_v<Key>) {
@@ -110,13 +115,17 @@ template <typename Key, typename Value, std::size_t N, typename Hasher = std::ha
           typename KeyEqual = std::equal_to<Key>>
 class CompileTimeMap {
 public:
-  using key_type = Key;
-  using mapped_type = Value;
-  using value_type = std::pair<Key, Value>;
-  using hasher = Hasher;
-  using key_equal = KeyEqual;
-  using size_type = std::size_t;
+  /// @name STL-compatible typedefs
+  /// @{
+  using key_type = Key;  ///< Type of the keys in the map.
+  using mapped_type = Value;  ///< Type of the mapped values.
+  using value_type = std::pair<Key, Value>;  ///< Key/value pair type.
+  using hasher = Hasher;  ///< Hasher type used to hash keys.
+  using key_equal = KeyEqual;  ///< Key equality comparator type.
+  using size_type = std::size_t;  ///< Size type.
+  /// @}
 
+  /// Number of entries stored in the map.
   static constexpr size_type kSize = N;
   static_assert(kSize > 0, "CompileTimeMap requires at least one element.");
 

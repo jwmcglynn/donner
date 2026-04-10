@@ -122,6 +122,7 @@ struct MarkerOrient {
     }
   }
 
+  /// Equality comparison.
   bool operator==(const MarkerOrient& other) const {
     return type_ == other.type_ && NearEquals(angleRadians_, other.angleRadians_);
   }

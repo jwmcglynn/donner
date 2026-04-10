@@ -110,7 +110,7 @@ public:
   }
 
   /**
-   * Convert this text element to positioned glyph outlines, one \ref Path per glyph.
+   * Convert this text element to positioned glyph outlines, one \ref donner::Path per glyph.
    *
    * Useful for custom rendering, export to path-only formats, or computing text geometry without
    * the full rendering pipeline.

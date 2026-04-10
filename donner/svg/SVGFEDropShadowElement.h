@@ -57,9 +57,11 @@ class SVGFEDropShadowElement : public SVGFilterPrimitiveStandardAttributes {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEDropShadowElement wrapper from an entity.
   explicit SVGFEDropShadowElement(EntityHandle handle)
       : SVGFilterPrimitiveStandardAttributes(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEDropShadowElement CreateOn(EntityHandle handle);
 
 public:

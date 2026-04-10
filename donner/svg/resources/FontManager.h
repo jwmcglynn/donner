@@ -26,6 +26,7 @@ public:
 
   /// Equality comparison.
   bool operator==(const FontHandle& other) const { return entity_ == other.entity_; }
+  /// Inequality comparison.
   bool operator!=(const FontHandle& other) const { return entity_ != other.entity_; }
 
   /// Get the raw entity identifier (for internal use and hash maps).
@@ -39,8 +40,11 @@ private:
 
 }  // namespace donner::svg
 
+/// std::hash specialization so \ref donner::svg::FontHandle can be used as a key in
+/// unordered associative containers.
 template <>
 struct std::hash<donner::svg::FontHandle> {
+  /// Returns a hash value derived from the underlying entity identifier.
   size_t operator()(const donner::svg::FontHandle& h) const noexcept {
     return std::hash<std::uint32_t>{}(static_cast<std::uint32_t>(h.entity()));
   }
@@ -67,7 +71,9 @@ namespace donner::svg {
  */
 class FontManager {
 public:
+  /// Construct a FontManager tied to the provided ECS \p registry.
   explicit FontManager(Registry& registry);
+  /// Destructor.
   ~FontManager();
 
   // Non-copyable, non-movable.

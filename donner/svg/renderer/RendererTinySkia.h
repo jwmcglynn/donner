@@ -90,6 +90,7 @@ public:
    * Pushes an isolated compositing layer.
    *
    * @param opacity Group opacity applied when the layer is composited back.
+   * @param blendMode Mix-blend-mode applied when the layer is composited back.
    */
   void pushIsolatedLayer(double opacity, MixBlendMode blendMode) override;
 
@@ -178,8 +179,7 @@ public:
   /**
    * Draws shaped text.
    *
-   * Text rendering is not yet implemented for this backend.
-   *
+   * @param registry ECS registry used for resolving paint references.
    * @param text The shaped text runs.
    * @param params Text styling parameters.
    */

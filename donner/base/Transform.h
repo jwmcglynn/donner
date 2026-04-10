@@ -84,7 +84,7 @@ struct Transform2 {
   /**
    * Return a 2D rotation matrix with the given angle, in radians.
    *
-   * @param theta Angle in radians.
+   * @param angleRadians Angle in radians.
    */
   static Transform2 Rotate(T angleRadians) {
     const T sinVal = std::sin(angleRadians);

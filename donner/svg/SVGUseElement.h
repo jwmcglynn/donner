@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_use "<use>"
+ * @page xml_use "&lt;use&gt;"
  *
  * `<use>` instantiates another element at a specified position, cloning its rendered output.
  * It's the SVG equivalent of "put another copy of that shape over here" — commonly used for

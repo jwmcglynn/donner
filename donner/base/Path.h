@@ -116,10 +116,15 @@ public:
   Path() = default;
 
   // Copyable and movable.
+  /// Copy constructor.
   Path(const Path&) = default;
+  /// Move constructor.
   Path(Path&&) noexcept = default;
+  /// Copy assignment operator.
   Path& operator=(const Path&) = default;
+  /// Move assignment operator.
   Path& operator=(Path&&) noexcept = default;
+  /// Destructor.
   ~Path() = default;
 
   /// @name Accessors

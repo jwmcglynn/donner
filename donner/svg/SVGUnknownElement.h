@@ -18,9 +18,10 @@ protected:
   explicit SVGUnknownElement(EntityHandle handle) : SVGGraphicsElement(handle) {}
 
   /**
-   * Internal constructor to create the element on an existing \ref Entity.
+   * Internal constructor to create the element on an existing \ref donner::Entity.
    *
    * @param handle Entity handle.
+   * @param tagName The XML qualified name of the unknown element.
    */
   static SVGUnknownElement CreateOn(EntityHandle handle, const xml::XMLQualifiedNameRef& tagName);
 

@@ -190,9 +190,11 @@ class SVGFECompositeElement : public SVGFilterPrimitiveStandardAttributes {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFECompositeElement wrapper from an entity.
   explicit SVGFECompositeElement(EntityHandle handle)
       : SVGFilterPrimitiveStandardAttributes(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFECompositeElement CreateOn(EntityHandle handle);
 
 public:

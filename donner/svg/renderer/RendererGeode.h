@@ -62,7 +62,9 @@ public:
 
   RendererGeode(const RendererGeode&) = delete;
   RendererGeode& operator=(const RendererGeode&) = delete;
+  /// Move constructor.
   RendererGeode(RendererGeode&&) noexcept;
+  /// Move assignment operator.
   RendererGeode& operator=(RendererGeode&&) noexcept;
 
   // --- RendererInterface ---

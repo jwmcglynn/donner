@@ -38,8 +38,8 @@ struct FileOffset {
   /**
    * Create a FileOffset for a multi-line string.
    *
-   * @param line Line number of the error.
    * @param offset Character offset of the error in the string.
+   * @param lineInfo Line and column info for the offset.
    */
   static FileOffset OffsetWithLineInfo(size_t offset, LineInfo lineInfo) {
     return FileOffset{offset, lineInfo};

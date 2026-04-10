@@ -15,6 +15,7 @@ namespace donner::svg {
  */
 class TextBackendFull final : public TextBackend {
 public:
+  /// Construct a full text backend using the provided font manager and ECS registry.
   TextBackendFull(FontManager& fontManager, Registry& registry);
   ~TextBackendFull() override;
 

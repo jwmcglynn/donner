@@ -23,7 +23,7 @@ public:
    * @param handle Entity handle to apply the filter to.
    * @param component Filter effect for the current entity, so that this may only be called if one
    * is present.
-   * @param outWarnings Warnings generated during parsing.
+   * @param warningSink Warnings generated during parsing.
    */
   void createComputedFilter(EntityHandle handle, const FilterComponent& component,
                             ParseWarningSink& warningSink);
@@ -32,7 +32,7 @@ public:
    * Create all \ref ComputedFilterComponent in the tree.
    *
    * @param registry Registry to operate on.
-   * @param outWarnings Warnings generated during parsing.
+   * @param warningSink Warnings generated during parsing.
    */
   void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 };

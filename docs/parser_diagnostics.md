@@ -33,8 +33,10 @@ flowchart TD
     H --> I[DiagnosticRenderer]
     I --> J[Console Output with Carets]
 
-    style G fill:#f9f,stroke:#333
-    style I fill:#bbf,stroke:#333
+    classDef warn fill:magenta,stroke:gray,color:black
+    classDef diag fill:lightblue,stroke:gray,color:black
+    class G warn
+    class I diag
 ```
 
 ## Headers

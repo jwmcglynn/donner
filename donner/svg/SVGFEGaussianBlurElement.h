@@ -75,7 +75,7 @@ protected:
       : SVGFilterPrimitiveStandardAttributes(handle) {}
 
   /**
-   * Internal constructor to create the element on an existing \ref Entity.
+   * Internal constructor to create the element on an existing \ref donner::Entity.
    *
    * @param handle Entity handle.
    */

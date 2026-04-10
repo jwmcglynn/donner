@@ -403,4 +403,4 @@ result = await mcp.call_tool("analyze_visual_diff", {
 - **Progress tracking** - monitor feature completion
 - **Visual analysis** - categorize diff types automatically
 
-See [resvg-test-triage README](../../../tools/mcp-servers/resvg-test-triage/README.md) for full documentation.
+See [resvg-test-triage README](https://github.com/jwmcglynn/donner/blob/main/tools/mcp-servers/resvg-test-triage/README.md) for full documentation.

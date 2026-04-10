@@ -468,15 +468,16 @@ public:
    */
   bool operator==(const char* str) const { return (*this) == std::string_view(str); }
 
-  /**
-   * Friend functions to allow reversed equality syntax.
-   */
+  /// Reversed equality comparison against a std::string_view.
   friend bool operator==(std::string_view sv, const ChunkedString& cs) { return cs == sv; }
 
+  /// Reversed equality comparison against an RcString.
   friend bool operator==(const RcString& str, const ChunkedString& cs) { return cs == str; }
 
+  /// Reversed equality comparison against an RcStringOrRef.
   friend bool operator==(const RcStringOrRef& str, const ChunkedString& cs) { return cs == str; }
 
+  /// Reversed equality comparison against a C string.
   friend bool operator==(const char* str, const ChunkedString& cs) { return cs == str; }
 
   /**

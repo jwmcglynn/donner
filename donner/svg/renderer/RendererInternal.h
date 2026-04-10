@@ -8,6 +8,7 @@
 
 namespace donner::svg {
 
+/// @cond INTERNAL
 class RendererImplementation : public RendererInterface {
 public:
   ~RendererImplementation() override = default;
@@ -20,5 +21,6 @@ public:
 };
 
 std::unique_ptr<RendererImplementation> CreateRendererImplementation(bool verbose);
+/// @endcond
 
 }  // namespace donner::svg

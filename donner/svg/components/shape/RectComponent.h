@@ -76,7 +76,7 @@ struct ComputedRectComponent {
    * @param inputProperties The input properties for the rectangle.
    * @param unparsedProperties The unparsed properties for the rectangle, which may contain
    * presentation attributes set in the CSS stylesheet which need to be applied to the element.
-   * @param outWarnings A vector to append any warnings to.
+   * @param warningSink A vector to append any warnings to.
    */
   ComputedRectComponent(const RectProperties& inputProperties,
                         const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,

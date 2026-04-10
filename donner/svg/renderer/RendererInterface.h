@@ -53,6 +53,7 @@ struct RendererBitmap {
   /// Bytes between rows; allows alignment/padding differences between renderers.
   std::size_t rowBytes = 0;
 
+  /// Returns true if this bitmap has no pixel data.
   [[nodiscard]] bool empty() const {
     return dimensions.x <= 0 || dimensions.y <= 0 || pixels.empty();
   }
@@ -92,14 +93,17 @@ struct PaintParams {
  * Clip stack entry combining rectangles, paths, and optional masks.
  */
 struct ResolvedClip {
-  std::optional<Box2d> clipRect;
-  std::vector<PathShape> clipPaths;
+  std::optional<Box2d> clipRect;  ///< Optional axis-aligned clip rectangle.
+  std::vector<PathShape> clipPaths;  ///< Ordered list of clip path shapes to intersect.
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
-  Transform2d clipPathUnitsTransform;
-  std::optional<components::ResolvedMask> mask;
+  Transform2d clipPathUnitsTransform;  ///< Transform applied to the clip path coordinate system.
+  std::optional<components::ResolvedMask> mask;  ///< Optional resolved mask reference.
 
+  /// Default constructor.
   ResolvedClip() = default;
+  /// Move constructor.
   ResolvedClip(ResolvedClip&&) = default;
+  /// Move assignment operator.
   ResolvedClip& operator=(ResolvedClip&&) = default;
 
   /// Deep copy (clones mask chain).
@@ -110,6 +114,7 @@ struct ResolvedClip {
         mask(other.mask ? std::optional<components::ResolvedMask>(other.mask->deepCopy())
                         : std::nullopt) {}
 
+  /// Deep-copy assignment operator.
   ResolvedClip& operator=(const ResolvedClip& other) {
     if (this != &other) {
       clipRect = other.clipRect;
@@ -121,6 +126,7 @@ struct ResolvedClip {
     return *this;
   }
 
+  /// Returns true if the clip has no rect, paths, or mask.
   [[nodiscard]] bool empty() const { return !clipRect.has_value() && clipPaths.empty() && !mask; }
 };
 

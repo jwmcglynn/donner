@@ -54,8 +54,7 @@ struct AttributesComponent {
   /**
    * Get a list of all attributes.
    *
-   * @param name Name of the attribute to get.
-   * @return The value of the attribute, or std::nullopt if the attribute does not exist.
+   * @return The list of all attribute names currently set on this component.
    */
   SmallVector<xml::XMLQualifiedNameRef, 10> attributes() const {
     SmallVector<xml::XMLQualifiedNameRef, 10> result;
@@ -68,8 +67,9 @@ struct AttributesComponent {
   /**
    * Find attributes matching the given name matcher.
    *
-   * @param matcher Matcher to use to find attributes. If \ref XMLQualifiedNameRef::namespacePrefix
-   * is "*", the matcher will match any namespace with the given attribute name.
+   * @param matcher Matcher to use to find attributes. If
+   * \ref donner::xml::XMLQualifiedNameRef::namespacePrefix is `*`, the matcher will match any
+   * namespace with the given attribute name.
    * @return A vector of attributes matching the given name matcher.
    */
   SmallVector<xml::XMLQualifiedNameRef, 1> findMatchingAttributes(
@@ -80,7 +80,7 @@ struct AttributesComponent {
    * custom user-provided attribute.
    *
    * This API only stores the underlying strings for the attribute name and value, and does not
-   * parse them. To parse, use the upper-layer API: \ref SVGElement::setAttribute.
+   * parse them. To parse, use the upper-layer API: \ref donner::svg::SVGElement::setAttribute.
    *
    * @param registry Registry to use for the operation.
    * @param name Name of the attribute to set.

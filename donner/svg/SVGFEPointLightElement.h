@@ -158,8 +158,10 @@ class SVGFEPointLightElement : public SVGElement {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEPointLightElement wrapper from an entity.
   explicit SVGFEPointLightElement(EntityHandle handle) : SVGElement(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEPointLightElement CreateOn(EntityHandle handle);
 
 public:

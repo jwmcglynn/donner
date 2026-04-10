@@ -54,6 +54,7 @@ public:
    * Construct a stylesheet from a list of rules.
    *
    * @param rules List of rules, ownership is taken.
+   * @param fontFaces Optional list of `@font-face` declarations, ownership is taken.
    */
   explicit Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces = {})
       : rules_(std::move(rules)), fontFaces_(std::move(fontFaces)) {}

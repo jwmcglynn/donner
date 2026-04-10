@@ -84,6 +84,7 @@ struct ResolvedMask {
   }
 };
 
+/// Resolved \ref xml_marker reference applied to a rendering instance.
 struct ResolvedMarker {
   /// Reference to a \ref xml_marker element.
   ResolvedReference reference;
