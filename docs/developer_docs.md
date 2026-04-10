@@ -11,6 +11,7 @@
 - \subpage BuildingDonner
 - \subpage Maintenance
 - \subpage Devtools
+- \subpage AgentRoster
 - \subpage TerminalImageViewerGuide
 - \subpage ReSvgTestSuite
 - \subpage DataFormats
