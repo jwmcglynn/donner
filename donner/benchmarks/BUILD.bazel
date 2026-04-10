@@ -32,6 +32,16 @@ donner_cc_binary(
     ],
 )
 
+donner_cc_binary(
+    name = "css_parse_perf_bench",
+    srcs = ["CssParsePerfBench.cpp"],
+    deps = [
+        "//donner/base",
+        "//donner/css",
+        "@google_benchmark//:benchmark_main",
+    ],
+)
+
 sh_test(
     name = "filter_perf_compare",
     size = "large",
