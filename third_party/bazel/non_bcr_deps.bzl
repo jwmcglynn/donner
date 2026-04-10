@@ -110,11 +110,15 @@ HBEOF""",
     )
 
     # resvg test suite: reference renderings used by image comparison tests.
+    # Layout (post-2023-05 restructure + Great Rename): tests are under
+    # tests/<category>/<feature>/<name>.svg with paired <name>.png in the
+    # same directory. Resources (external images) under resources/, fonts
+    # under fonts/.
     new_git_repository(
         name = "resvg-test-suite",
         build_file = "//third_party:BUILD.resvg-test-suite",
-        commit = "682a9c8da8c580ad59cba0ef8cb8a8fd5534022f",
-        remote = "https://github.com/RazrFalcon/resvg-test-suite.git",
+        commit = "d8e064337faf01bc5a9579187a56dbdbe3eacc72",
+        remote = "https://github.com/linebender/resvg-test-suite.git",
     )
 
     # bazel_clang_tidy: --config=clang-tidy aspect (see .bazelrc).

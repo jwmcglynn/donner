@@ -2,16 +2,24 @@
 
 An MCP (Model Context Protocol) server that automates the analysis and categorization of resvg test suite failures for the Donner SVG renderer.
 
+> **Layout note.** After the 2024 upstream upgrade, the resvg test suite uses
+> directory-based categories — `tests/<category>/<feature>/<name>.svg` (e.g.
+> `tests/text/textPath/simple-case.svg`) — rather than the old
+> `a-*` / `e-*` filename prefixes. Skip entries also carry their reason as a
+> string argument (`Params::Skip("Not impl: textPath")`) instead of trailing
+> `// comments`. This server targets the new format; it falls back to the
+> legacy comment form only when parsing historic skip files.
+
 ## Features
 
 - **SVG Feature Detection**: Automatically parse SVG files to identify which advanced features are being tested
 - **Failure Categorization**: Classify failures as "not implemented", "threshold needed", "font difference", or "bug"
-- **Skip Comment Generation**: Auto-generate properly formatted skip comments following project conventions
+- **Skip Entry Generation**: Auto-generate properly formatted skip entries using the reason-string API
 - **Batch Processing**: Analyze multiple test failures at once and group them by feature category
 - **Vision Model Integration**: Send actual, expected, and diff images to vision models for visual analysis of rendering differences
 - **Implementation Guidance**: Suggest which files to modify and provide hints for implementing missing features
 - **Related Test Discovery**: Find all tests affected by the same missing feature for batch implementation
-- **Feature Progress Reports**: Generate comprehensive reports showing test completion rates by category
+- **Feature Progress Reports**: Generate comprehensive reports showing test completion rates by category directory
 - **Visual Diff Analysis**: Programmatically analyze diff images to categorize failure types (positioning, missing elements, styling, anti-aliasing)
 
 ## Installation
@@ -80,32 +88,32 @@ See the [Codex MCP Integration docs](https://github.com/openai/codex/blob/main/d
 Analyze a single test failure with complete diagnostics. Optionally include rendered images for vision model analysis.
 
 **Parameters:**
-- `test_name` (string, required): Test file name (e.g., "e-text-023.svg")
+- `test_name` (string, required): Bare SVG filename (e.g., "letter-spacing-with-arabic.svg")
 - `svg_content` (string, required): Complete SVG source code
 - `pixel_diff` (number, required): Number of pixels differing from expected
 - `actual_image_path` (string, optional): Path to actual rendering PNG (Donner's output)
-- `expected_image_path` (string, optional): Path to expected rendering PNG (golden reference)
+- `expected_image_path` (string, optional): Path to expected rendering PNG — sits next to the .svg in the new layout
 - `diff_image_path` (string, optional): Path to diff image PNG (visual comparison)
 
 **Returns:**
 JSON analysis followed by PNG images (if paths provided):
 ```json
 {
-  "test_name": "e-text-023.svg",
+  "test_name": "letter-spacing-with-arabic.svg",
   "pixel_diff": 8234,
   "features": [
     {
-      "name": "letter_spacing",
-      "category": "text_styling",
-      "description": "Multiple x values for per-glyph positioning"
+      "name": "letter-spacing",
+      "category": "styling",
+      "description": "letter-spacing for character spacing"
     }
   ],
   "category": "not_implemented",
   "severity": "major",
-  "suggested_skip": "{\"e-text-002.svg\", Params::Skip()},  // Not impl: Multiple x values",
+  "suggested_skip": "{\"letter-spacing-with-arabic.svg\", Params::Skip(\"Not impl: `letter-spacing`\")},",
   "analysis": {
     "feature_count": 1,
-    "primary_feature": "letter-spacing attribute",
+    "primary_feature": "letter-spacing for character spacing",
     "recommendation": "Skip - feature not implemented"
   }
 }
@@ -126,7 +134,9 @@ Process multiple test failures from test output.
   "total_failures": 32,
   "failures": [
     {
-      "test": "e-text-002.svg",
+      "test": "coordinates-list.svg",
+      "path": "/runfiles/.../tests/text/text/coordinates-list.svg",
+      "category_dir": "text/text",
       "pixel_diff": 13766,
       "features": ["multiple_x_values"],
       "category": "not_implemented",
@@ -135,8 +145,8 @@ Process multiple test failures from test output.
     }
   ],
   "grouped_by_feature": {
-    "multiple_x_values": ["e-text-002.svg", "e-text-003.svg"],
-    "dx_attribute": ["e-text-006.svg", "e-text-007.svg"]
+    "multiple_x_values": ["coordinates-list.svg", "coordinates-list-2.svg"],
+    "dx_attribute": ["dx.svg", "dx-relative.svg"]
   },
   "summary": {
     "not_implemented": 28,
@@ -179,8 +189,8 @@ Generate a formatted skip comment.
 **Returns:**
 ```json
 {
-  "skip_comment": "{\"e-text-023.svg\", Params::Skip()},  // Not impl: letter-spacing",
-  "test_name": "e-text-023.svg",
+  "skip_comment": "{\"letter-spacing.svg\", Params::Skip(\"Not impl: `letter-spacing`\")},",
+  "test_name": "letter-spacing.svg",
   "category": "not_implemented"
 }
 ```
@@ -190,7 +200,7 @@ Generate a formatted skip comment.
 Suggest which files to modify and provide implementation guidance for a failing test.
 
 **Parameters:**
-- `test_name` (string, required): Test file name (e.g., "e-text-023.svg")
+- `test_name` (string, required): Bare SVG filename (e.g., "letter-spacing.svg")
 - `features` (array, required): List of detected feature names
 - `category` (string, required): Feature category (e.g., "text_styling", "text_positioning")
 - `codebase_files` (array, optional): List of relevant files found in codebase
@@ -198,7 +208,7 @@ Suggest which files to modify and provide implementation guidance for a failing 
 **Returns:**
 ```json
 {
-  "test_name": "e-text-023.svg",
+  "test_name": "letter-spacing.svg",
   "category": "text_styling",
   "primary_feature": "letter_spacing",
   "likely_files": [
@@ -240,11 +250,11 @@ Find all tests failing for the same feature or reason.
 ```json
 {
   "feature": "letter-spacing",
-  "related_tests": ["e-text-023.svg"],
-  "impact": "1 test affected",
+  "related_tests": ["letter-spacing.svg", "letter-spacing-with-arabic.svg"],
+  "impact": "2 tests affected",
   "priority": "low",
   "grouped_by_category": {
-    "e-text": ["e-text-023.svg", "e-text-024.svg"]
+    "unknown": ["letter-spacing.svg", "letter-spacing-with-arabic.svg"]
   },
   "all_missing_features": {
     "letter-spacing": 2,
@@ -254,33 +264,38 @@ Find all tests failing for the same feature or reason.
 }
 ```
 
+> Note: since the skip file keys by bare filename without its category
+> directory, `grouped_by_category` lands everything under `"unknown"`. If
+> you need directory grouping, scope `skip_file_content` to one category
+> block before passing it in.
+
 ### `generate_feature_report`
 
 Generate comprehensive progress report for a feature category.
 
 **Parameters:**
-- `category` (string, required): Category prefix (e.g., "e-text", "a-transform")
+- `category` (string, required): Category directory relative to `resvg-test-suite/tests/` (e.g., "text/textPath", "painting/fill", "filters/feGaussianBlur")
 - `test_output` (string, required): Recent test run output from bazel test
 - `skip_file_content` (string, optional): Content of resvg_test_suite.cc for missing feature analysis
 
 **Returns:**
 ```json
 {
-  "category": "e-text",
-  "total_tests": 15,
-  "passing": 3,
-  "skipped": 12,
-  "completion_rate": "20%",
+  "category": "text/textPath",
+  "total_tests": 45,
+  "passing": 15,
+  "skipped": 30,
+  "completion_rate": "33%",
   "implemented_features": [],
   "missing_features": [
-    "dx attribute",
-    "dy attribute",
-    "letter-spacing"
+    "textPath `side`",
+    "textPath with method=stretch",
+    "textPath startOffset as length"
   ],
-  "next_priority": "dx attribute (affects 3 tests)",
+  "next_priority": "textPath `side` (affects 8 tests)",
   "test_details": [
     {
-      "name": "e-text-001.svg",
+      "name": "simple-case.svg",
       "status": "PASSED",
       "pixel_diff": null
     }
@@ -327,8 +342,8 @@ Programmatically analyze diff images to categorize failure types.
 ```python
 # 1. Run tests and capture output
 test_output = """
-[  COMPARE ] .../e-text-023.svg: FAIL (8234 pixels differ, with 100 max)
-SVG Content for e-text-023.svg:
+[  COMPARE ] /runfiles/resvg-test-suite/tests/text/text/letter-spacing.svg [TinySkia]: 8234 pixels differ
+SVG Content for letter-spacing.svg:
 ---
 <svg><text x="30" y="100" letter-spacing="10">Text</text></svg>
 ---
@@ -348,12 +363,12 @@ result = await mcp.call_tool("batch_triage_tests", {
 ```python
 # 1. Analyze a single test with images for vision model
 result = await mcp.call_tool("analyze_test_failure", {
-    "test_name": "e-text-023.svg",
+    "test_name": "letter-spacing.svg",
     "svg_content": svg_source,
     "pixel_diff": 8234,
-    "actual_image_path": "/var/folders/.../e-text-023.png",
-    "expected_image_path": "/path/to/resvg-test-suite/png/e-text-023.png",
-    "diff_image_path": "/var/folders/.../diff_e-text-023.png"
+    "actual_image_path": "/var/folders/.../letter-spacing.png",
+    "expected_image_path": "/runfiles/resvg-test-suite/tests/text/text/letter-spacing.png",
+    "diff_image_path": "/var/folders/.../diff_letter-spacing.png"
 })
 
 # 2. Vision model receives:
@@ -379,7 +394,7 @@ features = await mcp.call_tool("detect_svg_features", {
 
 # 2. Get implementation guidance
 guidance = await mcp.call_tool("suggest_implementation_approach", {
-    "test_name": "e-text-023.svg",
+    "test_name": "letter-spacing.svg",
     "features": ["letter_spacing"],
     "category": "text_styling",
     "codebase_files": []  # Agent can populate with glob/grep results
@@ -395,9 +410,9 @@ guidance = await mcp.call_tool("suggest_implementation_approach", {
 ### Feature Progress Tracking
 
 ```python
-# 1. Generate progress report for a category
+# 1. Generate progress report for a category directory
 report = await mcp.call_tool("generate_feature_report", {
-    "category": "e-text",
+    "category": "text/textPath",
     "test_output": bazel_test_output,
     "skip_file_content": resvg_test_suite_cc_content
 })
@@ -465,15 +480,19 @@ The server can detect these SVG features:
 - alignment-baseline
 - dominant-baseline
 
-## Comment Format Conventions
+## Reason String Conventions
 
-The server follows established conventions:
+Reasons are stored as string arguments to the factory (e.g.
+`Params::Skip("Not impl: textPath")`) and surface in test skip/failure
+messages. The server follows these conventions:
 
-- `Not impl: <feature>` - Feature not yet implemented
-- `Not impl: <element>` - SVG element not supported
-- `UB: <reason>` - Undefined behavior
-- `Bug: <description>` - Known bug
-- `Larger threshold due to <reason>` - Anti-aliasing artifacts
+- `Not impl: <feature>` — Feature not yet implemented
+- `Not impl: <element>` — SVG element not supported
+- `UB: <reason>` — Undefined behavior
+- `Bug: <description>` — Known bug
+- `Larger threshold due to <reason>` — Anti-aliasing artifacts
+- `M1 upgrade: needs triage` — Placeholder from the Great Rename upgrade,
+  pending per-test investigation
 
 ## Integration with Test Documentation
 

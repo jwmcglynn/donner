@@ -384,7 +384,7 @@ std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFe
 
 std::optional<std::string> skipReasonIfUnsupported(const ImageComparisonParams& params) {
   if (params.shouldSkip()) {
-    return std::string("Test case disabled");
+    return params.reason.empty() ? std::string("Test case disabled") : std::string(params.reason);
   }
 
   if (!isActiveBackendAllowed(params)) {
@@ -646,7 +646,11 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   }
 
   if (params.renderOnly) {
-    std::cout << "RENDER-ONLY (comparison skipped)\n";
+    std::cout << "RENDER-ONLY (comparison skipped)";
+    if (!params.reason.empty()) {
+      std::cout << ": " << params.reason;
+    }
+    std::cout << "\n";
     return;
   }
 

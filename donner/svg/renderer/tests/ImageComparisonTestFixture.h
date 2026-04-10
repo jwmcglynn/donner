@@ -77,14 +77,20 @@ struct ImageComparisonParams {
   /// If true, render but skip the pixel comparison. Used for tests where the output
   /// is implementation-defined or UB, but we still want to verify rendering stability.
   bool renderOnly = false;
+  /// Human-readable reason attached to Skip / RenderOnly / WithThreshold overrides.
+  /// Surfaced in test skip messages and failure output — prefer this over trailing
+  /// `// comments` so the reason is discoverable from test logs.
+  std::string_view reason;
 
   /**
    * @brief Creates parameters to skip a test.
+   * @param reason Human-readable explanation, shown in the skip message.
    * @return ImageComparisonParams configured to skip.
    */
-  static ImageComparisonParams Skip() {
+  static ImageComparisonParams Skip(std::string_view reason = std::string_view()) {
     ImageComparisonParams result;
     result.skip = true;
+    result.reason = reason;
     return result;
   }
 
@@ -93,11 +99,13 @@ struct ImageComparisonParams {
    *
    * Used for tests where the output is implementation-defined or has expected
    * variance, but we want to verify that rendering completes without crashing.
+   * @param reason Human-readable explanation, shown in the test log.
    * @return ImageComparisonParams configured for render-only mode.
    */
-  static ImageComparisonParams RenderOnly() {
+  static ImageComparisonParams RenderOnly(std::string_view reason = std::string_view()) {
     ImageComparisonParams result;
     result.renderOnly = true;
+    result.reason = reason;
     return result;
   }
 
@@ -106,13 +114,16 @@ struct ImageComparisonParams {
    *
    * @param threshold The per-pixel difference threshold.
    * @param maxMismatchedPixels The maximum number of pixels allowed to mismatch.
+   * @param reason Human-readable explanation for why the threshold is raised.
    * @return ImageComparisonParams configured with the specified thresholds.
    */
   static ImageComparisonParams WithThreshold(float threshold,
-                                             int maxMismatchedPixels = kDefaultMismatchedPixels) {
+                                             int maxMismatchedPixels = kDefaultMismatchedPixels,
+                                             std::string_view reason = std::string_view()) {
     ImageComparisonParams result;
     result.threshold = threshold;
     result.maxMismatchedPixels = maxMismatchedPixels;
+    result.reason = reason;
     return result;
   }
 
@@ -121,14 +132,31 @@ struct ImageComparisonParams {
    *
    * @param filename The filename to use for the golden image.
    * @param threshold Optional per-pixel difference threshold to use with the override.
+   * @param reason Human-readable explanation for why the override is needed.
    * @return ImageComparisonParams configured with the golden override.
    */
   static ImageComparisonParams WithGoldenOverride(std::string_view filename,
-                                                  float threshold = kDefaultThreshold) {
+                                                  float threshold = kDefaultThreshold,
+                                                  std::string_view reason = std::string_view()) {
     ImageComparisonParams result;
     result.overrideGoldenFilename = filename;
     result.threshold = threshold;
+    result.reason = reason;
     return result;
+  }
+
+  /**
+   * @brief Attach a human-readable reason to a chained Params() expression.
+   *
+   * Use when you're starting from `Params()` (or any other builder) and want
+   * to record why the override exists. Surfaces in skip/failure messages.
+   *
+   * @param text Reason text.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withReason(std::string_view text) {
+    reason = text;
+    return *this;
   }
 
   /**

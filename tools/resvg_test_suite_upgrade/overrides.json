@@ -1,0 +1,2139 @@
+{
+  "overrides": [
+    {
+      "filename": "a-color-interpolation-filters-001.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "TinySkia linearRGB blur edge regression",
+      "suite_name": "Color",
+      "suite_prefix": "a-color"
+    },
+    {
+      "filename": "a-baseline-shift-020.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor AA artifacts on axis",
+      "suite_name": "BaselineShift",
+      "suite_prefix": "a-baseline-shift"
+    },
+    {
+      "filename": "a-baseline-shift-021.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor AA artifacts on axis",
+      "suite_name": "BaselineShift",
+      "suite_prefix": "a-baseline-shift"
+    },
+    {
+      "filename": "a-clip-001.svg",
+      "params": "Params::Skip()",
+      "comment": "",
+      "suite_name": "Clip",
+      "suite_prefix": "a-clip"
+    },
+    {
+      "filename": "a-display-006.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: <tref>",
+      "suite_name": "Display",
+      "suite_prefix": "a-display"
+    },
+    {
+      "filename": "a-fill-010.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: rgb(int int int)",
+      "suite_name": "Fill",
+      "suite_prefix": "a-fill"
+    },
+    {
+      "filename": "a-fill-015.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: ICC color",
+      "suite_name": "Fill",
+      "suite_prefix": "a-fill"
+    },
+    {
+      "filename": "a-fill-027.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: Fallback with icc-color",
+      "suite_name": "Fill",
+      "suite_prefix": "a-fill"
+    },
+    {
+      "filename": "a-fill-031.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 500)",
+      "comment": "",
+      "suite_name": "Fill",
+      "suite_prefix": "a-fill"
+    },
+    {
+      "filename": "a-fill-032.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 500)",
+      "comment": "",
+      "suite_name": "Fill",
+      "suite_prefix": "a-fill"
+    },
+    {
+      "filename": "a-fill-033.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 2100)",
+      "comment": "",
+      "suite_name": "Fill",
+      "suite_prefix": "a-fill"
+    },
+    {
+      "filename": "a-flood-color-004.svg",
+      "params": "Params::Skip()",
+      "comment": "230K diff: ICC color",
+      "suite_name": "Flood",
+      "suite_prefix": "a-flood"
+    },
+    {
+      "filename": "a-font-001.svg",
+      "params": "Params::Skip()",
+      "comment": "Canvas size mismatch (400 vs 500)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-001.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 4200)",
+      "comment": "serif (Noto Serif)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-002.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 1900)",
+      "comment": "sans-serif (Noto Sans)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-003.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 5000)",
+      "comment": "cursive (Yellowtail)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-004.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 5200)",
+      "comment": "fantasy (Sedgwick Ave Display)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-005.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 600)",
+      "comment": "monospace (Noto Mono)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-007.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 1300)",
+      "comment": "Source Sans Pro",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-008.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 1300)",
+      "comment": "Font list: Source Sans Pro fallback",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-009.svg",
+      "params": "Params::Skip()",
+      "comment": "Fallback from invalid family (different",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-010.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 1000)",
+      "comment": "Fallback list: \"Invalid, Noto Sans\"",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-family-011.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 5200)",
+      "comment": "Bold sans-serif (Noto Sans Bold)",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-variant-001.svg",
+      "params": "Params().withSimpleTextMaxPixels(1200)",
+      "comment": "small-caps is emulated with simple text",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-variant-002.svg",
+      "params": "Params().withSimpleTextMaxPixels(1200)",
+      "comment": "small-caps is emulated with simple text",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-size-005.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/\" \"resvg-a-font-size-005.png\")",
+      "comment": "Donner uses CSS Fonts Level 4, which has",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-size-008.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/\" \"resvg-a-font-size-008.png\")",
+      "comment": "Donner uses CSS Fonts Level 4, which has",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-font-size-013.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: negative font size",
+      "suite_name": "Font",
+      "suite_prefix": "a-font"
+    },
+    {
+      "filename": "a-letter-spacing-007.svg",
+      "params": "Params().requireFeature(RendererBackendFeature::TextFull)",
+      "comment": "Arabic text",
+      "suite_name": "LetterSpacing",
+      "suite_prefix": "a-letter-spacing"
+    },
+    {
+      "filename": "a-letter-spacing-009.svg",
+      "params": "Params::Skip()",
+      "comment": "Needs BiDi: mixed LTR Latin + RTL Arabic in one span",
+      "suite_name": "LetterSpacing",
+      "suite_prefix": "a-letter-spacing"
+    },
+    {
+      "filename": "a-letter-spacing-010.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: negative letter-spacing",
+      "suite_name": "LetterSpacing",
+      "suite_prefix": "a-letter-spacing"
+    },
+    {
+      "filename": "a-letter-spacing-011.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug? We render with a different CJK glyph. Wrong font?",
+      "suite_name": "LetterSpacing",
+      "suite_prefix": "a-letter-spacing"
+    },
+    {
+      "filename": "a-opacity-005.svg",
+      "params": "Params::Skip()",
+      "comment": "Changed in css-color-4 to allow percentage in",
+      "suite_name": "Opacity",
+      "suite_prefix": "a-opacity"
+    },
+    {
+      "filename": "a-stroke-007.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "AA artifacts",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-008.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Gradient stroke on text",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-009.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "AA artifacts",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-dasharray-007.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB (negative values)",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-dasharray-009.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB (negative sum)",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-dasharray-013.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Larger threshold due to anti-aliasing artifacts.",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-linejoin-004.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB (SVG 2), no UA supports `miter-clip`",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-linejoin-005.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB (SVG 2), no UA supports `arcs`",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-stroke-width-004.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Nothing should be rendered",
+      "suite_name": "Stroke",
+      "suite_prefix": "a-stroke"
+    },
+    {
+      "filename": "a-style-003.svg",
+      "params": "Params::Skip()",
+      "comment": "<svg version=\"1.1\"> disables geometry attributes in style",
+      "suite_name": "Style",
+      "suite_prefix": "a-style"
+    },
+    {
+      "filename": "a-text-anchor-006.svg",
+      "params": "Params().requireFeature(RendererBackendFeature::TextFull)",
+      "comment": "",
+      "suite_name": "TextAnchor",
+      "suite_prefix": "a-text-anchor"
+    },
+    {
+      "filename": "a-text-anchor-009.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Axis AA artifacts",
+      "suite_name": "TextAnchor",
+      "suite_prefix": "a-text-anchor"
+    },
+    {
+      "filename": "a-text-decoration-008.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor AA diffs",
+      "suite_name": "TextDecoration",
+      "suite_prefix": "a-text-decoration"
+    },
+    {
+      "filename": "a-text-decoration-013.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "Minor shading diffs",
+      "suite_name": "TextDecoration",
+      "suite_prefix": "a-text-decoration"
+    },
+    {
+      "filename": "a-text-decoration-015.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor AA diffs",
+      "suite_name": "TextDecoration",
+      "suite_prefix": "a-text-decoration"
+    },
+    {
+      "filename": "a-text-decoration-016.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor AA diffs",
+      "suite_name": "TextDecoration",
+      "suite_prefix": "a-text-decoration"
+    },
+    {
+      "filename": "a-text-decoration-017.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor AA diffs",
+      "suite_name": "TextDecoration",
+      "suite_prefix": "a-text-decoration"
+    },
+    {
+      "filename": "a-text-decoration-019.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-a-text-decoration-019.png\")",
+      "comment": "",
+      "suite_name": "TextDecoration",
+      "suite_prefix": "a-text-decoration"
+    },
+    {
+      "filename": "a-textLength-008.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug? We compress slightly more than the golden",
+      "suite_name": "TextLength",
+      "suite_prefix": "a-textLength"
+    },
+    {
+      "filename": "a-transform-007.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "Larger threshold due to anti-aliasing artifacts.",
+      "suite_name": "Transform",
+      "suite_prefix": "a-transform"
+    },
+    {
+      "filename": "a-visibility-007.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: <text> contributing to bbox handling",
+      "suite_name": "Visibility",
+      "suite_prefix": "a-visibility"
+    },
+    {
+      "filename": "a-word-spacing-007.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: word-spacing=-10000",
+      "suite_name": "WordSpacing",
+      "suite_prefix": "a-word-spacing"
+    },
+    {
+      "filename": "a-writing-mode-005.svg",
+      "params": "Params().withMaxPixelsDifferent(1500)",
+      "comment": "Bug: Baseline is ~2px off compared to resvg",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-006.svg",
+      "params": "Params().withMaxPixelsDifferent(1500)",
+      "comment": "Bug: Baseline is ~2px off compared to resvg",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-008.svg",
+      "params": "Params().withMaxPixelsDifferent(1500)",
+      "comment": "Bug: Baseline is ~2px off compared to resvg",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-010.svg",
+      "params": "Params().withMaxPixelsDifferent(1500)",
+      "comment": "Bug: Baseline is ~2px off compared to resvg",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-011.svg",
+      "params": "Params::Skip().onlyTextFull()",
+      "comment": "Non-ascii text",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-012.svg",
+      "params": "Params().onlyTextFull().withMaxPixelsDifferent( 600)",
+      "comment": "Non-ascii text, bug: y position is ~1px off",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-013.svg",
+      "params": "Params::Skip().onlyTextFull()",
+      "comment": "Non-ascii text, bug: mixed language",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-014.svg",
+      "params": "Params::Skip().onlyTextFull()",
+      "comment": "Non-ascii text, bug: underline not",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-015.svg",
+      "params": "Params::Skip().onlyTextFull()",
+      "comment": "Non-ascii text, bug: CJK punctuation",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-016.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: tb with rotate",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-017.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: tb with rotate and underline",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-019.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: `writing-mode=tb` with `dx`",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-018.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: `writing-mode=tb` with `dx`",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "a-writing-mode-020.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: `writing-mode=tb` with `dy`",
+      "suite_name": "WritingMode",
+      "suite_prefix": "a-writing-mode"
+    },
+    {
+      "filename": "e-clipPath-007.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: clipPath on <text>",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-009.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: clipPath with <text> children",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-010.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: clipPath with <text> children",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-011.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: clipPath with <text> children",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-012.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: clipPath with <text> children",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-034.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Nested clip-path not working",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-042.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: on root `<svg>` without size",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-044.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: <use> child",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-clipPath-046.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: <switch>",
+      "suite_name": "ClipPath",
+      "suite_prefix": "e-clipPath"
+    },
+    {
+      "filename": "e-defs-007.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 6500)",
+      "comment": "",
+      "suite_name": "Defs",
+      "suite_prefix": "e-defs"
+    },
+    {
+      "filename": "e-feColorMatrix-001.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "type=matrix",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-002.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "identity matrix",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-003.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "identity matrix",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-004.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "identity matrix",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-005.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "identity matrix",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-006.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "non-normalized values",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-007.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "saturate",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-008.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "saturate -0.5 (UB)",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-009.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "saturate 99999 (UB)",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-010.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "identity saturate",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-011.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "hueRotate(30)",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-012.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "hueRotate(0) identity",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feColorMatrix-015.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "no attrs identity",
+      "suite_name": "FeColorMatrix",
+      "suite_prefix": "e-feColorMatrix"
+    },
+    {
+      "filename": "e-feConvolveMatrix-014.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "Skia MatrixConvolution edge shift vs tiny-skia",
+      "suite_name": "FeConvolveMatrix",
+      "suite_prefix": "e-feConvolveMatrix"
+    },
+    {
+      "filename": "e-feConvolveMatrix-015.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: bias=0.5",
+      "suite_name": "FeConvolveMatrix",
+      "suite_prefix": "e-feConvolveMatrix"
+    },
+    {
+      "filename": "e-feConvolveMatrix-016.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: bias=-0.5",
+      "suite_name": "FeConvolveMatrix",
+      "suite_prefix": "e-feConvolveMatrix"
+    },
+    {
+      "filename": "e-feConvolveMatrix-017.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: bias=9999",
+      "suite_name": "FeConvolveMatrix",
+      "suite_prefix": "e-feConvolveMatrix"
+    },
+    {
+      "filename": "e-feConvolveMatrix-022.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 200)",
+      "comment": "Minor algorithm differences on edge handling (180px)",
+      "suite_name": "FeConvolveMatrix",
+      "suite_prefix": "e-feConvolveMatrix"
+    },
+    {
+      "filename": "e-feConvolveMatrix-023.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: wrap with oversized kernel",
+      "suite_name": "FeConvolveMatrix",
+      "suite_prefix": "e-feConvolveMatrix"
+    },
+    {
+      "filename": "e-feDiffuseLighting-021.svg",
+      "params": "Params::WithThreshold(0.2f)",
+      "comment": "Shading differences, donner is smoother",
+      "suite_name": "FeDiffuseLighting",
+      "suite_prefix": "e-feDiffuseLighting"
+    },
+    {
+      "filename": "e-feDropShadow-001.svg",
+      "params": "Params::WithThreshold(0.04f)",
+      "comment": "Minor blur diffs",
+      "suite_name": "FeDropShadow",
+      "suite_prefix": "e-feDropShadow"
+    },
+    {
+      "filename": "e-feDropShadow-002.svg",
+      "params": "Params::WithThreshold(0.03f)",
+      "comment": "Minor blur diffs",
+      "suite_name": "FeDropShadow",
+      "suite_prefix": "e-feDropShadow"
+    },
+    {
+      "filename": "e-feGaussianBlur-002.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "Extreme sigma=1000; output is implementation-defined",
+      "suite_name": "FeGaussianBlur",
+      "suite_prefix": "e-feGaussianBlur"
+    },
+    {
+      "filename": "e-feGaussianBlur-012.svg",
+      "params": "Params::WithThreshold(0.03f)",
+      "comment": "Minor AA differences",
+      "suite_name": "FeGaussianBlur",
+      "suite_prefix": "e-feGaussianBlur"
+    },
+    {
+      "filename": "e-feImage-001.svg",
+      "params": "Params::Skip()",
+      "comment": "External file reference (no ResourceLoader)",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-002.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/\" \"resvg-e-feImage-002.png\")",
+      "comment": "We render higher quality",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-003.svg",
+      "params": "Params::WithThreshold(0.05f, 100)",
+      "comment": "Bilinear interpolation + sRGB\u2194linear roundtrip",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-004.svg",
+      "params": "Params::WithThreshold(0.05f, 100)",
+      "comment": "Bilinear interpolation + sRGB\u2194linear roundtrip",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-007.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 5100)",
+      "comment": "OBB subregion bilinear",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-008.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 5100)",
+      "comment": "OBB subregion percentage",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-009.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 14500)",
+      "comment": "Percentage width subregion",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-010.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 15000)",
+      "comment": "Absolute subregion coords",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-005.svg",
+      "params": "Params::Skip()",
+      "comment": "Linux CI: std::bad_alloc in test setup.",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-011.svg",
+      "params": "Params::Skip()",
+      "comment": "Subregion with rotation: filter",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-019.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 34200)",
+      "comment": "Fragment ref with skewX transform on element",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-021.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 26200)",
+      "comment": "Fragment ref with complex transform",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feImage-024.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 22000)",
+      "comment": "Chained feImage fragment refs",
+      "suite_name": "FeImage",
+      "suite_prefix": "e-feImage"
+    },
+    {
+      "filename": "e-feMerge-003.svg",
+      "params": "Params::WithThreshold(0.15f)",
+      "comment": "Minor blur shading differences",
+      "suite_name": "FeMerge",
+      "suite_prefix": "e-feMerge"
+    },
+    {
+      "filename": "e-fePointLight-004.svg",
+      "params": "Params::WithThreshold(0.1f, 120)",
+      "comment": "Minor shading differences",
+      "suite_name": "FePointLight",
+      "suite_prefix": "e-fePointLight"
+    },
+    {
+      "filename": "e-feSpecularLighting-002.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/\" \"resvg-e-feSpecularLighting-002.png\", 0.02f)",
+      "comment": "resvg golden",
+      "suite_name": "FeSpecularLighting",
+      "suite_prefix": "e-feSpecularLighting"
+    },
+    {
+      "filename": "e-feSpotLight-012.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/\" \"resvg-e-feSpotLight-012.png\")",
+      "comment": "resvg bug: SpotLight Y",
+      "suite_name": "FeSpotLight",
+      "suite_prefix": "e-feSpotLight"
+    },
+    {
+      "filename": "e-feTile-007.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: complex transform",
+      "suite_name": "FeTile",
+      "suite_prefix": "e-feTile"
+    },
+    {
+      "filename": "e-feTurbulence-017.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: stitchTiles=stitch",
+      "suite_name": "FeTurbulence",
+      "suite_prefix": "e-feTurbulence"
+    },
+    {
+      "filename": "e-feTurbulence-018.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "Minor shading differences",
+      "suite_name": "FeTurbulence",
+      "suite_prefix": "e-feTurbulence"
+    },
+    {
+      "filename": "e-feTurbulence-019.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "Minor shading differences",
+      "suite_name": "FeTurbulence",
+      "suite_prefix": "e-feTurbulence"
+    },
+    {
+      "filename": "e-filter-011.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Minor shading differences",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-019.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Color is slightly off, we are missing transparency",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-027.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: We don't blur the right edge",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-032.svg",
+      "params": "Params::Skip()",
+      "comment": "in=BackgroundImage (deprecated SVG 1.1)",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-033.svg",
+      "params": "Params::Skip()",
+      "comment": "in=BackgroundAlpha (deprecated SVG 1.1)",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-034.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: in=FillPaint",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-035.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: in=StrokePaint",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-036.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: in=FillPaint gradient",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-037.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: in=FillPaint pattern",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-038.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: in=FillPaint on group",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-060.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Filter on the root `svg`",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-filter-065.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: in=FillPaint on empty group",
+      "suite_name": "Filter",
+      "suite_prefix": "e-filter"
+    },
+    {
+      "filename": "e-image-029.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: No width and height",
+      "suite_name": "Image",
+      "suite_prefix": "e-image"
+    },
+    {
+      "filename": "e-image-030.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: No width",
+      "suite_name": "Image",
+      "suite_prefix": "e-image"
+    },
+    {
+      "filename": "e-image-031.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: No height",
+      "suite_name": "Image",
+      "suite_prefix": "e-image"
+    },
+    {
+      "filename": "e-image-032.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Float size",
+      "suite_name": "Image",
+      "suite_prefix": "e-image"
+    },
+    {
+      "filename": "e-image-040.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: External URLs",
+      "suite_name": "Image",
+      "suite_prefix": "e-image"
+    },
+    {
+      "filename": "e-image-041.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: External URLs",
+      "suite_name": "Image",
+      "suite_prefix": "e-image"
+    },
+    {
+      "filename": "e-line-001.svg",
+      "params": "Params::WithThreshold(0.02f)",
+      "comment": "Larger threshold due to anti-aliasing",
+      "suite_name": "Line",
+      "suite_prefix": "e-line-"
+    },
+    {
+      "filename": "e-linearGradient-037.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Invalid `gradientTransform`",
+      "suite_name": "LinearGradient",
+      "suite_prefix": "e-linearGradient"
+    },
+    {
+      "filename": "e-marker-008.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: with `viewBox`",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-017.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: `text`",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-018.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 110)",
+      "comment": "Minor AA diffs on Skia text_full",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-019.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/\" \"resvg-e-marker-019.png\")",
+      "comment": "We (correctly)",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-032.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Target with subpaths",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-044.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Multiple closepaths",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-045.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-marker-045.png\")",
+      "comment": "BUG? Disagreement about marker direction on cusp",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-marker-051.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-marker-051.png\")",
+      "comment": "",
+      "suite_name": "Marker",
+      "suite_prefix": "e-marker"
+    },
+    {
+      "filename": "e-mask-017.svg",
+      "params": "Params::Skip()",
+      "comment": "Not implemented: color-interpolation linearRGB",
+      "suite_name": "Mask",
+      "suite_prefix": "e-mask"
+    },
+    {
+      "filename": "e-mask-022.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Recursive on child",
+      "suite_name": "Mask",
+      "suite_prefix": "e-mask"
+    },
+    {
+      "filename": "e-mask-026.svg",
+      "params": "Params::Skip()",
+      "comment": "Non-text mask regression kept out of text stack",
+      "suite_name": "Mask",
+      "suite_prefix": "e-mask"
+    },
+    {
+      "filename": "e-mask-029.svg",
+      "params": "Params::WithThreshold(0.1f)",
+      "comment": "Mask with <image> (bilinear edge diffs)",
+      "suite_name": "Mask",
+      "suite_prefix": "e-mask"
+    },
+    {
+      "filename": "e-pattern-003.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: overflow=visible",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-008.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 250)",
+      "comment": "Skia pattern AA",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-010.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 150)",
+      "comment": "Skia pattern AA",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-018.svg",
+      "params": "Params::WithThreshold(0.5f, 1150)",
+      "comment": "AA artifacts + quad glyph outlines",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-019.svg",
+      "params": "Params::WithThreshold(0.2f)",
+      "comment": "Anti-aliasing artifacts",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-020.svg",
+      "params": "Params::WithThreshold(0.6f, 800)",
+      "comment": "Nested pattern AA (768px)",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-021.svg",
+      "params": "Params::WithThreshold(0.2f)",
+      "comment": "Larger threshold due to recursive pattern seams.",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-022.svg",
+      "params": "Params::WithThreshold(0.2f)",
+      "comment": "Larger threshold due to recursive pattern seams.",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-023.svg",
+      "params": "Params::WithThreshold(0.2f)",
+      "comment": "Larger threshold due to recursive pattern seams.",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-028.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Invalid patternTransform",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-pattern-030.svg",
+      "params": "Params::WithThreshold(0.02f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "Pattern",
+      "suite_prefix": "e-pattern"
+    },
+    {
+      "filename": "e-radialGradient-031.svg",
+      "params": "Params::Skip()",
+      "comment": "Test suite bug? In SVG2 this was changed to draw",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-radialGradient-032.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Negative `r`",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-radialGradient-039.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Invalid `gradientUnits`",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-radialGradient-040.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Invalid `gradientTransform`",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-radialGradient-043.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: fr=0.5 (SVG 2)",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-radialGradient-044.svg",
+      "params": "Params::Skip()",
+      "comment": "Test suite bug? fr > default value of",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-radialGradient-045.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: fr=-1 (SVG 2)",
+      "suite_name": "RadialGradient",
+      "suite_prefix": "e-radialGradient"
+    },
+    {
+      "filename": "e-stop-011.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug? Strange edge case, stop-color",
+      "suite_name": "StopElement",
+      "suite_prefix": "e-stop"
+    },
+    {
+      "filename": "e-style-012.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: <svg version=\"1.1\">",
+      "suite_name": "StyleElement",
+      "suite_prefix": "e-style"
+    },
+    {
+      "filename": "e-style-014.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: CSS @import",
+      "suite_name": "StyleElement",
+      "suite_prefix": "e-style"
+    },
+    {
+      "filename": "e-svg-002.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug? xmlns validation",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-003.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug? mixed namespaces",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-005.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug/Not impl? XML Entity references",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-007.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug/Not impl? Non-UTF8 encoding",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-008.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-009.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-010.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-011.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-012.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-013.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-014.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-015.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-016.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-017.svg",
+      "params": "Params::WithThreshold(0.13f)",
+      "comment": "Has anti-aliasing artifacts.",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-018.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Invalid id attribute",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-019.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: Invalid id attribute",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-020.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: FuncIRI parsing",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-021.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: FuncIRI with invalid chars",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-028.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: overflow",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-029.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: overflow",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-031.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug/Not impl? XML Entity references",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-032.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug/Not impl? XML Entity references",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-033.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug? Rect inside unknown element",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-svg-036.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: Computed bounds from content",
+      "suite_name": "SvgElement",
+      "suite_prefix": "e-svg"
+    },
+    {
+      "filename": "e-symbol-010.svg",
+      "params": "Params::Skip()",
+      "comment": "New SVG2 feature, transform on symbol",
+      "suite_name": "SymbolElement",
+      "suite_prefix": "e-symbol"
+    },
+    {
+      "filename": "e-text-022.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 1400)",
+      "comment": "",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-025.svg",
+      "params": "Params().onlyTextFull()",
+      "comment": "Combining mark needs HarfBuzz",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-026.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/resvg-e-text-026.png\") .onlyTextFull()",
+      "comment": "Simple text can't compose combining marks",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-027.svg",
+      "params": "Params::WithThreshold(0.2f).onlyTextFull()",
+      "comment": "Emoji, differences between",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-028.svg",
+      "params": "Params::WithThreshold(0.2f) .onlyTextFull()",
+      "comment": "Emoji, differences between resvg and our bitmap",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-029.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/resvg-e-text-029.png\", 0.1f) .withMaxPixelsDifferent(1100) .onlyTextFull()",
+      "comment": "Emoji, Skia bitmap scaling differs from TinySkia",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-030.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/resvg-e-text-030.png\") .withMaxPixelsDifferent(400) // Vertical axis has different AA (its // not the focus of the test) .onlyTextFull()",
+      "comment": "Arabic text shaping requires text-full, and this",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-031.svg",
+      "params": "Params() .withMaxPixelsDifferent(300) // Vertical axis has different AA (its // not the focus of the test) .onlyTextFull()",
+      "comment": "Complex diatrics requires text-full",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-034.svg",
+      "params": "Params().onlyTextFull()",
+      "comment": "Complex diatrics requires text-full",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-035.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: Bidirectional text shaping",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-036.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/resvg-e-text-036.png\") .onlyTextFull()",
+      "comment": "Arabic text shaping requires text-full,",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-040.svg",
+      "params": "Params().onlyTextFull()",
+      "comment": "Arabic text shaping requires text-full",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-042.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: grapheme split by tspan",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-text-043.svg",
+      "params": "Params::WithThreshold(kDefaultThreshold, 19100)",
+      "comment": "",
+      "suite_name": "TextElement",
+      "suite_prefix": "e-text-"
+    },
+    {
+      "filename": "e-textPath-001.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-001.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-002.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-002.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-003.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-003.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-004.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-004.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-005.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-005.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-007.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: method=stretch",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-008.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: spacing=auto",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-009.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-009.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-010.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/\" \"resvg-e-textPath-010.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-011.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-011.png\")",
+      "comment": "AA diffs",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-012.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Kerning on textPath",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-013.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-013.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-014.svg",
+      "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/\" \"resvg-e-textPath-014.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-015.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-015.png\")",
+      "comment": "AA diffs",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-016.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: link to rect (SVG 2)",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-019.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-019.png\")",
+      "comment": "",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-020.svg",
+      "params": "Params::WithThreshold(0.1f, 400)",
+      "comment": "Minor AA diffs",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-021.svg",
+      "params": "Params::Skip()",
+      "comment": "Deferred: writing-mode=tb on textPath",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-022.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-022.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-023.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-023.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-026.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-026.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-027.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-027.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-028.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-028.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-029.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-029.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-030.svg",
+      "params": "Params::Skip()",
+      "comment": "Deferred: vertical + circular path",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-032.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-032.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-033.svg",
+      "params": "Params::RenderOnly()",
+      "comment": "UB: baseline-shift + rotate",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-034.svg",
+      "params": "Params::WithThreshold(0.05f)",
+      "comment": "AA artifacts",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-035.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-035.png\", 0.05f) .withMaxPixelsDifferent( 1100)",
+      "comment": "AA + minor char advance diffs, different w/ text vs. text-full so",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-036.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-036.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-037.svg",
+      "params": "Params::WithGoldenOverride( \"donner/svg/renderer/testdata/golden/resvg-e-textPath-037.png\")",
+      "comment": "Minor char",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-040.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: filter on textPath",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-041.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: side=right (SVG 2)",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-042.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: path attr (SVG 2)",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-043.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: path + xlink:href",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-textPath-044.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: invalid path + href",
+      "suite_name": "TextPathElement",
+      "suite_prefix": "e-textPath"
+    },
+    {
+      "filename": "e-tspan-011.svg",
+      "params": "Params::Skip()",
+      "comment": "Whitespace-only text nodes lost in",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-016.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Applying rotation indices across nested tspans",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-020.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: Interaction with `mask`",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-021.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: Interaction with `clip-path`",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-022.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: Interaction with `filter`",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-026.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: BIDI reordering",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-028.svg",
+      "params": "Params::Skip()",
+      "comment": "Bug: Handling kerning with font size changes",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-030.svg",
+      "params": "Params().withMaxPixelsDifferent(900)",
+      "comment": "Crosshair thin-line AA + underline uses",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-tspan-031.svg",
+      "params": "Params().withMaxPixelsDifferent(400)",
+      "comment": "Vertical axis has different AA",
+      "suite_name": "TspanElement",
+      "suite_prefix": "e-tspan"
+    },
+    {
+      "filename": "e-use-008.svg",
+      "params": "Params::Skip()",
+      "comment": "Not impl: External file.",
+      "suite_name": "Use",
+      "suite_prefix": "e-use"
+    }
+  ],
+  "suite_list": [
+    {
+      "suite_name": "Color",
+      "prefix": "a-color"
+    },
+    {
+      "suite_name": "BaselineShift",
+      "prefix": "a-baseline-shift"
+    },
+    {
+      "suite_name": "Clip",
+      "prefix": "a-clip"
+    },
+    {
+      "suite_name": "Display",
+      "prefix": "a-display"
+    },
+    {
+      "suite_name": "Fill",
+      "prefix": "a-fill"
+    },
+    {
+      "suite_name": "Flood",
+      "prefix": "a-flood"
+    },
+    {
+      "suite_name": "Font",
+      "prefix": "a-font"
+    },
+    {
+      "suite_name": "LetterSpacing",
+      "prefix": "a-letter-spacing"
+    },
+    {
+      "suite_name": "Opacity",
+      "prefix": "a-opacity"
+    },
+    {
+      "suite_name": "Stroke",
+      "prefix": "a-stroke"
+    },
+    {
+      "suite_name": "Style",
+      "prefix": "a-style"
+    },
+    {
+      "suite_name": "TextAnchor",
+      "prefix": "a-text-anchor"
+    },
+    {
+      "suite_name": "TextDecoration",
+      "prefix": "a-text-decoration"
+    },
+    {
+      "suite_name": "TextLength",
+      "prefix": "a-textLength"
+    },
+    {
+      "suite_name": "Transform",
+      "prefix": "a-transform"
+    },
+    {
+      "suite_name": "Visibility",
+      "prefix": "a-visibility"
+    },
+    {
+      "suite_name": "WordSpacing",
+      "prefix": "a-word-spacing"
+    },
+    {
+      "suite_name": "WritingMode",
+      "prefix": "a-writing-mode"
+    },
+    {
+      "suite_name": "ClipPath",
+      "prefix": "e-clipPath"
+    },
+    {
+      "suite_name": "Defs",
+      "prefix": "e-defs"
+    },
+    {
+      "suite_name": "FeColorMatrix",
+      "prefix": "e-feColorMatrix"
+    },
+    {
+      "suite_name": "FeConvolveMatrix",
+      "prefix": "e-feConvolveMatrix"
+    },
+    {
+      "suite_name": "FeDiffuseLighting",
+      "prefix": "e-feDiffuseLighting"
+    },
+    {
+      "suite_name": "FeDropShadow",
+      "prefix": "e-feDropShadow"
+    },
+    {
+      "suite_name": "FeGaussianBlur",
+      "prefix": "e-feGaussianBlur"
+    },
+    {
+      "suite_name": "FeImage",
+      "prefix": "e-feImage"
+    },
+    {
+      "suite_name": "FeMerge",
+      "prefix": "e-feMerge"
+    },
+    {
+      "suite_name": "FePointLight",
+      "prefix": "e-fePointLight"
+    },
+    {
+      "suite_name": "FeSpecularLighting",
+      "prefix": "e-feSpecularLighting"
+    },
+    {
+      "suite_name": "FeSpotLight",
+      "prefix": "e-feSpotLight"
+    },
+    {
+      "suite_name": "FeTile",
+      "prefix": "e-feTile"
+    },
+    {
+      "suite_name": "FeTurbulence",
+      "prefix": "e-feTurbulence"
+    },
+    {
+      "suite_name": "Filter",
+      "prefix": "e-filter"
+    },
+    {
+      "suite_name": "Image",
+      "prefix": "e-image"
+    },
+    {
+      "suite_name": "Line",
+      "prefix": "e-line-"
+    },
+    {
+      "suite_name": "LinearGradient",
+      "prefix": "e-linearGradient"
+    },
+    {
+      "suite_name": "Marker",
+      "prefix": "e-marker"
+    },
+    {
+      "suite_name": "Mask",
+      "prefix": "e-mask"
+    },
+    {
+      "suite_name": "Pattern",
+      "prefix": "e-pattern"
+    },
+    {
+      "suite_name": "RadialGradient",
+      "prefix": "e-radialGradient"
+    },
+    {
+      "suite_name": "StopElement",
+      "prefix": "e-stop"
+    },
+    {
+      "suite_name": "StyleElement",
+      "prefix": "e-style"
+    },
+    {
+      "suite_name": "SvgElement",
+      "prefix": "e-svg"
+    },
+    {
+      "suite_name": "SymbolElement",
+      "prefix": "e-symbol"
+    },
+    {
+      "suite_name": "TextElement",
+      "prefix": "e-text-"
+    },
+    {
+      "suite_name": "TextPathElement",
+      "prefix": "e-textPath"
+    },
+    {
+      "suite_name": "TspanElement",
+      "prefix": "e-tspan"
+    },
+    {
+      "suite_name": "Use",
+      "prefix": "e-use"
+    }
+  ],
+  "default_suites": [
+    {
+      "suite_name": "AlignmentBaseline",
+      "prefix": "a-alignment-baseline"
+    },
+    {
+      "suite_name": "DominantBaseline",
+      "prefix": "a-dominant-baseline"
+    },
+    {
+      "suite_name": "Isolation",
+      "prefix": "a-isolation"
+    },
+    {
+      "suite_name": "Kerning",
+      "prefix": "a-kerning"
+    },
+    {
+      "suite_name": "LengthAdjust",
+      "prefix": "a-lengthAdjust"
+    },
+    {
+      "suite_name": "MarkerAttrib",
+      "prefix": "a-marker"
+    },
+    {
+      "suite_name": "MixBlendMode",
+      "prefix": "a-mix-blend-mode"
+    },
+    {
+      "suite_name": "Overflow",
+      "prefix": "a-overflow"
+    },
+    {
+      "suite_name": "Shape",
+      "prefix": "a-shape"
+    },
+    {
+      "suite_name": "StopAttributes",
+      "prefix": "a-stop"
+    },
+    {
+      "suite_name": "TextRendering",
+      "prefix": "a-text-rendering"
+    },
+    {
+      "suite_name": "Circle",
+      "prefix": "e-circle"
+    },
+    {
+      "suite_name": "Ellipse",
+      "prefix": "e-ellipse"
+    },
+    {
+      "suite_name": "FeBlend",
+      "prefix": "e-feBlend"
+    },
+    {
+      "suite_name": "FeComponentTransfer",
+      "prefix": "e-feComponentTransfer"
+    },
+    {
+      "suite_name": "FeComposite",
+      "prefix": "e-feComposite"
+    },
+    {
+      "suite_name": "FeDisplacementMap",
+      "prefix": "e-feDisplacementMap"
+    },
+    {
+      "suite_name": "FeDistantLight",
+      "prefix": "e-feDistantLight"
+    },
+    {
+      "suite_name": "FeFlood",
+      "prefix": "e-feFlood"
+    },
+    {
+      "suite_name": "FeMorphology",
+      "prefix": "e-feMorphology"
+    },
+    {
+      "suite_name": "FeOffset",
+      "prefix": "e-feOffset"
+    },
+    {
+      "suite_name": "G",
+      "prefix": "e-g"
+    },
+    {
+      "suite_name": "Path",
+      "prefix": "e-path"
+    },
+    {
+      "suite_name": "Polygon",
+      "prefix": "e-polygon"
+    },
+    {
+      "suite_name": "Polyline",
+      "prefix": "e-polyline"
+    },
+    {
+      "suite_name": "Rect",
+      "prefix": "e-rect"
+    }
+  ],
+  "total_overrides": 262
+}

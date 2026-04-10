@@ -12,7 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent, ImageContent
@@ -32,6 +32,7 @@ from test_output_parser import (
     group_by_category,
     identify_missing_features,
     get_next_priority_feature,
+    extract_category_from_path,
 )
 
 server = Server("resvg-test-triage")
@@ -334,81 +335,77 @@ def categorize_failure(pixel_diff: int, features: list[SVGFeature]) -> tuple[str
 
 def suggest_skip_comment(test_name: str, features: list[SVGFeature], category: str) -> str:
     """
-    Generate a skip comment for resvg_test_suite.cc.
+    Generate a skip entry for resvg_test_suite.cc.
+
+    Post-upgrade, reasons are carried as string arguments to the factory:
+    ``Params::Skip("Not impl: letter-spacing")``. The returned string is
+    ready to paste inside a ``getTestsInCategory(..., { ... })`` override
+    map, keyed by bare filename (not category-prefixed).
 
     Args:
-        test_name: Test file name (e.g., "e-text-002.svg")
+        test_name: Bare SVG filename (e.g., "simple-case.svg")
         features: Detected SVG features
         category: Failure category
 
     Returns:
-        Formatted skip entry
+        Formatted skip entry as it should appear in an override map.
     """
     if category == "not_implemented" and features:
-        # Use the most specific feature
         feature = features[0]
 
-        # Generate appropriate comment based on feature
+        # Generate a short human-readable reason based on the feature.
         if feature.category == "element":
-            comment = f"Not impl: <{feature.name}>"
+            reason = f"Not impl: <{feature.name}>"
         elif feature.category == "positioning":
-            # Format feature name nicely
             feature_name = feature.name.replace("_", " ").replace(" attribute", "")
             if "multiple" in feature_name:
-                comment = f"Not impl: {feature_name.capitalize()}"
+                reason = f"Not impl: {feature_name.capitalize()}"
             else:
-                comment = f"Not impl: `{feature_name}` attribute"
+                reason = f"Not impl: `{feature_name}` attribute"
         elif feature.category == "styling":
             attr_name = feature.name.replace("_", "-")
-            comment = f"Not impl: `{attr_name}`"
+            reason = f"Not impl: `{attr_name}`"
         elif feature.category == "text":
             if "emoji" in feature.name:
-                comment = "Not impl: Color emoji font (Noto Color Emoji)"
-            elif "mode" in feature.name:
-                comment = f"Not impl: `{feature.name.replace('_', '-')}`"
+                reason = "Not impl: Color emoji font (Noto Color Emoji)"
             else:
-                comment = f"Not impl: `{feature.name.replace('_', '-')}`"
+                reason = f"Not impl: `{feature.name.replace('_', '-')}`"
         else:
-            comment = f"Not impl: {feature.description}"
+            reason = f"Not impl: {feature.description}"
     elif category == "threshold_needed":
-        comment = "Larger threshold due to anti-aliasing artifacts"
+        reason = "Larger threshold due to anti-aliasing artifacts"
     elif category == "font_difference":
-        comment = "Expected font rendering difference (CoreText vs FreeType)"
+        reason = "Expected font rendering difference (CoreText vs FreeType)"
     else:
-        comment = "Bug: Rendering issue"
+        reason = "Bug: Rendering issue"
 
-    return f'{{\"{test_name}\", Params::Skip()}},  // {comment}'
+    escaped_reason = reason.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{{"{test_name}", Params::Skip("{escaped_reason}")}},'
 
 
 def find_related_tests(features: list[SVGFeature], all_tests: list[str]) -> list[str]:
     """
-    Find tests that likely use similar features.
+    Find tests that likely exercise the same feature.
+
+    In the new directory-based layout there's no useful filename-prefix
+    heuristic — a test like ``text/textPath/simple-case.svg`` and
+    ``text/textPath/nested.svg`` are related because they share a
+    category directory, not because they share a numeric prefix.
+
+    This helper is kept for callers that have a pre-scoped list of
+    category peers (e.g., from ``getTestsInCategory("text/textPath")``)
+    and just want to sample the first few.
 
     Args:
-        features: Features detected in current test
-        all_tests: List of all test names
+        features: Features detected in current test (unused; retained
+            for API compatibility).
+        all_tests: List of test names within the same category.
 
     Returns:
-        List of related test names
+        First N peers from ``all_tests``.
     """
-    if not features:
-        return []
-
-    # Simple heuristic: tests with same numeric prefix often test related features
-    # e.g., e-text-002, e-text-003, e-text-004 all test multiple x/y values
-    related = []
-
-    # Extract base pattern (e.g., "e-text-00" from "e-text-002.svg")
-    for test in all_tests:
-        # Match pattern like e-text-NNN.svg
-        match = re.match(r'(e-\w+-)(\d{3})', test)
-        if match:
-            prefix = match.group(1)
-            num = int(match.group(2))
-            # Tests within +/-5 often related
-            related.append(f"{prefix}{num:03d}.svg")
-
-    return related[:5]  # Limit to 5 related tests
+    del features  # retained for compatibility, not used here
+    return sorted(all_tests)[:5]
 
 
 # ============================================================================
@@ -431,7 +428,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "test_name": {
                         "type": "string",
-                        "description": "Test file name (e.g., 'e-text-002.svg')"
+                        "description": "Bare SVG filename (e.g., 'simple-case.svg')"
                     },
                     "svg_content": {
                         "type": "string",
@@ -447,7 +444,11 @@ async def list_tools() -> list[Tool]:
                     },
                     "expected_image_path": {
                         "type": "string",
-                        "description": "Path to expected rendering PNG (golden reference)"
+                        "description": (
+                            "Path to expected rendering PNG (golden reference). "
+                            "In the new layout this sits next to the .svg in "
+                            "resvg-test-suite/tests/<category>/."
+                        )
                     },
                     "diff_image_path": {
                         "type": "string",
@@ -529,7 +530,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "test_name": {
                         "type": "string",
-                        "description": "Test file name (e.g., 'e-text-023.svg')"
+                        "description": "Bare SVG filename (e.g., 'letter-spacing-with-arabic.svg')"
                     },
                     "features": {
                         "type": "array",
@@ -581,7 +582,11 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "Category prefix (e.g., 'e-text', 'a-transform')"
+                        "description": (
+                            "Category directory relative to resvg-test-suite/tests/ "
+                            "(e.g. 'text/textPath', 'painting/fill', "
+                            "'filters/feGaussianBlur')."
+                        )
                     },
                     "test_output": {
                         "type": "string",
@@ -731,48 +736,74 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     elif name == "batch_triage_tests":
         test_output = arguments["test_output"]
 
-        # Parse test output to extract failures
-        failures = []
-        current_test = None
-        current_svg = None
-        current_diff = None
+        # Parse test output to extract failures.
+        #
+        # The authoritative source for the test's SVG filename and
+        # category is the absolute path — either on the [  COMPARE  ]
+        # line or on the "where GetParam() = <path>" suffix of a failing
+        # summary line. We intentionally do NOT reverse-engineer the test
+        # ID (e.g. ``ResvgTest/simple_case``) into a filename — GoogleTest
+        # sanitizes ``-``, ``=``, ``#`` into ``_``, which isn't reversible.
+        failures: list[dict] = []
+        current_svg_path: Optional[str] = None
+        current_category: Optional[str] = None
+        current_diff: Optional[int] = None
+        current_svg: Optional[list[str]] = None
 
         for line in test_output.split('\n'):
-            # Match test name: Text/ImageComparisonTestFixture.ResvgTest/e_text_002
-            if "ResvgTest/" in line and "[ RUN" in line:
-                match = re.search(r'ResvgTest/(\w+)', line)
-                if match:
-                    current_test = match.group(1).replace('_', '-') + '.svg'
+            if "[ RUN" in line and "ResvgTest/" in line:
+                current_svg_path = None
+                current_category = None
+                current_diff = None
+                current_svg = None
+                continue
 
-            # Match COMPARE line with pixel diff
-            elif "[  COMPARE ]" in line and "FAIL" in line:
-                match = re.search(r'(\d+) pixels differ', line)
-                if match and current_test:
-                    current_diff = int(match.group(1))
+            # COMPARE line: "[  COMPARE ] /.../tests/text/textPath/foo.svg [Backend]: ..."
+            if "[  COMPARE ]" in line:
+                path_match = re.search(r'(\S+\.svg)', line)
+                if path_match:
+                    current_svg_path = path_match.group(1)
+                    current_category = extract_category_from_path(current_svg_path)
+                diff_match = re.search(r'(\d+)\s+pixels?\s+differ', line)
+                if diff_match:
+                    current_diff = int(diff_match.group(1))
+                continue
 
-            # Match SVG content start
-            elif "SVG Content for" in line:
+            # Summary FAILED line: fill in path from "where GetParam() = ..."
+            if "[  FAILED  ]" in line and current_svg_path is None:
+                where_match = re.search(
+                    r'where\s+GetParam\(\)\s*=\s*(\S+\.svg)', line)
+                if where_match:
+                    current_svg_path = where_match.group(1)
+                    current_category = extract_category_from_path(current_svg_path)
+
+            # SVG content block, fenced by "---"
+            if "SVG Content for" in line:
                 current_svg = []
-            elif current_svg is not None:
-                if line.strip() == "---" and len(current_svg) > 0:
-                    # End of SVG content
+                continue
+            if current_svg is not None:
+                if line.strip() == "---" and current_svg:
                     svg_content = '\n'.join(current_svg)
-                    if current_test and current_diff:
+                    if current_svg_path and current_diff is not None:
                         features = detect_svg_features(svg_content)
-                        category, severity = categorize_failure(current_diff, features)
-                        skip_comment = suggest_skip_comment(current_test, features, category)
-
+                        category, severity = categorize_failure(
+                            current_diff, features)
+                        test_name = current_svg_path.rsplit("/", 1)[-1]
+                        skip_comment = suggest_skip_comment(
+                            test_name, features, category)
                         failures.append({
-                            "test": current_test,
+                            "test": test_name,
+                            "path": current_svg_path,
+                            "category_dir": current_category,
                             "pixel_diff": current_diff,
                             "features": [f.name for f in features],
                             "category": category,
                             "severity": severity,
-                            "suggested_skip": skip_comment
+                            "suggested_skip": skip_comment,
                         })
-
                     current_svg = None
-                    current_test = None
+                    current_svg_path = None
+                    current_category = None
                     current_diff = None
                 elif line.strip() != "---":
                     current_svg.append(line)
@@ -898,19 +929,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         # Identify all missing features and group
         feature_map = identify_missing_features(skip_map)
 
-        # Group related tests by category
-        grouped_by_category = {}
+        # Group related tests by category directory. The skip file keys by
+        # bare filename without the directory, so unless the caller has
+        # scoped the content to a single category block we fall back to
+        # "unknown" here. Callers that care about directory grouping
+        # should scope skip_file_content before passing it in.
+        grouped_by_category: dict[str, list[str]] = {}
         for test in related_tests:
-            # Extract category prefix
-            match = re.match(r'^([a-z]+-[a-z]+)-', test)
-            if match:
-                cat = match.group(1)
-            else:
-                cat = "other"
-
-            if cat not in grouped_by_category:
-                grouped_by_category[cat] = []
-            grouped_by_category[cat].append(test)
+            cat = "unknown"
+            grouped_by_category.setdefault(cat, []).append(test)
 
         # Determine impact and priority
         impact_count = len(related_tests)
