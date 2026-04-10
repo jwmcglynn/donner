@@ -118,16 +118,35 @@ def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
     current_diff: Optional[int] = None
     current_svg_path: Optional[str] = None
     current_test_id: Optional[str] = None
-    seen: set[str] = set()  # (svg_path, status) to dedupe summary lines
+    seen: set[tuple[str, str]] = set()  # (key, status) to dedupe summary lines
 
     def flush() -> None:
+        """Emit a TestResult for the in-flight test, then reset state.
+
+        Prefers the SVG path (rich: filename + category) but falls back to
+        the GoogleTest test ID (e.g. ``Suite/Fixture.ResvgTest/param``) when
+        no path was emitted — common for tests that hit ``GTEST_SKIP()``
+        before the fixture prints its ``[ COMPARE ]`` line. Without the
+        fallback, every runtime-skipped test was being silently dropped.
+        """
         nonlocal current_status, current_diff, current_svg_path, current_test_id
-        if current_svg_path and current_status:
-            key = (current_svg_path, current_status)
-            if key not in seen:
-                seen.add(key)
+        if current_status:
+            key: Optional[str] = None
+            test_name: Optional[str] = None
+            category: Optional[str] = None
+            if current_svg_path:
                 test_name = current_svg_path.rsplit("/", 1)[-1]
                 category = extract_category_from_path(current_svg_path)
+                key = current_svg_path
+            elif current_test_id:
+                # Best-effort recovery — we can't reverse the GoogleTest
+                # name sanitization to recover the SVG filename, but we
+                # can keep the record so callers see accurate skip counts
+                # and the test ID for triage cross-reference.
+                test_name = current_test_id
+                key = current_test_id
+            if key is not None and (key, current_status) not in seen:
+                seen.add((key, current_status))
                 results.append(TestResult(
                     test_name=test_name,
                     status=current_status,
@@ -160,21 +179,35 @@ def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
             continue
 
         # Result lines: [       OK ], [  FAILED  ], [  SKIPPED ].
+        # Both FAILED and SKIPPED summary lines may carry the SVG path
+        # via ``where GetParam() = /x``; check for it before flushing
+        # so callers see the correct path even when the in-test
+        # [ COMPARE ] line was never emitted (e.g. GTEST_SKIP() fires
+        # before the fixture body runs).
         if re.search(r'\[\s*OK\s*\]', line):
             current_status = "PASSED"
             flush()
             continue
         if re.search(r'\[\s*FAILED\s*\]', line):
-            # Summary FAILED lines carry the path via ``where GetParam() = /x``.
             where_match = re.search(
                 r'where\s+GetParam\(\)\s*=\s*(\S+\.svg)', line)
             if where_match:
-                # Summary line — fill in the path directly.
                 current_svg_path = where_match.group(1)
             current_status = "FAILED"
             flush()
             continue
         if re.search(r'\[\s*SKIPPED\s*\]', line):
+            where_match = re.search(
+                r'where\s+GetParam\(\)\s*=\s*(\S+\.svg)', line)
+            if where_match:
+                current_svg_path = where_match.group(1)
+            # Pull the test ID off the SKIPPED line if we don't already
+            # have one — the summary block at end-of-output emits one
+            # SKIPPED line per test without a preceding [ RUN ].
+            if current_test_id is None:
+                id_match = re.search(r'ResvgTest/(\S+)', line)
+                if id_match:
+                    current_test_id = id_match.group(1)
             current_status = "SKIPPED"
             flush()
             continue

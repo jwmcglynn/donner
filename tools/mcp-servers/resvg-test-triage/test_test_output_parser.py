@@ -77,6 +77,41 @@ def test_parse_test_output_where_getparam_summary_line():
     assert results[0].category == "text/textPath"
 
 
+def test_parse_test_output_runtime_skipped_without_compare_line():
+    """Runtime-skipped tests (GTEST_SKIP() before [ COMPARE ]) must still
+    produce a record. The fixture's [ COMPARE ] line never fires because
+    skipReasonIfUnsupported() returned a reason, so current_svg_path is
+    None when [ SKIPPED ] arrives. Recover via the test ID instead of
+    silently dropping the record."""
+    test_output = """
+[ RUN      ] TextLetterSpacing/ImageComparisonTestFixture.ResvgTest/on_Arabic
+.../ImageComparisonTestFixture.cc:599: Skipped
+TinySkia backend does not support Arabic text shaping
+[  SKIPPED ] TextLetterSpacing/ImageComparisonTestFixture.ResvgTest/on_Arabic (2 ms)
+"""
+    results, _ = parse_test_output(test_output)
+    assert len(results) == 1
+    assert results[0].status == "SKIPPED"
+    # No SVG path was emitted, so test_name falls back to the test ID.
+    assert "on_Arabic" in results[0].test_name
+    assert results[0].category is None
+
+
+def test_parse_test_output_skipped_with_where_getparam():
+    """If a test fixture is updated to print [  COMPARE  ] before the skip
+    check, or if GoogleTest's summary block ever starts including
+    `where GetParam() = …` for skipped parameterized tests, the parser
+    should pick up the path the same way it does for FAILED."""
+    test_output = """
+[  SKIPPED ] PaintingFill/ImageComparisonTestFixture.ResvgTest/example, where GetParam() = /runfiles/resvg-test-suite/tests/painting/fill/example.svg
+"""
+    results, _ = parse_test_output(test_output)
+    assert len(results) == 1
+    assert results[0].status == "SKIPPED"
+    assert results[0].test_name == "example.svg"
+    assert results[0].category == "painting/fill"
+
+
 def test_parse_skip_file_new_form():
     """New Params::Skip("reason") syntax is the primary format."""
     skip_content = '''
