@@ -61,9 +61,74 @@ the other. Land them together as a single PR.
 - `painting/marker/percent-values.svg`
 - `text/text/percent-value-on-{x-and-y,dx-and-dy}.svg`
 
+### B2: CSS filter function shorthand (`blur()`, `drop-shadow()`, etc.) parses but is not applied at render
+
+**Impact:** 30 tests in `filters/filter-functions/`.
+
+**Symptom:** SVGs that use the CSS shorthand form `filter="blur(3)"`,
+`filter="drop-shadow(...)"`, `filter="grayscale(0.5)"`, `filter="hue-rotate(45deg)"`,
+or chains of those, render with **no filter applied at all** — the unfiltered
+geometry shows through. The `filter="url(#filter1)"` form (referencing a
+`<filter>` element) works correctly.
+
+**Symptom verified visually:** Donner renders
+`filters/filter-functions/blur-function.svg` (which is
+`<rect filter="blur(3)"/>`) as a sharp green rectangle; resvg's golden has a
+soft-edged blurred rectangle.
+
+**Root cause (partial — needs deeper investigation):**
+- `PropertyRegistry::ParseFilterFunction` correctly parses
+  `blur(...)`, `drop-shadow(...)`, `brightness(...)`, `contrast(...)`,
+  `grayscale(...)`, `hue-rotate(...)`, `invert(...)`, `opacity(...)`,
+  `saturate(...)`, `sepia(...)`. Returns `FilterEffect` variants.
+- `RendererDriver` has full dispatch coverage for all filter function variants
+  in `RendererDriver.cc::renderFilterEffect`.
+- So **either** the parsed `std::vector<FilterEffect>` doesn't reach the
+  entity's filter component, **or** the rendering path doesn't read the
+  CSS-function variant of the filter component (only the `ElementReference`
+  variant).
+
+**Next step:** Set a breakpoint in `ParseFilterFunction` and walk the value
+to where it's stored. Check `FilterComponent` to see whether the CSS-function
+variant is plumbed through to whatever the renderer reads. Ideally write a
+unit test that exercises `<rect filter="blur(3)"/>` end-to-end and asserts
+the rendered pixel values change.
+
+**Passing tests in the same category** (kept passing because they're
+edge-case rejection paths that produce empty output anyway): `blur-function-{
+negative,percent,two}-value`, `drop-shadow-function-{comma-separated,
+extra-value,no-values,only-X-offset,percent-values}`,
+`hue-rotate-function-45` (no unit), `nested-filters`,
+`one-invalid-{function,url}-in-list`, `two-drop-shadow-function`.
+
+**Affected tests:** every `*.svg` in `filters/filter-functions/` that's
+in the M1 skip list (30 of 43).
+
 ## Unimplemented SVG features
 
-### F1: `transform-origin` presentation attribute (SVG 2)
+### F1: `enable-background` attribute and `BackgroundImage`/`BackgroundAlpha` filter inputs
+
+**Impact:** 17 tests in `filters/enable-background/`.
+
+**What's missing:** SVG 1.1's `enable-background="new"` (and the `BackgroundImage`
+/ `BackgroundAlpha` filter input keywords that depend on it). Both were
+deprecated in SVG 2 and replaced by `<filter>` element chains and
+`backdrop-filter`. Donner has never implemented them; the existing pre-upgrade
+filter suite already had `Skip` entries for the same feature with the same
+rationale (`in=BackgroundAlpha (deprecated SVG 1.1)`,
+`in=BackgroundImage (deprecated SVG 1.1)` in the FilterFilter block).
+
+**Next step:** This is a feature explicitly out of scope per
+[`docs/unsupported_svg1_features.md`](../../docs/unsupported_svg1_features.md).
+The skip is the correct long-term state; no fix planned.
+
+**Affected tests:** every `*.svg` under `filters/enable-background/` that's
+in the M1 skip list (17 of 21 — the remaining 4 are passing because they
+exercise the parser's handling of invalid regions, not the rendering path).
+
+---
+
+### F2: `transform-origin` presentation attribute (SVG 2)
 
 **Impact:** 20 tests in `structure/transform-origin/`.
 
