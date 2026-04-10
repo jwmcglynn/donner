@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <!-- Off-center focal point inside the outer circle. The brightest pixel
+         should sit at (fx, fy), not at (cx, cy). Exercises the
+         general-case quadratic in radial_t. -->
+    <radialGradient id="g" gradientUnits="userSpaceOnUse"
+                    cx="32" cy="32" r="30" fx="48" fy="48">
+      <stop offset="0" stop-color="white"/>
+      <stop offset="1" stop-color="#003366"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" fill="url(#g)"/>
+</svg>

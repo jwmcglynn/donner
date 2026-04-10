@@ -2,22 +2,49 @@
 
 #include <webgpu/webgpu_cpp.h>
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <optional>
+#include <utility>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Path.h"
+#include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/GradientComponent.h"
+#include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
 
 namespace {
 
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
+
+/// The unit path bounds used by `objectBoundingBox` gradient coordinates,
+/// matching the helper in RendererTinySkia / RendererSkia.
+const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+
+/// Hard cap on gradient stops baked into the uniform buffer. Must be
+/// <= `GeoEncoder`'s internal `kMaxGradientStops` (which mirrors the WGSL
+/// constant in `slug_gradient.wgsl`). Values beyond this cap are truncated
+/// with a one-shot warning; the follow-up is a texture-based stop lookup
+/// (see `GeodeGradientCacheComponent` in the Geode design doc).
+constexpr size_t kMaxGradientStopsClient = 16;
 
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
 /// buffers. This rounds the unpadded row width up to the next 256 boundary.
@@ -59,7 +86,288 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
   style.cap = toLineCap(params.lineCap);
   style.join = toLineJoin(params.lineJoin);
   style.miterLimit = params.miterLimit;
+  style.dashArray = params.dashArray;
+  style.dashOffset = params.dashOffset;
+  style.pathLength = params.pathLength;
   return style;
+}
+
+/// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
+/// `objectBoundingBox` mode. Mirrors the `toPercent` helper used by
+/// RendererTinySkia / RendererSkia for gradient coordinate resolution.
+inline Lengthd coerceGradientLength(Lengthd value, bool numbersArePercent) {
+  if (!numbersArePercent) {
+    return value;
+  }
+  if (value.unit == Lengthd::Unit::None) {
+    value.value *= 100.0;
+    value.unit = Lengthd::Unit::Percent;
+  }
+  return value;
+}
+
+/// Resolve a `(x, y)` pair of gradient coordinates against the reference
+/// bounds (unit box for objectBoundingBox, viewBox for userSpaceOnUse).
+Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& bounds,
+                               bool numbersArePercent) {
+  return Vector2d(coerceGradientLength(x, numbersArePercent)
+                      .toPixels(bounds, FontMetrics(), Lengthd::Extent::X),
+                  coerceGradientLength(y, numbersArePercent)
+                      .toPixels(bounds, FontMetrics(), Lengthd::Extent::Y));
+}
+
+/// Resolve a single gradient coordinate (used for the radial `r` and `fr`
+/// attributes, which are isotropic and don't carry an X/Y axis hint).
+inline double resolveGradientCoord(Lengthd value, const Box2d& bounds, bool numbersArePercent) {
+  return coerceGradientLength(value, numbersArePercent).toPixels(bounds, FontMetrics());
+}
+
+/// Resolve the `gradientTransform` attribute of a gradient into a concrete
+/// Transform2d. If the referenced entity has no transform component, returns
+/// identity. Mirrors the logic in RendererTinySkia / RendererSkia.
+Transform2d resolveGradientTransform(
+    const components::ComputedLocalTransformComponent* maybeTransformComponent,
+    const Box2d& viewBox) {
+  if (maybeTransformComponent == nullptr) {
+    return Transform2d();
+  }
+  const Vector2d origin = maybeTransformComponent->transformOrigin;
+  const Transform2d entityFromParent =
+      maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
+  return Transform2d::Translate(origin) * entityFromParent *
+         Transform2d::Translate(-origin);
+}
+
+/// Resolved frame for either kind of gradient: the bounds against which
+/// gradient coordinates are evaluated (`coordBounds`), the path-from-gradient
+/// transform (already inverted to `gradientFromPath`), and a `numbersArePercent`
+/// flag for objectBoundingBox-mode coordinate coercion.
+struct ResolvedGradientFrame {
+  Transform2d gradientFromPath;
+  Box2d coordBounds;
+  bool numbersArePercent = false;
+};
+
+/// Resolve the gradient's coordinate frame and `gradientFromPath` transform.
+/// Returns nullopt for malformed or degenerate frames (degenerate
+/// objectBoundingBox bounds, singular gradientTransform). Shared by the
+/// linear and radial resolvers — they only differ in which start/end /
+/// center/radius fields they then read from the typed gradient component.
+std::optional<ResolvedGradientFrame> resolveGradientFrame(
+    const EntityHandle handle, const components::ComputedGradientComponent& computedGradient,
+    const Box2d& pathBounds, const Box2d& viewBox) {
+  const bool objectBoundingBox =
+      computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
+
+  // Degenerate path bounds disable objectBoundingBox gradients; ditto the
+  // other backends, which bail out rather than produce garbage coordinates.
+  constexpr double kDegenerateBBoxTolerance = 1e-6;
+  if (objectBoundingBox && (std::abs(pathBounds.width()) < kDegenerateBBoxTolerance ||
+                            std::abs(pathBounds.height()) < kDegenerateBBoxTolerance)) {
+    return std::nullopt;
+  }
+
+  // pathFromGradient maps coordinates expressed in the gradient's own frame
+  // (which is either the path's unit bbox or the user-space viewBox) back
+  // into the path-space the fragment shader receives. We invert it once on
+  // the CPU so the GPU just multiplies row vectors per-pixel.
+  //
+  // In userSpaceOnUse mode, gradient space == path (user) space modulo the
+  // `gradientTransform` attribute, so pathFromGradient == gradientTransform
+  // and we can compose directly.
+  //
+  // In objectBoundingBox mode, coordinates are expressed in the unit box
+  // [0..1] relative to the path's bounding box. The mapping back to path
+  // space is:
+  //   pathFromGradient = bboxFromUnit * gradientTransform
+  //                    = Scale(size) · Translate(topLeft) · gradientTransform
+  // (post-multiply because the gradientTransform is applied first in the
+  // gradient's own local frame.)
+  Transform2d pathFromGradient;
+  if (objectBoundingBox) {
+    const Transform2d gradientTransform = resolveGradientTransform(
+        handle.try_get<components::ComputedLocalTransformComponent>(), kUnitPathBounds);
+    const Transform2d bboxFromUnit =
+        Transform2d::Scale(pathBounds.size()) * Transform2d::Translate(pathBounds.topLeft);
+    pathFromGradient = gradientTransform * bboxFromUnit;
+  } else {
+    pathFromGradient = resolveGradientTransform(
+        handle.try_get<components::ComputedLocalTransformComponent>(), viewBox);
+  }
+
+  if (std::abs(pathFromGradient.determinant()) < 1e-12) {
+    return std::nullopt;
+  }
+
+  ResolvedGradientFrame frame;
+  frame.gradientFromPath = pathFromGradient.inverse();
+  frame.coordBounds = objectBoundingBox ? kUnitPathBounds : viewBox;
+  frame.numbersArePercent = objectBoundingBox;
+  return frame;
+}
+
+/// Map an SVG `GradientSpreadMethod` to the encoder's `spreadMode` integer.
+inline uint32_t toGeoSpreadMode(GradientSpreadMethod method) {
+  switch (method) {
+    case GradientSpreadMethod::Pad: return 0u;
+    case GradientSpreadMethod::Reflect: return 1u;
+    case GradientSpreadMethod::Repeat: return 2u;
+  }
+  return 0u;
+}
+
+/// Translate the gradient's stop list into the encoder wire format. Returns
+/// the populated count and sets `*outStopsTruncated` if the source had more
+/// stops than the encoder's hard cap.
+size_t buildGradientStops(const components::ComputedGradientComponent& computedGradient,
+                          const css::RGBA currentColor, float opacity,
+                          std::vector<geode::LinearGradientParams::Stop>& stopsStorage,
+                          bool* outStopsTruncated) {
+  const size_t stopCount = std::min(computedGradient.stops.size(), kMaxGradientStopsClient);
+  if (outStopsTruncated != nullptr) {
+    *outStopsTruncated = computedGradient.stops.size() > kMaxGradientStopsClient;
+  }
+  stopsStorage.clear();
+  stopsStorage.reserve(stopCount);
+  for (size_t i = 0; i < stopCount; ++i) {
+    const GradientStop& stop = computedGradient.stops[i];
+    const css::RGBA rgba = stop.color.resolve(currentColor, stop.opacity * opacity);
+    geode::LinearGradientParams::Stop out;
+    out.offset = stop.offset;
+    out.rgba[0] = rgba.r / 255.0f;
+    out.rgba[1] = rgba.g / 255.0f;
+    out.rgba[2] = rgba.b / 255.0f;
+    out.rgba[3] = rgba.a / 255.0f;
+    stopsStorage.push_back(out);
+  }
+  return stopCount;
+}
+
+/// Attempt to resolve a `PaintResolvedReference` into a concrete linear-gradient
+/// draw specification for the Geode encoder. Returns `std::nullopt` for any
+/// non-linear / malformed / degenerate gradient; the caller should fall back
+/// to the gradient's fallback color or skip the draw.
+std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
+    const components::PaintResolvedReference& ref, const Box2d& pathBounds,
+    const Box2d& viewBox, const css::RGBA currentColor, float opacity,
+    std::vector<geode::LinearGradientParams::Stop>& stopsStorage,
+    bool* outStopsTruncated) {
+  if (outStopsTruncated != nullptr) {
+    *outStopsTruncated = false;
+  }
+
+  const EntityHandle handle = ref.reference.handle;
+  if (!handle) {
+    return std::nullopt;
+  }
+  const auto* computedGradient = handle.try_get<components::ComputedGradientComponent>();
+  if (computedGradient == nullptr || !computedGradient->initialized) {
+    return std::nullopt;
+  }
+  const auto* linear = handle.try_get<components::ComputedLinearGradientComponent>();
+  if (linear == nullptr) {
+    // Not a linear gradient — caller will try the radial resolver next.
+    return std::nullopt;
+  }
+
+  auto frame = resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox);
+  if (!frame.has_value()) {
+    return std::nullopt;
+  }
+
+  const Vector2d startGrad =
+      resolveGradientCoords(linear->x1, linear->y1, frame->coordBounds, frame->numbersArePercent);
+  const Vector2d endGrad =
+      resolveGradientCoords(linear->x2, linear->y2, frame->coordBounds, frame->numbersArePercent);
+
+  if (computedGradient->stops.empty()) {
+    return std::nullopt;
+  }
+
+  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, outStopsTruncated);
+
+  geode::LinearGradientParams params;
+  params.startGrad = startGrad;
+  params.endGrad = endGrad;
+  params.gradientFromPath = frame->gradientFromPath;
+  params.spreadMode = toGeoSpreadMode(computedGradient->spreadMethod);
+  params.stops = std::span<const geode::LinearGradientParams::Stop>(stopsStorage);
+  return params;
+}
+
+/// Same shape as @ref resolveLinearGradientParams, but for radial gradients.
+/// Returns `nullopt` if the referenced entity isn't a radial gradient or if
+/// the gradient is degenerate (zero radius, singular transform, focal point
+/// outside the outer circle in a way that yields an empty annulus).
+std::optional<geode::RadialGradientParams> resolveRadialGradientParams(
+    const components::PaintResolvedReference& ref, const Box2d& pathBounds,
+    const Box2d& viewBox, const css::RGBA currentColor, float opacity,
+    std::vector<geode::RadialGradientParams::Stop>& stopsStorage, bool* outStopsTruncated) {
+  if (outStopsTruncated != nullptr) {
+    *outStopsTruncated = false;
+  }
+
+  const EntityHandle handle = ref.reference.handle;
+  if (!handle) {
+    return std::nullopt;
+  }
+  const auto* computedGradient = handle.try_get<components::ComputedGradientComponent>();
+  if (computedGradient == nullptr || !computedGradient->initialized) {
+    return std::nullopt;
+  }
+  const auto* radial = handle.try_get<components::ComputedRadialGradientComponent>();
+  if (radial == nullptr) {
+    return std::nullopt;
+  }
+
+  auto frame = resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox);
+  if (!frame.has_value()) {
+    return std::nullopt;
+  }
+
+  const double radius =
+      resolveGradientCoord(radial->r, frame->coordBounds, frame->numbersArePercent);
+  // SVG: a radius of zero collapses the gradient to a single point. Match the
+  // tiny-skia / Skia behavior of falling back to the last-stop color, which
+  // here means dropping the gradient and letting the caller paint nothing
+  // (the fallback solid color, if any, is handled one level up).
+  if (radius <= 0.0) {
+    return std::nullopt;
+  }
+  const double focalRadius =
+      resolveGradientCoord(radial->fr, frame->coordBounds, frame->numbersArePercent);
+  const Vector2d center =
+      resolveGradientCoords(radial->cx, radial->cy, frame->coordBounds, frame->numbersArePercent);
+  // SVG 2: if `fx` / `fy` aren't specified, they coincide with `cx` / `cy`.
+  // Resolved on the spot — keeps the geometry resolution local to the
+  // shader's coordinate system.
+  const Vector2d focalCenter = resolveGradientCoords(
+      radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy), frame->coordBounds,
+      frame->numbersArePercent);
+
+  // Empty annulus: focal circle entirely contains the outer circle, so the
+  // gradient never has a valid `t` anywhere. Match tiny-skia: drop the draw
+  // (no shader can produce meaningful colors).
+  const double centerDistance = (center - focalCenter).length();
+  if (centerDistance + radius <= focalRadius) {
+    return std::nullopt;
+  }
+
+  if (computedGradient->stops.empty()) {
+    return std::nullopt;
+  }
+
+  buildGradientStops(*computedGradient, currentColor, opacity, stopsStorage, outStopsTruncated);
+
+  geode::RadialGradientParams params;
+  params.center = center;
+  params.focalCenter = focalCenter;
+  params.radius = radius;
+  params.focalRadius = focalRadius;
+  params.gradientFromPath = frame->gradientFromPath;
+  params.spreadMode = toGeoSpreadMode(computedGradient->spreadMethod);
+  params.stops = std::span<const geode::RadialGradientParams::Stop>(stopsStorage);
+  return params;
 }
 
 }  // namespace
@@ -71,6 +379,8 @@ struct RendererGeode::Impl {
   // `device` is null and the renderer enters a no-op state.
   std::unique_ptr<geode::GeodeDevice> device;
   std::unique_ptr<geode::GeodePipeline> pipeline;
+  std::unique_ptr<geode::GeodeGradientPipeline> gradientPipeline;
+  std::unique_ptr<geode::GeodeImagePipeline> imagePipeline;
 
   // Per-frame resources, recreated in `beginFrame`.
   RenderViewport viewport;
@@ -79,10 +389,58 @@ struct RendererGeode::Impl {
   wgpu::Texture target;  // RGBA8 RenderAttachment | CopySrc
   std::unique_ptr<geode::GeoEncoder> encoder;
 
+  // Reusable scratch storage for gradient stop vectors — keeps the
+  // per-fillPath allocation counts down and lets the `std::span` in
+  // `LinearGradientParams` remain stable across the call.
+  std::vector<geode::LinearGradientParams::Stop> gradientStopScratch;
+
   // CPU-side state.
   PaintParams paint;
   Transform2d currentTransform;
   std::vector<Transform2d> transformStack;
+
+  // --- Pattern tile state (Phase 2H) ---
+  //
+  // When the driver calls `beginPatternTile`, we save the active `encoder`
+  // and transform state onto `patternStack`, then allocate an offscreen
+  // tile texture + a fresh `GeoEncoder` that redirects subsequent draws into
+  // it. `endPatternTile` finishes that encoder, pops the saved state, and
+  // stashes the resulting texture as the current fill/stroke pattern paint
+  // via `patternFillPaint` / `patternStrokePaint`.
+  //
+  // The Slug fill shader supports pattern sampling directly (paintMode==1),
+  // so the subsequent draw call samples the tile through the existing fill
+  // pipeline — no separate textured-quad pass is needed and the path's
+  // Slug coverage test naturally handles arbitrary (non-rectangular) fills.
+  struct PatternStackFrame {
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;
+    Transform2d savedTransform;
+    std::vector<Transform2d> savedTransformStack;
+    int savedPixelWidth = 0;
+    int savedPixelHeight = 0;
+
+    // The pattern tile being recorded.
+    Box2d tileRect;                 // In pattern space (topLeft at origin).
+    Transform2d targetFromPattern;  // Transform used when the tile is sampled.
+    wgpu::Texture tileTexture;      // Offscreen tile being written to.
+    int tilePixelWidth = 0;
+    int tilePixelHeight = 0;
+    // Scale factor applied to all `setTransform` calls while this frame is
+    // active, mapping pattern-tile units to tile-texture pixels so the
+    // encoder's viewport math works out.
+    Vector2d rasterScale = Vector2d(1.0, 1.0);
+  };
+  std::vector<PatternStackFrame> patternStack;
+
+  /// A completed pattern tile ready to be sampled as fill or stroke paint.
+  struct PatternPaintSlot {
+    wgpu::Texture tile;
+    Vector2d tileSize;              // In pattern space.
+    Transform2d targetFromPattern;  // destFromSource naming.
+  };
+  std::optional<PatternPaintSlot> patternFillPaint;
+  std::optional<PatternPaintSlot> patternStrokePaint;
 
   // Stub-state depth counters — incremented on push, decremented on pop. Used
   // only to keep stack semantics balanced and to drop the warning to stderr
@@ -91,46 +449,63 @@ struct RendererGeode::Impl {
   bool warnedLayer = false;
   bool warnedFilter = false;
   bool warnedMask = false;
-  bool warnedPattern = false;
-  bool warnedStroke = false;
   bool warnedGradient = false;
   bool warnedImage = false;
   bool warnedText = false;
 
-  /// Resolve the current `paint_.fill` to a solid RGBA color, or nullopt if
-  /// the fill is None or a paint server we don't yet support.
+  /// Resolve the current fill/stroke paint's fallback to a solid RGBA color
+  /// when the referenced paint server can't instantiate. Returns nullopt for
+  /// None and for paint-server references without a fallback.
   std::optional<css::RGBA> resolveSolidFill() {
-    if (std::holds_alternative<PaintServer::None>(paint.fill)) {
+    return resolveSolidPaint(paint.fill, paint.fillOpacity * paint.opacity);
+  }
+
+  std::optional<css::RGBA> resolveSolidStroke() {
+    return resolveSolidPaint(paint.stroke, paint.strokeOpacity * paint.opacity);
+  }
+
+  std::optional<css::RGBA> resolveSolidPaint(const components::ResolvedPaintServer& server,
+                                             double effectiveOpacity) {
+    if (std::holds_alternative<PaintServer::None>(server)) {
       return std::nullopt;
     }
     const css::RGBA currentColor = paint.currentColor.rgba();
-    const float fillOpacity = static_cast<float>(paint.fillOpacity * paint.opacity);
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&paint.fill)) {
-      return solid->color.resolve(currentColor, fillOpacity);
+    const float opacity = static_cast<float>(effectiveOpacity);
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
+      return solid->color.resolve(currentColor, opacity);
     }
-    if (verbose && !warnedGradient) {
-      std::cerr << "RendererGeode: gradient/pattern paint servers not yet supported\n";
-      warnedGradient = true;
+    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&server)) {
+      if (ref->fallback.has_value()) {
+        return ref->fallback->resolve(currentColor, opacity);
+      }
     }
     return std::nullopt;
   }
 
-  /// Resolve the current `paint_.stroke` to a solid RGBA color, or nullopt if
-  /// the stroke is None or a paint server we don't yet support.
-  std::optional<css::RGBA> resolveSolidStroke() {
-    if (std::holds_alternative<PaintServer::None>(paint.stroke)) {
-      return std::nullopt;
-    }
-    const css::RGBA currentColor = paint.currentColor.rgba();
-    const float strokeOpacity = static_cast<float>(paint.strokeOpacity * paint.opacity);
-    if (const auto* solid = std::get_if<PaintServer::Solid>(&paint.stroke)) {
-      return solid->color.resolve(currentColor, strokeOpacity);
-    }
-    if (verbose && !warnedGradient) {
-      std::cerr << "RendererGeode: gradient/pattern paint servers not yet supported\n";
-      warnedGradient = true;
-    }
-    return std::nullopt;
+  /// Build a `GeoEncoder::PatternPaint` from a stashed slot, composing the
+  /// current transform so the shader samples in the correct space.
+  ///
+  /// Math: during the fill draw, the vertex shader receives path-space
+  /// positions (pre-`currentTransform`). In pattern mode the fragment shader
+  /// transforms those path-space positions into pattern-tile space using
+  /// `patternFromPath`. Chaining:
+  ///
+  ///   patternFromPath = patternFromTarget * targetFromPath
+  ///                   = inverse(targetFromPattern) * currentTransform
+  ///
+  /// where `targetFromPattern` is what the driver gave us at
+  /// `beginPatternTile` time. Both transforms are 2D affines and
+  /// Transform2d::inversed() handles the inverse.
+  geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
+                                                    double opacity) const {
+    const Transform2d patternFromTarget = slot.targetFromPattern.inverse();
+    const Transform2d patternFromPath = patternFromTarget * currentTransform;
+    geode::GeoEncoder::PatternPaint p;
+    p.tile = slot.tile;
+    p.tileSize = slot.tileSize;
+    p.patternFromPath = patternFromPath;
+    p.opacity = opacity;
+    return p;
   }
 
   /// Push the renderer's currentTransform onto the encoder before drawing.
@@ -140,18 +515,110 @@ struct RendererGeode::Impl {
     }
   }
 
-  /// Issue a fill of the given path. Resolves the current paint and skips if
-  /// the fill is non-solid or empty.
+  /// Issue a fill of the given path using the current `paint.fill`. Handles
+  /// solid colors, linear and radial gradients, and pattern tiles. None and
+  /// unsupported types are ignored or fall back to their fallback color.
   void fillResolved(const Path& path, FillRule rule) {
     if (!encoder) {
       return;
     }
-    auto color = resolveSolidFill();
-    if (!color.has_value()) {
+    // Pattern dispatch comes first: a pattern slot is populated by the
+    // driver via `endPatternTile`, and is consumed by the very next fill or
+    // stroke draw (matching RendererTinySkia/RendererSkia semantics).
+    if (patternFillPaint.has_value()) {
+      syncTransform();
+      const double opacity = paint.fillOpacity * paint.opacity;
+      encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity));
+      patternFillPaint.reset();
       return;
     }
-    syncTransform();
-    encoder->fillPath(path, *color, rule);
+    const double effectiveOpacity = paint.fillOpacity * paint.opacity;
+    drawPaintedPath(path, paint.fill, effectiveOpacity, rule);
+  }
+
+  /// Core dispatch: given a path and a resolved paint server, emit the
+  /// appropriate fill call (solid color or gradient).
+  void drawPaintedPath(const Path& path, const components::ResolvedPaintServer& server,
+                       double effectiveOpacity, FillRule rule) {
+    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule);
+  }
+
+  /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
+  /// computed from `geometryPath` while the GPU draw uses `drawPath`. This
+  /// is required for stroked outlines: SVG specifies that the
+  /// `objectBoundingBox` of a stroke gradient is derived from the *original*
+  /// geometry, not the expanded stroke outline, otherwise a thick stroke
+  /// would warp the gradient direction relative to the underlying shape.
+  void drawPaintedPathAgainst(const Path& geometryPath, const Path& drawPath,
+                              const components::ResolvedPaintServer& server,
+                              double effectiveOpacity, FillRule rule) {
+    if (!encoder || drawPath.empty()) {
+      return;
+    }
+    if (std::holds_alternative<PaintServer::None>(server)) {
+      return;
+    }
+
+    const css::RGBA currentColor = paint.currentColor.rgba();
+    const float opacity = static_cast<float>(effectiveOpacity);
+
+    // Solid color: straight through the flat fill pipeline.
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
+      syncTransform();
+      encoder->fillPath(drawPath, solid->color.resolve(currentColor, opacity), rule);
+      return;
+    }
+
+    // Paint-server reference: try linear gradient first, then radial; if
+    // neither matches, fall back to the reference's solid fallback color.
+    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&server)) {
+      const Box2d geometryBounds = geometryPath.bounds();
+      bool stopsTruncated = false;
+
+      auto linear = resolveLinearGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
+                                                opacity, gradientStopScratch, &stopsTruncated);
+      if (linear.has_value()) {
+        if (stopsTruncated && verbose && !warnedGradient) {
+          std::cerr << "RendererGeode: gradient has more than " << kMaxGradientStopsClient
+                    << " stops; truncating (follow-up: texture-based stop lookup)\n";
+          warnedGradient = true;
+        }
+        syncTransform();
+        encoder->fillPathLinearGradient(drawPath, *linear, rule);
+        return;
+      }
+
+      auto radial = resolveRadialGradientParams(*ref, geometryBounds, paint.viewBox, currentColor,
+                                                opacity, gradientStopScratch, &stopsTruncated);
+      if (radial.has_value()) {
+        if (stopsTruncated && verbose && !warnedGradient) {
+          std::cerr << "RendererGeode: gradient has more than " << kMaxGradientStopsClient
+                    << " stops; truncating (follow-up: texture-based stop lookup)\n";
+          warnedGradient = true;
+        }
+        syncTransform();
+        encoder->fillPathRadialGradient(drawPath, *radial, rule);
+        return;
+      }
+
+      // Neither linear nor radial — could be a pattern, a sweep gradient
+      // (not yet supported by the donner SVG parser), a malformed gradient
+      // with no stops, or a degenerate frame. Fall back to the reference's
+      // solid fallback color if one was declared, otherwise drop the draw.
+      if (ref->fallback.has_value()) {
+        syncTransform();
+        encoder->fillPath(drawPath, ref->fallback->resolve(currentColor, opacity), rule);
+        return;
+      }
+
+      // No fallback, no gradient support — issue a one-shot warning so
+      // verbose callers can see it.
+      if (verbose && !warnedGradient) {
+        std::cerr << "RendererGeode: paint server is neither linear nor radial gradient and "
+                     "has no fallback (patterns and sweep gradients are Phase 2H+)\n";
+        warnedGradient = true;
+      }
+    }
   }
 };
 
@@ -165,6 +632,10 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     return;
   }
   impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat);
+  impl_->gradientPipeline =
+      std::make_unique<geode::GeodeGradientPipeline>(impl_->device->device(), kFormat);
+  impl_->imagePipeline =
+      std::make_unique<geode::GeodeImagePipeline>(impl_->device->device(), kFormat);
 }
 
 RendererGeode::~RendererGeode() = default;
@@ -189,7 +660,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->encoder.reset();
   impl_->target = wgpu::Texture();
 
-  if (!impl_->device || !impl_->pipeline || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
+      impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return;
   }
 
@@ -204,8 +676,9 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   td.dimension = wgpu::TextureDimension::e2D;
   impl_->target = impl_->device->device().CreateTexture(&td);
 
-  impl_->encoder =
-      std::make_unique<geode::GeoEncoder>(*impl_->device, *impl_->pipeline, impl_->target);
+  impl_->encoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      impl_->target);
   // Default to a transparent clear so an empty frame matches the other
   // backends' "no document content" appearance.
   impl_->encoder->clear(css::RGBA(0, 0, 0, 0));
@@ -221,6 +694,23 @@ void RendererGeode::endFrame() {
 }
 
 void RendererGeode::setTransform(const Transform2d& transform) {
+  // Inside a pattern tile we're rasterising into a texture whose pixel
+  // dimensions may not match the logical tile-space units. Pre-compose the
+  // raster scale onto the transform so draws submitted to the tile encoder
+  // map 1:1 onto the tile texture's pixel grid. (Matches
+  // `RendererTinySkia::setTransform`'s `scaleTransformOutput` path.)
+  if (!impl_->patternStack.empty()) {
+    const Vector2d& scale = impl_->patternStack.back().rasterScale;
+    Transform2d scaled = transform;
+    scaled.data[0] *= scale.x;
+    scaled.data[2] *= scale.x;
+    scaled.data[4] *= scale.x;
+    scaled.data[1] *= scale.y;
+    scaled.data[3] *= scale.y;
+    scaled.data[5] *= scale.y;
+    impl_->currentTransform = scaled;
+    return;
+  }
   impl_->currentTransform = transform;
 }
 
@@ -275,15 +765,192 @@ void RendererGeode::pushMask(const std::optional<Box2d>& /*maskBounds*/) {
 void RendererGeode::transitionMaskToContent() {}
 void RendererGeode::popMask() {}
 
-void RendererGeode::beginPatternTile(const Box2d& /*tileRect*/,
-                                     const Transform2d& /*targetFromPattern*/) {
-  if (impl_->verbose && !impl_->warnedPattern) {
-    std::cerr << "RendererGeode: pattern tiles not yet implemented (Phase 2)\n";
-    impl_->warnedPattern = true;
+void RendererGeode::beginPatternTile(const Box2d& tileRect,
+                                     const Transform2d& targetFromPattern) {
+  if (!impl_->device || !impl_->pipeline) {
+    return;
   }
+
+  // Raster resolution: use the composition of the current transform and the
+  // tile transform to estimate how many device pixels one tile unit maps to,
+  // then scale the tile texture accordingly. Using device pixels directly as
+  // a 1:1 fallback would under-sample patterns that are scaled up before
+  // tiling. We clamp to a minimum of 1 pixel per axis so zero-size tiles
+  // never allocate a zero-extent texture.
+  const Transform2d deviceFromPattern = impl_->currentTransform * targetFromPattern;
+  const double scaleX = std::hypot(deviceFromPattern.data[0], deviceFromPattern.data[1]);
+  const double scaleY = std::hypot(deviceFromPattern.data[2], deviceFromPattern.data[3]);
+  auto boundedPx = [](double v) {
+    if (!(v > 0.0) || !std::isfinite(v)) {
+      return 1;
+    }
+    constexpr double kMaxTileDim = 4096.0;
+    return std::max(1, static_cast<int>(std::ceil(std::min(v, kMaxTileDim))));
+  };
+  const int tilePixelWidth = boundedPx(tileRect.width() * (scaleX > 0.0 ? scaleX : 1.0));
+  const int tilePixelHeight = boundedPx(tileRect.height() * (scaleY > 0.0 ? scaleY : 1.0));
+
+  wgpu::TextureDescriptor td = {};
+  td.label = "RendererGeodePatternTile";
+  td.size = {static_cast<uint32_t>(tilePixelWidth),
+             static_cast<uint32_t>(tilePixelHeight), 1u};
+  td.format = kFormat;
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+             wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::e2D;
+  wgpu::Texture tileTexture = impl_->device->device().CreateTexture(&td);
+  if (!tileTexture) {
+    return;
+  }
+
+  // Stash the currently-active encoder/target/transform state. A nested
+  // encoder can't share a render pass with the outer one, so we finish any
+  // pending outer work below. `GeoEncoder` submits its command buffer on
+  // `finish()`, so finishing the outer encoder here commits its queued
+  // draws; we then create a fresh outer encoder on pop (see
+  // `endPatternTile`).
+  //
+  // An alternate design would share a single command encoder and use two
+  // render passes, but `GeoEncoder` owns its command encoder and render
+  // pass together. Splitting into two submissions keeps the `GeoEncoder`
+  // API unchanged and still orders correctly because each submission is
+  // serialised on the same queue.
+  Impl::PatternStackFrame frame;
+  if (impl_->encoder) {
+    impl_->encoder->finish();
+  }
+  frame.savedEncoder = std::move(impl_->encoder);
+  frame.savedTarget = impl_->target;
+  frame.savedTransform = impl_->currentTransform;
+  frame.savedTransformStack = std::move(impl_->transformStack);
+  frame.savedPixelWidth = impl_->pixelWidth;
+  frame.savedPixelHeight = impl_->pixelHeight;
+  frame.tileRect = tileRect;
+  frame.targetFromPattern = targetFromPattern;
+  frame.tileTexture = tileTexture;
+  frame.tilePixelWidth = tilePixelWidth;
+  frame.tilePixelHeight = tilePixelHeight;
+  // Map pattern-tile units onto tile-texture pixels: this factor is applied
+  // to every `setTransform` call while this frame is on the stack so the
+  // encoder's pixelWidth/pixelHeight-based MVP renders the tile at its
+  // native resolution.
+  const double tileWidthUnits = tileRect.width();
+  const double tileHeightUnits = tileRect.height();
+  frame.rasterScale = Vector2d(
+      tileWidthUnits > 0.0 ? static_cast<double>(tilePixelWidth) / tileWidthUnits : 1.0,
+      tileHeightUnits > 0.0 ? static_cast<double>(tilePixelHeight) / tileHeightUnits : 1.0);
+  impl_->patternStack.push_back(std::move(frame));
+
+  // Redirect all subsequent draw calls into the new tile texture. The new
+  // encoder uses a coordinate system where path-space (0,0)..(tileRect.w,
+  // tileRect.h) maps to (0,0)..(tilePixelWidth, tilePixelHeight) — i.e.,
+  // the tile is rasterised at its native pixel resolution.
+  //
+  // The driver calls `setTransform` on the renderer before issuing draws
+  // inside the tile subtree, so we don't need to preserve the outer
+  // transform here. But we do need `pixelWidth/pixelHeight` to match the
+  // tile texture so the new encoder's MVP maps correctly.
+  impl_->pixelWidth = tilePixelWidth;
+  impl_->pixelHeight = tilePixelHeight;
+  impl_->target = tileTexture;
+  impl_->transformStack.clear();
+  // Initialise the current transform to the raster scale so direct draws
+  // issued before the driver's next `setTransform` still land in the
+  // correct place on the tile texture.
+  const Vector2d& rasterScale = impl_->patternStack.back().rasterScale;
+  impl_->currentTransform = Transform2d::Scale(rasterScale.x, rasterScale.y);
+
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      tileTexture);
+  // Transparent clear so unpainted tile pixels contribute nothing.
+  newEncoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->encoder = std::move(newEncoder);
+
+  // Compose the pattern raster scale into targetFromPattern so it takes
+  // pattern-pixel coordinates to target units. We record the raster scale
+  // in the frame itself and apply it in endPatternTile.
 }
 
-void RendererGeode::endPatternTile(bool /*forStroke*/) {}
+void RendererGeode::endPatternTile(bool forStroke) {
+  if (impl_->patternStack.empty()) {
+    return;
+  }
+
+  Impl::PatternStackFrame frame = std::move(impl_->patternStack.back());
+  impl_->patternStack.pop_back();
+
+  // Finish the tile's render pass so the texture contents are available
+  // for sampling by subsequent draws.
+  if (impl_->encoder) {
+    impl_->encoder->finish();
+  }
+
+  // Restore outer state.
+  impl_->target = frame.savedTarget;
+  impl_->pixelWidth = frame.savedPixelWidth;
+  impl_->pixelHeight = frame.savedPixelHeight;
+  impl_->currentTransform = frame.savedTransform;
+  impl_->transformStack = std::move(frame.savedTransformStack);
+
+  // Create a fresh encoder for the outer target. The old outer encoder was
+  // finished in `beginPatternTile`; the new one loads the current contents
+  // of the target (no clear), since we don't want to wipe previously-drawn
+  // content. `GeoEncoder` defaults to clearing unless `hasExplicitClear` is
+  // false and no draws are issued — but its render pass *always* uses
+  // LoadOp::Clear with a transparent clearColor by default. That would
+  // wipe the outer target on the next draw. Work around this by using the
+  // saved encoder path: we can't directly reuse the saved encoder because
+  // it was finished; instead, manually load the previous contents via a
+  // separate copy pass is overkill for the MVP.
+  //
+  // Instead we issue a `CopyTextureToTexture` before the new encoder's
+  // first draw to preserve the outer target's contents... actually an
+  // even simpler fix is to have the new encoder skip its default clear by
+  // explicitly calling `clear()` — but clear() sets the clearColor which
+  // still wipes the target.
+  //
+  // Simpler: run the pre-existing content through. We allocate a *scratch*
+  // intermediate target, copy old contents in, create the new encoder on
+  // the scratch, then merge... that's a lot of work.
+  //
+  // Practical fix: change the render pass load op to Load instead of Clear
+  // when there's been at least one prior submission. This requires
+  // extending GeoEncoder; see the `reopen` helper added below.
+  if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
+      frame.savedTarget) {
+    auto newEncoder = std::make_unique<geode::GeoEncoder>(
+        *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+        frame.savedTarget);
+    // Preserve existing target contents: the pattern subtree may have
+    // submitted work on the outer target *before* the pattern tile opened
+    // (via the finish() in beginPatternTile), so we must not clear it
+    // again. GeoEncoder's constructor defaults to LoadOp::Clear with a
+    // transparent clearValue; call setLoadPreserve() to switch it to
+    // LoadOp::Load for the next render pass.
+    newEncoder->setLoadPreserve();
+    impl_->encoder = std::move(newEncoder);
+  } else {
+    impl_->encoder.reset();
+  }
+
+  // Stash the completed tile as the current pattern paint slot. The tile
+  // size is in *pattern-space* units (matching the vertex shader's
+  // input), not pixels — the shader scales `patternFromPath` positions
+  // through the existing 4x4 matrix multiply and compares against the
+  // tile's native dimensions.
+  Impl::PatternPaintSlot slot;
+  slot.tile = frame.tileTexture;
+  slot.tileSize = frame.tileRect.size();
+  slot.targetFromPattern = frame.targetFromPattern;
+  if (forStroke) {
+    impl_->patternStrokePaint = std::move(slot);
+  } else {
+    impl_->patternFillPaint = std::move(slot);
+  }
+}
 
 void RendererGeode::setPaint(const PaintParams& paint) { impl_->paint = paint; }
 
@@ -303,41 +970,49 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     return;
   }
 
-  // Dashes are not yet wired up. Warn once per verbose session and fall back
-  // to drawing the undashed stroke outline so the frame isn't silently wrong.
-  if (!stroke.dashArray.empty() && impl_->verbose && !impl_->warnedStroke) {
-    std::cerr << "RendererGeode: stroke-dasharray not yet implemented, "
-                 "rendering as undashed stroke\n";
-    impl_->warnedStroke = true;
-  }
-
-  auto strokeColor = impl_->resolveSolidStroke();
-  if (!strokeColor.has_value()) {
-    return;
-  }
-
-  // Expand the stroked outline into a filled path and reuse the Slug fill
-  // pipeline. `strokeToFill` handles flattening, cap/join generation, and
-  // miter-limit fallback to bevel internally.
+  // Dash support is now wired through `Path::strokeToFill` (Phase 2A).
+  // `toStrokeStyle` plumbs `dashArray`/`dashOffset`/`pathLength` from the
+  // SVG stroke params into the stroke style; `strokeToFill` walks each
+  // subpath, splits it at the dash on/off transitions, and emits one
+  // capped ribbon per on-segment.
+  //
+  // Expand the stroked outline into a filled path and reuse the Slug fill /
+  // gradient-fill / pattern pipeline. `strokeToFill` handles flattening,
+  // cap/join generation, and miter-limit fallback to bevel internally.
   //
   // Fill rule note: for closed subpaths, strokeToFill emits the outer and
   // inner contours as two *same-winding* closed subpaths (not opposite), so
   // NonZero would over-fill the interior and EvenOdd is required to get a
-  // hollow ring. For OPEN subpaths with sharp concave corners (e.g., the
-  // apex of an inverted V), the single output polygon self-intersects at
-  // the inner side of the join — emitJoin's "inside-turn" branch just draws
-  // a line across the overlap, which neither NonZero nor EvenOdd can resolve
-  // cleanly. EvenOdd is still preferable because closed subpaths are far
-  // more common in real SVGs; the open-sharp-corner case is a known
-  // limitation of Path::strokeToFill and will need inner-corner intersection
-  // handling in a follow-up.
+  // hollow ring. EvenOdd is also correct for open subpaths, including sharp
+  // inside corners: as of the 2C fix, `emitJoin` emits the true offset-line
+  // intersection at inside turns (instead of an interior-crossing overlap),
+  // so the resulting single polygon is geometrically clean on both sides.
   const Path strokedOutline = path.path.strokeToFill(toStrokeStyle(stroke));
   if (strokedOutline.empty()) {
     return;
   }
 
-  impl_->syncTransform();
-  impl_->encoder->fillPath(strokedOutline, *strokeColor, FillRule::EvenOdd);
+  // Pattern dispatch comes first: a stroke pattern slot was populated by the
+  // driver via `endPatternTile(forStroke=true)` and consumed here.
+  if (impl_->patternStrokePaint.has_value()) {
+    impl_->syncTransform();
+    const double opacity = impl_->paint.strokeOpacity * impl_->paint.opacity;
+    impl_->encoder->fillPathPattern(
+        strokedOutline, FillRule::EvenOdd,
+        impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
+    impl_->patternStrokePaint.reset();
+    return;
+  }
+
+  // Otherwise dispatch through the shared painted-path routine so stroke
+  // gradients get the same handling as fill gradients (including the
+  // gradient-unit objectBoundingBox transform, which is relative to the
+  // *original* path bounds — we deliberately do NOT use
+  // `strokedOutline.bounds()` here).
+  const double effectiveOpacity = impl_->paint.strokeOpacity * impl_->paint.opacity;
+  auto strokeServer = impl_->paint.stroke;
+  impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
+                                FillRule::EvenOdd);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
@@ -352,11 +1027,20 @@ void RendererGeode::drawEllipse(const Box2d& bounds, const StrokeParams& stroke)
   drawPath(shape, stroke);
 }
 
-void RendererGeode::drawImage(const ImageResource& /*image*/, const ImageParams& /*params*/) {
-  if (impl_->verbose && !impl_->warnedImage) {
-    std::cerr << "RendererGeode: drawImage not yet implemented (Phase 2)\n";
-    impl_->warnedImage = true;
+void RendererGeode::drawImage(const ImageResource& image, const ImageParams& params) {
+  if (!impl_->encoder) {
+    return;
   }
+  // Combine per-image opacity with the inherited paint opacity so group
+  // `opacity` attributes on ancestors propagate — matches the tiny-skia /
+  // Skia backends' semantics.
+  const double combinedOpacity = params.opacity * impl_->paint.opacity;
+  if (combinedOpacity <= 0.0) {
+    return;
+  }
+  impl_->syncTransform();
+  impl_->encoder->drawImage(image, params.targetRect, combinedOpacity,
+                            params.imageRenderingPixelated);
 }
 
 void RendererGeode::drawText(Registry& /*registry*/,

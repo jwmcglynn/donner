@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+    <title>Geode Phase 2H: simple pattern with one solid-colored rect</title>
+
+    <!--
+      Minimal pattern test for the Geode backend: a 20x20 userSpaceOnUse tile
+      with a single solid-grey square that fills the whole tile. The fill
+      rect (20..100 on both axes) spans exactly 4x4 tiles, so each tile
+      boundary should be pixel-aligned and the result should be a uniform
+      grey square without seams.
+    -->
+    <pattern id="patt1" patternUnits="userSpaceOnUse" width="20" height="20">
+      <rect x="0" y="0" width="20" height="20" fill="#888888"/>
+    </pattern>
+
+    <rect x="20" y="20" width="80" height="80" fill="url(#patt1)"/>
+</svg>

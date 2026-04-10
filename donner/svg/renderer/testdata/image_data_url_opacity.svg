@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="64" height="64" viewBox="0 0 64 64">
+  <!-- Opaque white background so opacity blending is visible. -->
+  <rect x="0" y="0" width="64" height="64" fill="white" />
+  <!-- Same 2x2 RGB+magenta PNG, drawn at 50% opacity. Default
+       (bilinear) filtering, so quadrant edges anti-alias. -->
+  <image x="16" y="16" width="32" height="32"
+         opacity="0.5"
+         href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyB9H8g/R8ARssI+PwctGoAAAAASUVORK5CYII=" />
+</svg>

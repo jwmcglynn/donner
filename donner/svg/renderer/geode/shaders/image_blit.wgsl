@@ -1,0 +1,93 @@
+// Geode image blit pipeline: renders a textured quad.
+//
+// Shared by:
+//   - `drawImage`: SVG <image> elements (via GeoEncoder::drawImage).
+//   - Phase 2H patterns: pattern tile sampled as repeating fill.
+//
+// Unlike the Slug fill pipeline, this shader does *no* coverage computation —
+// it's a straightforward 2-triangle textured quad. The vertex shader maps
+// unit-square corners into target-pixel space using the host-supplied
+// destination rectangle and MVP, then the fragment shader samples the
+// texture and multiplies by the opacity uniform.
+//
+// The pipeline blend state is premultiplied-source-over (same as Slug fill),
+// so the fragment shader premultiplies RGB by (alpha * opacity) before
+// writing. The input texture itself is uploaded as straight-alpha RGBA8
+// (that's what `ImageResource` stores); the premultiply happens here.
+
+struct Uniforms {
+  // Model-view-projection matrix — maps target-pixel space to clip space.
+  // Built by the host exactly like the Slug fill pipeline's MVP.
+  mvp: mat4x4f,
+  // Destination rectangle in target-pixel space (x0, y0, x1, y1).
+  // Quad corners come from (unit.x ? x1 : x0, unit.y ? y1 : y0).
+  destRect: vec4f,
+  // Source UV rectangle (u0, v0, u1, v1), in normalized [0,1] texture space.
+  // For a full-image blit this is (0,0,1,1). For pattern tile sampling
+  // (Phase 2H) the caller may pass a sub-rect.
+  srcRect: vec4f,
+  // Overall multiplier applied to the sampled texel. Used for
+  // `ImageParams::opacity * paint.opacity` on the draw path.
+  opacity: f32,
+  _pad0: f32,
+  _pad1: f32,
+  _pad2: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var imageSampler: sampler;
+@group(0) @binding(2) var imageTexture: texture_2d<f32>;
+
+// The vertex shader uses `@builtin(vertex_index)` to pick one of the six
+// corners of the quad — no vertex buffer is needed. Layout:
+//
+//   0: (0,0)   1: (1,0)   2: (0,1)
+//   3: (1,0)   4: (1,1)   5: (0,1)
+//
+// Two triangles covering the unit square.
+
+struct VertexOutput {
+  @builtin(position) clip_pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
+  // Lookup tables for the two triangles.
+  var corners = array<vec2f, 6>(
+    vec2f(0.0, 0.0),
+    vec2f(1.0, 0.0),
+    vec2f(0.0, 1.0),
+    vec2f(1.0, 0.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 1.0),
+  );
+  let unit = corners[vid];
+
+  // Map unit corner into target-pixel destination rectangle.
+  let dest_pos = vec2f(
+    mix(uniforms.destRect.x, uniforms.destRect.z, unit.x),
+    mix(uniforms.destRect.y, uniforms.destRect.w, unit.y),
+  );
+
+  // Map unit corner into source UV rectangle for sampling.
+  let src_uv = vec2f(
+    mix(uniforms.srcRect.x, uniforms.srcRect.z, unit.x),
+    mix(uniforms.srcRect.y, uniforms.srcRect.w, unit.y),
+  );
+
+  var out: VertexOutput;
+  out.clip_pos = uniforms.mvp * vec4f(dest_pos, 0.0, 1.0);
+  out.uv = src_uv;
+  return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+  let sampled = textureSample(imageTexture, imageSampler, in.uv);
+  // The uploaded texture stores straight-alpha RGBA8. Premultiply by
+  // (alpha * opacity) so the fragment matches the pipeline's
+  // premultiplied-source-over blend state.
+  let a = sampled.a * uniforms.opacity;
+  return vec4f(sampled.rgb * a, a);
+}

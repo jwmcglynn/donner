@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+    <title>Geode Phase 2H: two-rect checkerboard pattern</title>
+
+    <!--
+      Standard checkerboard-style pattern: a 20x20 tile with a grey square
+      in the top-left quadrant and a green square in the bottom-right
+      quadrant. The fill region is 80x80 so the tile repeats exactly 4
+      times per axis. This exercises the shader's pattern sampling with
+      multiple draws recorded into the offscreen tile texture.
+    -->
+    <pattern id="patt1" patternUnits="userSpaceOnUse" width="20" height="20">
+      <rect x="0" y="0" width="10" height="10" fill="#888888"/>
+      <rect x="10" y="10" width="10" height="10" fill="#208040"/>
+    </pattern>
+
+    <rect x="20" y="20" width="80" height="80" fill="url(#patt1)"/>
+</svg>

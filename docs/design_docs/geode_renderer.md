@@ -1,9 +1,9 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phase 0 complete (#481 merged); Phase 1 MVP in progress (#484, follow-ups landing on `geo-encoder` branch)
+**Status:** Phase 0 complete (#481 merged); Phase 1 MVP complete (#484 + #492); Phase 2 complete (landing on `geode-phase2` branch)
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
-**Last updated:** 2026-04-08
+**Last updated:** 2026-04-09
 
 ## Implementation status
 
@@ -47,7 +47,22 @@
     required). Dawn auto-discovers it via the standard Vulkan loader.
     Added as an experimental `linux-geode` CI job
     (`continue-on-error: true` until the first run confirms it works).
-- **Phase 2+**: not yet started.
+- **Phase 2**: 🚧 in progress.
+  - ✅ `drawImage`: textured quads via a dedicated image-blit pipeline
+    (`GeodeImagePipeline`) + reusable texture upload/draw helpers
+    (`GeodeTextureEncoder`). Supports bilinear and nearest sampling
+    (`image-rendering: pixelated`), `ImageParams::opacity` combined with
+    `paint.opacity`, and honors the current transform stack. Texture
+    uploads go through `wgpu::Queue::WriteTexture` with `bytesPerRow`
+    normalized to 256-byte alignment on the slow path (the fast path
+    uploads directly when `width*4` is already aligned). `GeoEncoder`
+    now `SetPipeline`s the Slug fill pipeline on every `fillPath` so
+    it's safe to interleave fills and image draws within one pass.
+    **Reusable for Phase 2H patterns:** `GeodeTextureEncoder::drawTexturedQuad`
+    takes a pre-uploaded `wgpu::Texture` plus explicit `destRect`/`srcRect`
+    in target-pixel / UV space. Phase 2H will render the pattern tile to
+    an offscreen texture (via `GeoSurface`), then call `drawTexturedQuad`
+    with the repeating `srcRect` to stamp the tile across the fill region.
 
 
 ## Summary
@@ -1101,14 +1116,88 @@ cleanup.
        a Slug band encoder issue with multi-subpath inputs. **Also:**
        `Path::strokeMiterBounds` should be audited for correctness at the
        same time (tracked separately).
-- [ ] Implement `GeodeGradientEncoder`: linear, radial, and sweep gradients.
-  - [ ] Fragment shader gradient evaluation.
-  - [ ] Spread modes: pad, reflect, repeat.
-- [ ] Implement pattern tile rendering: render tile to offscreen texture, sample as repeating
-  shader.
+- [🚧] Implement `GeodeGradientEncoder`: linear, radial, and sweep gradients.
+  - [x] **Linear gradients (Phase 2E).** Shipped as a sibling pipeline
+    (`GeodeGradientPipeline`) + fragment shader
+    (`shaders/slug_gradient.wgsl`) + `GeoEncoder::fillPathLinearGradient`.
+    Supports both `userSpaceOnUse` and `objectBoundingBox` units, the
+    `gradientTransform` attribute, and all three spread modes. Stops are
+    baked into the per-draw uniform (cap: 16 stops — follow-up is a
+    texture-based stop lookup via `GeodeGradientCacheComponent`). The
+    `RendererGeode` fill/stroke dispatch shares a single code path
+    (`drawPaintedPathAgainst`) so gradient strokes reuse the *original*
+    path bounds for gradient coordinate resolution, matching the SVG spec
+    and the other backends. Golden coverage:
+    `linear_gradient_basic.svg` (objectBoundingBox / horizontal / pad),
+    `linear_gradient_userspace.svg` (userSpaceOnUse + rotate
+    gradientTransform + 3-stop),
+    `linear_gradient_spread.svg` (three rects exercising
+    pad / reflect / repeat side by side),
+    `linear_gradient_stroke.svg` (stroked rect outline gradient-filled).
+    Unit-test coverage in `GeoEncoder_tests.cc` exercises the pipeline
+    directly (`FillLinearGradientUserSpace`, `FillLinearGradientRepeat`).
+  - [x] **Radial gradients (Phase 2F).** Shipped by extending
+    `slug_gradient.wgsl` with a `gradientKind` discriminator (linear vs.
+    radial) and a small uniform-layout grow (`GradientUniforms` is now
+    480 bytes, up from 464). The fragment stage forks into one of two
+    `t` derivations before reaching the shared `apply_spread` /
+    `sample_stops` path:
+      * **linear** — projects the gradient-space sample onto the
+        `(start, end)` axis (unchanged from Phase 2E).
+      * **radial** — solves the SVG 2 / Canvas two-circle quadratic
+        `|e − t·d|² = (Fr + t·Dr)²` for `t`, taking the root whose
+        corresponding radius `Fr + t·Dr` is non-negative. Reduces to the
+        closed form `|P − C| / R` when the focal point coincides with
+        the center and `fr == 0`. See `radial_t()` in
+        `shaders/slug_gradient.wgsl` for the full derivation.
+    `RendererGeode::resolveRadialGradientParams` shares its frame /
+    transform / stop-list helpers with the linear resolver via the new
+    `resolveGradientFrame` and `buildGradientStops` factor-outs, so the
+    only branch-specific code is the geometry resolution and the new
+    `geode::RadialGradientParams` struct. Both fill and stroke routes
+    work — the existing `drawPaintedPathAgainst` dispatch tries linear
+    first, then radial, then falls back to the reference's solid
+    fallback color. Golden coverage:
+    `radial_gradient_basic.svg` (objectBoundingBox / concentric / pad),
+    `radial_gradient_userspace.svg` (userSpaceOnUse + anisotropic
+    gradientTransform + 3-stop),
+    `radial_gradient_focal.svg` (off-center focal point exercising the
+    general two-circle quadratic),
+    `radial_gradient_spread.svg` (pad / reflect / repeat side by side
+    on a 30%-radius gradient),
+    `radial_gradient_stroke.svg` (stroked rect outline radial-filled).
+    Unit-test coverage in `GeoEncoder_tests.cc` exercises the encoder
+    directly (`FillRadialGradientConcentric`, `FillRadialGradientFocal`).
+  - [ ] Sweep / conic gradients (Phase 2F-followup). The donner SVG
+    parser does not yet expose a `<conicGradient>` element nor a
+    `ComputedSweepGradientComponent`, so there is nothing for the
+    renderer to dispatch on. The shader is structured to take a third
+    branch when the parser side lands: add a `kGradientSweep` enum
+    value, drop a `sweep_t()` function next to `radial_t()` (one
+    `atan2` over the gradient-space delta), and wire a sibling
+    resolver in `RendererGeode`. Tracking issue / parser support is
+    a prerequisite.
+  - [x] Spread modes: pad, reflect, repeat (covered by both linear and
+    radial paths).
+- [x] Implement pattern tile rendering: render tile to offscreen texture, sample as repeating
+  shader. The Slug fill shader gained a `paintMode` uniform (0 = solid, 1 = pattern), a
+  `patternFromPath` affine transform, and texture + sampler bindings. `beginPatternTile`
+  allocates an offscreen `wgpu::Texture`, finishes the outer `GeoEncoder`, and redirects
+  subsequent draws into a nested `GeoEncoder` on the tile. `endPatternTile` finishes the
+  tile encoder, stashes the texture as the fill or stroke paint, and creates a fresh outer
+  encoder with `setLoadPreserve()` so earlier outer content is retained. Pattern fills
+  reuse the winding-number coverage path, so non-rectangular pattern fills (e.g., pattern
+  inside a triangle) work transparently. Goldens: `geode_pattern_solid`, `_checker`,
+  `_offset`, `_nonrect`.
 - [ ] Implement `drawRect` and `drawEllipse` optimized paths (skip band decomposition for
   axis-aligned primitives).
-- [ ] Implement `drawImage`: textured quad with opacity and filtering.
+- [x] Implement `drawImage`: textured quad with opacity and filtering.
+  Shipped via `GeodeImagePipeline` + `GeodeTextureEncoder` (see
+  implementation-status note above). Unit-tested in
+  `geo_encoder_tests` and `renderer_geode_tests`; golden tests in
+  `renderer_geode_golden_tests` (`image_data_url_pixelated.svg`,
+  `image_data_url_opacity.svg`). The same `GeodeTextureEncoder`
+  helpers will be reused by Phase 2H pattern tile sampling.
 - [ ] Implement `GeodeGradientCacheComponent` for ECS gradient caching.
 
 ### Phase 3: Compositing and Clipping
@@ -1139,6 +1228,43 @@ cleanup.
 - [ ] Performance benchmarking: compare against RendererSkia and RendererTinySkia on the
   resvg test suite and complex real-world SVGs.
 - [ ] Optimize: batch draw calls for paths sharing the same pipeline state.
+
+### Phase 5b: Full Test-Suite Parity with tiny-skia
+
+Today Geode runs a curated `renderer_geode_golden_tests` target (33 SVGs as of Phase 2)
+against per-backend goldens, while the main `renderer_tests` target (87 SVGs) and the
+resvg test suite (~600 SVGs) are gated out of the Geode build via `target_compatible_with`.
+This gap exists because:
+  - Geode's Slug-based rasterization has sub-pixel AA differences from tiny-skia's
+    supersampling that would fail strict-identity comparisons on every edge pixel.
+  - Some features (text, clipping, masks, filter layers) are still stubbed in
+    `RendererGeode` as of Phase 2, so most resvg tests would fail outright.
+
+The target is to lift `target_compatible_with = [skia, tiny_skia]` from the main
+test targets and run them through Geode too:
+
+- [ ] **Unblock the main renderer golden suite for Geode.** Teach the
+  `compareWithGolden` fixture about backend-specific overrides so that a Geode
+  run looks for `golden/geode/foo.png` first, then falls back to `golden/foo.png`
+  (the tiny-skia ground truth) with an AA-edge-tolerant comparison
+  (`maxMismatchedPixels` scaled to stroke perimeter). Remove the
+  `target_compatible_with` guard on `:renderer_tests`.
+- [ ] **Backport per-test Geode goldens for the strict cases.** For SVGs where
+  Geode's Slug output is a genuine improvement (or simply different) from
+  tiny-skia's, capture per-backend goldens under `golden/geode/` instead of
+  tightening thresholds.
+- [ ] **Unblock the resvg test suite for Geode.** Add a `geode` variant to the
+  `resvg_test_suite` target (see `donner/svg/renderer/tests:resvg_test_suite`)
+  and enumerate which resvg categories pass, fail cleanly, or depend on
+  unimplemented features (text, filters, clipping).
+- [ ] **Close the feature gaps that show up as systematic resvg failures.**
+  The highest-leverage gaps are text (Phase 4), clipping/masks (Phase 3), and
+  filter layers (Phase 7). Skip resvg tests that depend on those until the
+  corresponding phase lands, with a per-test comment linking to the blocker.
+- [ ] **Track the pass-rate delta between Geode and RendererSkia** per the
+  existing "Resvg test suite" goal in the Testing section below. Landing
+  criterion: Geode's pass rate is within ε of RendererSkia's, where ε is
+  limited to the genuinely sub-pixel-AA difference set.
 
 ### Phase 6: Embeddability
 

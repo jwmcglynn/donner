@@ -114,6 +114,29 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Linear-gradient fragment shader. Shares the vertex pipeline / band layout
+# with slug_fill.wgsl but the fragment stage reads a larger uniform that
+# carries gradient parameters (transform, start/end, spread, stops).
+embed_resources(
+    name = "slug_gradient_wgsl",
+    header_output = "embed_resources/SlugGradientWgsl.h",
+    resources = {
+        "kSlugGradientWgsl": "shaders/slug_gradient.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Embed the image-blit WGSL shader source. Used by the image-blit pipeline
+# (drawImage today, pattern tile sampling in Phase 2H).
+embed_resources(
+    name = "image_blit_wgsl",
+    header_output = "embed_resources/ImageBlitWgsl.h",
+    resources = {
+        "kImageBlitWgsl": "shaders/image_blit.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -121,7 +144,9 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":image_blit_wgsl",
         ":slug_fill_wgsl",
+        ":slug_gradient_wgsl",
         "@dawn//:webgpu_dawn",
     ],
 )
@@ -150,6 +175,32 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "geode_image_pipeline",
+    srcs = ["GeodeImagePipeline.cc"],
+    hdrs = ["GeodeImagePipeline.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_shaders",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_library(
+    name = "geode_texture_encoder",
+    srcs = ["GeodeTextureEncoder.cc"],
+    hdrs = ["GeodeTextureEncoder.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_device",
+        ":geode_image_pipeline",
+        "//donner/base",
+        "@dawn//:webgpu_dawn",
+    ],
+)
+
+donner_cc_library(
     name = "geo_encoder",
     srcs = ["GeoEncoder.cc"],
     hdrs = ["GeoEncoder.h"],
@@ -157,10 +208,13 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
+        ":geode_image_pipeline",
         ":geode_path_encoder",
         ":geode_pipeline",
+        ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",
+        "//donner/svg/resources:image_resource",
         "@dawn//:webgpu_dawn",
     ],
 )
@@ -172,9 +226,11 @@ donner_cc_test(
     deps = [
         ":geo_encoder",
         ":geode_device",
+        ":geode_image_pipeline",
         ":geode_pipeline",
         "//donner/base",
         "//donner/css",
+        "//donner/svg/resources:image_resource",
         "@com_google_gtest//:gtest_main",
     ],
 )

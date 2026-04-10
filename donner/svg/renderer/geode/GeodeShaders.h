@@ -16,6 +16,8 @@ namespace donner::geode {
  * - `@group(0) @binding(0) var<uniform> uniforms: Uniforms;`
  * - `@group(0) @binding(1) var<storage, read> bands: array<Band>;`
  * - `@group(0) @binding(2) var<storage, read> curveData: array<f32>;`
+ * - `@group(0) @binding(3) var patternTexture: texture_2d<f32>;`
+ * - `@group(0) @binding(4) var patternSampler: sampler;`
  *
  * and vertex attributes:
  * - `@location(0) pos: vec2f`      — path-space position
@@ -26,5 +28,36 @@ namespace donner::geode {
  *   failed (errors go to the device's uncaptured error callback).
  */
 wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device);
+
+/**
+ * Compile the Slug gradient-fill shader for the given device.
+ *
+ * Parallel to @ref createSlugFillShader, but bound to a different uniform
+ * layout that carries linear-gradient parameters (transform, start/end,
+ * spread mode, stops) alongside the Slug coverage machinery. See
+ * `shaders/slug_gradient.wgsl` for the exact struct layout.
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
+
+/**
+ * Compile the image-blit shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/image_blit.wgsl` via the `embed_resources()` Bazel rule. The
+ * shader expects:
+ *
+ * - `@group(0) @binding(0) var<uniform> uniforms: Uniforms;`
+ * - `@group(0) @binding(1) var imageSampler: sampler;`
+ * - `@group(0) @binding(2) var imageTexture: texture_2d<f32>;`
+ *
+ * and no vertex buffer — corners are generated from `@builtin(vertex_index)`.
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createImageBlitShader(const wgpu::Device& device);
 
 }  // namespace donner::geode

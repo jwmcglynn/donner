@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <!-- userSpaceOnUse, diagonal, with a gradientTransform rotation -->
+    <linearGradient id="g" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="0" x2="64" y2="0"
+                    gradientTransform="rotate(45 32 32)">
+      <stop offset="0" stop-color="#ffcc00"/>
+      <stop offset="0.5" stop-color="#009933"/>
+      <stop offset="1" stop-color="#0033aa"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" fill="url(#g)"/>
+</svg>

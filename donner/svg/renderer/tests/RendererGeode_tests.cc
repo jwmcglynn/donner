@@ -14,6 +14,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
+#include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
 namespace {
@@ -332,6 +333,156 @@ TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
   EXPECT_EQ(center[3], 0u) << "Zero-width stroke should draw nothing";
+}
+
+/// `drawImage` must upload the RGBA pixels to a texture and render the
+/// textured quad at the target rectangle, honoring the current transform
+/// and the combined opacity. Draw a 4-color 2x2 image stretched across
+/// most of the canvas and sanity-check the four expected corner colors
+/// (nearest-neighbor sampling so quadrant boundaries are crisp).
+TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  renderer.setPaint(PaintParams{});
+
+  // 2x2 image: RGBY across the four pixels. Pixelated filtering so each
+  // quadrant of the destination rect is a single pure color.
+  ImageResource image;
+  image.width = 2;
+  image.height = 2;
+  image.data = {
+      255, 0, 0, 255,    // (0,0) red
+      0, 255, 0, 255,    // (1,0) green
+      0, 0, 255, 255,    // (0,1) blue
+      255, 255, 0, 255,  // (1,1) yellow
+  };
+
+  ImageParams params;
+  params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
+  params.opacity = 1.0;
+  params.imageRenderingPixelated = true;
+
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Top-left quadrant (pixel at ~24, 24) — red.
+  auto tl = pixelAt(snap, 24, 24);
+  EXPECT_EQ(tl[0], 255u) << "TL R";
+  EXPECT_EQ(tl[1], 0u) << "TL G";
+  EXPECT_EQ(tl[3], 255u) << "TL A";
+
+  // Top-right quadrant (~40, 24) — green.
+  auto tr = pixelAt(snap, 40, 24);
+  EXPECT_EQ(tr[0], 0u) << "TR R";
+  EXPECT_EQ(tr[1], 255u) << "TR G";
+
+  // Bottom-left (~24, 40) — blue.
+  auto bl = pixelAt(snap, 24, 40);
+  EXPECT_EQ(bl[2], 255u) << "BL B";
+
+  // Bottom-right (~40, 40) — yellow.
+  auto br = pixelAt(snap, 40, 40);
+  EXPECT_EQ(br[0], 255u) << "BR R";
+  EXPECT_EQ(br[1], 255u) << "BR G";
+
+  // Outside the target rect: transparent.
+  auto outside = pixelAt(snap, 4, 4);
+  EXPECT_EQ(outside[3], 0u) << "Outside alpha";
+}
+
+/// Transform stack must compose with drawImage. Push a translate, draw
+/// the image at the *unshifted* targetRect, pop, and verify the image
+/// lands at the translated position.
+TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  ImageResource image;
+  image.width = 1;
+  image.height = 1;
+  image.data = {255, 0, 255, 255};  // Solid magenta.
+
+  ImageParams params;
+  params.targetRect = Box2d({0.0, 0.0}, {8.0, 8.0});
+  params.opacity = 1.0;
+
+  renderer.pushTransform(Transform2d::Translate(Vector2d(16, 16)));
+  renderer.drawImage(image, params);
+  renderer.popTransform();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  // Translated pixel should be magenta.
+  auto inside = pixelAt(snap, 20, 20);
+  EXPECT_EQ(inside[0], 255u) << "Translated R";
+  EXPECT_EQ(inside[2], 255u) << "Translated B";
+  EXPECT_EQ(inside[3], 255u) << "Translated A";
+
+  // Original (unshifted) position should be empty.
+  auto unshifted = pixelAt(snap, 4, 4);
+  EXPECT_EQ(unshifted[3], 0u) << "Unshifted origin should be transparent";
+}
+
+/// `ImageParams::opacity` should multiply with the paint's overall
+/// `opacity` so group `opacity` attributes on ancestors propagate.
+TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  // paint.opacity = 0.5, ImageParams.opacity = 0.5 → combined = 0.25.
+  PaintParams paint;
+  paint.opacity = 0.5;
+  renderer.setPaint(paint);
+
+  ImageResource image;
+  image.width = 1;
+  image.height = 1;
+  image.data = {255, 0, 0, 255};
+
+  ImageParams params;
+  params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
+  params.opacity = 0.5;
+
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  auto center = pixelAt(snap, 32, 32);
+  // Straight-alpha: R=255, A≈64 (255 * 0.25).
+  EXPECT_NEAR(center[0], 255u, 2u) << "Straight-alpha R preserved";
+  EXPECT_NEAR(center[3], 64u, 2u) << "Combined alpha";
+}
+
+/// Empty image data (width/height = 0) and a zero-size target rect both
+/// must be safe no-ops.
+TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
+  RendererGeode renderer;
+  beginFrame(renderer);
+
+  ImageResource empty;
+  empty.width = 0;
+  empty.height = 0;
+  ImageParams params;
+  params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
+  renderer.drawImage(empty, params);
+
+  ImageResource valid;
+  valid.width = 1;
+  valid.height = 1;
+  valid.data = {255, 255, 255, 255};
+  ImageParams emptyRect;
+  emptyRect.targetRect = Box2d({16.0, 16.0}, {16.0, 16.0});
+  renderer.drawImage(valid, emptyRect);
+
+  renderer.endFrame();
+  RendererBitmap snap = renderer.takeSnapshot();
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[3], 0u) << "Empty image should draw nothing";
 }
 
 /// Stubbed methods (clip/mask/layer/filter/pattern/image/text) should be
