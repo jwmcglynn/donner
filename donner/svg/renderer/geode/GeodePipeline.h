@@ -15,9 +15,13 @@ namespace donner::geode {
  * draw call but the pipeline state object can be reused.
  *
  * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
- * - binding 0: uniform buffer (Uniforms struct: mvp, viewport, color, fillRule)
+ * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath, viewport,
+ *   tileSize, color, fillRule, paintMode, patternOpacity)
  * - binding 1: storage buffer (read-only) — Band[]
  * - binding 2: storage buffer (read-only) — curve data (flat f32[])
+ * - binding 3: pattern tile texture (2D, Float sampleType) — sampled only
+ *   when paintMode == 1. A 1x1 dummy texture is bound in solid-fill draws.
+ * - binding 4: pattern sampler (Filtering) — paired with binding 3.
  *
  * The vertex buffer layout is:
  * - location 0: vec2f position (offset 0)
@@ -49,6 +53,40 @@ public:
   const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
   /// Color format the pipeline was built for.
+  wgpu::TextureFormat colorFormat() const { return colorFormat_; }
+
+private:
+  wgpu::TextureFormat colorFormat_;
+  wgpu::BindGroupLayout bindGroupLayout_;
+  wgpu::RenderPipeline pipeline_;
+};
+
+/**
+ * Caches a compiled `wgpu::RenderPipeline` for the Slug gradient-fill shader
+ * plus its bind-group layout.
+ *
+ * Parallel to @ref GeodePipeline but with a larger uniform buffer that carries
+ * linear-gradient parameters (pathFromGradient transform, start/end,
+ * spread mode, per-stop colors and offsets). The vertex layout, Band / curve
+ * storage bindings, and blend state are identical.
+ *
+ * Kept as a sibling class instead of a branch inside @ref GeodePipeline to
+ * keep the solid-fill pipeline's 128-byte uniform layout untouched, and so
+ * radial / sweep gradient pipelines can slot in alongside this one later
+ * without churning the solid-fill path.
+ */
+class GeodeGradientPipeline {
+public:
+  GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+
+  ~GeodeGradientPipeline() = default;
+  GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
+  GeodeGradientPipeline& operator=(const GeodeGradientPipeline&) = delete;
+  GeodeGradientPipeline(GeodeGradientPipeline&&) noexcept = default;
+  GeodeGradientPipeline& operator=(GeodeGradientPipeline&&) noexcept = default;
+
+  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:

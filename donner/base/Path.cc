@@ -1299,6 +1299,56 @@ Vector2d segmentNormal(const Vector2d& a, const Vector2d& b) {
   return Vector2d(-d.y, d.x).normalize();
 }
 
+/// Result of computing the miter (intersection) point of two offset lines.
+struct MiterResult {
+  bool valid = false;       ///< True if a finite miter point exists.
+  Vector2d point;           ///< The miter point (intersection of the two offset lines).
+  double lengthFromVertex;  ///< Distance from the original vertex to the miter point.
+};
+
+/// Compute the intersection point of the two offset lines.
+///
+/// `prevNormal` and `curNormal` are the (unit) outward normals of the two adjacent
+/// segments *on the current contour side* — for the inside-of-turn branch the
+/// caller passes the true normals; for the outside branch the caller also passes
+/// the true outward normals of the contour it's currently tracing. Both offset
+/// lines are `{ x : x·n = vertex·n + halfWidth }`, and their intersection lies
+/// at `vertex + miterUnit * (halfWidth / cosHalfAngle)` where
+/// `cosHalfAngle = |prevNormal + curNormal| / 2`. This is the same formula used
+/// by `ComputeMiter` in `strokeMiterBounds` — expressed as
+/// `halfWidth / cos(halfAngleBetweenNormals)`, which equals
+/// `halfWidth / sin(interiorHalfAngleAtVertex)` (the textbook SVG miter
+/// formula). Importantly, this is NOT `halfWidth / sinHalfAngle`: that earlier
+/// formulation happened to be correct for 90° corners (where sin=cos at 45°)
+/// but drifts for any other turn — undershooting sharp inside corners of open
+/// paths (the Phase 2C inverted-V symptom) and overshooting gentle outside
+/// corners.
+MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal,
+                              const Vector2d& curNormal, double halfWidth) {
+  MiterResult result;
+  const Vector2d miterDir = prevNormal + curNormal;
+  const double miterDirLen = miterDir.length();
+  if (NearZero(miterDirLen, 1e-10)) {
+    // 180° turn: offset lines are parallel; no finite miter.
+    return result;
+  }
+
+  const Vector2d miterUnit = miterDir * (1.0 / miterDirLen);
+  // cosHalfAngle = cos(half the angle between the two normals) = |n1+n2|/2.
+  // Equivalently, it is sin(half the interior angle at the vertex): rotating
+  // both normals 90° yields segment-direction unit vectors, which preserves
+  // all relative angles.
+  const double cosHalfAngle = miterDirLen * 0.5;
+  if (NearZero(cosHalfAngle, 1e-10)) {
+    return result;
+  }
+
+  result.valid = true;
+  result.lengthFromVertex = halfWidth / cosHalfAngle;
+  result.point = vertex + miterUnit * result.lengthFromVertex;
+  return result;
+}
+
 /// Emit a line join between two consecutive offset segments.
 ///
 /// \p prevEnd is the end of the previous offset segment on the current side.
@@ -1330,8 +1380,50 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
   const bool isOutside = isLeftSide ? (cross < 0.0) : (cross > 0.0);
 
   if (!isOutside) {
-    // Inside of the turn: just connect directly. The segments will overlap slightly
-    // but that's correct for fill.
+    // Inside of the turn: the naive `lineTo(curStart)` connects two points
+    // that are both `halfWidth` from `vertex` on different offset directions,
+    // so the resulting edge zig-zags back through the interior of the stroke
+    // ribbon. Neither NonZero nor EvenOdd renders that cleanly; the symptoms
+    // are:
+    //   - Phase 2D: full-width diagonal streaks inside stroked rects/ellipses
+    //     (Geode goldens rect2, ellipse1, quadbezier1, rotated-rect).
+    //   - Phase 2C: gaps / extra triangles at the concave side of sharp
+    //     open-subpath corners like the inverted-V apex in the
+    //     stroking_linejoin Geode golden.
+    //
+    // For SHARP inside corners (turn angle >= 60°, i.e.
+    // `cosHalfAngle <= cos(30°) ≈ 0.866`), replace the naive edge with the
+    // true intersection of the two offset lines via `computeMiterPoint`. The
+    // intersection lies on both offset lines, so the polygon edge from the
+    // previous segment's offset end to the miter point cancels (in winding)
+    // against the backward traversal of the same offset line; the net
+    // traced shape is the clean inner miter corner. This handles angular
+    // polygon corners (rect 90°, inverted-V ~127°) and the Phase 2C
+    // sharp-open-corner case.
+    //
+    // For SMOOTH flattened-curve joins (~1–10° turns), keep the original
+    // `lineTo(curStart)` behavior. The correct miter point is geometrically
+    // close to `curStart` but adds tiny zig-zag vertices on dense flattened
+    // ellipse contours that have been observed to corrupt ray-cast winding
+    // (see the `StrokeToFillClosedEllipseInteriorIsEmpty` regression). The
+    // sub-halfWidth zig is visually imperceptible in that regime.
+    //
+    // For very-sharp inside turns beyond the miter limit (miterRatio >
+    // miterLimit, close to a U-turn), fall back to the direct connection —
+    // the intersection recedes toward infinity and emitting it would inject
+    // spurious far-away vertices.
+    constexpr double kSharpInsideCosThreshold = 0.866;  // turn angle >= 60°
+    constexpr double kSharpInsideMiterRatio = 1.0 / kSharpInsideCosThreshold;
+    const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
+    if (miter.valid) {
+      const double miterRatio = miter.lengthFromVertex / halfWidth;
+      const bool isSharp = miterRatio >= kSharpInsideMiterRatio;
+      const bool withinLimit = miterRatio <= miterLimit;
+      if (isSharp && withinLimit) {
+        builder.lineTo(miter.point);
+        return;
+      }
+    }
     builder.lineTo(curStart);
     return;
   }
@@ -1372,40 +1464,32 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
     }
 
     case LineJoin::Miter: {
-      // Compute the miter point: intersection of the two offset lines.
-      // The miter point is at vertex + halfWidth * (prevNormal + curNormal) / cos(halfAngle).
-      const Vector2d miterDir = (prevNormal + curNormal);
-      const double miterDirLen = miterDir.length();
-
-      if (NearZero(miterDirLen, 1e-10)) {
-        // Degenerate: 180-degree turn, fall back to bevel.
+      // Compute the miter point: the intersection of the two offset lines.
+      // The offset lines are { x : x·n = vertex·n + halfWidth }, and their
+      // intersection lies at `vertex + miterUnit * halfWidth/cosHalfAngle`,
+      // where `miterUnit = (n1+n2)/|n1+n2|` and
+      // `cosHalfAngle = |n1+n2|/2 = sin(interiorHalfAngle)`. This matches the
+      // standard SVG miter formula `halfWidth/sin(interiorHalfAngle)` used by
+      // `ComputeMiter` in `strokeMiterBounds`.
+      //
+      // Note: prior revisions used `halfWidth/sinHalfAngle` (where
+      // sinHalfAngle is the sine of the half-angle *between the normals*),
+      // which happens to coincide with the correct formula at exactly 90°
+      // turns (sin 45° = cos 45°) but drifts for every other angle —
+      // undershooting sharp outside miters (the inverted-V right contour
+      // bug) and rejecting gentle outside miters via a spuriously-large
+      // miter ratio.
+      const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
+      if (!miter.valid) {
         builder.lineTo(curStart);
         break;
       }
 
-      const Vector2d miterUnit = miterDir * (1.0 / miterDirLen);
-
-      // The cosine of half the angle between the normals:
-      // cos(halfAngle) = dot(prevNormal, miterUnit) = miterDirLen / 2
-      const double cosHalfAngle = miterDirLen * 0.5;
-
-      // Miter length ratio = 1 / sin(halfAngle).
-      // sin(halfAngle) = sqrt(1 - cos^2(halfAngle)).
-      const double sinHalfAngle = std::sqrt(std::max(0.0, 1.0 - cosHalfAngle * cosHalfAngle));
-
-      double miterRatio = 0.0;
-      if (!NearZero(sinHalfAngle, 1e-10)) {
-        miterRatio = 1.0 / sinHalfAngle;
-      }
-
-      if (miterRatio > miterLimit || NearZero(sinHalfAngle, 1e-10)) {
-        // Miter limit exceeded: fall back to bevel.
+      const double miterRatio = miter.lengthFromVertex / halfWidth;
+      if (miterRatio > miterLimit) {
         builder.lineTo(curStart);
       } else {
-        // Emit the miter point.
-        const double miterLength = halfWidth / sinHalfAngle;
-        const Vector2d miterPoint = vertex + miterUnit * miterLength;
-        builder.lineTo(miterPoint);
+        builder.lineTo(miter.point);
         builder.lineTo(curStart);
       }
       break;
@@ -1635,6 +1719,306 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   }
 }
 
+/// Compute the total arc length of a flat subpath (sum of segment lengths).
+double subpathLength(const FlatSubpath& subpath) {
+  const auto& pts = subpath.points;
+  if (pts.size() < 2) {
+    return 0.0;
+  }
+  double total = 0.0;
+  for (size_t i = 1; i < pts.size(); ++i) {
+    total += (pts[i] - pts[i - 1]).length();
+  }
+  return total;
+}
+
+/// Resolve the effective (repeat-doubled) dash pattern and the normalized
+/// dash offset. The returned pattern's total length is strictly positive
+/// (callers should check the result is non-empty). All input sanity cases
+/// (negative values, all-zero values, pathLength scaling) are handled here.
+///
+/// \p rawDashes is the raw stroke-dasharray.
+/// \p dashOffset is the raw stroke-dashoffset.
+/// \p actualLength is the arc length of the subpath being dashed. Returning
+///   nullopt for `actualLength <= 0` keeps callers from emitting zero-length
+///   dashes.
+/// \p totalPathArc is the total arc length of the ENTIRE path (sum of all
+///   subpath lengths). This is the reference length used together with
+///   \p pathLength to compute the spec's dash-scaling ratio; per SVG2
+///   pathLength refers to the whole path, so multi-subpath strokes must
+///   share one scale factor rather than rescaling per subpath.
+/// \p pathLength is the SVG pathLength attribute (0 means unused).
+struct ResolvedDashPattern {
+  std::vector<double> lengths;  ///< Even-length sequence: on, off, on, off, ...
+  double totalLength = 0.0;     ///< Sum of all entries.
+  double startPhase = 0.0;      ///< Phase within [0, totalLength) to begin the walk.
+};
+
+std::optional<ResolvedDashPattern> resolveDashPattern(const std::vector<double>& rawDashes,
+                                                      double dashOffset, double actualLength,
+                                                      double totalPathArc, double pathLength) {
+  if (rawDashes.empty() || actualLength <= 0.0) {
+    return std::nullopt;
+  }
+
+  // Per SVG: any negative value or all-zero pattern disables dashing (render
+  // as if stroke-dasharray: none).
+  double sum = 0.0;
+  for (double v : rawDashes) {
+    if (v < 0.0) {
+      return std::nullopt;
+    }
+    sum += v;
+  }
+  if (sum <= 0.0) {
+    return std::nullopt;
+  }
+
+  // Guardrail against pathological allocations: cap the doubled pattern at a
+  // reasonable size. Matches spec behavior (odd -> double) but bails out if
+  // the result would be unreasonably large. Real SVG dasharrays are rarely
+  // longer than ~16 entries.
+  constexpr size_t kMaxDashEntries = 256;
+  if (rawDashes.size() > kMaxDashEntries) {
+    return std::nullopt;
+  }
+
+  ResolvedDashPattern result;
+  result.lengths.reserve(rawDashes.size() * 2);
+  result.lengths.assign(rawDashes.begin(), rawDashes.end());
+  // Per SVG spec: if the array has an odd length, it is doubled.
+  if ((result.lengths.size() & 1u) != 0u) {
+    const size_t half = result.lengths.size();
+    for (size_t i = 0; i < half; ++i) {
+      result.lengths.push_back(result.lengths[i]);
+    }
+  }
+
+  // Apply pathLength scaling. When pathLength is set, dash distances are
+  // expressed relative to pathLength (the author-declared total length of
+  // the ENTIRE path), so we scale by totalPathArc/pathLength. The same
+  // scale factor applies to every subpath — otherwise, multi-subpath
+  // strokes would get inconsistent dash sizes. Per SVG2 §12.2 ("moving
+  // along a path", stroke-dasharray + pathLength).
+  double effectiveOffset = dashOffset;
+  if (pathLength > 0.0 && totalPathArc > 0.0) {
+    const double scale = totalPathArc / pathLength;
+    for (double& v : result.lengths) {
+      v *= scale;
+    }
+    effectiveOffset *= scale;
+  }
+
+  // Recompute total after scaling.
+  result.totalLength = 0.0;
+  for (double v : result.lengths) {
+    result.totalLength += v;
+  }
+  if (result.totalLength <= 0.0) {
+    return std::nullopt;
+  }
+
+  // Normalize the offset into [0, totalLength). Negative offsets wrap
+  // backward. std::fmod can return a negative value for negative input.
+  double phase = std::fmod(effectiveOffset, result.totalLength);
+  if (phase < 0.0) {
+    phase += result.totalLength;
+  }
+  result.startPhase = phase;
+  return result;
+}
+
+/// Extract a sub-polyline of a subpath in the arc-length range
+/// [startDist, endDist], producing a FlatSubpath containing the polyline
+/// points at the exact start/end cuts (interpolated along the original
+/// segment if the cut falls mid-segment). Both distances must be within
+/// [0, total arc length]. Empty result if the range is degenerate.
+///
+/// For closed subpaths, callers handle wrap-around by calling this twice.
+FlatSubpath extractPolylineRange(const FlatSubpath& subpath, double startDist, double endDist) {
+  FlatSubpath result;
+  const auto& pts = subpath.points;
+  if (pts.size() < 2 || endDist <= startDist) {
+    return result;
+  }
+
+  // Walk segments accumulating arc length.
+  double cursor = 0.0;
+  bool started = false;
+  for (size_t i = 0; i + 1 < pts.size(); ++i) {
+    const Vector2d& a = pts[i];
+    const Vector2d& b = pts[i + 1];
+    const double segLen = (b - a).length();
+    if (segLen <= 0.0) {
+      continue;
+    }
+    const double segEnd = cursor + segLen;
+
+    // If this entire segment is before startDist, skip.
+    if (segEnd <= startDist) {
+      cursor = segEnd;
+      continue;
+    }
+    // If this entire segment is past endDist, we're done.
+    if (cursor >= endDist) {
+      break;
+    }
+
+    // The segment overlaps [startDist, endDist]. Compute the clipped portion.
+    const double tStart = std::max(0.0, (startDist - cursor) / segLen);
+    const double tEnd = std::min(1.0, (endDist - cursor) / segLen);
+
+    if (!started) {
+      const Vector2d startPt = a + (b - a) * tStart;
+      result.points.push_back(startPt);
+      started = true;
+    }
+
+    if (tEnd >= 1.0) {
+      // Segment's full remainder is included; emit b (or skip if equal to
+      // the previous point due to floating-point slop).
+      if (result.points.empty() || result.points.back().distanceSquared(b) > 1e-24) {
+        result.points.push_back(b);
+      }
+    } else {
+      // End cut falls inside this segment; emit the interpolated endpoint.
+      const Vector2d endPt = a + (b - a) * tEnd;
+      if (result.points.empty() || result.points.back().distanceSquared(endPt) > 1e-24) {
+        result.points.push_back(endPt);
+      }
+    }
+
+    cursor = segEnd;
+  }
+
+  return result;
+}
+
+/// Dash a single subpath and emit its stroked dashes to the builder. Returns
+/// true if any dashes were emitted, false if the pattern was invalid or the
+/// subpath was too degenerate to dash.
+bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
+                         double totalPathArc, PathBuilder& builder) {
+  const double totalArc = subpathLength(subpath);
+  auto maybePattern = resolveDashPattern(style.dashArray, style.dashOffset, totalArc,
+                                         totalPathArc, style.pathLength);
+  if (!maybePattern.has_value()) {
+    return false;
+  }
+  const ResolvedDashPattern& pattern = *maybePattern;
+
+  // Compute the list of (onStart, onEnd) arc-length ranges covered by the
+  // dashed pattern over the subpath. Each range becomes its own open-subpath
+  // stroke (with its own pair of caps).
+  //
+  // Walk pattern indices starting at the one that covers the startPhase.
+  // For closed subpaths, we start walking at phase=startPhase but cover
+  // distances [0, totalArc]; an "on" dash that straddles the end of a closed
+  // path wraps to the beginning. For open subpaths, dashes that run past
+  // the end are simply clipped.
+
+  // Find the pattern index and offset-within-index at which to begin.
+  // `patternCursor` is the distance along the repeating pattern where
+  // distance=0 on the subpath sits. A positive dashOffset shifts the
+  // pattern forward relative to the path, i.e., the path position 0 sits
+  // at pattern-position `startPhase`.
+  const size_t numEntries = pattern.lengths.size();
+  double patternPos = pattern.startPhase;  // in [0, totalLength)
+  size_t idx = 0;
+  {
+    double acc = 0.0;
+    for (size_t i = 0; i < numEntries; ++i) {
+      if (patternPos < acc + pattern.lengths[i]) {
+        idx = i;
+        break;
+      }
+      acc += pattern.lengths[i];
+    }
+    // Fractional offset within the current entry:
+    double consumed = 0.0;
+    for (size_t i = 0; i < idx; ++i) {
+      consumed += pattern.lengths[i];
+    }
+    // `remainingInEntry` = length left in this entry from the starting path
+    // position. We use this to "resume" mid-entry.
+    double remainingInEntry = pattern.lengths[idx] - (patternPos - consumed);
+
+    // Safety cap on dash segment count (pathological dash arrays on very
+    // long paths). A single subpath emitting more than this many dashes is
+    // almost certainly a bug or an attacker-crafted input; bail out rather
+    // than hang.
+    constexpr size_t kMaxDashes = 65536;
+    size_t dashesEmitted = 0;
+
+    // Guard against zero-length entries in the pattern causing an infinite
+    // loop: if a full cycle of the pattern advances cursor by less than this
+    // epsilon, bail. pattern.totalLength > 0 is guaranteed by the resolver,
+    // so a full cycle must advance at least totalLength.
+    size_t iterationsWithoutProgress = 0;
+    const size_t kMaxStalledIters = numEntries + 2;  // Full cycle plus slack.
+
+    // Walk the pattern forward over [0, totalArc]. For closed subpaths, if
+    // the final "on" dash would wrap across the start, we emit it as two
+    // pieces (the tail at end-of-path and the head at start-of-path).
+    double cursor = 0.0;
+    while (cursor < totalArc) {
+      const double entryLen = (remainingInEntry > 0.0) ? remainingInEntry : pattern.lengths[idx];
+      if (entryLen <= 0.0) {
+        if (++iterationsWithoutProgress >= kMaxStalledIters) {
+          break;
+        }
+        remainingInEntry = 0.0;
+        idx = (idx + 1u) % numEntries;
+        continue;
+      }
+      iterationsWithoutProgress = 0;
+      const double next = cursor + entryLen;
+      const bool isOn = (idx % 2u == 0u);
+
+      if (isOn && entryLen > 0.0) {
+        if (++dashesEmitted > kMaxDashes) {
+          return true;  // Truncate; caller treats us as having emitted dashes.
+        }
+        if (subpath.closed && next > totalArc && cursor < totalArc) {
+          // Wrap-around dash: tail of current cycle + head of next.
+          FlatSubpath tail = extractPolylineRange(subpath, cursor, totalArc);
+          const double headEnd = std::min(next - totalArc, totalArc);
+          FlatSubpath head = extractPolylineRange(subpath, 0.0, headEnd);
+          // Stitch tail + head together into one open-subpath polyline, so a
+          // single ribbon with caps bridges the seam correctly. The last
+          // point of tail should equal the first point of head if the
+          // subpath's end equals its start (which it does for a proper
+          // closed subpath), so dedupe to avoid a zero-length segment.
+          FlatSubpath combined;
+          combined.closed = false;
+          combined.points = std::move(tail.points);
+          for (size_t k = 0; k < head.points.size(); ++k) {
+            if (combined.points.empty() ||
+                combined.points.back().distanceSquared(head.points[k]) > 1e-24) {
+              combined.points.push_back(head.points[k]);
+            }
+          }
+          if (combined.points.size() >= 2) {
+            strokeSubpath(combined, style, builder);
+          }
+        } else {
+          const double dashEnd = std::min(next, totalArc);
+          FlatSubpath dash = extractPolylineRange(subpath, cursor, dashEnd);
+          if (dash.points.size() >= 2) {
+            strokeSubpath(dash, style, builder);
+          }
+        }
+      }
+
+      cursor = next;
+      remainingInEntry = 0.0;  // Next iteration uses full entry length.
+      idx = (idx + 1u) % numEntries;
+    }
+  }
+
+  return true;
+}
+
 }  // namespace
 
 Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const {
@@ -1648,9 +2032,32 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
   // Step 2: Extract subpaths.
   const std::vector<FlatSubpath> subpaths = extractSubpaths(flattened);
 
-  // Step 3: Build the stroke outline for each subpath.
+  // Step 3: Build the stroke outline for each subpath. When a dash pattern
+  // is set, each subpath is split into on-dash sub-polylines (each treated
+  // as an open subpath with its own caps) before offsetting.
+  //
+  // We compute the TOTAL arc length (sum across all subpaths) up front and
+  // pass it into the per-subpath dasher. This is the reference length for
+  // the SVG `pathLength` attribute — pathLength describes the entire
+  // `<path>`'s length, so the scaling ratio must be consistent for every
+  // subpath. Computing it per-subpath would give different-sized dashes on
+  // different subpaths of the same stroke.
   PathBuilder builder;
+  const bool hasDashes = !style.dashArray.empty();
+  double totalPathArc = 0.0;
+  if (hasDashes && style.pathLength > 0.0) {
+    for (const auto& subpath : subpaths) {
+      totalPathArc += subpathLength(subpath);
+    }
+  }
   for (const auto& subpath : subpaths) {
+    if (hasDashes) {
+      if (strokeDashedSubpath(subpath, style, totalPathArc, builder)) {
+        continue;
+      }
+      // Fallback: dash pattern was degenerate (all-zero, etc.) — SVG says
+      // render as solid stroke.
+    }
     strokeSubpath(subpath, style, builder);
   }
 

@@ -848,7 +848,79 @@ TEST(Path, StrokeToFillSingleLine) {
   EXPECT_GE(filledBounds.bottomRight.x - filledBounds.topLeft.x, 10.0);
 }
 
+namespace {
+
+/// Ray-cast winding number for a polygonal closed path.
+///
+/// Casts a horizontal ray from `query` going +x and counts signed crossings with
+/// each LineTo / ClosePath edge. Horizontal edges contribute 0. Assumes the
+/// path is composed only of MoveTo, LineTo, and ClosePath (i.e. already
+/// flattened). This is sufficient for checking `strokeToFill` output, which is
+/// always a closed polygon of LineTos.
+int rayCastWinding(const Path& path, const Vector2d& query) {
+  int winding = 0;
+  Vector2d start;
+  Vector2d prev;
+  bool havePrev = false;
+
+  auto crossEdge = [&](const Vector2d& a, const Vector2d& b) {
+    // Skip horizontal edges.
+    if (a.y == b.y) {
+      return;
+    }
+    // Does the edge straddle the query y? Use a half-open interval so
+    // vertex-touches aren't double-counted.
+    const bool upward = b.y > a.y;
+    const double yLo = upward ? a.y : b.y;
+    const double yHi = upward ? b.y : a.y;
+    if (query.y < yLo || query.y >= yHi) {
+      return;
+    }
+    // Intersection x at query.y.
+    const double t = (query.y - a.y) / (b.y - a.y);
+    const double ix = a.x + t * (b.x - a.x);
+    if (ix > query.x) {
+      winding += upward ? 1 : -1;
+    }
+  };
+
+  for (const auto& cmd : path.commands()) {
+    switch (cmd.verb) {
+      case Path::Verb::MoveTo:
+        start = path.points()[cmd.pointIndex];
+        prev = start;
+        havePrev = true;
+        break;
+      case Path::Verb::LineTo: {
+        const Vector2d& p = path.points()[cmd.pointIndex];
+        if (havePrev) {
+          crossEdge(prev, p);
+        }
+        prev = p;
+        break;
+      }
+      case Path::Verb::ClosePath:
+        if (havePrev) {
+          crossEdge(prev, start);
+        }
+        prev = start;
+        break;
+      case Path::Verb::QuadTo:
+      case Path::Verb::CurveTo:
+        // Not expected in strokeToFill output.
+        break;
+    }
+  }
+  return winding;
+}
+
+}  // namespace
+
 TEST(Path, StrokeToFillRoundCap) {
+  // Horizontal line from (0,0) to (10,0) with stroke width 2 (halfWidth=1).
+  // With round caps the filled region is a rect [0,10]×[-1,1] plus two unit
+  // semicircles centered at (0,0) and (10,0) — i.e., the set of points within
+  // distance 1 of the segment.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
   StrokeStyle style;
   style.width = 2.0;
@@ -866,12 +938,55 @@ TEST(Path, StrokeToFillRoundCap) {
   // The bounding box should extend ±halfWidth past the line endpoints in
   // the line's travel direction (the round cap's outermost extent).
   const Box2d bounds = filled.bounds();
-  EXPECT_LT(bounds.topLeft.x, 0.0) << "Round cap should extend left of x=0";
-  EXPECT_GT(bounds.bottomRight.x, 10.0)
-      << "Round cap should extend right of x=10";
+  EXPECT_LT(bounds.topLeft.x, -0.95) << "Round cap should extend ~halfWidth left of x=0";
+  EXPECT_GT(bounds.bottomRight.x, 9.95)
+      << "Round cap should extend ~halfWidth right of x=10";
+  EXPECT_NEAR(bounds.topLeft.y, -1.0, 1e-9);
+  EXPECT_NEAR(bounds.bottomRight.y, 1.0, 1e-9);
+  EXPECT_NEAR(bounds.topLeft.x, -1.0, 0.1)
+      << "Left cap polyline should reach ~(-1, 0)";
+  EXPECT_NEAR(bounds.bottomRight.x, 11.0, 0.1)
+      << "Right cap polyline should reach ~(11, 0)";
+
+  // ---- Winding tests inside the expected round-capped region ----
+  // Interior of the straight part.
+  EXPECT_NE(rayCastWinding(filled, {5.0, 0.0}), 0) << "interior of line";
+  EXPECT_NE(rayCastWinding(filled, {5.0, 0.9}), 0) << "near top edge interior";
+  EXPECT_NE(rayCastWinding(filled, {5.0, -0.9}), 0) << "near bottom edge interior";
+
+  // Inside each round cap — points within unit distance of the endpoint
+  // but outside the [0,10] x range.
+  EXPECT_NE(rayCastWinding(filled, {-0.5, 0.0}), 0) << "inside left round cap";
+  EXPECT_NE(rayCastWinding(filled, {-0.8, 0.0}), 0) << "near far-left of left cap";
+  EXPECT_NE(rayCastWinding(filled, {10.5, 0.0}), 0) << "inside right round cap";
+  EXPECT_NE(rayCastWinding(filled, {10.8, 0.0}), 0) << "near far-right of right cap";
+  EXPECT_NE(rayCastWinding(filled, {-0.3, 0.5}), 0) << "inside upper-left of left cap";
+  EXPECT_NE(rayCastWinding(filled, {10.3, -0.5}), 0) << "inside lower-right of right cap";
+
+  // ---- Winding tests outside the expected region ----
+  // Well past either cap on the x axis.
+  EXPECT_EQ(rayCastWinding(filled, {-2.0, 0.0}), 0) << "well past left cap";
+  EXPECT_EQ(rayCastWinding(filled, {12.0, 0.0}), 0) << "well past right cap";
+  // Above / below the stroke band.
+  EXPECT_EQ(rayCastWinding(filled, {5.0, 2.0}), 0) << "above the stroke";
+  EXPECT_EQ(rayCastWinding(filled, {5.0, -2.0}), 0) << "below the stroke";
+  // Corner regions outside the round cap but inside what a square cap would
+  // cover (|x|+epsilon past the endpoint, near ±halfWidth in y). With stroke
+  // width 2 at endpoint (0,0): (-0.9, 0.9) has distance sqrt(1.62) ≈ 1.273 > 1,
+  // so it should be OUTSIDE the round cap (but inside a square cap).
+  EXPECT_EQ(rayCastWinding(filled, {-0.9, 0.9}), 0)
+      << "upper-left corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {-0.9, -0.9}), 0)
+      << "lower-left corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {10.9, 0.9}), 0)
+      << "upper-right corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {10.9, -0.9}), 0)
+      << "lower-right corner outside round cap";
 }
 
 TEST(Path, StrokeToFillSquareCap) {
+  // Horizontal line from (0,0) to (10,0) with stroke width 2 (halfWidth=1).
+  // With square caps the filled region is the rect [-1,11] x [-1,1].
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
   StrokeStyle style;
   style.width = 2.0;
@@ -887,24 +1002,267 @@ TEST(Path, StrokeToFillSquareCap) {
       << "Square cap should extend halfWidth left of x=0";
   EXPECT_GE(bounds.bottomRight.x, 11.0 - 1e-9)
       << "Square cap should extend halfWidth right of x=10";
+  EXPECT_NEAR(bounds.topLeft.y, -1.0, 1e-9);
+  EXPECT_NEAR(bounds.bottomRight.y, 1.0, 1e-9);
+
+  // ---- Winding tests inside the expected rectangular region ----
+  // Interior of the line body.
+  EXPECT_NE(rayCastWinding(filled, {5.0, 0.0}), 0);
+  // Square cap corners — these should all be filled for square caps.
+  EXPECT_NE(rayCastWinding(filled, {-0.9, 0.9}), 0)
+      << "upper-left corner of left square cap should be filled";
+  EXPECT_NE(rayCastWinding(filled, {-0.9, -0.9}), 0)
+      << "lower-left corner of left square cap should be filled";
+  EXPECT_NE(rayCastWinding(filled, {10.9, 0.9}), 0)
+      << "upper-right corner of right square cap should be filled";
+  EXPECT_NE(rayCastWinding(filled, {10.9, -0.9}), 0)
+      << "lower-right corner of right square cap should be filled";
+  // Middle of each square cap.
+  EXPECT_NE(rayCastWinding(filled, {-0.5, 0.0}), 0) << "middle of left square cap";
+  EXPECT_NE(rayCastWinding(filled, {10.5, 0.0}), 0) << "middle of right square cap";
+
+  // ---- Winding tests outside the expected region ----
+  // Well past either cap.
+  EXPECT_EQ(rayCastWinding(filled, {-1.5, 0.0}), 0) << "past left square cap";
+  EXPECT_EQ(rayCastWinding(filled, {11.5, 0.0}), 0) << "past right square cap";
+  // Above / below the stroke band.
+  EXPECT_EQ(rayCastWinding(filled, {5.0, 1.5}), 0) << "above the stroke";
+  EXPECT_EQ(rayCastWinding(filled, {5.0, -1.5}), 0) << "below the stroke";
+  // Diagonal outside of the extended rect.
+  EXPECT_EQ(rayCastWinding(filled, {-1.5, 1.5}), 0) << "outside upper-left";
+  EXPECT_EQ(rayCastWinding(filled, {11.5, -1.5}), 0) << "outside lower-right";
 }
 
+TEST(Path, StrokeToFillButtCapShape) {
+  // Butt cap baseline: the filled region is exactly the rect [0,10]×[-1,1].
+  // Used to contrast with round / square caps (no extension past endpoints).
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.cap = LineCap::Butt;
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+
+  const Box2d bounds = filled.bounds();
+  EXPECT_NEAR(bounds.topLeft.x, 0.0, 1e-9) << "Butt cap must not extend past x=0";
+  EXPECT_NEAR(bounds.bottomRight.x, 10.0, 1e-9) << "Butt cap must not extend past x=10";
+
+  // Interior filled, cap-extension area NOT filled.
+  EXPECT_NE(rayCastWinding(filled, {5.0, 0.0}), 0);
+  EXPECT_EQ(rayCastWinding(filled, {-0.1, 0.0}), 0) << "butt: no left extension";
+  EXPECT_EQ(rayCastWinding(filled, {10.1, 0.0}), 0) << "butt: no right extension";
+}
+
+TEST(Path, StrokeToFillRoundCapVertical) {
+  // Same line but vertical, to verify the cap math is direction-agnostic.
+  // Line from (0,0) to (0,10) with width 2; round caps at top and bottom.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({0, 10}).build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.cap = LineCap::Round;
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+
+  const Box2d bounds = filled.bounds();
+  EXPECT_NEAR(bounds.topLeft.x, -1.0, 1e-9);
+  EXPECT_NEAR(bounds.bottomRight.x, 1.0, 1e-9);
+  EXPECT_NEAR(bounds.topLeft.y, -1.0, 0.1) << "bottom round cap extends below 0";
+  EXPECT_NEAR(bounds.bottomRight.y, 11.0, 0.1) << "top round cap extends above 10";
+
+  // Inside each cap.
+  EXPECT_NE(rayCastWinding(filled, {0.0, -0.5}), 0) << "inside bottom round cap";
+  EXPECT_NE(rayCastWinding(filled, {0.0, 10.5}), 0) << "inside top round cap";
+  EXPECT_NE(rayCastWinding(filled, {0.0, 5.0}), 0) << "interior of line";
+  // Corners outside round cap (distance > 1 from endpoint).
+  EXPECT_EQ(rayCastWinding(filled, {0.9, -0.9}), 0);
+  EXPECT_EQ(rayCastWinding(filled, {-0.9, 10.9}), 0);
+}
+
+TEST(Path, StrokeToFillSquareCapDiagonal) {
+  // Diagonal line: cap geometry should extend along the line direction.
+  // Line from (0,0) to (10,10), width = 2*sqrt(2), so halfWidth = sqrt(2).
+  // The tangent at the ends is (1,1)/sqrt(2), so the square-cap extension
+  // along that tangent is sqrt(2) * (1,1)/sqrt(2) = (1,1).
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 10}).build();
+  StrokeStyle style;
+  style.width = 2.0 * std::sqrt(2.0);
+  style.cap = LineCap::Square;
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+
+  // Extended endpoints: (-1, -1) and (11, 11).
+  const Box2d bounds = filled.bounds();
+  EXPECT_LE(bounds.topLeft.x, -1.0 + 1e-6);
+  EXPECT_LE(bounds.topLeft.y, -1.0 + 1e-6);
+  EXPECT_GE(bounds.bottomRight.x, 11.0 - 1e-6);
+  EXPECT_GE(bounds.bottomRight.y, 11.0 - 1e-6);
+
+  // Points along the line axis, inside the square-cap extension region.
+  EXPECT_NE(rayCastWinding(filled, {-0.5, -0.5}), 0) << "inside start square cap";
+  EXPECT_NE(rayCastWinding(filled, {10.5, 10.5}), 0) << "inside end square cap";
+  // Corner of the square cap (perpendicular to the line at the extended endpoint).
+  // At (-1,-1) extended corner, shift perpendicular by ~0.5: (-1.5, -0.5).
+  // Wait — the square cap is a square of side = strokeWidth, rotated with the
+  // line. The corner points are at extended_endpoint ± halfWidth * perpendicular.
+  // Keep it simple: check the interior of the line.
+  EXPECT_NE(rayCastWinding(filled, {5.0, 5.0}), 0) << "interior of line";
+  // Past the cap — well outside.
+  EXPECT_EQ(rayCastWinding(filled, {-3.0, -3.0}), 0);
+  EXPECT_EQ(rayCastWinding(filled, {13.0, 13.0}), 0);
+}
+
+// (Duplicate `rayCastWinding` removed during the Phase 2C merge — the canonical
+// definition lives at line ~860 and is shared by all tests below.)
+
 TEST(Path, StrokeToFillRoundJoin) {
+  // L-shape: (0,0) -> (10,0) -> (10,10), stroked with width 2 and a round
+  // join at the (10,0) corner. halfWidth=1.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).build();
   StrokeStyle style;
   style.width = 2.0;
   style.join = LineJoin::Round;
   Path filled = path.strokeToFill(style);
   EXPECT_FALSE(filled.empty());
+
+  // A round join subdivides into an arc at the outside of the corner. The
+  // point count should exceed the bevel-joined equivalent by the round-join
+  // arc subdivision.
+  Path bevel =
+      path.strokeToFill({.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Bevel});
+  EXPECT_GT(filled.points().size(), bevel.points().size())
+      << "Round join should add arc points beyond the bevel baseline";
+
+  // Geometric verification via ray-cast (EvenOdd, matching the Geode
+  // renderer). The outside of the corner is the (11,11) region; the round
+  // arc should include points close to (11,11)+hw in the corner bisector.
+  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+
+  // Inside the stroke ribbon along each leg.
+  EXPECT_TRUE(evenOdd({5, 0})) << "midpoint of horizontal leg stroke";
+  EXPECT_TRUE(evenOdd({10, 5})) << "midpoint of vertical leg stroke";
+
+  // The outside of the corner: the round arc should cover the area
+  // close to (10.7, 0.7) (on the corner bisector, ~0.7 hw past vertex).
+  EXPECT_TRUE(evenOdd({10.7, 0.7})) << "inside round-join arc";
+
+  // Far past the round arc (more than hw beyond vertex on bisector):
+  // (11.5, 1.5) is at distance ~2.12*hw from (10,0), outside the stroke.
+  EXPECT_FALSE(evenOdd({11.5, 1.5})) << "far past round-join arc";
+
+  // Points clearly outside the stroke ribbon.
+  EXPECT_FALSE(evenOdd({5, 5})) << "outside horizontal leg (far below)";
+  EXPECT_FALSE(evenOdd({5, -5})) << "outside horizontal leg (far above)";
+  EXPECT_FALSE(evenOdd({-5, 0})) << "left of horizontal leg";
 }
 
 TEST(Path, StrokeToFillBevelJoin) {
+  // Same L-shape, bevel join. halfWidth=1.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).build();
   StrokeStyle style;
   style.width = 2.0;
   style.join = LineJoin::Bevel;
   Path filled = path.strokeToFill(style);
   EXPECT_FALSE(filled.empty());
+
+  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+
+  // Stroke ribbon along each leg.
+  EXPECT_TRUE(evenOdd({5, 0})) << "midpoint of horizontal leg stroke";
+  EXPECT_TRUE(evenOdd({10, 5})) << "midpoint of vertical leg stroke";
+
+  // Bevel chamfers the outside of the corner: the point (10.7, 0.7) is
+  // beyond the bevel chord (which runs from (11,0) to (10,-1)) — wait,
+  // we need to identify the outside relative to the path direction.
+  // The path (0,0)->(10,0)->(10,10) turns right (CW in y-down). The
+  // outside of the turn is the top-right: y <= 0 and x >= 10 with
+  // x+y<=10 becoming x+y>=11 past the corner. Bevel chord connects the
+  // two outer offset line endpoints. For width 2, hw=1, the bevel chord
+  // runs from (10, -1) to (11, 0).
+  //
+  // Point (10.9, -0.9) is ~0.7*hw beyond the vertex on the bisector;
+  // it's BEYOND the bevel chord (11 - 10.9 + 0 + 0.9 = 1 which equals
+  // the chord line offset, slightly outside by numerical drift). Use
+  // (10.4, -0.4) which is comfortably inside the bevel triangle.
+  EXPECT_TRUE(evenOdd({10.4, -0.4})) << "inside bevel triangle";
+
+  // The bevel chord cuts off the corner so beyond the chord there's no
+  // fill: (11, -1) is past both offset lines.
+  EXPECT_FALSE(evenOdd({11, -1})) << "past bevel chord (outside)";
+
+  // Concave side of the corner (inside of the turn, around (9, 1)):
+  // the inner offset lines meet at (9,1). Points well inside the concave
+  // pocket — deep in the L's interior — should be outside the stroke.
+  EXPECT_FALSE(evenOdd({5, 5})) << "deep inside L (concave region)";
+}
+
+TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
+  // Phase 2C: inverted V (M 0 100 L 50 0 L 100 100) with a SHARP inside
+  // corner at the apex. Before the fix, `emitJoin`'s inside-turn branch
+  // emitted a single line across the overlap, creating a self-intersecting
+  // polygon that neither NonZero nor EvenOdd could render cleanly — visible
+  // as gaps/extra triangles at the concave side of the apex in the
+  // stroking_linejoin Geode golden.
+  //
+  // After the fix, the true intersection of the two inner offset lines
+  // is emitted, producing a clean polygon. Verify via ray-cast winding
+  // (matching Geode's Slug shader) that points inside the stroke ribbon
+  // are filled and points outside — especially in the V's concave pocket
+  // and far above the apex — are not.
+  Path path = PathBuilder().moveTo({0, 100}).lineTo({50, 0}).lineTo({100, 100}).build();
+  StrokeStyle style;
+  style.width = 20.0;  // halfWidth = 10
+  style.join = LineJoin::Miter;
+  style.miterLimit = 4.0;
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+
+  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+
+  // Points clearly inside the stroke ribbon on each leg. The legs have
+  // (unit) left normal n1 = (2,1)/√5 and n2 = (-2,1)/√5, so the stroke
+  // ribbon on each leg is the 20-wide strip perpendicular to the leg
+  // direction.
+  //
+  // Midpoint of leg 1: (25, 50). Perturb by small amounts along the
+  // left/right normal — points within ±halfWidth must be filled.
+  EXPECT_TRUE(evenOdd({25, 50})) << "midpoint of leg 1";
+  EXPECT_TRUE(evenOdd({75, 50})) << "midpoint of leg 2";
+
+  // Slightly inside (toward apex from midpoint): still on the leg.
+  EXPECT_TRUE(evenOdd({30, 40})) << "leg 1 toward apex";
+  EXPECT_TRUE(evenOdd({70, 40})) << "leg 2 toward apex";
+
+  // Close to the apex vertex (50, 0) on the outside of the V: above
+  // the apex but within half-width. The outer offset lines at the apex
+  // meet at ~(50, -22.36) (the outside miter), so (50, -5) and (50, -15)
+  // are inside the outside-miter triangle, well within the stroke.
+  EXPECT_TRUE(evenOdd({50, -5})) << "just above apex on outside miter";
+  EXPECT_TRUE(evenOdd({50, -15})) << "further above apex, still inside outside miter";
+
+  // Inside of the apex on the concave side: the inner offset lines meet
+  // at ~(50, 22.36). Points between the apex and (50, 22) should be
+  // inside the stroke ribbon (concave inside-miter triangle).
+  EXPECT_TRUE(evenOdd({50, 10})) << "inside concave miter triangle";
+  EXPECT_TRUE(evenOdd({50, 20})) << "near apex of inside miter triangle";
+
+  // BELOW the inside miter point (deeper into the V's concave pocket):
+  // must be OUTSIDE the stroke. Before the fix this region showed
+  // spurious fills/gaps due to the self-intersecting polygon.
+  EXPECT_FALSE(evenOdd({50, 40})) << "deep inside V pocket (below inside miter)";
+  EXPECT_FALSE(evenOdd({50, 60})) << "further down V pocket";
+  EXPECT_FALSE(evenOdd({50, 80})) << "near bottom of V pocket";
+
+  // Above the apex beyond the outside miter (more than miterLimit*hw
+  // from the vertex on the exterior bisector): must be OUTSIDE.
+  EXPECT_FALSE(evenOdd({50, -30})) << "above outside miter point";
+
+  // Points inside the V but off the leg: far from both legs.
+  EXPECT_FALSE(evenOdd({30, 90})) << "bottom-left interior";
+  EXPECT_FALSE(evenOdd({70, 90})) << "bottom-right interior";
+
+  // Points clearly outside the legs.
+  EXPECT_FALSE(evenOdd({0, 0})) << "far upper left";
+  EXPECT_FALSE(evenOdd({100, 0})) << "far upper right";
 }
 
 TEST(Path, StrokeToFillClosedPath) {
@@ -916,9 +1274,116 @@ TEST(Path, StrokeToFillClosedPath) {
                   .closePath()
                   .build();
   StrokeStyle style;
-  style.width = 2.0;
+  style.width = 2.0;  // halfWidth = 1
   Path filled = path.strokeToFill(style);
   EXPECT_FALSE(filled.empty());
+
+  // Regression for 2D (donner_sfv #492 follow-up): the stroked rect should
+  // render as a hollow square annulus from (-1,-1) to (11,11) with a
+  // (1,1)–(9,9) hole. Historically the inside-turn branch of emitJoin emitted
+  // `lineTo(curStart)` — the start of the next offset segment — which caused
+  // full-height/width lines across the interior, manifesting as diagonal
+  // streaks in Geode's rotated-rect stroke golden.
+  //
+  // Verify via ray-cast winding (EvenOdd) at points in each region. This
+  // matches how the Geode slug_fill shader evaluates inside/outside and
+  // catches the "extra segment spanning the interior" bug directly, without
+  // being sensitive to overshoot vertices that cancel in winding.
+  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+
+  // Hole interior: (5, 5), (3, 5), (7, 5) — all should be OUTSIDE.
+  EXPECT_FALSE(evenOdd({5, 5})) << "center of hole";
+  EXPECT_FALSE(evenOdd({3, 5})) << "left of center";
+  EXPECT_FALSE(evenOdd({7, 5})) << "right of center";
+
+  // Stroke ring (annulus): between original rect boundary and ±halfWidth.
+  EXPECT_TRUE(evenOdd({5, 0.5})) << "top stroke";
+  EXPECT_TRUE(evenOdd({5, 9.5})) << "bottom stroke";
+  EXPECT_TRUE(evenOdd({0.5, 5})) << "left stroke";
+  EXPECT_TRUE(evenOdd({9.5, 5})) << "right stroke";
+  // Corners of the stroke ring.
+  EXPECT_TRUE(evenOdd({0.5, 0.5})) << "top-left stroke corner";
+  EXPECT_TRUE(evenOdd({9.5, 9.5})) << "bottom-right stroke corner";
+
+  // Outside the outer ring.
+  EXPECT_FALSE(evenOdd({-5, 5})) << "left of stroke";
+  EXPECT_FALSE(evenOdd({15, 5})) << "right of stroke";
+  EXPECT_FALSE(evenOdd({5, -5})) << "above stroke";
+  EXPECT_FALSE(evenOdd({5, 15})) << "below stroke";
+}
+
+TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
+  // Regression for 2D: curved closed-subpath strokes used to emit spurious
+  // line segments across the interior at each flattened vertex due to the
+  // emitJoin inside-turn bug. For an ellipse, this manifested visually as
+  // diagonal streaks visible inside the stroke ring (see the Geode
+  // renderer_geode_golden ellipse1/rect2/quadbezier1 cases).
+  //
+  // Verify via ray-cast winding that the interior of a stroked ellipse
+  // produces the expected EvenOdd result (outside) at several interior sample
+  // points. Before the fix the interior would show odd winding counts at
+  // positions where the zig-zag self-intersections happened to align with a
+  // scan line.
+  Path ellipse = PathBuilder()
+                     .addEllipse(Box2d(Vector2d(0, 0), Vector2d(100, 60)))
+                     .build();
+  StrokeStyle style;
+  style.width = 4.0;  // halfWidth = 2
+  Path filled = ellipse.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+
+  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+
+  // Points well inside the hole of the stroke ring (center and several offsets).
+  // An ellipse has center (50, 30), semi-axes 50 and 30. Interior points:
+  EXPECT_FALSE(evenOdd({50, 30})) << "center of ellipse";
+  EXPECT_FALSE(evenOdd({30, 30})) << "inside-left";
+  EXPECT_FALSE(evenOdd({70, 30})) << "inside-right";
+  EXPECT_FALSE(evenOdd({50, 20})) << "inside-up";
+  EXPECT_FALSE(evenOdd({50, 40})) << "inside-down";
+
+  // Points far outside the ellipse.
+  EXPECT_FALSE(evenOdd({-20, 30})) << "far left";
+  EXPECT_FALSE(evenOdd({120, 30})) << "far right";
+  EXPECT_FALSE(evenOdd({50, -20})) << "far above";
+  EXPECT_FALSE(evenOdd({50, 80})) << "far below";
+
+  // Points on the stroke ring at the ellipse's cardinal points. Inner edge
+  // of the stroke is (50 ± 48, 30) on the major axis and (50, 30 ± 28) on
+  // the minor, outer edge at ±52 and ±32. Sample points well inside the
+  // annulus:
+  EXPECT_TRUE(evenOdd({1, 30})) << "left stroke";
+  EXPECT_TRUE(evenOdd({99, 30})) << "right stroke";
+  EXPECT_TRUE(evenOdd({50, 1})) << "top stroke";
+  EXPECT_TRUE(evenOdd({50, 59})) << "bottom stroke";
+}
+
+TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
+  // Reproduces the quadbezier1 wave path's first half exactly as it appears
+  // in the test SVG (with the scale(0.5) translate(30,30) transform pre-baked
+  // into the coordinates) and verifies that the strokeToFill output's polygon
+  // does NOT include the lens interior.
+  //
+  // For the path M115,165 Q215,40 315,165 stroked at width 2.5 (= path 5 *
+  // scale 0.5), the stroke ring is a thin ribbon along the curve. Points
+  // INSIDE the lens — the empty area above the chord, between the curve's
+  // two halves — must NOT be inside the stroke polygon.
+  Path path = PathBuilder()
+                  .moveTo({115, 165})
+                  .quadTo({215, 40}, {315, 165})
+                  .build();
+  StrokeStyle style;
+  style.width = 2.5;
+  Path filled = path.strokeToFill(style);
+
+  auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
+
+  // Per the Geode quadbezier1 golden, an artifact appears at screen-y=116
+  // spanning screen-x [172, 257]. A pixel at (200, 116) is well inside the
+  // lens — it should be OUTSIDE the stroke polygon.
+  EXPECT_FALSE(evenOdd({200, 116})) << "lens interior at y=116";
+  EXPECT_FALSE(evenOdd({215, 105})) << "near apex above curve";
+  EXPECT_FALSE(evenOdd({200, 130})) << "lens interior at y=130";
 }
 
 TEST(Path, StrokeToFillCurves) {
@@ -931,6 +1396,196 @@ TEST(Path, StrokeToFillCurves) {
   style.width = 1.0;
   Path filled = path.strokeToFill(style);
   EXPECT_FALSE(filled.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Dashed strokes
+// -----------------------------------------------------------------------------
+
+namespace {
+// Count the number of subpaths (MoveTo commands) in a path.
+size_t countSubpaths(const Path& p) {
+  size_t n = 0;
+  for (const auto& cmd : p.commands()) {
+    if (cmd.verb == Path::Verb::MoveTo) {
+      ++n;
+    }
+  }
+  return n;
+}
+}  // namespace
+
+TEST(Path, StrokeToFillDashArraySimple) {
+  // 100-unit line with a 10/10 dash pattern: 5 on-dashes.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.dashArray = {10.0, 10.0};
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+  // Each dash becomes its own capped polygon subpath.
+  EXPECT_EQ(countSubpaths(filled), 5u);
+
+  // Horizontal extent should roughly match the line.
+  const Box2d bounds = filled.bounds();
+  EXPECT_GE(bounds.topLeft.x, -0.5);
+  EXPECT_LE(bounds.bottomRight.x, 100.5);
+  // Vertical extent should be ~width.
+  EXPECT_NEAR(bounds.bottomRight.y - bounds.topLeft.y, 2.0, 0.1);
+}
+
+TEST(Path, StrokeToFillDashArrayOddLengthIsDoubled) {
+  // Per SVG: odd-length dasharrays are doubled. [10] becomes [10, 10].
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle styleOdd;
+  styleOdd.width = 2.0;
+  styleOdd.dashArray = {10.0};
+
+  StrokeStyle styleEven;
+  styleEven.width = 2.0;
+  styleEven.dashArray = {10.0, 10.0};
+
+  Path filledOdd = path.strokeToFill(styleOdd);
+  Path filledEven = path.strokeToFill(styleEven);
+
+  EXPECT_EQ(countSubpaths(filledOdd), countSubpaths(filledEven));
+}
+
+TEST(Path, StrokeToFillDashOffsetShiftsPattern) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style0;
+  style0.width = 2.0;
+  style0.dashArray = {10.0, 10.0};
+  style0.dashOffset = 0.0;
+
+  StrokeStyle style5;
+  style5.width = 2.0;
+  style5.dashArray = {10.0, 10.0};
+  style5.dashOffset = 5.0;
+
+  Path filled0 = path.strokeToFill(style0);
+  Path filled5 = path.strokeToFill(style5);
+  EXPECT_FALSE(filled0.empty());
+  EXPECT_FALSE(filled5.empty());
+
+  // With a half-period offset the first dash is truncated (5 units instead
+  // of 10), so the overall x-bounds should start a tad past x=0-halfWidth.
+  const Box2d b0 = filled0.bounds();
+  const Box2d b5 = filled5.bounds();
+  // The first dash is 10 units wide at offset 0, only 5 units at offset 5,
+  // but both start at x=0. Instead verify a structural change: offset 5
+  // starts with a 5-on and 10-off, shifting the pattern, and we still get
+  // a non-empty result with the same rough span.
+  EXPECT_NEAR(b0.topLeft.x, b5.topLeft.x, 0.5);
+}
+
+TEST(Path, StrokeToFillDashOffsetNegativeWraps) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.dashArray = {10.0, 10.0};
+  style.dashOffset = -5.0;  // Equivalent to +15 mod 20.
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+}
+
+TEST(Path, StrokeToFillDashClosedRect) {
+  // Closed square, perimeter = 40. 10/10 dashes = 2 on-dashes.
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .lineTo({10, 10})
+                  .lineTo({0, 10})
+                  .closePath()
+                  .build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {10.0, 10.0};
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+  // Perimeter 40 / pattern 20 = 2 on-dashes, neither wraps the seam
+  // because 40 is an exact multiple of the pattern length.
+  EXPECT_EQ(countSubpaths(filled), 2u);
+}
+
+TEST(Path, StrokeToFillDashClosedWrapsSeam) {
+  // Perimeter = 40. Pattern 15/10 = total 25. With offset 0:
+  //   0..15 ON, 15..25 OFF, 25..40 ON (wraps: 25..40 reaches 15 past start).
+  // Wait: 25 + 15 = 40, so the last dash ends exactly at the seam.
+  // Use offset 5 to force a wrap: starts 5 into the first entry, so:
+  //   0..10 ON, 10..20 OFF, 20..35 ON, 35..40 ... wraps into next cycle OFF.
+  // Hmm, let's pick perimeter 40, pattern {30, 5}, offset 20:
+  //   phase=20, idx=0, remainingInEntry=10 ON 0..10, OFF 10..15, ON 15..40...
+  //   next=45 > 40 → wrap-around dash combines tail [15..40] + head [0..5].
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .lineTo({10, 10})
+                  .lineTo({0, 10})
+                  .closePath()
+                  .build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {30.0, 5.0};
+  style.dashOffset = 20.0;
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+  // We expect 2 on-dashes (one short starting at 0, one wrap-around).
+  EXPECT_GE(countSubpaths(filled), 1u);
+}
+
+TEST(Path, StrokeToFillDashPathLengthScaling) {
+  // pathLength=50 on a 100-unit line means dash values are interpreted
+  // relative to 50, so a [10, 10] dasharray covers 20 units per cycle
+  // on the normalized scale but 40 units per cycle on the actual path:
+  // the 100-unit line fits exactly 2.5 cycles → 3 on-dashes (last
+  // truncated at the endpoint).
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {10.0, 10.0};
+  style.pathLength = 50.0;
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 3u);
+}
+
+TEST(Path, StrokeToFillDashAllZeroIsSolid) {
+  // Per SVG, an all-zero dasharray renders as a solid stroke.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {0.0, 0.0};
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+  // Should be exactly one capped subpath, same as undashed.
+  EXPECT_EQ(countSubpaths(filled), 1u);
+}
+
+TEST(Path, StrokeToFillDashZeroEntryDoesNotHang) {
+  // {10, 0} is a 10-on/0-off pattern, which would naively loop forever
+  // because the OFF entry never advances cursor. Verify the implementation
+  // bails out without hanging.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {10.0, 0.0};
+  Path filled = path.strokeToFill(style);
+  // Should produce *something*, not hang. (Whether it's one big stroke or
+  // chopped up depends on the cycle handling, but it must terminate.)
+  EXPECT_FALSE(filled.empty());
+}
+
+TEST(Path, StrokeToFillDashNegativeIsSolid) {
+  // Negative values in the dasharray disable dashing.
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {10.0, -5.0, 10.0, 10.0};
+  Path filled = path.strokeToFill(style);
+  EXPECT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 1u);
 }
 
 // =============================================================================

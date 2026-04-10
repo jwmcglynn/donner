@@ -231,5 +231,179 @@ TEST_F(RendererGeodeGoldenTests, StrokingStrokewidth) {
                          "donner/svg/renderer/testdata/golden/geode/stroking_strokewidth.png");
 }
 
+// ----------------------------------------------------------------------------
+// Linear gradient coverage (Phase 2E). These exercise the gradient-fill
+// pipeline end-to-end: `GradientSystem` resolution in the driver →
+// `RendererGeode::drawPaintedPath` → `GeoEncoder::fillPathLinearGradient` →
+// `shaders/slug_gradient.wgsl`.
+//
+// Each SVG isolates a specific axis of gradient behavior:
+//  - Basic: objectBoundingBox default units, horizontal pad.
+//  - UserSpace: userSpaceOnUse + gradientTransform (rotate).
+//  - Spread: all three spread modes (pad/reflect/repeat) side by side.
+//  - Stroke: stroked rect outline filled with a gradient, verifying the
+//    stroke dispatch reuses the original path bounds for gradient coords.
+// ----------------------------------------------------------------------------
+
+/// Basic linear gradient: red → blue horizontal, `objectBoundingBox` units.
+TEST_F(RendererGeodeGoldenTests, LinearGradientBasic) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_basic.svg",
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_basic.png");
+}
+
+/// `userSpaceOnUse` gradient with a `gradientTransform="rotate(...)"`.
+TEST_F(RendererGeodeGoldenTests, LinearGradientUserSpace) {
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/linear_gradient_userspace.svg",
+      "donner/svg/renderer/testdata/golden/geode/linear_gradient_userspace.png");
+}
+
+/// Pad / reflect / repeat spread modes rendered side by side.
+TEST_F(RendererGeodeGoldenTests, LinearGradientSpread) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_spread.svg",
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_spread.png");
+}
+
+/// Stroke outline filled with a linear gradient.
+TEST_F(RendererGeodeGoldenTests, LinearGradientStroke) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_stroke.svg",
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_stroke.png");
+}
+
+// ----------------------------------------------------------------------------
+// Radial gradient coverage (Phase 2F). Same end-to-end pipeline as the linear
+// tests above but exercising the radial branch of `slug_gradient.wgsl` and
+// `RendererGeode::resolveRadialGradientParams`. Sweep / conic gradients are
+// not yet supported because the donner SVG parser does not yet expose them.
+// ----------------------------------------------------------------------------
+
+/// Basic radial gradient: white center → black rim, `objectBoundingBox` units,
+/// concentric (no focal point), pad spread. Exercises the `F == C, fr == 0`
+/// fast path of the radial-`t` derivation.
+TEST_F(RendererGeodeGoldenTests, RadialGradientBasic) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_basic.svg",
+                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_basic.png");
+}
+
+/// `userSpaceOnUse` radial gradient with an anisotropic `gradientTransform`,
+/// verifying the `gradientFromPath` inverse is applied correctly per pixel.
+TEST_F(RendererGeodeGoldenTests, RadialGradientUserSpace) {
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/radial_gradient_userspace.svg",
+      "donner/svg/renderer/testdata/golden/geode/radial_gradient_userspace.png");
+}
+
+/// Off-center focal point inside the outer circle. Brightest pixel should
+/// land at (fx, fy), exercising the general two-circle quadratic.
+TEST_F(RendererGeodeGoldenTests, RadialGradientFocal) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_focal.svg",
+                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_focal.png");
+}
+
+/// Pad / reflect / repeat spread modes for a radial gradient covering only
+/// the central 30% of each strip.
+TEST_F(RendererGeodeGoldenTests, RadialGradientSpread) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_spread.svg",
+                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_spread.png");
+}
+
+/// Stroke outline filled with a radial gradient — same dispatch as the
+/// linear stroke test but routed through `fillPathRadialGradient`.
+TEST_F(RendererGeodeGoldenTests, RadialGradientStroke) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_stroke.svg",
+                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_stroke.png");
+}
+
+// ----------------------------------------------------------------------------
+// `<image>` element round-trips through Phase 2G's textured-quad path.
+// Both SVGs embed a 2x2 RGBA PNG via a data: URL so external image loading
+// doesn't factor into the test, only the CPU→GPU upload and the blit
+// pipeline.
+// ----------------------------------------------------------------------------
+
+/// 2x2 data-URL PNG with `image-rendering: pixelated` scaled to 32×32.
+/// Nearest-neighbor sampling should produce four 16×16 solid quadrants.
+TEST_F(RendererGeodeGoldenTests, ImageDataUrlPixelated) {
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/image_data_url_pixelated.svg",
+      "donner/svg/renderer/testdata/golden/geode/image_data_url_pixelated.png");
+}
+
+/// Same 2x2 PNG over an opaque white background at 50% opacity using the
+/// default (bilinear) sampling filter. Exercises both the `opacity`
+/// uniform and the premultiplied-source-over blend path.
+TEST_F(RendererGeodeGoldenTests, ImageDataUrlOpacity) {
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/image_data_url_opacity.svg",
+      "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity.png");
+}
+
+// ----------------------------------------------------------------------------
+// Pattern fill tests (Phase 2H). Exercise the offscreen tile rendering path
+// and the Slug fill shader's pattern-sampling mode. Tile content is
+// rendered into an intermediate `wgpu::Texture` via a nested `GeoEncoder`,
+// then sampled as the fill paint when the outer path is rasterised.
+// ----------------------------------------------------------------------------
+
+/// 20x20 userSpaceOnUse tile with a single solid-grey square spanning the
+/// whole tile. The fill region is tile-aligned, so every tile boundary
+/// lands on integer pixels and the result should be a uniform grey square.
+TEST_F(RendererGeodeGoldenTests, PatternSolid) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/geode_pattern_solid.svg",
+                         "donner/svg/renderer/testdata/golden/geode/geode_pattern_solid.png");
+}
+
+/// 20x20 checkerboard-style tile with a grey top-left square and a green
+/// bottom-right square. Tests multi-draw tile rendering — the nested
+/// encoder records two distinct fills into the offscreen tile texture.
+TEST_F(RendererGeodeGoldenTests, PatternChecker) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/geode_pattern_checker.svg",
+                         "donner/svg/renderer/testdata/golden/geode/geode_pattern_checker.png");
+}
+
+/// Pattern whose fill region is intentionally misaligned with the tile
+/// grid (starts at x=25 with a 20-unit tile). Exercises the shader's
+/// fract()-based wrap for non-zero pattern origin offsets.
+TEST_F(RendererGeodeGoldenTests, PatternOffset) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/geode_pattern_offset.svg",
+                         "donner/svg/renderer/testdata/golden/geode/geode_pattern_offset.png");
+}
+
+/// Pattern fill on a non-rectangular triangle path. Exercises the Slug
+/// winding-number coverage integrated with pattern texture sampling: the
+/// shader must discard exterior pixels based on the fill rule while still
+/// sampling the repeating pattern for interior pixels.
+TEST_F(RendererGeodeGoldenTests, PatternNonRect) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/geode_pattern_nonrect.svg",
+                         "donner/svg/renderer/testdata/golden/geode/geode_pattern_nonrect.png");
+}
+
+// ----------------------------------------------------------------------------
+// Dashed strokes (Phase 2A: stroke-dasharray, stroke-dashoffset, pathLength).
+//
+// These exercise `Path::strokeToFill`'s dash splitter, which extracts each
+// on-dash sub-polyline along the source subpath and offsets it independently
+// (so every dash gets its own pair of caps). Each test uses a dedicated
+// per-Geode golden generated from the same backend that's being tested.
+// ----------------------------------------------------------------------------
+
+/// Multiple horizontal lines with varied dasharray patterns.
+TEST_F(RendererGeodeGoldenTests, StrokingDasharray) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_dasharray.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_dasharray.png");
+}
+
+/// Same dash pattern at four different `stroke-dashoffset` values.
+TEST_F(RendererGeodeGoldenTests, StrokingDashoffset) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_dashoffset.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_dashoffset.png");
+}
+
+/// `pathLength` attribute scaling dash distances.
+TEST_F(RendererGeodeGoldenTests, StrokingPathlength) {
+  compareWithGeodeGolden("donner/svg/renderer/testdata/stroking_pathlength.svg",
+                         "donner/svg/renderer/testdata/golden/geode/stroking_pathlength.png");
+}
+
 }  // namespace
 }  // namespace donner::svg

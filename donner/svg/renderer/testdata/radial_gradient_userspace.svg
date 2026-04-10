@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <!-- userSpaceOnUse with a non-uniform gradientTransform — verifies the
+         gradientFromPath path goes through the inverse correctly even when
+         the transform is anisotropic. -->
+    <radialGradient id="g" gradientUnits="userSpaceOnUse"
+                    cx="32" cy="32" r="24"
+                    gradientTransform="scale(1.0 0.5) translate(0 32)">
+      <stop offset="0" stop-color="#ffcc00"/>
+      <stop offset="0.5" stop-color="#009933"/>
+      <stop offset="1" stop-color="#0033aa"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" fill="url(#g)"/>
+</svg>

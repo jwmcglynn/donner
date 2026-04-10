@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="64" viewBox="0 0 192 64">
+  <!-- Three strips showing pad / reflect / repeat spread methods. The
+       gradient covers only the central 40% of each strip so the spread
+       behavior at the edges is visible. -->
+  <defs>
+    <linearGradient id="gp" gradientUnits="objectBoundingBox" x1="0.3" y1="0" x2="0.7" y2="0" spreadMethod="pad">
+      <stop offset="0" stop-color="red"/>
+      <stop offset="1" stop-color="blue"/>
+    </linearGradient>
+    <linearGradient id="gr" gradientUnits="objectBoundingBox" x1="0.3" y1="0" x2="0.7" y2="0" spreadMethod="reflect">
+      <stop offset="0" stop-color="red"/>
+      <stop offset="1" stop-color="blue"/>
+    </linearGradient>
+    <linearGradient id="grp" gradientUnits="objectBoundingBox" x1="0.3" y1="0" x2="0.7" y2="0" spreadMethod="repeat">
+      <stop offset="0" stop-color="red"/>
+      <stop offset="1" stop-color="blue"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" fill="url(#gp)"/>
+  <rect x="64" y="0" width="64" height="64" fill="url(#gr)"/>
+  <rect x="128" y="0" width="64" height="64" fill="url(#grp)"/>
+</svg>

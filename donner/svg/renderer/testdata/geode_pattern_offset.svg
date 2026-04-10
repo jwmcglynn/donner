@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+    <title>Geode Phase 2H: pattern with non-tile-aligned fill region</title>
+
+    <!--
+      Pattern whose fill region (25..105 on both axes) is deliberately NOT
+      aligned to the 20-unit tile grid. The tile origin stays at (0,0) in
+      target space, so the first visible tile is a partial one starting
+      mid-cell. This exercises the shader's fract()-based wrap math for
+      non-zero sample offsets.
+    -->
+    <pattern id="patt1" patternUnits="userSpaceOnUse" width="20" height="20">
+      <rect x="0" y="0" width="10" height="10" fill="#cccccc"/>
+      <rect x="10" y="10" width="10" height="10" fill="#3366aa"/>
+    </pattern>
+
+    <rect x="25" y="25" width="80" height="80" fill="url(#patt1)"/>
+</svg>

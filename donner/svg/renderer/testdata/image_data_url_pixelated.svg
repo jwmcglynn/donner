@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="64" height="64" viewBox="0 0 64 64">
+  <!-- Solid black background so anti-aliased pixels at image edges have
+       a deterministic fallback color. -->
+  <rect x="0" y="0" width="64" height="64" fill="black" />
+  <!-- 2x2 embedded PNG: checkerboard of red/green/blue/magenta. Stretched
+       to fill a 32x32 destination rect with `image-rendering: pixelated`
+       so each 16x16 quadrant of the output is a single pure color. -->
+  <image x="16" y="16" width="32" height="32"
+         style="image-rendering: pixelated"
+         href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyB9H8g/R8ARssI+PwctGoAAAAASUVORK5CYII=" />
+</svg>

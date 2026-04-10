@@ -54,6 +54,22 @@ struct StrokeStyle {
   LineCap cap = LineCap::Butt;     ///< Line cap style for open subpath endpoints.
   LineJoin join = LineJoin::Miter;  ///< Line join style for corners between segments.
   double miterLimit = 4.0;     ///< Maximum miter length ratio (as per SVG stroke-miterlimit).
+
+  /// Dash pattern lengths alternating on/off segments (SVG `stroke-dasharray`).
+  /// Empty vector means solid stroke. If the vector has an odd number of
+  /// entries, the pattern is implicitly doubled per the SVG spec.
+  std::vector<double> dashArray;
+
+  /// Initial phase offset along the dash pattern (SVG `stroke-dashoffset`).
+  /// Positive values shift the dash pattern forward; negative values shift it
+  /// backward. The phase wraps modulo the pattern length.
+  double dashOffset = 0.0;
+
+  /// SVG `pathLength` attribute. When non-zero, dasharray values and dashoffset
+  /// are interpreted relative to this length rather than the actual path
+  /// length, so all dash distances are scaled by `actualLength / pathLength`.
+  /// Zero (the default) means use the actual path length unchanged.
+  double pathLength = 0.0;
 };
 
 class PathBuilder;

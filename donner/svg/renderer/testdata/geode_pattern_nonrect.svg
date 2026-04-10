@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+    <title>Geode Phase 2H: pattern fill on a non-rectangular path</title>
+
+    <!--
+      Pattern fill on a triangle. Exercises the Slug winding-number coverage
+      test with pattern sampling: only pixels inside the triangle receive the
+      tiled pattern, so the triangle edges should be pattern-filled and the
+      exterior should remain transparent. This is the key guarantee of
+      routing pattern fills through `fillPathPattern` rather than via a
+      textured-quad over the bounding box.
+    -->
+    <pattern id="patt1" patternUnits="userSpaceOnUse" width="16" height="16">
+      <rect x="0" y="0" width="8" height="8" fill="#d03030"/>
+      <rect x="8" y="8" width="8" height="8" fill="#2020c0"/>
+    </pattern>
+
+    <path d="M 60 15 L 105 100 L 15 100 Z" fill="url(#patt1)"/>
+</svg>
