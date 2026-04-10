@@ -661,8 +661,13 @@ struct RendererGeode::Impl {
           return;
         }
         // Recognized as radial but otherwise unusable (empty stops, focal
-        // circle containing outer, singular transform). Drop the draw.
-        return;
+        // circle containing outer, singular transform, degenerate
+        // objectBoundingBox frame). Fall through to the paint-server
+        // fallback below — per SVG2, a gradient paint server that can't
+        // be instantiated on a given element should use the reference's
+        // fallback color (e.g., `stroke="url(#lg) green"` paints green on
+        // a zero-height horizontal line where the objectBoundingBox
+        // gradient can't be applied).
       }
 
       // Neither linear nor radial — could be a pattern, a sweep gradient
