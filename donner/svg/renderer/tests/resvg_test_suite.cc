@@ -114,8 +114,8 @@ INSTANTIATE_TEST_SUITE_P(Fill, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix(
                              "a-fill",  //
                              {
-                                 {"a-fill-010.svg", Params::Skip()},  // UB: rgb(int int int)
-                                 {"a-fill-015.svg", Params::Skip()},  // UB: ICC color
+                                 {"a-fill-010.svg", Params::RenderOnly()},  // UB: rgb(int int int)
+                                 {"a-fill-015.svg", Params::RenderOnly()},  // UB: ICC color
                                  {"a-fill-027.svg",
                                   Params::Skip()},  // Not impl: Fallback with icc-color
                                  // Text fill tests: Skia's native glyph rendering produces
@@ -182,7 +182,7 @@ INSTANTIATE_TEST_SUITE_P(
                  "donner/svg/renderer/testdata/golden/"
                  "resvg-a-font-size-008.png")},       // Donner uses CSS Fonts Level 4, which has
                                                       // different scaling than resvg's CSS2 ratios.
-            {"a-font-size-013.svg", Params::Skip()},  // UB: negative font size
+            {"a-font-size-013.svg", Params::RenderOnly()},  // UB: negative font size
         })),
     TestNameFromFilename);
 
@@ -206,7 +206,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params().requireFeature(RendererBackendFeature::TextFull)},  // Arabic text
             {"a-letter-spacing-009.svg",
              Params::Skip()},  // Needs BiDi: mixed LTR Latin + RTL Arabic in one span
-            {"a-letter-spacing-010.svg", Params::Skip()},  // UB: negative letter-spacing
+            {"a-letter-spacing-010.svg", Params::RenderOnly()},  // UB: negative letter-spacing
             {"a-letter-spacing-011.svg",
              Params::Skip()},  // Bug? We render with a different CJK glyph. Wrong font?
         })),
@@ -248,14 +248,16 @@ INSTANTIATE_TEST_SUITE_P(
             {"a-stroke-007.svg", Params::WithThreshold(0.05f)},  // AA artifacts
             {"a-stroke-008.svg", Params::Skip()},                // Bug: Gradient stroke on text
             {"a-stroke-009.svg", Params::WithThreshold(0.1f)},   // AA artifacts
-            {"a-stroke-dasharray-007.svg", Params::Skip()},      // UB (negative values)
-            {"a-stroke-dasharray-009.svg", Params::Skip()},      // UB (negative sum)
+            {"a-stroke-dasharray-007.svg", Params::RenderOnly()},  // UB (negative values)
+            {"a-stroke-dasharray-009.svg", Params::RenderOnly()},  // UB (negative sum)
             {"a-stroke-dasharray-013.svg",
              Params::WithThreshold(0.13f)},  // Larger threshold due to anti-aliasing artifacts.
             {"a-stroke-linejoin-004.svg",
-             Params::Skip()},  // UB (SVG 2), no UA supports `miter-clip`
-            {"a-stroke-linejoin-005.svg", Params::Skip()},  // UB (SVG 2), no UA supports `arcs`
-            {"a-stroke-width-004.svg", Params::Skip()},     // UB: Nothing should be rendered
+             Params::RenderOnly()},  // UB (SVG 2), no UA supports `miter-clip`
+            {"a-stroke-linejoin-005.svg",
+             Params::RenderOnly()},  // UB (SVG 2), no UA supports `arcs`
+            {"a-stroke-width-004.svg",
+             Params::RenderOnly()},  // UB: Nothing should be rendered
         })),
     TestNameFromFilename);
 
@@ -341,7 +343,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix("a-word-spacing",
                                 {
                                     {"a-word-spacing-007.svg",
-                                     Params::Skip()},  // UB: word-spacing=-10000
+                                     Params::RenderOnly()},  // UB: word-spacing=-10000
                                 })),
     TestNameFromFilename);
 
@@ -368,8 +370,9 @@ INSTANTIATE_TEST_SUITE_P(
                                               // implemented, mixed language
             {"a-writing-mode-015.svg",
              Params::Skip().onlyTextFull()},             // Non-ascii text, bug: CJK punctuation
-            {"a-writing-mode-016.svg", Params::Skip()},  // UB: tb with rotate
-            {"a-writing-mode-017.svg", Params::Skip()},  // UB: tb with rotate and underline
+            {"a-writing-mode-016.svg", Params::RenderOnly()},  // UB: tb with rotate
+            {"a-writing-mode-017.svg",
+             Params::RenderOnly()},  // UB: tb with rotate and underline
             {"a-writing-mode-019.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
             {"a-writing-mode-018.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dx`
             {"a-writing-mode-020.svg", Params::Skip()},  // Bug: `writing-mode=tb` with `dy`
@@ -393,7 +396,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-clipPath-011.svg", Params::Skip()},  // Not impl: clipPath with <text> children
             {"e-clipPath-012.svg", Params::Skip()},  // Not impl: clipPath with <text> children
             {"e-clipPath-034.svg", Params::Skip()},  // Bug: Nested clip-path not working
-            {"e-clipPath-042.svg", Params::Skip()},  // UB: on root `<svg>` without size
+            {"e-clipPath-042.svg",
+             Params::RenderOnly()},  // UB: on root `<svg>` without size
             {"e-clipPath-044.svg", Params::Skip()},  // Not impl: <use> child
             {"e-clipPath-046.svg", Params::Skip()},  // Not impl: <switch>
         })),
@@ -437,8 +441,8 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-feColorMatrix-005.svg", Params::WithThreshold(0.05f)},  // identity matrix
             {"e-feColorMatrix-006.svg", Params::WithThreshold(0.05f)},  // non-normalized values
             {"e-feColorMatrix-007.svg", Params::WithThreshold(0.05f)},  // saturate
-            {"e-feColorMatrix-008.svg", Params::Skip()},                // saturate -0.5 (UB)
-            {"e-feColorMatrix-009.svg", Params::Skip()},                // saturate 99999 (UB)
+            {"e-feColorMatrix-008.svg", Params::RenderOnly()},          // saturate -0.5 (UB)
+            {"e-feColorMatrix-009.svg", Params::RenderOnly()},          // saturate 99999 (UB)
             {"e-feColorMatrix-010.svg", Params::WithThreshold(0.05f)},  // identity saturate
             {"e-feColorMatrix-011.svg", Params::WithThreshold(0.05f)},  // hueRotate(30)
             {"e-feColorMatrix-012.svg", Params::WithThreshold(0.05f)},  // hueRotate(0) identity
@@ -462,13 +466,14 @@ INSTANTIATE_TEST_SUITE_P(
         {
             {"e-feConvolveMatrix-014.svg",
              Params::RenderOnly()},  // Skia MatrixConvolution edge shift vs tiny-skia
-            {"e-feConvolveMatrix-015.svg", Params::Skip()},  // UB: bias=0.5
-            {"e-feConvolveMatrix-016.svg", Params::Skip()},  // UB: bias=-0.5
-            {"e-feConvolveMatrix-017.svg", Params::Skip()},  // UB: bias=9999
+            {"e-feConvolveMatrix-015.svg", Params::RenderOnly()},  // UB: bias=0.5
+            {"e-feConvolveMatrix-016.svg", Params::RenderOnly()},  // UB: bias=-0.5
+            {"e-feConvolveMatrix-017.svg", Params::RenderOnly()},  // UB: bias=9999
             {"e-feConvolveMatrix-022.svg",
              Params::WithThreshold(kDefaultThreshold,
                                    200)},  // Minor algorithm differences on edge handling (180px)
-            {"e-feConvolveMatrix-023.svg", Params::Skip()},  // UB: wrap with oversized kernel
+            {"e-feConvolveMatrix-023.svg",
+             Params::RenderOnly()},  // UB: wrap with oversized kernel
         },
         kFilterDefaultParams)),
     TestNameFromFilename);
@@ -622,7 +627,7 @@ INSTANTIATE_TEST_SUITE_P(FeTile, ImageComparisonTestFixture,
                          ValuesIn(getTestsWithPrefix("e-feTile",
                                                      {
                                                          {"e-feTile-007.svg",
-                                                          Params::Skip()},  // UB: complex transform
+                                                          Params::RenderOnly()},  // UB: complex transform
                                                      },
                                                      kFilterDefaultParams)),
                          TestNameFromFilename);
@@ -632,7 +637,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-feTurbulence",
         {
-            {"e-feTurbulence-017.svg", Params::Skip()},                // UB: stitchTiles=stitch
+            {"e-feTurbulence-017.svg", Params::RenderOnly()},          // UB: stitchTiles=stitch
             {"e-feTurbulence-018.svg", Params::WithThreshold(0.05f)},  // Minor shading differences
             {"e-feTurbulence-019.svg", Params::WithThreshold(0.05f)},  // Minor shading differences
         },
@@ -650,13 +655,13 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-filter-027.svg", Params::Skip()},  // Bug: We don't blur the right edge
             {"e-filter-032.svg", Params::Skip()},  // in=BackgroundImage (deprecated SVG 1.1)
             {"e-filter-033.svg", Params::Skip()},  // in=BackgroundAlpha (deprecated SVG 1.1)
-            {"e-filter-034.svg", Params::Skip()},  // UB: in=FillPaint
-            {"e-filter-035.svg", Params::Skip()},  // UB: in=StrokePaint
-            {"e-filter-036.svg", Params::Skip()},  // UB: in=FillPaint gradient
-            {"e-filter-037.svg", Params::Skip()},  // UB: in=FillPaint pattern
-            {"e-filter-038.svg", Params::Skip()},  // UB: in=FillPaint on group
-            {"e-filter-060.svg", Params::Skip()},  // UB: Filter on the root `svg`
-            {"e-filter-065.svg", Params::Skip()},  // UB: in=FillPaint on empty group
+            {"e-filter-034.svg", Params::RenderOnly()},  // UB: in=FillPaint
+            {"e-filter-035.svg", Params::RenderOnly()},  // UB: in=StrokePaint
+            {"e-filter-036.svg", Params::RenderOnly()},  // UB: in=FillPaint gradient
+            {"e-filter-037.svg", Params::RenderOnly()},  // UB: in=FillPaint pattern
+            {"e-filter-038.svg", Params::RenderOnly()},  // UB: in=FillPaint on group
+            {"e-filter-060.svg", Params::RenderOnly()},  // UB: Filter on the root `svg`
+            {"e-filter-065.svg", Params::RenderOnly()},  // UB: in=FillPaint on empty group
         },
         kFilterDefaultParams)),
     TestNameFromFilename);
@@ -668,10 +673,11 @@ INSTANTIATE_TEST_SUITE_P(
     Image, ImageComparisonTestFixture,
     ValuesIn(getTestsWithPrefix("e-image",
                                 {
-                                    {"e-image-029.svg", Params::Skip()},  // UB: No width and height
-                                    {"e-image-030.svg", Params::Skip()},  // UB: No width
-                                    {"e-image-031.svg", Params::Skip()},  // UB: No height
-                                    {"e-image-032.svg", Params::Skip()},  // UB: Float size
+                                    {"e-image-029.svg",
+                                     Params::RenderOnly()},  // UB: No width and height
+                                    {"e-image-030.svg", Params::RenderOnly()},  // UB: No width
+                                    {"e-image-031.svg", Params::RenderOnly()},  // UB: No height
+                                    {"e-image-032.svg", Params::RenderOnly()},  // UB: Float size
                                     {"e-image-040.svg", Params::Skip()},  // Not impl: External URLs
                                     {"e-image-041.svg", Params::Skip()},  // Not impl: External URLs
                                 },
@@ -694,7 +700,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix("e-linearGradient",
                                 {
                                     {"e-linearGradient-037.svg",
-                                     Params::Skip()},  // UB: Invalid `gradientTransform`
+                                     Params::RenderOnly()},  // UB: Invalid `gradientTransform`
                                 })),
     TestNameFromFilename);
 
@@ -703,7 +709,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-marker",
         {
-            {"e-marker-008.svg", Params::Skip()},  // UB: with `viewBox`
+            {"e-marker-008.svg", Params::RenderOnly()},  // UB: with `viewBox`
             {"e-marker-017.svg", Params::Skip()},  // Not impl: `text`
             {"e-marker-018.svg",
              Params::WithThreshold(kDefaultThreshold, 110)},  // Minor AA diffs on Skia text_full
@@ -712,7 +718,7 @@ INSTANTIATE_TEST_SUITE_P(
                                         "resvg-e-marker-019.png")},  // We (correctly)
                                                                      // apply opacity
                                                                      // on image
-            {"e-marker-032.svg", Params::Skip()},                    // UB: Target with subpaths
+            {"e-marker-032.svg", Params::RenderOnly()},              // UB: Target with subpaths
             {"e-marker-044.svg", Params::Skip()},                    // Bug: Multiple closepaths
             // Resvg bug? Direction to place markers at the beginning/end of closed shapes.
             {"e-marker-045.svg", Params::WithGoldenOverride(
@@ -730,7 +736,7 @@ INSTANTIATE_TEST_SUITE_P(
         "e-mask",
         {
             {"e-mask-017.svg", Params::Skip()},  // Not implemented: color-interpolation linearRGB
-            {"e-mask-022.svg", Params::Skip()},  // UB: Recursive on child
+            {"e-mask-022.svg", Params::RenderOnly()},  // UB: Recursive on child
             {"e-mask-026.svg", Params::Skip()},  // Non-text mask regression kept out of text stack
             {"e-mask-029.svg",
              Params::WithThreshold(0.1f)},  // Mask with <image> (bilinear edge diffs)
@@ -745,7 +751,7 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsWithPrefix(
         "e-pattern",
         {
-            {"e-pattern-003.svg", Params::Skip()},  // UB: overflow=visible
+            {"e-pattern-003.svg", Params::RenderOnly()},  // UB: overflow=visible
             {"e-pattern-008.svg",
              Params::WithThreshold(kDefaultThreshold, 250)},  // Skia pattern AA
             {"e-pattern-010.svg",
@@ -760,7 +766,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.
             {"e-pattern-023.svg",
              Params::WithThreshold(0.2f)},  // Larger threshold due to recursive pattern seams.
-            {"e-pattern-028.svg", Params::Skip()},                // UB: Invalid patternTransform
+            {"e-pattern-028.svg", Params::RenderOnly()},          // UB: Invalid patternTransform
             {"e-pattern-030.svg", Params::WithThreshold(0.02f)},  // Has anti-aliasing artifacts.
         })),
     TestNameFromFilename);
@@ -779,14 +785,15 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-radialGradient-031.svg",
              Params::Skip()},  // Test suite bug? In SVG2 this was changed to draw
                                // conical gradient instead of correcting focal point.
-            {"e-radialGradient-032.svg", Params::Skip()},  // UB: Negative `r`
-            {"e-radialGradient-039.svg", Params::Skip()},  // UB: Invalid `gradientUnits`
-            {"e-radialGradient-040.svg", Params::Skip()},  // UB: Invalid `gradientTransform`
-            {"e-radialGradient-043.svg", Params::Skip()},  // UB: fr=0.5 (SVG 2)
+            {"e-radialGradient-032.svg", Params::RenderOnly()},  // UB: Negative `r`
+            {"e-radialGradient-039.svg", Params::RenderOnly()},  // UB: Invalid `gradientUnits`
+            {"e-radialGradient-040.svg",
+             Params::RenderOnly()},  // UB: Invalid `gradientTransform`
+            {"e-radialGradient-043.svg", Params::RenderOnly()},  // UB: fr=0.5 (SVG 2)
             {"e-radialGradient-044.svg", Params::Skip()},  // Test suite bug? fr > default value of
                                                            // r (0.5) should not
                                                            //  render.
-            {"e-radialGradient-045.svg", Params::Skip()},  // UB: fr=-1 (SVG 2)
+            {"e-radialGradient-045.svg", Params::RenderOnly()},  // UB: fr=-1 (SVG 2)
         })),
     TestNameFromFilename);
 
@@ -832,10 +839,10 @@ INSTANTIATE_TEST_SUITE_P(
             {"e-svg-015.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
             {"e-svg-016.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
             {"e-svg-017.svg", Params::WithThreshold(0.13f)},  // Has anti-aliasing artifacts.
-            {"e-svg-018.svg", Params::Skip()},                // UB: Invalid id attribute
-            {"e-svg-019.svg", Params::Skip()},                // UB: Invalid id attribute
-            {"e-svg-020.svg", Params::Skip()},                // UB: FuncIRI parsing
-            {"e-svg-021.svg", Params::Skip()},                // UB: FuncIRI with invalid chars
+            {"e-svg-018.svg", Params::RenderOnly()},          // UB: Invalid id attribute
+            {"e-svg-019.svg", Params::RenderOnly()},          // UB: Invalid id attribute
+            {"e-svg-020.svg", Params::RenderOnly()},          // UB: FuncIRI parsing
+            {"e-svg-021.svg", Params::RenderOnly()},          // UB: FuncIRI with invalid chars
             {"e-svg-028.svg", Params::Skip()},                // Not impl: overflow
             {"e-svg-029.svg", Params::Skip()},                // Not impl: overflow
             {"e-svg-031.svg", Params::Skip()},                // Bug/Not impl? XML Entity references
@@ -908,7 +915,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     // custom golden: test suite's Noto Sans lacks
                                     // Arabic, so we fall back to Amiri
             {"e-text-040.svg", Params().onlyTextFull()},  // Arabic text shaping requires text-full
-            {"e-text-042.svg", Params::Skip()},           // UB: grapheme split by tspan
+            {"e-text-042.svg", Params::RenderOnly()},     // UB: grapheme split by tspan
             {"e-text-043.svg", Params::WithThreshold(kDefaultThreshold, 19100)},
         },
         Params::WithThreshold(0.1f,
@@ -1005,7 +1012,7 @@ INSTANTIATE_TEST_SUITE_P(
              Params::WithGoldenOverride(
                  "donner/svg/renderer/testdata/golden/resvg-e-textPath-032.png")},  // Minor char
                                                                                     // advance diffs
-            {"e-textPath-033.svg", Params::Skip()},                // UB: baseline-shift + rotate
+            {"e-textPath-033.svg", Params::RenderOnly()},          // UB: baseline-shift + rotate
             {"e-textPath-034.svg", Params::WithThreshold(0.05f)},  // AA artifacts
             {"e-textPath-035.svg",
              Params::WithGoldenOverride(
