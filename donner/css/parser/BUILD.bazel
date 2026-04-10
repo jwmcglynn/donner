@@ -22,6 +22,7 @@ donner_cc_library(
         "ValueParser.h",
         "details/Common.h",
         "details/ComponentValueParser.h",
+        "details/ComponentValueStream.h",
         "details/Subparsers.h",
         "details/Tokenizer.h",
     ],
@@ -42,6 +43,7 @@ donner_cc_test(
     srcs = [
         "tests/AnbMicrosyntaxParser_tests.cc",
         "tests/ColorParser_tests.cc",
+        "tests/ComponentValueStream_tests.cc",
         "tests/DeclarationListParser_tests.cc",
         "tests/RuleParser_tests.cc",
         "tests/SelectorParser_tests.cc",

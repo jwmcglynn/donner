@@ -7,6 +7,7 @@
 #include "donner/css/Selector.h"
 #include "donner/css/parser/AnbMicrosyntaxParser.h"
 #include "donner/css/parser/details/ComponentValueParser.h"
+#include "donner/css/parser/details/ComponentValueStream.h"
 #include "donner/css/parser/details/Tokenizer.h"
 
 namespace donner::css::parser {
@@ -111,7 +112,7 @@ public:
   /**
    * Construct a new SelectorParserImpl over a list of \ref ComponentValue.
    */
-  SelectorParserImpl(std::span<const ComponentValue> components) : components_(components) {}
+  SelectorParserImpl(std::span<const ComponentValue> components) : stream_(components) {}
 
   /**
    * Parse the selector list.
@@ -931,7 +932,12 @@ private:
   std::optional<ParseDiagnostic>&& getError() && { return std::move(error_); }
 
 private:
-  bool isEOF() const { return components_.empty(); }
+  // Thin wrappers around `stream_`. These preserve the call-site grammar the
+  // selector parser was written against while routing all cursor state through
+  // the shared `ComponentValueStream` abstraction — the goal is that any
+  // cursor/peek/advance bookkeeping lives in exactly one place (the stream)
+  // and not re-implemented per subparser via span arithmetic.
+  bool isEOF() const { return stream_.isEOF(); }
 
   bool tryConsumeDelim(char value) {
     if (nextDelimIs(value)) {
@@ -944,7 +950,7 @@ private:
 
   template <typename TokenType>
   void expectAndConsumeToken() {
-    assert(!components_.empty() && components_.front().isToken<TokenType>());
+    assert(stream_.peekIsToken<TokenType>() && "Expected token at cursor");
     advance();
   }
   void expectAndConsumeDelim(char value) {
@@ -952,59 +958,41 @@ private:
     assert(didConsumeDelim && "Failed to consume delimiter");
   }
 
-  void advance(size_t amount = 1) { components_ = components_.subspan(amount); }
+  void advance(size_t amount = 1) { stream_.advance(amount); }
 
   template <typename T>
   const T* next(size_t advance = 0) const {
-    if (components_.size() <= advance || !components_[advance].is<T>()) {
-      return nullptr;
-    }
-
-    return &components_[advance].get<T>();
+    return stream_.peekAs<T>(advance);
   }
 
   template <typename T>
   bool nextIs(size_t advance = 0) const {
-    return (components_.size() > advance && components_[advance].is<T>());
+    return stream_.peekIs<T>(advance);
   }
 
   template <typename T>
   bool nextTokenIs(size_t advance = 0) const {
-    return (components_.size() > advance && components_[advance].is<Token>() &&
-            components_[advance].get<Token>().is<T>());
+    return stream_.peekIsToken<T>(advance);
   }
 
-  bool nextDelimIs(char value, size_t advance = 0) const { return peekNextDelim(advance) == value; }
+  bool nextDelimIs(char value, size_t advance = 0) const {
+    return stream_.peekDelimIs(value, advance);
+  }
 
   std::optional<char> peekNextDelim(size_t advance = 0) const {
-    if (components_.size() > advance && components_[advance].is<Token>()) {
-      const Token& token = components_[advance].get<Token>();
-      if (const auto* maybeDelim = token.tryGet<Token::Delim>()) {
-        return maybeDelim->value;
-      }
-    }
-
-    return std::nullopt;
+    return stream_.peekDelim(advance);
   }
 
-  void skipWhitespace() {
-    while (!components_.empty() && components_.front().isToken<Token::Whitespace>()) {
-      components_ = components_.subspan(1);
-    }
-  }
+  void skipWhitespace() { stream_.skipWhitespace(); }
 
   void setError(std::string reason) {
-    error_ = ParseDiagnostic::Error(
-        RcString(reason),
-        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString());
+    error_ = ParseDiagnostic::Error(RcString(reason), stream_.currentOffset());
   }
 
   void setError(ParseDiagnostic&& error) { error_ = std::move(error); }
 
   void addWarning(std::string reason) {
-    warnings_.push_back(ParseDiagnostic::Error(
-        RcString(reason),
-        !components_.empty() ? components_.front().sourceOffset() : FileOffset::EndOfString()));
+    warnings_.push_back(ParseDiagnostic::Error(RcString(reason), stream_.currentOffset()));
   }
 
   std::optional<CompoundSelector::Entry> subclassToCompoundEntry(
@@ -1018,7 +1006,7 @@ private:
         std::move(subclass).value());
   }
 
-  std::span<const ComponentValue> components_;
+  details::ComponentValueStream stream_;
   std::optional<ParseDiagnostic> error_;
   std::vector<ParseDiagnostic> warnings_;
 };
