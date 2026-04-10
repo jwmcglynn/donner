@@ -1249,6 +1249,14 @@ void RendererGeode::endPatternTile(bool forStroke) {
     // LoadOp::Load for the next render pass.
     newEncoder->setLoadPreserve();
     impl_->encoder = std::move(newEncoder);
+    // Re-apply the active clip stack to the freshly-created encoder.
+    // The scissor state lived on the OLD encoder (finished inside
+    // beginPatternTile) and doesn't carry over automatically — without
+    // this call, a pattern capture triggered from inside a viewport
+    // or `<use>` clip would leak the subsequent pattern fill outside
+    // that clip rect. Mirrors the scissor restore in push/
+    // popIsolatedLayer.
+    impl_->updateEncoderScissor();
   } else {
     impl_->encoder.reset();
   }
