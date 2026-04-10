@@ -3,7 +3,7 @@
 **Status:** Partially implemented (`incremental-invalidation-initial`)
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-13
-**Tracking:** v0.5 milestone ([ProjectRoadmap](ProjectRoadmap.md))
+**Tracking:** v0.5 milestone (\ref DonnerProjectRoadmap)
 
 ## Summary
 
@@ -651,4 +651,4 @@ For the common case (k=1, N=1000): ~1000x reduction in style/layout/paint work.
 - [Chromium Style Invalidation](https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/core/css/invalidation/) — Browser CSS invalidation
 - [Firefox Style Sharing](https://hacks.mozilla.org/2017/08/inside-a-super-fast-css-engine-quantum-css-aka-stylo/) — Stylo incremental restyle
 - [SVG DOM Spec](https://svgwg.org/svg2-draft/types.html#SVGDOMOverview) — SVG mutation APIs
-- [Composited Rendering Design](composited_rendering.md) — Layer dirty tracking (already implemented)
+- Composited Rendering Design (`composited_rendering.md` — planned; layer dirty tracking already implemented)

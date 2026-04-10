@@ -40,7 +40,7 @@ bazel test --config=asan-fuzzer --test_tag_filters=fuzz_target //...
 Donner includes a continuous fuzzing harness that runs all fuzzer targets for extended periods,
 stops when coverage plateaus, manages corpus across runs, and reports crashes.
 
-See the [design doc](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/continuous_fuzzing.md) for full architecture details.
+See the [design doc](design_docs/continuous_fuzzing.md) for full architecture details.
 
 ## Quick Start
 

@@ -3,7 +3,7 @@
 **Status:** Complete (all filters within 1.5x of Skia)
 **Author:** jwm
 **Date:** 2025-03-11
-**Related:** [filter_effects.md](filter_effects.md), [renderer_interface_design.md](renderer_interface_design.md)
+**Related:** [renderer_interface_design.md](renderer_interface_design.md)
 
 ## Problem
 

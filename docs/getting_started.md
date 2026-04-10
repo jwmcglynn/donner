@@ -4,7 +4,7 @@
 
 ## Adding to Your Bazel Project
 
-Add the following to your `MODULE.bazel` (bazel 8.0 or newer required):
+Add the following to your `MODULE.bazel` (bazel 7.0.0 required):
 
 ```py
 bazel_dep(name = "donner", version = "0.0.0")

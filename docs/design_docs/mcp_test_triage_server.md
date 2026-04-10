@@ -518,6 +518,6 @@ See `.vscode/mcp.json` or `mcp-config-example.json` for format.
 
 ## See Also
 
-- [MCP Server README](../../../tools/mcp-servers/resvg-test-triage/README.md) - User documentation
-- [AGENTS.md](../../../AGENTS.md) - Workflow examples for AI agents
-- [README_resvg_test_suite.md](../../../donner/svg/renderer/tests/README_resvg_test_suite.md) - Test triage workflow
+- [MCP Server README](https://github.com/jwmcglynn/donner/blob/main/tools/mcp-servers/resvg-test-triage/README.md) - User documentation
+- [AGENTS.md](https://github.com/jwmcglynn/donner/blob/main/AGENTS.md) - Workflow examples for AI agents
+- \ref ReSvgTestSuite - Test triage workflow

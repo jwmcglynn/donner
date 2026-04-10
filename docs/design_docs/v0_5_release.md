@@ -26,14 +26,14 @@ documentation, creating examples for new features, running fuzzers, and ensuring
 
 ## Non-Goals
 
-- Animation (`<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`) — deferred to v1.0.
+- Animation (`&lt;animate&gt;`, `&lt;animateTransform&gt;`, `&lt;animateMotion&gt;`, `&lt;set&gt;`) — deferred to v1.0.
 - Composited rendering and interactivity — deferred to v1.0.
-- New feature work beyond `<textPath>` (that's v1.0).
-- `<a>` and `<switch>` element support (v1.0).
+- New feature work beyond `&lt;textPath&gt;` (that's v1.0).
+- `&lt;a&gt;` and `&lt;switch&gt;` element support (v1.0).
 - 100% resvg test suite pass rate (known gaps are documented).
 - Upstream contributions (resvg harness integration is v1.0).
 - Deprecated SVG 1.1 features: `enable-background`, `BackgroundImage`/`BackgroundAlpha` filter
-  inputs, SVG fonts, `<cursor>`, `<altGlyph>`, `<tref>`, CSS `clip` rect. These are removed in
+  inputs, SVG fonts, `&lt;cursor&gt;`, `&lt;altGlyph&gt;`, `&lt;tref&gt;`, CSS `clip` rect. These are removed in
   SVG 2 and will not be implemented. See
   [unsupported_svg1_features.md](../../docs/unsupported_svg1_features.md).
 
@@ -255,10 +255,10 @@ architectural uint8 quantization.
 - [x] **Verify threshold reductions** — After each fix, re-run the full resvg test suite and
   tighten thresholds. Target: all tests below 1000px diffs where possible.
 
-### Phase 11: `<textPath>` Implementation
+### Phase 11: `&lt;textPath&gt;` Implementation
 
-Implement `<textPath>` element support for text rendered along arbitrary paths.
-Detailed design in [text_rendering.md](text_rendering.md#textpath-implementation-plan-v05).
+Implement `&lt;textPath&gt;` element support for text rendered along arbitrary paths.
+Detailed design in [text_rendering.md](text_rendering.md).
 
 - [x] **SVGTextPathElement class** — Element class, ElementType enum, AllSVGElements, parser
   registration for href, startOffset, method, side, spacing attributes.

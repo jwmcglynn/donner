@@ -31,7 +31,7 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 - **Renderer interface abstraction** — `RendererInterface` / `RendererSkia` split with
   `RendererDriver` traversing a flat render tree. Enables future backend swaps.
-  ([design](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/renderer_interface_design.md))
+  ([design](design_docs/renderer_interface_design.md))
 - **tiny-skia software renderer** — Full software rasterizer (fill, stroke, gradients, patterns,
   shaders, lowp/highp pipeline) as an alternative to Skia. All render operations within 1.5× of
   Skia performance.
@@ -42,7 +42,7 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
   `dominant-baseline`.
 - Phase 6: Optional HarfBuzz text shaping tier (`--config=text-full`).
 - `<textPath>` element support for text rendered along arbitrary paths.
-- ([design](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/text_rendering.md))
+- ([design](design_docs/text_rendering.md))
 
 ### SVG Filter Effects
 
@@ -52,7 +52,7 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
   color matrix, turbulence, convolution, blend, composite, lighting, displacement map, component
   transfer, flood, offset, merge, tile.
 - All 23 filter benchmarks within 1.5× of Skia; 21 of 23 are faster.
-- ([design](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/filter_effects.md), [perf](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/filter_performance.md))
+- ([perf](design_docs/filter_performance.md))
 
 ### Infrastructure
 
@@ -150,7 +150,7 @@ Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
   `linebender/resvg-test-suite`, migrated all test entries via a rename-map codemod, and
   introduced a reason-string Skip/RenderOnly/WithThreshold API. Follow-up feature gaps and
   bugs tracked in
-  [resvg_feature_gaps.md](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/resvg_feature_gaps.md).
+  [resvg_feature_gaps.md](design_docs/resvg_feature_gaps.md).
 - [x] **Enable text resvg tests** — Shipped as part of the v0.5 text-rendering work: 37
   `e-textPath-*` tests passing plus per-character positioning, letter-spacing, baseline-shift,
   writing-mode, and alignment-baseline coverage. Remaining gaps (e.g. bidi, complex emoji)
@@ -272,9 +272,8 @@ flowchart TD
 
 | Document | Status |
 |----------|--------|
-| [Renderer Interface](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/renderer_interface_design.md) | Shipped (Phases 1–2a) |
-| [Text Rendering](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/text_rendering.md) | Shipped (Phases 1–6) |
-| [Filter Effects](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/filter_effects.md) | Shipped (17/17 primitives) |
-| [Filter Performance](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/filter_performance.md) | Shipped (all within 1.5×) |
-| [v0.5 Release](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/v0_5_release.md) | In Progress |
-| [External SVG References](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/external_svg_references.md) | Design |
+| [Renderer Interface](design_docs/renderer_interface_design.md) | Shipped (Phases 1–2a) |
+| [Text Rendering](design_docs/text_rendering.md) | Shipped (Phases 1–6) |
+| [Filter Performance](design_docs/filter_performance.md) | Shipped (all 17 primitives, within 1.5×) |
+| [v0.5 Release](design_docs/v0_5_release.md) | In Progress |
+| [External SVG References](design_docs/external_svg_references.md) | Design |

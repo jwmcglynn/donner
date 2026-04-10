@@ -71,7 +71,7 @@ took real time and must survive the migration.
 
 ### Custom goldens
 
-- Location: `donner/svg/renderer/testdata/golden/resvg-<test-name>.png`
+- Location: `donner/svg/renderer/testdata/golden/resvg-&lt;test-name&gt;.png`
 - Documented in
   [`resvg_test_suite_bugs.md`](resvg_test_suite_bugs.md) with per-bug
   Symptom → Root Cause → Ruled Out → Resolution format
@@ -286,8 +286,8 @@ to its new form.
 
 Write `tools/resvg_test_suite_upgrade/rewrite_test_entries.py` that:
 
-1. Parses `resvg_test_suite.cc` with a line-oriented regex
-   (`{"(a|e)-[^"]+\.svg",\s*(Params[^}]+)}\s*,\s*//\s*(.+)`) — the file is
+1. Parses `resvg_test_suite.cc` with a line-oriented regex that matches
+   the `{"a-foo.svg", Params...},  // comment` entries — the file is
    mechanically structured, so tree-sitter is overkill
 2. Looks up each old filename in the rename map
 3. Emits new entries with the new filename and preserved comment
@@ -653,7 +653,7 @@ in the table is community recognition, not a one-time thing.
 
 ```json
 {
-  "a-fill-001.svg": "tests/painting/fill/#RGB-color.svg",
+  "a-fill-001.svg": "tests/painting/fill/\#RGB-color.svg",
   "a-fill-010.svg": "tests/painting/fill/rgb(int int int).svg",
   "e-filter-034.svg": "tests/filters/filter/in=FillPaint.svg",
   "a-some-removed-test.svg": null
