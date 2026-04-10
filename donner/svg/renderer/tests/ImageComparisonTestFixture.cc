@@ -408,6 +408,49 @@ std::optional<std::string> skipReasonIfUnsupported(const ImageComparisonParams& 
   return std::nullopt;
 }
 
+/// Name of the subdirectory under `golden/` that holds per-backend golden
+/// overrides, or an empty view if the active backend shares the default
+/// (tiny-skia) goldens. Scoped here so we can add more overrides in the
+/// future without touching callers.
+std::string_view backendGoldenSubdir() {
+  switch (ActiveRendererBackend()) {
+    case RendererBackend::Geode: return "geode";
+    // Skia and TinySkia share the main (tiny-skia-authored) goldens today.
+    case RendererBackend::Skia:
+    case RendererBackend::TinySkia: return std::string_view();
+  }
+  return std::string_view();
+}
+
+/// Given a caller-supplied golden path (e.g., `.../golden/foo.png`), return
+/// the path the active backend should actually read from — preferring a
+/// backend-specific override (e.g., `.../golden/geode/foo.png`) when one
+/// exists on disk, and falling through to the caller's path otherwise.
+///
+/// Safe to call with paths that are already under the backend subdirectory
+/// (e.g., paths ending in `golden/geode/foo.png`): the resolver detects that
+/// the path's immediate parent already matches the backend subdirectory and
+/// returns the input unchanged.
+std::filesystem::path resolveGoldenForActiveBackend(const std::filesystem::path& goldenPath) {
+  const std::string_view subdir = backendGoldenSubdir();
+  if (subdir.empty()) {
+    return goldenPath;
+  }
+
+  // Already backend-specific? Leave alone. Match on the immediate parent
+  // directory name so paths like `.../golden/geode/foo.png` short-circuit.
+  const std::filesystem::path parent = goldenPath.parent_path();
+  if (parent.filename().string() == subdir) {
+    return goldenPath;
+  }
+
+  std::filesystem::path candidate = parent / std::string(subdir) / goldenPath.filename();
+  if (std::filesystem::exists(candidate)) {
+    return candidate;
+  }
+  return goldenPath;
+}
+
 RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   const std::size_t tightRowBytes = static_cast<std::size_t>(snapshot.dimensions.x) * 4u;
   if (snapshot.empty() || snapshot.rowBytes == tightRowBytes) {
@@ -599,6 +642,18 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     GTEST_SKIP() << *skipReason;
   }
 
+  // Resolve the golden to a backend-specific override when one exists on
+  // disk. This lets a single test definition target multiple backends: e.g.,
+  // `RendererTests` calls with `.../golden/foo.png`, and under `--config=geode`
+  // we transparently redirect to `.../golden/geode/foo.png` when the backend
+  // has backported its own golden for that test. Per-backend goldens are
+  // necessary because Slug's sub-pixel AA has irreducible differences from
+  // tiny-skia's supersampling.
+  const std::filesystem::path resolvedGoldenPath =
+      resolveGoldenForActiveBackend(std::filesystem::path(goldenImageFilename));
+  const std::string resolvedGoldenString = resolvedGoldenPath.string();
+  const char* const effectiveGoldenFilename = resolvedGoldenString.c_str();
+
   std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << ActiveRendererBackendName()
             << "]: ";  // No endl yet, the line will be continued
 
@@ -621,8 +676,17 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   if (params.updateGoldenFromEnv) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
     if (goldenImageDirToUpdate != nullptr) {
+      // When the active backend has its own golden subdirectory, regenerate
+      // into that subdirectory so goldens for other backends are preserved.
+      const std::string_view subdir = backendGoldenSubdir();
+      std::filesystem::path relativeOutput = std::filesystem::path(goldenImageFilename);
+      if (!subdir.empty() && relativeOutput.parent_path().filename().string() != subdir) {
+        relativeOutput =
+            relativeOutput.parent_path() / std::string(subdir) / relativeOutput.filename();
+      }
       const std::filesystem::path goldenImagePath =
-          std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+          std::filesystem::path(goldenImageDirToUpdate) / relativeOutput;
+      std::filesystem::create_directories(goldenImagePath.parent_path());
       RendererImageIO::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(), snapshot.pixels,
                                                 width, height, strideInPixels);
       std::cout << "Updated golden image: " << goldenImagePath.string() << "\n";
@@ -630,13 +694,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
   }
 
-  // If the golden image doesn't exist and UPDATE_GOLDEN_IMAGES_DIR is set, create it from the
-  // current rendering regardless of backend.
-  if (!std::filesystem::exists(goldenImageFilename)) {
+  // If the resolved golden image doesn't exist and UPDATE_GOLDEN_IMAGES_DIR is set, create it
+  // from the current rendering regardless of backend.
+  if (!std::filesystem::exists(effectiveGoldenFilename)) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
     if (goldenImageDirToUpdate != nullptr) {
       const std::filesystem::path goldenImagePath =
-          std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+          std::filesystem::path(goldenImageDirToUpdate) / effectiveGoldenFilename;
       std::filesystem::create_directories(goldenImagePath.parent_path());
       RendererImageIO::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(), snapshot.pixels,
                                                 width, height, strideInPixels);
@@ -654,7 +718,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     return;
   }
 
-  auto maybeGoldenImage = RendererImageTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
+  auto maybeGoldenImage =
+      RendererImageTestUtils::readRgbaImageFromPngFile(effectiveGoldenFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
 
   Image goldenImage = std::move(maybeGoldenImage.value());
@@ -677,12 +742,12 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
               << params.effectiveMaxMismatchedPixels() << " max)\n";
 
     const std::filesystem::path actualImagePath =
-        std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
+        std::filesystem::temp_directory_path() / escapeFilename(effectiveGoldenFilename);
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
                                               width, height, strideInPixels);
 
     const std::filesystem::path diffFilePath =
-        std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
+        std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(effectiveGoldenFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
@@ -693,7 +758,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
         std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
         const std::filesystem::path skpFilePath =
-            std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
+            std::filesystem::temp_directory_path() /
+            (escapeFilename(effectiveGoldenFilename) + ".skp");
         if (WriteActiveRendererDebugSkp(document, skpFilePath)) {
           std::cout << "Load this .skp into https://debugger.skia.org/\n"
                     << "=> " << skpFilePath.string() << "\n\n";
@@ -728,7 +794,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
 
     std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
-    std::cout << "Expected: " << goldenImageFilename << "\n";
+    std::cout << "Expected: " << effectiveGoldenFilename << "\n";
     std::cout << "Diff: " << diffFilePath.string() << "\n\n";
 
     const std::optional<TerminalPreviewConfig> previewConfig = PreviewConfigFromEnv(params);
