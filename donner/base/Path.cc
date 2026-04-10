@@ -1627,6 +1627,54 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
 
   const double halfWidth = style.width * 0.5;
 
+  // SVG 2 §11.4 zero-length subpath handling: a subpath with zero length
+  // (all coincident points) renders as a linecap-shaped shape centered at
+  // the vertex:
+  //   - `butt`  → nothing
+  //   - `square`→ a square of side `stroke-width` centered at the point
+  //   - `round` → a circle of diameter `stroke-width` centered at the point
+  //
+  // This is tested by resvg's `painting/stroke-linecap/zero-length-*` and
+  // the similar open-path-with-* cases. The main `strokeSubpath` body
+  // below assumes each segment has a well-defined tangent, so we detect
+  // the all-coincident case up front and emit the spec shape directly.
+  bool allCoincident = true;
+  for (size_t i = 1; i < n; ++i) {
+    if (pts[i].distanceSquared(pts[0]) > 1e-20) {
+      allCoincident = false;
+      break;
+    }
+  }
+  if (allCoincident) {
+    if (style.cap == LineCap::Butt) {
+      return;
+    }
+    const Vector2d p = pts[0];
+    if (style.cap == LineCap::Square) {
+      // Axis-aligned square centered at p with side = stroke-width.
+      builder.moveTo(Vector2d(p.x - halfWidth, p.y - halfWidth));
+      builder.lineTo(Vector2d(p.x + halfWidth, p.y - halfWidth));
+      builder.lineTo(Vector2d(p.x + halfWidth, p.y + halfWidth));
+      builder.lineTo(Vector2d(p.x - halfWidth, p.y + halfWidth));
+      builder.closePath();
+      return;
+    }
+    // Round: full circle approximated as a polygon. Use the same
+    // step-per-pixel heuristic as `emitCap`'s round-cap branch — 8 minimum,
+    // otherwise proportional to the circumference.
+    const int numSteps = std::max(16, static_cast<int>(std::ceil(halfWidth * 4.0)));
+    builder.moveTo(Vector2d(p.x + halfWidth, p.y));
+    for (int s = 1; s < numSteps; ++s) {
+      const double angle =
+          (static_cast<double>(s) / static_cast<double>(numSteps)) * 2.0 *
+          MathConstants<double>::kPi;
+      builder.lineTo(
+          Vector2d(p.x + std::cos(angle) * halfWidth, p.y + std::sin(angle) * halfWidth));
+    }
+    builder.closePath();
+    return;
+  }
+
   // Compute per-segment normals (left-side normals, pointing to the left of the direction).
   const size_t numSegments = n - 1;
   std::vector<Vector2d> normals(numSegments);
@@ -2020,34 +2068,24 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
         if (++dashesEmitted > kMaxDashes) {
           return true;  // Truncate; caller treats us as having emitted dashes.
         }
-        if (subpath.closed && next > totalArc && cursor < totalArc) {
-          // Wrap-around dash: tail of current cycle + head of next.
-          FlatSubpath tail = extractPolylineRange(subpath, cursor, totalArc);
-          const double headEnd = std::min(next - totalArc, totalArc);
-          FlatSubpath head = extractPolylineRange(subpath, 0.0, headEnd);
-          // Stitch tail + head together into one open-subpath polyline, so a
-          // single ribbon with caps bridges the seam correctly. The last
-          // point of tail should equal the first point of head if the
-          // subpath's end equals its start (which it does for a proper
-          // closed subpath), so dedupe to avoid a zero-length segment.
-          FlatSubpath combined;
-          combined.closed = false;
-          combined.points = std::move(tail.points);
-          for (size_t k = 0; k < head.points.size(); ++k) {
-            if (combined.points.empty() ||
-                combined.points.back().distanceSquared(head.points[k]) > 1e-24) {
-              combined.points.push_back(head.points[k]);
-            }
-          }
-          if (combined.points.size() >= 2) {
-            strokeSubpath(combined, style, builder);
-          }
-        } else {
-          const double dashEnd = std::min(next, totalArc);
-          FlatSubpath dash = extractPolylineRange(subpath, cursor, dashEnd);
-          if (dash.points.size() >= 2) {
-            strokeSubpath(dash, style, builder);
-          }
+        // Truncate the dash at `totalArc` for both closed and open
+        // subpaths. For closed subpaths, the first dash emitted by the
+        // loop (at `cursor == 0`) already covers the head-of-path
+        // region, so wrapping the final dash across the seam would
+        // produce two overlapping stroke polygons at arc [0, next -
+        // totalArc]. The resulting dashed path has multiple subpaths
+        // and is rendered with EvenOdd (see
+        // `RendererGeode::drawPath`'s subpath-count heuristic), so the
+        // overlap cancels out to a visible GAP at the seam — the
+        // symptom on resvg's `stroke-dasharray/even-count` where the
+        // wrap dash appears as two disconnected arcs with a butt-cap
+        // notch at angle 0°. Truncating at `totalArc` and letting the
+        // first dash cover the head region matches tiny-skia's
+        // behavior and produces the expected continuous visual.
+        const double dashEnd = std::min(next, totalArc);
+        FlatSubpath dash = extractPolylineRange(subpath, cursor, dashEnd);
+        if (dash.points.size() >= 2) {
+          strokeSubpath(dash, style, builder);
         }
       }
 
