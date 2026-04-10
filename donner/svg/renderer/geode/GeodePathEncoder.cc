@@ -87,10 +87,56 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   const auto points = monoPath.points();
   const auto commands = monoPath.commands();
 
+  // Fill winding-number correctness requires every subpath to be a closed
+  // region. Open subpaths (e.g., `<line>` rendered as MoveTo+LineTo with no
+  // Close) would contribute a single edge to each scanline they cross —
+  // that produces ±1 winding over the entire half-plane to one side of
+  // the edge, spilling a huge fill where there should be none.
+  //
+  // To match the SVG/tiny-skia convention for `fill-rule` on open subpaths,
+  // we emit an IMPLICIT closing line back to the subpath start whenever:
+  //   (1) we encounter a new MoveTo after one or more drawn segments, or
+  //   (2) the path ends with an open subpath.
+  // For a path like M a L b (from `<line>`), the implicit close appends
+  // L a, giving a path that crosses each scanline between y_a and y_b
+  // exactly twice (once each direction) — winding 0 everywhere, no fill.
+  //
+  // Note: this closing segment is only relevant for fills. Stroke callers
+  // funnel through `Path::strokeToFill` which already closes the ribbon
+  // polygon, so the encoder sees a pre-closed path there and the implicit
+  // close is a no-op.
+  Vector2d subpathStart;
+  bool subpathHasSegments = false;
+
+  auto emitImplicitClose = [&]() {
+    if (!subpathHasSegments) {
+      return;
+    }
+    if (NearZero((currentPoint - subpathStart).lengthSquared())) {
+      return;
+    }
+    const Vector2d mid = (currentPoint + subpathStart) * 0.5;
+
+    const auto p0x = static_cast<float>(currentPoint.x);
+    const auto p0y = static_cast<float>(currentPoint.y);
+    const auto p1x = static_cast<float>(mid.x);
+    const auto p1y = static_cast<float>(mid.y);
+    const auto p2x = static_cast<float>(subpathStart.x);
+    const auto p2y = static_cast<float>(subpathStart.y);
+
+    allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
+                         computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
+    currentPoint = subpathStart;
+  };
+
   for (const auto& cmd : commands) {
     switch (cmd.verb) {
       case Path::Verb::MoveTo:
+        // Close the previous subpath if it was left open.
+        emitImplicitClose();
         currentPoint = points[cmd.pointIndex];
+        subpathStart = currentPoint;
+        subpathHasSegments = false;
         break;
 
       case Path::Verb::LineTo: {
@@ -108,6 +154,7 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
                              computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         currentPoint = end;
+        subpathHasSegments = true;
         break;
       }
 
@@ -125,6 +172,7 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
                              computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         currentPoint = end;
+        subpathHasSegments = true;
         break;
       }
 
@@ -143,6 +191,7 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
                              computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         currentPoint = end;
+        subpathHasSegments = true;
         break;
       }
 
@@ -163,10 +212,16 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
                                computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         }
         currentPoint = end;
+        // The subpath is explicitly closed — don't let the final implicit
+        // close logic re-close it. A follow-on MoveTo begins a new subpath.
+        subpathHasSegments = false;
         break;
       }
     }
   }
+
+  // Flush the final subpath if the caller left it open.
+  emitImplicitClose();
 
   if (allCurves.empty()) {
     return result;

@@ -146,4 +146,88 @@ TEST(GeodePathEncoder, VertexNormalsPointOutward) {
   }
 }
 
+// Regression: filling an OPEN subpath (e.g., an SVG `<line>` that expands to
+// MoveTo+LineTo with no explicit close) must not spill fill across the
+// half-plane. The encoder emits an implicit closing segment back to the
+// subpath start, and the resulting winding-number sum is zero everywhere
+// (the only non-zero region would be the "stripe" between the forward and
+// return edges, which has zero width for a single LineTo).
+//
+// Pre-fix behavior: a single LineTo produced one curve that crossed each
+// scanline once → odd winding on the entire half-plane to one side of the
+// line, rendering a 100%-filled triangle in a-stroke-linecap-001/002/003.
+//
+// Strategy: compare the encoded output of an open path against the same
+// path with an explicit closePath(). They should produce identical band
+// curve counts and identical bounds. `encoded.curves` is band-flattened
+// (each curve is duplicated per band it spans), so an equality assertion
+// on the size implicitly verifies the total number of source segments
+// and their band coverage matches.
+TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
+  // Triangle as three LineTos with no closePath() vs. the same with
+  // closePath(). The implicit-close logic in the encoder should make
+  // the two paths encode identically (same band curves, same bounds).
+  Path openTriangle = PathBuilder()
+                          .moveTo(Vector2d(0, 0))
+                          .lineTo(Vector2d(100, 0))
+                          .lineTo(Vector2d(50, 100))
+                          .build();  // No closePath.
+  Path closedTriangle = PathBuilder()
+                            .moveTo(Vector2d(0, 0))
+                            .lineTo(Vector2d(100, 0))
+                            .lineTo(Vector2d(50, 100))
+                            .closePath()
+                            .build();
+  EncodedPath openEncoded = GeodePathEncoder::encode(openTriangle, FillRule::NonZero);
+  EncodedPath closedEncoded = GeodePathEncoder::encode(closedTriangle, FillRule::NonZero);
+  EXPECT_FALSE(openEncoded.empty());
+  EXPECT_FALSE(closedEncoded.empty());
+  EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+  EXPECT_EQ(openEncoded.bands.size(), closedEncoded.bands.size());
+
+  // A straight line (the geometry resvg's `a-stroke-linecap-001` feeds to
+  // the fill path before the stroke ribbon is generated) must produce
+  // non-empty output with the implicit close. Pre-fix it would have been
+  // a single forward curve with no return edge, producing spill fill.
+  Path openLine = PathBuilder().moveTo(Vector2d(40, 40)).lineTo(Vector2d(160, 160)).build();
+  EncodedPath encoded = GeodePathEncoder::encode(openLine, FillRule::NonZero);
+  EXPECT_FALSE(encoded.empty());
+  // There must be an even number of forward+return segments per band
+  // (one LineTo forward, one implicit close back). `curves.size()` is
+  // band-flattened, so for an N-band span we expect 2*N band curves.
+  EXPECT_EQ(encoded.curves.size() % 2u, 0u);
+}
+
+// Multi-subpath regression: a MoveTo in the middle of a path starts a new
+// subpath, and the previous one (if left open) must be closed implicitly
+// at that boundary — not merged with the new subpath's geometry.
+//
+// Strategy: encode M-L-M-L (two open horizontal lines) and compare to
+// M-L-Z-M-L-Z (same lines explicitly closed). Horizontal lines are
+// Y-degenerate and drop out of the encoder, but the returning close
+// segment of the second triangle contributes a triangle-shaped fill
+// region. After the fix, both encode identically.
+TEST(GeodePathEncoder, MultipleOpenSubpathsEachGetClosed) {
+  // Two diagonal open lines in disjoint Y ranges — each should get its
+  // own implicit close, without one subpath's close bridging across
+  // MoveTo into the next subpath's start.
+  Path twoLinesOpen = PathBuilder()
+                          .moveTo(Vector2d(10, 10))
+                          .lineTo(Vector2d(90, 40))
+                          .moveTo(Vector2d(10, 60))
+                          .lineTo(Vector2d(90, 90))
+                          .build();
+  Path twoLinesClosed = PathBuilder()
+                            .moveTo(Vector2d(10, 10))
+                            .lineTo(Vector2d(90, 40))
+                            .closePath()
+                            .moveTo(Vector2d(10, 60))
+                            .lineTo(Vector2d(90, 90))
+                            .closePath()
+                            .build();
+  EncodedPath openEncoded = GeodePathEncoder::encode(twoLinesOpen, FillRule::NonZero);
+  EncodedPath closedEncoded = GeodePathEncoder::encode(twoLinesClosed, FillRule::NonZero);
+  EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+}
+
 }  // namespace donner::geode
