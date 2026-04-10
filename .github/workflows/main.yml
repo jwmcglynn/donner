@@ -27,7 +27,18 @@ jobs:
           retry_wait_seconds: 15
           command: |
             sudo apt-get update
-            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              libc++-18-dev libc++abi-18-dev
+            # libc++ is needed because `bazelisk build //...` evaluates the
+            # `resvg_test_suite_geode_*` variant targets. Those use the
+            # `donner_variant_cc_test` multi-transition, which promotes
+            # `enable_dawn=true` for the geode sub-configuration. That
+            # pulls in Dawn via `rules_foreign_cc`, whose CMake test-
+            # compile inherits the bazel toolchain's `-stdlib=libc++`
+            # flag. The actual Geode runtime tests only run in
+            # `linux-geode` (via `--config=geode` + `llvmpipe`), but the
+            # regular `linux` job still needs libc++ to build the shared
+            # Dawn dependency pulled in by the transitioned variant.
 
       - name: Cache Bazel
         uses: actions/cache@v5
