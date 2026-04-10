@@ -388,14 +388,16 @@ def _render_summary(metadata: ReportMetadata, sections: typing.Sequence[SectionR
 
 def make_lines_of_code_section(runner: CommandRunner) -> SectionResult:
     args = ["tools/cloc.sh"]
-    if shutil.which("cloc") is None:
-        content = _render_static_command_block(
-            format_command(args),
-            "(cloc not available — install `cloc` to populate this section)",
-        )
-        return SectionResult("Lines of Code", "failed", 0.0, content)
-
     result = runner.run("lines-of-code", args)
+
+    # If `cloc` isn't installed, CommandRunner returns exit 127 via
+    # FileNotFoundError. Surface a clearer hint in that case, but always
+    # route through the injected runner so callers (and tests) can mock
+    # the section deterministically.
+    failure_hint = None
+    if not result.success and shutil.which("cloc") is None:
+        failure_hint = "(cloc not available — install `cloc` to populate this section)"
+
     return SectionResult(
         "Lines of Code",
         _result_status(result),
@@ -404,6 +406,7 @@ def make_lines_of_code_section(runner: CommandRunner) -> SectionResult:
             format_command(args),
             result,
             empty_output_message="(cloc produced no output)",
+            failure_hint=failure_hint,
         ),
     )
 

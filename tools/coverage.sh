@@ -37,8 +37,8 @@ fi
 
 echo "Analyzing coverage for: ${TARGETS[*]}"
 
-# Error if genhtml is not found
-if ! which genhtml > /dev/null; then
+# Error if genhtml is not found (only required when HTML output is enabled).
+if [ "$NO_HTML" = false ] && ! which genhtml > /dev/null; then
     echo "ERROR: genhtml not found, please install lcov"
     exit 1
 fi
