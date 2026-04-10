@@ -852,31 +852,46 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(StructureTransformOrigin, ImageComparisonTestFixture,
-                         ValuesIn(getTestsInCategory("structure/transform-origin",
-                                {
-                                    {"bottom.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"center.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"keyword-length.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"left.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"length-percent.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"length-px.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-clippath-objectBoundingBox.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-clippath.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-gradient-object-bounding-box.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-gradient-user-space-on-use.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-group.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-image.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-pattern-object-bounding-box.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-pattern-user-space-on-use.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-shape.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-text-path.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"right-bottom.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"right.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"top.svg", Params::Skip("M1 upgrade: needs triage")},
-                                })),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    StructureTransformOrigin, ImageComparisonTestFixture,
+    ValuesIn(getTestsInCategory(
+        "structure/transform-origin",
+        {
+            // Gap: SVG 2 `transform-origin` presentation attribute syntax is
+            // not wired up. Donner parses `style="transform-origin: ..."` via
+            // PropertyRegistry, but the presentation attribute form
+            // (`transform-origin="..."` directly on an element) is not
+            // registered in any component's kProperties map, so the attribute
+            // is ignored and the transform pivots around the origin instead
+            // of the element.
+            //
+            // Secondary gap: the CSS transform-origin parser in
+            // PropertyRegistry.cc::ParseTransformOrigin requires whitespace
+            // after the first coordinate token, so a single-keyword value
+            // like `transform-origin: center` errors out even via style=.
+            // Two-token values (`center center`, `50% 50%`) work.
+            {"bottom.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"center.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"keyword-length.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"left.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"length-percent.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"length-px.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-clippath-objectBoundingBox.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-clippath.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-gradient-object-bounding-box.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-gradient-user-space-on-use.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-group.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-image.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-pattern-object-bounding-box.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-pattern-user-space-on-use.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-shape.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-text-path.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"on-text.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"right-bottom.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"right.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+            {"top.svg", Params::Skip("Not impl: `transform-origin` presentation attribute (SVG 2)")},
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureUse, ImageComparisonTestFixture,
