@@ -42,8 +42,8 @@ namespace donner::svg::parser {
  *
  * | Command | Function | Parameters | Description |
  * | :-----: | -------- | ---------- | ----------- |
- * | **M**   | \ref Path::moveTo | `(x y)+` | Start a new sub-path at `(x, y)`. If additional coordinate pairs follow, they are treated as implicit `L` commands. |
- * | **Z**   | \ref Path::closePath | (none) | Close the current sub-path by drawing a line from the current point to the starting point of the sub-path. |
+ * | **M**   | \ref PathBuilder::moveTo | `(x y)+` | Start a new sub-path at `(x, y)`. If additional coordinate pairs follow, they are treated as implicit `L` commands. |
+ * | **Z**   | \ref PathBuilder::closePath | (none) | Close the current sub-path by drawing a line from the current point to the starting point of the sub-path. |
  *
  * \htmlonly
  * <svg id="path_data_moveto" width="320" height="180" viewBox="0 0 320 180" style="background-color: white" font-family="sans-serif" font-size="12">
@@ -72,7 +72,7 @@ namespace donner::svg::parser {
  *
  * | Command | Function | Parameters | Description |
  * | :-----: | -------- | ---------- | ----------- |
- * | **L**   | \ref Path::lineTo    | `(x y)+` | Draw a line to `(x, y)`. |
+ * | **L**   | \ref PathBuilder::lineTo    | `(x y)+` | Draw a line to `(x, y)`. |
  * | **H**   | Horizontal line to   | `x+`     | Draw a horizontal line to `(x, currentY)`. |
  * | **V**   | Vertical line to     | `y+`     | Draw a vertical line to `(currentX, y)`. |
  *
@@ -106,7 +106,7 @@ namespace donner::svg::parser {
  *
  * | Command | Function | Parameters | Description |
  * | :-----: | -------- | ---------- | ----------- |
- * | **C**   | \ref Path::curveTo | `(x1 y1 x2 y2 x y)+` | Draw a cubic Bézier from the current point to `(x, y)` with control points `(x1, y1)` (for the start) and `(x2, y2)` (for the end). |
+ * | **C**   | \ref PathBuilder::curveTo | `(x1 y1 x2 y2 x y)+` | Draw a cubic Bézier from the current point to `(x, y)` with control points `(x1, y1)` (for the start) and `(x2, y2)` (for the end). |
  * | **S**   | Smooth cubic curve to | `(x2 y2 x y)+` | Same as `C`, but the first control point is implicitly the **reflection** of the previous command's second control point across the current point. Chains after a `C` or another `S`. |
  *
  * \htmlonly
@@ -184,7 +184,7 @@ namespace donner::svg::parser {
  *
  * | Command | Parameters | Description |
  * | :-----: | ---------- | ----------- |
- * | **A**   | `rx ry x-axis-rotation large-arc-flag sweep-flag x y` | Draw an elliptical arc to `(x, y)` using radii `rx` and `ry`, rotated by `x-axis-rotation` degrees. `large-arc-flag` chooses the longer (`1`) or shorter (`0`) of the two possible arcs, and `sweep-flag` chooses the arc going clockwise (`1`) or counter-clockwise (`0`). See \ref Path::arcTo. |
+ * | **A**   | `rx ry x-axis-rotation large-arc-flag sweep-flag x y` | Draw an elliptical arc to `(x, y)` using radii `rx` and `ry`, rotated by `x-axis-rotation` degrees. `large-arc-flag` chooses the longer (`1`) or shorter (`0`) of the two possible arcs, and `sweep-flag` chooses the arc going clockwise (`1`) or counter-clockwise (`0`). See \ref PathBuilder::arcTo. |
  *
  * The four flag combinations pick out the four distinct arcs between the same pair of
  * endpoints on the same ellipse:

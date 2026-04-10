@@ -67,9 +67,11 @@ class SVGFEColorMatrixElement : public SVGFilterPrimitiveStandardAttributes {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEColorMatrixElement wrapper from an entity.
   explicit SVGFEColorMatrixElement(EntityHandle handle)
       : SVGFilterPrimitiveStandardAttributes(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEColorMatrixElement CreateOn(EntityHandle handle);
 
 public:

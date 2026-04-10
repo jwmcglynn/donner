@@ -29,7 +29,7 @@ namespace donner::svg::components {
  * It stores the final, absolute positions for each contiguous slice of text, allowing the renderer
  * to iterate quickly without re‑evaluating attribute vectors on every frame.
  *
- * The component contains a single public field, \ref spans, which is the computed list of text
+ * The component contains a single public field, `spans`, which is the computed list of text
  * spans.
  *
  * \note This structure is internal to the rendering pipeline and is not exposed through the
@@ -135,6 +135,7 @@ struct ComputedTextComponent {
       Lengthd shift;
       double fontSizePx;
     };
+    /// Ordered stack of baseline shifts contributed by ancestor text spans.
     SmallVector<AncestorShift, 2> ancestorBaselineShifts;
 
     /// CSS `alignment-baseline` value for this span. When not Auto, overrides the

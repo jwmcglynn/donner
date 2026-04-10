@@ -43,7 +43,9 @@ public:
   // Non-copyable, movable.
   SubDocumentCache(const SubDocumentCache&) = delete;
   SubDocumentCache& operator=(const SubDocumentCache&) = delete;
+  /// Move constructor.
   SubDocumentCache(SubDocumentCache&&) = default;
+  /// Move assignment operator.
   SubDocumentCache& operator=(SubDocumentCache&&) = default;
 
   /**

@@ -41,7 +41,7 @@ public:
    * @param handle Entity handle to create the computed path for
    * @param component Shape component attached to \p handle
    * @param fontMetrics Font metrics, used to scale lengths
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   template <typename T>
   ComputedPathComponent* createComputedPath(EntityHandle handle, const T& component,
@@ -60,7 +60,7 @@ public:
    *
    * @param handle Entity handle to create the computed path for
    * @param fontMetrics Font metrics, used to scale lengths
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   ComputedPathComponent* createComputedPathIfShape(EntityHandle handle,
                                                    const FontMetrics& fontMetrics,
@@ -72,7 +72,7 @@ public:
    * This assumes that \ref StyleSystem::computeAllStyles has already been called.
    *
    * @param registry Registry used to find all shape components
-   * @param outWarnings Containing any warnings found
+   * @param warningSink Containing any warnings found
    */
   void instantiateAllComputedPaths(Registry& registry, ParseWarningSink& warningSink);
 

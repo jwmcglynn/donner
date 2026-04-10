@@ -38,14 +38,14 @@ public:
 
     /**
      * Parse comments in the XML document, e.g. `<!-- ... -->`. If this flag is set to true,
-     * comments will be parsed as \ref XMLNode::Type::Comment nodes added to the document tree.
+     * comments will be parsed as \ref donner::xml::XMLNode::Type::Comment nodes added to the document tree.
      */
     bool parseComments = false;
 
     /**
      * Parse the doctype node in the XML document, e.g. `<!DOCTYPE ...>`. If this flag is set to
-     * true, the doctype node will be parsed as a \ref XMLNode::Type::Doctype node added to the
-     * document tree.
+     * true, the doctype node will be parsed as a \ref donner::xml::XMLNode::Type::DocType node
+     * added to the document tree.
      */
     bool parseDoctype = true;
 
@@ -57,7 +57,7 @@ public:
 
     /**
      * Parse processing instructions in the XML document, e.g. `<?php ...>`. If this flag is set to
-     * true, processing instructions will be parsed as \ref XMLNode::Type::ProcessingInstruction
+     * true, processing instructions will be parsed as \ref donner::xml::XMLNode::Type::ProcessingInstruction
      * nodes added to the document tree.
      */
     bool parseProcessingInstructions = false;

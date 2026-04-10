@@ -56,8 +56,9 @@ public:
     return entt::to_entity(storage_, *current_);
   }
 
+  /// Opaque iterator state returned by \ref save and consumed by \ref restore.
   struct SavedState {
-    Iterator current;
+    Iterator current;  ///< Saved iterator position.
   };
 
   /// Saves the current state.

@@ -34,6 +34,7 @@ namespace donner::svg {
  */
 class TextEngine {
 public:
+  /// Construct a text engine using the provided font manager and ECS registry.
   TextEngine(FontManager& fontManager, Registry& registry);
 
   /// Test-only constructor that injects a custom TextBackend.
@@ -44,7 +45,9 @@ public:
   TextEngine(const TextEngine&) = delete;
   TextEngine& operator=(const TextEngine&) = delete;
 
+  /// Register a single \p face with the engine's font manager.
   void addFontFace(const css::FontFace& face);
+  /// Register a batch of \p faces with the engine's font manager.
   void addFontFaces(std::span<const css::FontFace> faces);
 
   /// Prepare text dependencies for the text root containing \p handle.
@@ -54,14 +57,23 @@ public:
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,
                               const TextLayoutParams& params);
 
+  /// Return vertical font metrics for \p font.
   FontVMetrics fontVMetrics(FontHandle font) const;
+  /// Return the scale factor mapping design units to \p pixelHeight pixels for \p font.
   float scaleForPixelHeight(FontHandle font, float pixelHeight) const;
+  /// Return the scale factor mapping one em to \p pixelHeight pixels for \p font.
   float scaleForEmToPixels(FontHandle font, float pixelHeight) const;
+  /// Return underline position/thickness for \p font, if available.
   std::optional<UnderlineMetrics> underlineMetrics(FontHandle font) const;
+  /// Return strikeout position/thickness for \p font, if available.
   std::optional<UnderlineMetrics> strikeoutMetrics(FontHandle font) const;
+  /// Return subscript/superscript offset metrics for \p font, if available.
   std::optional<SubSuperMetrics> subSuperMetrics(FontHandle font) const;
+  /// Return the vector outline for \p glyphIndex in \p font at the given \p scale.
   Path glyphOutline(FontHandle font, int glyphIndex, float scale) const;
+  /// Return true if \p font only contains bitmap glyphs (e.g. color emoji).
   bool isBitmapOnly(FontHandle font) const;
+  /// Return a rasterized bitmap glyph for \p glyphIndex in \p font at the given \p scale.
   std::optional<TextBackend::BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                                       float scale) const;
 

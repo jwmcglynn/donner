@@ -94,7 +94,9 @@ struct Event {
 struct ListenerHandle {
   uint32_t id = 0;  //!< Unique identifier for the listener.
 
+  /// Equality comparison.
   bool operator==(const ListenerHandle& other) const { return id == other.id; }
+  /// Inequality comparison.
   bool operator!=(const ListenerHandle& other) const { return id != other.id; }
 };
 

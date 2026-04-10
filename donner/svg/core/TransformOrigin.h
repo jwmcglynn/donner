@@ -16,6 +16,7 @@ struct TransformOrigin {
   Lengthd y;  ///< Y coordinate.
 };
 
+/// Ostream output operator.
 inline std::ostream& operator<<(std::ostream& os, const TransformOrigin& origin) {
   return os << origin.x << ' ' << origin.y;
 }

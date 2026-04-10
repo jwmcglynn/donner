@@ -292,7 +292,7 @@ struct LightSource {
   /// Light source type.
   enum class Type : std::uint8_t { Distant, Point, Spot };
 
-  Type type = Type::Distant;
+  Type type = Type::Distant;  ///< Which kind of light source is represented.
 
   // feDistantLight
   double azimuth = 0.0;    ///< Angle in the XY plane (degrees).

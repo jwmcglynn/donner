@@ -43,7 +43,7 @@ struct ComputedStopComponent {
    * @param inputProperties The properties of the \ref xml_stop element.
    * @param style The computed style of the stop element.
    * @param unparsedProperties The unparsed properties of the \ref xml_stop element.
-   * @param outWarnings The warnings that were generated during parsing.
+   * @param warningSink The warnings that were generated during parsing.
    */
   ComputedStopComponent(const StopProperties& inputProperties, const ComputedStyleComponent& style,
                         const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,

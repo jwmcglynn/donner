@@ -18,6 +18,7 @@ enum class DataUrlParserError : uint8_t {
   InvalidDataUrl,  ///< The data URL is invalid.
 };
 
+/// Returns a human-readable description of a \ref DataUrlParserError.
 inline std::string_view ToString(DataUrlParserError err) {
   switch (err) {
     case DataUrlParserError::InvalidDataUrl: return "Invalid data URL";
@@ -59,7 +60,7 @@ public:
   /**
    * Parse a URL, which can be an external resource or a data URL.
    *
-   * @param urlEncodedString The URL-encoded string to parse.
+   * @param uri The URL-encoded string to parse.
    * @return Result containing the parsed URL kind and payload, or an error if the input is not
    * valid.
    */

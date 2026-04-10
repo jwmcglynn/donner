@@ -12,7 +12,7 @@ namespace donner::svg::components {
 
 /**
  * Stores an offset/size for elements that are positioned with `x`/`y`/`width`/`height` attributes
- * with respect to their parent. Used for \ref xml_svg, \ref xml_image and \ref xml_foreignObject by
+ * with respect to their parent. Used for \ref xml_svg, \ref xml_image and `<foreignObject>` by
  * the standard, and also internally with \ref xml_use for Donner.
  *
  * If not specified, `x`/`y` default to 0, and `width`/`height` are `std::nullopt`.
@@ -36,7 +36,7 @@ struct SizedElementProperties {
 
 /**
  * Stores the properties of a sized element, `x`, `y`, `width`, `height`. Used for \ref xml_svg,
- * \ref xml_image and \ref xml_foreignObject by the standard, and also internally with \ref xml_use
+ * \ref xml_image and `<foreignObject>` by the standard, and also internally with \ref xml_use
  * for Donner.
  */
 struct SizedElementComponent {

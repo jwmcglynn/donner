@@ -83,7 +83,7 @@ public:
   /**
    * Decodes the next UTF-8 codepoint from the input string, while strictly validating continuation
    * bytes and sequence lengths. If an invalid codepoint is encountered, the function returns
-   * the Unicode replacement character (\xFFFD) and consumes the invalid codepoint.
+   * the Unicode replacement character (`U+FFFD`) and consumes the invalid codepoint.
    *
    * @param str The input string_view from which to read the codepoint.
    * @return A tuple containing the decoded Unicode codepoint and the number of bytes consumed.

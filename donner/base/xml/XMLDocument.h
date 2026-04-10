@@ -31,8 +31,6 @@ public:
    * Constructor to create an empty XMLDocument.
    *
    * To load a document from an XML file, use \ref donner::xml::XMLParser.
-   *
-   * @param settings Settings to configure the document.
    */
   XMLDocument();
 

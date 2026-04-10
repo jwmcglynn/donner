@@ -196,6 +196,7 @@ struct FEFuncComponent {
   double exponent = 1.0;                ///< Exponent for gamma type.
   double offset = 0.0;                  ///< Offset for gamma type.
 
+  /// Construct a \ref FEFuncComponent for the given channel.
   explicit FEFuncComponent(Channel ch) : channel(ch) {}
 };
 
@@ -312,7 +313,7 @@ struct LightSourceComponent {
   /// Light source type.
   enum class Type : std::uint8_t { Distant, Point, Spot };
 
-  Type type;
+  Type type;  ///< Which kind of light source is represented.
 
   // feDistantLight attributes.
   double azimuth = 0.0;     ///< Angle in the XY plane (degrees).
@@ -330,6 +331,7 @@ struct LightSourceComponent {
   double spotExponent = 1.0; ///< Spotlight exponent (falloff).
   std::optional<double> limitingConeAngle;  ///< Cone angle limit (degrees).
 
+  /// Construct a \ref LightSourceComponent for the given light type.
   explicit LightSourceComponent(Type t) : type(t) {}
 };
 
@@ -360,6 +362,7 @@ struct FESpecularLightingComponent {
   }};
 };
 
+/// @cond INTERNAL
 // Forward declare for presentation attribute parsing helpers.
 ParseResult<bool> ParseFeFloodPresentationAttribute(EntityHandle handle, std::string_view name,
                                                     const parser::PropertyParseFnParams& params);
@@ -369,5 +372,6 @@ ParseResult<bool> ParseFeDiffuseLightingPresentationAttribute(
     EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params);
 ParseResult<bool> ParseFeSpecularLightingPresentationAttribute(
     EntityHandle handle, std::string_view name, const parser::PropertyParseFnParams& params);
+/// @endcond
 
 }  // namespace donner::svg::components

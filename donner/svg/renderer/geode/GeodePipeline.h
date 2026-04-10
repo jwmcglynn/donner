@@ -43,7 +43,9 @@ public:
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
   GeodePipeline& operator=(const GeodePipeline&) = delete;
+  /// Move constructor.
   GeodePipeline(GeodePipeline&&) noexcept = default;
+  /// Move assignment operator.
   GeodePipeline& operator=(GeodePipeline&&) noexcept = default;
 
   /// The compiled render pipeline.
@@ -77,16 +79,22 @@ private:
  */
 class GeodeGradientPipeline {
 public:
+  /// Construct a gradient pipeline for the given device and color target format.
   GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
   GeodeGradientPipeline& operator=(const GeodeGradientPipeline&) = delete;
+  /// Move constructor.
   GeodeGradientPipeline(GeodeGradientPipeline&&) noexcept = default;
+  /// Move assignment operator.
   GeodeGradientPipeline& operator=(GeodeGradientPipeline&&) noexcept = default;
 
+  /// The compiled render pipeline.
   const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  /// The bind group layout used by the pipeline.
   const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  /// Color format the pipeline was built for.
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:

@@ -56,7 +56,7 @@ struct ViewBoxComponent {
 };
 ```
 
-The same system is used to implement the tree structure, where a \ref donner::svg::components::TreeComponent "TreeComponent" is added to each entity that contains `Entity` references to its parent and children.
+The same system is used to implement the tree structure, where a \ref donner::components::TreeComponent "TreeComponent" is added to each entity that contains `Entity` references to its parent and children.
 
 ## Systems
 
@@ -152,7 +152,7 @@ The final transformation occurs to instantiate the render tree, which occurs wit
 
 This step traverses the tree and produces a sorted list of \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent" corresponding to the draw order.
 
-This list is then processed by \ref donner::svg::RendererSkia to produce the final output.
+This list is then processed by the selected backend (\ref donner::svg::Renderer, which resolves to `RendererTinySkia` by default or `RendererSkia` under `--config=skia`) to produce the final output.
 
 # API Layer
 

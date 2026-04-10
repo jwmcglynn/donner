@@ -30,7 +30,7 @@ public:
    * Supported functions:
    * | Function | Description |
    * | -------: | :---------- |
-   * | `matrix(a, b, c, d, e, f)` | Matrix transform. \see \ref donner::Transform |
+   * | `matrix(a, b, c, d, e, f)` | Matrix transform. \see \ref donner::Transform2 |
    * | `translate(x, y=0)` | Translates by `(x, y)` pixels. |
    * | `scale(x, y=x)` | Scales by `(x, y)`. |
    * | `rotate(angle)` | Rotates by `angle` degrees. |

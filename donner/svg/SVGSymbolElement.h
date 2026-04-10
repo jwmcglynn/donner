@@ -11,7 +11,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_symbol "<symbol>"
+ * @page xml_symbol "&lt;symbol&gt;"
  *
  * Defines a symbol element that can be used to define graphical templates which are not rendered
  * directly but can be instantiated by a \ref xml_use element. A symbol element establishes a nested
@@ -63,7 +63,7 @@ namespace donner::svg {
  * | `refX`                | `0`             | The reference x coordinate used when the symbol is instantiated via a \ref xml_use element. |
  * | `refY`                | `0`             | The reference y coordinate used when the symbol is instantiated via a \ref xml_use element. |
  *
- * For details on `<symbol>` sizing, viewport behavior, and coordinate system rules, see
+ * For details on `&lt;symbol&gt;` sizing, viewport behavior, and coordinate system rules, see
  * \subpage SymbolElementUsage.
  */
 

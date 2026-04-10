@@ -26,10 +26,10 @@ struct TypeSelector {
    * Selector matcher itself, which may contain wildcards.
    *
    * In this context, the members have the following meanings:
-   * - \ref XMLQualifiedName::namespacePrefix The namespace matcher of the selector, the
-   * wildcard namespace ("*"), or empty if no namespace is specified.
-   * - \ref XMLQualifiedName::name The name matcher of the selector, or "*" if the selector is
-   * a universal selector.
+   * - \ref donner::xml::XMLQualifiedName::namespacePrefix The namespace matcher of the selector,
+   *   the wildcard namespace (`*`), or empty if no namespace is specified.
+   * - \ref donner::xml::XMLQualifiedName::name The name matcher of the selector, or `*` if the
+   *   selector is a universal selector.
    */
   xml::XMLQualifiedName matcher;
 

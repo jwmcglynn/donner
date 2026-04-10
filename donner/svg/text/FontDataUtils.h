@@ -6,6 +6,7 @@
 
 namespace donner::svg {
 
+/// Read a 32-bit big-endian unsigned integer from \p p.
 inline uint32_t ReadBe32(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);

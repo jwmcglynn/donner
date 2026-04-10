@@ -13,7 +13,7 @@ Donner intends to provide browser-level functionality as a standalone C++ librar
 - Instead of simply rendering `.svg` files, Donner constructs a DOM tree that allows inspecting and modifying the file contents in-memory.
 - Donner transforms the document tree into an efficient in-memory representation that can be repeatedly rendered.
 
-Donner currently renders with Skia, which is the core rendering library used by Chrome and Firefox. Skia is a high-performance, hardware-accelerated 2D graphics library that provides a common API for drawing text, shapes, and images.
+Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the default, a lightweight software rasterizer vendored from Rust's `tiny-skia` library — no external dependencies) and **Skia** (the full Chromium/Firefox 2D graphics library, enabled with `--config=skia`). An experimental **Geode** GPU backend (WebGPU + Slug) is under development and gated behind `--config=geode`.
 
 ## System Context
 
@@ -42,7 +42,7 @@ The parser suite consists of parsers in three layers:
 
 Provides a fully-featured CSS3 toolkit, which can be used to parse CSS stylesheets, style strings, or selectors, and match those selectors against a document tree.
 
-See [Using the CSS API](DonnerAPI.html#using-the-css-api) for more details.
+See \ref UsingTheCssApi for more details.
 
 The CSS layer parses stylesheets into lists of \ref donner::css::SelectorRule "SelectorRule" objects, which contains:
 
@@ -96,7 +96,7 @@ The Document Model is built on top of the [EnTT](https://github.com/skypjack/ent
 
 ### Rendering Backend
 
-The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then rendered by the Skia renderer.
+The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then consumed by the selected renderer (tiny-skia by default, or Skia with `--config=skia`).
 
 Rendering components are attached to the same entities as the document model components, allowing for easy synchronization between the document model and the rendering backend. When the document model is modified, the associated rendering components are invalidated.
 
@@ -106,7 +106,7 @@ The `//donner/base` library contains common utility code used by the other libra
 
 - \ref donner::RcString "RcString" - a reference-counted string class
 - \ref donner::Vector2 "Vector2" - a simple 2D vector class
-- \ref donner::Transform "Transform" - which handles 2D affine transformation and stores a 3x2 matrix.
+- \ref donner::Transform2 "Transform2" - which handles 2D affine transformation and stores a 3x2 matrix.
 - \ref donner::Length "Length" - a simple class to represent a length with a specific unit, such as `10px` or `10cm`.
 - and more...
 

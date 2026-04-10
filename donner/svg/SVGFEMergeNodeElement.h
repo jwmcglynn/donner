@@ -99,8 +99,10 @@ class SVGFEMergeNodeElement : public SVGElement {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEMergeNodeElement wrapper from an entity.
   explicit SVGFEMergeNodeElement(EntityHandle handle) : SVGElement(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEMergeNodeElement CreateOn(EntityHandle handle);
 
 public:

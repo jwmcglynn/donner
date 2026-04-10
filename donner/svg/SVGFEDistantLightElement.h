@@ -169,8 +169,10 @@ class SVGFEDistantLightElement : public SVGElement {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEDistantLightElement wrapper from an entity.
   explicit SVGFEDistantLightElement(EntityHandle handle) : SVGElement(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEDistantLightElement CreateOn(EntityHandle handle);
 
 public:

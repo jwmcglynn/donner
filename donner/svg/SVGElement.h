@@ -45,7 +45,7 @@ class SVGParserImpl;
  * underlying element, not a deep copy. Use `isa<Derived>()` and `cast<Derived>()` to work with
  * element-specific APIs (e.g., `SVGCircleElement`, `SVGPathElement`).
  *
- * For advanced queries like hit-testing, see \ref DonnerController.
+ * For advanced queries like hit-testing, see `DonnerController`.
  *
  * @see \ref SVGDocument
  */
@@ -54,10 +54,10 @@ class SVGElement {
 
 protected:
   /**
-   * Internal constructor to create an SVGElement from an \ref EntityHandle.
+   * Internal constructor to create an SVGElement from an \ref donner::EntityHandle.
    *
-   * To create an SVGElement, use the static \c Create methods on the derived class, such as \ref
-   * SVGCircleElement::Create.
+   * To create an SVGElement, use the static \c Create methods on the derived class, such as
+   * \ref donner::svg::SVGCircleElement::Create.
    *
    * @param handle EntityHandle to wrap.
    */
@@ -85,12 +85,12 @@ public:
   /// Get the XML tag name string for this element.
   xml::XMLQualifiedNameRef tagName() const;
 
-  /// Returns true if this is a known element type, returns false if this is an \ref
-  /// SVGUnknownElement.
+  /// Returns true if this is a known element type, returns false if this is an
+  /// \ref donner::svg::SVGUnknownElement.
   bool isKnownType() const;
 
-  /// Get the underlying \ref EntityHandle, for advanced use-cases that require direct access to the
-  /// ECS.
+  /// Get the underlying \ref donner::EntityHandle, for advanced use-cases that require direct
+  /// access to the ECS.
   EntityHandle entityHandle() const { return handle_; }
 
   /// Get the element id, the value of the "id" attribute.
@@ -162,8 +162,9 @@ public:
   /**
    * Find attributes matching the given name matcher.
    *
-   * @param matcher Matcher to use to find attributes. If \ref XMLQualifiedNameRef::namespacePrefix
-   * is "*", the matcher will match any namespace with the given attribute name.
+   * @param matcher Matcher to use to find attributes. If
+   * \ref donner::xml::XMLQualifiedNameRef::namespacePrefix is `*`, the matcher will match any
+   * namespace with the given attribute name.
    * @return A vector of attributes matching the given name matcher.
    */
   SmallVector<xml::XMLQualifiedNameRef, 1> findMatchingAttributes(
@@ -402,7 +403,7 @@ public:
 
   /**
    * Get the computed CSS style of this element, after the CSS cascade has been applied. The
-   * returned \ref PropertyRegistry contains resolved values for all CSS properties (fill, stroke,
+   * returned \ref donner::svg::PropertyRegistry contains resolved values for all CSS properties (fill, stroke,
    * font-size, etc.).
    */
   const PropertyRegistry& getComputedStyle() const;
@@ -416,7 +417,7 @@ protected:
   static EntityHandle CreateEmptyEntity(SVGDocument& document);
 
   /**
-   * Create a new SVG element instance on a given \ref Entity.
+   * Create a new SVG element instance on a given \ref donner::Entity.
    *
    * @param handle Entity to create the element on.
    * @param tagName XML element type, e.g. "svg" or "rect", which an optional namespace.

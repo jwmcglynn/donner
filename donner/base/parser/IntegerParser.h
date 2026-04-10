@@ -26,7 +26,6 @@ public:
    * Parse a positive integer in decimal format.
    *
    * @param str String to parse, not all characters may be consumed.
-   * @param options Parser options.
    * @return Result containing the number and the number of characters that were parsed.
    */
   static ParseResult<Result> Parse(std::string_view str);
@@ -36,7 +35,6 @@ public:
    * with a prefix (no '0x').
    *
    * @param str String to parse, not all characters may be consumed.
-   * @param options Parser options.
    * @return Result containing the number and the number of characters that were parsed.
    */
   static ParseResult<Result> ParseHex(std::string_view str);

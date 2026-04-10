@@ -41,7 +41,9 @@ public:
   // Non-copyable, movable.
   GeodeDevice(const GeodeDevice&) = delete;
   GeodeDevice& operator=(const GeodeDevice&) = delete;
+  /// Move constructor.
   GeodeDevice(GeodeDevice&&) noexcept;
+  /// Move assignment operator.
   GeodeDevice& operator=(GeodeDevice&&) noexcept;
 
   /// Returns the wgpu::Device. Guaranteed valid for the lifetime of this object.

@@ -446,8 +446,9 @@ private:
    * Union to store the data for the vector.
    */
   union Data {
+    /// Inline buffer backing storage used while the vector fits within \p DefaultSize.
     struct ShortData {
-      alignas(T) std::byte data[sizeof(T) * DefaultSize];
+      alignas(T) std::byte data[sizeof(T) * DefaultSize];  ///< Raw inline storage bytes.
     } shortData;  //!< Data storage for small vectors.
     T* longData;    //!< Data storage for large vectors.
 

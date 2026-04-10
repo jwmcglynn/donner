@@ -65,8 +65,10 @@ class SVGFEFuncAElement : public SVGElement {
   friend class parser::SVGParserImpl;
 
 protected:
+  /// Create an SVGFEFuncAElement wrapper from an entity.
   explicit SVGFEFuncAElement(EntityHandle handle) : SVGElement(handle) {}
 
+  /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEFuncAElement CreateOn(EntityHandle handle);
 
 public:

@@ -28,6 +28,10 @@ namespace donner::svg {
  * @param filterGraph Filter graph to execute.
  * @param deviceFromFilter Transform from filter local coordinates to device coordinates.
  * @param filterRegion Optional filter region in filter local coordinates.
+ * @param clipSourceToFilterRegion If true, clip `pixmap`'s contents to `filterRegion` before
+ *   running the filter graph.
+ * @param fillPaintInput Optional `FillPaint` input pixmap, or nullptr if unused.
+ * @param strokePaintInput Optional `StrokePaint` input pixmap, or nullptr if unused.
  */
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transform2d& deviceFromFilter,

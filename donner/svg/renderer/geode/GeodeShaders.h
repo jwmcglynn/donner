@@ -32,7 +32,7 @@ wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device);
 /**
  * Compile the Slug gradient-fill shader for the given device.
  *
- * Parallel to @ref createSlugFillShader, but bound to a different uniform
+ * Parallel to `createSlugFillShader`, but bound to a different uniform
  * layout that carries linear-gradient parameters (transform, start/end,
  * spread mode, stops) alongside the Slug coverage machinery. See
  * `shaders/slug_gradient.wgsl` for the exact struct layout.

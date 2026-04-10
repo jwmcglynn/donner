@@ -16,7 +16,7 @@ namespace donner::xml {
 class XMLDocument;
 
 /**
- * Represents an XML element belonging to an \ref XMLDocument.
+ * Represents an XML element belonging to an \ref donner::xml::XMLDocument.
  *
  * Each \ref XMLNode may only belong to a single document, and each document can have only one
  * root. XMLDocument is responsible for managing the lifetime of all elements in the document, by
@@ -31,7 +31,7 @@ class XMLDocument;
  * within Components in the ECS.  This makes \ref XMLNode a thin wrapper around an \ref Entity,
  * making the object lightweight and usable on the stack.
  *
- * @see \ref XMLDocument
+ * @see \ref donner::xml::XMLDocument
  * @see \ref EcsArchitecture
  */
 class XMLNode {
@@ -46,8 +46,8 @@ protected:
   explicit XMLNode(EntityHandle handle);
 
   /**
-   * Create an XMLNode for the root node of a document. This is called internally by \ref
-   * XMLDocument.
+   * Create an XMLNode for the root node of a document. This is called internally by
+   * \ref donner::xml::XMLDocument.
    */
   static XMLNode CreateDocumentNode(XMLDocument& document);
 
@@ -55,8 +55,8 @@ public:
   /// Node type, use \ref type() to query the value. To create nodes of different types, use the
   /// relevant static method constructor, such as \ref CreateElementNode and \ref CreateCommentNode.
   enum class Type : uint8_t {
-    /// Document node, which is the root of the document tree. This is created automatically by \ref
-    /// XMLDocument. \ref tagName() and \ref value() are empty.
+    /// Document node, which is the root of the document tree. This is created automatically by
+    /// \ref donner::xml::XMLDocument. \ref tagName() and \ref value() are empty.
     Document,
     /// Element node, representing a regular XML tag, such as `<svg>`. \ref tagName() is the tag
     /// name, and \ref value() contains the text of the first data node.
@@ -296,9 +296,9 @@ public:
    * Set the value of a generic XML attribute, which may be either a presentation attribute or
    * custom user-provided attribute.
    *
-   * This API supports a superset of \ref trySetPresentationAttribute, however its parse errors are
-   * ignored. If the attribute is not a presentation attribute, or there are parse errors the
-   * attribute will be stored as a custom attribute instead.
+   * This API supports a superset of \ref donner::svg::SVGElement::trySetPresentationAttribute,
+   * however its parse errors are ignored. If the attribute is not a presentation attribute, or
+   * there are parse errors the attribute will be stored as a custom attribute instead.
    *
    * @param name Name of the attribute to set.
    * @param value New value to set.

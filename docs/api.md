@@ -56,7 +56,7 @@ flowchart TD
 
 - Donner uses C++20 features such as concepts when possible to improve usability and readability.
 
-- For example, the \ref donner::ElementLike concept is used to make the CSS library usable without depending on the SVG library, or within a test context with \ref donner::FakeElement.
+- For example, the \ref donner::ElementLike concept is used to make the CSS library usable without depending on the SVG library, or within a test context with `FakeElement`.
 
   ```cpp
   template <typename T>
@@ -210,7 +210,7 @@ The output size is determined by \ref donner::svg::SVGDocument, which can either
 - \ref donner::svg::SVGDocument::setCanvasSize()
 - \ref donner::svg::SVGDocument::useAutomaticCanvasSize()
 
-### Using the CSS API
+### Using the CSS API {#UsingTheCssApi}
 
 The CSS API is used internally within the SVG library, but can be used standalone.
 

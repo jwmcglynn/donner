@@ -43,7 +43,7 @@ struct RGBA {
   /**
    * Convert the color to a hex string, such as `#ff0000`.
    *
-   * @returns '#rrggbb' if the color is opaque, or '#rrggbbaa' if the color has an alpha channel.
+   * @returns `#rrggbb` if the color is opaque, or `#rrggbbaa` if the color has an alpha channel.
    */
   std::string toHexString() const;
 
@@ -151,9 +151,11 @@ struct Color {
   /// Equality operator RGBA == Color.
   friend bool operator==(const RGBA& lhs, const Color& rhs) { return rhs == lhs; }
 
+  /// Equality operator for Color == HSLA.
   bool operator==(const HSLA& other) const {
     return std::holds_alternative<HSLA>(value) && std::get<HSLA>(value) == other;
   }
+  /// Equality operator for Color == CurrentColor.
   bool operator==(const CurrentColor& other) const {
     return std::holds_alternative<CurrentColor>(value);
   }

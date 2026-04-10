@@ -15,7 +15,7 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/shapes.html#EllipseElement
  *
  * The `<ellipse>` element draws an oval (a "stretched" circle) with independent horizontal and
- * vertical radii. Think of it as the generalization of \ref xml_circle: set `rx` and `ry` to the
+ * vertical radii. Think of it as the generalization of \ref xml_circle — set `rx` and `ry` to the
  * same value and you get a circle; make them different and you get an oval. Like other
  * \ref elements_basic_shapes, ellipses participate in `fill`, `stroke`, transforms, and all other
  * presentation attributes.

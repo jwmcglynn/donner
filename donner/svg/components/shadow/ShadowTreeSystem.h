@@ -26,7 +26,7 @@ namespace donner::svg::components {
  * @param useEntity The source \ref xml_use that may provide size override.
  * @param symbolEntity The target \ref xml_symbol entity whose properties might be overridden.
  * @param branchType The type of branch being created.
- * @param outWarnings Output vector of parse errors, if any.
+ * @param warningSink Output vector of parse errors, if any.
  * @return true if a component was created, false otherwise.
  */
 using ShadowSizedElementHandler = std::function<bool(
@@ -74,7 +74,7 @@ public:
    * render tree.
    * @param lightTarget Target entity to reflect in the shadow tree.
    * @param href The value of the href attribute for the shadow tree, for diagnostics.
-   * @param outWarnings If provided, warnings will be added to this vector.
+   * @param warningSink If provided, warnings will be added to this vector.
    * @returns The index of the offscreen shadow tree, if \p branchType is not the \ref
    * ShadowBranchType::Main branch. Returns \c std::nullopt if it is.
    */
