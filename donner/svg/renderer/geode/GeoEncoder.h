@@ -166,6 +166,24 @@ public:
   void setTransform(const Transform2d& transform);
 
   /**
+   * Set a scissor rectangle in target-pixel coordinates. Subsequent draws
+   * are clipped to the intersection of (0,0,targetWidth,targetHeight) and
+   * this rectangle. Used by `RendererGeode::pushClip` to implement SVG
+   * viewport rect clipping (nested `<svg>` clip, overflow: hidden, etc.).
+   *
+   * The scissor persists across `setTransform`, `fillPath`, and friends
+   * until explicitly cleared via `clearScissorRect`.
+   *
+   * Negative `x`/`y` and widths/heights that extend past the target are
+   * clamped internally; the caller can pass any AABB in pixel space
+   * without bounds-checking.
+   */
+  void setScissorRect(int32_t x, int32_t y, int32_t w, int32_t h);
+
+  /// Remove any active scissor, restoring full-target rasterization.
+  void clearScissorRect();
+
+  /**
    * Draw a raster image into the given destination rectangle.
    *
    * The image's straight-alpha RGBA8 pixels are uploaded to a fresh

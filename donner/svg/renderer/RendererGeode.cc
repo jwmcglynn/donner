@@ -478,6 +478,57 @@ struct RendererGeode::Impl {
   std::optional<PatternPaintSlot> patternFillPaint;
   std::optional<PatternPaintSlot> patternStrokePaint;
 
+  /// Axis-aligned clip rectangles in target-pixel coords. Each entry
+  /// corresponds to a `pushClip` with a non-empty `clipRect`. The active
+  /// scissor is the intersection of every entry on this stack.
+  /// Entries with `valid == false` represent pushClip calls that had no
+  /// `clipRect` component (path- or mask-only clips) — they're tracked
+  /// so `popClip` stays balanced with `pushClip`.
+  struct ClipStackEntry {
+    Box2d pixelRect;
+    bool valid = false;
+  };
+  std::vector<ClipStackEntry> clipStack;
+
+  /// Recompute the intersection of every rectangular clip entry on
+  /// `clipStack` and apply it to the active encoder as a scissor. Called
+  /// whenever the clip stack changes.
+  void updateEncoderScissor() {
+    if (!encoder) {
+      return;
+    }
+    std::optional<Box2d> active;
+    for (const ClipStackEntry& entry : clipStack) {
+      if (!entry.valid) {
+        continue;
+      }
+      if (!active.has_value()) {
+        active = entry.pixelRect;
+      } else {
+        // Intersect: take the overlap of the two rectangles.
+        const double x0 = std::max(active->topLeft.x, entry.pixelRect.topLeft.x);
+        const double y0 = std::max(active->topLeft.y, entry.pixelRect.topLeft.y);
+        const double x1 = std::min(active->bottomRight.x, entry.pixelRect.bottomRight.x);
+        const double y1 = std::min(active->bottomRight.y, entry.pixelRect.bottomRight.y);
+        active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
+      }
+    }
+    if (!active.has_value()) {
+      encoder->clearScissorRect();
+      return;
+    }
+    // Convert the Box2d corners to integer pixel coords. Floor on topLeft
+    // and ceil on bottomRight so we don't accidentally clip fractional
+    // edge pixels that the rasterizer still wants to cover.
+    const int32_t x = static_cast<int32_t>(std::floor(active->topLeft.x));
+    const int32_t y = static_cast<int32_t>(std::floor(active->topLeft.y));
+    const int32_t w = std::max(
+        0, static_cast<int32_t>(std::ceil(active->bottomRight.x)) - x);
+    const int32_t h = std::max(
+        0, static_cast<int32_t>(std::ceil(active->bottomRight.y)) - y);
+    encoder->setScissorRect(x, y, w, h);
+  }
+
   // Stub-state depth counters — incremented on push, decremented on pop. Used
   // only to keep stack semantics balanced and to drop the warning to stderr
   // exactly once per category in verbose mode.
@@ -796,14 +847,37 @@ void RendererGeode::popTransform() {
   impl_->transformStack.pop_back();
 }
 
-void RendererGeode::pushClip(const ResolvedClip& /*clip*/) {
-  if (impl_->verbose && !impl_->warnedClip) {
-    std::cerr << "RendererGeode: clipping not yet implemented (Phase 3)\n";
+void RendererGeode::pushClip(const ResolvedClip& clip) {
+  // Rectangular clip (the nested-`<svg>` viewport, `overflow: hidden`, and
+  // `<image>` dest-rect cases) is implemented via the WebGPU scissor rect.
+  // Path- and mask-based clipping are still stubbed — they require a
+  // stencil or mask-texture pass which is Phase 3 proper.
+  const bool hasPathOrMaskClip = !clip.clipPaths.empty() || clip.mask.has_value();
+  if (hasPathOrMaskClip && impl_->verbose && !impl_->warnedClip) {
+    std::cerr << "RendererGeode: path/mask clipping not yet implemented (Phase 3)\n";
     impl_->warnedClip = true;
   }
+
+  // Compose the incoming clip rect (in user-space) with the current
+  // transform to get pixel-space coordinates, then push onto the stack.
+  // The active scissor is the INTERSECTION of everything on the stack.
+  Box2d pixelRect;
+  bool valid = false;
+  if (clip.clipRect.has_value()) {
+    const Transform2d& t = impl_->currentTransform;
+    pixelRect = t.transformBox(*clip.clipRect);
+    valid = true;
+  }
+  impl_->clipStack.push_back({pixelRect, valid});
+  impl_->updateEncoderScissor();
 }
 
-void RendererGeode::popClip() {}
+void RendererGeode::popClip() {
+  if (!impl_->clipStack.empty()) {
+    impl_->clipStack.pop_back();
+  }
+  impl_->updateEncoderScissor();
+}
 
 void RendererGeode::pushIsolatedLayer(double /*opacity*/, MixBlendMode /*blendMode*/) {
   if (impl_->verbose && !impl_->warnedLayer) {

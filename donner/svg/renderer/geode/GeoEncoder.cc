@@ -160,6 +160,44 @@ struct GeoEncoder::Impl {
   // Current transform — applied to MVP for the next draw.
   Transform2d transform = Transform2d();  // Identity.
 
+  // Current scissor rectangle in target-pixel coords. An empty/unset
+  // scissor means "no clipping" (full target extent). Applied to each
+  // render pass as it opens via `SetScissorRect` — subsequent pushClip /
+  // popClip updates also re-apply during the currently-active pass.
+  //
+  // `scissorActive == false` means the scissor has never been set OR was
+  // popped back to the default, and draws should rasterize into the full
+  // target. `scissorActive == true` means the current scissor is
+  // `scissorX,scissorY,scissorW,scissorH` (all in target-pixel units).
+  bool scissorActive = false;
+  uint32_t scissorX = 0;
+  uint32_t scissorY = 0;
+  uint32_t scissorW = 0;
+  uint32_t scissorH = 0;
+
+  /// Apply the current scissor to the open render pass. No-op if the
+  /// pass isn't open yet — `ensurePassOpen` will call this on first
+  /// open. Safe to call whenever `scissorActive` / `scissor*` changes.
+  void applyScissorIfPassOpen() {
+    if (!passOpen) {
+      return;
+    }
+    if (scissorActive) {
+      // Clamp to the target so out-of-bounds scissor rects don't trigger
+      // WebGPU validation errors. Required when the clip rect is outside
+      // the current viewport (e.g., a nested SVG positioned at the edge).
+      uint32_t x = std::min(scissorX, targetWidth);
+      uint32_t y = std::min(scissorY, targetHeight);
+      uint32_t maxW = targetWidth - x;
+      uint32_t maxH = targetHeight - y;
+      uint32_t w = std::min(scissorW, maxW);
+      uint32_t h = std::min(scissorH, maxH);
+      pass.SetScissorRect(x, y, w, h);
+    } else {
+      pass.SetScissorRect(0, 0, targetWidth, targetHeight);
+    }
+  }
+
   /// Lazily create the dummy texture + sampler used by the solid-fill path.
   void ensureDummyResources() {
     if (dummyTextureView) {
@@ -223,6 +261,11 @@ struct GeoEncoder::Impl {
     currentPipeline = BoundPipeline::kNone;
     currentPipelineIsGradient = false;
     passOpen = true;
+    // Install any deferred scissor that the renderer requested before the
+    // pass was open (e.g., a `pushClip` made before the first draw of the
+    // encoder). Also ensures a fresh pass re-applies the scissor if a
+    // previous pass was finished and a new one opened.
+    applyScissorIfPassOpen();
   }
 
   /// Track which pipeline is currently bound so we can emit `SetPipeline`
@@ -351,6 +394,27 @@ void GeoEncoder::clear(const css::RGBA& color) {
 
 void GeoEncoder::setTransform(const Transform2d& transform) {
   impl_->transform = transform;
+}
+
+void GeoEncoder::setScissorRect(int32_t x, int32_t y, int32_t w, int32_t h) {
+  // Clamp negative / overflowing values at the u32 boundary so WebGPU's
+  // strict validation never sees an out-of-range value. A scissor with
+  // zero area is valid (clips everything).
+  const int32_t clampedX = std::max(0, x);
+  const int32_t clampedY = std::max(0, y);
+  const int32_t clampedW = std::max(0, w - (clampedX - x));
+  const int32_t clampedH = std::max(0, h - (clampedY - y));
+  impl_->scissorActive = true;
+  impl_->scissorX = static_cast<uint32_t>(clampedX);
+  impl_->scissorY = static_cast<uint32_t>(clampedY);
+  impl_->scissorW = static_cast<uint32_t>(clampedW);
+  impl_->scissorH = static_cast<uint32_t>(clampedH);
+  impl_->applyScissorIfPassOpen();
+}
+
+void GeoEncoder::clearScissorRect() {
+  impl_->scissorActive = false;
+  impl_->applyScissorIfPassOpen();
 }
 
 void GeoEncoder::setLoadPreserve() {
