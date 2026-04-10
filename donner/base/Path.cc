@@ -1409,32 +1409,37 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
     // intersection and tracing to them would self-intersect the ribbon;
     // see the a-stroke-linecap-008/009 resvg regression).
     //
-    // For SHARP inside corners (turn angle >= 60°) with a finite miter
-    // within the miter limit, emit ONLY the miter intersection point.
+    // Unlike OUTSIDE turns, the miter LIMIT does NOT apply here: the
+    // limit exists to prevent the outside miter from sticking arbitrarily
+    // far outward at sharp corners, but the inside miter extends INWARD
+    // into the ribbon interior and has no analogous aesthetic concern.
+    // Capping the inside miter at a limit and falling back to a direct
+    // `prevEnd → curStart` connector would create a figure-8
+    // self-intersection at sharp-chevron inside corners (the
+    // a-stroke-miterlimit-001..005 resvg regression).
     //
-    // For SMOOTH flattened-curve joins (~1–10° turns) the miter point is
-    // geometrically very close to `prevEnd`/`curStart` and using it adds
-    // tiny zig-zag vertices that corrupt ray-cast winding on dense
-    // flattened contours (see `StrokeToFillClosedEllipseInteriorIsEmpty`).
-    // Keep the naive `prevEnd → curStart` connector in that regime — the
-    // sub-halfWidth zig is imperceptible.
-    //
-    // For very-sharp inside turns whose miter would exceed the limit
-    // (close to a U-turn), fall back to the direct connection rather than
-    // emitting a miter point that recedes toward infinity.
+    // We DO still guard against two degenerate cases:
+    //   1. SMOOTH flattened-curve joins (~1–10° turns) — the miter is
+    //      geometrically so close to `prevEnd`/`curStart` that using it
+    //      adds tiny zig-zag vertices which corrupt ray-cast winding on
+    //      dense flattened contours (`StrokeToFillClosedEllipseInteriorIsEmpty`
+    //      regression). Keep the naive connector in that regime — the
+    //      sub-halfWidth zig is imperceptible.
+    //   2. NUMERICALLY ill-conditioned miters (near 180° U-turns where
+    //      `cosHalfAngle → 0`) — `computeMiterPoint` returns `invalid`
+    //      for those and we fall through to the naive connector.
     constexpr double kSharpInsideCosThreshold = 0.866;  // turn angle >= 60°
     constexpr double kSharpInsideMiterRatio = 1.0 / kSharpInsideCosThreshold;
     const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
     if (miter.valid) {
       const double miterRatio = miter.lengthFromVertex / halfWidth;
-      const bool isSharp = miterRatio >= kSharpInsideMiterRatio;
-      const bool withinLimit = miterRatio <= miterLimit;
-      if (isSharp && withinLimit) {
+      if (miterRatio >= kSharpInsideMiterRatio) {
         builder.lineTo(miter.point);
         return;
       }
     }
-    // Fallback: emit the naive `prevEnd → curStart` connector.
+    // Fallback: emit the naive `prevEnd → curStart` connector (used for
+    // gentle joins and for numerically-degenerate miters).
     builder.lineTo(prevEnd);
     builder.lineTo(curStart);
     return;
