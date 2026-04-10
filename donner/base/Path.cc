@@ -1351,15 +1351,32 @@ MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal
 
 /// Emit a line join between two consecutive offset segments.
 ///
-/// \p prevEnd is the end of the previous offset segment on the current side.
-/// \p curStart is the start of the current offset segment on the current side.
-/// \p vertex is the original path vertex (the corner point before offset).
-/// \p prevNormal and \p curNormal are the outward normals of the previous and current segments.
-/// \p halfWidth is half the stroke width.
-/// \p join is the line join style.
-/// \p miterLimit is the SVG miter limit.
-/// \p builder is the PathBuilder to emit to.
-/// \p isLeftSide indicates whether we are building the left (forward) or right (backward) contour.
+/// **Calling convention** — the caller MUST NOT pre-emit `prevEnd` before
+/// calling `emitJoin`. On entry the cursor sits at the previous iteration's
+/// "exit point" (either `curStart` of the last outside join, the miter point
+/// of the last inside join, or `leftStart` for the very first join). The
+/// join itself is responsible for emitting `prevEnd` when the contour
+/// actually needs to traverse it (outside turns), and for skipping it
+/// entirely on inside turns where the ribbon's outer boundary truncates
+/// at the miter intersection instead.
+///
+/// This matters because the inside-turn miter point lies on both adjacent
+/// offset lines and is typically BEFORE the corresponding `prevEnd` /
+/// `curStart` (i.e., between them and the vertex). If the caller had
+/// pre-emitted `prevEnd`, the polygon edge `prevEnd → miter` would
+/// backtrack along the previous offset line, producing a self-intersecting
+/// ribbon that rendered as a starburst of artifacts in EvenOdd fill mode.
+///
+/// \p prevEnd    end of the previous offset segment on the current side.
+/// \p curStart   start of the current offset segment on the current side.
+/// \p vertex     the original path vertex (the corner point before offset).
+/// \p prevNormal outward normal of the previous segment on the current side.
+/// \p curNormal  outward normal of the current segment on the current side.
+/// \p halfWidth  half the stroke width.
+/// \p join       line-join style for outside turns.
+/// \p miterLimit SVG `stroke-miterlimit` value.
+/// \p builder    the PathBuilder to emit to.
+/// \p isLeftSide whether this is the left (forward) or right (backward) contour.
 void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d& vertex,
               const Vector2d& prevNormal, const Vector2d& curNormal, double halfWidth,
               LineJoin join, double miterLimit, PathBuilder& builder, bool isLeftSide) {
@@ -1368,9 +1385,13 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
   // For a left turn (counter-clockwise), the outside is on the left side.
   const double cross = prevNormal.x * curNormal.y - prevNormal.y * curNormal.x;
 
-  // If the normals are nearly parallel, just connect with a line.
+  // Nearly-parallel normals: the two offset lines are colinear (straight
+  // run through `vertex`), so the ribbon has no corner to speak of. Emit
+  // `prevEnd` so the polygon edge covers the end of the previous segment,
+  // then fall through — the next iteration's `emitJoin` (or the final
+  // post-loop `lineTo`) will carry the contour to the next point.
   if (NearZero(cross, 1e-10)) {
-    builder.lineTo(curStart);
+    builder.lineTo(prevEnd);
     return;
   }
 
@@ -1380,38 +1401,27 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
   const bool isOutside = isLeftSide ? (cross < 0.0) : (cross > 0.0);
 
   if (!isOutside) {
-    // Inside of the turn: the naive `lineTo(curStart)` connects two points
-    // that are both `halfWidth` from `vertex` on different offset directions,
-    // so the resulting edge zig-zags back through the interior of the stroke
-    // ribbon. Neither NonZero nor EvenOdd renders that cleanly; the symptoms
-    // are:
-    //   - Phase 2D: full-width diagonal streaks inside stroked rects/ellipses
-    //     (Geode goldens rect2, ellipse1, quadbezier1, rotated-rect).
-    //   - Phase 2C: gaps / extra triangles at the concave side of sharp
-    //     open-subpath corners like the inverted-V apex in the
-    //     stroking_linejoin Geode golden.
+    // Inside of the turn: the two offset lines cross *before* reaching
+    // `prevEnd` / `curStart`. The true ribbon boundary terminates the
+    // previous segment and restarts the current segment at that
+    // intersection — the miter point. The polygon must NOT visit
+    // `prevEnd` or `curStart` (they sit on the wrong side of the
+    // intersection and tracing to them would self-intersect the ribbon;
+    // see the a-stroke-linecap-008/009 resvg regression).
     //
-    // For SHARP inside corners (turn angle >= 60°, i.e.
-    // `cosHalfAngle <= cos(30°) ≈ 0.866`), replace the naive edge with the
-    // true intersection of the two offset lines via `computeMiterPoint`. The
-    // intersection lies on both offset lines, so the polygon edge from the
-    // previous segment's offset end to the miter point cancels (in winding)
-    // against the backward traversal of the same offset line; the net
-    // traced shape is the clean inner miter corner. This handles angular
-    // polygon corners (rect 90°, inverted-V ~127°) and the Phase 2C
-    // sharp-open-corner case.
+    // For SHARP inside corners (turn angle >= 60°) with a finite miter
+    // within the miter limit, emit ONLY the miter intersection point.
     //
-    // For SMOOTH flattened-curve joins (~1–10° turns), keep the original
-    // `lineTo(curStart)` behavior. The correct miter point is geometrically
-    // close to `curStart` but adds tiny zig-zag vertices on dense flattened
-    // ellipse contours that have been observed to corrupt ray-cast winding
-    // (see the `StrokeToFillClosedEllipseInteriorIsEmpty` regression). The
-    // sub-halfWidth zig is visually imperceptible in that regime.
+    // For SMOOTH flattened-curve joins (~1–10° turns) the miter point is
+    // geometrically very close to `prevEnd`/`curStart` and using it adds
+    // tiny zig-zag vertices that corrupt ray-cast winding on dense
+    // flattened contours (see `StrokeToFillClosedEllipseInteriorIsEmpty`).
+    // Keep the naive `prevEnd → curStart` connector in that regime — the
+    // sub-halfWidth zig is imperceptible.
     //
-    // For very-sharp inside turns beyond the miter limit (miterRatio >
-    // miterLimit, close to a U-turn), fall back to the direct connection —
-    // the intersection recedes toward infinity and emitting it would inject
-    // spurious far-away vertices.
+    // For very-sharp inside turns whose miter would exceed the limit
+    // (close to a U-turn), fall back to the direct connection rather than
+    // emitting a miter point that recedes toward infinity.
     constexpr double kSharpInsideCosThreshold = 0.866;  // turn angle >= 60°
     constexpr double kSharpInsideMiterRatio = 1.0 / kSharpInsideCosThreshold;
     const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
@@ -1424,11 +1434,17 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
         return;
       }
     }
+    // Fallback: emit the naive `prevEnd → curStart` connector.
+    builder.lineTo(prevEnd);
     builder.lineTo(curStart);
     return;
   }
 
-  // Outside of the turn: apply the join style.
+  // Outside of the turn: traverse to `prevEnd` (end of the previous offset
+  // segment), then apply the requested join style, then finish at
+  // `curStart` (start of the current offset segment).
+  builder.lineTo(prevEnd);
+
   switch (join) {
     case LineJoin::Bevel:
       // Simple: connect the two offset endpoints with a straight line.
@@ -1615,25 +1631,41 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
 
   // ---- Left contour (forward walk) ----
   // Offset each segment to the left by halfWidth.
-
-  // Start point of the left contour.
+  //
+  // Invariant: `emitJoin` is responsible for emitting the end of the
+  // previous offset segment (`prevEnd`) on OUTSIDE turns and for
+  // short-circuiting directly to the miter intersection on sharp INSIDE
+  // turns (skipping both `prevEnd` and `curStart`). The caller must NOT
+  // pre-emit `prevEnd` — doing so would cause the polygon to backtrack
+  // along the previous offset line on inside-turn vertices, producing a
+  // self-intersecting ribbon.
+  //
+  // Trace shape: `leftStart → (joins) → (end of final segment)`.
+  // At the entry to each iteration `i`, the cursor is guaranteed to sit
+  // on the SEGMENT(i-1) offset line — either at `leftStart` (i=1), at
+  // `curStart` from the previous iteration's outside join, or at the
+  // previous iteration's inside miter point (which also lies on segment
+  // (i-1)'s offset line by construction).
   const Vector2d leftStart = pts[0] + normals[0] * halfWidth;
   builder.moveTo(leftStart);
 
-  // Emit the first segment's end on the left side.
-  builder.lineTo(pts[1] + normals[0] * halfWidth);
-
-  // For each subsequent segment, emit a join then the segment.
+  // Each iteration processes the join at `pts[i]` between segment (i-1)
+  // and segment i. emitJoin handles the end-of-prev-offset / start-of-cur-
+  // offset bookkeeping itself.
   for (size_t i = 1; i < numSegments; ++i) {
     const Vector2d prevEnd = pts[i] + normals[i - 1] * halfWidth;
     const Vector2d curStart = pts[i] + normals[i] * halfWidth;
 
     emitJoin(prevEnd, curStart, pts[i], normals[i - 1], normals[i], halfWidth, style.join,
              style.miterLimit, builder, /*isLeftSide=*/true);
-
-    // Emit end of current segment on left side.
-    builder.lineTo(pts[i + 1] + normals[i] * halfWidth);
   }
+
+  // Emit the end of the LAST segment's offset. For a stroke with a single
+  // segment (numSegments == 1, skipping the loop) this produces a straight
+  // left-side edge from `leftStart` to the end of segment 0's offset. For
+  // multi-segment strokes this completes the traversal from the last
+  // join's exit point (curStart or miter.point) to the far endpoint.
+  builder.lineTo(pts[n - 1] + normals[numSegments - 1] * halfWidth);
 
   if (subpath.closed) {
     // For closed subpaths, join the last segment to the first.
@@ -1649,23 +1681,27 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     builder.closePath();
 
     // ---- Right contour (inner, wound opposite direction for closed paths) ----
-    // Walk backward, offset to the right (i.e., negate the normal).
+    // Walk backward, offset to the right (i.e., negate the normal). Same
+    // "caller does not pre-emit prevEnd" invariant as the left contour.
     const Vector2d rightStart = pts[0] - normals[0] * halfWidth;
     builder.moveTo(rightStart);
-
-    builder.lineTo(pts[1] - normals[0] * halfWidth);
 
     for (size_t i = 1; i < numSegments; ++i) {
       const Vector2d prevEnd = pts[i] - normals[i - 1] * halfWidth;
       const Vector2d curStart = pts[i] - normals[i] * halfWidth;
 
-      // On the right side, the "outside" sense is flipped.
+      // On the right side, the "outside" sense is flipped — feed emitJoin
+      // the flipped normals so its cross-product sign classification
+      // points at the right-contour outside.
       emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i - 1].x, -normals[i - 1].y),
                Vector2d(-normals[i].x, -normals[i].y), halfWidth, style.join, style.miterLimit,
                builder, /*isLeftSide=*/true);
-
-      builder.lineTo(pts[i + 1] - normals[i] * halfWidth);
     }
+
+    // NOTE: unlike the OPEN case, closed paths do NOT need a post-loop
+    // lineTo here — the following wrap-around emitJoin will emit the end
+    // of segment (numSegments-1)'s offset as its own `prevEnd` for outside
+    // turns, and will correctly short-circuit on inside turns.
 
     // Close the right contour with a join at the start/end point.
     {
@@ -1683,22 +1719,21 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     // ---- Open subpath: cap at end, then right contour backward, then cap at start ----
 
     // End cap: going from the left side to the right side at the last point.
+    // On entry the left contour has ended at `pts[n-1] + normals[numSegments-1] * halfWidth`
+    // (the end of the last segment's offset) — the cap sweeps from that
+    // cursor over to the mirrored point on the right side.
     {
       const Vector2d endDir = (pts[n - 1] - pts[n - 2]).normalize();
       emitCap(pts[n - 1], endDir, halfWidth, style.cap, builder);
     }
 
     // ---- Right contour (backward walk) ----
-    // Walk segments in reverse, offset to the right (negate normal).
-    // We are already at the right side of the last point after the cap.
-    builder.lineTo(pts[n - 1] - normals[numSegments - 1] * halfWidth);
-
+    // Same "caller does not pre-emit prevEnd" invariant as the left
+    // contour. The cursor entering the loop sits at `pts[n-1] - normals[numSegments-1] * halfWidth`
+    // (the start of the right-contour traversal, which is where the end
+    // cap ended). Each iteration processes the join at `pts[i]` between
+    // segment i (previous, in the backward walk) and segment i-1 (current).
     for (size_t i = numSegments - 1; i > 0; --i) {
-      builder.lineTo(pts[i] - normals[i] * halfWidth);
-
-      // Join between segment i and segment i-1 on the right side (walking backward).
-      // When walking backward, the "previous" is normals[i] and "current" is normals[i-1],
-      // but negated since we're on the right side.
       const Vector2d prevEnd = pts[i] - normals[i] * halfWidth;
       const Vector2d curStart = pts[i] - normals[i - 1] * halfWidth;
 
@@ -1707,6 +1742,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
                style.miterLimit, builder, /*isLeftSide=*/true);
     }
 
+    // End of the final (= seg 0) offset on the right side.
     builder.lineTo(pts[0] - normals[0] * halfWidth);
 
     // Start cap: going from the right side to the left side at the first point.

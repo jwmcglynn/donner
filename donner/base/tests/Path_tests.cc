@@ -1736,4 +1736,68 @@ TEST(Path, OstreamVertex) {
   EXPECT_NE(oss.str().find("Vertex"), std::string::npos);
 }
 
+// Regression for the emitJoin restructure (a-stroke-linecap-008). The open
+// triangle `M150,50 L150,130 L50,90 L150,50` has sharp inside turns at
+// every interior vertex; the pre-restructure strokeSubpath pre-emitted
+// `prevEnd` before `emitJoin`, which caused the polygon to backtrack along
+// the previous offset line when emitJoin substituted a miter point for
+// an inside turn — producing a wildly self-intersecting ribbon. The
+// invariant now is: `emitJoin` is responsible for emitting `prevEnd` on
+// outside turns (or a miter substitute on inside turns); the caller does
+// not pre-emit it. This test locks that invariant in place by verifying
+// the left-side contour trace stays monotonic along each segment's offset
+// line rather than backtracking into the previous segment.
+TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
+  Path path = PathBuilder()
+                  .moveTo({150, 50})
+                  .lineTo({150, 130})
+                  .lineTo({50, 90})
+                  .lineTo({150, 50})
+                  .build();
+  StrokeStyle style;
+  style.width = 20.0;
+  style.cap = LineCap::Round;
+  style.join = LineJoin::Miter;
+  style.miterLimit = 4.0;
+  Path filled = path.strokeToFill(style);
+  ASSERT_FALSE(filled.empty());
+
+  // The first LineTo in the stroke polygon must start the left contour on
+  // segment 0's offset and NOT backtrack (y should move monotonically along
+  // the first segment's offset direction before any inside-miter vertex).
+  // We assert this via the bounding box: segment 0 runs from y=50 down to
+  // y=130 in path space. After applying halfWidth=10 offset, the bounding
+  // box in y covers approximately [40, 145] (the outside miters at pts[1]
+  // extend past y=130). If the forward trace had backtracked, we'd see
+  // duplicate y coordinates along a vertical edge at x=140 (the left
+  // offset of segment 0), which manifests as the same x appearing with
+  // non-monotonic y values in the polygon output.
+  const auto commands = filled.commands();
+  const auto pts = filled.points();
+  double lastYOnSeg0Offset = -1.0;
+  bool seenIncrease = false;
+  for (const auto& cmd : commands) {
+    if (cmd.verb != Path::Verb::MoveTo && cmd.verb != Path::Verb::LineTo) {
+      continue;
+    }
+    const Vector2d& p = pts[cmd.pointIndex];
+    // Only check points on segment 0's left offset (x ≈ 140).
+    if (std::abs(p.x - 140.0) > 0.5) {
+      break;  // Left the seg 0 offset region; stop checking.
+    }
+    if (lastYOnSeg0Offset < 0) {
+      lastYOnSeg0Offset = p.y;
+      continue;
+    }
+    // y should be monotonically non-decreasing while we walk the seg 0
+    // offset forward. A decrease indicates a backtrack.
+    ASSERT_GE(p.y, lastYOnSeg0Offset - 0.01) << "Left contour backtracked along seg 0 offset";
+    if (p.y > lastYOnSeg0Offset + 0.01) {
+      seenIncrease = true;
+    }
+    lastYOnSeg0Offset = p.y;
+  }
+  EXPECT_TRUE(seenIncrease) << "Expected at least one forward step along seg 0 offset";
+}
+
 }  // namespace donner
