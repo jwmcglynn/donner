@@ -176,7 +176,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"only-stdDeviation.svg", Params::WithThreshold(0.04f, kDefaultMismatchedPixels, "Minor blur diffs")},
                                     {"with-flood-color.svg", Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor blur diffs")},
                                 
-                                    {"with-percent-offset.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"with-percent-offset.svg", Params::Skip("Bug: feDropShadow edge case")},
                                 })),
     TestNameFromFilename);
 
@@ -211,9 +211,9 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"with-subregion-4.svg", Params::WithThreshold(kDefaultThreshold, 15000, "Absolute subregion coords")},
                                     {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
                                 
-                                    {"with-x-y-and-protruding-subregion-1.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-x-y-and-protruding-subregion-2.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-x-y.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"with-x-y-and-protruding-subregion-1.svg", Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                                    {"with-x-y-and-protruding-subregion-2.svg", Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                                    {"with-x-y.svg", Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
                                 })),
     TestNameFromFilename);
 
@@ -228,11 +228,11 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(FiltersFeMorphology, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("filters/feMorphology",
                                 {
-                                    {"empty-radius.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"negative-radius.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"no-radius.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"radius-with-too-many-values.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"zero-radius.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"empty-radius.svg", Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
+                                    {"negative-radius.svg", Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
+                                    {"no-radius.svg", Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
+                                    {"radius-with-too-many-values.svg", Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
+                                    {"zero-radius.svg", Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
                                 })),
                          TestNameFromFilename);
 
@@ -299,10 +299,10 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"transform-on-shape-with-filter-region.svg", Params::Skip("Bug: We don't blur the right edge")},
                                     {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "Minor shading differences")},
                                 
-                                    {"content-outside-the-canvas-2.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"in=BackgroundAlpha.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-mask-on-parent.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-transform-outside-of-canvas.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"content-outside-the-canvas-2.svg", Params::Skip("Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                                    {"in=BackgroundAlpha.svg", Params::Skip("Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                                    {"with-mask-on-parent.svg", Params::Skip("Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
+                                    {"with-transform-outside-of-canvas.svg", Params::Skip("Bug: <filter> edge cases (filterRes, filterUnits, multiple inputs)")},
                                 })),
     TestNameFromFilename);
 
@@ -380,9 +380,9 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"switch-is-not-a-valid-child.svg", Params::Skip("Not impl: <switch>")},
                                     {"with-use-child.svg", Params::Skip("Not impl: <use> child")},
                                 
-                                    {"circle-shorthand-with-stroke-box.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"circle-shorthand-with-view-box.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"circle-shorthand.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"circle-shorthand-with-stroke-box.svg", Params::Skip("Bug: clipPath edge cases beyond core support")},
+                                    {"circle-shorthand-with-view-box.svg", Params::Skip("Bug: clipPath edge cases beyond core support")},
+                                    {"circle-shorthand.svg", Params::Skip("Bug: clipPath edge cases beyond core support")},
                                 })),
     TestNameFromFilename);
 
@@ -395,12 +395,12 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"recursive-on-child.svg", Params::RenderOnly("UB: Recursive on child")},
                                     {"with-image.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "Mask with <image> (bilinear edge diffs)")},
                                 
-                                    {"half-width-region-with-rotation.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"mask-on-self-with-mask-type=alpha.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"mask-on-self-with-mixed-mask-type.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"mask-type-in-style.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"mask-type=alpha.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-group-with-transform.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"half-width-region-with-rotation.svg", Params::Skip("Bug: mask edge cases (color-interpolation, mask-units, mask-type) need investigation")},
+                                    {"mask-on-self-with-mask-type=alpha.svg", Params::Skip("Bug: mask edge cases (color-interpolation, mask-units, mask-type) need investigation")},
+                                    {"mask-on-self-with-mixed-mask-type.svg", Params::Skip("Bug: mask edge cases (color-interpolation, mask-units, mask-type) need investigation")},
+                                    {"mask-type-in-style.svg", Params::Skip("Bug: mask edge cases (color-interpolation, mask-units, mask-type) need investigation")},
+                                    {"mask-type=alpha.svg", Params::Skip("Bug: mask edge cases (color-interpolation, mask-units, mask-type) need investigation")},
+                                    {"on-group-with-transform.svg", Params::Skip("Bug: mask edge cases (color-interpolation, mask-units, mask-type) need investigation")},
                                 })),
     TestNameFromFilename);
 
@@ -471,18 +471,18 @@ INSTANTIATE_TEST_SUITE_P(PaintingColor, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(PaintingContext, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("painting/context",
                                 {
-                                    {"in-marker.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"in-nested-marker.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"in-nested-use-and-marker.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-shape-with-zero-size-bbox.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-gradient-and-gradient-transform.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-gradient-in-use.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-gradient-on-marker.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-pattern-and-transform-in-use.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-pattern-in-use.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-pattern-objectBoundingBox-in-use.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-pattern-on-marker.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-text.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"in-marker.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"in-nested-marker.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"in-nested-use-and-marker.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"on-shape-with-zero-size-bbox.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-gradient-and-gradient-transform.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-gradient-in-use.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-gradient-on-marker.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-pattern-and-transform-in-use.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-pattern-in-use.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-pattern-objectBoundingBox-in-use.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-pattern-on-marker.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
+                                    {"with-text.svg", Params::Skip("Not impl: context-fill / context-stroke (parsed but not honored at render)")},
                                 })),
                          TestNameFromFilename);
 
@@ -518,8 +518,8 @@ INSTANTIATE_TEST_SUITE_P(PaintingFillRule, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(PaintingImageRendering, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("painting/image-rendering",
                                 {
-                                    {"on-feImage.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"optimizeSpeed.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"on-feImage.svg", Params::Skip("Not impl: image-rendering property (pixelated/crisp-edges/smooth)")},
+                                    {"optimizeSpeed.svg", Params::Skip("Not impl: image-rendering property (pixelated/crisp-edges/smooth)")},
                                 })),
                          TestNameFromFilename);
 
@@ -540,9 +540,9 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"with-an-image-child.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-with-an-image-child.png").withReason("We (correctly)")},
                                     {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
                                 
-                                    {"marker-on-rounded-rect.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"marker-on-rounded-rect.svg", Params::Skip("Bug: marker edge cases (rounded-rect path corners, recursive-5)")},
                                     {"percent-values.svg", Params::Skip("Bug: intrinsic sizing + percent resolution with non-square viewBox; see ShapesEllipse")},
-                                    {"recursive-5.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"recursive-5.svg", Params::Skip("Bug: marker edge cases (rounded-rect path corners, recursive-5)")},
                                 })),
     TestNameFromFilename);
 
@@ -565,14 +565,14 @@ INSTANTIATE_TEST_SUITE_P(PaintingOverflow, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(PaintingPaintOrder, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("painting/paint-order",
                                 {
-                                    {"fill-markers-stroke.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"markers-stroke.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"markers.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"stroke-markers-fill.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"stroke-markers.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"stroke.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"fill-markers-stroke.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"markers-stroke.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"markers.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"on-text.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"on-tspan.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"stroke-markers-fill.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"stroke-markers.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
+                                    {"stroke.svg", Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
                                 })),
                          TestNameFromFilename);
 
@@ -598,10 +598,10 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"negative-sum.svg", Params::RenderOnly("UB (negative sum)")},
                                     {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
                                 
-                                    {"0-n-with-butt-caps.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"0-n-with-round-caps.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"0-n-with-square-caps.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"n-0.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"0-n-with-butt-caps.svg", Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
+                                    {"0-n-with-round-caps.svg", Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
+                                    {"0-n-with-square-caps.svg", Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
+                                    {"n-0.svg", Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
                                 })),
     TestNameFromFilename);
 
@@ -718,9 +718,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(StructureA, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("structure/a",
                                 {
-                                    {"inside-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"inside-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"inside-text.svg", Params::Skip("Not impl: <a> link element rendering / hyperlink processing")},
+                                    {"inside-tspan.svg", Params::Skip("Not impl: <a> link element rendering / hyperlink processing")},
+                                    {"on-tspan.svg", Params::Skip("Not impl: <a> link element rendering / hyperlink processing")},
                                 })),
                          TestNameFromFilename);
 
@@ -747,24 +747,24 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"url-to-png.svg", Params::Skip("Not impl: External URLs")},
                                     {"url-to-svg.svg", Params::Skip("Not impl: External URLs")},
                                 
-                                    {"embedded-16bit-png.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"embedded-gif.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"embedded-jpeg-without-mime.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"embedded-png.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"embedded-svg-with-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"external-gif.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"external-png.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"no-height-non-square.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"no-height.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"no-width-and-height.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"no-width.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"preserveAspectRatio=none.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"preserveAspectRatio=xMaxYMax-meet.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"preserveAspectRatio=xMidYMid-meet.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"preserveAspectRatio=xMinYMin-meet.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"raster-image-and-size-with-odd-numbers.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"width-and-height-set-to-auto.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-transform.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"embedded-16bit-png.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"embedded-gif.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"embedded-jpeg-without-mime.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"embedded-png.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"embedded-svg-with-text.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"external-gif.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"external-png.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"no-height-non-square.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"no-height.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"no-width-and-height.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"no-width.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"preserveAspectRatio=none.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"preserveAspectRatio=xMaxYMax-meet.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"preserveAspectRatio=xMidYMid-meet.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"preserveAspectRatio=xMinYMin-meet.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"raster-image-and-size-with-odd-numbers.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"width-and-height-set-to-auto.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
+                                    {"with-transform.svg", Params::Skip("Bug: <image> rendering layout/sizing differs from golden (embedded data URLs render but at wrong size; preserveAspectRatio modes need investigation)")},
                                 })),
     TestNameFromFilename);
 
@@ -814,26 +814,26 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"viewBox-not-at-zero-pos.svg", Params::WithThreshold(0.13f, kDefaultMismatchedPixels, "Has anti-aliasing artifacts.")},
                                     {"xmlns-validation.svg", Params::Skip("Bug? xmlns validation")},
                                 
-                                    {"funcIRI-with-quotes.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"funcIRI-with-quotes.svg", Params::Skip("Bug: <svg> root element edge cases")},
+                                    {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params::Skip("Bug: <svg> root element edge cases")},
                                 })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StructureSwitch, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("structure/switch",
                                 {
-                                    {"comment-as-first-child.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"display-none-on-child.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"non-SVG-child.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"requiredFeatures.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"simple-case.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"systemLanguage.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"systemLanguage=en-GB.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"systemLanguage=en-US.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"systemLanguage=en.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"systemLanguage=ru-Ru.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"systemLanguage=ru-en.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-attributes.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"comment-as-first-child.svg", Params::Skip("Not impl: <switch>")},
+                                    {"display-none-on-child.svg", Params::Skip("Not impl: <switch>")},
+                                    {"non-SVG-child.svg", Params::Skip("Not impl: <switch>")},
+                                    {"requiredFeatures.svg", Params::Skip("Not impl: <switch>")},
+                                    {"simple-case.svg", Params::Skip("Not impl: <switch>")},
+                                    {"systemLanguage.svg", Params::Skip("Not impl: <switch>")},
+                                    {"systemLanguage=en-GB.svg", Params::Skip("Not impl: <switch>")},
+                                    {"systemLanguage=en-US.svg", Params::Skip("Not impl: <switch>")},
+                                    {"systemLanguage=en.svg", Params::Skip("Not impl: <switch>")},
+                                    {"systemLanguage=ru-Ru.svg", Params::Skip("Not impl: <switch>")},
+                                    {"systemLanguage=ru-en.svg", Params::Skip("Not impl: <switch>")},
+                                    {"with-attributes.svg", Params::Skip("Not impl: <switch>")},
                                 })),
                          TestNameFromFilename);
 
@@ -848,9 +848,9 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(StructureSystemLanguage, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("structure/systemLanguage",
                                 {
-                                    {"on-svg.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"ru-Ru.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"on-svg.svg", Params::Skip("Not impl: systemLanguage conditional processing")},
+                                    {"on-tspan.svg", Params::Skip("Not impl: systemLanguage conditional processing")},
+                                    {"ru-Ru.svg", Params::Skip("Not impl: systemLanguage conditional processing")},
                                 })),
                          TestNameFromFilename);
 
@@ -909,27 +909,27 @@ INSTANTIATE_TEST_SUITE_P(
                                 {
                                     {"xlink-to-an-external-file.svg", Params::Skip("Not impl: External file.")},
                                 
-                                    {"nested-xlink-to-svg-element-with-rect-and-size.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"xlink-to-svg-element-with-rect-only-width.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"xlink-to-svg-element-with-rect.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"xlink-to-svg-element-with-viewBox.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"xlink-to-svg-element-with-width-height-on-use.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"nested-xlink-to-svg-element-with-rect-and-size.svg", Params::Skip("Bug: <use> referencing inline <svg> elements with various width/height/viewBox combinations")},
+                                    {"xlink-to-svg-element-with-rect-only-width.svg", Params::Skip("Bug: <use> referencing inline <svg> elements with various width/height/viewBox combinations")},
+                                    {"xlink-to-svg-element-with-rect.svg", Params::Skip("Bug: <use> referencing inline <svg> elements with various width/height/viewBox combinations")},
+                                    {"xlink-to-svg-element-with-viewBox.svg", Params::Skip("Bug: <use> referencing inline <svg> elements with various width/height/viewBox combinations")},
+                                    {"xlink-to-svg-element-with-width-height-on-use.svg", Params::Skip("Bug: <use> referencing inline <svg> elements with various width/height/viewBox combinations")},
                                 })),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextAlignmentBaseline, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/alignment-baseline",
                                 {
-                                    {"after-edge.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"baseline.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"before-edge.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"hanging-on-vertical.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"ideographic.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"middle-on-textPath.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"middle.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"text-after-edge.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"text-before-edge.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"two-textPath-with-middle-on-first.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"after-edge.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"baseline.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"before-edge.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"hanging-on-vertical.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"ideographic.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"middle-on-textPath.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"middle.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"text-after-edge.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"text-before-edge.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
+                                    {"two-textPath-with-middle-on-first.svg", Params::Skip("Not impl: full alignment-baseline keyword set + tspan baseline alignment")},
                                 })),
                          TestNameFromFilename);
 
@@ -945,28 +945,28 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(TextDirection, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/direction",
                                 {
-                                    {"rtl-with-vertical-writing-mode.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"rtl.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"rtl-with-vertical-writing-mode.svg", Params::Skip("Not impl: direction property (BiDi text shaping)")},
+                                    {"rtl.svg", Params::Skip("Not impl: direction property (BiDi text shaping)")},
                                 })),
                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextDominantBaseline, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/dominant-baseline",
                                 {
-                                    {"alignment-baseline-and-baseline-shift-on-tspans.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"alignment-baseline=baseline-on-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"complex.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"dummy-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"hanging.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"inherit.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"middle.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"nested.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"no-change.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"reset-size.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"sequential.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"text-after-edge.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"text-before-edge.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"use-script.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"alignment-baseline-and-baseline-shift-on-tspans.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"alignment-baseline=baseline-on-tspan.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"complex.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"dummy-tspan.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"hanging.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"inherit.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"middle.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"nested.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"no-change.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"reset-size.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"sequential.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"text-after-edge.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"text-before-edge.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
+                                    {"use-script.svg", Params::Skip("Not impl: full dominant-baseline keyword set (incl. before/after-edge, no-change, reset-size, use-script)")},
                                 })),
                          TestNameFromFilename);
 
@@ -976,7 +976,7 @@ INSTANTIATE_TEST_SUITE_P(
                                 {
                                     {"simple-case.svg", Params::Skip("Canvas size mismatch (400 vs 500)")},
                                 
-                                    {"font-shorthand.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"font-shorthand.svg", Params::Skip("Not impl: font shorthand property")},
                                 })),
     TestNameFromFilename);
 
@@ -1000,8 +1000,8 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(TextFontKerning, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/font-kerning",
                                 {
-                                    {"arabic-script.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"none.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"arabic-script.svg", Params::Skip("Not impl: font-kerning property (HarfBuzz feature toggle)")},
+                                    {"none.svg", Params::Skip("Not impl: font-kerning property (HarfBuzz feature toggle)")},
                                 })),
                          TestNameFromFilename);
 
@@ -1018,7 +1018,7 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(TextFontSizeAdjust, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/font-size-adjust",
                                 {
-                                    {"simple-case.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"simple-case.svg", Params::Skip("Not impl: font-size-adjust property")},
                                 })),
                          TestNameFromFilename);
 
@@ -1046,31 +1046,31 @@ INSTANTIATE_TEST_SUITE_P(TextFontWeight, ImageComparisonTestFixture,
 INSTANTIATE_TEST_SUITE_P(TextGlyphOrientationHorizontal, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/glyph-orientation-horizontal",
                                 {
-                                    {"simple-case.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"simple-case.svg", Params::Skip("Not impl: glyph-orientation-horizontal (deprecated SVG 1.1)")},
                                 })),
                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextGlyphOrientationVertical, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/glyph-orientation-vertical",
                                 {
-                                    {"simple-case.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"simple-case.svg", Params::Skip("Not impl: glyph-orientation-vertical (deprecated SVG 1.1)")},
                                 })),
                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextKerning, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/kerning",
                                 {
-                                    {"0.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"10percent.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"0.svg", Params::Skip("Not impl: kerning attribute (deprecated SVG 1.1)")},
+                                    {"10percent.svg", Params::Skip("Not impl: kerning attribute (deprecated SVG 1.1)")},
                                 })),
                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(TextLengthAdjust, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/lengthAdjust",
                                 {
-                                    {"text-on-path.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"vertical.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-underline.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"text-on-path.svg", Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
+                                    {"vertical.svg", Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
+                                    {"with-underline.svg", Params::Skip("Not impl: lengthAdjust attribute (parented to textLength)")},
                                 })),
                          TestNameFromFilename);
 
@@ -1083,7 +1083,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"non-ASCII-character.svg", Params::Skip("Bug? We render with a different CJK glyph. Wrong font?")},
                                     {"on-Arabic.svg", Params().requireFeature(RendererBackendFeature::TextFull).withReason("Arabic text")},
                                 
-                                    {"filter-bbox.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"filter-bbox.svg", Params::Skip("Bug: letter-spacing edge cases")},
                                 })),
     TestNameFromFilename);
 
@@ -1118,12 +1118,12 @@ INSTANTIATE_TEST_SUITE_P(
                                          .withReason("Complex diacritics; vertical-axis AA diff "
                                                      "not the focus of the test")},
                                 
-                                    {"filter-bbox.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"ligatures-handling-in-mixed-fonts-1.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"ligatures-handling-in-mixed-fonts-2.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"filter-bbox.svg", Params::Skip("Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
+                                    {"ligatures-handling-in-mixed-fonts-1.svg", Params::Skip("Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
+                                    {"ligatures-handling-in-mixed-fonts-2.svg", Params::Skip("Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
                                     {"percent-value-on-dx-and-dy.svg", Params::Skip("Bug: intrinsic sizing + percent resolution with non-square viewBox; see ShapesEllipse")},
                                     {"percent-value-on-x-and-y.svg", Params::Skip("Bug: intrinsic sizing + percent resolution with non-square viewBox; see ShapesEllipse")},
-                                    {"real-text-height.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"real-text-height.svg", Params::Skip("Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
                                 })),
     TestNameFromFilename);
 
@@ -1147,8 +1147,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"tspan-decoration.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "Minor AA diffs")},
                                     {"underline-with-rotate-list-4.svg", Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "Minor shading diffs")},
                                 
-                                    {"indirect-with-multiple-colors.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-textLength-on-a-single-character.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"indirect-with-multiple-colors.svg", Params::Skip("Not impl: text-decoration full SVG2 support (line/style/color independent)")},
+                                    {"with-textLength-on-a-single-character.svg", Params::Skip("Not impl: text-decoration full SVG2 support (line/style/color independent)")},
                                 })),
     TestNameFromFilename);
 
@@ -1162,10 +1162,10 @@ INSTANTIATE_TEST_SUITE_P(
                                 {
                                     {"on-text-and-tspan.svg", Params::Skip("Bug? We compress slightly more than the golden")},
                                 
-                                    {"arabic-with-lengthAdjust.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"arabic.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"on-a-single-tspan.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"zero.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"arabic-with-lengthAdjust.svg", Params::Skip("Not impl: textLength + lengthAdjust attribute (text stretching/compressing)")},
+                                    {"arabic.svg", Params::Skip("Not impl: textLength + lengthAdjust attribute (text stretching/compressing)")},
+                                    {"on-a-single-tspan.svg", Params::Skip("Not impl: textLength + lengthAdjust attribute (text stretching/compressing)")},
+                                    {"zero.svg", Params::Skip("Not impl: textLength + lengthAdjust attribute (text stretching/compressing)")},
                                 })),
     TestNameFromFilename);
 
@@ -1215,15 +1215,15 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(TextTref, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/tref",
                                 {
-                                    {"link-to-a-complex-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"link-to-a-non-text-element.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"link-to-an-external-file-element.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"link-to-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"position-attributes.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"style-attributes.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-a-title-child.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"with-text.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"xml-space.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"link-to-a-complex-text.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"link-to-a-non-text-element.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"link-to-an-external-file-element.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"link-to-text.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"position-attributes.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"style-attributes.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"with-a-title-child.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"with-text.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
+                                    {"xml-space.svg", Params::Skip("Not impl: <tref> (deprecated SVG 2)")},
                                 })),
                          TestNameFromFilename);
 
@@ -1246,7 +1246,7 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(TextUnicodeBidi, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("text/unicode-bidi",
                                 {
-                                    {"bidi-override.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"bidi-override.svg", Params::Skip("Not impl: unicode-bidi property (BiDi override)")},
                                 })),
                          TestNameFromFilename);
 
@@ -1277,8 +1277,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"tb-with-rotate.svg", Params::RenderOnly("UB: tb with rotate")},
                                     {"tb.svg", Params().withMaxPixelsDifferent(1500).withReason("Bug: Baseline is ~2px off compared to resvg")},
                                 
-                                    {"vertical-lr.svg", Params::Skip("M1 upgrade: needs triage")},
-                                    {"vertical-rl.svg", Params::Skip("M1 upgrade: needs triage")},
+                                    {"vertical-lr.svg", Params::Skip("Bug: writing-mode edge cases beyond basic support")},
+                                    {"vertical-rl.svg", Params::Skip("Bug: writing-mode edge cases beyond basic support")},
                                 })),
     TestNameFromFilename);
 
