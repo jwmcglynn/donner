@@ -93,7 +93,7 @@ Good: `error: unexpected ')' at line 12 col 4 — expected path command or end o
 
 ## How to answer common questions
 
-**"My SVG parser crashed on this input"** — treat as a P0. Get the input, add it to the relevant fuzzer corpus, run the fuzzer locally to confirm reproduction (`bazel run //donner/svg/parser/tests:SVGParser_fuzzer`), then fix the underlying bug. Never ship without a regression corpus entry.
+**"My SVG parser crashed on this input"** — treat as a P0. Get the input, add it to the relevant fuzzer corpus, run the fuzzer locally to confirm reproduction (`bazel run //donner/svg/parser:svg_parser_fuzzer` — all Donner fuzzer targets live in the parent package and use snake_case names; see the `donner_cc_fuzzer` entries in the relevant `BUILD.bazel`), then fix the underlying bug. Never ship without a regression corpus entry.
 
 **"My parser's error message is useless"** — walk the user through `docs/parser_diagnostics.md`. The fix is almost always "thread a source span through to the error site". Show them the pattern used in a nearby parser that does it well.
 
