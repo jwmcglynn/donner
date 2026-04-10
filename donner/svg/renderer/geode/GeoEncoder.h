@@ -184,6 +184,20 @@ public:
   void clearScissorRect();
 
   /**
+   * Blit an offscreen texture across the entire target with an alpha
+   * multiplier. Used by `RendererGeode::popIsolatedLayer` to composite a
+   * sub-layer's content back onto the outer target. The source texture
+   * must be the SAME SIZE as this encoder's target — the blit takes the
+   * full texture and maps it 1:1 onto the full target. The current
+   * `setTransform` does NOT affect the blit (it's a device-pixel-space
+   * operation, not a model-space draw).
+   *
+   * @param src Source texture (RGBA8, premultiplied).
+   * @param opacity Overall alpha multiplier in [0, 1].
+   */
+  void blitFullTarget(const wgpu::Texture& src, double opacity);
+
+  /**
    * Draw a raster image into the given destination rectangle.
    *
    * The image's straight-alpha RGBA8 pixels are uploaded to a fresh

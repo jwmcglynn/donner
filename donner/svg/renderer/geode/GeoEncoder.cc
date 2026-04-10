@@ -843,6 +843,38 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   impl_->pass.Draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
 }
 
+void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
+  if (!src) {
+    return;
+  }
+  impl_->ensurePassOpen();
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  // Identity MVP: map target-pixel coords (0..W, 0..H) directly to clip
+  // space (-1..+1 with Y flipped). This is the same math
+  // `Impl::buildMvp` does with `transform == identity`.
+  const double sx = 2.0 / static_cast<double>(impl_->targetWidth);
+  const double sy = -2.0 / static_cast<double>(impl_->targetHeight);
+  float mvp[16] = {0};
+  mvp[0] = static_cast<float>(sx);
+  mvp[5] = static_cast<float>(sy);
+  mvp[10] = 1.0f;
+  mvp[12] = -1.0f;
+  mvp[13] = 1.0f;
+  mvp[15] = 1.0f;
+
+  GeodeTextureEncoder::QuadParams qp;
+  qp.destRect = Box2d(Vector2d(0.0, 0.0),
+                      Vector2d(static_cast<double>(impl_->targetWidth),
+                               static_cast<double>(impl_->targetHeight)));
+  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  qp.opacity = opacity;
+  qp.filter = GeodeTextureEncoder::Filter::Linear;
+
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+}
+
 void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
                            bool pixelated) {
   if (image.data.empty() || image.width <= 0 || image.height <= 0) {

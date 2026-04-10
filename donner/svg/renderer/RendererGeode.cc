@@ -472,6 +472,20 @@ struct RendererGeode::Impl {
   };
   std::vector<PatternStackFrame> patternStack;
 
+  /// A saved encoder + target state for an in-progress isolated layer
+  /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
+  /// group with non-identity opacity or a non-Normal blend mode, we
+  /// redirect subsequent draws into an offscreen texture of the same size
+  /// as the current target. On `pop`, the offscreen is composited back
+  /// onto the saved target with the stored opacity.
+  struct LayerStackFrame {
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;
+    wgpu::Texture layerTexture;
+    double opacity = 1.0;
+  };
+  std::vector<LayerStackFrame> layerStack;
+
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
     wgpu::Texture tile;
@@ -556,11 +570,11 @@ struct RendererGeode::Impl {
   /// when the referenced paint server can't instantiate. Returns nullopt for
   /// None and for paint-server references without a fallback.
   std::optional<css::RGBA> resolveSolidFill() {
-    return resolveSolidPaint(paint.fill, paint.fillOpacity * paint.opacity);
+    return resolveSolidPaint(paint.fill, paint.fillOpacity);
   }
 
   std::optional<css::RGBA> resolveSolidStroke() {
-    return resolveSolidPaint(paint.stroke, paint.strokeOpacity * paint.opacity);
+    return resolveSolidPaint(paint.stroke, paint.strokeOpacity);
   }
 
   std::optional<css::RGBA> resolveSolidPaint(const components::ResolvedPaintServer& server,
@@ -642,12 +656,12 @@ struct RendererGeode::Impl {
     // stroke draw (matching RendererTinySkia/RendererSkia semantics).
     if (patternFillPaint.has_value()) {
       syncTransform();
-      const double opacity = paint.fillOpacity * paint.opacity;
+      const double opacity = paint.fillOpacity;
       encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity));
       patternFillPaint.reset();
       return;
     }
-    const double effectiveOpacity = paint.fillOpacity * paint.opacity;
+    const double effectiveOpacity = paint.fillOpacity;
     drawPaintedPath(path, paint.fill, effectiveOpacity, rule);
   }
 
@@ -891,14 +905,98 @@ void RendererGeode::popClip() {
   impl_->updateEncoderScissor();
 }
 
-void RendererGeode::pushIsolatedLayer(double /*opacity*/, MixBlendMode /*blendMode*/) {
-  if (impl_->verbose && !impl_->warnedLayer) {
-    std::cerr << "RendererGeode: isolated layers not yet implemented (Phase 3)\n";
-    impl_->warnedLayer = true;
+void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
+  // Blend modes other than Normal are a Phase 7 concern (they require the
+  // compute-based filter / compositor pipeline). For now we support
+  // Isolation + alpha — which handles group opacity, `<svg opacity=...>`,
+  // and nested-group `opacity` propagation, covering a-opacity-001/007/008
+  // and several adjacent tests. Anything-but-Normal blend is dropped with
+  // a one-shot warning.
+  if (blendMode != MixBlendMode::Normal) {
+    if (impl_->verbose && !impl_->warnedLayer) {
+      std::cerr << "RendererGeode: non-Normal blend modes not yet implemented (Phase 7)\n";
+      impl_->warnedLayer = true;
+    }
   }
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline ||
+      !impl_->imagePipeline || !impl_->encoder) {
+    // Headless or degenerate state — drop silently but still push a
+    // placeholder frame so popIsolatedLayer stays balanced.
+    impl_->layerStack.push_back({});
+    return;
+  }
+
+  // Allocate an offscreen texture of the same size as the current target.
+  // All draws issued between push/pop land here instead of the outer
+  // target; pop composites this texture back with the stored opacity.
+  wgpu::TextureDescriptor td = {};
+  td.label = "RendererGeodeIsolatedLayer";
+  td.size = {static_cast<uint32_t>(impl_->pixelWidth),
+             static_cast<uint32_t>(impl_->pixelHeight), 1u};
+  td.format = kFormat;
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+             wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::e2D;
+  wgpu::Texture layerTexture = impl_->device->device().CreateTexture(&td);
+  if (!layerTexture) {
+    impl_->layerStack.push_back({});
+    return;
+  }
+
+  // Finish the outer encoder so its queued draws land on the saved target
+  // before we redirect subsequent work into the offscreen layer. Same
+  // shape as `beginPatternTile` — two render-pass submissions ordered
+  // serially on the queue.
+  impl_->encoder->finish();
+
+  Impl::LayerStackFrame frame;
+  frame.savedEncoder = std::move(impl_->encoder);
+  frame.savedTarget = impl_->target;
+  frame.layerTexture = layerTexture;
+  frame.opacity = opacity;
+
+  impl_->target = layerTexture;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      layerTexture);
+  newEncoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->encoder = std::move(newEncoder);
+  impl_->layerStack.push_back(std::move(frame));
+  // The layer inherits the outer clip stack — reapply it to the new
+  // encoder so scissors carry through.
+  impl_->updateEncoderScissor();
 }
 
-void RendererGeode::popIsolatedLayer() {}
+void RendererGeode::popIsolatedLayer() {
+  if (impl_->layerStack.empty()) {
+    return;
+  }
+  Impl::LayerStackFrame frame = std::move(impl_->layerStack.back());
+  impl_->layerStack.pop_back();
+
+  if (!frame.layerTexture) {
+    return;  // Placeholder frame from the headless/error path.
+  }
+
+  // Finish the layer's render pass so the texture contents are ready.
+  if (impl_->encoder) {
+    impl_->encoder->finish();
+  }
+
+  // Restore outer target + create a fresh encoder that preserves its
+  // existing contents (LoadOp::Load). Draw the layer texture across the
+  // entire target with the stored opacity as the compositing alpha.
+  impl_->target = frame.savedTarget;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      frame.savedTarget);
+  newEncoder->setLoadPreserve();
+  impl_->encoder = std::move(newEncoder);
+  impl_->updateEncoderScissor();
+  impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
+}
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& /*filterGraph*/,
                                     const std::optional<Box2d>& /*filterRegion*/) {
@@ -1158,7 +1256,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // driver via `endPatternTile(forStroke=true)` and consumed here.
   if (impl_->patternStrokePaint.has_value()) {
     impl_->syncTransform();
-    const double opacity = impl_->paint.strokeOpacity * impl_->paint.opacity;
+    const double opacity = impl_->paint.strokeOpacity;
     impl_->encoder->fillPathPattern(
         strokedOutline, FillRule::EvenOdd,
         impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
@@ -1171,7 +1269,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // gradient-unit objectBoundingBox transform, which is relative to the
   // *original* path bounds — we deliberately do NOT use
   // `strokedOutline.bounds()` here).
-  const double effectiveOpacity = impl_->paint.strokeOpacity * impl_->paint.opacity;
+  const double effectiveOpacity = impl_->paint.strokeOpacity;
   auto strokeServer = impl_->paint.stroke;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
                                 FillRule::EvenOdd);
@@ -1193,10 +1291,13 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
   if (!impl_->encoder) {
     return;
   }
-  // Combine per-image opacity with the inherited paint opacity so group
-  // `opacity` attributes on ancestors propagate — matches the tiny-skia /
-  // Skia backends' semantics.
-  const double combinedOpacity = params.opacity * impl_->paint.opacity;
+  // The element's own `opacity` is handled by `pushIsolatedLayer` in the
+  // driver before this call lands, so we do NOT multiply it back in here
+  // (doing so would double-apply the group opacity, producing opacity²).
+  // Match RendererTinySkia's behavior in `drawImage`: use `params.opacity`
+  // (which is the image-specific opacity component) without the
+  // paint.opacity factor.
+  const double combinedOpacity = params.opacity;
   if (combinedOpacity <= 0.0) {
     return;
   }
