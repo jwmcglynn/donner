@@ -237,73 +237,118 @@ fn curve_winding(curve: Quadratic, sample: vec2f) -> i32 {
 // Fragment stage
 // ============================================================================
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let band = bands[in.bandIndex];
-
-  // Clip to the band's natural Y range.
-  //
-  // Each band's bounding quad is dilated by ~1 pixel along its outward normals
-  // for edge AA. Adjacent bands share a Y boundary, so the dilation makes
-  // their quads OVERLAP by ~1 pixel of viewport space. Without this clip, a
-  // pixel inside the overlap is rasterized by BOTH bands and the fragment
-  // shader runs twice. Each band's curve list contains the curves whose Y
-  // range overlaps that band, so a curve straddling the boundary appears in
-  // both lists and gets COUNTED TWICE in the overlap pixel — flipping the
-  // EvenOdd parity by an odd number when contributions from the two sides of
-  // the path don't perfectly cancel. The visible symptom is single-pixel-tall
-  // horizontal "fill streaks" through smooth-curve stroked paths at scanlines
-  // that happen to align with band boundaries (Phase 2D smooth-curve
-  // regression in quadbezier1, ellipse1, rect2).
-  //
-  // Half-open `[yMin, yMax)` so each viewport pixel center belongs to exactly
-  // one band. The dilation still provides AA at the path's actual outer
-  // edges, because there's no NEXT band beyond the topmost / bottommost
-  // boundary to claim those overlap pixels.
-  if (in.sample_pos.y < band.yMin || in.sample_pos.y >= band.yMax) {
-    discard;
-  }
-
-  // Iterate over all curves in this band and accumulate winding number.
+/// Test whether a single sub-pixel sample position is inside the fill,
+/// per the active fill rule. Shared between `fs_main` sample-mask loop
+/// and any future per-sample helpers.
+fn sample_is_inside(band: Band, sample_pos: vec2f) -> bool {
   var winding: i32 = 0;
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_curve(band.curveStart + i);
-    winding = winding + curve_winding(curve, in.sample_pos);
+    winding = winding + curve_winding(curve, sample_pos);
   }
-
-  // Apply fill rule.
-  var inside: bool;
   if (uniforms.fillRule == 0u) {
-    // Non-zero: winding ≠ 0 means inside.
-    inside = winding != 0;
-  } else {
-    // Even-odd: odd winding means inside.
-    inside = (winding & 1) != 0;
+    return winding != 0;
+  }
+  return (winding & 1) != 0;
+}
+
+/// Fragment output with a sample-mask so the pipeline's 4× MSAA can
+/// produce sub-pixel fractional coverage. The fragment shader runs once
+/// per pixel, computes per-sample inside/outside via `sample_is_inside`
+/// at four offsets around the pixel center, and writes the same color
+/// to the samples that are "inside". The hardware resolve step averages
+/// the samples into the 1-sample resolve attachment — the result is
+/// 0/4, 1/4, 2/4, 3/4, or 4/4 coverage per pixel, closely matching
+/// tiny-skia's 4× supersampling scan-converter.
+struct FragOutput {
+  @location(0) color: vec4f,
+  @builtin(sample_mask) mask: u32,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragOutput {
+  let band = bands[in.bandIndex];
+
+  // NO pixel-center band-Y clip. The previous single-sample path
+  // discarded fragments whose pixel center fell outside the band's
+  // half-open `[yMin, yMax)` range to avoid double-counting curves at
+  // the band overlap boundary. That approach doesn't generalise to
+  // sub-pixel coverage: a pixel whose CENTER sits above the boundary
+  // may still have sub-pixel samples *below* it that should be filled
+  // by the adjacent band, and vice versa. Instead, the per-sample
+  // band-Y check inside the loop below owns each sample to exactly
+  // one band — if sample N's Y is outside `band.y` range, the bit is
+  // left clear and the neighbouring band's fragment invocation at the
+  // same viewport pixel sets it. The sum across both bands' fragment
+  // outputs (blended via premultiplied source-over with mask writes)
+  // reproduces a conflict-free 4-sample coverage at boundary pixels.
+
+  // Derivatives of path-space `sample_pos` with respect to viewport
+  // pixels. `sample_pos` is a linear function of the viewport position
+  // (the vertex shader applies the MVP, the rasterizer interpolates),
+  // so `dpdx` / `dpdy` are constant across the primitive and give the
+  // path-space delta per one viewport pixel along each axis.
+  let dx = dpdx(in.sample_pos);
+  let dy = dpdy(in.sample_pos);
+
+  // Four sub-pixel offsets, in viewport-pixel units from the pixel
+  // center. WebGPU doesn't promise any specific MSAA sample pattern,
+  // but the sample_mask bits still map bit N → sample index N. The
+  // resolve step averages the 4 samples regardless of their geometric
+  // positions, so any 4 distinct in-pixel offsets give a correct 4×
+  // coverage estimate. Use D3D-style rotated positions to avoid
+  // axis-aligned Moiré on near-horizontal / near-vertical edges.
+  var offsets = array<vec2f, 4>(
+    vec2f(-0.125, -0.375),
+    vec2f( 0.375, -0.125),
+    vec2f(-0.375,  0.125),
+    vec2f( 0.125,  0.375),
+  );
+
+  var mask: u32 = 0u;
+  for (var s: u32 = 0u; s < 4u; s = s + 1u) {
+    // Convert the viewport-pixel offset into a path-space delta.
+    let sp = in.sample_pos + offsets[s].x * dx + offsets[s].y * dy;
+
+    // Per-sample band-Y clip: samples on the other side of the band
+    // boundary are OWNED by the adjacent band's fragment invocation at
+    // this same pixel. Skipping them here (leaving their sample_mask
+    // bit at 0) means the other band will fill them in. No double
+    // coverage at band boundaries.
+    if (sp.y < band.yMin || sp.y >= band.yMax) {
+      continue;
+    }
+
+    if (sample_is_inside(band, sp)) {
+      mask = mask | (1u << s);
+    }
   }
 
-  if (!inside) {
+  if (mask == 0u) {
     discard;
   }
 
+  var out: FragOutput;
+  out.mask = mask;
+
   if (uniforms.paintMode == 0u) {
-    return uniforms.color;
+    // `uniforms.color` is already premultiplied by the host encoder.
+    // The hardware routes this one color to the selected samples and
+    // resolves to fractional coverage after the pass.
+    out.color = uniforms.color;
+    return out;
   }
 
-  // Pattern mode: transform the path-space sample position into pattern-tile
-  // space, wrap into [0, tileSize) (repeat spread mode), and sample the
-  // pattern texture via normalized UVs.
+  // Pattern mode: sample the tile at the pixel center. The
+  // sample_mask still controls edge coverage.
   let patternPos = (uniforms.patternFromPath * vec4f(in.sample_pos, 0.0, 1.0)).xy;
-  // Repeat (SVG patterns default to a "repeat" spread): wrap into tile space.
-  // fract() handles negative values per WGSL semantics (returns x - floor(x)).
   let wrapped = vec2f(
     fract(patternPos.x / uniforms.tileSize.x) * uniforms.tileSize.x,
     fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y,
   );
   let uv = wrapped / uniforms.tileSize;
   var sampled = textureSample(patternTexture, patternSampler, uv);
-  // The tile texture is premultiplied (written by the Slug fill pipeline with
-  // premultiplied blending). Apply the pattern opacity multiplier to the full
-  // premultiplied RGBA so the result stays premultiplied.
   sampled = sampled * uniforms.patternOpacity;
-  return sampled;
+  out.color = sampled;
+  return out;
 }

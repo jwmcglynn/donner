@@ -130,6 +130,12 @@ struct GeoEncoder::Impl {
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
+  // 4× multisampled color attachment. All draws land here and the
+  // hardware resolves into `target` at the end of each render pass.
+  wgpu::Texture msaaTarget;
+  wgpu::TextureView msaaTargetView;
+  // 1-sample resolve texture. External code (image blit, readback)
+  // samples / copies from this texture, never the MSAA color.
   wgpu::Texture target;
   wgpu::TextureView targetView;
   wgpu::CommandEncoder commandEncoder;
@@ -243,8 +249,15 @@ struct GeoEncoder::Impl {
     if (passOpen) {
       return;
     }
+    // 4× MSAA color attachment with per-pass resolve. The MSAA view is
+    // the draw target; WebGPU implicitly resolves into `targetView` at
+    // pass end. `storeOp = Store` on the MSAA attachment preserves its
+    // state for a subsequent pass (see `setLoadPreserve()` — we may
+    // reopen a pass to continue drawing on top of the previous MSAA
+    // contents, e.g., after a nested-layer composite).
     wgpu::RenderPassColorAttachment color = {};
-    color.view = targetView;
+    color.view = msaaTargetView;
+    color.resolveTarget = targetView;
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = clearColor;
@@ -351,16 +364,19 @@ struct GeoEncoder::Impl {
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target)
+                       const GeodeImagePipeline& imagePipeline,
+                       const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget)
     : impl_(std::make_unique<Impl>()) {
   impl_->device = &device;
   impl_->pipeline = &fillPipeline;
   impl_->gradientPipeline = &gradientPipeline;
   impl_->imagePipeline = &imagePipeline;
-  impl_->target = target;
-  impl_->targetView = target.CreateView();
-  impl_->targetWidth = target.GetWidth();
-  impl_->targetHeight = target.GetHeight();
+  impl_->msaaTarget = msaaTarget;
+  impl_->msaaTargetView = msaaTarget.CreateView();
+  impl_->target = resolveTarget;
+  impl_->targetView = resolveTarget.CreateView();
+  impl_->targetWidth = resolveTarget.GetWidth();
+  impl_->targetHeight = resolveTarget.GetHeight();
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = "GeoEncoder";
@@ -634,18 +650,23 @@ void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& grad
   u.row1[2] = static_cast<float>(gradientFromPath.data[5]);
   u.row1[3] = 0.0f;
 
-  // Premultiply each stop's RGB by A for the blend pipeline. Clamp the stop
-  // count to the shader's hard cap; overflow was warned about at the caller.
+  // Upload stops in STRAIGHT (unpremultiplied) alpha. The shader's
+  // `sample_stops` linearly interpolates between these values and then the
+  // fragment stage premultiplies at output before the premultiplied-alpha
+  // blend pipeline composites onto the framebuffer. This matches tiny-skia /
+  // Skia gradient behavior — e.g. `a-stop-opacity-001` transitions from
+  // white to black@0.2 and expects straight-space interpolation, not
+  // premultiplied-space mix. Clamp the stop count to the shader's hard cap;
+  // overflow was warned about at the caller.
   const uint32_t stopCount =
       std::min<uint32_t>(kMaxGradientStops, static_cast<uint32_t>(stops.size()));
   u.stopCount = stopCount;
   for (uint32_t i = 0; i < stopCount; ++i) {
     const StopT& s = stops[i];
-    const float a = s.rgba[3];
-    u.stopColors[i * 4 + 0] = s.rgba[0] * a;
-    u.stopColors[i * 4 + 1] = s.rgba[1] * a;
-    u.stopColors[i * 4 + 2] = s.rgba[2] * a;
-    u.stopColors[i * 4 + 3] = a;
+    u.stopColors[i * 4 + 0] = s.rgba[0];
+    u.stopColors[i * 4 + 1] = s.rgba[1];
+    u.stopColors[i * 4 + 2] = s.rgba[2];
+    u.stopColors[i * 4 + 3] = s.rgba[3];
     // Packed 4-per-vec4: stop i lives in stopOffsets[i/4].(x|y|z|w).
     u.stopOffsets[i] = s.offset;
   }
@@ -870,6 +891,14 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
   qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
   qp.opacity = opacity;
   qp.filter = GeodeTextureEncoder::Filter::Linear;
+  // Layer textures are offscreen render targets produced by the Geode
+  // premultiplied source-over pipeline, so their storage is already in
+  // premultiplied-alpha form. The shader needs to skip its default
+  // straight→premult conversion, otherwise nested `pushIsolatedLayer`
+  // calls double-darken the RGB channel (e.g.
+  // structure/use/opacity-inheritance where a use opacity=0.5 wraps a
+  // rect opacity=0.5 and should composite to 0.25).
+  qp.sourceIsPremultiplied = true;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);

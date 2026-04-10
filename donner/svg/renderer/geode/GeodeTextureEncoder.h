@@ -86,6 +86,13 @@ public:
     double opacity = 1.0;
     /// Sampling filter mode.
     Filter filter = Filter::Linear;
+    /// Set when the source texture already stores premultiplied-alpha
+    /// pixels. `drawImage` uses straight-alpha textures uploaded from
+    /// `ImageResource` (default = false). Offscreen render targets that
+    /// Geode blits back during `popIsolatedLayer` / pattern compositing
+    /// are premultiplied and must set this flag to avoid a double
+    /// premultiplication that darkens the RGB channel.
+    bool sourceIsPremultiplied = false;
   };
 
   /**

@@ -80,7 +80,12 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
+  // 4× MSAA to match the Slug fill + gradient pipelines. WebGPU requires
+  // all pipelines used against the same render pass attachment to agree
+  // on sample count, and the Geode encoder always targets MSAA textures.
+  // Image blit itself doesn't need per-sample coverage (the quad is
+  // fully-covering), but the pipeline must still advertise 4×.
+  rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.CreateRenderPipeline(&rpDesc);

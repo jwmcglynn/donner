@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -352,6 +353,29 @@ std::string escapeFilename(std::string filename) {
       return c;
     }
   });
+  // macOS (and most common filesystems) cap filename components at 255
+  // bytes. The test runfiles paths we escape into single names can blow
+  // past that — `resvg_test_suite_geode_text` sandbox runfiles reach
+  // ~290 chars — which makes the resulting `/tmp/<escaped>.png` impossible
+  // to open for debugging. Truncate overlong names, preserving the tail
+  // (where the distinguishing test filename lives) and keeping a short
+  // hash prefix so collisions between long names stay detectable.
+  constexpr size_t kMaxComponentBytes = 240;
+  if (filename.size() > kMaxComponentBytes) {
+    // Simple 32-bit FNV-1a over the full original string.
+    uint32_t hash = 2166136261u;
+    for (char c : filename) {
+      hash ^= static_cast<uint8_t>(c);
+      hash *= 16777619u;
+    }
+    char hashBuf[9];
+    std::snprintf(hashBuf, sizeof(hashBuf), "%08x", hash);
+    // Keep the tail (the distinguishing filename + extension); replace the
+    // long prefix with an 8-char hash so the result fits in 240 bytes.
+    const size_t tailLen = kMaxComponentBytes - 9;  // 9 = 8 hash chars + '_'
+    std::string tail = filename.substr(filename.size() - tailLen);
+    filename = std::string(hashBuf) + "_" + std::move(tail);
+  }
   return filename;
 }
 

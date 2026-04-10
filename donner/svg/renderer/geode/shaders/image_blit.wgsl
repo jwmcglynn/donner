@@ -29,9 +29,18 @@ struct Uniforms {
   // Overall multiplier applied to the sampled texel. Used for
   // `ImageParams::opacity * paint.opacity` on the draw path.
   opacity: f32,
+  // 0 = texture stores STRAIGHT alpha (default; `drawImage` for SVG
+  // `<image>` elements sourced from `ImageResource`). The fragment
+  // shader will premultiply by `alpha * opacity` before writing.
+  // 1 = texture already stores PREMULTIPLIED alpha (used by
+  // `blitFullTarget` for layer/pattern compositing — offscreen render
+  // targets always end up premultiplied because the Geode render
+  // pipeline's blend state is premultiplied source-over). The shader
+  // will multiply the entire texel by `opacity` and write the result
+  // as-is.
+  sourceIsPremult: u32,
   _pad0: f32,
   _pad1: f32,
-  _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -85,6 +94,12 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let sampled = textureSample(imageTexture, imageSampler, in.uv);
+  if (uniforms.sourceIsPremult != 0u) {
+    // Source is already premultiplied. Just scale the whole texel by
+    // the external opacity so the output stays premultiplied and
+    // composites correctly through the pipeline's source-over blend.
+    return sampled * uniforms.opacity;
+  }
   // The uploaded texture stores straight-alpha RGBA8. Premultiply by
   // (alpha * opacity) so the fragment matches the pipeline's
   // premultiplied-source-over blend state.

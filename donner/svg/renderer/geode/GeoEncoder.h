@@ -120,20 +120,35 @@ struct RadialGradientParams {
 class GeoEncoder {
 public:
   /**
-   * Create an encoder targeting the given texture.
+   * Create an encoder targeting the given texture pair.
+   *
+   * The encoder uses 4× MSAA internally: every render pass attaches
+   * `msaaTarget` as the color attachment and `resolveTarget` as the
+   * pass's resolve attachment. The MSAA attachment's store op is `Store`
+   * so multi-pass work (e.g., re-opening a pass via `setLoadPreserve()`
+   * after a nested layer composite) can pick up the previous MSAA state
+   * via `LoadOp::Load`.
+   *
+   * External code reads back / samples from the `resolveTarget` (always
+   * 1-sample), never from the MSAA texture, because sampling an MSAA
+   * texture requires `texture_multisampled_2d` bindings in WGSL which the
+   * image-blit shader doesn't use.
    *
    * @param device The Geode device (owns the wgpu::Device + queue).
-   * @param fillPipeline The Slug fill pipeline (must match the target's format).
-   * @param gradientPipeline The Slug gradient-fill pipeline (must match the
-   *   target's format).
-   * @param imagePipeline The image-blit pipeline (must match the target's format).
-   * @param target Texture to render into. Must be created with
-   *   `RenderAttachment` usage. The encoder takes a reference; the caller
-   *   must keep the texture alive until `finish()` returns.
+   * @param fillPipeline The Slug fill pipeline (4× multisample).
+   * @param gradientPipeline The Slug gradient-fill pipeline (4× multisample).
+   * @param imagePipeline The image-blit pipeline (4× multisample).
+   * @param msaaTarget 4× multisampled render target texture. Usage must
+   *   include `RenderAttachment`. Same width/height as `resolveTarget`.
+   * @param resolveTarget 1-sample resolve texture. Usage must include
+   *   `RenderAttachment` + `TextureBinding` + `CopySrc` (for readback).
+   *   The encoder retains references to both; both must outlive
+   *   `finish()`.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline,
-             const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target);
+             const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
+             const wgpu::Texture& resolveTarget);
 
   ~GeoEncoder();
 
