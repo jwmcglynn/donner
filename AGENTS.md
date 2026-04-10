@@ -4,20 +4,14 @@ Modern C++20 SVG project. Source lives in `donner/`.
 
 ## Coding Style
 
-- [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with C++20 and SVG naming modifications.
-- **100-char line limit**, enforced by `.clang-format`.
-- Folders: `lower_snake_case`. Files: `UpperCamelCase` (matching main class), `.cc`/`.h`/`_tests.cc`.
-- Headers: `#pragma once`, then `/// @file`.
-- Includes: project files `#include "donner/path/file.h"` (repo-relative), system/third-party `#include <lib/header.h>`.
+- [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with C++20 and SVG naming modifications; 100-char line limit enforced by `.clang-format`.
+- Folders: `lower_snake_case`. Files: `UpperCamelCase` (matching main class), `.cc`/`.h`/`_tests.cc`. Headers: `#pragma once`, then `/// @file`.
+- Includes: project `#include "donner/path/file.h"` (repo-relative), system/third-party `#include <lib/header.h>`.
 - Doxygen on all public APIs: `///` single-line, `/** */` multi-line, `//!<` trailing. `@param` for all params. Use `\ref` for cross-references.
 - All code in `donner` namespace (sub-namespaces like `donner::svg`).
-- Always use braces for control structures.
-- Naming: Classes `UpperCamelCase`, methods `lowerCamelCase`, static/global functions `UpperCamelCase`, members `trailingUnderscore_`, constants `kUpperCamelCase`, enum values `UpperCamelCase`. Include units in names (e.g., `timeoutMs`) or use strong types.
-- `struct` for data aggregates, `class` for types with invariants/logic.
-- Properties: `thing()` / `setThing()`. Use `std::optional` for optional values.
+- Naming: Classes `UpperCamelCase`, methods `lowerCamelCase`, static/global functions `UpperCamelCase`, members `trailingUnderscore_`, constants `kUpperCamelCase`, enum values `UpperCamelCase`. Include units in names (`timeoutMs`) or use strong types. Properties use `thing()` / `setThing()`.
 - Strings: `std::string_view` (non-owning), `RcString` (owning), `RcStringOrRef` (flexible API param). Helpers in `"donner/base/StringUtils.h"`.
-- Prefer `constexpr`, generous `const`, `explicit` single-arg constructors.
-- Use `enum class` with `operator<<` for debugging. Prefer `operator<=>` (with explicit `operator==` due to gtest bug).
+- Use `enum class` with `operator<<` for debugging. Prefer `operator<=>` with explicit `operator==` (gtest bug workaround).
 - Use `auto` sparingly — only when type is obvious or for standard patterns (iterators, `ParseResult`).
 - Assert with `UTILS_RELEASE_ASSERT` / `UTILS_RELEASE_ASSERT_MSG` (release) or `assert(cond && "msg")` (debug).
 - **No `std::any`** — use concrete types, `std::variant`, forward declarations, or existing handle/value wrappers.
@@ -33,7 +27,7 @@ Donner is a dynamic SVG engine (browser-like, not a static renderer). It builds 
 - **Styling** (`Property`, `PropertyRegistry`, `StyleSystem`): Consumes CSS data, implements SVG style model (presentation attributes, cascading, inheritance) → `ComputedStyleComponent`.
 - **Document Model (ECS)**: Built on **EnTT**. Entities = SVG elements, Components = data (`TreeComponent`, `StyleComponent`, `PathComponent`), Systems = logic (`LayoutSystem`, `StyleSystem`, `ShapeSystem`).
 - **API Frontend** (`donner::svg::SVG*Element`): User-facing wrappers around ECS entities/components.
-- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Two backends implement it: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Skia** (`RendererSkia`, full-featured). `Renderer` is the public facade. Select with `--config=skia` or `--config=tiny-skia` (Bazel) / `DONNER_RENDERER_BACKEND` (CMake).
+- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`), **Skia** (`RendererSkia`, full-featured), and **Geode** (`RendererGeode`, in-development GPU backend via Dawn/WebGPU; gated on `--//donner/svg/renderer/geode:enable_dawn=true`). `Renderer` is the public facade. Select with `--config=skia` or `--config=tiny-skia` (Bazel) / `DONNER_RENDERER_BACKEND` (CMake).
 - **Base Library** (`donner::base`): Common utilities (`RcString`, `Vector2`, `Transform`, `Length`).
 
 ### Rendering Pipeline
@@ -50,7 +44,7 @@ Stages transform components through the ECS:
    - `FilterSystem`: `FilterComponent` → `ComputedFilterComponent`
    - `PaintSystem`: Gradients/patterns → `ComputedGradientComponent`, `ComputedPatternComponent`
 3. **Rendering Instantiation** (`RenderingContext`): Traverses computed tree, creates `RenderingInstanceComponent` per visible element with resolved references (paint, clip, mask, marker, filter), offscreen subtrees, layer isolation (opacity < 1, filters, masks), and `drawOrder`.
-4. **Backend** (TinySkia or Skia): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
+4. **Backend** (TinySkia, Skia, or Geode): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
 
 ## Pull Request Workflow
 
@@ -71,10 +65,10 @@ See `docs/design_docs/ci_escape_prevention.md` for the full rationale behind the
 
 ## General Practices
 
-- Prefer existing Donner utilities (`Transformd`, `RcString`, `StringUtils`) before adding dependencies.
-- Optimize for readability/testability. Extract helpers over large inline blocks.
-- Docs: follow `docs/AGENTS.md`, use templates under `docs/design_docs/`, keep lines ≤100, use SVG/mermaid visuals. Use Doxygen anchors `{#AnchorId}`, run `tools/doxygen.sh`.
+- Prefer existing Donner utilities (`Transform2d`, `RcString`, `StringUtils`) before adding dependencies.
+- Docs: follow `docs/AGENTS.md`, use templates under `docs/design_docs/`. Run `tools/doxygen.sh` to regenerate.
 - **All code changes should include tests.** Use gMock/gTest. Add fuzzers for parser paths when practical.
+- Fix root causes, not symptoms; include necessary error handling without asking. Mainline must stay green — investigate failures rather than dismissing them as pre-existing.
 
 ## Building
 
@@ -90,13 +84,6 @@ python3 tools/cmake/gen_cmakelists.py && cmake -S . -B build && cmake --build bu
 # CMake with tests
 cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) && ctest --test-dir build
 ```
-
-## Code Quality
-
-- Prefer correct, complete implementations over minimal ones.
-- Use appropriate data structures/algorithms — no brute-force when better solutions exist.
-- Fix root causes, not symptoms. Include necessary error handling without asking.
-- Mainline must always be green — investigate any failures, no pre-existing issues.
 
 ## Transform Naming Convention
 
@@ -144,12 +131,8 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ## Pixel Diff & Threshold Philosophy
 
-- **Root-cause** pixel diffs, even in vendored libraries (e.g., tiny-skia-cpp).
-- Don't bump thresholds — investigate WHY pixels differ and fix the underlying code.
-- "Glyph outline differences" is almost never a valid explanation for resvg failures — treat as red herring without strong evidence.
-- Threshold/max-diff adjustments are a **last resort** after investigation, require explicit human approval.
-- Never inflate max diff pixels without consent — 99% of the time it masks real issues.
-- Even "only 200 pixels off" can hide meaningful rendering bugs.
+- **Root-cause pixel diffs, always** — even in vendored libraries like tiny-skia-cpp. Don't bump thresholds or inflate max-diff pixels to mask failures; investigate *why* pixels differ. Threshold changes are a last resort requiring explicit human approval.
+- **Red herrings**: "glyph outline differences" for resvg failures, "only N pixels off" for any failure. Treat as red herrings without strong evidence — even 200 pixels off can hide real bugs.
 
 ### Resvg Test Threshold Conventions
 
@@ -163,11 +146,8 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ## Development Notes
 
-- Format C++ with `clang-format -i` (`git clang-format` for pending changes). Format TS/JSON/Markdown with `dprint` (line width 100, indent 2). Don't format `third_party/` or `external/`.
-- Format Bazel files with `buildifier`.
-- Design doc guidance: `docs/design_docs/AGENTS.md`.
-- For doc-only changes, skip formatting and builds.
-- Generate docs: `tools/doxygen.sh` → `generated-doxygen/html/`. Coverage: `tools/coverage.sh`.
+- Format: `clang-format -i` (`git clang-format` for pending changes) for C++, `dprint` for TS/JSON/Markdown (line width 100, indent 2), `buildifier` for Bazel files. Don't format `third_party/` or `external/`. Doc-only changes skip formatting and builds.
+- Generated docs: `tools/doxygen.sh` → `generated-doxygen/html/`. Coverage: `tools/coverage.sh`.
 - IDE false positives (`entt.hpp` not found, unknown `Registry`) are from missing Bazel context — verify with `bazel build`.
 - **LLM quiet mode**: `LLM=1` suppresses verbose renderer test output (pixel dumps, terminal previews, SVG echoes). Set in `.bazelrc`. Re-enable with `DONNER_RENDERER_TEST_VERBOSE=1`. In-repo Claude/Codex settings set `LLM=1` by default.
 
@@ -177,13 +157,7 @@ The resvg test suite (`//donner/svg/renderer/tests:resvg_test_suite`) provides c
 
 ### Test-Driven Development
 
-1. Identify relevant resvg tests before implementing a feature
-2. Use tests as acceptance criteria — passing tests = feature complete
-3. Triage all related failures per [README_resvg_test_suite.md](donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures)
-
-### When to Triage
-
-After implementing features, when tests fail, when adding rendering features, during code review.
+Identify relevant resvg tests before implementing a feature, use them as acceptance criteria, and triage failures per [README_resvg_test_suite.md](donner/svg/renderer/tests/README_resvg_test_suite.md#triaging-test-failures).
 
 ### Triage Quick Reference
 
