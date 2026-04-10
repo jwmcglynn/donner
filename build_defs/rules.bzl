@@ -188,11 +188,18 @@ def _multi_transition_impl(settings, attr):
         return {
             "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
             "//donner/svg/renderer:text_full": settings["//donner/svg/renderer:text_full"],
+            "//donner/svg/renderer/geode:enable_dawn": settings["//donner/svg/renderer/geode:enable_dawn"],
         }
 
+    # Selecting the geode backend implies turning on Dawn: the
+    # `:renderer_geode` library gates its sources behind the
+    # `enable_dawn` flag, so the transition must set it to keep the
+    # dependency graph buildable without the user also passing
+    # `--config=geode` on the command line.
     return {
         "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
         "//donner/svg/renderer:text_full": attr.text_full == "true",
+        "//donner/svg/renderer/geode:enable_dawn": attr.renderer_backend == "geode",
     }
 
 _multi_transition = transition(
@@ -201,10 +208,12 @@ _multi_transition = transition(
         "//build_defs:disable_backend_test_transition",
         "//donner/svg/renderer:renderer_backend",
         "//donner/svg/renderer:text_full",
+        "//donner/svg/renderer/geode:enable_dawn",
     ],
     outputs = [
         "//donner/svg/renderer:renderer_backend",
         "//donner/svg/renderer:text_full",
+        "//donner/svg/renderer/geode:enable_dawn",
     ],
 )
 
