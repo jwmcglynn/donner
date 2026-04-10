@@ -38,21 +38,13 @@ jobs:
 
       - name: Generate coverage
         run: |
-          bazelisk coverage \
-            --local_test_jobs=1 \
-            --nocache_test_results \
-            --config=latest_llvm \
-            //donner/...
-
-      - name: Filter coverage
-        run: |
-          python3 tools/filter_coverage.py --input $(bazelisk info output_path)/_coverage/_coverage_report.dat --output ./filtered_report.dat
+          tools/coverage.sh --quiet --no-html
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./filtered_report.dat
+          files: ./coverage-report/filtered_report.dat
           flags: unittests
           fail_ci_if_error: true
           verbose: true

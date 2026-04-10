@@ -11,6 +11,12 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
+py_binary(
+    name = "render_notice",
+    srcs = ["render_notice.py"],
+    visibility = ["//visibility:public"],
+)
+
 # Genrule to execute the embed_resources.py script
 genrule(
     name = "generate_embedded_test_resources",
@@ -41,4 +47,12 @@ py_test(
         "//third_party/public-sans:embedded_cpp",
     ],
     deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "generate_build_report_tests",
+    srcs = [
+        "generate_build_report.py",
+        "generate_build_report_tests.py",
+    ],
 )

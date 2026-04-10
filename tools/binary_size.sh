@@ -22,12 +22,13 @@ if [[ "$(uname)" == "Darwin" ]]; then
   BAZEL_CONFIGS="$BAZEL_CONFIGS --config=macos-binary-size"
 fi
 
-# Build the binary to analyze, svg_parser_tool
+# Build the binaries to analyze. Always measure the stripped outputs, and keep an
+# unstripped parser binary around separately so bloaty can attribute sizes using symbols.
 bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/parser:svg_parser_tool.stripped
-cp -f bazel-bin/donner/svg/parser/svg_parser_tool build-binary-size/svg_parser_tool
+cp -f bazel-bin/donner/svg/parser/svg_parser_tool.stripped build-binary-size/svg_parser_tool
 
 bazel build $BAZEL_QUIET_OPTIONS $BAZEL_CONFIGS //donner/svg/tool:donner-svg.stripped
-cp -f bazel-bin/donner/svg/tool/donner-svg build-binary-size/donner-svg
+cp -f bazel-bin/donner/svg/tool/donner-svg.stripped build-binary-size/donner-svg
 
 # Print human-readable binary size of svg_parser_tool.stripped and donner-svg.stripped
 echo '```'
@@ -42,15 +43,15 @@ echo ""
 echo "### Detailed analysis of \`svg_parser_tool\`"
 echo ""
 
-# On macOS run dsymutil to generate debug symbols
+# On macOS run dsymutil to generate debug symbols. On Linux point bloaty at the
+# unstripped Bazel output as the debug file while measuring the stripped binary.
 DEBUG_FILE_ARG=
 if [[ "$(uname)" == "Darwin" ]]; then
-  dsymutil build-binary-size/svg_parser_tool
-  DEBUG_FILE_ARG="--debug-file=build-binary-size/svg_parser_tool.dSYM/Contents/Resources/DWARF/svg_parser_tool"
+  cp -f bazel-bin/donner/svg/parser/svg_parser_tool build-binary-size/svg_parser_tool.debug
+  dsymutil build-binary-size/svg_parser_tool.debug
+  DEBUG_FILE_ARG="--debug-file=build-binary-size/svg_parser_tool.debug.dSYM/Contents/Resources/DWARF/svg_parser_tool.debug"
 elif [[ "$(uname)" == "Linux" ]]; then
-  cp -f build-binary-size/svg_parser_tool build-binary-size/svg_parser_tool.debug
-  chmod +w build-binary-size/svg_parser_tool
-  strip -g build-binary-size/svg_parser_tool
+  cp -f bazel-bin/donner/svg/parser/svg_parser_tool build-binary-size/svg_parser_tool.debug
   DEBUG_FILE_ARG="--debug-file=build-binary-size/svg_parser_tool.debug"
 else
   echo "Unknown OS: $(uname)" >&2

@@ -66,9 +66,18 @@ def generate_color_bar(aggregated_sizes: Dict[str, int]) -> str:
     color_index = 0
     key_y_offset = height + 20
 
-    sorted_items = {
-        k: v for k, v in sorted(aggregated_sizes.items(), key=lambda item: -item[1])
-    }
+    # Cap the chart at ~20 categories so the key stays readable. Keep the top
+    # entries by size and fold everything else (including any pre-existing
+    # "Everything else" bucket from aggregate_sizes) into a single tail.
+    max_categories = 20
+    ranked = sorted(aggregated_sizes.items(), key=lambda item: -item[1])
+    if len(ranked) > max_categories:
+        head = ranked[: max_categories - 1]
+        tail = ranked[max_categories - 1 :]
+        tail_total = sum(v for _, v in tail)
+        head.append(("Everything else", tail_total))
+        ranked = sorted(head, key=lambda item: -item[1])
+    sorted_items = {k: v for k, v in ranked}
 
     def to_human_readable(size: int):
         for unit in ["B", "KB", "MB", "GB"]:

@@ -112,7 +112,7 @@ test --test_env=DONNER_RENDERER_TEST_VERBOSE
 coverage --config=coverage
 coverage --combined_report=lcov
 coverage --instrumentation_filter="-test_utils$,//donner[:/]"
-coverage --test_tag_filters=-fuzz_target
+coverage --test_tag_filters=-fuzz_target,-lint
 # Continue past build/analysis failures so coverage is collected from all tests
 # that can run (e.g. Skia backend fails ObjC analysis on macOS with LLVM toolchain).
 coverage --keep_going

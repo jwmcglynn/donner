@@ -220,7 +220,10 @@ donner_cc_library(
         ":text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
-    visibility = ["//visibility:public"],
+    visibility = [
+        "//donner/svg:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         "//donner/svg/components",
         "//donner/svg/components/filter:filter_system",

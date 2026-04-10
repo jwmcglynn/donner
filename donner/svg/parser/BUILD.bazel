@@ -44,7 +44,6 @@ donner_cc_library(
     hdrs = [
         "details/SVGParserContext.h",
     ],
-    visibility = ["//visibility:public"],
     deps = [
         ":parser_core",
         ":parser_header",
@@ -56,7 +55,6 @@ donner_cc_library(
     name = "attribute_parser",
     srcs = ["AttributeParser.cc"],
     hdrs = ["AttributeParser.h"],
-    visibility = ["//visibility:public"],
     deps = [
         ":parser_details",
         "//donner/svg:svg_core",
