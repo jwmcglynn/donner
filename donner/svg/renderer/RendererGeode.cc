@@ -465,6 +465,15 @@ struct RendererGeode::Impl {
     wgpu::Texture tile;
     Vector2d tileSize;              // In pattern space.
     Transform2d targetFromPattern;  // destFromSource naming.
+    // `currentTransform` snapshotted at the time the outer element kicked
+    // off `beginPatternTile`. This is the path→device transform that the
+    // SAME outer element will use when its fill draw happens. Used at
+    // pattern-paint build time to strip the canvas-scale / parent-transform
+    // chain back out of the live `currentTransform`, so the resulting
+    // `patternFromPath` matrix compares path-space positions against the
+    // pattern tile's user-space coordinate system instead of accidentally
+    // multiplying them by the viewBox→canvas scale.
+    Transform2d deviceFromPathAtCapture;
   };
   std::optional<PatternPaintSlot> patternFillPaint;
   std::optional<PatternPaintSlot> patternStrokePaint;
@@ -512,21 +521,37 @@ struct RendererGeode::Impl {
   /// Build a `GeoEncoder::PatternPaint` from a stashed slot, composing the
   /// current transform so the shader samples in the correct space.
   ///
-  /// Math: during the fill draw, the vertex shader receives path-space
-  /// positions (pre-`currentTransform`). In pattern mode the fragment shader
-  /// transforms those path-space positions into pattern-tile space using
-  /// `patternFromPath`. Chaining:
+  /// Math: during the fill draw, the Geode vertex shader emits `sample_pos`
+  /// in PATH space (pre-MVP, pre-`currentTransform`). The pattern fragment
+  /// shader needs pattern-tile-space coordinates. The driver gave us
+  /// `targetFromPattern` in USER space (i.e., the viewBox frame the outer
+  /// element was drawn in) — *not* device space — which is a semantic
+  /// mismatch with the renderer, where `currentTransform` goes all the way
+  /// from path space to device pixels (i.e., it bakes in the
+  /// viewBox→canvas scale on top of the entity's own transform).
   ///
-  ///   patternFromPath = patternFromTarget * targetFromPath
-  ///                   = inverse(targetFromPattern) * currentTransform
+  /// To bridge the mismatch we capture `deviceFromPathAtCapture = currentTransform`
+  /// at `beginPatternTile` time. Both the pattern's content subtree and the
+  /// eventual fill draw use the same referencing element, so that transform
+  /// is the path→device mapping we'd want for BOTH the tile raster and
+  /// the final sample. The chain is:
   ///
-  /// where `targetFromPattern` is what the driver gave us at
-  /// `beginPatternTile` time. Both transforms are 2D affines and
-  /// Transform2d::inversed() handles the inverse.
+  ///   pattern_pos  =  inverse(deviceFromPath_at_capture * targetFromPattern)
+  ///                 · currentTransform · path_pos
+  ///
+  /// Expanding: the two `currentTransform`/`deviceFromPath_at_capture` matrices
+  /// cancel (they're the same transform when the outer element is drawing
+  /// its own fill immediately after the pattern subtree returns), leaving
+  /// `inverse(targetFromPattern) · path_pos` — which sits in the user-space
+  /// frame that `tileSize` is expressed in. That keeps the shader's
+  /// `fract(patternPos / tileSize)` well-defined regardless of the
+  /// viewBox→canvas scale.
   geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
                                                     double opacity) const {
-    const Transform2d patternFromTarget = slot.targetFromPattern.inverse();
-    const Transform2d patternFromPath = patternFromTarget * currentTransform;
+    const Transform2d deviceFromPattern =
+        slot.deviceFromPathAtCapture * slot.targetFromPattern;
+    const Transform2d patternFromDevice = deviceFromPattern.inverse();
+    const Transform2d patternFromPath = patternFromDevice * currentTransform;
     geode::GeoEncoder::PatternPaint p;
     p.tile = slot.tile;
     p.tileSize = slot.tileSize;
@@ -984,6 +1009,13 @@ void RendererGeode::endPatternTile(bool forStroke) {
   slot.tile = frame.tileTexture;
   slot.tileSize = frame.tileRect.size();
   slot.targetFromPattern = frame.targetFromPattern;
+  // `frame.savedTransform` is the path→device transform that was live at
+  // `beginPatternTile` time — i.e., the outer element's currentTransform
+  // including the viewBox→canvas scale. We stash it on the slot so
+  // `buildPatternPaint` can cancel it out of the live `currentTransform`
+  // at the upcoming fill draw, leaving the pattern sample in the pattern's
+  // user-space frame (where `tileSize` is expressed).
+  slot.deviceFromPathAtCapture = frame.savedTransform;
   if (forStroke) {
     impl_->patternStrokePaint = std::move(slot);
   } else {
