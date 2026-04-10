@@ -3,6 +3,11 @@ Parser for bazel test output to extract test results and statistics.
 
 This module provides utilities for parsing test output from bazel test runs,
 extracting pass/fail/skip counts, and organizing results by category.
+
+Post-upgrade (linebender/resvg-test-suite, 2024+), tests live under
+tests/<category>/<feature>/<name>.svg rather than the old flat svg/a-*.svg /
+svg/e-*.svg layout. The "category" is therefore the parent directory path
+(e.g. ``text/textPath``, ``painting/fill``), not a filename prefix.
 """
 
 import re
@@ -16,7 +21,9 @@ class TestResult:
     test_name: str
     status: str  # "PASSED", "FAILED", "SKIPPED"
     pixel_diff: Optional[int] = None
-    category_prefix: Optional[str] = None  # e.g., "e-text", "a-transform"
+    # Category directory in the new layout (e.g. "text/textPath",
+    # "painting/fill"). Replaces the old category_prefix field.
+    category: Optional[str] = None
 
 
 @dataclass
@@ -41,30 +48,64 @@ class CategoryReport:
     test_results: list[TestResult]
 
 
-def extract_test_prefix(test_name: str) -> Optional[str]:
+def extract_category_from_path(svg_path: str) -> Optional[str]:
     """
-    Extract the category prefix from a test name.
+    Extract the category directory from an SVG runfile path.
+
+    The post-upgrade layout places every test at
+    ``<runfiles root>/tests/<category>/<feature>/<name>.svg``. The category
+    is the relative directory portion (everything between ``tests/`` and the
+    final filename) — e.g. ``text/textPath`` or ``painting/fill``.
 
     Examples:
-        "e-text-002.svg" -> "e-text"
-        "a-transform-001.svg" -> "a-transform"
-        "custom-test.svg" -> None
+        ".../resvg-test-suite/tests/painting/fill/rgb-int-int-int.svg"
+            -> "painting/fill"
+        ".../resvg-test-suite/tests/text/textPath/simple-case.svg"
+            -> "text/textPath"
+        "some/unrelated/path.svg"
+            -> None
 
     Args:
-        test_name: Test file name
+        svg_path: Absolute or relative path to the .svg test file.
 
     Returns:
-        Category prefix or None if no standard prefix found
+        Category directory relative to ``tests/`` or None if the path does
+        not live under a ``tests/`` segment.
     """
-    match = re.match(r'^([a-z]+-[a-z]+)-\d+\.svg$', test_name)
-    if match:
-        return match.group(1)
-    return None
+    if not svg_path:
+        return None
+    # Find the last occurrence of "/tests/" (or leading "tests/") and take
+    # everything after it up to the final filename.
+    marker = "/tests/"
+    idx = svg_path.rfind(marker)
+    if idx < 0:
+        if svg_path.startswith("tests/"):
+            rest = svg_path[len("tests/"):]
+        else:
+            return None
+    else:
+        rest = svg_path[idx + len(marker):]
+    if "/" not in rest:
+        return None
+    category, _, _ = rest.rpartition("/")
+    return category or None
 
 
 def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
     """
     Parse bazel test output to extract test results.
+
+    Handles the current GoogleTest format used by the resvg test suite:
+
+        [ RUN      ] TextTextPath/ImageComparisonTestFixture.ResvgTest/simple_case
+        [  COMPARE ] /.../tests/text/textPath/simple-case.svg [TinySkia]: ...
+        [       OK ] TextTextPath/ImageComparisonTestFixture.ResvgTest/simple_case
+        [  FAILED  ] TextTextPath/ImageComparisonTestFixture.ResvgTest/x, where GetParam() = /.../tests/text/textPath/x.svg
+
+    The SVG filename (and therefore category) is extracted from the COMPARE
+    line or from the ``where GetParam() = <path>`` suffix on the summary
+    FAILED line — not from the mangled test ID, which has ``_`` swapped for
+    ``/`` / ``-`` / ``=`` and is not round-trippable.
 
     Args:
         test_output: Complete output from 'bazel test' command
@@ -73,54 +114,82 @@ def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
         Tuple of (test_results, summary)
     """
     results = []
-    current_test = None
-    current_status = None
-    current_diff = None
+    current_status: Optional[str] = None
+    current_diff: Optional[int] = None
+    current_svg_path: Optional[str] = None
+    current_test_id: Optional[str] = None
+    seen: set[str] = set()  # (svg_path, status) to dedupe summary lines
+
+    def flush() -> None:
+        nonlocal current_status, current_diff, current_svg_path, current_test_id
+        if current_svg_path and current_status:
+            key = (current_svg_path, current_status)
+            if key not in seen:
+                seen.add(key)
+                test_name = current_svg_path.rsplit("/", 1)[-1]
+                category = extract_category_from_path(current_svg_path)
+                results.append(TestResult(
+                    test_name=test_name,
+                    status=current_status,
+                    pixel_diff=current_diff,
+                    category=category,
+                ))
+        current_status = None
+        current_diff = None
+        current_svg_path = None
+        current_test_id = None
 
     for line in test_output.split('\n'):
-        # Match test start: [ RUN      ] ResvgTest/e_text_002
-        run_match = re.search(r'\[\s*RUN\s*\].*ResvgTest/(\w+)', line)
+        # [ RUN ] Suite/Fixture.TestName/param_id — starts a new test.
+        run_match = re.search(r'\[\s*RUN\s*\].*ResvgTest/(\S+)', line)
         if run_match:
-            current_test = run_match.group(1).replace('_', '-') + '.svg'
-            current_status = None
-            current_diff = None
+            flush()
+            current_test_id = run_match.group(1)
+            continue
 
-        # Match test result: [       OK ] or [  FAILED  ]
-        elif re.search(r'\[\s*OK\s*\]', line) and current_test:
-            current_status = "PASSED"
-        elif re.search(r'\[\s*FAILED\s*\]', line) and current_test:
-            current_status = "FAILED"
-
-        # Match pixel diff: "COMPARE ] FAIL: 1234 pixels differ"
-        elif "[  COMPARE ]" in line and "FAIL" in line:
+        # [  COMPARE ] /absolute/path/to/foo.svg [Backend]: ...
+        # This is where we learn the actual SVG filename + category.
+        compare_match = re.search(
+            r'\[\s*COMPARE\s*\]\s+(\S+\.svg)', line)
+        if compare_match:
+            current_svg_path = compare_match.group(1)
+            # Pixel diff, if present on the same line.
             diff_match = re.search(r'(\d+)\s+pixels?\s+differ', line)
             if diff_match:
                 current_diff = int(diff_match.group(1))
+            continue
 
-        # Match skipped test (from test output or skip list)
-        elif "SKIPPED" in line and current_test:
+        # Result lines: [       OK ], [  FAILED  ], [  SKIPPED ].
+        if re.search(r'\[\s*OK\s*\]', line):
+            current_status = "PASSED"
+            flush()
+            continue
+        if re.search(r'\[\s*FAILED\s*\]', line):
+            # Summary FAILED lines carry the path via ``where GetParam() = /x``.
+            where_match = re.search(
+                r'where\s+GetParam\(\)\s*=\s*(\S+\.svg)', line)
+            if where_match:
+                # Summary line — fill in the path directly.
+                current_svg_path = where_match.group(1)
+            current_status = "FAILED"
+            flush()
+            continue
+        if re.search(r'\[\s*SKIPPED\s*\]', line):
             current_status = "SKIPPED"
+            flush()
+            continue
+        # GTest also emits a bare "Skipped" message on disabled tests:
+        if current_test_id and "DISABLED_" in line:
+            current_status = "SKIPPED"
+            flush()
 
-        # When test completes, save result
-        if current_test and current_status:
-            prefix = extract_test_prefix(current_test)
-            result = TestResult(
-                test_name=current_test,
-                status=current_status,
-                pixel_diff=current_diff,
-                category_prefix=prefix
-            )
-            results.append(result)
-            current_test = None
-            current_status = None
-            current_diff = None
+    # Any trailing in-flight entry.
+    flush()
 
-    # Calculate summary
     total = len(results)
     passed = sum(1 for r in results if r.status == "PASSED")
     failed = sum(1 for r in results if r.status == "FAILED")
     skipped = sum(1 for r in results if r.status == "SKIPPED")
-
     completion_rate = passed / total if total > 0 else 0.0
 
     summary = TestSummary(
@@ -128,9 +197,8 @@ def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
         passed=passed,
         failed=failed,
         skipped=skipped,
-        completion_rate=completion_rate
+        completion_rate=completion_rate,
     )
-
     return results, summary
 
 
@@ -138,39 +206,54 @@ def parse_skip_file(skip_file_content: str) -> dict[str, str]:
     """
     Parse resvg_test_suite.cc skip entries to extract test -> reason mapping.
 
+    After the M1 upgrade, reasons are carried as string arguments to the
+    Skip factory: ``{"foo.svg", Params::Skip("Not impl: textPath")}``. The
+    pre-upgrade trailing-comment form is still recognized as a fallback so
+    this module can also read historic skip files.
+
     Args:
         skip_file_content: Content of resvg_test_suite.cc
 
     Returns:
         Dictionary mapping test_name -> skip_reason
     """
-    skip_map = {}
+    skip_map: dict[str, str] = {}
 
-    # Match skip entries like: {"e-text-002.svg", Params::Skip()},  // Not impl: dx attribute
-    pattern = r'\{\"([^\"]+)\",\s*Params::Skip\(\)\},\s*//\s*(.+)'
+    # New form: Skip("reason") with optional trailing comment.
+    # The reason string is the authoritative source.
+    new_form = re.compile(
+        r'\{\s*"(?P<name>[^"]+\.svg)"\s*,\s*'
+        r'Params::Skip\(\s*"(?P<reason>[^"]*)"\s*\)'
+    )
+    for match in new_form.finditer(skip_file_content):
+        skip_map[match.group("name")] = match.group("reason").strip()
 
-    for match in re.finditer(pattern, skip_file_content):
-        test_name = match.group(1)
-        reason = match.group(2).strip()
-        skip_map[test_name] = reason
+    # Legacy form: Skip() with a trailing "// comment" on the same line.
+    legacy_form = re.compile(
+        r'\{\s*"(?P<name>[^"]+\.svg)"\s*,\s*Params::Skip\(\s*\)\s*\}\s*,'
+        r'\s*//\s*(?P<reason>.+)'
+    )
+    for match in legacy_form.finditer(skip_file_content):
+        # Only fill in if the newer form didn't already cover this test.
+        skip_map.setdefault(match.group("name"), match.group("reason").strip())
 
     return skip_map
 
 
 def group_by_category(results: list[TestResult]) -> dict[str, CategoryReport]:
     """
-    Group test results by category prefix.
+    Group test results by category directory (e.g. ``text/textPath``).
 
     Args:
         results: List of test results
 
     Returns:
-        Dictionary mapping category -> CategoryReport
+        Dictionary mapping category directory -> CategoryReport
     """
     categories = {}
 
     for result in results:
-        category = result.category_prefix or "other"
+        category = result.category or "other"
 
         if category not in categories:
             categories[category] = {
@@ -213,29 +296,33 @@ def identify_missing_features(skip_map: dict[str, str], category: Optional[str] 
     """
     Identify missing features and the tests they affect.
 
+    Since the post-upgrade skip file keys the map by bare SVG filename
+    (e.g. ``simple-case.svg``) without the category directory, the
+    ``category`` filter is advisory: callers should scope the skip_map
+    themselves before calling if they want strict category filtering.
+    A passed ``category`` is therefore ignored here — preserved as a
+    parameter for backwards compatibility.
+
     Args:
         skip_map: Dictionary from parse_skip_file()
-        category: Optional category filter (e.g., "e-text")
+        category: Advisory; no-op in the directory-based layout.
 
     Returns:
         Dictionary mapping feature -> list of affected tests
     """
+    del category  # parameter preserved for backwards compatibility
     features = {}
 
     for test_name, reason in skip_map.items():
-        # Filter by category if specified
-        if category:
-            prefix = extract_test_prefix(test_name)
-            if prefix != category:
-                continue
-
-        # Extract feature from skip reason
-        # "Not impl: dx attribute" -> "dx attribute"
-        # "Not impl: `letter-spacing`" -> "letter-spacing"
-        feature_match = re.search(r'Not impl:\s*[`<]?([^>`]+)[>`]?', reason)
+        # Extract feature from skip reason.
+        # Recognized patterns:
+        #   "Not impl: dx attribute"          -> "dx attribute"
+        #   "Not impl: `letter-spacing`"      -> "letter-spacing"
+        #   "Not impl: <textPath>"            -> "textPath"
+        #   "M1 upgrade: needs triage"        -> no feature extracted
+        feature_match = re.search(r'Not impl:\s*[`<]?([^>`]+?)[>`]?\s*$', reason)
         if feature_match:
             feature = feature_match.group(1).strip()
-
             if feature not in features:
                 features[feature] = []
             features[feature].append(test_name)
