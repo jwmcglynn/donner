@@ -110,11 +110,10 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Geode is skeleton-stage: stroke/gradient/text/filter/image all stubbed,
-    # so the existing golden suite fails across the board. `--config=geode`
-    # runs the curated :renderer_geode_golden_tests target instead, which
-    # only exercises pure solid-fill SVGs.
-    target_compatible_with = renderer_backend_compatible_with(["skia", "tiny_skia"]),
+    # Geode runs through this suite too, using the shared (tiny-skia-authored)
+    # goldens with a widened default threshold. Per-test Geode overrides live
+    # in `geodeOverrides()` in `Renderer_tests.cc` — see the Phase 5b section
+    # of `docs/design_docs/geode_renderer.md`.
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
