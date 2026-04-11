@@ -232,12 +232,18 @@ int main(int argc, char** argv) {
     // Global keyboard shortcuts. ImGui translates Cmd on macOS and Ctrl
     // elsewhere into `Super`/`Ctrl` key mods, so we accept either.
     {
-      const bool undoShortcut =
-          ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false) &&
-          (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) &&
-          !ImGui::GetIO().KeyShift;
-      if (undoShortcut && app.canUndo()) {
-        app.undo();
+      const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+      const bool shift = ImGui::GetIO().KeyShift;
+      const bool pressedZ = ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false);
+
+      if (pressedZ && cmd && !shift) {
+        // Cmd+Z: undo
+        if (app.canUndo()) {
+          app.undo();
+        }
+      } else if (pressedZ && cmd && shift) {
+        // Cmd+Shift+Z: redo (break chain + undo-of-undo)
+        app.redo();
       }
     }
 

@@ -32,6 +32,16 @@ void EditorApp::undo() {
   applyMutation(EditorCommand::SetTransformCommand(entity, snapshot->transform));
 }
 
+void EditorApp::redo() {
+  // "Redo" in the non-destructive timeline model is "break the active
+  // undo chain and undo again". Breaking the chain causes the next
+  // undo to start a fresh chain from the end of the timeline, which
+  // means the first entry it walks is the most recently-appended
+  // undo-entry — whose `before` state is the post-drag position.
+  undoTimeline_.breakUndoChain();
+  undo();
+}
+
 std::optional<svg::SVGGeometryElement> EditorApp::hitTest(const Vector2d& documentPoint) {
   if (!document_.hasDocument()) {
     return std::nullopt;

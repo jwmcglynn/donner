@@ -116,6 +116,18 @@ public:
   /// No-op if there is nothing to undo.
   void undo();
 
+  /// Redo the most recently undone entry.
+  ///
+  /// In the non-destructive `UndoTimeline` model, "redo" is mechanically
+  /// identical to "undo the most recent undo-entry": breaking the
+  /// current undo chain and then calling `undo()` again pops the
+  /// undo-entry the previous `undo()` call appended, which restores
+  /// the post-drag state.
+  ///
+  /// Like `undo()`, the restored transform is routed through the
+  /// command queue so the mutation seam is preserved.
+  void redo();
+
 private:
   AsyncSVGDocument document_;
   Entity selectedEntity_ = entt::null;

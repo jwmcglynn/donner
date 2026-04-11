@@ -194,5 +194,76 @@ TEST_F(SelectToolTest, MultiStepDragCollapsesToSingleUndoEntry) {
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
 }
 
+TEST_F(SelectToolTest, RedoAfterUndoRestoresPostDragState) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 0.0);
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0);
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 20.0);
+}
+
+TEST_F(SelectToolTest, UndoRedoCyclesStayConsistent) {
+  // Drag by (25, 20).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Three undo/redo cycles — each pair should leave the element at its
+  // post-drag position.
+  for (int i = 0; i < 3; ++i) {
+    app.undo();
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0) << "iteration " << i;
+
+    app.redo();
+    ASSERT_TRUE(app.flushFrame());
+    EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0) << "iteration " << i;
+  }
+}
+
+TEST_F(SelectToolTest, RedoWithNothingToRedoIsNoOp) {
+  // Nothing in the timeline → redo is a no-op.
+  app.redo();
+  EXPECT_FALSE(app.flushFrame());
+}
+
+TEST_F(SelectToolTest, TwoDifferentDragsBothUndoableInOrder) {
+  // Drag r1 by (25, 20).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Drag r2 by (10, 5).
+  tool.onMouseDown(app, Vector2d(120.0, 120.0));
+  tool.onMouseMove(app, Vector2d(130.0, 125.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(130.0, 125.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(app.undoTimeline().entryCount(), 2u);
+
+  // Undo: r2 back to identity, r1 still moved.
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r2").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0);
+
+  // Undo again: r1 back to identity too.
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#r2").data[4], 0.0);
+}
+
 }  // namespace
 }  // namespace donner::editor
