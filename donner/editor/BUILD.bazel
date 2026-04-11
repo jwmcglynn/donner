@@ -13,7 +13,12 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("//build_defs:rules.bzl", "donner_cc_library")
 
-package(default_visibility = ["//donner/editor:__subpackages__"])
+# Editor libraries are public so the //examples:svg_viewer target (in the
+# separate examples Bazel module) can depend on them. BCR consumers cannot
+# transitively use these targets because imgui/glfw/tracy are
+# `dev_dependency = True` in MODULE.bazel and won't resolve outside dev
+# builds.
+package(default_visibility = ["//visibility:public"])
 
 donner_cc_library(
     name = "viewport_geometry",

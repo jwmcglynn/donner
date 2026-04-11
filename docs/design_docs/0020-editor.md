@@ -18,19 +18,28 @@ gives the project a differentiator no parallel SVG library has:
 the DOM as a first-class editing target, not a frozen parse tree.
 
 This migration is explicitly scoped **down**. The code is imported from the
-prototype's git state at commit `709be25` ("Add composited rendering for
-smooth element dragging") — immediately *before* the structured
-bidirectional text↔canvas sync work started in commit `47373a2`. The
-import point captures the plain `TextEditor` + `TextBuffer` components
-(which are load-bearing for the editor experience), but naturally
-excludes `SourcePatch`, structured-edit bidirectional sync,
-save-from-text-pane, and the `structured_text_editing.md` design doc —
-none of which existed at the import commit. The pen-style path tool and
-node-edit tool *do* exist at the import commit and are stripped during
-the port; they return as a fast-follow milestone. What moves in is: the
-shell, the `TextEditor` pane (read/write but without bidirectional
-source patching), the select/transform/undo loop, and the headless test
-infrastructure.
+prototype's git state at commit `808d98a` ("Fix the last character not
+refreshing the screen") — immediately *before* `67513fa` introduced the
+basic path tool, and well before `1a43411` added the headless harness +
+`UndoTimeline` + `EditablePathSpline`-based path editing, and before
+`47373a2` introduced `SourcePatch` and structured bidirectional
+text↔canvas sync. The import point captures the bare imgui shell:
+`TextEditor` + `TextBuffer` (load-bearing for the editor experience),
+`AsyncSVGDocument` + `AsyncSVGRenderer` (the prototype's mutex-based
+async render — being **rewritten** around the new command queue, not
+ported verbatim), `SVGState`, and `main.cc`. It naturally excludes
+`PathTool`, `NodeEditTool`, `EditablePathSpline`, `SourcePatch`,
+`UndoTimeline`, `OverlayRenderer`, `SelectTool`, `EditorApp` (the
+EditorApp abstraction was added later — at the import point, `main.cc`
+talks to `SVGState` directly), `HeadlessEditorHarness`,
+`HiddenWindowFramebufferHarness`, and the framebuffer/headless test
+files.
+
+Pieces that are in the M2 design but *don't exist* at the import point
+(`ViewportGeometry`, `UndoTimeline`, `SelectTool`, `OverlayRenderer`,
+`EditorApp`) are written **fresh** against the new mutation-seam +
+command-queue architecture rather than ported. They draw on the
+design-doc decisions, not on the prototype's code.
 
 ## Goals
 
@@ -107,10 +116,10 @@ infrastructure.
 - **Incremental bidirectional text↔canvas sync** (`SourcePatch.{h,cc}`,
   `tryIncrementalUpdate()` source patching, and the
   `structured_text_editing.md` design doc) is **not** migrating. The
-  import point (`709be25`) pre-dates all of it. `TextEditor.{h,cc}` and
+  import point (`808d98a`) pre-dates all of it. `TextEditor.{h,cc}` and
   `TextBuffer.h` themselves **are** migrating — they are load-bearing
-  for the editor experience and existed in simpler form at the import
-  commit. The text pane is **read-write**: the user can type in it, and
+  for the editor experience and existed in their current form at the
+  import commit (verified identical to the later `709be25` snapshot). The text pane is **read-write**: the user can type in it, and
   every change triggers a **full SVG re-parse** via
   `processEditorTextChanges()`, which already exists at the import
   commit in `editor/EditorApp.cc`. Canvas edits do not patch the text
@@ -181,13 +190,21 @@ Reviewers should flag any PR that tries to sneak these in under cover of
   "SVG viewer app" targets in the tree.
 
 **Import point.** Source files are imported from the external
-`jwmcglynn/donner-editor` repo at commit `709be25` (pre-structured-editing,
-pre-SourcePatch). History is not imported — this is a rewrite-during-move.
-Where the port benefits from later prototype work that happened after
-`709be25` (specifically the direct-renderer overlay approach from commit
-`015fac6`), that later work is re-authored in-tree rather than
-cherry-picked; the prototype commits are cited in per-file provenance
-comments where useful.
+`jwmcglynn/donner-editor` repo at commit `808d98a` (pre-`67513fa`, the
+commit that first introduced any path tool). History is not imported —
+this is a rewrite-during-move. Where the port benefits from later
+prototype work (e.g. the direct-renderer overlay approach from the
+much later commit `015fac6`), that work is re-authored in-tree rather
+than cherry-picked; the prototype commits are cited in per-file
+provenance comments where useful.
+
+At `808d98a` the prototype's editor surface is small and clean:
+`TextEditor` + `TextBuffer` + `SVGState` + `AsyncSVGDocument` +
+`AsyncSVGRenderer` + `main.cc`. There is **no** `EditorApp`, no tool
+interface, no `UndoTimeline`, no headless harness, no path tools, no
+selection chrome separation. The simpler structure is closer to what
+the M2 design wants, which is part of why this is the right import
+point.
 
 ## Implementation Plan
 
@@ -247,10 +264,11 @@ comments where useful.
         mutation-seam contract: all DOM writes go through
         `EditorApp::applyMutation(EditorMutation)`. Tools never touch
         `SVGElement::setTransform()` directly.
-  - [ ] Port `TextBuffer` and `TextEditor` from the import commit (`709be25`
+  - [ ] Port `TextBuffer` and `TextEditor` from the import commit (`808d98a`
         versions — pre-`SourcePatch`, pre-`tryIncrementalUpdate`). The
-        existing `processEditorTextChanges()` at the import commit does a
-        full re-parse on every text edit; that's the contract.
+        existing text-pane re-parse contract at the import commit does a
+        full re-parse on every text edit; the new `EditorCommand::ReplaceDocument`
+        case is the modern equivalent.
   - [ ] Add the upgraded **`//examples:svg_viewer`** at
         `examples/svg_viewer.cc`, depending on `//donner/editor:text_editor`
         and donner's renderer. Wire imgui + glfw + glad into

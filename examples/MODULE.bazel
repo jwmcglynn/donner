@@ -10,11 +10,46 @@ local_path_override(
     path = "..",
 )
 
+bazel_dep(name = "apple_support", version = "2.5.2", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
 bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
 bazel_dep(name = "stb", version = "0.0.0")
 git_override(
     module_name = "stb",
     remote = "https://github.com/jwmcglynn/rules_stb",
     commit = "075e5a470e31e46a7318cc308c79dba205a6b2eb",
+)
+
+##
+## Editor demo deps (used by //examples:svg_viewer).
+##
+## These mirror donner's own //MODULE.bazel entries so the imgui/glfw repos
+## resolve to the same physical instance both modules consume.
+##
+## NOTE: the patch files in `examples/third_party/patches/` must stay in
+## sync with `donner/third_party/patches/` — Bazel forbids cross-module
+## patch label references (`@donner//...`), so each module keeps its own
+## copy. See `examples/third_party/patches/BUILD.bazel` for details.
+##
+bazel_dep(name = "imgui", version = "0.0.0")
+git_override(
+    module_name = "imgui",
+    remote = "https://github.com/ocornut/imgui",
+    commit = "ee1deccc08c14ab1e6abcfa6aae11d915763cdb7",
+    patches = [
+        "//third_party/patches:imgui_bazel_build_files.patch",
+    ],
+    patch_strip = 1,
+)
+
+bazel_dep(name = "glfw", version = "0.0.0")
+git_override(
+    module_name = "glfw",
+    remote = "https://github.com/glfw/glfw",
+    commit = "4df5129529b1af57d04a51f09145da5079822c3e",
+    patches = [
+        "//third_party/patches:glfw_bazel_build_files.patch",
+    ],
+    patch_strip = 1,
 )
