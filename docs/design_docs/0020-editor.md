@@ -115,7 +115,10 @@ design-doc decisions, not on the prototype's code.
 
 - **Incremental bidirectional text↔canvas sync** (`SourcePatch.{h,cc}`,
   `tryIncrementalUpdate()` source patching, and the
-  `structured_text_editing.md` design doc) is **not** migrating. The
+  [`structured_text_editing.md`](structured_text_editing.md) design doc)
+  is **not** migrating in this milestone but is the next major editor
+  initiative — that doc has been resurrected from the prototype repo
+  and adapted to consume the M2/M3 mutation seam. The
   import point (`808d98a`) pre-dates all of it. `TextEditor.{h,cc}` and
   `TextBuffer.h` themselves **are** migrating — they are load-bearing
   for the editor experience and existed in their current form at the
@@ -1150,9 +1153,17 @@ Existing external design docs being migrated:
   — migrated as the harness substrate, but with the scenario DSL
   replaced by straight-line gtest.
 
+Resurrected from the prototype but scoped as a follow-up initiative:
+
+- [`structured_text_editing.md`](structured_text_editing.md) — adapted
+  from the prototype's `da076ec` snapshot to consume the M2/M3
+  mutation seam (`EditorApp::applyMutation`, the `EditorCommand`
+  variant taxonomy, and the `lastParseError()` machinery from M3)
+  rather than the prototype's mutex-based `SVGState`. All checkboxes
+  reset; nothing in the doc has been built in donner yet.
+
 Not migrated (prototype-only, dropped at the door):
 
-- `donner-editor/docs/design_docs/structured_text_editing.md`
 - `donner-editor/docs/design_docs/graphic_designer_path_tools.md`
 
 ## Open Questions
