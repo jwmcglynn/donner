@@ -229,13 +229,21 @@ land as standalone PRs in this order.
       path. Regression test in `SVGElement_tests.cc` verifies that
       `fill="red"` survives a subsequent `setStyle("stroke: blue")`
       while `opacity` from a prior style attribute gets cleared.
-- [ ] **`xml::XMLParser::Options` DoS caps.** Today only
-      `maxEntityDepth = 64` (`donner/base/xml/XMLParser.h:75`). Add
-      `maxElements`, `maxAttributesPerElement`, `maxNestingDepth` with
-      defaults 100k / 1k / 256. **Required independent of structured
-      editing** — the XML parser handles untrusted SVG input today
-      without these caps, which is a gap the fuzzing corpus hasn't
-      exercised. File as an upstream prerequisite.
+- [x] **`xml::XMLParser::Options` DoS caps.** Added `maxElements`
+      (100k default), `maxAttributesPerElement` (1k), and
+      `maxNestingDepth` (256) alongside the existing `maxEntityDepth`
+      + `maxEntitySubstitutions`. The element cap is enforced in a
+      new `countTreeNode()` helper called from every tree-node
+      creator (`parseElement`, `parseXMLDeclaration`, `parseComment`,
+      `parseDoctype`, `parseProcessingInstructions`, `parseCData`)
+      so an attacker can't amplify with non-element nodes. Nesting
+      depth is tracked via an explicit counter bumped around
+      `parseNodeContents` rather than the recursive call stack so
+      the error message fires cleanly before the recursion.
+      Seven new tests in `XMLParser_tests.cc` cover boundary cases:
+      cap exceeded, realistic documents under default caps, per-
+      element attribute-cap scoping, and wide-shallow documents
+      passing a tight nesting cap.
 - [ ] **`AttributeParser` re-entrancy audit.** `ParseAndSetAttribute`
       was designed for "called once per attribute during a single
       parse" and the editor's reuse will violate several of its

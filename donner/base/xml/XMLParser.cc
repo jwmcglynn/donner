@@ -242,7 +242,12 @@ private:
 
   const int maxEntityDepth_;
   const uint64_t maxEntitySubstitutions_;
+  const uint64_t maxElements_;
+  const uint64_t maxAttributesPerElement_;
+  const int maxNestingDepth_;
   uint64_t entitySubstitutionCount_ = 0;
+  uint64_t elementCount_ = 0;
+  int nestingDepth_ = 0;
 
 public:
   explicit XMLParserImpl(std::string_view text, const XMLParser::Options& options)
@@ -251,7 +256,10 @@ public:
         remaining_(text),
         options_(options),
         maxEntityDepth_(options.maxEntityDepth),
-        maxEntitySubstitutions_(options.maxEntitySubstitutions) {}
+        maxEntitySubstitutions_(options.maxEntitySubstitutions),
+        maxElements_(options.maxElements),
+        maxAttributesPerElement_(options.maxAttributesPerElement),
+        maxNestingDepth_(options.maxNestingDepth) {}
 
   bool isWhitespace(char ch) const {
     // Whitespace is defined by multiple specs, but both match.
@@ -942,6 +950,9 @@ private:
 
   /// Parse XML declaration (<?xml...)
   ParseResult<XMLNode> parseXMLDeclaration(FileOffset startOffset) {
+    if (auto maybeError = countTreeNode(startOffset)) {
+      return std::move(maybeError.value());
+    }
     // Create declaration
     XMLNode declaration = XMLNode::CreateXMLDeclarationNode(document_);
     declaration.setSourceStartOffset(startOffset);
@@ -974,6 +985,9 @@ private:
 
     // If Comment nodes are enabled
     if (options_.parseComments) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return std::move(maybeError.value());
+      }
       XMLNode commentNode = XMLNode::CreateCommentNode(document_, commentStr.toSingleRcString());
       commentNode.setSourceStartOffset(startOffset);
       commentNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
@@ -1052,6 +1066,9 @@ private:
     remaining_.remove_prefix(i + 1);  // consume the '>' as well
 
     if (options_.parseDoctype) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return std::move(maybeError.value());
+      }
       XMLNode docNode = XMLNode::CreateDocTypeNode(document_, doctypeStr.toSingleRcString());
       docNode.setSourceStartOffset(startOffset);
       docNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
@@ -1081,6 +1098,9 @@ private:
     const ChunkedString& piValue = maybePiValue.value();
 
     if (options_.parseProcessingInstructions) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return std::move(maybeError.value());
+      }
       XMLNode pi = XMLNode::CreateProcessingInstructionNode(document_, piName.toSingleRcString(),
                                                             piValue.toSingleRcString());
       pi.setSourceStartOffset(startOffset);
@@ -1125,6 +1145,10 @@ private:
     auto maybeCData = consumeContentsUntilEndString("]]>");
     if (!maybeCData) {
       return createParseError("CDATA node does not end with ']]>'");
+    }
+
+    if (auto maybeError = countTreeNode(startOffset)) {
+      return std::move(maybeError.value());
     }
 
     const ChunkedString& cdataStr = maybeCData.value();
@@ -1235,6 +1259,13 @@ private:
    * Parsing an element of form `<tag ...>` or `<tag .../>`.
    */
   ParseResult<XMLNode> parseElement(FileOffset startOffset) {
+    // Enforce the element count cap. Any element-ish node (including comments, doctype,
+    // PI, CDATA) also counts toward this budget via `countTreeNode` so an attacker can't
+    // route around it by piling comments.
+    if (auto maybeError = countTreeNode(startOffset)) {
+      return std::move(maybeError.value());
+    }
+
     // Extract element name
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
@@ -1257,7 +1288,14 @@ private:
 
     // Determine ending type
     if (tryConsume(remaining_, ">")) {
-      if (auto maybeError = parseNodeContents(element)) {
+      // Enter the element — bump nesting depth before recursing, restore on exit.
+      if (nestingDepth_ >= maxNestingDepth_) {
+        return createParseError("Maximum element nesting depth exceeded", startOffset);
+      }
+      ++nestingDepth_;
+      auto maybeError = parseNodeContents(element);
+      --nestingDepth_;
+      if (maybeError) {
         return std::move(maybeError.value());
       }
 
@@ -1269,6 +1307,17 @@ private:
 
     element.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
     return element;
+  }
+
+  /// Increment the element/tree-node counter and return an error if it would exceed
+  /// the configured cap. Called once per parsed element, comment, doctype, CDATA,
+  /// processing instruction, or XML declaration.
+  [[nodiscard]] std::optional<ParseDiagnostic> countTreeNode(const FileOffset& where) {
+    if (elementCount_ >= maxElements_) {
+      return createParseError("Maximum element count exceeded", where);
+    }
+    ++elementCount_;
+    return std::nullopt;
   }
 
   /**
@@ -1492,8 +1541,10 @@ private:
    * Parse XML attributes of the node, gather all attributes until `>` or `/>`
    */
   [[nodiscard]] std::optional<ParseDiagnostic> parseNodeAttributes(XMLNode& node) {
+    uint64_t attributeCount = 0;
     // For all attributes
     while (true) {
+      const FileOffset beforeAttribute = currentOffsetWithLineNumber(remaining_);
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
       if (maybeAttribute.hasError()) {
         return std::move(maybeAttribute.error());
@@ -1502,6 +1553,11 @@ private:
       skipWhitespace(remaining_);
 
       if (maybeAttribute.result().has_value()) {
+        if (attributeCount >= maxAttributesPerElement_) {
+          return createParseError("Maximum attributes-per-element count exceeded",
+                                  beforeAttribute);
+        }
+        ++attributeCount;
         const ParsedAttribute& attribute = maybeAttribute.result().value();
         node.setAttribute(attribute.name, attribute.value);
       } else {

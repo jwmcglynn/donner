@@ -834,6 +834,88 @@ TEST_F(XMLParserTests, EntitySubstitutionLimitExceeded) {
   EXPECT_THAT(result, ParseErrorIs("Entity substitution limit exceeded"));
 }
 
+TEST_F(XMLParserTests, MaxElementsLimitExceeded) {
+  // Set a tiny element cap so the test input immediately overruns it. The
+  // cap counts every tree-building node (element, CDATA, comment, doctype,
+  // PI, XML declaration) so an attacker can't sidestep it with non-element
+  // tree nodes.
+  XMLParser::Options options;
+  options.maxElements = 3;
+
+  auto result = XMLParser::Parse("<a><b/><c/><d/></a>", options);
+
+  // Expect: root <a> (1), <b/> (2), <c/> (3), <d/> (exceeds) → error on <d/>.
+  EXPECT_THAT(result, ParseErrorIs("Maximum element count exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxElementsLimitAllowsRealisticDocuments) {
+  // The default cap (100k) is far above any realistic SVG; this test
+  // documents that a 50-element input parses cleanly without bumping caps.
+  auto result = XMLParser::Parse(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g><rect/><rect/><rect/><rect/><rect/></g>
+      <g><rect/><rect/><rect/><rect/><rect/></g>
+      <g><rect/><rect/><rect/><rect/><rect/></g>
+    </svg>
+  )");
+  EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
+TEST_F(XMLParserTests, MaxAttributesPerElementLimitExceeded) {
+  XMLParser::Options options;
+  options.maxAttributesPerElement = 2;
+
+  auto result =
+      XMLParser::Parse(R"(<node a="1" b="2" c="3" d="4"/>)", options);
+
+  EXPECT_THAT(result, ParseErrorIs("Maximum attributes-per-element count exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxAttributesCapIsPerElement) {
+  // The attribute cap is **per element**, not cumulative — two elements
+  // each with the maximum attributes must both parse.
+  XMLParser::Options options;
+  options.maxAttributesPerElement = 3;
+
+  auto result = XMLParser::Parse(R"(
+    <root>
+      <a x="1" y="2" z="3"/>
+      <b x="1" y="2" z="3"/>
+    </root>
+  )",
+                                 options);
+  EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
+TEST_F(XMLParserTests, MaxNestingDepthLimitExceeded) {
+  XMLParser::Options options;
+  options.maxNestingDepth = 3;
+
+  // The root element sits at depth 0; each child pushes depth by one.
+  // With maxNestingDepth=3, <a><b><c><d></d></c></b></a> is rejected
+  // at the point where we try to enter <d> (depth 3 → 4 would exceed).
+  auto result =
+      XMLParser::Parse("<a><b><c><d><e/></d></c></b></a>", options);
+
+  EXPECT_THAT(result, ParseErrorIs("Maximum element nesting depth exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxNestingDepthAllowsSiblingSpread) {
+  // A wide-but-shallow document should parse fine under a tight nesting
+  // cap — the cap is about call-stack depth, not total element count.
+  XMLParser::Options options;
+  options.maxNestingDepth = 2;
+
+  auto result = XMLParser::Parse(R"(
+    <root>
+      <a/><a/><a/><a/><a/>
+      <a/><a/><a/><a/><a/>
+    </root>
+  )",
+                                 options);
+  EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
 TEST_F(XMLParserTests, EntitiesComposition) {
   // Test entity composition (one entity referencing another)
   auto result = XMLParser::Parse(R"(
