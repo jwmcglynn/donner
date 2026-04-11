@@ -5,7 +5,7 @@ namespace donner::editor {
 EditorApp::EditorApp() = default;
 
 bool EditorApp::loadFromString(std::string_view svgBytes) {
-  selectedEntity_ = entt::null;
+  selectedElement_.reset();
   controller_.reset();
   undoTimeline_.clear();
   return document_.loadFromString(svgBytes);
@@ -25,11 +25,7 @@ void EditorApp::undo() {
   // DOM write — tool drags, text-pane re-parse, and undo — goes through
   // the same mutation seam. The queue coalesces with any pending
   // commands and applies on the next `flushFrame()`.
-  const Entity entity = snapshot->element.entityHandle().entity();
-  if (entity == entt::null) {
-    return;
-  }
-  applyMutation(EditorCommand::SetTransformCommand(entity, snapshot->transform));
+  applyMutation(EditorCommand::SetTransformCommand(snapshot->element, snapshot->transform));
 }
 
 void EditorApp::redo() {

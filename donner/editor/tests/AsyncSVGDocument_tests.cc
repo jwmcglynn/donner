@@ -41,10 +41,9 @@ TEST(AsyncSVGDocumentTest, FlushAppliesQueuedSetTransform) {
 
   auto rect = doc.document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
-  const Entity entity = rect->entityHandle().entity();
 
   const Transform2d translateBy = Transform2d::Translate(Vector2d(7.0, 11.0));
-  doc.applyMutation(EditorCommand::SetTransformCommand(entity, translateBy));
+  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, translateBy));
 
   EXPECT_TRUE(doc.flushFrame());
   EXPECT_GT(doc.currentFrameVersion(), initialVersion);
@@ -61,12 +60,11 @@ TEST(AsyncSVGDocumentTest, MultipleSetTransformsCoalesceAtFlush) {
 
   auto rect = doc.document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
-  const Entity entity = rect->entityHandle().entity();
 
   // Three writes, only the last should apply.
-  doc.applyMutation(EditorCommand::SetTransformCommand(entity, Transform2d::Translate(Vector2d(1.0, 0.0))));
-  doc.applyMutation(EditorCommand::SetTransformCommand(entity, Transform2d::Translate(Vector2d(2.0, 0.0))));
-  doc.applyMutation(EditorCommand::SetTransformCommand(entity, Transform2d::Translate(Vector2d(3.0, 0.0))));
+  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(1.0, 0.0))));
+  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(2.0, 0.0))));
+  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(3.0, 0.0))));
   EXPECT_EQ(doc.queue().size(), 3u);
 
   EXPECT_TRUE(doc.flushFrame());
@@ -81,12 +79,12 @@ TEST(AsyncSVGDocumentTest, ReplaceDocumentSwapsTheTreeAndDropsPriorMutations) {
   ASSERT_TRUE(doc.document().querySelector("#r1").has_value());
 
   auto rect = doc.document().querySelector("#r1");
-  const Entity staleEntity = rect->entityHandle().entity();
+  ASSERT_TRUE(rect.has_value());
 
   // Queue a SetTransform, then a ReplaceDocument. The SetTransform must
   // be dropped because its target entity belongs to the doomed document.
   doc.applyMutation(EditorCommand::SetTransformCommand(
-      staleEntity, Transform2d::Translate(Vector2d(99.0, 99.0))));
+      *rect, Transform2d::Translate(Vector2d(99.0, 99.0))));
   doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kReplacementSvg)));
 
   EXPECT_TRUE(doc.flushFrame());

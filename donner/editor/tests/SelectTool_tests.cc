@@ -19,16 +19,24 @@ protected:
     ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
   }
 
-  Entity entityById(std::string_view id) {
+  svg::SVGElement elementById(std::string_view id) {
     auto element = app.document().document().querySelector(id);
     EXPECT_TRUE(element.has_value()) << "no element matching " << id;
-    return element->entityHandle().entity();
+    return *element;
   }
 
   Transform2d transformOf(std::string_view id) {
     auto element = app.document().document().querySelector(id);
     EXPECT_TRUE(element.has_value());
     return element->cast<svg::SVGGraphicsElement>().transform();
+  }
+
+  bool selectionIs(std::string_view id) {
+    const auto& selection = app.selectedElement();
+    if (!selection.has_value()) {
+      return false;
+    }
+    return *selection == elementById(id);
   }
 
   EditorApp app;
@@ -39,12 +47,12 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0));
 
   EXPECT_TRUE(app.hasSelection());
-  EXPECT_EQ(app.selectedEntity(), entityById("#r1"));
+  EXPECT_TRUE(selectionIs("#r1"));
   EXPECT_TRUE(tool.isDragging());
 }
 
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
-  app.setSelection(entityById("#r1"));
+  app.setSelection(elementById("#r1"));
   EXPECT_TRUE(app.hasSelection());
 
   tool.onMouseDown(app, Vector2d(180.0, 180.0));
@@ -54,12 +62,12 @@ TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
 
 TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0));
-  ASSERT_EQ(app.selectedEntity(), entityById("#r1"));
+  ASSERT_TRUE(selectionIs("#r1"));
 
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
   tool.onMouseDown(app, Vector2d(110.0, 110.0));
 
-  EXPECT_EQ(app.selectedEntity(), entityById("#r2"));
+  EXPECT_TRUE(selectionIs("#r2"));
 }
 
 TEST_F(SelectToolTest, DragTranslatesSelectedElement) {

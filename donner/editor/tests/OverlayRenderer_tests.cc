@@ -50,7 +50,7 @@ TEST(OverlayRendererTest, EmitsChromeForSelectedElement) {
 
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
-  app.setSelection(rect->entityHandle().entity());
+  app.setSelection(*rect);
 
   svg::Renderer renderer;
   renderer.draw(app.document().document());
@@ -72,7 +72,7 @@ TEST(OverlayRendererTest, ToleratesStaleSelectionAfterReload) {
 
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
-  app.setSelection(rect->entityHandle().entity());
+  app.setSelection(*rect);
 
   // Reload the document — the previously-selected entity is now stale.
   // EditorApp::loadFromString clears the selection, so this case is

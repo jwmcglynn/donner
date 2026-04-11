@@ -1,8 +1,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
-#include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
@@ -46,14 +45,15 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
 void AsyncSVGDocument::applyOne(const EditorCommand& command) {
   switch (command.kind) {
     case EditorCommand::Kind::SetTransform: {
-      if (!document_.has_value()) {
+      if (!command.element.has_value()) {
         return;
       }
-      EntityHandle handle(document_->registry(), command.entity);
-      if (!handle) {
-        return;
-      }
-      svg::components::LayoutSystem().setRawEntityFromParentTransform(handle, command.transform);
+      // The element handle was captured by a public API (hitTest, tree
+      // traversal, or querySelector) so we just cast to the graphics-
+      // element interface and call the public transform setter — no
+      // direct ECS access.
+      auto graphics = command.element->cast<svg::SVGGraphicsElement>();
+      graphics.setTransform(command.transform);
       break;
     }
 
@@ -63,6 +63,21 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // setDocument path which clears the queue (already drained) and bumps
       // the version (which `flushFrame` will bump again, harmlessly).
       (void)loadFromString(command.bytes);
+      break;
+    }
+
+    case EditorCommand::Kind::DeleteElement: {
+      if (!command.element.has_value()) {
+        return;
+      }
+      // Detach via the public `SVGElement::remove()` method. The ECS
+      // entity stays in the registry (orphaned, not garbage-collected)
+      // so any in-flight references — stale selection, undo snapshots —
+      // remain valid but invisible to the renderer because the tree
+      // walk stops at the detach point. We copy to a local because
+      // `remove()` is non-const and `command` is `const&`.
+      svg::SVGElement element = *command.element;
+      element.remove();
       break;
     }
   }

@@ -14,6 +14,8 @@ donner_cc_test(
     srcs = ["CommandQueue_tests.cc"],
     deps = [
         "//donner/editor:command_queue",
+        "//donner/svg",
+        "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
     ],
 )

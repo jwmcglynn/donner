@@ -1,10 +1,9 @@
 #include "donner/editor/OverlayRenderer.h"
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
-#include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -33,26 +32,21 @@ svg::PaintParams MakeSelectionPaint() {
 }  // namespace
 
 void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
-  if (!editor.hasDocument() || !editor.hasSelection()) {
+  if (!editor.hasSelection()) {
     return;
   }
 
-  // Resolve the selected entity's world-space bounds via the same
-  // ShapeSystem path that `SVGGeometryElement::worldBounds()` uses
-  // internally. This bypasses `SVGElement`'s protected constructor while
-  // still going through the canonical layout pipeline.
-  const auto& constDoc = editor.document().document();
-  // ShapeSystem::getShapeWorldBounds takes a non-const EntityHandle.
-  // Const-cast is safe: we don't mutate the registry, ShapeSystem just
-  // populates lazily-computed components which the renderer also touches.
-  auto& mutableRegistry = const_cast<Registry&>(constDoc.registry());
-  EntityHandle handle(mutableRegistry, editor.selectedEntity());
-  if (!handle) {
+  // Resolve world-space bounds via the public `SVGGeometryElement`
+  // API — no ECS reach-through. The selection is guaranteed to be a
+  // geometry element because `SelectTool::onMouseDown` only selects
+  // results returned by `EditorApp::hitTest`, which returns
+  // `SVGGeometryElement`. Non-geometry selections (which can't happen
+  // in M2 but might in future tools) are skipped.
+  const svg::SVGElement& selected = *editor.selectedElement();
+  if (!selected.isa<svg::SVGGeometryElement>()) {
     return;
   }
-
-  const std::optional<Box2d> bounds =
-      svg::components::ShapeSystem().getShapeWorldBounds(handle);
+  const auto bounds = selected.cast<svg::SVGGeometryElement>().worldBounds();
   if (!bounds.has_value()) {
     return;
   }

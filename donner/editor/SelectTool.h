@@ -10,10 +10,10 @@
 
 #include <optional>
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/Tool.h"
+#include "donner/svg/SVGElement.h"
 
 namespace donner::editor {
 
@@ -29,7 +29,7 @@ public:
 
 private:
   struct DragState {
-    Entity entity = entt::null;
+    svg::SVGElement element;
     Vector2d startDocumentPoint;
     Transform2d startTransform;
     /// The most recent transform SelectTool has pushed through the

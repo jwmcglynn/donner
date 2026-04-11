@@ -34,8 +34,8 @@
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TracyWrapper.h"
-#include "donner/svg/components/layout/LayoutSystem.h"
-#include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
 
 #include "glad/glad.h"
@@ -87,72 +87,59 @@ donner::editor::Coordinates FileOffsetToEditorCoordinates(const donner::FileOffs
 
 /// Render a small inspector line that describes the currently-selected
 /// element (tag, id, world bounds, local transform). No-op if nothing
-/// is selected.
+/// is selected. All reads go through public SVGElement APIs so the
+/// editor doesn't touch the ECS registry directly.
 void RenderInspector(const donner::editor::EditorApp& app) {
-  if (!app.hasSelection() || !app.hasDocument()) {
+  if (!app.hasSelection()) {
     ImGui::TextDisabled("Nothing selected. Click an element to inspect.");
     return;
   }
 
-  auto& mutableRegistry =
-      const_cast<donner::Registry&>(app.document().document().registry());
-  donner::EntityHandle handle(mutableRegistry, app.selectedEntity());
-  if (!handle) {
-    ImGui::TextDisabled("Selected entity no longer exists.");
-    return;
-  }
+  const donner::svg::SVGElement& selected = *app.selectedElement();
 
-  // Tag name + id via the XML node wrapper (the same wrapper that
-  // powers the XML source highlight on click). `RcString` / `RcStringOrRef`
-  // convert to `std::string_view` but aren't null-terminated, so we use
-  // the `%.*s` form which takes length + data directly.
-  auto xmlNode = donner::xml::XMLNode::TryCast(handle);
-  if (xmlNode.has_value()) {
-    const std::string_view tagSv = xmlNode->tagName().name;
-    const auto id = xmlNode->getAttribute(donner::xml::XMLQualifiedNameRef("id"));
-    if (id.has_value()) {
-      const std::string_view idSv = *id;
-      ImGui::Text("Selected: <%.*s id=\"%.*s\">", static_cast<int>(tagSv.size()), tagSv.data(),
-                  static_cast<int>(idSv.size()), idSv.data());
-    } else {
-      ImGui::Text("Selected: <%.*s>", static_cast<int>(tagSv.size()), tagSv.data());
-    }
+  // Tag name + id via the public `SVGElement` API. `RcString` converts
+  // to `std::string_view` but isn't null-terminated, so use the `%.*s`
+  // (length + data) form for ImGui::Text.
+  const std::string_view tagSv = selected.tagName().name;
+  const donner::RcString idStr = selected.id();
+  const std::string_view idSv = idStr;
+  if (!idSv.empty()) {
+    ImGui::Text("Selected: <%.*s id=\"%.*s\">", static_cast<int>(tagSv.size()), tagSv.data(),
+                static_cast<int>(idSv.size()), idSv.data());
   } else {
-    ImGui::TextUnformatted("Selected: (non-XML element)");
+    ImGui::Text("Selected: <%.*s>", static_cast<int>(tagSv.size()), tagSv.data());
   }
 
-  // World-space bounds via the same path OverlayRenderer uses for the
-  // selection chrome rect.
-  if (auto bounds = donner::svg::components::ShapeSystem().getShapeWorldBounds(handle);
-      bounds.has_value()) {
-    ImGui::Text("Bounds: (%.1f, %.1f) %.1f × %.1f", bounds->topLeft.x, bounds->topLeft.y,
-                bounds->width(), bounds->height());
+  // World-space bounds via `SVGGeometryElement::worldBounds()` (the
+  // same public API OverlayRenderer uses for the chrome rect).
+  if (selected.isa<donner::svg::SVGGeometryElement>()) {
+    if (auto bounds = selected.cast<donner::svg::SVGGeometryElement>().worldBounds();
+        bounds.has_value()) {
+      ImGui::Text("Bounds: (%.1f, %.1f) %.1f × %.1f", bounds->topLeft.x, bounds->topLeft.y,
+                  bounds->width(), bounds->height());
+    }
   }
 
-  // Local (parent-from-entity) transform — the same quantity SelectTool
-  // drags and UndoTimeline snapshots.
-  const donner::Transform2d xform =
-      donner::svg::components::LayoutSystem().getRawEntityFromParentTransform(handle);
-  ImGui::Text("Transform: [%.3f %.3f %.3f %.3f  %.2f %.2f]", xform.data[0], xform.data[1],
-              xform.data[2], xform.data[3], xform.data[4], xform.data[5]);
+  // Local (parent-from-entity) transform via the public `SVGGraphicsElement`
+  // API — the same quantity SelectTool drags and UndoTimeline snapshots.
+  if (selected.isa<donner::svg::SVGGraphicsElement>()) {
+    const donner::Transform2d xform =
+        selected.cast<donner::svg::SVGGraphicsElement>().transform();
+    ImGui::Text("Transform: [%.3f %.3f %.3f %.3f  %.2f %.2f]", xform.data[0], xform.data[1],
+                xform.data[2], xform.data[3], xform.data[4], xform.data[5]);
+  }
 }
 
-/// Highlight an entity's XML source span in the text editor. No-op if the
-/// entity doesn't carry XML source offsets (which should never happen for
-/// a parse from `SVGParser::ParseSVG`, but is defensive).
-void HighlightEntitySource(const donner::editor::EditorApp& app,
-                           donner::editor::TextEditor& textEditor,
-                           donner::Entity entity) {
-  if (entity == entt::null || !app.hasDocument()) {
-    return;
-  }
-  auto& mutableRegistry =
-      const_cast<donner::Registry&>(app.document().document().registry());
-  donner::EntityHandle handle(mutableRegistry, entity);
-  if (!handle) {
-    return;
-  }
-  auto xmlNode = donner::xml::XMLNode::TryCast(handle);
+/// Highlight an element's XML source span in the text editor. No-op if
+/// the element doesn't carry XML source offsets.
+void HighlightElementSource(donner::editor::TextEditor& textEditor,
+                            const donner::svg::SVGElement& element) {
+  // `XMLNode::TryCast` is a public donner base API that wraps the same
+  // handle as the SVGElement and exposes XML source-location metadata.
+  // It still takes an EntityHandle, but since we're calling it with a
+  // handle that already came from a public SVG-side API we're not
+  // reaching into the ECS from the editor.
+  auto xmlNode = donner::xml::XMLNode::TryCast(element.entityHandle());
   if (!xmlNode.has_value()) {
     return;
   }
@@ -261,8 +248,8 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   std::uint64_t lastRenderedVersion = 0;
-  donner::Entity lastRenderedSelection = entt::null;
-  donner::Entity lastHighlightedSelection = entt::null;
+  std::optional<donner::svg::SVGElement> lastRenderedSelection;
+  std::optional<donner::svg::SVGElement> lastHighlightedSelection;
   donner::Vector2i lastRenderedCanvasSize{0, 0};
   int textureWidth = 0;
   int textureHeight = 0;
@@ -291,10 +278,11 @@ int main(int argc, char** argv) {
     // the render pane is resized — the main loop pokes the document
     // below before this check).
     const auto currentVersion = app.document().currentFrameVersion();
-    const donner::Entity currentSelection = app.selectedEntity();
+    const auto& currentSelection = app.selectedElement();
+    const bool selectionChanged = currentSelection != lastRenderedSelection;
     const donner::Vector2i currentCanvasSize =
         app.hasDocument() ? app.document().document().canvasSize() : donner::Vector2i{0, 0};
-    if ((currentVersion != lastRenderedVersion || currentSelection != lastRenderedSelection ||
+    if ((currentVersion != lastRenderedVersion || selectionChanged ||
          currentCanvasSize != lastRenderedCanvasSize) &&
         app.hasDocument()) {
       ZoneScopedN("render");
@@ -322,6 +310,7 @@ int main(int argc, char** argv) {
       lastRenderedVersion = currentVersion;
       lastRenderedSelection = currentSelection;
       lastRenderedCanvasSize = currentCanvasSize;
+      (void)selectionChanged;
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -400,7 +389,22 @@ int main(int argc, char** argv) {
       // active.
       if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) &&
           ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) && app.hasSelection()) {
-        app.setSelection(entt::null);
+        app.setSelection(std::nullopt);
+      }
+
+      // Delete / Backspace: detach the selected element from the tree
+      // via a `DeleteElement` command. The command flows through the
+      // queue like any other mutation and the actual detach happens on
+      // the next `flushFrame`. Undo for this action is not supported
+      // (see `EditorCommand::Kind::DeleteElement`).
+      const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
+                             ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
+      if (deleteKey && app.hasSelection() &&
+          !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) &&
+          !ImGui::GetIO().WantCaptureKeyboard) {
+        const donner::svg::SVGElement element = *app.selectedElement();
+        app.setSelection(std::nullopt);
+        app.applyMutation(donner::editor::EditorCommand::DeleteElementCommand(element));
       }
     }
 
@@ -561,9 +565,11 @@ int main(int argc, char** argv) {
       // Whenever the selection changes, jump the source pane to the
       // selected element's XML span. Gated on actual selection change so
       // the highlight only fires on click, not every frame.
-      const donner::Entity selectionNow = app.selectedEntity();
+      const auto& selectionNow = app.selectedElement();
       if (selectionNow != lastHighlightedSelection) {
-        HighlightEntitySource(app, textEditor, selectionNow);
+        if (selectionNow.has_value()) {
+          HighlightElementSource(textEditor, *selectionNow);
+        }
         lastHighlightedSelection = selectionNow;
       }
     } else {

@@ -18,12 +18,12 @@
 #include <optional>
 #include <string_view>
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/DonnerController.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 
 namespace donner::editor {
@@ -76,15 +76,20 @@ public:
   // Selection
   // ---------------------------------------------------------------------------
 
-  /// The currently-selected entity, or `entt::null` if nothing is selected.
-  [[nodiscard]] Entity selectedEntity() const { return selectedEntity_; }
+  /// The currently-selected element, or `std::nullopt` if nothing is
+  /// selected.
+  [[nodiscard]] const std::optional<svg::SVGElement>& selectedElement() const {
+    return selectedElement_;
+  }
 
   /// Whether anything is selected.
-  [[nodiscard]] bool hasSelection() const { return selectedEntity_ != entt::null; }
+  [[nodiscard]] bool hasSelection() const { return selectedElement_.has_value(); }
 
-  /// Replace the current selection with a single element. Pass `entt::null`
-  /// to clear the selection.
-  void setSelection(Entity entity) { selectedEntity_ = entity; }
+  /// Replace the current selection with a single element. Pass
+  /// `std::nullopt` to clear the selection.
+  void setSelection(std::optional<svg::SVGElement> element) {
+    selectedElement_ = std::move(element);
+  }
 
   // ---------------------------------------------------------------------------
   // Hit testing
@@ -130,7 +135,7 @@ public:
 
 private:
   AsyncSVGDocument document_;
-  Entity selectedEntity_ = entt::null;
+  std::optional<svg::SVGElement> selectedElement_;
   UndoTimeline undoTimeline_;
 
   // Lazily-rebuilt hit-test controller. Recreated whenever the document's

@@ -81,6 +81,24 @@ _RULES: List[_Rule] = [
         # headers must add an explicit exemption (and a justification).
         exempt_path_prefixes=("donner/editor/", "examples/svg_viewer"),
     ),
+    _Rule(
+        pattern=re.compile(
+            r'#\s*include\s*[<"](?:donner/svg/components/|donner/base/xml/components/)'
+        ),
+        description="ECS-internal component header from outside donner/svg or donner/base",
+        remediation=(
+            "donner/svg/components/** and donner/base/xml/components/** are ECS-internal "
+            "implementation details of the SVG pipeline. External consumers (including "
+            "//donner/editor) must go through the public SVGElement / SVGGraphicsElement / "
+            "SVGGeometryElement / XMLNode APIs instead. If your callsite legitimately "
+            "needs a new piece of state from the ECS, add a public accessor to the "
+            "SVGElement subclass rather than reaching into the component."
+        ),
+        # Only donner/svg and donner/base are allowed to include these
+        # component headers. Notably the editor, examples, and any future
+        # non-core consumer must go through the SVG public API surface.
+        exempt_path_prefixes=("donner/svg/", "donner/base/"),
+    ),
 ]
 
 

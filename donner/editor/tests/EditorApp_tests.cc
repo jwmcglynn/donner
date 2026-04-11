@@ -15,7 +15,7 @@ TEST(EditorAppTest, EmptyByDefault) {
   EditorApp app;
   EXPECT_FALSE(app.hasDocument());
   EXPECT_FALSE(app.hasSelection());
-  EXPECT_TRUE(app.selectedEntity() == entt::null);
+  EXPECT_FALSE(app.selectedElement().has_value());
 }
 
 TEST(EditorAppTest, LoadFromStringPopulatesDocument) {
@@ -32,11 +32,9 @@ TEST(EditorAppTest, LoadFromStringClearsExistingSelection) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
 
-  // Use a real entity from the document so that selection comparisons
-  // don't have to fabricate entt::entity values.
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
-  app.setSelection(rect->entityHandle().entity());
+  app.setSelection(*rect);
   EXPECT_TRUE(app.hasSelection());
 
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
@@ -73,10 +71,9 @@ TEST(EditorAppTest, ApplyMutationFlowsThroughDocument) {
 
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
-  const Entity entity = rect->entityHandle().entity();
 
   app.applyMutation(EditorCommand::SetTransformCommand(
-      entity, Transform2d::Translate(Vector2d(99.0, 0.0))));
+      *rect, Transform2d::Translate(Vector2d(99.0, 0.0))));
 
   EXPECT_EQ(app.document().queue().size(), 1u);
   EXPECT_TRUE(app.flushFrame());
@@ -89,13 +86,13 @@ TEST(EditorAppTest, SelectionSetAndClear) {
 
   auto r1 = app.document().document().querySelector("#r1");
   ASSERT_TRUE(r1.has_value());
-  const Entity entity = r1->entityHandle().entity();
 
-  app.setSelection(entity);
+  app.setSelection(*r1);
   EXPECT_TRUE(app.hasSelection());
-  EXPECT_TRUE(app.selectedEntity() == entity);
+  ASSERT_TRUE(app.selectedElement().has_value());
+  EXPECT_TRUE(*app.selectedElement() == *r1);
 
-  app.setSelection(entt::null);
+  app.setSelection(std::nullopt);
   EXPECT_FALSE(app.hasSelection());
 }
 
