@@ -69,6 +69,7 @@ donner_cc_binary(
     deps = [
         "//donner/editor:command_queue",
         "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
         "//donner/editor:select_tool",
         "//donner/editor:text_editor",
         "//donner/svg/renderer",

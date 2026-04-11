@@ -70,11 +70,16 @@ _RULES: List[_Rule] = [
         ),
         description="editor-only third-party header outside donner/editor/**",
         remediation=(
-            "imgui, GLFW, and Tracy headers are only allowed under donner/editor/**. "
-            "If you need this functionality elsewhere, expose a Donner-internal abstraction "
-            "in donner/editor/ and depend on that."
+            "imgui, GLFW, and Tracy headers are only allowed under donner/editor/** "
+            "(plus the //examples:svg_viewer demo binary). If you need this functionality "
+            "elsewhere, expose a Donner-internal abstraction in donner/editor/ and depend "
+            "on that."
         ),
-        exempt_path_prefixes=("donner/editor/",),
+        # `examples/svg_viewer` covers the canonical //examples:svg_viewer
+        # demo binary that wires the editor TextEditor + AsyncSVGDocument
+        # together for live demos. New non-editor consumers of these
+        # headers must add an explicit exemption (and a justification).
+        exempt_path_prefixes=("donner/editor/", "examples/svg_viewer"),
     ),
 ]
 

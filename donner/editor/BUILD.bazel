@@ -87,6 +87,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "overlay_renderer",
+    srcs = ["OverlayRenderer.cc"],
+    hdrs = ["OverlayRenderer.h"],
+    deps = [
+        ":editor_app",
+        "//donner/base",
+        "//donner/css",
+        "//donner/svg",
+        "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_library(
     name = "text_buffer",
     hdrs = ["TextBuffer.h"],
     deps = [

@@ -26,6 +26,7 @@
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -147,6 +148,7 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
   std::uint64_t lastRenderedVersion = 0;
+  donner::Entity lastRenderedSelection = entt::null;
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -160,10 +162,15 @@ int main(int argc, char** argv) {
     // SetTransform from SelectTool drags).
     app.flushFrame();
 
-    // Re-render only when the document version has changed.
+    // Re-render whenever the document version changes OR the selection
+    // changes. The overlay chrome lives in the same render target as the
+    // document, so a selection change requires re-running both passes.
     const auto currentVersion = app.document().currentFrameVersion();
-    if (currentVersion != lastRenderedVersion && app.hasDocument()) {
+    const donner::Entity currentSelection = app.selectedEntity();
+    if ((currentVersion != lastRenderedVersion || currentSelection != lastRenderedSelection) &&
+        app.hasDocument()) {
       renderer.draw(app.document().document());
+      donner::editor::OverlayRenderer::drawChrome(renderer, app);
       const donner::svg::RendererBitmap bitmap = renderer.takeSnapshot();
       if (!bitmap.empty()) {
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -175,6 +182,7 @@ int main(int argc, char** argv) {
         textureHeight = bitmap.dimensions.y;
       }
       lastRenderedVersion = currentVersion;
+      lastRenderedSelection = currentSelection;
     }
 
     ImGui_ImplOpenGL3_NewFrame();

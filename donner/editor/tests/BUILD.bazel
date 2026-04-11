@@ -50,6 +50,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "overlay_renderer_tests",
+    srcs = ["OverlayRenderer_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_buffer_tests",
     srcs = ["TextBuffer_tests.cc"],
     deps = [
