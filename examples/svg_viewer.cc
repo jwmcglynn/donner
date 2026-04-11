@@ -328,6 +328,11 @@ int main(int argc, char** argv) {
     textEditor.render("##source");
     if (textEditor.isTextChanged()) {
       state.loadFromString(textEditor.getText());
+      // `isTextChanged` is a sticky flag — the caller is responsible for
+      // clearing it. Without this reset, every frame would re-parse the
+      // document and wipe any selection state we just built up via the
+      // click handler below.
+      textEditor.resetTextChanged();
     }
     ImGui::End();
 

@@ -210,6 +210,10 @@ int main(int argc, char** argv) {
     if (textEditor.isTextChanged()) {
       app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(
           textEditor.getText()));
+      // `isTextChanged` is sticky until explicitly reset — without this
+      // the next frame would re-submit another ReplaceDocument command
+      // and clobber any in-progress drag state.
+      textEditor.resetTextChanged();
     }
     ImGui::End();
 
