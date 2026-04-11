@@ -32,6 +32,15 @@ private:
     Entity entity = entt::null;
     Vector2d startDocumentPoint;
     Transform2d startTransform;
+    /// The most recent transform SelectTool has pushed through the
+    /// command queue during this drag. Tracked so `onMouseUp` can
+    /// record an undo entry with the final drag state without having
+    /// to read the element back (the queued commands may not have
+    /// been flushed yet).
+    Transform2d currentTransform;
+    /// Whether any `onMouseMove` has fired since `onMouseDown`. A
+    /// click-without-drag shouldn't leave an undo entry behind.
+    bool hasMoved = false;
   };
 
   std::optional<DragState> dragState_;

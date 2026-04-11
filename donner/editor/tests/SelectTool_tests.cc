@@ -126,5 +126,73 @@ TEST_F(SelectToolTest, MissedClickEndsAnyPriorDragSilently) {
   EXPECT_FALSE(app.hasSelection());
 }
 
+TEST_F(SelectToolTest, DragWithMoveRecordsUndoEntry) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_TRUE(app.canUndo());
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Move element");
+}
+
+TEST_F(SelectToolTest, ClickWithoutDragDoesNotRecordUndo) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(SelectToolTest, UndoRestoresElementToPreDragPosition) {
+  // Drag r1 by (25, 20) and flush.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Undo through EditorApp (which routes through the command queue).
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+
+  // r1's transform should be back to identity.
+  const Transform2d after = transformOf("#r1");
+  EXPECT_DOUBLE_EQ(after.data[4], 0.0);
+  EXPECT_DOUBLE_EQ(after.data[5], 0.0);
+}
+
+TEST_F(SelectToolTest, UndoOfUndoReappliesTheDrag) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  // Undo the drag.
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0);
+
+  // Break the chain and undo again — should re-apply the drag delta.
+  app.undoTimeline().breakUndoChain();
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d after = transformOf("#r1");
+  EXPECT_DOUBLE_EQ(after.data[4], 25.0);
+  EXPECT_DOUBLE_EQ(after.data[5], 20.0);
+}
+
+TEST_F(SelectToolTest, MultiStepDragCollapsesToSingleUndoEntry) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0));
+  tool.onMouseMove(app, Vector2d(20.0, 15.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(30.0, 20.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(50.0, 35.0));
+
+  // 60fps drag → many SetTransform commands, but exactly one undo entry.
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+}
+
 }  // namespace
 }  // namespace donner::editor

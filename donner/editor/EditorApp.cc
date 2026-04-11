@@ -7,11 +7,29 @@ EditorApp::EditorApp() = default;
 bool EditorApp::loadFromString(std::string_view svgBytes) {
   selectedEntity_ = entt::null;
   controller_.reset();
+  undoTimeline_.clear();
   return document_.loadFromString(svgBytes);
 }
 
 bool EditorApp::flushFrame() {
   return document_.flushFrame();
+}
+
+void EditorApp::undo() {
+  auto snapshot = undoTimeline_.undo();
+  if (!snapshot.has_value()) {
+    return;
+  }
+
+  // Route the restored transform through the command queue so every
+  // DOM write — tool drags, text-pane re-parse, and undo — goes through
+  // the same mutation seam. The queue coalesces with any pending
+  // commands and applies on the next `flushFrame()`.
+  const Entity entity = snapshot->element.entityHandle().entity();
+  if (entity == entt::null) {
+    return;
+  }
+  applyMutation(EditorCommand::SetTransformCommand(entity, snapshot->transform));
 }
 
 std::optional<svg::SVGGeometryElement> EditorApp::hitTest(const Vector2d& documentPoint) {

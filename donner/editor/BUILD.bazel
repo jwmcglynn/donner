@@ -60,6 +60,7 @@ donner_cc_library(
     deps = [
         ":async_svg_document",
         ":command_queue",
+        ":undo_timeline",
         "//donner/base",
         "//donner/svg",
     ],
@@ -81,6 +82,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":tool",
+        ":undo_timeline",
         "//donner/base",
         "//donner/svg",
     ],

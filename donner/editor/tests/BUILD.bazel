@@ -62,6 +62,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "undo_timeline_tests",
+    srcs = ["UndoTimeline_tests.cc"],
+    deps = [
+        "//donner/editor:undo_timeline",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_buffer_tests",
     srcs = ["TextBuffer_tests.cc"],
     deps = [

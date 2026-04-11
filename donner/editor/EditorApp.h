@@ -22,6 +22,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/UndoTimeline.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGGeometryElement.h"
 
@@ -94,9 +95,31 @@ public:
   /// canvas space (the same space as the root `<svg>` viewBox).
   [[nodiscard]] std::optional<svg::SVGGeometryElement> hitTest(const Vector2d& documentPoint);
 
+  // ---------------------------------------------------------------------------
+  // Undo
+  // ---------------------------------------------------------------------------
+
+  /// Access the underlying `UndoTimeline`. Tools record begin/commit
+  /// transactions on it directly; `EditorApp::undo()` below is the
+  /// canonical way to *apply* undo entries because it routes them
+  /// through the command queue so the mutation seam is preserved.
+  [[nodiscard]] UndoTimeline& undoTimeline() { return undoTimeline_; }
+  [[nodiscard]] const UndoTimeline& undoTimeline() const { return undoTimeline_; }
+
+  /// Whether there is an entry to undo.
+  [[nodiscard]] bool canUndo() const { return undoTimeline_.canUndo(); }
+
+  /// Undo the most recent entry. Pops the timeline's next entry and
+  /// pushes the restored transform onto the command queue as a
+  /// `SetTransformCommand` — the actual DOM mutation happens on the
+  /// next `flushFrame()`, keeping every DOM write on the same path.
+  /// No-op if there is nothing to undo.
+  void undo();
+
 private:
   AsyncSVGDocument document_;
   Entity selectedEntity_ = entt::null;
+  UndoTimeline undoTimeline_;
 
   // Lazily-rebuilt hit-test controller. Recreated whenever the document's
   // version counter advances past the version we built the controller for.

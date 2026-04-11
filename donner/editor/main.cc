@@ -229,6 +229,18 @@ int main(int argc, char** argv) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    // Global keyboard shortcuts. ImGui translates Cmd on macOS and Ctrl
+    // elsewhere into `Super`/`Ctrl` key mods, so we accept either.
+    {
+      const bool undoShortcut =
+          ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false) &&
+          (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) &&
+          !ImGui::GetIO().KeyShift;
+      if (undoShortcut && app.canUndo()) {
+        app.undo();
+      }
+    }
+
     int windowWidth = 0;
     int windowHeight = 0;
     glfwGetWindowSize(window, &windowWidth, &windowHeight);

@@ -5,10 +5,14 @@
 namespace donner::editor {
 
 UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element) {
+  // The snapshot must capture the local (parent-from-entity) transform so
+  // that `applySnapshot` can restore it via `setTransform`. The prototype
+  // used `elementFromWorld()` here, but that's the world-space cumulative
+  // transform and does not round-trip through `setTransform`.
   auto graphicsElement = element.cast<svg::SVGGraphicsElement>();
   return UndoSnapshot{
       .element = element,
-      .transform = graphicsElement.elementFromWorld(),
+      .transform = graphicsElement.transform(),
   };
 }
 
@@ -64,17 +68,20 @@ std::optional<UndoSnapshot> UndoTimeline::undo() {
     undoCursor_ = chainStart_ - 1;
   }
 
-  const UndoEntry& target = entries_[undoCursor_];
+  // Copy the target out of the vector before appending — `push_back` can
+  // reallocate, invalidating any reference into `entries_`.
+  const size_t cursorAtEntry = undoCursor_;
+  UndoEntry targetCopy = entries_[cursorAtEntry];
 
   // Apply the "before" snapshot to reverse this entry.
-  applySnapshot(target.before);
+  applySnapshot(targetCopy.before);
 
   // Record the undo as a new timeline entry (appended after chainStart_, so not revisited).
   entries_.push_back(UndoEntry{
-      .label = "Undo: " + target.label,
-      .before = target.after,
-      .after = target.before,
-      .undoOf = undoCursor_,
+      .label = "Undo: " + targetCopy.label,
+      .before = targetCopy.after,
+      .after = targetCopy.before,
+      .undoOf = cursorAtEntry,
   });
 
   // Move cursor backward for the next undo in this chain.
@@ -84,7 +91,7 @@ std::optional<UndoSnapshot> UndoTimeline::undo() {
     --undoCursor_;
   }
 
-  return target.before;
+  return targetCopy.before;
 }
 
 bool UndoTimeline::canUndo() const {

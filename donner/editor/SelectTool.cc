@@ -2,6 +2,7 @@
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
@@ -30,6 +31,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint) {
       .entity = entity,
       .startDocumentPoint = documentPoint,
       .startTransform = startTransform,
+      .currentTransform = startTransform,
   };
 }
 
@@ -50,6 +52,9 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   const Transform2d newTransform =
       Transform2d::Translate(deltaDoc) * dragState_->startTransform;
 
+  dragState_->currentTransform = newTransform;
+  dragState_->hasMoved = true;
+
   // Coalescing happens in CommandQueue::flush(): the high-frequency drag
   // produces one SetTransform per mouse-move event but the queue collapses
   // them into a single effective command per entity per frame.
@@ -58,10 +63,24 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
 }
 
 void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/) {
-  // M2: drag commit is implicit — the last queued SetTransform is the final
-  // state. Future milestones add UndoTimeline integration here, recording
-  // a single undo entry for the whole drag (begin/commit transaction).
-  (void)editor;
+  if (!dragState_.has_value()) {
+    return;
+  }
+
+  // Record a single undo entry for the whole drag, but only if the
+  // element actually moved — a click that never saw a mouse-move event
+  // is a no-op for undo purposes.
+  if (dragState_->hasMoved) {
+    // Re-hit the drag-start point to recover an SVGElement handle we can
+    // attach to the UndoSnapshot. Going back through `hitTest` avoids
+    // SVGElement's protected constructor.
+    if (auto hit = editor.hitTest(dragState_->startDocumentPoint); hit.has_value()) {
+      UndoSnapshot before{.element = *hit, .transform = dragState_->startTransform};
+      UndoSnapshot after{.element = *hit, .transform = dragState_->currentTransform};
+      editor.undoTimeline().record("Move element", std::move(before), std::move(after));
+    }
+  }
+
   dragState_.reset();
 }
 
