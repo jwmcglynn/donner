@@ -28,8 +28,11 @@
 #include <string>
 
 #include "donner/base/Box.h"
+#include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLNode.h"
+#include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGDocument.h"
@@ -162,17 +165,43 @@ struct ViewerState {
     }
   }
 
-  void handleClick(const donner::Vector2d& documentPoint) {
+  /// Click a document-space point. Returns the newly-selected element's
+  /// source-location range (in the original SVG text) if the click hit a
+  /// geometry element that carries XML source offsets, so the caller can
+  /// highlight it in the text pane.
+  ///
+  /// Selection is **sticky** — clicking empty space is a no-op rather than
+  /// a deselect. Only a click that lands on an element changes the
+  /// selection. This matches the behavior of most vector editors and
+  /// avoids accidental deselection while pan/zoom lands later.
+  std::optional<donner::SourceRange> handleClick(const donner::Vector2d& documentPoint) {
     if (!controller) {
-      return;
+      return std::nullopt;
     }
-    if (auto hit = controller->findIntersecting(documentPoint)) {
-      selectElement(*hit);
-    } else {
-      selectNone();
+    auto hit = controller->findIntersecting(documentPoint);
+    if (!hit.has_value()) {
+      return std::nullopt;
     }
+
+    selectElement(*hit);
+
+    if (auto xmlNode = donner::xml::XMLNode::TryCast(hit->entityHandle())) {
+      return xmlNode->getNodeLocation();
+    }
+    return std::nullopt;
   }
 };
+
+/// Convert a `FileOffset` from donner's XML source location into a
+/// `TextEditor` coordinate. donner's line is 1-based; `TextEditor` is
+/// 0-based.
+donner::editor::Coordinates FileOffsetToEditorCoordinates(const donner::FileOffset& offset) {
+  if (!offset.lineInfo.has_value()) {
+    return donner::editor::Coordinates(0, 0);
+  }
+  return donner::editor::Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
+                                     static_cast<int>(offset.lineInfo->offsetOnLine));
+}
 
 }  // namespace
 
@@ -316,7 +345,12 @@ int main(int argc, char** argv) {
 
       if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 mouse = ImGui::GetMousePos();
-        state.handleClick(donner::Vector2d(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y));
+        const auto sourceRange =
+            state.handleClick(donner::Vector2d(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y));
+        if (sourceRange.has_value()) {
+          textEditor.selectAndFocus(FileOffsetToEditorCoordinates(sourceRange->start),
+                                    FileOffsetToEditorCoordinates(sourceRange->end));
+        }
       }
     } else {
       ImGui::TextUnformatted("(no rendered image)");
