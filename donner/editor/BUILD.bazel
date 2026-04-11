@@ -54,6 +54,39 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "editor_app",
+    srcs = ["EditorApp.cc"],
+    hdrs = ["EditorApp.h"],
+    deps = [
+        ":async_svg_document",
+        ":command_queue",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "tool",
+    hdrs = ["Tool.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "select_tool",
+    srcs = ["SelectTool.cc"],
+    hdrs = ["SelectTool.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":tool",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "text_buffer",
     hdrs = ["TextBuffer.h"],
     deps = [

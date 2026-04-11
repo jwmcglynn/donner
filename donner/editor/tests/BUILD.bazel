@@ -29,6 +29,27 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_app_tests",
+    srcs = ["EditorApp_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "select_tool_tests",
+    srcs = ["SelectTool_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "text_buffer_tests",
     srcs = ["TextBuffer_tests.cc"],
     deps = [
