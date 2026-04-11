@@ -51,7 +51,11 @@ the version number.
 ## Final Commit
 
 - [ ] **Generate build report** — Run `docs/build_report.md` generation and check in the updated
-  report on the final pre-release commit.
+  report on the final pre-release commit. This also refreshes
+  `docs/reports/coverage.zip` (lcov HTML, repacked as a single archive
+  to keep the working tree small) and `docs/reports/binary-size/`, which
+  `tools/build_docs.sh` extracts/copies into the Doxygen site — commit
+  those too.
 - [ ] **CI green** — Verify the final commit passes all CI checks.
 
 ## Release
