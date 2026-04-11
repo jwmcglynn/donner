@@ -16,24 +16,22 @@ struct StyleComponent {
   PropertyRegistry properties;
 
   /**
-   * Sets the properties from the value of the element's `style=""` attribute. Note that this
-   * applies the style additively, and does not invalidate the existing style.
+   * Sets the properties from the value of the element's `style=""` attribute, replacing the
+   * prior `style=""` contribution on this element. Presentation-attribute-origin properties
+   * (e.g. `fill="red"`) and author-stylesheet properties are left intact — the replacement
+   * is scoped to declarations previously tagged with
+   * \ref css::Specificity::StyleAttribute().
    *
-   * @todo Add an option to clear the existing style first. For now, this can be done by setting
-   * \ref properties to an empty \ref PropertyRegistry.
+   * Safe to call from the SVG parse pipeline (where presentation attributes may already
+   * be in the registry) and from the editor's text-edit rewrite path.
+   *
+   * Callers that want to *merge* new declarations into an existing `style=""` — e.g. a
+   * tool that toggles one property — should use \ref updateStyle instead.
    *
    * @param style The value of the `style` attribute.
    */
-
   void setStyle(std::string_view style) {
-    // UPDATE docs after fixing this
-    /**
-     * Sets the properties from the value of the element's `style=""` attribute. Note that this
-     * first invalidates the previous `style=""` values and replaces them.
-     *
-     * @param style The value of the `style` attribute.
-     */
-    // properties.clearStyle();
+    properties.clearStyleAttributeProperties();
     properties.parseStyle(style);
   }
 

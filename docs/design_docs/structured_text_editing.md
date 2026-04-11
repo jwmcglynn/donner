@@ -208,16 +208,27 @@ These are fixes to in-tree code that the rest of this design assumes are
 in place. They are useful independently of structured editing and should
 land as standalone PRs in this order.
 
-- [ ] **`StyleComponent::setStyle` actually replaces.** Today it's
-      additive (`properties.clearStyle()` is commented out at
-      `donner/svg/components/style/StyleComponent.h:36` — the inline TODO
-      has been there since the prototype). Uncomment, verify tests,
-      add a regression test:
-      *load SVG with `style='fill:red;stroke:green'` → set style to
-      `'fill:blue'` → assert stroke is cleared.*
-      Without this fix, every hot-path style edit silently corrupts
-      the ECS state — **M5's incremental fast path is non-viable until
-      this lands.**
+- [x] **`StyleComponent::setStyle` replaces its own contribution
+      without clobbering presentation attributes.** The original
+      plan was to uncomment an absent `clearStyle()` and wipe the
+      registry. That's wrong: `PropertyRegistry` mixes presentation-
+      attribute properties (`fill="red"`, specificity `0,0,0`) and
+      style-attribute properties (`style="stroke:green"`, specificity
+      `StyleAttribute()`) into the same bucket, so a naive reset
+      breaks the parse path — `std::map`-ordered attribute iteration
+      writes `fill` into the registry *before* `style=` is seen.
+      The real fix uses the specificity tag that's already stored
+      on every `Property<T>`:
+      `PropertyRegistry::clearStyleAttributeProperties()` walks the
+      registry via `forEachProperty` and clears only properties
+      whose `specificity == Specificity::StyleAttribute()`, plus
+      erases matching entries from `unparsedProperties`.
+      `StyleComponent::setStyle` then calls it before `parseStyle`,
+      which gives correct replace-only-my-contribution semantics
+      for both the parse path and the editor's text-edit rewrite
+      path. Regression test in `SVGElement_tests.cc` verifies that
+      `fill="red"` survives a subsequent `setStyle("stroke: blue")`
+      while `opacity` from a prior style attribute gets cleared.
 - [ ] **`xml::XMLParser::Options` DoS caps.** Today only
       `maxEntityDepth = 64` (`donner/base/xml/XMLParser.h:75`). Add
       `maxElements`, `maxAttributesPerElement`, `maxNestingDepth` with
