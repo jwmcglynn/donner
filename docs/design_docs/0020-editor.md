@@ -208,38 +208,35 @@ point.
 
 ## Implementation Plan
 
-- [ ] Milestone 1: Build-system foundation
-  - [ ] **No `--config=editor` flag.** The editor is a first-class
+- [x] Milestone 1: Build-system foundation (landed in PR #505)
+  - [x] **No `--config=editor` flag.** The editor is a first-class
         default-path target. Dependencies are kept out of BCR consumers
         by `dev_dependency = True`, not by a user-visible config flag.
         Default donner checkouts do pull imgui/glfw/tracy.
-  - [ ] Vendor Tracy at `third_party/tracy/` (git subtree, not submodule) and
-        add `local_path_override` in `MODULE.bazel` under `dev_dependency`.
-  - [ ] Add `emsdk` 4.0.12 `bazel_dep` + `git_override` in `MODULE.bazel`
-        under `dev_dependency`. `.bazelrc`:
-        `build:editor-wasm --//donner/editor/wasm:enable_wasm=true`
-        (wasm is a toolchain transition, not a feature flag — see M6).
-  - [ ] Keep `imgui` and `glfw` as top-level `bazel_dep(dev_dependency=True)` +
-        `git_override` (inheriting the prototype's patches).
-  - [ ] Extend `build_defs/check_banned_patterns.py` with a path-scoped rule
+  - [x] ~~Vendor Tracy at `third_party/tracy/` via git subtree~~ —
+        changed approach: Tracy is a `new_git_repository` under the
+        `non_bcr_deps` extension (user decision: smaller donner tree).
+  - [ ] Add `emsdk` 4.0.12 — **deferred to M6**. The wasm toolchain
+        isn't needed until we're building wasm targets, and adding it
+        early would bloat every fresh donner checkout.
+  - [x] Keep `imgui` and `glfw` as top-level `bazel_dep(dev_dependency=True)` +
+        `git_override` (already in MODULE.bazel from PR #492).
+  - [x] Extend `build_defs/check_banned_patterns.py` with a path-scoped rule
         that forbids `#include <imgui.h>`, `GLFW/*`, and `Tracy*` outside
-        `donner/editor/**`.
-  - [ ] Add `donner/editor/**` packages to `gen_cmakelists.py` `SKIPPED_PACKAGES`
+        `donner/editor/**` (plus `examples/svg_viewer`).
+  - [x] Add `donner/editor/**` packages to `gen_cmakelists.py` `SKIPPED_PACKAGES`
         (editor is Bazel-only, CMake mirror ignores it).
-  - [ ] Add imgui/glfw/tracy/fira_code/roboto `license()` targets in
+  - [x] Add imgui/glfw/tracy `license()` targets in
         `third_party/licenses/BUILD.bazel` and a new `notice_editor` variant in
         `build_defs/licenses.bzl` + `tools/generate_build_report.py`.
-        **Sequencing note:** licenses must land before or with the
-        imgui/glfw module deps, or the first `//donner/editor` build fails
-        the license manifest check.
-  - [ ] **Debug and remove `//build_defs:gui_supported`.** Reproduce
-        the original failure: a macOS UI build under the `latest_llvm`
-        toolchain (LLVM 21). The config_setting exists solely to skip
-        targets on that toolchain. Either root-cause and fix the
-        underlying LLVM 21 + macOS UI build breakage, or narrow the
-        scope and rename to describe its real meaning. Editor targets
-        do not permanently depend on `gui_supported` — if the fix
-        lands, the editor builds under every toolchain.
+        Fonts (fira_code/roboto) deferred to M3 when they're actually
+        needed.
+  - [x] **Delete `//build_defs:gui_supported` as orphaned.** Resolved:
+        the config_setting's only consumer was `//experimental/viewer`,
+        deleted in M1. The hypothesized "LLVM 21 + macOS UI build
+        failure" was never reproduced — the config_setting was
+        defensive scaffolding for an editor that never landed. Removed
+        rather than debugged.
 - [x] Milestone 1.5: AsyncSVGDocument command-queue design note
   - [x] **Decision (already made):** replace the prototype's
         mutex-guarded document snapshot with a **single-threaded command
@@ -256,42 +253,60 @@ point.
         port lives in M2 — there is no prototype version in donner to
         refactor; M2 is when it first arrives, built directly to the
         M1.5 design.
-- [ ] Milestone 2: Editor skeleton + mutation seam + example viewer
-  - [ ] Create `//donner/editor` package with `donner_cc_library` targets:
+- [x] Milestone 2: Editor skeleton + mutation seam + example viewer
+  - [x] Create `//donner/editor` package with `donner_cc_library` targets:
         `:viewport_geometry`, `:tracy_wrapper`, `:text_buffer`, `:text_editor`,
-        `:core`.
-  - [ ] Port `ViewportGeometry`, `SVGState`, `EditorApp` headers with the
+        `:command_queue`, `:async_svg_document`, `:undo_timeline`,
+        `:editor_app`, `:tool`, `:select_tool`, `:overlay_renderer`.
+  - [x] Write `ViewportGeometry` and `EditorApp` as fresh code (they
+        don't exist at the import commit). `EditorApp` implements the
         mutation-seam contract: all DOM writes go through
-        `EditorApp::applyMutation(EditorMutation)`. Tools never touch
-        `SVGElement::setTransform()` directly.
-  - [ ] Port `TextBuffer` and `TextEditor` from the import commit (`808d98a`
-        versions — pre-`SourcePatch`, pre-`tryIncrementalUpdate`). The
-        existing text-pane re-parse contract at the import commit does a
-        full re-parse on every text edit; the new `EditorCommand::ReplaceDocument`
-        case is the modern equivalent.
-  - [ ] Add the upgraded **`//examples:svg_viewer`** at
-        `examples/svg_viewer.cc`, depending on `//donner/editor:text_editor`
-        and donner's renderer. Wire imgui + glfw + glad into
-        `examples/MODULE.bazel` (separate from donner core). The example is
-        the always-on smoke test for imgui + TextEditor + renderer
-        integration. Update `README.md`, `docs/building.md`,
-        `.vscode/launch.json` to point at the new target.
-  - [ ] **Rewrite `OverlayRenderer` to use direct canvas-style calls on
-        the `RendererInterface`**, not a fabricated SVG subtree. The
-        import-point version builds an SVG fragment for selection chrome and
-        renders it through the main SVG pipeline ("SVG layer"); that's the
-        approach being replaced. Prior art in the prototype: commit
-        `015fac6` ("Replace SVG overlay with direct renderer drawing for
-        zero-lag selection"). See Proposed Architecture for the policy on
-        which primitives are fair game.
-  - [ ] Port `SelectTool` as the only initial tool. Delete `PathTool`,
-        `NodeEditTool`, `ToolsDialog`.
-  - [ ] Port `UndoTimeline` with snapshot kinds restricted to
-        `ElementTransform`. Strip `PathSpline` and `ElementCreated/Removed` —
-        those come back with path tools.
-  - [ ] Port `AsyncSVGRenderer` on top of the hand-off mechanism decided in
-        Milestone 1.5.
-  - [ ] Delete `//experimental/viewer`.
+        `EditorApp::applyMutation(EditorCommand)` →
+        `AsyncSVGDocument::queue` → `flushFrame`. Tools never touch
+        `SVGElement::setTransform` directly. (SVGState is dropped in
+        favor of the simpler EditorApp surface.)
+  - [x] Port `TextBuffer` and `TextEditor` from the import commit (`808d98a`
+        versions — pre-`SourcePatch`, pre-`tryIncrementalUpdate`). Text-pane
+        edits re-parse via `EditorCommand::ReplaceDocument`.
+  - [x] Add **`//examples:svg_viewer`** (minimal scope — DonnerController
+        hit-test, inject selection chrome into document tree, TextEditor
+        pane with full re-parse on change, XML source highlighting on
+        click, sticky selection). Wire imgui + glfw into
+        `examples/MODULE.bazel` (patches duplicated from donner core —
+        Bazel forbids cross-module patch labels). Updated `README.md`,
+        `docs/building.md`, `.vscode/launch.json`. Removed
+        `//experimental/viewer`.
+  - [x] **Rewrite `OverlayRenderer` to use direct canvas-style calls on
+        the `RendererInterface`** — no fabricated SVG subtree. Takes a
+        `svg::Renderer&` + `EditorApp&`, draws selection bounds via
+        `setPaint` + `drawRect` directly into the same render target as
+        the document, between `Renderer::draw(document)` and
+        `Renderer::takeSnapshot()`. Bounds come from
+        `ShapeSystem::getShapeWorldBounds` via the raw `EntityHandle`.
+  - [x] Write `SelectTool` as the only initial tool (fresh code — doesn't
+        exist at the import commit). Hit-test on `onMouseDown`, set
+        selection, capture start transform, track `currentTransform` +
+        `hasMoved` during drag, push `SetTransform` commands through the
+        queue on `onMouseMove`, record a single `UndoTimeline` entry on
+        `onMouseUp` if `hasMoved`.
+  - [x] Write `UndoTimeline` with transform-only snapshots (fresh code —
+        doesn't exist at the import commit). Transaction begin/commit
+        and direct `record` APIs. `EditorApp::undo()` routes restored
+        transforms through the command queue so every DOM write flows
+        through the same mutation seam.
+  - [ ] ~~Port `AsyncSVGRenderer`~~ — skipped. The design note picked
+        single-threaded for M2; there's no render-thread story to
+        support yet. The prototype's `AsyncSVGRenderer` was a
+        mutex+condvar wrapper we explicitly chose not to port. If
+        render-thread performance becomes a concern, revisit.
+  - [x] Delete `//experimental/viewer`.
+
+  In addition to the M2 library set, this milestone also landed the
+  advanced editor binary itself (originally planned for M3) at
+  `//donner/editor:editor`. It wires `EditorApp + SelectTool +
+  OverlayRenderer + TextEditor` into the same two-pane shell the
+  viewer uses and adds click-and-drag translation, selection chrome,
+  XML source highlight on click, and Ctrl/Cmd+Z undo.
 - [ ] Milestone 3: Native binary + resources
   - [ ] Create `//donner/editor/resources` package: embedded fonts (FiraCode,
         Roboto), splash SVG, icon SVG.
