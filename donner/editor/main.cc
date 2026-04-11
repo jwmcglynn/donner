@@ -1,44 +1,33 @@
-/**
- * @example svg_viewer.cc Minimal Donner SVG viewer with a live text pane.
- *
- * A small ImGui demo: load an SVG, display it, click to select a shape,
- * and edit the source in a text pane that re-parses on every keystroke.
- * Selection chrome is drawn by injecting an `editor-only` `<rect>` and
- * `<path>` into the document tree — no separate overlay renderer and no
- * editor-side command queue. The **only** dependency on the editor tree
- * is `donner::editor::TextEditor`, the syntax-aware text widget.
- *
- * For the full editor binary (EditorApp + SelectTool + OverlayRenderer
- * + command queue + mutation seam) see `//donner/editor`.
- *
- * To run:
- *
- * ```sh
- * bazel run //examples:svg_viewer -- donner_splash.svg
- * ```
- */
+/// @file
+///
+/// `//donner/editor:editor` — the full-featured Donner editor binary.
+///
+/// This is the advanced editor application. It wires `EditorApp`,
+/// `SelectTool`, `OverlayRenderer`, and `TextEditor` into an ImGui
+/// shell with a live source pane and a click-and-drag render pane.
+///
+/// Run with:
+///
+/// ```sh
+/// bazel run //donner/editor -- donner_splash.svg
+/// ```
+///
+/// For the minimal viewer demo (no tools, no overlay chrome, just a
+/// rendered SVG and a text pane) see `//examples:svg_viewer`.
 
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <optional>
 #include <sstream>
 #include <string>
 
-#include "donner/base/Box.h"
-#include "donner/base/ParseWarningSink.h"
-#include "donner/base/Vector2.h"
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorCommand.h"
+#include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
-#include "donner/svg/DonnerController.h"
-#include "donner/svg/SVGDocument.h"
-#include "donner/svg/SVGElement.h"
-#include "donner/svg/SVGGeometryElement.h"
-#include "donner/svg/SVGPathElement.h"
-#include "donner/svg/SVGRectElement.h"
-#include "donner/svg/SVGUnknownElement.h"
-#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 
 #include "glad/glad.h"
@@ -72,108 +61,6 @@ std::string LoadFile(const std::string& filename) {
   return std::move(out).str();
 }
 
-/// Bundles the loaded document with its hit-test controller and the
-/// editor-only overlay nodes that render the current selection. Re-parsing
-/// throws all of this away and rebuilds it.
-struct ViewerState {
-  donner::svg::SVGDocument document;
-  std::optional<donner::svg::DonnerController> controller;
-  std::optional<donner::svg::SVGRectElement> boundsShape;
-  std::optional<donner::svg::SVGPathElement> selectedPathOutline;
-  std::optional<donner::svg::SVGElement> selectedElement;
-  bool valid = false;
-
-  void loadFromString(std::string_view source) {
-    using namespace donner;
-    using namespace donner::svg;
-    using namespace donner::svg::parser;
-
-    document = SVGDocument();
-    valid = false;
-    controller.reset();
-    boundsShape.reset();
-    selectedPathOutline.reset();
-    selectedElement.reset();
-
-    ParseWarningSink disabled = ParseWarningSink::Disabled();
-    ParseResult<SVGDocument> maybe = SVGParser::ParseSVG(source, disabled);
-    if (maybe.hasError()) {
-      return;
-    }
-
-    document = std::move(maybe.result());
-    controller = DonnerController(document);
-
-    // Inject an editor-only container holding the selection chrome as
-    // regular SVG elements. The renderer draws them alongside the real
-    // document; toggling display:inline/none shows or hides them.
-    auto editorOnly = SVGUnknownElement::Create(document, "editor-only");
-    document.svgElement().appendChild(editorOnly);
-
-    boundsShape = SVGRectElement::Create(document);
-    editorOnly.appendChild(boundsShape.value());
-    boundsShape->setStyle(
-        "display: none; fill: none; stroke: deepskyblue; stroke-width: 1px; "
-        "pointer-events: none");
-
-    selectedPathOutline = SVGPathElement::Create(document);
-    editorOnly.appendChild(selectedPathOutline.value());
-    selectedPathOutline->setStyle(
-        "display: none; fill: none; stroke: deepskyblue; stroke-width: 1px; "
-        "pointer-events: none");
-
-    valid = true;
-  }
-
-  void selectNone() {
-    selectedElement.reset();
-    if (boundsShape) {
-      boundsShape->setStyle("display: none");
-    }
-    if (selectedPathOutline) {
-      selectedPathOutline->setStyle("display: none");
-    }
-  }
-
-  void selectElement(const donner::svg::SVGElement& element) {
-    using namespace donner::svg;
-
-    selectedElement = element;
-    if (!element.isa<SVGGeometryElement>()) {
-      return;
-    }
-
-    auto geom = element.cast<SVGGeometryElement>();
-    if (auto spline = geom.computedSpline()) {
-      if (selectedPathOutline) {
-        selectedPathOutline->setStyle("display: inline");
-        selectedPathOutline->setSpline(*spline);
-        selectedPathOutline->setTransform(geom.elementFromWorld());
-      }
-      if (auto bounds = geom.worldBounds()) {
-        if (boundsShape) {
-          boundsShape->setStyle("display: inline");
-          boundsShape->setX(donner::Lengthd(bounds->topLeft.x));
-          boundsShape->setY(donner::Lengthd(bounds->topLeft.y));
-          boundsShape->setWidth(donner::Lengthd(bounds->width()));
-          boundsShape->setHeight(donner::Lengthd(bounds->height()));
-        }
-      }
-    }
-  }
-
-  void handleClick(const donner::Vector2d& documentPoint) {
-    if (!controller) {
-      return;
-    }
-    if (auto hit = controller->findIntersecting(documentPoint)) {
-      selectElement(*hit);
-    } else {
-      selectNone();
-    }
-  }
-};
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -182,7 +69,7 @@ int main(int argc, char** argv) {
   }
 
   if (argc != 2) {
-    std::cerr << "Usage: svg_viewer <filename>\n";
+    std::cerr << "Usage: donner-editor <filename>\n";
     return 1;
   }
 
@@ -207,7 +94,7 @@ int main(int argc, char** argv) {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
   GLFWwindow* window = glfwCreateWindow(kInitialWindowWidth, kInitialWindowHeight,
-                                        "Donner SVG Viewer", nullptr, nullptr);
+                                        "Donner Editor", nullptr, nullptr);
   if (!window) {
     std::cerr << "Failed to create GLFW window\n";
     glfwTerminate();
@@ -229,16 +116,24 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
-  io.IniFilename = nullptr;  // no persistence
+  // imgui.ini persistence is disabled per the editor security policy in
+  // docs/design_docs/editor.md.
+  io.IniFilename = nullptr;
   ImGui::StyleColorsDark();
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
   // ---------------------------------------------------------------------------
-  // Viewer state
+  // Editor state
   // ---------------------------------------------------------------------------
-  ViewerState state;
-  state.loadFromString(initialSource);
+  donner::editor::EditorApp app;
+  if (!app.loadFromString(initialSource)) {
+    std::cerr << "Failed to parse SVG file: " << svgPath << "\n";
+    // Keep running with an empty document so the user can still fix it
+    // in the source pane.
+  }
+
+  donner::editor::SelectTool selectTool;
 
   donner::editor::TextEditor textEditor;
   textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
@@ -251,6 +146,8 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
+  std::uint64_t lastRenderedVersion = 0;
+  donner::Entity lastRenderedSelection = entt::null;
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -260,10 +157,19 @@ int main(int argc, char** argv) {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
-    // Re-render every frame — this is a minimal demo and the document is
-    // small. A real application would track a dirty flag.
-    if (state.valid) {
-      renderer.draw(state.document);
+    // Drain the command queue (ReplaceDocument from text edits,
+    // SetTransform from SelectTool drags).
+    app.flushFrame();
+
+    // Re-render whenever the document version changes OR the selection
+    // changes. Selection change needs a re-render because the overlay
+    // chrome lives in the same render target as the document.
+    const auto currentVersion = app.document().currentFrameVersion();
+    const donner::Entity currentSelection = app.selectedEntity();
+    if ((currentVersion != lastRenderedVersion || currentSelection != lastRenderedSelection) &&
+        app.hasDocument()) {
+      renderer.draw(app.document().document());
+      donner::editor::OverlayRenderer::drawChrome(renderer, app);
       const donner::svg::RendererBitmap bitmap = renderer.takeSnapshot();
       if (!bitmap.empty()) {
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -274,6 +180,8 @@ int main(int argc, char** argv) {
         textureWidth = bitmap.dimensions.x;
         textureHeight = bitmap.dimensions.y;
       }
+      lastRenderedVersion = currentVersion;
+      lastRenderedSelection = currentSelection;
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -284,29 +192,31 @@ int main(int argc, char** argv) {
     int windowHeight = 0;
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
 
-    // Lock both panes in place. Without this, clicking on an image
-    // inside an ImGui window falls through to the parent window and
-    // tries to drag the pane around, since `ImGui::Image` doesn't
-    // consume the mouse event.
+    // Windows are locked in place: positions and sizes are re-asserted
+    // every frame with `ImGuiCond_Always`, and the NoMove / NoResize /
+    // NoCollapse flags prevent any in-frame attempts to drag them
+    // around (otherwise a click-and-drag on the image surface falls
+    // through to the parent window and the user ends up moving the
+    // pane instead of the editor target).
     const ImGuiWindowFlags kPaneFlags =
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
 
-    // Source pane: TextEditor with full re-parse on change.
+    // Source pane.
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, static_cast<float>(windowHeight)),
                              ImGuiCond_Always);
     ImGui::Begin("Source", nullptr, kPaneFlags);
     textEditor.render("##source");
     if (textEditor.isTextChanged()) {
-      state.loadFromString(textEditor.getText());
+      app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(
+          textEditor.getText()));
     }
     ImGui::End();
 
-    // Render pane: image + click-to-select.
+    // Render pane + SelectTool interaction.
     ImGui::SetNextWindowPos(ImVec2(kSourcePaneWidth, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(
-        ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth,
-               static_cast<float>(windowHeight)),
+        ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth, static_cast<float>(windowHeight)),
         ImGuiCond_Always);
     ImGui::Begin("Render", nullptr, kPaneFlags);
     if (textureWidth > 0 && textureHeight > 0) {
@@ -314,9 +224,22 @@ int main(int argc, char** argv) {
       ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
                    ImVec2(static_cast<float>(textureWidth), static_cast<float>(textureHeight)));
 
+      const auto screenToDocument = [&](const ImVec2& screenPoint) {
+        return donner::Vector2d(screenPoint.x - imageOrigin.x, screenPoint.y - imageOrigin.y);
+      };
+
       if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const ImVec2 mouse = ImGui::GetMousePos();
-        state.handleClick(donner::Vector2d(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y));
+        selectTool.onMouseDown(app, screenToDocument(ImGui::GetMousePos()));
+      }
+      // Drag continues even after the cursor leaves the image.
+      if (selectTool.isDragging()) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+          selectTool.onMouseMove(app, screenToDocument(ImGui::GetMousePos()),
+                                 /*buttonHeld=*/true);
+        }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+          selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
+        }
       }
     } else {
       ImGui::TextUnformatted("(no rendered image)");

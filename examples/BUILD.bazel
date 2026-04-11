@@ -67,12 +67,14 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        "//donner/editor:command_queue",
-        "//donner/editor:editor_app",
-        "//donner/editor:overlay_renderer",
-        "//donner/editor:select_tool",
+        "//:donner",
+        # The viewer is intentionally minimal: donner core for the DOM,
+        # parser, hit-test, and renderer; glad/glfw/imgui for the ImGui
+        # shell; and exactly one library from //donner/editor — the
+        # TextEditor widget. The full editor binary with EditorApp,
+        # SelectTool, OverlayRenderer, and the command queue lives at
+        # //donner/editor:editor.
         "//donner/editor:text_editor",
-        "//donner/svg/renderer",
         "//third_party/glad",
         "@glfw",
         "@imgui",

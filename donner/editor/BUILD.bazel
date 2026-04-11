@@ -11,13 +11,13 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 
 # Editor libraries are public so the //examples:svg_viewer target (in the
-# separate examples Bazel module) can depend on them. BCR consumers cannot
-# transitively use these targets because imgui/glfw/tracy are
-# `dev_dependency = True` in MODULE.bazel and won't resolve outside dev
-# builds.
+# separate examples Bazel module) can depend on `:text_editor`. BCR
+# consumers cannot transitively use the editor libraries because
+# imgui/glfw/tracy are `dev_dependency = True` in MODULE.bazel and won't
+# resolve outside dev builds.
 package(default_visibility = ["//visibility:public"])
 
 donner_cc_library(
@@ -96,6 +96,34 @@ donner_cc_library(
         "//donner/css",
         "//donner/svg",
         "//donner/svg/renderer",
+    ],
+)
+
+# The full Donner editor binary. Wires EditorApp + SelectTool +
+# OverlayRenderer + TextEditor into an ImGui shell with a live source
+# pane and a click-and-drag render pane. The minimal viewer demo lives
+# at `//examples:svg_viewer`.
+#
+#     bazel run //donner/editor -- donner_splash.svg
+donner_cc_binary(
+    name = "editor",
+    srcs = ["main.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":editor_app",
+        ":overlay_renderer",
+        ":select_tool",
+        ":text_editor",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//third_party/glad",
+        "@glfw",
+        "@imgui",
     ],
 )
 
