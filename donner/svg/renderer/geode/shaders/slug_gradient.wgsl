@@ -73,6 +73,19 @@ struct GradientUniforms {
   // Per-stop offset in [0, 1]. Packed 4 stops per vec4 to respect WGSL's
   // 16-byte array stride for uniform buffers.
   stopOffsets: array<vec4f, 4u>,
+
+  // Nonzero when a convex 4-vertex clip polygon is active. Same semantics
+  // as in `slug_fill.wgsl` — the planes are expressed in viewport-pixel
+  // space and tested against each sample's `@builtin(position)` offset.
+  hasClipPolygon: u32,
+  // Nonzero when a path-clip mask texture is bound at binding 3 (see
+  // `slug_fill.wgsl` for the motivation — the gradient pipeline
+  // carries its own copy of the flag so neither shader needs to reach
+  // into the other's uniform block).
+  hasClipMask: u32,
+  _clipPad1: u32,
+  _clipPad2: u32,
+  clipPolygonPlanes: array<vec4f, 4>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: GradientUniforms;
@@ -93,6 +106,13 @@ struct Band {
 
 // Flat float array of quadratic Bézier control points (6 floats per curve).
 @group(0) @binding(2) var<storage, read> curveData: array<f32>;
+
+// Path-clip mask texture + sampler (Phase 3b). Always bound; a 1x1
+// dummy with value 1.0 is bound when `uniforms.hasClipMask == 0` so
+// the sample call is always legal. See `slug_fill.wgsl` for the full
+// motivation.
+@group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
+@group(0) @binding(4) var clipMaskSampler: sampler;
 
 // ============================================================================
 // Vertex stage
@@ -392,6 +412,23 @@ fn gradient_t(path_pos: vec2f) -> f32 {
 // Fragment stage
 // ============================================================================
 
+/// Convex clip-polygon test in viewport-pixel space. Mirrors the
+/// identical helper in `slug_fill.wgsl`; the gradient uniform block
+/// keeps its own copy of `hasClipPolygon` / `clipPolygonPlanes` so no
+/// cross-shader binding is required.
+fn sample_in_clip_polygon(pixel_pos: vec2f) -> bool {
+  if (uniforms.hasClipPolygon == 0u) {
+    return true;
+  }
+  for (var i = 0u; i < 4u; i = i + 1u) {
+    let plane = uniforms.clipPolygonPlanes[i];
+    if (plane.x * pixel_pos.x + plane.y * pixel_pos.y + plane.z < -1e-4) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Same shape as `sample_is_inside` in slug_fill.wgsl. Duplicated
 /// because WGSL modules are per-shader and the gradient pipeline uses
 /// its own uniform buffer layout.
@@ -423,6 +460,10 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // explanation. Per-sample checks inside the loop own each sample to
   // exactly one band.
 
+  // Framebuffer-pixel center of this fragment, used for the clip
+  // polygon test (which is expressed in viewport-pixel space).
+  let pixel_center = in.clip_pos.xy;
+
   let dx = dpdx(in.sample_pos);
   let dy = dpdy(in.sample_pos);
 
@@ -440,6 +481,10 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     if (sp.y < band.yMin || sp.y >= band.yMax) {
       continue;
     }
+    let pixel_sample = pixel_center + offsets[s];
+    if (!sample_in_clip_polygon(pixel_sample)) {
+      continue;
+    }
     if (sample_is_inside(band, sp)) {
       mask = mask | (1u << s);
     }
@@ -447,6 +492,18 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 
   if (mask == 0u) {
     discard;
+  }
+
+  // Path-clip mask sampling — see the identical block in
+  // `slug_fill.wgsl` for the rationale.
+  var clipCoverage: f32 = 1.0;
+  if (uniforms.hasClipMask != 0u) {
+    let mask_uv = pixel_center / uniforms.viewport;
+    clipCoverage = clamp(textureSample(clipMaskTexture, clipMaskSampler, mask_uv).r,
+                         0.0, 1.0);
+    if (clipCoverage <= 0.0) {
+      discard;
+    }
   }
 
   // Evaluate the gradient stop color at the pixel center. Per-sample
@@ -461,7 +518,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   let straight = sample_stops(t);
 
   var out: FragOutput;
-  out.color = vec4f(straight.rgb * straight.a, straight.a);
+  out.color = vec4f(straight.rgb * straight.a, straight.a) * clipCoverage;
   out.mask = mask;
   return out;
 }

@@ -491,6 +491,38 @@ struct RendererGeode::Impl {
   };
   std::vector<LayerStackFrame> layerStack;
 
+  /// Phase 3c: state for an in-progress `<mask>` element. Two offscreen
+  /// texture pairs, one capturing the mask element's content and one
+  /// capturing the masked subtree. `popMask` composites them via
+  /// `GeoEncoder::blitFullTargetMasked` back onto the saved parent
+  /// target.
+  ///
+  /// Phase sequencing matches `RendererTinySkia`:
+  ///   * `pushMask` → allocate mask capture pair, redirect encoder.
+  ///   * `transitionMaskToContent` → switch to content pair.
+  ///   * `popMask` → blit (content * luminance(mask)) onto parent.
+  struct MaskStackFrame {
+    enum class Phase { Capturing, Content };
+    Phase phase = Phase::Capturing;
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;
+    wgpu::Texture savedMsaaTarget;
+    wgpu::Texture maskTexture;          // Mask element's content (RGBA).
+    wgpu::Texture maskMsaaTexture;
+    wgpu::Texture contentTexture;       // Masked element's content (RGBA).
+    wgpu::Texture contentMsaaTexture;
+    /// Raw mask-bounds rectangle from the driver, in the coordinate
+    /// space of `maskBoundsTransform` (userSpaceOnUse or the
+    /// objectBoundingBox-mapped user space — either way, NOT yet in
+    /// device pixels).
+    std::optional<Box2d> maskBounds;
+    /// `currentTransform` snapshotted at `pushMask` time so that
+    /// `popMask` can lift `maskBounds` into device-pixel space. This
+    /// mirrors `RendererTinySkia::SurfaceFrame::maskBoundsTransform`.
+    Transform2d maskBoundsTransform;
+  };
+  std::vector<MaskStackFrame> maskStack;
+
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
     wgpu::Texture tile;
@@ -511,39 +543,97 @@ struct RendererGeode::Impl {
 
   /// Axis-aligned clip rectangles in target-pixel coords. Each entry
   /// corresponds to a `pushClip` with a non-empty `clipRect`. The active
-  /// scissor is the intersection of every entry on this stack.
+  /// scissor is the intersection of every entry's `pixelRect` on this
+  /// stack.
   /// Entries with `valid == false` represent pushClip calls that had no
   /// `clipRect` component (path- or mask-only clips) — they're tracked
   /// so `popClip` stays balanced with `pushClip`.
+  ///
+  /// For non-axis-aligned ancestor transforms (e.g., a rotated `<svg>`
+  /// or `<use>`), the scissor rect is the AABB of the transformed clip
+  /// rect — which over-reports coverage. In that case the entry also
+  /// carries the 4 polygon corners of the clip in device-pixel space,
+  /// and the fragment shader tests each sample against the polygon's
+  /// half-planes on top of the scissor rect. We only honour the TOPMOST
+  /// polygon-bearing entry (`setClipPolygon` has no in-shader
+  /// intersection with a previous polygon) — nested rotated clips are
+  /// rare enough that we accept the over-coverage fallback.
   struct ClipStackEntry {
     Box2d pixelRect;
     bool valid = false;
+    bool hasPolygon = false;
+    Vector2d polygonCorners[4];
+    /// Phase 3b path-clip mask. When non-null, `maskResolveView`
+    /// references a 1-sample R8Unorm texture sampled by the fill /
+    /// gradient pipelines through their clip-mask bindings. The
+    /// texture is allocated per `pushClip` call — the Impl owns the
+    /// wgpu::Texture to keep the resolve alive until `popClip`.
+    ///
+    /// For nested `<clipPath>` references, the pushClip code builds
+    /// one mask per clip-path layer (deepest first); each outer
+    /// layer's mask is rendered with the previous layer's mask as an
+    /// input clip mask so every outer shape is intersected with the
+    /// deeper union. The final (outermost) layer's resolve lives in
+    /// `maskResolveView`; the intermediate layer textures are parked
+    /// in `maskLayerTextures` so their wgpu::Texture ownership
+    /// persists until `popClip`.
+    wgpu::Texture maskMsaaTexture;
+    wgpu::Texture maskResolveTexture;
+    wgpu::TextureView maskResolveView;
+    std::vector<wgpu::Texture> maskLayerTextures;
   };
   std::vector<ClipStackEntry> clipStack;
 
   /// Recompute the intersection of every rectangular clip entry on
-  /// `clipStack` and apply it to the active encoder as a scissor. Called
-  /// whenever the clip stack changes.
+  /// `clipStack` and apply it to the active encoder as a scissor,
+  /// plus forward the topmost polygon clip (if any) through
+  /// `setClipPolygon`. Called whenever the clip stack changes.
   void updateEncoderScissor() {
     if (!encoder) {
       return;
     }
     std::optional<Box2d> active;
+    const ClipStackEntry* polygonEntry = nullptr;
+    const ClipStackEntry* maskEntry = nullptr;
     for (const ClipStackEntry& entry : clipStack) {
-      if (!entry.valid) {
-        continue;
+      if (entry.valid) {
+        if (!active.has_value()) {
+          active = entry.pixelRect;
+        } else {
+          // Intersect: take the overlap of the two rectangles.
+          const double x0 = std::max(active->topLeft.x, entry.pixelRect.topLeft.x);
+          const double y0 = std::max(active->topLeft.y, entry.pixelRect.topLeft.y);
+          const double x1 = std::min(active->bottomRight.x, entry.pixelRect.bottomRight.x);
+          const double y1 = std::min(active->bottomRight.y, entry.pixelRect.bottomRight.y);
+          active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
+        }
       }
-      if (!active.has_value()) {
-        active = entry.pixelRect;
-      } else {
-        // Intersect: take the overlap of the two rectangles.
-        const double x0 = std::max(active->topLeft.x, entry.pixelRect.topLeft.x);
-        const double y0 = std::max(active->topLeft.y, entry.pixelRect.topLeft.y);
-        const double x1 = std::min(active->bottomRight.x, entry.pixelRect.bottomRight.x);
-        const double y1 = std::min(active->bottomRight.y, entry.pixelRect.bottomRight.y);
-        active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
+      if (entry.hasPolygon) {
+        // Overwrite with the topmost polygon entry; no multi-polygon
+        // intersection in the shader (see ClipStackEntry docs).
+        polygonEntry = &entry;
+      }
+      if (entry.maskResolveView) {
+        // Same deal for the path-clip mask — we always bind the
+        // topmost one, and nested path-clip intersections are a
+        // TODO (would need multiple clip-mask bindings in the
+        // fragment shader or a per-clip compositing pass).
+        maskEntry = &entry;
       }
     }
+
+    if (polygonEntry != nullptr) {
+      encoder->setClipPolygon(polygonEntry->polygonCorners);
+    } else {
+      encoder->clearClipPolygon();
+    }
+
+    if (maskEntry != nullptr) {
+      encoder->setClipMask(maskEntry->maskResolveView);
+    } else {
+      encoder->clearClipMask();
+    }
+
     if (!active.has_value()) {
       encoder->clearScissorRect();
       return;
@@ -897,26 +987,202 @@ void RendererGeode::popTransform() {
 
 void RendererGeode::pushClip(const ResolvedClip& clip) {
   // Rectangular clip (the nested-`<svg>` viewport, `overflow: hidden`, and
-  // `<image>` dest-rect cases) is implemented via the WebGPU scissor rect.
-  // Path- and mask-based clipping are still stubbed — they require a
-  // stencil or mask-texture pass which is Phase 3 proper.
-  const bool hasPathOrMaskClip = !clip.clipPaths.empty() || clip.mask.has_value();
-  if (hasPathOrMaskClip && impl_->verbose && !impl_->warnedClip) {
-    std::cerr << "RendererGeode: path/mask clipping not yet implemented (Phase 3)\n";
-    impl_->warnedClip = true;
+  // `<image>` dest-rect cases) is implemented via the WebGPU scissor rect
+  // (plus the Phase 3a polygon clip for non-axis-aligned ancestors).
+  // Path-based clip-paths are implemented via the Phase 3b mask
+  // pipeline below. `<mask>` alpha masks are still stubbed (Phase 3c).
+  if (clip.mask.has_value() && impl_->verbose && !impl_->warnedMask) {
+    std::cerr << "RendererGeode: <mask> compositing not yet implemented (Phase 3c)\n";
+    impl_->warnedMask = true;
   }
 
   // Compose the incoming clip rect (in user-space) with the current
   // transform to get pixel-space coordinates, then push onto the stack.
   // The active scissor is the INTERSECTION of everything on the stack.
-  Box2d pixelRect;
-  bool valid = false;
+  Impl::ClipStackEntry entry;
   if (clip.clipRect.has_value()) {
     const Transform2d& t = impl_->currentTransform;
-    pixelRect = t.transformBox(*clip.clipRect);
-    valid = true;
+    entry.pixelRect = t.transformBox(*clip.clipRect);
+    entry.valid = true;
+
+    // Detect a non-axis-aligned ancestor transform — rotation or shear
+    // means the true clip shape is a parallelogram, not a rectangle,
+    // and a rectangular scissor can only describe its AABB. In that
+    // case we carry the 4 transformed corners through to the encoder
+    // as a polygon clip so the fragment shader can do a half-plane
+    // test per sample.
+    const double a = t.data[0];
+    const double b = t.data[1];
+    const double c = t.data[2];
+    const double d = t.data[3];
+    // Axis-aligned iff (no shear: b=c=0) OR (90°-rotation: a=d=0).
+    // Use a small tolerance to absorb floating-point noise in the
+    // composed transform chain.
+    constexpr double kAxisAlignedEps = 1e-9;
+    const bool axisAligned =
+        (std::abs(b) < kAxisAlignedEps && std::abs(c) < kAxisAlignedEps) ||
+        (std::abs(a) < kAxisAlignedEps && std::abs(d) < kAxisAlignedEps);
+    if (!axisAligned) {
+      const Box2d& local = *clip.clipRect;
+      const Vector2d tl(local.topLeft.x, local.topLeft.y);
+      const Vector2d tr(local.bottomRight.x, local.topLeft.y);
+      const Vector2d br(local.bottomRight.x, local.bottomRight.y);
+      const Vector2d bl(local.topLeft.x, local.bottomRight.y);
+      entry.polygonCorners[0] = t.transformPosition(tl);
+      entry.polygonCorners[1] = t.transformPosition(tr);
+      entry.polygonCorners[2] = t.transformPosition(br);
+      entry.polygonCorners[3] = t.transformPosition(bl);
+      entry.hasPolygon = true;
+    }
   }
-  impl_->clipStack.push_back({pixelRect, valid});
+
+  // Phase 3b: path-clip mask. When the clip has any `clipPaths`,
+  // render them into R8Unorm mask textures via the Slug mask
+  // pipeline and hand the resolved view of the outermost layer to
+  // the encoder so subsequent fill / gradient draws multiply clip
+  // coverage into their output.
+  //
+  // `clip.clipPaths` is a flat list in traversal order with a
+  // per-shape `layer` index. Paths at the same layer are UNIONED;
+  // when the layer decreases (we cross back from a nested clipPath
+  // reference to its parent), that whole nested layer is
+  // INTERSECTED with each path at the outer layer. This matches the
+  // recursive `buildLayerMask` in `RendererTinySkia::pushClip`.
+  //
+  // The union step lives in the hardware blend (`BlendOperation::Max`
+  // on the R channel). The intersection step lives in the slug_mask
+  // fragment shader: when a deeper layer's mask is bound as the
+  // `clipMaskTexture`, each outer-layer shape samples it at its
+  // pixel center and multiplies the coverage output, so
+  // `max(shape_i ∩ nested)` = `(union of shape_i) ∩ nested`.
+  //
+  // Bottom-up traversal order: we scan the clipPaths list and
+  // partition it into contiguous runs of equal layer. Deeper layers
+  // appear AFTER outer layers in the list (the driver emits them in
+  // the order they're encountered during DFS, and references push a
+  // higher layer for the nested clip's children). So the deepest
+  // layer is at the tail; we render each layer's mask in reverse,
+  // binding the previously-rendered deeper mask as the input clip.
+  if (!clip.clipPaths.empty() && impl_->device && impl_->encoder &&
+      impl_->pixelWidth > 0 && impl_->pixelHeight > 0) {
+    const wgpu::Device& dev = impl_->device->device();
+
+    const auto makeResolveTexture = [&](const char* label) {
+      wgpu::TextureDescriptor desc = {};
+      desc.label = label;
+      desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                   static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      desc.format = wgpu::TextureFormat::R8Unorm;
+      desc.usage =
+          wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+      desc.mipLevelCount = 1;
+      desc.sampleCount = 1;
+      desc.dimension = wgpu::TextureDimension::e2D;
+      return dev.CreateTexture(&desc);
+    };
+    const auto makeMsaaTexture = [&](const char* label) {
+      wgpu::TextureDescriptor desc = {};
+      desc.label = label;
+      desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                   static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      desc.format = wgpu::TextureFormat::R8Unorm;
+      desc.usage = wgpu::TextureUsage::RenderAttachment;
+      desc.mipLevelCount = 1;
+      desc.sampleCount = 4;
+      desc.dimension = wgpu::TextureDimension::e2D;
+      return dev.CreateTexture(&desc);
+    };
+
+    // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
+    // one per layer, in the order they appear. Layers appear in
+    // traversal order — within a run the layer is constant, and
+    // boundaries correspond to clipPath-reference crossings. For
+    // each run we'll render one mask texture.
+    struct LayerRun {
+      size_t begin;
+      size_t end;
+      int layer;
+    };
+    std::vector<LayerRun> runs;
+    {
+      size_t i = 0;
+      while (i < clip.clipPaths.size()) {
+        const int layer = clip.clipPaths[i].layer;
+        size_t j = i + 1;
+        while (j < clip.clipPaths.size() && clip.clipPaths[j].layer == layer) {
+          ++j;
+        }
+        runs.push_back({i, j, layer});
+        i = j;
+      }
+    }
+
+    // Render runs bottom-up (deepest layer first). Each run's mask
+    // is rendered with the previously-rendered deeper mask bound as
+    // the input clip so shapes get intersected with the deeper
+    // union. Runs at the same layer don't intersect with each other
+    // — the Max blend on the R channel handles union within a run.
+    const Transform2d savedTransform = impl_->currentTransform;
+
+    // If any clip stack entry already carries a path mask (e.g., an
+    // ancestor `<g>` with its own `clip-path`), use the topmost one
+    // as the initial nested mask so this new clip gets intersected
+    // with it as it's being rendered. Without this seed the outer
+    // ancestor clip would be lost the moment the inner clip lands
+    // because `updateEncoderScissor` only binds the topmost entry.
+    wgpu::TextureView nestedMaskView;
+    for (auto rit = impl_->clipStack.rbegin(); rit != impl_->clipStack.rend(); ++rit) {
+      if (rit->maskResolveView) {
+        nestedMaskView = rit->maskResolveView;
+        break;
+      }
+    }
+
+    for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+      wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa");
+      wgpu::Texture resolveTexture = makeResolveTexture("RendererGeodeClipMaskResolve");
+      if (!msaaTexture || !resolveTexture) {
+        continue;
+      }
+
+      // Bind the previously-rendered nested mask (if any) so this
+      // layer's fragment shader samples it and intersects.
+      if (nestedMaskView) {
+        impl_->encoder->setClipMask(nestedMaskView);
+      } else {
+        impl_->encoder->clearClipMask();
+      }
+
+      impl_->encoder->beginMaskPass(msaaTexture, resolveTexture);
+      for (size_t s = it->begin; s < it->end; ++s) {
+        const PathShape& shape = clip.clipPaths[s];
+        const Transform2d composed =
+            clip.clipPathUnitsTransform * shape.entityFromParent * savedTransform;
+        impl_->encoder->setTransform(composed);
+        impl_->encoder->fillPathIntoMask(shape.path, shape.fillRule);
+      }
+      impl_->encoder->endMaskPass();
+
+      nestedMaskView = resolveTexture.CreateView();
+
+      // Keep the intermediate textures alive until popClip.
+      entry.maskLayerTextures.push_back(std::move(msaaTexture));
+      entry.maskLayerTextures.push_back(resolveTexture);
+
+      // The outermost layer (the LAST one processed by this loop,
+      // i.e. the FIRST run in `runs`) provides the resolve view the
+      // main draws sample as their clip.
+      entry.maskResolveTexture = resolveTexture;
+      entry.maskResolveView = nestedMaskView;
+    }
+
+    // Clear the encoder's internal clip-mask state — the next main
+    // pass will rebind via `updateEncoderScissor`.
+    impl_->encoder->clearClipMask();
+    impl_->encoder->setTransform(savedTransform);
+  }
+
+  impl_->clipStack.push_back(std::move(entry));
   impl_->updateEncoderScissor();
 }
 
@@ -1051,15 +1317,143 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& /*filterGraph
 
 void RendererGeode::popFilterLayer() {}
 
-void RendererGeode::pushMask(const std::optional<Box2d>& /*maskBounds*/) {
-  if (impl_->verbose && !impl_->warnedMask) {
-    std::cerr << "RendererGeode: masks not yet implemented (Phase 3)\n";
-    impl_->warnedMask = true;
+void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline ||
+      !impl_->imagePipeline || !impl_->encoder || impl_->pixelWidth <= 0 ||
+      impl_->pixelHeight <= 0) {
+    // Headless / degenerate — push a placeholder so popMask stays balanced.
+    impl_->maskStack.push_back({});
+    return;
   }
+
+  const auto allocTexturePair = [&](const char* label, const char* msaaLabel,
+                                    wgpu::Texture& outResolve, wgpu::Texture& outMsaa) {
+    wgpu::TextureDescriptor td = {};
+    td.label = label;
+    td.size = {static_cast<uint32_t>(impl_->pixelWidth),
+               static_cast<uint32_t>(impl_->pixelHeight), 1u};
+    td.format = kFormat;
+    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+               wgpu::TextureUsage::CopySrc;
+    td.mipLevelCount = 1;
+    td.sampleCount = 1;
+    td.dimension = wgpu::TextureDimension::e2D;
+    outResolve = impl_->device->device().CreateTexture(&td);
+
+    wgpu::TextureDescriptor msaaDesc = {};
+    msaaDesc.label = msaaLabel;
+    msaaDesc.size = td.size;
+    msaaDesc.format = kFormat;
+    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    msaaDesc.mipLevelCount = 1;
+    msaaDesc.sampleCount = 4;
+    msaaDesc.dimension = wgpu::TextureDimension::e2D;
+    outMsaa = impl_->device->device().CreateTexture(&msaaDesc);
+  };
+
+  Impl::MaskStackFrame frame;
+  allocTexturePair("RendererGeodeMaskCapture", "RendererGeodeMaskCaptureMSAA",
+                   frame.maskTexture, frame.maskMsaaTexture);
+  allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA",
+                   frame.contentTexture, frame.contentMsaaTexture);
+  if (!frame.maskTexture || !frame.maskMsaaTexture || !frame.contentTexture ||
+      !frame.contentMsaaTexture) {
+    impl_->maskStack.push_back({});
+    return;
+  }
+  frame.maskBounds = maskBounds;
+  frame.maskBoundsTransform = impl_->currentTransform;
+
+  // Flush the outer encoder's pending draws so they land before we
+  // redirect subsequent commands into the mask capture.
+  impl_->encoder->finish();
+
+  frame.savedEncoder = std::move(impl_->encoder);
+  frame.savedTarget = impl_->target;
+  frame.savedMsaaTarget = impl_->msaaTarget;
+  frame.phase = Impl::MaskStackFrame::Phase::Capturing;
+
+  impl_->target = frame.maskTexture;
+  impl_->msaaTarget = frame.maskMsaaTexture;
+  auto captureEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      frame.maskMsaaTexture, frame.maskTexture);
+  captureEncoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->encoder = std::move(captureEncoder);
+  impl_->maskStack.push_back(std::move(frame));
+  impl_->updateEncoderScissor();
 }
 
-void RendererGeode::transitionMaskToContent() {}
-void RendererGeode::popMask() {}
+void RendererGeode::transitionMaskToContent() {
+  if (impl_->maskStack.empty()) {
+    return;
+  }
+  Impl::MaskStackFrame& frame = impl_->maskStack.back();
+  if (frame.phase != Impl::MaskStackFrame::Phase::Capturing) {
+    return;
+  }
+  if (!frame.contentTexture || !frame.contentMsaaTexture || !impl_->encoder) {
+    frame.phase = Impl::MaskStackFrame::Phase::Content;
+    return;
+  }
+
+  // Flush the mask-capture encoder so the mask texture is ready to
+  // sample in popMask.
+  impl_->encoder->finish();
+
+  impl_->target = frame.contentTexture;
+  impl_->msaaTarget = frame.contentMsaaTexture;
+  auto contentEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      frame.contentMsaaTexture, frame.contentTexture);
+  contentEncoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->encoder = std::move(contentEncoder);
+  frame.phase = Impl::MaskStackFrame::Phase::Content;
+  impl_->updateEncoderScissor();
+}
+
+void RendererGeode::popMask() {
+  if (impl_->maskStack.empty()) {
+    return;
+  }
+  Impl::MaskStackFrame frame = std::move(impl_->maskStack.back());
+  impl_->maskStack.pop_back();
+
+  if (!frame.savedEncoder) {
+    // Placeholder frame from the headless path — nothing to do.
+    return;
+  }
+
+  // Finish the content encoder so its resolve is ready to sample.
+  if (impl_->encoder) {
+    impl_->encoder->finish();
+  }
+
+  // Restore the outer target and reopen a new encoder with load-
+  // preserve on the saved MSAA state.
+  impl_->target = frame.savedTarget;
+  impl_->msaaTarget = frame.savedMsaaTarget;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      frame.savedMsaaTarget, frame.savedTarget);
+  newEncoder->setLoadPreserve();
+  impl_->encoder = std::move(newEncoder);
+  impl_->updateEncoderScissor();
+
+  // Lift the raw mask-bounds rect into device-pixel space using the
+  // transform captured at pushMask time. This handles `maskUnits ==
+  // userSpaceOnUse` (where bounds are in user space and need the
+  // element's world transform applied) and `objectBoundingBox`
+  // (where the driver has already folded the bbox mapping into the
+  // bounds, but the outer world transform still applies).
+  std::optional<Box2d> pixelMaskBounds;
+  if (frame.maskBounds.has_value()) {
+    pixelMaskBounds = frame.maskBoundsTransform.transformBox(*frame.maskBounds);
+  }
+
+  // Composite `content * luminance(mask)` onto the outer target.
+  impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, pixelMaskBounds);
+}
 
 void RendererGeode::beginPatternTile(const Box2d& tileRect,
                                      const Transform2d& targetFromPattern) {

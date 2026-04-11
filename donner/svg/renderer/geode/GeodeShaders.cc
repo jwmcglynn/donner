@@ -3,6 +3,7 @@
 #include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
+#include "embed_resources/SlugMaskWgsl.h"
 
 namespace donner::geode {
 
@@ -32,6 +33,21 @@ wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device) {
 
   wgpu::ShaderModuleDescriptor desc = {};
   desc.label = "SlugGradient";
+  desc.nextInChain = &wgslSource;
+
+  return device.CreateShaderModule(&desc);
+}
+
+wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device) {
+  // Embedded at build time from shaders/slug_mask.wgsl via the
+  // :slug_mask_wgsl rule in BUILD.bazel.
+  wgpu::ShaderSourceWGSL wgslSource = {};
+  wgslSource.code.data =
+      reinterpret_cast<const char*>(donner::embedded::kSlugMaskWgsl.data());
+  wgslSource.code.length = donner::embedded::kSlugMaskWgsl.size();
+
+  wgpu::ShaderModuleDescriptor desc = {};
+  desc.label = "SlugMask";
   desc.nextInChain = &wgslSource;
 
   return device.CreateShaderModule(&desc);

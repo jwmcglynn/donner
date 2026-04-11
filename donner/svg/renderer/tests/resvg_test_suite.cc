@@ -77,15 +77,11 @@ geodeCategoryGate(std::string_view category) {
     };
   }
 
-  // Clipping / masking: arbitrary path clipping and alpha masks are
-  // Phase 3. `masking/clip-rule` is just the fill-rule attribute on
-  // clip paths — also path-clip territory.
-  if (category == "masking/clip" || category == "masking/clipPath" ||
-      category == "masking/mask" || category == "masking/clip-rule") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "clipping/masking (Geode Phase 3)");
-    };
-  }
+  // Clip-paths (`masking/clip`, `masking/clipPath`, `masking/clip-rule`)
+  // run through the Phase 3b mask pipeline, and `<mask>` elements run
+  // through the Phase 3c mask-blit pipeline — no wholesale category
+  // gate here. Individual per-file overrides handle any remaining
+  // divergences.
 
   // Markers: Phase 6.
   if (category == "painting/marker") {
@@ -156,14 +152,27 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     };
   }
 
-  // `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg` has a
-  // content-level bug (see the Phase 3 block below), handled earlier
-  // than the rest of the `preserveAspectRatio=*` widening.
+  // `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg` is
+  // currently 104 pixels past the default 100-px max even at the
+  // widened 0.3 per-pixel threshold. The failing pixels form a thin
+  // fringe along the curved green stroke inside the embedded data-URL
+  // SVG: 4× MSAA places the sub-pixel stroke edge on a different side
+  // of the pixel boundary than tiny-skia's 16× supersample on roughly
+  // 4% of the edge pixels, and those are 100% diffs (fully-coloured
+  // stroke vs background), not something a threshold bump can absorb.
+  // Historically this test was disabled under the mistaken "path
+  // clipping (Phase 3)" rationale; Phase 3a polygon clipping confirms
+  // no non-axis-aligned transform is in play (ancestor transform is
+  // `matrix(16 0 0 16 10 175)`), so polygon clipping isn't the lever
+  // to close this gap. Leaving disabled as an AA-quantisation TODO
+  // until Geode picks up a finer sample pattern or analytic stroke AA.
+  // TODO(geode): upgrade to 8× / 16× MSAA or analytic stroke AA to
+  // shed the thin-stroke fringe pixels on nested-image tests.
   if (category == "structure/image" &&
       filename == "preserveAspectRatio=xMaxYMax-slice-on-svg.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "non-axis-aligned viewport clip needs path clipping (Phase 3)");
+                       "4× MSAA thin-stroke fringe on nested image data URL");
     };
   }
 
@@ -187,39 +196,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
       filename == "control-points-clamping-1.svg" ||
       filename == "preserveAspectRatio=xMaxYMax-slice-on-svg.svg") {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-
-  // `structure/symbol/with-transform-on-use` applies a `skewX(20)`
-  // transform on a `<use>` element that references a `<symbol>` with a
-  // 100×100 viewport containing a 120×120 rect. The correct rendering
-  // clips the rect to the symbol viewport *in symbol-local space* and
-  // then skews the clipped shape, producing a parallelogram with both
-  // left and right edges slanted. Geode's rectangular scissor clips in
-  // canvas space with the AABB of the transformed viewport — that's
-  // wider than the true skewed viewport polygon along the bottom
-  // edge, leaving an untransformed rectangle with a vertical right
-  // edge visible. The correct fix is path clipping (Phase 3), which
-  // would let Geode clip to the actual transformed-viewport polygon
-  // instead of its AABB.
-  //
-  // The same root cause hits
-  // `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg`: the
-  // nested SVG data URL uses `xMaxYMax slice` which extends the
-  // content past the `<image>` viewport; Geode's AABB scissor leaves
-  // the blue rounded-rect background visible past the green stroke
-  // where tiny-skia correctly clips it. Both files share the
-  // transformed-viewport clipping gap.
-  // TODO(geode-phase3): use path clipping for non-axis-aligned
-  // transformed viewports (`<symbol>`, `<svg>` with transform,
-  // `<image>` with `slice`) so scissor-AABB clipping is no longer
-  // required.
-  if ((category == "structure/symbol" && filename == "with-transform-on-use.svg") ||
-      (category == "structure/image" &&
-       filename == "preserveAspectRatio=xMaxYMax-slice-on-svg.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "non-axis-aligned viewport clip needs path clipping (Phase 3)");
-    };
   }
 
   // `painting/stroke-linejoin/miter` renders 6 stroked polylines with
