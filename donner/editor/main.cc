@@ -15,6 +15,7 @@
 /// For the minimal viewer demo (no tools, no overlay chrome, just a
 /// rendered SVG and a text pane) see `//examples:svg_viewer`.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -32,6 +33,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/TracyWrapper.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -51,6 +53,23 @@ namespace {
 constexpr int kInitialWindowWidth = 1280;
 constexpr int kInitialWindowHeight = 800;
 constexpr float kSourcePaneWidth = 560.0f;
+constexpr float kMinZoom = 0.1f;
+constexpr float kMaxZoom = 32.0f;
+constexpr float kZoomStep = 1.1f;  // Per wheel notch.
+
+/// Pan + zoom state for the render pane. At zoom 1.0 and pan (0, 0), the
+/// rendered bitmap exactly fills the pane's content region. Zoom scales
+/// the image around the cursor; pan offsets its origin in pane-local
+/// pixels.
+struct ViewTransform {
+  float zoom = 1.0f;
+  ImVec2 pan = ImVec2(0.0f, 0.0f);
+
+  void reset() {
+    zoom = 1.0f;
+    pan = ImVec2(0.0f, 0.0f);
+  }
+};
 
 void GlfwErrorCallback(int error, const char* description) {
   std::cerr << "GLFW error " << error << ": " << description << "\n";
@@ -248,15 +267,24 @@ int main(int argc, char** argv) {
   int textureWidth = 0;
   int textureHeight = 0;
 
+  ViewTransform view;
+  bool panning = false;
+  ImVec2 lastPanMouse(0.0f, 0.0f);
+
   // ---------------------------------------------------------------------------
   // Main loop
   // ---------------------------------------------------------------------------
   while (!glfwWindowShouldClose(window)) {
+    ZoneScopedN("main_loop");
+
     glfwPollEvents();
 
     // Drain the command queue (ReplaceDocument from text edits,
     // SetTransform from SelectTool drags).
-    app.flushFrame();
+    {
+      ZoneScopedN("flushFrame");
+      app.flushFrame();
+    }
 
     // Re-render whenever the document version changes, the selection
     // changes, OR the canvas size changed (the latter happens when
@@ -269,9 +297,19 @@ int main(int argc, char** argv) {
     if ((currentVersion != lastRenderedVersion || currentSelection != lastRenderedSelection ||
          currentCanvasSize != lastRenderedCanvasSize) &&
         app.hasDocument()) {
-      renderer.draw(app.document().document());
-      donner::editor::OverlayRenderer::drawChrome(renderer, app);
-      const donner::svg::RendererBitmap bitmap = renderer.takeSnapshot();
+      ZoneScopedN("render");
+      {
+        ZoneScopedN("renderer.draw");
+        renderer.draw(app.document().document());
+      }
+      {
+        ZoneScopedN("overlay");
+        donner::editor::OverlayRenderer::drawChrome(renderer, app);
+      }
+      const donner::svg::RendererBitmap bitmap = [&] {
+        ZoneScopedN("takeSnapshot");
+        return renderer.takeSnapshot();
+      }();
       if (!bitmap.empty()) {
         glBindTexture(GL_TEXTURE_2D, texture);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
@@ -404,47 +442,114 @@ int main(int argc, char** argv) {
 
     // Inspector header — always-visible summary of what's selected.
     RenderInspector(app);
+    ImGui::Text("Zoom: %.0f%%  Pan: (%.0f, %.0f)  (wheel=zoom, space+drag=pan, Cmd+0=reset)",
+                view.zoom * 100.0f, view.pan.x, view.pan.y);
     ImGui::Separator();
 
-    // Resize the document's canvas to match the content region, so the
-    // image scales to fit the pane instead of overflowing (for big SVGs)
-    // or leaving whitespace (for small ones). Only call setCanvasSize
-    // when the desired size changes — otherwise we'd bump the document
-    // every frame. The render re-trigger picks up the change via the
-    // `currentCanvasSize != lastRenderedCanvasSize` check above.
+    // Base canvas size = pane content region. Everything past this point
+    // works in pane-local coordinates where (0,0) is the top-left of the
+    // render area below the inspector header. Zoom scales the bitmap at
+    // display time; pan offsets it.
     const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
-    const int desiredW = static_cast<int>(contentRegion.x);
-    const int desiredH = static_cast<int>(contentRegion.y);
-    if (app.hasDocument() && desiredW > 0 && desiredH > 0) {
+    const ImVec2 paneOrigin = ImGui::GetCursorScreenPos();
+    const int baseW = static_cast<int>(contentRegion.x);
+    const int baseH = static_cast<int>(contentRegion.y);
+
+    if (app.hasDocument() && baseW > 0 && baseH > 0) {
       const donner::Vector2i currentSize = app.document().document().canvasSize();
-      if (currentSize.x != desiredW || currentSize.y != desiredH) {
-        app.document().document().setCanvasSize(desiredW, desiredH);
+      if (currentSize.x != baseW || currentSize.y != baseH) {
+        app.document().document().setCanvasSize(baseW, baseH);
       }
     }
 
-    if (textureWidth > 0 && textureHeight > 0) {
-      const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
-      ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
-                   ImVec2(static_cast<float>(textureWidth), static_cast<float>(textureHeight)));
+    // Reserve the full content area as an invisible button so ImGui
+    // routes mouse events (wheel, drag, click) to this pane even when
+    // the cursor is over empty space around the image.
+    ImGui::InvisibleButton("##render_canvas", contentRegion,
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
+    const bool paneHovered = ImGui::IsItemHovered();
 
-      // Screen → document mapping. The canvas may be scaled relative to
-      // the document viewBox, so run screen-space clicks through
-      // `documentFromCanvasTransform` to recover the document-space
-      // point that `SelectTool` and `hitTest` want.
+    // Space+drag → pan. Middle-click+drag is a common alternative; both
+    // work. `panning` is a one-frame edge-detected state so the first
+    // frame of a drag captures the starting mouse position.
+    const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
+    const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+    if (paneHovered && (spaceHeld || middleDown) &&
+        ImGui::IsMouseDown(ImGuiMouseButton_Left) && !panning) {
+      panning = true;
+      lastPanMouse = ImGui::GetMousePos();
+    } else if (middleDown && !panning) {
+      panning = true;
+      lastPanMouse = ImGui::GetMousePos();
+    }
+    if (panning) {
+      const ImVec2 now = ImGui::GetMousePos();
+      view.pan.x += now.x - lastPanMouse.x;
+      view.pan.y += now.y - lastPanMouse.y;
+      lastPanMouse = now;
+      if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+          !ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+        panning = false;
+      }
+    }
+
+    // Mouse wheel → zoom around the cursor. To keep the point under the
+    // cursor stationary across the zoom, compute the pre-zoom pane-local
+    // coordinate of the cursor, change the zoom, then shift the pan so
+    // the same bitmap pixel lands at the same pane-local coordinate.
+    const float wheel = ImGui::GetIO().MouseWheel;
+    if (paneHovered && wheel != 0.0f && !panning) {
+      const ImVec2 mouse = ImGui::GetMousePos();
+      const ImVec2 mousePaneLocal(mouse.x - paneOrigin.x, mouse.y - paneOrigin.y);
+      const ImVec2 bitmapUnderCursor((mousePaneLocal.x - view.pan.x) / view.zoom,
+                                     (mousePaneLocal.y - view.pan.y) / view.zoom);
+      const float factor = wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep;
+      const float newZoom = std::clamp(view.zoom * factor, kMinZoom, kMaxZoom);
+      view.pan.x = mousePaneLocal.x - bitmapUnderCursor.x * newZoom;
+      view.pan.y = mousePaneLocal.y - bitmapUnderCursor.y * newZoom;
+      view.zoom = newZoom;
+    }
+
+    // Keyboard shortcut for reset view.
+    if (ImGui::IsKeyPressed(ImGuiKey_0) &&
+        (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper)) {
+      view.reset();
+    }
+
+    if (textureWidth > 0 && textureHeight > 0) {
+      const ImVec2 imageOrigin(paneOrigin.x + view.pan.x, paneOrigin.y + view.pan.y);
+      const ImVec2 imageSize(static_cast<float>(textureWidth) * view.zoom,
+                             static_cast<float>(textureHeight) * view.zoom);
+
+      // Draw the image via the foreground draw list so it composites
+      // into the pane without interfering with the InvisibleButton's
+      // event consumption.
+      ImGui::GetWindowDrawList()->AddImage(
+          static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)), imageOrigin,
+          ImVec2(imageOrigin.x + imageSize.x, imageOrigin.y + imageSize.y));
+
+      // Screen → pane-local → canvas → document. The canvas→document
+      // step is baked into the renderer's documentFromCanvasTransform
+      // (it accounts for viewBox scaling), and the pane-local → canvas
+      // step divides out the editor zoom.
       const donner::Transform2d documentFromCanvas =
           app.document().document().documentFromCanvasTransform();
       const auto screenToDocument = [&](const ImVec2& screenPoint) {
-        const donner::Vector2d canvasPoint(screenPoint.x - imageOrigin.x,
-                                            screenPoint.y - imageOrigin.y);
+        const donner::Vector2d canvasPoint(
+            (screenPoint.x - paneOrigin.x - view.pan.x) / view.zoom,
+            (screenPoint.y - paneOrigin.y - view.pan.y) / view.zoom);
         return documentFromCanvas.transformPosition(canvasPoint);
       };
 
-      if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+      // Only treat a click as a tool event when it's NOT a pan gesture.
+      const bool toolEligible = paneHovered && !panning && !spaceHeld;
+
+      if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         selectTool.onMouseDown(app, screenToDocument(ImGui::GetMousePos()));
       }
       // Drag continues even after the cursor leaves the image.
       if (selectTool.isDragging()) {
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
           selectTool.onMouseMove(app, screenToDocument(ImGui::GetMousePos()),
                                  /*buttonHeld=*/true);
         }
@@ -476,6 +581,7 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+    FrameMark;
   }
 
   // ---------------------------------------------------------------------------

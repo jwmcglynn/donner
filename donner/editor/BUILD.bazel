@@ -143,6 +143,7 @@ donner_cc_binary(
         ":overlay_renderer",
         ":select_tool",
         ":text_editor",
+        ":tracy_wrapper",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/renderer",
