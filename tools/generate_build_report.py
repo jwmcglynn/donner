@@ -539,6 +539,11 @@ _DEPENDENCY_VARIANTS: tuple[DependencyVariant, ...] = (
         configs=("--config=skia", "--config=text-full"),
         notice_target="//third_party/licenses:notice_skia_text_full",
     ),
+    DependencyVariant(
+        category_name="editor (skia + text-full + imgui/glfw/tracy)",
+        configs=("--config=skia", "--config=text-full"),
+        notice_target="//third_party/licenses:notice_editor",
+    ),
 )
 
 

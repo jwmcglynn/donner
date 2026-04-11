@@ -12,6 +12,7 @@ shipped over BCR:
 - harfbuzz        : Text shaping                (--config=text-full)
 - woff2           : WOFF2 font format           (--config=text-full)
 - dawn            : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_dawn=true)
+- tracy           : In-process profiling client (//donner/editor only — see check_banned_patterns.py)
 - resvg-test-suite: Reference SVG goldens       (image comparison tests)
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
 
@@ -107,6 +108,18 @@ HBEOF""",
             # new_git_repository build_file attribute — don't remove that one.)
             "rm -f WORKSPACE WORKSPACE.bazel MODULE.bazel",
         ],
+    )
+
+    # Tracy in-process profiler. Only consumed under //donner/editor/...
+    # Donner uses a custom BUILD file (third_party/BUILD.tracy) because Tracy
+    # does not ship Bazel BUILD files upstream. The build file is adapted
+    # from the one donner-editor maintains in its own vendored Tracy copy.
+    new_git_repository(
+        name = "tracy",
+        build_file = "//third_party:BUILD.tracy",
+        # Pinned to the latest stable upstream release. Bump deliberately.
+        tag = "v0.12.2",
+        remote = "https://github.com/wolfpld/tracy.git",
     )
 
     # resvg test suite: reference renderings used by image comparison tests.

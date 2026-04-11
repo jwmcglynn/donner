@@ -48,6 +48,7 @@ use_repo(
     "harfbuzz",
     "resvg-test-suite",
     "skia",
+    "tracy",
     "woff2",
 )
 ##

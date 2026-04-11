@@ -12,6 +12,7 @@ Rules enforced:
   - No `std::aligned_storage`: use alignas(T) on a byte buffer
   - No `std::aligned_union`: same reason
   - No user-defined literal operators (operator"" _foo): use named helpers
+  - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
 
 Usage:
   python3 tools/check_banned_patterns.py            # Check all files
@@ -24,38 +25,71 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
 
-# Each rule: (pattern, description, remediation)
-_RULES: List[Tuple[re.Pattern, str, str]] = [
-    (
-        re.compile(r"\blong\s+long\b"),
-        "`long long` type",
-        "Use std::int64_t / std::uint64_t (width-portable) — long long is long on macOS but "
-        "long-long on Linux, causing template specialization collisions (see PR #415).",
+class _Rule(NamedTuple):
+    pattern: re.Pattern
+    description: str
+    remediation: str
+    # Path prefixes (forward-slash) where this rule does NOT apply.
+    # Empty tuple means the rule applies everywhere.
+    exempt_path_prefixes: Tuple[str, ...] = ()
+
+
+_RULES: List[_Rule] = [
+    _Rule(
+        pattern=re.compile(r"\blong\s+long\b"),
+        description="`long long` type",
+        remediation=(
+            "Use std::int64_t / std::uint64_t (width-portable) — long long is long on macOS but "
+            "long-long on Linux, causing template specialization collisions (see PR #415)."
+        ),
     ),
-    (
-        re.compile(r"\bstd::aligned_storage\b"),
-        "std::aligned_storage",
-        "Use `alignas(T) std::byte buffer[N * sizeof(T)]` instead — aligned_storage is "
-        "deprecated in C++23.",
+    _Rule(
+        pattern=re.compile(r"\bstd::aligned_storage\b"),
+        description="std::aligned_storage",
+        remediation=(
+            "Use `alignas(T) std::byte buffer[N * sizeof(T)]` instead — aligned_storage is "
+            "deprecated in C++23."
+        ),
     ),
-    (
-        re.compile(r"\bstd::aligned_union\b"),
-        "std::aligned_union",
-        "Use `alignas` on a byte buffer instead — aligned_union is deprecated in C++23.",
+    _Rule(
+        pattern=re.compile(r"\bstd::aligned_union\b"),
+        description="std::aligned_union",
+        remediation="Use `alignas` on a byte buffer instead — aligned_union is deprecated in C++23.",
     ),
-    (
-        re.compile(r"\boperator\s*\"\"\s*_[A-Za-z_][A-Za-z0-9_]*"),
-        "user-defined literal operator",
-        "Use a named helper function (e.g. `RgbHex(0xFF0000)` instead of `0xFF0000_rgb`).",
+    _Rule(
+        pattern=re.compile(r"\boperator\s*\"\"\s*_[A-Za-z_][A-Za-z0-9_]*"),
+        description="user-defined literal operator",
+        remediation="Use a named helper function (e.g. `RgbHex(0xFF0000)` instead of `0xFF0000_rgb`).",
+    ),
+    _Rule(
+        pattern=re.compile(
+            r'#\s*include\s*[<"](?:imgui(?:[_/][^>"]*)?\.h|GLFW/[^>"]+|Tracy[A-Za-z]*\.h)[>"]'
+        ),
+        description="editor-only third-party header outside donner/editor/**",
+        remediation=(
+            "imgui, GLFW, and Tracy headers are only allowed under donner/editor/**. "
+            "If you need this functionality elsewhere, expose a Donner-internal abstraction "
+            "in donner/editor/ and depend on that."
+        ),
+        exempt_path_prefixes=("donner/editor/",),
     ),
 ]
 
 
+_INCLUDE_LINE_RE = re.compile(r"^\s*#\s*include\b")
+_STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+
+
 def _strip_comments_and_strings(text: str) -> str:
-    """Remove comments and string literals but preserve line counts."""
+    """Remove comments and string literals but preserve line counts.
+
+    `#include "..."` directives are preserved verbatim so include-path rules
+    can match against the filename — otherwise the quoted include path would
+    be stripped to `""` along with every other string literal.
+    """
     # Line comments: replace text after // with spaces, keep newlines
     text = re.sub(r"//[^\n]*", "", text)
     # Block comments: replace with equivalent number of newlines
@@ -63,8 +97,12 @@ def _strip_comments_and_strings(text: str) -> str:
         return "\n" * m.group(0).count("\n")
     text = re.sub(r"/\*.*?\*/", _replace_block, text, flags=re.DOTALL)
     text = re.sub(r'R"\([^)]*\)"', '""', text)
-    text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
-    return text
+    # Strings: strip them, but leave `#include "..."` lines alone.
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if not _INCLUDE_LINE_RE.match(line):
+            lines[i] = _STRING_LITERAL_RE.sub('""', line)
+    return "\n".join(lines)
 
 
 _NOLINT_RE = re.compile(r"//\s*NOLINT\(banned_patterns(?::[^)]*)?\)")
@@ -83,10 +121,13 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
 
     raw_lines = raw.splitlines()
     stripped = _strip_comments_and_strings(raw)
+    posix_path = path.as_posix()
 
     errors: List[Tuple[int, str, str]] = []
-    for pattern, desc, remediation in _RULES:
-        for m in pattern.finditer(stripped):
+    for rule in _RULES:
+        if any(prefix in posix_path for prefix in rule.exempt_path_prefixes):
+            continue
+        for m in rule.pattern.finditer(stripped):
             line = stripped.count("\n", 0, m.start()) + 1
             # Check the match line and up to 2 lines after for a NOLINT marker
             # (clang-format may wrap the signature onto multiple lines).
@@ -98,7 +139,7 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
                     break
             if suppressed:
                 continue
-            errors.append((line, desc, remediation))
+            errors.append((line, rule.description, rule.remediation))
 
     return sorted(errors)
 
