@@ -32,6 +32,8 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/renderer/Renderer.h"
 
 #include "glad/glad.h"
@@ -62,6 +64,58 @@ donner::editor::Coordinates FileOffsetToEditorCoordinates(const donner::FileOffs
   }
   return donner::editor::Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
                                      static_cast<int>(offset.lineInfo->offsetOnLine));
+}
+
+/// Render a small inspector line that describes the currently-selected
+/// element (tag, id, world bounds, local transform). No-op if nothing
+/// is selected.
+void RenderInspector(const donner::editor::EditorApp& app) {
+  if (!app.hasSelection() || !app.hasDocument()) {
+    ImGui::TextDisabled("Nothing selected. Click an element to inspect.");
+    return;
+  }
+
+  auto& mutableRegistry =
+      const_cast<donner::Registry&>(app.document().document().registry());
+  donner::EntityHandle handle(mutableRegistry, app.selectedEntity());
+  if (!handle) {
+    ImGui::TextDisabled("Selected entity no longer exists.");
+    return;
+  }
+
+  // Tag name + id via the XML node wrapper (the same wrapper that
+  // powers the XML source highlight on click). `RcString` / `RcStringOrRef`
+  // convert to `std::string_view` but aren't null-terminated, so we use
+  // the `%.*s` form which takes length + data directly.
+  auto xmlNode = donner::xml::XMLNode::TryCast(handle);
+  if (xmlNode.has_value()) {
+    const std::string_view tagSv = xmlNode->tagName().name;
+    const auto id = xmlNode->getAttribute(donner::xml::XMLQualifiedNameRef("id"));
+    if (id.has_value()) {
+      const std::string_view idSv = *id;
+      ImGui::Text("Selected: <%.*s id=\"%.*s\">", static_cast<int>(tagSv.size()), tagSv.data(),
+                  static_cast<int>(idSv.size()), idSv.data());
+    } else {
+      ImGui::Text("Selected: <%.*s>", static_cast<int>(tagSv.size()), tagSv.data());
+    }
+  } else {
+    ImGui::TextUnformatted("Selected: (non-XML element)");
+  }
+
+  // World-space bounds via the same path OverlayRenderer uses for the
+  // selection chrome rect.
+  if (auto bounds = donner::svg::components::ShapeSystem().getShapeWorldBounds(handle);
+      bounds.has_value()) {
+    ImGui::Text("Bounds: (%.1f, %.1f) %.1f × %.1f", bounds->topLeft.x, bounds->topLeft.y,
+                bounds->width(), bounds->height());
+  }
+
+  // Local (parent-from-entity) transform — the same quantity SelectTool
+  // drags and UndoTimeline snapshots.
+  const donner::Transform2d xform =
+      donner::svg::components::LayoutSystem().getRawEntityFromParentTransform(handle);
+  ImGui::Text("Transform: [%.3f %.3f %.3f %.3f  %.2f %.2f]", xform.data[0], xform.data[1],
+              xform.data[2], xform.data[3], xform.data[4], xform.data[5]);
 }
 
 /// Highlight an entity's XML source span in the text editor. No-op if the
@@ -296,6 +350,14 @@ int main(int argc, char** argv) {
         // Cmd+Shift+Z: redo (break chain + undo-of-undo)
         app.redo();
       }
+
+      // Escape: clear the current selection. Modal popups capture Escape
+      // first (to close themselves), so this only fires when no popup is
+      // active.
+      if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) &&
+          ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) && app.hasSelection()) {
+        app.setSelection(entt::null);
+      }
     }
 
     int windowWidth = 0;
@@ -333,6 +395,11 @@ int main(int argc, char** argv) {
         ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth, static_cast<float>(windowHeight)),
         ImGuiCond_Always);
     ImGui::Begin("Render", nullptr, kPaneFlags);
+
+    // Inspector header — always-visible summary of what's selected.
+    RenderInspector(app);
+    ImGui::Separator();
+
     if (textureWidth > 0 && textureHeight > 0) {
       const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
       ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
