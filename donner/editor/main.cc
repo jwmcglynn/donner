@@ -23,10 +23,13 @@
 #include <sstream>
 #include <string>
 
+#include "donner/base/FileOffset.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -48,6 +51,43 @@ constexpr float kSourcePaneWidth = 560.0f;
 
 void GlfwErrorCallback(int error, const char* description) {
   std::cerr << "GLFW error " << error << ": " << description << "\n";
+}
+
+/// Convert a donner `FileOffset` (1-based line) into a `TextEditor`
+/// `Coordinates` (0-based line).
+donner::editor::Coordinates FileOffsetToEditorCoordinates(const donner::FileOffset& offset) {
+  if (!offset.lineInfo.has_value()) {
+    return donner::editor::Coordinates(0, 0);
+  }
+  return donner::editor::Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
+                                     static_cast<int>(offset.lineInfo->offsetOnLine));
+}
+
+/// Highlight an entity's XML source span in the text editor. No-op if the
+/// entity doesn't carry XML source offsets (which should never happen for
+/// a parse from `SVGParser::ParseSVG`, but is defensive).
+void HighlightEntitySource(const donner::editor::EditorApp& app,
+                           donner::editor::TextEditor& textEditor,
+                           donner::Entity entity) {
+  if (entity == entt::null || !app.hasDocument()) {
+    return;
+  }
+  auto& mutableRegistry =
+      const_cast<donner::Registry&>(app.document().document().registry());
+  donner::EntityHandle handle(mutableRegistry, entity);
+  if (!handle) {
+    return;
+  }
+  auto xmlNode = donner::xml::XMLNode::TryCast(handle);
+  if (!xmlNode.has_value()) {
+    return;
+  }
+  auto range = xmlNode->getNodeLocation();
+  if (!range.has_value()) {
+    return;
+  }
+  textEditor.selectAndFocus(FileOffsetToEditorCoordinates(range->start),
+                            FileOffsetToEditorCoordinates(range->end));
 }
 
 std::string LoadFile(const std::string& filename) {
@@ -148,6 +188,7 @@ int main(int argc, char** argv) {
 
   std::uint64_t lastRenderedVersion = 0;
   donner::Entity lastRenderedSelection = entt::null;
+  donner::Entity lastHighlightedSelection = entt::null;
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -244,6 +285,15 @@ int main(int argc, char** argv) {
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
           selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
         }
+      }
+
+      // Whenever the selection changes, jump the source pane to the
+      // selected element's XML span. Gated on actual selection change so
+      // the highlight only fires on click, not every frame.
+      const donner::Entity selectionNow = app.selectedEntity();
+      if (selectionNow != lastHighlightedSelection) {
+        HighlightEntitySource(app, textEditor, selectionNow);
+        lastHighlightedSelection = selectionNow;
       }
     } else {
       ImGui::TextUnformatted("(no rendered image)");
