@@ -155,8 +155,4 @@ Donner builds everything from source. The Skia backend is large and slow to buil
 
 ### How do I build the editor?
 
-The Editor is an early prototype and hasn't made it to the tree. The Editor is built on the same foundation as the experimental svg_viewer in the tree. Run it with an opt build for the best experience:
-
-```sh
-bazel run -c opt //experimental/viewer:svg_viewer -- donner_icon.svg
-```
+The Donner Editor is in active migration into the tree under `//donner/editor`. See [docs/design_docs/editor.md](design_docs/editor.md) for the in-progress design and milestone plan.

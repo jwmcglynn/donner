@@ -19,7 +19,12 @@ load("//build_defs:licenses.bzl", "donner_notice_file")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["freetype.LICENSE.txt"])
+exports_files([
+    "freetype.LICENSE.txt",
+    "imgui.LICENSE.txt",
+    "glfw.LICENSE.md",
+    "tracy.LICENSE.txt",
+])
 
 license(
     name = "entt",
@@ -92,6 +97,44 @@ license(
     license_text = "freetype.LICENSE.txt",
 )
 
+# Dear ImGui — only consumed under //donner/editor/. Donner pulls imgui via
+# `git_override` in MODULE.bazel and the patch we apply does not export
+# LICENSE.txt, so we ship a local copy.
+license(
+    name = "imgui",
+    package_name = "Dear ImGui",
+    package_url = "https://github.com/ocornut/imgui",
+    # Pinned to commit ee1deccc in MODULE.bazel.
+    package_version = "ee1deccc",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "imgui.LICENSE.txt",
+)
+
+# GLFW — only consumed under //donner/editor/. Same vendoring story as imgui:
+# the donner-supplied BUILD overlay does not export LICENSE.md.
+license(
+    name = "glfw",
+    package_name = "GLFW",
+    package_url = "https://www.glfw.org/",
+    # Pinned to commit 4df5129 in MODULE.bazel.
+    package_version = "4df5129",
+    license_kinds = ["@rules_license//licenses/spdx:Zlib"],
+    license_text = "glfw.LICENSE.md",
+)
+
+# Tracy profiler — only consumed under //donner/editor/. Pulled from upstream
+# via the non_bcr_deps extension; we vendor a local copy of LICENSE rather
+# than rely on `@tracy//:LICENSE` so the variant build does not depend on the
+# external repo being fetched.
+license(
+    name = "tracy",
+    package_name = "Tracy Profiler",
+    package_url = "https://github.com/wolfpld/tracy",
+    package_version = "v0.12.2",
+    license_kinds = ["@rules_license//licenses/spdx:BSD-3-Clause"],
+    license_text = "tracy.LICENSE.txt",
+)
+
 # Canonical per-variant license lists. These match the build-report
 # variants in `tools/generate_build_report.py` so a Python script can
 # correlate cquery results with the aggregated manifest.
@@ -123,6 +166,15 @@ SKIA_TEXT_FULL_LICENSES = [
     "@zlib//:license",
 ]
 
+# Editor variant adds imgui, glfw, and tracy on top of the skia + text-full
+# variant. Editor-specific resources (FiraCode, Roboto fonts) get added here
+# when they land in M3.
+EDITOR_LICENSES = SKIA_TEXT_FULL_LICENSES + [
+    ":imgui",
+    ":glfw",
+    ":tracy",
+]
+
 donner_notice_file(
     name = "notice_default",
     variant = "Default (tiny-skia)",
@@ -139,4 +191,10 @@ donner_notice_file(
     name = "notice_skia_text_full",
     variant = "skia + text-full",
     licenses = SKIA_TEXT_FULL_LICENSES,
+)
+
+donner_notice_file(
+    name = "notice_editor",
+    variant = "editor (skia + text-full + imgui/glfw/tracy)",
+    licenses = EDITOR_LICENSES,
 )

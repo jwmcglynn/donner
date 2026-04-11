@@ -1,0 +1,14 @@
+"""Donner Editor: in-tree migration of the external `donner-editor` prototype.
+
+This package is the destination for the editor migration described in
+`docs/design_docs/editor.md`. Milestone 1 lands the package skeleton,
+build-system foundation, and dependency wiring; subsequent milestones add
+the actual editor source.
+
+The editor builds as part of default `bazel test //...` on supported hosts —
+there is no `--config=editor` feature flag. Heavy dependencies (imgui, glfw,
+tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
+graphs via `dev_dependency = True` in `MODULE.bazel`.
+"""
+
+package(default_visibility = ["//donner/editor:__subpackages__"])

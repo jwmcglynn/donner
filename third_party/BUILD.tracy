@@ -1,0 +1,106 @@
+"""Tracy profiler client library.
+
+Builds the Tracy client (the in-process profiling instrumentation) for use
+under //donner/editor/. Tracy is **not** linked into any non-editor donner
+target — see build_defs/check_banned_patterns.py for the path-scoped lint
+that enforces this.
+
+Adapted from the BUILD.bazel donner-editor maintains in its vendored Tracy
+copy. Donner fetches Tracy via `new_git_repository` in
+`third_party/bazel/non_bcr_deps.bzl` so it stays out of BCR consumer
+dependency graphs.
+"""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "tracy_client",
+    srcs = [
+        # Only TracyClient.cpp is compiled directly. All other .cpp files
+        # are pulled in via #include directives from TracyClient.cpp.
+        "public/TracyClient.cpp",
+    ],
+    hdrs = [
+        # Tracy public headers.
+        "public/tracy/TracyC.h",
+        "public/tracy/Tracy.hpp",
+        "public/tracy/TracyD3D11.hpp",
+        "public/tracy/TracyD3D12.hpp",
+        "public/tracy/TracyLua.hpp",
+        "public/tracy/TracyOpenCL.hpp",
+        "public/tracy/TracyOpenGL.hpp",
+        "public/tracy/TracyVulkan.hpp",
+        # Client headers.
+        "public/client/tracy_concurrentqueue.h",
+        "public/client/tracy_rpmalloc.hpp",
+        "public/client/tracy_SPSCQueue.h",
+        "public/client/TracyKCore.hpp",
+        "public/client/TracyArmCpuTable.hpp",
+        "public/client/TracyCallstack.h",
+        "public/client/TracyCallstack.hpp",
+        "public/client/TracyCpuid.hpp",
+        "public/client/TracyDebug.hpp",
+        "public/client/TracyDxt1.hpp",
+        "public/client/TracyFastVector.hpp",
+        "public/client/TracyLock.hpp",
+        "public/client/TracyProfiler.hpp",
+        "public/client/TracyRingBuffer.hpp",
+        "public/client/TracyScoped.hpp",
+        "public/client/TracyStringHelpers.hpp",
+        "public/client/TracySysPower.hpp",
+        "public/client/TracySysTime.hpp",
+        "public/client/TracySysTrace.hpp",
+        "public/client/TracyThread.hpp",
+        # Common headers.
+        "public/common/tracy_lz4.hpp",
+        "public/common/tracy_lz4hc.hpp",
+        "public/common/TracyAlign.hpp",
+        "public/common/TracyAlloc.hpp",
+        "public/common/TracyApi.h",
+        "public/common/TracyColor.hpp",
+        "public/common/TracyForceInline.hpp",
+        "public/common/TracyMutex.hpp",
+        "public/common/TracyProtocol.hpp",
+        "public/common/TracyQueue.hpp",
+        "public/common/TracySocket.hpp",
+        "public/common/TracyStackFrames.hpp",
+        "public/common/TracySystem.hpp",
+        "public/common/TracyUwp.hpp",
+        "public/common/TracyYield.hpp",
+        # TracyClient.cpp implementation files.
+        "public/common/TracySystem.cpp",
+        "public/common/tracy_lz4.cpp",
+        "public/client/TracyProfiler.cpp",
+        "public/client/TracyCallstack.cpp",
+        "public/client/TracySysPower.cpp",
+        "public/client/TracySysTime.cpp",
+        "public/client/TracySysTrace.cpp",
+        "public/common/TracySocket.cpp",
+        "public/client/tracy_rpmalloc.cpp",
+        "public/client/TracyDxt1.cpp",
+        "public/client/TracyAlloc.cpp",
+        "public/client/TracyOverride.cpp",
+        "public/client/TracyKCore.cpp",
+        "public/common/TracyStackFrames.cpp",
+    ] + glob([
+        # libbacktrace (callstack symbolication on Linux).
+        "public/libbacktrace/*.cpp",
+        "public/libbacktrace/*.hpp",
+        "public/libbacktrace/*.h",
+    ]),
+    copts = ["-Ipublic"],
+    defines = [
+        "TRACY_ENABLE",
+    ],
+    includes = ["public"],
+    linkopts = select({
+        "@platforms//os:windows": [
+            "-lws2_32",
+            "-ldbghelp",
+        ],
+        "@platforms//os:freebsd": ["-lexecinfo"],
+        "//conditions:default": ["-ldl"],
+    }),
+)

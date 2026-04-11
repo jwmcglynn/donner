@@ -65,13 +65,6 @@ config_setting(
 )
 
 config_setting(
-    name = "gui_supported",
-    flag_values = {
-        ":llvm_latest": "0",
-    },
-)
-
-config_setting(
     name = "llvm_latest_macos",
     constraint_values = [
         "@platforms//os:macos",

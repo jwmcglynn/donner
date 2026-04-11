@@ -39,7 +39,8 @@ __pycache__
 # From examples/svg_to_png.cc
 output.png
 
-# For experimental/viewer/svg_viewer.cc
+# Defensive: //donner/editor disables imgui.ini persistence, but keep this
+# in case any debug build re-enables it.
 imgui.ini
 
 # Fuzz testing
