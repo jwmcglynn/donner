@@ -244,6 +244,7 @@ int main(int argc, char** argv) {
   std::uint64_t lastRenderedVersion = 0;
   donner::Entity lastRenderedSelection = entt::null;
   donner::Entity lastHighlightedSelection = entt::null;
+  donner::Vector2i lastRenderedCanvasSize{0, 0};
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -257,12 +258,16 @@ int main(int argc, char** argv) {
     // SetTransform from SelectTool drags).
     app.flushFrame();
 
-    // Re-render whenever the document version changes OR the selection
-    // changes. Selection change needs a re-render because the overlay
-    // chrome lives in the same render target as the document.
+    // Re-render whenever the document version changes, the selection
+    // changes, OR the canvas size changed (the latter happens when
+    // the render pane is resized — the main loop pokes the document
+    // below before this check).
     const auto currentVersion = app.document().currentFrameVersion();
     const donner::Entity currentSelection = app.selectedEntity();
-    if ((currentVersion != lastRenderedVersion || currentSelection != lastRenderedSelection) &&
+    const donner::Vector2i currentCanvasSize =
+        app.hasDocument() ? app.document().document().canvasSize() : donner::Vector2i{0, 0};
+    if ((currentVersion != lastRenderedVersion || currentSelection != lastRenderedSelection ||
+         currentCanvasSize != lastRenderedCanvasSize) &&
         app.hasDocument()) {
       renderer.draw(app.document().document());
       donner::editor::OverlayRenderer::drawChrome(renderer, app);
@@ -278,6 +283,7 @@ int main(int argc, char** argv) {
       }
       lastRenderedVersion = currentVersion;
       lastRenderedSelection = currentSelection;
+      lastRenderedCanvasSize = currentCanvasSize;
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -400,13 +406,37 @@ int main(int argc, char** argv) {
     RenderInspector(app);
     ImGui::Separator();
 
+    // Resize the document's canvas to match the content region, so the
+    // image scales to fit the pane instead of overflowing (for big SVGs)
+    // or leaving whitespace (for small ones). Only call setCanvasSize
+    // when the desired size changes — otherwise we'd bump the document
+    // every frame. The render re-trigger picks up the change via the
+    // `currentCanvasSize != lastRenderedCanvasSize` check above.
+    const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
+    const int desiredW = static_cast<int>(contentRegion.x);
+    const int desiredH = static_cast<int>(contentRegion.y);
+    if (app.hasDocument() && desiredW > 0 && desiredH > 0) {
+      const donner::Vector2i currentSize = app.document().document().canvasSize();
+      if (currentSize.x != desiredW || currentSize.y != desiredH) {
+        app.document().document().setCanvasSize(desiredW, desiredH);
+      }
+    }
+
     if (textureWidth > 0 && textureHeight > 0) {
       const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
       ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
                    ImVec2(static_cast<float>(textureWidth), static_cast<float>(textureHeight)));
 
+      // Screen → document mapping. The canvas may be scaled relative to
+      // the document viewBox, so run screen-space clicks through
+      // `documentFromCanvasTransform` to recover the document-space
+      // point that `SelectTool` and `hitTest` want.
+      const donner::Transform2d documentFromCanvas =
+          app.document().document().documentFromCanvasTransform();
       const auto screenToDocument = [&](const ImVec2& screenPoint) {
-        return donner::Vector2d(screenPoint.x - imageOrigin.x, screenPoint.y - imageOrigin.y);
+        const donner::Vector2d canvasPoint(screenPoint.x - imageOrigin.x,
+                                            screenPoint.y - imageOrigin.y);
+        return documentFromCanvas.transformPosition(canvasPoint);
       };
 
       if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {

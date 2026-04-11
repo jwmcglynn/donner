@@ -343,6 +343,20 @@ int main(int argc, char** argv) {
                static_cast<float>(windowHeight)),
         ImGuiCond_Always);
     ImGui::Begin("Render", nullptr, kPaneFlags);
+
+    // Size the document's canvas to the render pane so the SVG scales
+    // to fit instead of overflowing large or leaving whitespace for
+    // small documents. The original experimental viewer did the same.
+    const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
+    const int desiredW = static_cast<int>(contentRegion.x);
+    const int desiredH = static_cast<int>(contentRegion.y);
+    if (state.valid && desiredW > 0 && desiredH > 0) {
+      const donner::Vector2i currentSize = state.document.canvasSize();
+      if (currentSize.x != desiredW || currentSize.y != desiredH) {
+        state.document.setCanvasSize(desiredW, desiredH);
+      }
+    }
+
     if (textureWidth > 0 && textureHeight > 0) {
       const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
       ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
@@ -350,8 +364,13 @@ int main(int argc, char** argv) {
 
       if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 mouse = ImGui::GetMousePos();
-        const auto sourceRange =
-            state.handleClick(donner::Vector2d(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y));
+        // Map screen → canvas → document via the canvas-to-document
+        // transform. When the canvas is scaled to fit the pane, the
+        // transform bakes in the scale factor.
+        const donner::Transform2d documentFromCanvas =
+            state.document.documentFromCanvasTransform();
+        const donner::Vector2d canvasPoint(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y);
+        const auto sourceRange = state.handleClick(documentFromCanvas.transformPosition(canvasPoint));
         if (sourceRange.has_value()) {
           textEditor.selectAndFocus(FileOffsetToEditorCoordinates(sourceRange->start),
                                     FileOffsetToEditorCoordinates(sourceRange->end));
