@@ -34,8 +34,12 @@ struct alignas(16) Uniforms {
   uint32_t maskMode;        // 104 .. 108 — Phase 3c <mask> luminance blit
   uint32_t applyMaskBounds; // 108 .. 112 — clip output to `maskBounds`
   float maskBounds[4];      // 112 .. 128 — (x0, y0, x1, y1) in target-pixel space
+  uint32_t blendMode;       // 128 .. 132 — Phase 3d mix-blend-mode selector
+  uint32_t _blendPad0;      // 132 .. 136
+  uint32_t _blendPad1;      // 136 .. 140
+  uint32_t _blendPad2;      // 140 .. 144
 };
-static_assert(sizeof(Uniforms) == 128, "Image-blit Uniforms layout mismatch");
+static_assert(sizeof(Uniforms) == 144, "Image-blit Uniforms layout mismatch");
 
 }  // namespace
 
@@ -131,6 +135,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   u.maskBounds[1] = static_cast<float>(params.maskBounds.topLeft.y);
   u.maskBounds[2] = static_cast<float>(params.maskBounds.bottomRight.x);
   u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
+  u.blendMode = params.blendMode;
 
   wgpu::BufferDescriptor uniDesc = {};
   uniDesc.label = "GeodeImageBlitUniforms";
@@ -143,14 +148,16 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   const wgpu::Sampler& sampler =
       (params.filter == Filter::Nearest) ? pipeline.nearestSampler() : pipeline.linearSampler();
 
-  // Bind group — the mask texture binding must always carry a valid
-  // view. When `params.maskTexture` is empty, we bind the source
-  // content texture view in its place as a cheap dummy (the shader
-  // ignores it because `maskMode == 0`).
+  // Bind group — the mask and dst-snapshot texture bindings must
+  // always carry a valid view. When their owning feature flags are
+  // off, we bind the source content texture view as a cheap dummy
+  // (the shader never samples it because the mode guard is 0).
   wgpu::TextureView view = texture.CreateView();
   wgpu::TextureView maskView =
       params.maskTexture ? params.maskTexture.CreateView() : view;
-  wgpu::BindGroupEntry entries[4] = {};
+  wgpu::TextureView dstView =
+      params.dstSnapshotTexture ? params.dstSnapshotTexture.CreateView() : view;
+  wgpu::BindGroupEntry entries[5] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
   entries[0].size = sizeof(Uniforms);
@@ -160,11 +167,13 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   entries[2].textureView = view;
   entries[3].binding = 3;
   entries[3].textureView = maskView;
+  entries[4].binding = 4;
+  entries[4].textureView = dstView;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = "GeodeImageBlitBindGroup";
   bgDesc.layout = pipeline.bindGroupLayout();
-  bgDesc.entryCount = 4;
+  bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
 

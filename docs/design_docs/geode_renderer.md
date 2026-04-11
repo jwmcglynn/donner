@@ -1289,10 +1289,28 @@ cleanup.
   clip rects), but is no longer on the critical path.
 - [x] Implement `pushIsolatedLayer`/`popIsolatedLayer`: offscreen
   render target allocation + opacity compositing. (Phase 2 landing.)
-  - [ ] Blend mode fragment shader (all 28 SVG/CSS blend modes).
-    Still pending — `popIsolatedLayer` does a plain premultiplied
-    source-over today. `painting/mix-blend-mode` + `painting/isolation`
-    remain category-gated.
+  - [x] **Phase 3d: blend mode fragment shader (all 16 SVG
+    `mix-blend-mode` values).** The existing `GeodeImagePipeline`
+    grew a third texture binding (`dstSnapshotTexture`) + a
+    `blendMode` uniform; `image_blit.wgsl` now carries the full
+    W3C Compositing Level 1 §9 suite (Normal → Luminosity,
+    including the HSL-space non-separable modes Hue / Saturation /
+    Color / Luminosity driven by the spec's `SetLum` / `SetSat` /
+    `ClipColor` helpers with the legacy 0.3/0.59/0.11 Lum
+    coefficients). `RendererGeode::popIsolatedLayer` takes the
+    blend-mode branch when the stored frame's mode is non-Normal:
+    it copies the parent's 1-sample resolve into a fresh snapshot
+    texture via `CommandEncoder::CopyTextureToTexture`, reopens the
+    parent with `LoadOp::Clear`, and dispatches
+    `GeoEncoder::blitFullTargetBlended(layer, snapshot, blendMode,
+    opacity)`. Group opacity is threaded through as the `opacity`
+    uniform so `opacity` + `mix-blend-mode` on the same element
+    composes correctly (source colour is scaled before the blend
+    formula, matching W3C Compositing 1 §7). Unlocks the full
+    `painting/mix-blend-mode` + `painting/isolation` categories —
+    21 of 22 mix-blend-mode/isolation tests pass at the default
+    threshold, no per-file overrides needed. Session delta: 666
+    → 688 passing on `resvg_test_suite_geode_text`.
 - [x] **Phase 3c: `<mask>` compositing via luminance blit.** The
   existing `GeodeImagePipeline` is extended with a second texture
   binding (luminance mask) + `maskMode` / `applyMaskBounds` /

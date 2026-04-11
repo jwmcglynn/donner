@@ -90,12 +90,11 @@ geodeCategoryGate(std::string_view category) {
     };
   }
 
-  // Mix-blend-mode and isolation: Phase 9 (compositing).
-  if (category == "painting/mix-blend-mode" || category == "painting/isolation") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "mix-blend-mode / isolation (Geode Phase 9)");
-    };
-  }
+  // Phase 3d implements all 16 W3C Compositing 1 blend modes through
+  // the image_blit pipeline's `blendMode` uniform + dst-snapshot
+  // binding, so `painting/mix-blend-mode` and `painting/isolation`
+  // are no longer wholesale gated here. Per-file overrides handle
+  // any remaining divergences.
 
   return std::nullopt;
 }

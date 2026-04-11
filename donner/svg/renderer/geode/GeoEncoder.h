@@ -299,6 +299,33 @@ public:
                             const std::optional<Box2d>& maskBounds);
 
   /**
+   * Phase 3d `mix-blend-mode` compositing. Blits `layer` across the
+   * entire target using one of the 16 W3C Compositing Level 1 blend
+   * formulas, reading the backdrop from `dstSnapshot` (which the
+   * caller has already copied from the parent target because the
+   * shader cannot read the render pass's own color attachment).
+   *
+   * Both textures must be the SAME SIZE as this encoder's target
+   * and already stored in premultiplied alpha. The encoder's pass
+   * must be in a `LoadOp::Clear` state — the blend shader writes the
+   * final pixel directly and relies on the render target being
+   * zeroed before the draw.
+   *
+   * @param layer Offscreen RGBA8 layer texture (premultiplied).
+   * @param dstSnapshot Frozen copy of the parent target's current
+   *   state (premultiplied) — the blend's backdrop.
+   * @param blendMode Value in `1..=16` matching the
+   *   `donner::svg::MixBlendMode` enumeration. A value of `0`
+   *   silently falls through to no-op.
+   * @param opacity Group opacity in [0, 1]. Applied to the layer
+   *   BEFORE the blend formula so an `opacity` + `mix-blend-mode`
+   *   combo on the same element composes correctly — the source
+   *   colour that enters the blend is `layer * opacity`.
+   */
+  void blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
+                             uint32_t blendMode, double opacity);
+
+  /**
    * Draw a raster image into the given destination rectangle.
    *
    * The image's straight-alpha RGBA8 pixels are uploaded to a fresh
