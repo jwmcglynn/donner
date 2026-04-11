@@ -24,8 +24,9 @@
 #include <sstream>
 #include <string>
 
-#include "donner/editor/AsyncSVGDocument.h"
+#include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -126,11 +127,13 @@ int main(int argc, char** argv) {
   // ---------------------------------------------------------------------------
   // Editor state
   // ---------------------------------------------------------------------------
-  donner::editor::AsyncSVGDocument document;
-  if (!document.loadFromString(initialSource)) {
+  donner::editor::EditorApp app;
+  if (!app.loadFromString(initialSource)) {
     std::cerr << "Failed to parse SVG file: " << svgPath << "\n";
     // Continue running with an empty document so the user can edit the source.
   }
+
+  donner::editor::SelectTool selectTool;
 
   donner::editor::TextEditor textEditor;
   textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
@@ -153,13 +156,14 @@ int main(int argc, char** argv) {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
-    // Drain the command queue (handles ReplaceDocument from text edits).
-    document.flushFrame();
+    // Drain the command queue (handles ReplaceDocument from text edits and
+    // SetTransform from SelectTool drags).
+    app.flushFrame();
 
     // Re-render only when the document version has changed.
-    const auto currentVersion = document.currentFrameVersion();
-    if (currentVersion != lastRenderedVersion && document.hasDocument()) {
-      renderer.draw(document.document());
+    const auto currentVersion = app.document().currentFrameVersion();
+    if (currentVersion != lastRenderedVersion && app.hasDocument()) {
+      renderer.draw(app.document().document());
       const donner::svg::RendererBitmap bitmap = renderer.takeSnapshot();
       if (!bitmap.empty()) {
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -183,18 +187,44 @@ int main(int argc, char** argv) {
     ImGui::Begin("Source");
     textEditor.render("##source");
     if (textEditor.isTextChanged()) {
-      document.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(
+      app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(
           textEditor.getText()));
     }
     ImGui::End();
 
-    // Render pane: just the rendered SVG bitmap.
+    // Render pane: SVG bitmap + SelectTool mouse handling.
     ImGui::SetNextWindowPos(ImVec2(560, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(720, kInitialWindowHeight), ImGuiCond_FirstUseEver);
     ImGui::Begin("Render");
     if (textureWidth > 0 && textureHeight > 0) {
+      const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
       ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
                    ImVec2(static_cast<float>(textureWidth), static_cast<float>(textureHeight)));
+
+      // Screen → document mapping. The image is currently rendered at the
+      // canvas's native size (no editor-side zoom), so the mapping is a
+      // simple translate. When pan/zoom lands at the main-loop layer this
+      // becomes a proper ViewportGeometry::screenToDocument call.
+      const auto screenToDocument = [&](const ImVec2& screenPoint) {
+        return donner::Vector2d(screenPoint.x - imageOrigin.x, screenPoint.y - imageOrigin.y);
+      };
+
+      if (ImGui::IsItemHovered()) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+          selectTool.onMouseDown(app, screenToDocument(ImGui::GetMousePos()));
+        }
+      }
+      // Drag continues even when the cursor leaves the image (matches
+      // standard editor UX).
+      if (selectTool.isDragging()) {
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+          selectTool.onMouseMove(app, screenToDocument(ImGui::GetMousePos()),
+                                 /*buttonHeld=*/true);
+        }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+          selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
+        }
+      }
     } else {
       ImGui::TextUnformatted("(no rendered image)");
     }

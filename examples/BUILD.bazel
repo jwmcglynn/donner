@@ -67,8 +67,9 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
         "//donner/editor:text_editor",
         "//donner/svg/renderer",
         "//third_party/glad",
