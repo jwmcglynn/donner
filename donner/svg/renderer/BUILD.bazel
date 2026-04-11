@@ -309,6 +309,10 @@ donner_cc_library(
     name = "renderer_geode",
     srcs = ["RendererGeode.cc"],
     hdrs = ["RendererGeode.h"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     # Geode pulls in Dawn via GeoEncoder. Gate behind the same enable_dawn
     # build flag that the rest of the geode/ targets use.
     target_compatible_with = select({
@@ -328,7 +332,13 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_pipeline",
         "//donner/svg/resources:image_resource",
         "@dawn//:webgpu_dawn",
-    ],
+    ] + select({
+        ":text_enabled": [
+            "//donner/svg/text:text_engine",
+            "//donner/svg/text:text_layout_params",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(

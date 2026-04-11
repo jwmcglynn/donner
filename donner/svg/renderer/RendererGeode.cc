@@ -28,6 +28,12 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/resources/ImageResource.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/MathUtils.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextLayoutParams.h"
+#endif
 
 namespace donner::svg {
 
@@ -38,6 +44,58 @@ constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
 /// matching the helper in RendererTinySkia / RendererSkia.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+
+/// Apply a `Transform2d` to every control point of a `Path`, returning a
+/// new `Path` whose commands mirror the input but whose coordinates are
+/// pre-transformed. Needed because `GeoEncoder::fillPath` draws in the
+/// encoder's current MVP and does not take a separate per-path matrix;
+/// for text we want to translate/rotate each glyph's outline before
+/// handing it to the encoder.
+Path transformPath(const Path& input, const Transform2d& transform) {
+  PathBuilder builder;
+  const auto points = input.points();
+  for (const Path::Command& command : input.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]));
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
+                        transform.transformPosition(points[command.pointIndex + 1]),
+                        transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath:
+        builder.closePath();
+        break;
+    }
+  }
+  return builder.build();
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TextLayoutParams toTextLayoutParams(const TextParams& params) {
+  TextLayoutParams layoutParams;
+  layoutParams.fontFamilies = params.fontFamilies;
+  layoutParams.fontSize = params.fontSize;
+  layoutParams.viewBox = params.viewBox;
+  layoutParams.fontMetrics = params.fontMetrics;
+  layoutParams.textAnchor = params.textAnchor;
+  layoutParams.dominantBaseline = params.dominantBaseline;
+  layoutParams.writingMode = params.writingMode;
+  layoutParams.letterSpacingPx = params.letterSpacingPx;
+  layoutParams.wordSpacingPx = params.wordSpacingPx;
+  layoutParams.textLength = params.textLength;
+  layoutParams.lengthAdjust = params.lengthAdjust;
+  return layoutParams;
+}
+#endif
 
 /// Hard cap on gradient stops baked into the uniform buffer. Must be
 /// <= `GeoEncoder`'s internal `kMaxGradientStops` (which mirrors the WGSL
@@ -1847,13 +1905,146 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
                             params.imageRenderingPixelated);
 }
 
-void RendererGeode::drawText(Registry& /*registry*/,
-                             const components::ComputedTextComponent& /*text*/,
-                             const TextParams& /*params*/) {
+void RendererGeode::drawText(Registry& registry,
+                             const components::ComputedTextComponent& text,
+                             const TextParams& params) {
+#ifdef DONNER_TEXT_ENABLED
+  if (!impl_->device || !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    return;
+  }
+  if (!registry.ctx().contains<TextEngine>()) {
+    if (impl_->verbose && !impl_->warnedText) {
+      std::cerr << "RendererGeode: TextEngine not available in registry context\n";
+      impl_->warnedText = true;
+    }
+    return;
+  }
+
+  auto& textEngine = registry.ctx().get<TextEngine>();
+
+  // Use cached layout runs from `ComputedTextGeometryComponent` when
+  // available; otherwise lay out fresh via the engine. This matches
+  // the pattern in `RendererTinySkia::drawText`.
+  std::vector<TextRun> runs;
+  if (params.textRootEntity != entt::null) {
+    if (const auto* cache =
+            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
+      runs = cache->runs;
+    }
+  }
+  if (runs.empty()) {
+    const TextLayoutParams layoutParams = toTextLayoutParams(params);
+    runs = textEngine.layout(text, layoutParams);
+  }
+
+  const float textFontSizePx = static_cast<float>(
+      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+
+  // Resolve a default fill colour from the text-element-level paint
+  // state. Per-span fills override below when present.
+  std::optional<css::RGBA> defaultFill = impl_->resolveSolidFill();
+  if (!defaultFill.has_value()) {
+    // No solid fill and no fallback — text is effectively invisible.
+    // Still walk through in case a per-span fill kicks in.
+    defaultFill = css::RGBA(0, 0, 0, 0);
+  }
+
+  const css::RGBA currentColor = impl_->paint.currentColor.rgba();
+
+  // The element-level fill is already scaled by the top-level
+  // `setPaint` call, but per-span fill overrides need their own
+  // `span.fillOpacity * span.opacity` applied.
+  const auto resolveSpanFill = [&](size_t runIndex) -> css::RGBA {
+    if (runIndex >= text.spans.size()) {
+      return *defaultFill;
+    }
+    const auto& span = text.spans[runIndex];
+    const float opacityScale = static_cast<float>(span.fillOpacity * span.opacity);
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+      return solid->color.resolve(currentColor, opacityScale);
+    }
+    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
+      if (ref->fallback.has_value()) {
+        return ref->fallback->resolve(currentColor, opacityScale);
+      }
+    }
+    return *defaultFill;
+  };
+
+  // Snapshot the encoder's current transform so we can restore it if
+  // per-glyph rotations mess with it. `fillPath` honours
+  // `impl_->currentTransform` via `setTransform`, and the glyph
+  // outline coordinates are already mapped into the text element's
+  // local space by the transformPath call below — so we want the
+  // encoder to use the element's currentTransform unchanged.
+  impl_->encoder->setTransform(impl_->currentTransform);
+
+  for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+    const auto& run = runs[runIndex];
+    if (run.font == FontHandle()) {
+      continue;
+    }
+
+    float spanFontSizePx = textFontSizePx;
+    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
+      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
+          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+    }
+
+    const float scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
+    if (scale <= 0.0f) {
+      continue;
+    }
+    if (textEngine.isBitmapOnly(run.font)) {
+      // Bitmap-only (color emoji) fonts need the `GeodeTextureEncoder`
+      // path, which drawText doesn't wire up yet. Skip the run so the
+      // rest of the text still renders.
+      continue;
+    }
+
+    const css::RGBA spanFill = resolveSpanFill(runIndex);
+    if (spanFill.a == 0) {
+      continue;
+    }
+
+    for (const auto& glyph : run.glyphs) {
+      if (glyph.glyphIndex == 0) {
+        continue;  // `.notdef` — skip to match tiny-skia.
+      }
+
+      Path glyphPath =
+          textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+      if (glyphPath.empty()) {
+        continue;
+      }
+
+      // Build the local-space transform that takes the raw glyph
+      // outline (baseline-origin, em-scaled) to its placed position.
+      // Order matches `RendererTinySkia::drawText`:
+      //   stretchScale → rotate (around glyph origin) → translate.
+      Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+      if (glyph.rotateDegrees != 0.0) {
+        const double radians = glyph.rotateDegrees * MathConstants<double>::kPi / 180.0;
+        glyphFromLocal = Transform2d::Rotate(radians) * glyphFromLocal;
+      }
+      if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+        glyphFromLocal =
+            Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) * glyphFromLocal;
+      }
+
+      const Path placed = transformPath(glyphPath, glyphFromLocal);
+      impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+    }
+  }
+#else
+  (void)registry;
+  (void)text;
+  (void)params;
   if (impl_->verbose && !impl_->warnedText) {
-    std::cerr << "RendererGeode: text rendering not yet implemented (Phase 4)\n";
+    std::cerr << "RendererGeode: text rendering requires DONNER_TEXT_ENABLED\n";
     impl_->warnedText = true;
   }
+#endif
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {
