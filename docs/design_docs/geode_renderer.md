@@ -1141,10 +1141,18 @@ cleanup.
       ellipses, and quadratic curves (`rect2`, `ellipse1`, `skew1`,
       `quadbezier1`) all pass after the strokeToFill regressions landed
       earlier in Phase 2.
-  Outstanding: `painting/stroke-linejoin/miter` still shows a ~2-pixel
-  offset at the bevel-fallback corner tip, marked `disableBackend(Geode)`
-  with a TODO to align `emitJoin`'s outside-turn branch with tiny-skia's
-  reference.
+  Previously outstanding — `painting/stroke-linejoin/miter` truncated
+  the miter tip at the cubic-to-cubic junction (150° turn, default
+  miter-limit 4). Root cause was `Path::strokeToFill`'s loose
+  `flattenTolerance = 0.25`: the final chord of each flattened cubic
+  pointed along the leaf's AVERAGE tangent rather than the true
+  endpoint tangent, so the effective turn angle measured by
+  `emitJoin` drifted ~0.7° to ~151° — just over the ratio-4
+  bevel threshold. Tightened the default to `0.1` (only inside
+  stroke outline generation, not `Path::flatten()` itself), which
+  shrinks the chord-direction error well under the threshold.
+  Test now passes at the default miter-limit on both Geode and
+  tiny-skia, no per-file override needed.
 - [🚧] Implement `GeodeGradientEncoder`: linear, radial, and sweep gradients.
   - [x] **Linear gradients (Phase 2E).** Shipped as a sibling pipeline
     (`GeodeGradientPipeline`) + fragment shader
@@ -1415,11 +1423,17 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
     * Zero-length subpath stroke caps (SVG 2 §11.4 shapes emitted
       directly from `strokeSubpath`).
   Phase 3a polygon clipping unblocked
-  `structure/symbol/with-transform-on-use{,-no-size}` — the remaining
-  per-file TODOs are `structure/image/preserveAspectRatio=xMaxYMax-
-  slice-on-svg` (polygon clip edge AA fringes 4 pixels past the 100-px
-  max — a follow-up, not a functional gap) and
-  `painting/stroke-linejoin/miter` (bevel-fallback corner drift).
+  `structure/symbol/with-transform-on-use{,-no-size}`. The
+  `painting/stroke-linejoin/miter` gate has been removed after
+  tightening `Path::strokeToFill`'s default `flattenTolerance` from
+  0.25 to 0.1 — the loose tolerance was letting each cubic leaf's
+  final chord point along its AVERAGE tangent instead of the true
+  endpoint tangent, drifting the measured turn angle ~0.7° past
+  the miter-limit-4 bevel threshold at 150° turns. The only
+  per-file TODO remaining in this bucket is
+  `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg` — a
+  4× MSAA thin-stroke fringe on nested image data URLs, unrelated
+  to stroking.
 - [x] **Track the pass-rate delta between Geode and RendererSkia.**
   After #504, `resvg_test_suite_geode_text` is **596 passing / 0
   failing / 765 skipped via feature gates** on top of the category

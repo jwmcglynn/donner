@@ -197,24 +197,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // `painting/stroke-linejoin/miter` renders 6 stroked polylines with
-  // different `stroke-miterlimit` values. On Geode, the sharp interior
-  // joins where miter-limit falls back to bevel produce ~180 Y-delta
-  // pixels at the tip of the bevel cut vs tiny-skia's reference.
-  // Visual inspection shows the bevel IS applied but its corner is in
-  // a slightly different pixel than tiny-skia — rendering a 1-2 pixel
-  // triangle of stroke in the wrong spot. Not an AA drift; it's a
-  // geometric offset in the miter-to-bevel fallback path of
-  // `Path::strokeToFill`.
-  // TODO(geode): align the bevel-fallback corner computation in
-  // `emitJoin`'s outside-turn branch with tiny-skia's reference.
-  if (category == "painting/stroke-linejoin" && filename == "miter.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "bevel-fallback corner geometry differs from tiny-skia");
-    };
-  }
-
   // `paint-servers/pattern/tiny-pattern-upscaled` renders a 2×2 tile
   // pattern scaled 10× containing a circle, tiled across a
   // rounded-rect fill. Geode samples the pre-rendered tile via
