@@ -16,6 +16,7 @@
 /// rendered SVG and a text pane) see `//examples:svg_viewer`.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -56,6 +57,99 @@ constexpr float kSourcePaneWidth = 560.0f;
 constexpr float kMinZoom = 0.1f;
 constexpr float kMaxZoom = 32.0f;
 constexpr float kZoomStep = 1.1f;  // Per wheel notch.
+constexpr std::size_t kFrameHistoryCapacity = 120;  // 2s @ 60fps.
+constexpr float kTargetFrameMs = 1000.0f / 60.0f;
+constexpr float kFrameGraphWidth = 240.0f;
+constexpr float kFrameGraphHeight = 32.0f;
+
+/// Fixed-size ring buffer of recent frame times (in milliseconds). Used by
+/// the diagnostic frame-time graph drawn in the Render pane header.
+struct FrameHistory {
+  std::array<float, kFrameHistoryCapacity> deltaMs{};
+  std::size_t writeIndex = 0;
+  std::size_t samples = 0;
+
+  void push(float ms) {
+    deltaMs[writeIndex] = ms;
+    writeIndex = (writeIndex + 1) % kFrameHistoryCapacity;
+    if (samples < kFrameHistoryCapacity) {
+      ++samples;
+    }
+  }
+
+  [[nodiscard]] float latest() const {
+    if (samples == 0) {
+      return 0.0f;
+    }
+    const std::size_t idx =
+        (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+    return deltaMs[idx];
+  }
+
+  [[nodiscard]] float max() const {
+    float m = 0.0f;
+    for (std::size_t i = 0; i < samples; ++i) {
+      m = std::max(m, deltaMs[i]);
+    }
+    return m;
+  }
+};
+
+/// Render a compact bar graph of the recent frame-time history plus the
+/// most recent frame's ms / FPS as text. Each bar is one sample; red if
+/// over the 16.67ms/60fps budget, green otherwise. A horizontal line
+/// marks the target budget. Samples read left-to-right in chronological
+/// order (oldest on the left).
+void RenderFrameGraph(const FrameHistory& history) {
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+
+  // Background panel + budget line.
+  const ImVec2 bottomRight(origin.x + kFrameGraphWidth, origin.y + kFrameGraphHeight);
+  dl->AddRectFilled(origin, bottomRight, IM_COL32(30, 30, 30, 255));
+
+  // Vertical scale: the higher of (2× budget) and the history max, so
+  // the budget line sits at the 50% mark in steady-state and the graph
+  // autoscales when frames go long.
+  const float scaleMs = std::max(kTargetFrameMs * 2.0f, history.max());
+
+  // Budget line — horizontal guide at kTargetFrameMs.
+  const float budgetY = origin.y + kFrameGraphHeight - (kTargetFrameMs / scaleMs) * kFrameGraphHeight;
+  dl->AddLine(ImVec2(origin.x, budgetY), ImVec2(bottomRight.x, budgetY),
+              IM_COL32(255, 255, 255, 80), 1.0f);
+
+  // Bars — oldest sample on the left. Each sample occupies
+  // `kFrameGraphWidth / kFrameHistoryCapacity` pixels (2px at default
+  // size), which is wide enough to eyeball individual frame spikes.
+  const float barWidth = kFrameGraphWidth / static_cast<float>(kFrameHistoryCapacity);
+  for (std::size_t i = 0; i < history.samples; ++i) {
+    const std::size_t readIdx =
+        (history.writeIndex + kFrameHistoryCapacity - history.samples + i) %
+        kFrameHistoryCapacity;
+    const float ms = history.deltaMs[readIdx];
+    const float clamped = std::min(ms, scaleMs);
+    const float barHeight = (clamped / scaleMs) * kFrameGraphHeight;
+    const bool overBudget = ms > kTargetFrameMs;
+    const ImU32 color =
+        overBudget ? IM_COL32(220, 60, 60, 255) : IM_COL32(80, 200, 100, 255);
+
+    const float x = origin.x + static_cast<float>(i) * barWidth;
+    dl->AddRectFilled(ImVec2(x, origin.y + kFrameGraphHeight - barHeight),
+                      ImVec2(x + barWidth, origin.y + kFrameGraphHeight), color);
+  }
+
+  // Advance the ImGui cursor past the graph so subsequent widgets lay out
+  // to the right / below without overlapping.
+  ImGui::Dummy(ImVec2(kFrameGraphWidth, kFrameGraphHeight));
+  ImGui::SameLine();
+  const float latestMs = history.latest();
+  const float fps = latestMs > 0.0f ? 1000.0f / latestMs : 0.0f;
+  const ImU32 textColor =
+      latestMs > kTargetFrameMs ? IM_COL32(220, 60, 60, 255) : IM_COL32(255, 255, 255, 255);
+  ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+  ImGui::Text("%.2f ms / %.1f FPS", latestMs, fps);
+  ImGui::PopStyleColor();
+}
 
 /// Pan + zoom state for the render pane. At zoom 1.0 and pan (0, 0), the
 /// rendered bitmap exactly fills the pane's content region. Zoom scales
@@ -257,12 +351,17 @@ int main(int argc, char** argv) {
   ViewTransform view;
   bool panning = false;
   ImVec2 lastPanMouse(0.0f, 0.0f);
+  FrameHistory frameHistory;
 
   // ---------------------------------------------------------------------------
   // Main loop
   // ---------------------------------------------------------------------------
   while (!glfwWindowShouldClose(window)) {
     ZoneScopedN("main_loop");
+
+    // Capture the previous frame's duration before any other ImGui
+    // bookkeeping; this is the wall-clock time the user actually waited.
+    frameHistory.push(ImGui::GetIO().DeltaTime * 1000.0f);
 
     glfwPollEvents();
 
@@ -448,6 +547,7 @@ int main(int argc, char** argv) {
     RenderInspector(app);
     ImGui::Text("Zoom: %.0f%%  Pan: (%.0f, %.0f)  (wheel=zoom, space+drag=pan, Cmd+0=reset)",
                 view.zoom * 100.0f, view.pan.x, view.pan.y);
+    RenderFrameGraph(frameHistory);
     ImGui::Separator();
 
     // Base canvas size = pane content region. Everything past this point
