@@ -43,6 +43,19 @@ wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device);
 wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
 
 /**
+ * Compile the path-clip mask shader for the given device.
+ *
+ * Same band/curve encoding as @ref createSlugFillShader but the fragment
+ * stage writes a single-channel coverage value into an R8Unorm target.
+ * The uniform layout is reduced to just the mvp matrix, viewport size,
+ * and fill rule — no paint mode, no pattern, no clip polygon. Used by
+ * the Phase 3b path-clipping pipeline to materialise a per-pixel clip
+ * mask texture that subsequent fill / gradient draws sample as a
+ * coverage multiplier.
+ */
+wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device);
+
+/**
  * Compile the image-blit shader for the given device.
  *
  * The WGSL source is embedded at build time from

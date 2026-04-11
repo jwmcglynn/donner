@@ -137,6 +137,18 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Path-clip mask shader. Same band/curve encoding as slug_fill.wgsl but
+# outputs a single-channel coverage value into an R8Unorm target so the
+# main fill / gradient pipelines can sample it as a clip mask (Phase 3b).
+embed_resources(
+    name = "slug_mask_wgsl",
+    header_output = "embed_resources/SlugMaskWgsl.h",
+    resources = {
+        "kSlugMaskWgsl": "shaders/slug_mask.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -147,6 +159,7 @@ donner_cc_library(
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
+        ":slug_mask_wgsl",
         "@dawn//:webgpu_dawn",
     ],
 )

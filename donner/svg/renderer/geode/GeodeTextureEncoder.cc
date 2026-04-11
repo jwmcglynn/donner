@@ -26,13 +26,14 @@ constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
 /// explicitly padded so the size is a multiple of the largest member's
 /// alignment (mat4x4 = 16 bytes).
 struct alignas(16) Uniforms {
-  float mvp[16];          // 0  .. 64
-  float destRect[4];      // 64 .. 80
-  float srcRect[4];       // 80 .. 96
-  float opacity;          // 96  .. 100
-  uint32_t sourceIsPremult;// 100 .. 104
-  float _pad0[2];         // 104 .. 112
-  float _pad1[4];         // 112 .. 128
+  float mvp[16];            //   0 ..  64
+  float destRect[4];        //  64 ..  80
+  float srcRect[4];         //  80 ..  96
+  float opacity;            //  96 .. 100
+  uint32_t sourceIsPremult; // 100 .. 104
+  uint32_t maskMode;        // 104 .. 108 — Phase 3c <mask> luminance blit
+  uint32_t applyMaskBounds; // 108 .. 112 — clip output to `maskBounds`
+  float maskBounds[4];      // 112 .. 128 — (x0, y0, x1, y1) in target-pixel space
 };
 static_assert(sizeof(Uniforms) == 128, "Image-blit Uniforms layout mismatch");
 
@@ -124,6 +125,12 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   u.srcRect[3] = static_cast<float>(params.srcRect.bottomRight.y);
   u.opacity = static_cast<float>(params.opacity);
   u.sourceIsPremult = params.sourceIsPremultiplied ? 1u : 0u;
+  u.maskMode = params.maskTexture ? 1u : 0u;
+  u.applyMaskBounds = params.applyMaskBounds ? 1u : 0u;
+  u.maskBounds[0] = static_cast<float>(params.maskBounds.topLeft.x);
+  u.maskBounds[1] = static_cast<float>(params.maskBounds.topLeft.y);
+  u.maskBounds[2] = static_cast<float>(params.maskBounds.bottomRight.x);
+  u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
 
   wgpu::BufferDescriptor uniDesc = {};
   uniDesc.label = "GeodeImageBlitUniforms";
@@ -136,9 +143,14 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   const wgpu::Sampler& sampler =
       (params.filter == Filter::Nearest) ? pipeline.nearestSampler() : pipeline.linearSampler();
 
-  // Bind group.
+  // Bind group — the mask texture binding must always carry a valid
+  // view. When `params.maskTexture` is empty, we bind the source
+  // content texture view in its place as a cheap dummy (the shader
+  // ignores it because `maskMode == 0`).
   wgpu::TextureView view = texture.CreateView();
-  wgpu::BindGroupEntry entries[3] = {};
+  wgpu::TextureView maskView =
+      params.maskTexture ? params.maskTexture.CreateView() : view;
+  wgpu::BindGroupEntry entries[4] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
   entries[0].size = sizeof(Uniforms);
@@ -146,11 +158,13 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   entries[1].sampler = sampler;
   entries[2].binding = 2;
   entries[2].textureView = view;
+  entries[3].binding = 3;
+  entries[3].textureView = maskView;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = "GeodeImageBlitBindGroup";
   bgDesc.layout = pipeline.bindGroupLayout();
-  bgDesc.entryCount = 3;
+  bgDesc.entryCount = 4;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
 

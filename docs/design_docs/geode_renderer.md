@@ -1231,12 +1231,88 @@ cleanup.
 
 ### Phase 3: Compositing and Clipping
 
-- [ ] Implement scissor-based clip rect.
-- [ ] Implement stencil-based clip path (render path to stencil, draw with stencil test).
-- [ ] Implement `pushIsolatedLayer`/`popIsolatedLayer`: offscreen render target allocation,
-  opacity/blend-mode compositing.
+- [x] Implement scissor-based clip rect.
+- [x] **Phase 3a: convex 4-vertex clip polygon.** For non-axis-aligned
+  ancestor transforms (e.g., a skewed or rotated `<symbol>` / `<svg>`
+  viewport), the rectangular scissor can only describe the AABB of the
+  transformed viewport, not the true parallelogram. `GeoEncoder` now
+  accepts `setClipPolygon(corners[4])` / `clearClipPolygon()`, uploads
+  4 inward half-planes through the `Uniforms` / `GradientUniforms`
+  blocks, and the fragment shader ANDs a per-sample half-plane test
+  into its `@builtin(sample_mask)` so the clip integrates with the 4×
+  MSAA coverage path. `RendererGeode::pushClip` detects non-axis-
+  aligned transforms via the 2×2 linear part and pushes the 4
+  transformed corners alongside the existing scissor AABB. Re-enables
+  `structure/symbol/with-transform-on-use{,-no-size}` on the Geode
+  resvg suite. Nested polygon clips (unusual) fall back to the
+  topmost polygon — no in-shader polygon-intersection pass yet.
+- [x] **Phase 3b: path clipping via R8 mask texture.** Arbitrary SVG
+  `clip-path` references are now honoured. `GeoEncoder` gains a
+  `beginMaskPass` / `fillPathIntoMask` / `endMaskPass` /
+  `setClipMask` / `clearClipMask` API. A new `GeodeMaskPipeline`
+  + `shaders/slug_mask.wgsl` renders clip paths into a 4× MSAA
+  R8Unorm target that resolves to a 1-sample R8Unorm texture; the
+  main fill + gradient pipelines gain an extra texture+sampler
+  binding and their fragment shaders sample `mask.r` at each pixel
+  center and multiply it into the output colour. A 1x1 dummy R8
+  (value 0xFF) is bound when no clip is active so the bind group
+  layout stays stable. `RendererGeode::pushClip` allocates mask
+  texture(s) per clip, walks `clip.clipPaths` applying the
+  `clipPathUnitsTransform × entityFromParent × currentTransform`
+  chain (matches `RendererTinySkia`), and stashes the outermost
+  resolve view on the clip stack entry so `updateEncoderScissor`
+  can bind the topmost mask. Multiple clip paths within a single
+  layer union via `BlendOperation::Max` on the R channel.
+
+  **Nested clip-path support (follow-up, also done):** The mask
+  pipeline itself accepts a clip mask input — `slug_mask.wgsl`
+  samples `clipMaskTexture.r` at the pixel center and multiplies it
+  into the shape's coverage output. `RendererGeode::pushClip`
+  partitions `clip.clipPaths` into contiguous layer runs, then
+  renders runs bottom-up (deepest first). Each outer layer binds
+  the previously-rendered deeper layer's mask as its input clip,
+  so every outer-layer shape is intersected with the deeper union
+  and `BlendOperation::Max` unions the outer shapes on top —
+  matching `RendererTinySkia::pushClip`'s recursive
+  `buildLayerMask`. Nested `<g>` clips (two separate `pushClip`
+  calls stacking) are handled by seeding the deepest layer's input
+  clip with the topmost existing clip stack entry's mask view,
+  intersecting the new clip with the active ancestor clip as it's
+  rendered. Unlocks the entire `masking/clipPath` +
+  `masking/clip` + `masking/clip-rule` category plus all
+  cross-category `*-on-clipPath` tests. Session delta: 596 → 636
+  passing on `resvg_test_suite_geode_text`.
+- [ ] Implement stencil-based clip path — superseded by Phase 3b
+  texture-mask clipping, which uses a resolved R8 mask sampled by the
+  main fill / gradient fragment shaders. Stencil would still be a
+  valid optimisation (skip the sample + the offscreen pass for simple
+  clip rects), but is no longer on the critical path.
+- [x] Implement `pushIsolatedLayer`/`popIsolatedLayer`: offscreen
+  render target allocation + opacity compositing. (Phase 2 landing.)
   - [ ] Blend mode fragment shader (all 28 SVG/CSS blend modes).
-- [ ] Implement mask compositing: render mask to offscreen, composite via alpha/luminance.
+    Still pending — `popIsolatedLayer` does a plain premultiplied
+    source-over today. `painting/mix-blend-mode` + `painting/isolation`
+    remain category-gated.
+- [x] **Phase 3c: `<mask>` compositing via luminance blit.** The
+  existing `GeodeImagePipeline` is extended with a second texture
+  binding (luminance mask) + `maskMode` / `applyMaskBounds` /
+  `maskBounds` uniforms; a 1x1 dummy mask is bound for normal
+  `drawImage` / `blitFullTarget` calls so layout stays stable. The
+  fragment shader computes `0.2126·R_pm + 0.7152·G_pm + 0.0722·B_pm`
+  (which equals `luminance(demult) · alpha` for premultiplied input)
+  and multiplies it into the output colour, matching tiny-skia's
+  `Mask::fromPixmap(Luminance)`. `RendererGeode::pushMask` allocates
+  two offscreen texture pairs (mask capture + masked content),
+  redirects the encoder into the first pair, and saves the outer
+  target + the `currentTransform` as the mask-bounds reference frame.
+  `transitionMaskToContent` swaps the encoder into the content pair.
+  `popMask` composites the pair back onto the restored parent via
+  `GeoEncoder::blitFullTargetMasked`, lifting the raw mask-bounds
+  rect into device-pixel space through the saved transform so
+  `maskUnits=userSpaceOnUse` and percent-sized bounds render
+  correctly. Unlocks the entire `masking/mask` category (31/31
+  tests passing). Session delta: 636 → 666 passing on
+  `resvg_test_suite_geode_text`.
 - [ ] Implement `GeodePatternCacheComponent` for ECS pattern caching.
 
 ### Phase 4: Text Rendering
@@ -1320,11 +1396,12 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
       counting `MoveTo` verbs in the `strokeToFill` result).
     * Zero-length subpath stroke caps (SVG 2 §11.4 shapes emitted
       directly from `strokeSubpath`).
-  Four tests remain `disableBackend(Geode)` with per-file TODOs, three
-  of them blocked on Phase 3 path clipping for non-axis-aligned
-  transformed viewports (`structure/symbol/with-transform-on-use`,
-  `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg`) and one
-  on a bevel-fallback corner drift (`painting/stroke-linejoin/miter`).
+  Phase 3a polygon clipping unblocked
+  `structure/symbol/with-transform-on-use{,-no-size}` — the remaining
+  per-file TODOs are `structure/image/preserveAspectRatio=xMaxYMax-
+  slice-on-svg` (polygon clip edge AA fringes 4 pixels past the 100-px
+  max — a follow-up, not a functional gap) and
+  `painting/stroke-linejoin/miter` (bevel-fallback corner drift).
 - [x] **Track the pass-rate delta between Geode and RendererSkia.**
   After #504, `resvg_test_suite_geode_text` is **596 passing / 0
   failing / 765 skipped via feature gates** on top of the category
