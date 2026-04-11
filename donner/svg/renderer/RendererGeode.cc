@@ -229,11 +229,23 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
   }
   stopsStorage.clear();
   stopsStorage.reserve(stopCount);
+
+  // Per SVG 1.1 §13.2.4 / SVG 2 §12.6.2: each stop's `offset` must be
+  // monotonically non-decreasing. If a stop specifies an offset less than
+  // the largest previous stop's offset, the offset is clamped up to that
+  // largest previous value. Missing offsets effectively default to the
+  // previous stop's offset via the same rule. The shader's
+  // `sample_stops` assumes monotonic offsets — violating the invariant
+  // produces wrong colors on the affected range (e-stop-003, e-stop-024).
+  float minOffset = 0.0f;
   for (size_t i = 0; i < stopCount; ++i) {
     const GradientStop& stop = computedGradient.stops[i];
     const css::RGBA rgba = stop.color.resolve(currentColor, stop.opacity * opacity);
     geode::LinearGradientParams::Stop out;
-    out.offset = stop.offset;
+    const float clampedOffset =
+        std::clamp<float>(static_cast<float>(stop.offset), 0.0f, 1.0f);
+    out.offset = std::max(clampedOffset, minOffset);
+    minOffset = out.offset;
     out.rgba[0] = rgba.r / 255.0f;
     out.rgba[1] = rgba.g / 255.0f;
     out.rgba[2] = rgba.b / 255.0f;
@@ -413,7 +425,8 @@ struct RendererGeode::Impl {
   RenderViewport viewport;
   int pixelWidth = 0;
   int pixelHeight = 0;
-  wgpu::Texture target;  // RGBA8 RenderAttachment | CopySrc
+  wgpu::Texture target;      // 1-sample resolve: RenderAttachment | CopySrc | TextureBinding.
+  wgpu::Texture msaaTarget;  // 4× MSAA color attachment companion to `target`.
   std::unique_ptr<geode::GeoEncoder> encoder;
 
   // Reusable scratch storage for gradient stop vectors — keeps the
@@ -442,6 +455,7 @@ struct RendererGeode::Impl {
   struct PatternStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
+    wgpu::Texture savedMsaaTarget;
     Transform2d savedTransform;
     std::vector<Transform2d> savedTransformStack;
     int savedPixelWidth = 0;
@@ -450,7 +464,8 @@ struct RendererGeode::Impl {
     // The pattern tile being recorded.
     Box2d tileRect;                 // In pattern space (topLeft at origin).
     Transform2d targetFromPattern;  // Transform used when the tile is sampled.
-    wgpu::Texture tileTexture;      // Offscreen tile being written to.
+    wgpu::Texture tileTexture;      // Offscreen tile (1-sample resolve) being sampled later.
+    wgpu::Texture tileMsaaTexture;  // 4× MSAA companion used during tile recording.
     int tilePixelWidth = 0;
     int tilePixelHeight = 0;
     // Scale factor applied to all `setTransform` calls while this frame is
@@ -460,14 +475,90 @@ struct RendererGeode::Impl {
   };
   std::vector<PatternStackFrame> patternStack;
 
+  /// A saved encoder + target state for an in-progress isolated layer
+  /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
+  /// group with non-identity opacity or a non-Normal blend mode, we
+  /// redirect subsequent draws into an offscreen texture of the same size
+  /// as the current target. On `pop`, the offscreen is composited back
+  /// onto the saved target with the stored opacity.
+  struct LayerStackFrame {
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;         // Outer 1-sample resolve target.
+    wgpu::Texture savedMsaaTarget;     // Outer 4× MSAA color attachment.
+    wgpu::Texture layerTexture;        // Inner layer 1-sample resolve.
+    wgpu::Texture layerMsaaTexture;    // Inner layer 4× MSAA color attachment.
+    double opacity = 1.0;
+  };
+  std::vector<LayerStackFrame> layerStack;
+
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
     wgpu::Texture tile;
     Vector2d tileSize;              // In pattern space.
     Transform2d targetFromPattern;  // destFromSource naming.
+    // `currentTransform` snapshotted at the time the outer element kicked
+    // off `beginPatternTile`. This is the path→device transform that the
+    // SAME outer element will use when its fill draw happens. Used at
+    // pattern-paint build time to strip the canvas-scale / parent-transform
+    // chain back out of the live `currentTransform`, so the resulting
+    // `patternFromPath` matrix compares path-space positions against the
+    // pattern tile's user-space coordinate system instead of accidentally
+    // multiplying them by the viewBox→canvas scale.
+    Transform2d deviceFromPathAtCapture;
   };
   std::optional<PatternPaintSlot> patternFillPaint;
   std::optional<PatternPaintSlot> patternStrokePaint;
+
+  /// Axis-aligned clip rectangles in target-pixel coords. Each entry
+  /// corresponds to a `pushClip` with a non-empty `clipRect`. The active
+  /// scissor is the intersection of every entry on this stack.
+  /// Entries with `valid == false` represent pushClip calls that had no
+  /// `clipRect` component (path- or mask-only clips) — they're tracked
+  /// so `popClip` stays balanced with `pushClip`.
+  struct ClipStackEntry {
+    Box2d pixelRect;
+    bool valid = false;
+  };
+  std::vector<ClipStackEntry> clipStack;
+
+  /// Recompute the intersection of every rectangular clip entry on
+  /// `clipStack` and apply it to the active encoder as a scissor. Called
+  /// whenever the clip stack changes.
+  void updateEncoderScissor() {
+    if (!encoder) {
+      return;
+    }
+    std::optional<Box2d> active;
+    for (const ClipStackEntry& entry : clipStack) {
+      if (!entry.valid) {
+        continue;
+      }
+      if (!active.has_value()) {
+        active = entry.pixelRect;
+      } else {
+        // Intersect: take the overlap of the two rectangles.
+        const double x0 = std::max(active->topLeft.x, entry.pixelRect.topLeft.x);
+        const double y0 = std::max(active->topLeft.y, entry.pixelRect.topLeft.y);
+        const double x1 = std::min(active->bottomRight.x, entry.pixelRect.bottomRight.x);
+        const double y1 = std::min(active->bottomRight.y, entry.pixelRect.bottomRight.y);
+        active = Box2d(Vector2d(x0, y0), Vector2d(std::max(x0, x1), std::max(y0, y1)));
+      }
+    }
+    if (!active.has_value()) {
+      encoder->clearScissorRect();
+      return;
+    }
+    // Convert the Box2d corners to integer pixel coords. Floor on topLeft
+    // and ceil on bottomRight so we don't accidentally clip fractional
+    // edge pixels that the rasterizer still wants to cover.
+    const int32_t x = static_cast<int32_t>(std::floor(active->topLeft.x));
+    const int32_t y = static_cast<int32_t>(std::floor(active->topLeft.y));
+    const int32_t w = std::max(
+        0, static_cast<int32_t>(std::ceil(active->bottomRight.x)) - x);
+    const int32_t h = std::max(
+        0, static_cast<int32_t>(std::ceil(active->bottomRight.y)) - y);
+    encoder->setScissorRect(x, y, w, h);
+  }
 
   // Stub-state depth counters — incremented on push, decremented on pop. Used
   // only to keep stack semantics balanced and to drop the warning to stderr
@@ -484,11 +575,11 @@ struct RendererGeode::Impl {
   /// when the referenced paint server can't instantiate. Returns nullopt for
   /// None and for paint-server references without a fallback.
   std::optional<css::RGBA> resolveSolidFill() {
-    return resolveSolidPaint(paint.fill, paint.fillOpacity * paint.opacity);
+    return resolveSolidPaint(paint.fill, paint.fillOpacity);
   }
 
   std::optional<css::RGBA> resolveSolidStroke() {
-    return resolveSolidPaint(paint.stroke, paint.strokeOpacity * paint.opacity);
+    return resolveSolidPaint(paint.stroke, paint.strokeOpacity);
   }
 
   std::optional<css::RGBA> resolveSolidPaint(const components::ResolvedPaintServer& server,
@@ -512,21 +603,37 @@ struct RendererGeode::Impl {
   /// Build a `GeoEncoder::PatternPaint` from a stashed slot, composing the
   /// current transform so the shader samples in the correct space.
   ///
-  /// Math: during the fill draw, the vertex shader receives path-space
-  /// positions (pre-`currentTransform`). In pattern mode the fragment shader
-  /// transforms those path-space positions into pattern-tile space using
-  /// `patternFromPath`. Chaining:
+  /// Math: during the fill draw, the Geode vertex shader emits `sample_pos`
+  /// in PATH space (pre-MVP, pre-`currentTransform`). The pattern fragment
+  /// shader needs pattern-tile-space coordinates. The driver gave us
+  /// `targetFromPattern` in USER space (i.e., the viewBox frame the outer
+  /// element was drawn in) — *not* device space — which is a semantic
+  /// mismatch with the renderer, where `currentTransform` goes all the way
+  /// from path space to device pixels (i.e., it bakes in the
+  /// viewBox→canvas scale on top of the entity's own transform).
   ///
-  ///   patternFromPath = patternFromTarget * targetFromPath
-  ///                   = inverse(targetFromPattern) * currentTransform
+  /// To bridge the mismatch we capture `deviceFromPathAtCapture = currentTransform`
+  /// at `beginPatternTile` time. Both the pattern's content subtree and the
+  /// eventual fill draw use the same referencing element, so that transform
+  /// is the path→device mapping we'd want for BOTH the tile raster and
+  /// the final sample. The chain is:
   ///
-  /// where `targetFromPattern` is what the driver gave us at
-  /// `beginPatternTile` time. Both transforms are 2D affines and
-  /// Transform2d::inversed() handles the inverse.
+  ///   pattern_pos  =  inverse(deviceFromPath_at_capture * targetFromPattern)
+  ///                 · currentTransform · path_pos
+  ///
+  /// Expanding: the two `currentTransform`/`deviceFromPath_at_capture` matrices
+  /// cancel (they're the same transform when the outer element is drawing
+  /// its own fill immediately after the pattern subtree returns), leaving
+  /// `inverse(targetFromPattern) · path_pos` — which sits in the user-space
+  /// frame that `tileSize` is expressed in. That keeps the shader's
+  /// `fract(patternPos / tileSize)` well-defined regardless of the
+  /// viewBox→canvas scale.
   geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
                                                     double opacity) const {
-    const Transform2d patternFromTarget = slot.targetFromPattern.inverse();
-    const Transform2d patternFromPath = patternFromTarget * currentTransform;
+    const Transform2d deviceFromPattern =
+        slot.deviceFromPathAtCapture * slot.targetFromPattern;
+    const Transform2d patternFromDevice = deviceFromPattern.inverse();
+    const Transform2d patternFromPath = patternFromDevice * currentTransform;
     geode::GeoEncoder::PatternPaint p;
     p.tile = slot.tile;
     p.tileSize = slot.tileSize;
@@ -554,12 +661,12 @@ struct RendererGeode::Impl {
     // stroke draw (matching RendererTinySkia/RendererSkia semantics).
     if (patternFillPaint.has_value()) {
       syncTransform();
-      const double opacity = paint.fillOpacity * paint.opacity;
+      const double opacity = paint.fillOpacity;
       encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity));
       patternFillPaint.reset();
       return;
     }
-    const double effectiveOpacity = paint.fillOpacity * paint.opacity;
+    const double effectiveOpacity = paint.fillOpacity;
     drawPaintedPath(path, paint.fill, effectiveOpacity, rule);
   }
 
@@ -636,8 +743,13 @@ struct RendererGeode::Impl {
           return;
         }
         // Recognized as radial but otherwise unusable (empty stops, focal
-        // circle containing outer, singular transform). Drop the draw.
-        return;
+        // circle containing outer, singular transform, degenerate
+        // objectBoundingBox frame). Fall through to the paint-server
+        // fallback below — per SVG2, a gradient paint server that can't
+        // be instantiated on a given element should use the reference's
+        // fallback color (e.g., `stroke="url(#lg) green"` paints green on
+        // a zero-height horizontal line where the objectBoundingBox
+        // gradient can't be applied).
       }
 
       // Neither linear nor radial — could be a pattern, a sweep gradient
@@ -698,26 +810,43 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->paint = PaintParams();
   impl_->encoder.reset();
   impl_->target = wgpu::Texture();
+  impl_->msaaTarget = wgpu::Texture();
 
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return;
   }
 
+  // 1-sample resolve target: what `takeSnapshot()` copies back and what
+  // pattern / layer blits sample from.
   wgpu::TextureDescriptor td = {};
   td.label = "RendererGeodeTarget";
   td.size = {static_cast<uint32_t>(impl_->pixelWidth),
              static_cast<uint32_t>(impl_->pixelHeight), 1};
   td.format = kFormat;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
+             wgpu::TextureUsage::TextureBinding;
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::e2D;
   impl_->target = impl_->device->device().CreateTexture(&td);
 
+  // 4× MSAA color attachment: all draws land here, hardware resolves to
+  // `target` at pass end. Per-pixel fragment shader invocations can
+  // write sample-masked output for sub-pixel AA (see slug_fill.wgsl).
+  wgpu::TextureDescriptor msaaDesc = {};
+  msaaDesc.label = "RendererGeodeTargetMSAA";
+  msaaDesc.size = td.size;
+  msaaDesc.format = kFormat;
+  msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+  msaaDesc.mipLevelCount = 1;
+  msaaDesc.sampleCount = 4;
+  msaaDesc.dimension = wgpu::TextureDimension::e2D;
+  impl_->msaaTarget = impl_->device->device().CreateTexture(&msaaDesc);
+
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->target);
+      impl_->msaaTarget, impl_->target);
   // Default to a transparent clear so an empty frame matches the other
   // backends' "no document content" appearance.
   impl_->encoder->clear(css::RGBA(0, 0, 0, 0));
@@ -766,23 +895,151 @@ void RendererGeode::popTransform() {
   impl_->transformStack.pop_back();
 }
 
-void RendererGeode::pushClip(const ResolvedClip& /*clip*/) {
-  if (impl_->verbose && !impl_->warnedClip) {
-    std::cerr << "RendererGeode: clipping not yet implemented (Phase 3)\n";
+void RendererGeode::pushClip(const ResolvedClip& clip) {
+  // Rectangular clip (the nested-`<svg>` viewport, `overflow: hidden`, and
+  // `<image>` dest-rect cases) is implemented via the WebGPU scissor rect.
+  // Path- and mask-based clipping are still stubbed — they require a
+  // stencil or mask-texture pass which is Phase 3 proper.
+  const bool hasPathOrMaskClip = !clip.clipPaths.empty() || clip.mask.has_value();
+  if (hasPathOrMaskClip && impl_->verbose && !impl_->warnedClip) {
+    std::cerr << "RendererGeode: path/mask clipping not yet implemented (Phase 3)\n";
     impl_->warnedClip = true;
   }
-}
 
-void RendererGeode::popClip() {}
-
-void RendererGeode::pushIsolatedLayer(double /*opacity*/, MixBlendMode /*blendMode*/) {
-  if (impl_->verbose && !impl_->warnedLayer) {
-    std::cerr << "RendererGeode: isolated layers not yet implemented (Phase 3)\n";
-    impl_->warnedLayer = true;
+  // Compose the incoming clip rect (in user-space) with the current
+  // transform to get pixel-space coordinates, then push onto the stack.
+  // The active scissor is the INTERSECTION of everything on the stack.
+  Box2d pixelRect;
+  bool valid = false;
+  if (clip.clipRect.has_value()) {
+    const Transform2d& t = impl_->currentTransform;
+    pixelRect = t.transformBox(*clip.clipRect);
+    valid = true;
   }
+  impl_->clipStack.push_back({pixelRect, valid});
+  impl_->updateEncoderScissor();
 }
 
-void RendererGeode::popIsolatedLayer() {}
+void RendererGeode::popClip() {
+  if (!impl_->clipStack.empty()) {
+    impl_->clipStack.pop_back();
+  }
+  impl_->updateEncoderScissor();
+}
+
+void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
+  // Blend modes other than Normal are a Phase 7 concern (they require the
+  // compute-based filter / compositor pipeline). For now we support
+  // Isolation + alpha — which handles group opacity, `<svg opacity=...>`,
+  // and nested-group `opacity` propagation, covering a-opacity-001/007/008
+  // and several adjacent tests. Anything-but-Normal blend is dropped with
+  // a one-shot warning.
+  if (blendMode != MixBlendMode::Normal) {
+    if (impl_->verbose && !impl_->warnedLayer) {
+      std::cerr << "RendererGeode: non-Normal blend modes not yet implemented (Phase 7)\n";
+      impl_->warnedLayer = true;
+    }
+  }
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline ||
+      !impl_->imagePipeline || !impl_->encoder) {
+    // Headless or degenerate state — drop silently but still push a
+    // placeholder frame so popIsolatedLayer stays balanced.
+    impl_->layerStack.push_back({});
+    return;
+  }
+
+  // Allocate offscreen 1-sample resolve + 4× MSAA companion for the
+  // layer. All draws issued between push/pop land here; pop composites
+  // the resolved 1-sample texture back onto the outer target with the
+  // stored opacity.
+  wgpu::TextureDescriptor td = {};
+  td.label = "RendererGeodeIsolatedLayer";
+  td.size = {static_cast<uint32_t>(impl_->pixelWidth),
+             static_cast<uint32_t>(impl_->pixelHeight), 1u};
+  td.format = kFormat;
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+             wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::e2D;
+  wgpu::Texture layerTexture = impl_->device->device().CreateTexture(&td);
+  if (!layerTexture) {
+    impl_->layerStack.push_back({});
+    return;
+  }
+
+  wgpu::TextureDescriptor msaaDesc = {};
+  msaaDesc.label = "RendererGeodeIsolatedLayerMSAA";
+  msaaDesc.size = td.size;
+  msaaDesc.format = kFormat;
+  msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+  msaaDesc.mipLevelCount = 1;
+  msaaDesc.sampleCount = 4;
+  msaaDesc.dimension = wgpu::TextureDimension::e2D;
+  wgpu::Texture layerMsaaTexture = impl_->device->device().CreateTexture(&msaaDesc);
+  if (!layerMsaaTexture) {
+    impl_->layerStack.push_back({});
+    return;
+  }
+
+  // Finish the outer encoder so its queued draws land on the saved target
+  // before we redirect subsequent work into the offscreen layer. Same
+  // shape as `beginPatternTile` — two render-pass submissions ordered
+  // serially on the queue.
+  impl_->encoder->finish();
+
+  Impl::LayerStackFrame frame;
+  frame.savedEncoder = std::move(impl_->encoder);
+  frame.savedTarget = impl_->target;
+  frame.savedMsaaTarget = impl_->msaaTarget;
+  frame.layerTexture = layerTexture;
+  frame.layerMsaaTexture = layerMsaaTexture;
+  frame.opacity = opacity;
+
+  impl_->target = layerTexture;
+  impl_->msaaTarget = layerMsaaTexture;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      layerMsaaTexture, layerTexture);
+  newEncoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->encoder = std::move(newEncoder);
+  impl_->layerStack.push_back(std::move(frame));
+  // The layer inherits the outer clip stack — reapply it to the new
+  // encoder so scissors carry through.
+  impl_->updateEncoderScissor();
+}
+
+void RendererGeode::popIsolatedLayer() {
+  if (impl_->layerStack.empty()) {
+    return;
+  }
+  Impl::LayerStackFrame frame = std::move(impl_->layerStack.back());
+  impl_->layerStack.pop_back();
+
+  if (!frame.layerTexture) {
+    return;  // Placeholder frame from the headless/error path.
+  }
+
+  // Finish the layer's render pass so the texture contents are ready.
+  if (impl_->encoder) {
+    impl_->encoder->finish();
+  }
+
+  // Restore outer target + create a fresh encoder that preserves its
+  // existing contents (LoadOp::Load on the outer MSAA texture, whose
+  // state was retained via `StoreOp::Store`). Draw the layer's RESOLVED
+  // (1-sample) texture across the entire target with the stored opacity
+  // as the compositing alpha.
+  impl_->target = frame.savedTarget;
+  impl_->msaaTarget = frame.savedMsaaTarget;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      frame.savedMsaaTarget, frame.savedTarget);
+  newEncoder->setLoadPreserve();
+  impl_->encoder = std::move(newEncoder);
+  impl_->updateEncoderScissor();
+  impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
+}
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& /*filterGraph*/,
                                     const std::optional<Box2d>& /*filterRegion*/) {
@@ -829,6 +1086,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   const int tilePixelWidth = boundedPx(tileRect.width() * (scaleX > 0.0 ? scaleX : 1.0));
   const int tilePixelHeight = boundedPx(tileRect.height() * (scaleY > 0.0 ? scaleY : 1.0));
 
+  // 1-sample resolve target for the pattern tile (this is what the Slug
+  // fill shader samples when the tile is later used as paint).
   wgpu::TextureDescriptor td = {};
   td.label = "RendererGeodePatternTile";
   td.size = {static_cast<uint32_t>(tilePixelWidth),
@@ -841,6 +1100,21 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   td.dimension = wgpu::TextureDimension::e2D;
   wgpu::Texture tileTexture = impl_->device->device().CreateTexture(&td);
   if (!tileTexture) {
+    return;
+  }
+
+  // 4× MSAA companion render target — shares the same encoder lifetime
+  // as the tile; resolved into `tileTexture` at pass end.
+  wgpu::TextureDescriptor tileMsaaDesc = {};
+  tileMsaaDesc.label = "RendererGeodePatternTileMSAA";
+  tileMsaaDesc.size = td.size;
+  tileMsaaDesc.format = kFormat;
+  tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+  tileMsaaDesc.mipLevelCount = 1;
+  tileMsaaDesc.sampleCount = 4;
+  tileMsaaDesc.dimension = wgpu::TextureDimension::e2D;
+  wgpu::Texture tileMsaaTexture = impl_->device->device().CreateTexture(&tileMsaaDesc);
+  if (!tileMsaaTexture) {
     return;
   }
 
@@ -862,6 +1136,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   }
   frame.savedEncoder = std::move(impl_->encoder);
   frame.savedTarget = impl_->target;
+  frame.savedMsaaTarget = impl_->msaaTarget;
   frame.savedTransform = impl_->currentTransform;
   frame.savedTransformStack = std::move(impl_->transformStack);
   frame.savedPixelWidth = impl_->pixelWidth;
@@ -869,6 +1144,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = tileTexture;
+  frame.tileMsaaTexture = tileMsaaTexture;
   frame.tilePixelWidth = tilePixelWidth;
   frame.tilePixelHeight = tilePixelHeight;
   // Map pattern-tile units onto tile-texture pixels: this factor is applied
@@ -894,6 +1170,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   impl_->pixelWidth = tilePixelWidth;
   impl_->pixelHeight = tilePixelHeight;
   impl_->target = tileTexture;
+  impl_->msaaTarget = tileMsaaTexture;
   impl_->transformStack.clear();
   // Initialise the current transform to the raster scale so direct draws
   // issued before the driver's next `setTransform` still land in the
@@ -903,7 +1180,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      tileTexture);
+      tileMsaaTexture, tileTexture);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -929,6 +1206,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
 
   // Restore outer state.
   impl_->target = frame.savedTarget;
+  impl_->msaaTarget = frame.savedMsaaTarget;
   impl_->pixelWidth = frame.savedPixelWidth;
   impl_->pixelHeight = frame.savedPixelHeight;
   impl_->currentTransform = frame.savedTransform;
@@ -959,10 +1237,10 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // when there's been at least one prior submission. This requires
   // extending GeoEncoder; see the `reopen` helper added below.
   if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
-      frame.savedTarget) {
+      frame.savedTarget && frame.savedMsaaTarget) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-        frame.savedTarget);
+        frame.savedMsaaTarget, frame.savedTarget);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
     // (via the finish() in beginPatternTile), so we must not clear it
@@ -971,6 +1249,14 @@ void RendererGeode::endPatternTile(bool forStroke) {
     // LoadOp::Load for the next render pass.
     newEncoder->setLoadPreserve();
     impl_->encoder = std::move(newEncoder);
+    // Re-apply the active clip stack to the freshly-created encoder.
+    // The scissor state lived on the OLD encoder (finished inside
+    // beginPatternTile) and doesn't carry over automatically — without
+    // this call, a pattern capture triggered from inside a viewport
+    // or `<use>` clip would leak the subsequent pattern fill outside
+    // that clip rect. Mirrors the scissor restore in push/
+    // popIsolatedLayer.
+    impl_->updateEncoderScissor();
   } else {
     impl_->encoder.reset();
   }
@@ -984,6 +1270,13 @@ void RendererGeode::endPatternTile(bool forStroke) {
   slot.tile = frame.tileTexture;
   slot.tileSize = frame.tileRect.size();
   slot.targetFromPattern = frame.targetFromPattern;
+  // `frame.savedTransform` is the path→device transform that was live at
+  // `beginPatternTile` time — i.e., the outer element's currentTransform
+  // including the viewBox→canvas scale. We stash it on the slot so
+  // `buildPatternPaint` can cancel it out of the live `currentTransform`
+  // at the upcoming fill draw, leaving the pattern sample in the pattern's
+  // user-space frame (where `tileSize` is expressed).
+  slot.deviceFromPathAtCapture = frame.savedTransform;
   if (forStroke) {
     impl_->patternStrokePaint = std::move(slot);
   } else {
@@ -1019,25 +1312,42 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // gradient-fill / pattern pipeline. `strokeToFill` handles flattening,
   // cap/join generation, and miter-limit fallback to bevel internally.
   //
-  // Fill rule note: for closed subpaths, strokeToFill emits the outer and
-  // inner contours as two *same-winding* closed subpaths (not opposite), so
-  // NonZero would over-fill the interior and EvenOdd is required to get a
-  // hollow ring. EvenOdd is also correct for open subpaths, including sharp
-  // inside corners: as of the 2C fix, `emitJoin` emits the true offset-line
-  // intersection at inside turns (instead of an interior-crossing overlap),
-  // so the resulting single polygon is geometrically clean on both sides.
+  // Fill rule: for closed subpaths, strokeToFill emits the outer and
+  // inner contours as two *same-winding* closed subpaths (not opposite),
+  // so NonZero would over-fill the interior and EvenOdd is required to
+  // get a hollow ring. For open subpaths, `strokeToFill` emits one
+  // closed polygon — but with overlapping start/end caps (e.g. the
+  // resvg `stroke-linecap/open-path-with-*` tests where the 4-point path
+  // `M 150 50 l 0 80 -100 -40 100 -40` ends at its start), the inside-
+  // miter shortcut in `emitJoin` creates a self-intersecting polygon
+  // whose interior has the wrong winding under EvenOdd (the first-
+  // segment rectangle drops out). NonZero handles that case correctly
+  // because the overlapping winding still sums to non-zero.
+  //
+  // Pick per-source: count the subpaths produced by `strokeToFill`.
+  // A 1-subpath result means the source was open, use NonZero. A
+  // 2-subpath result means the source was closed and we need EvenOdd.
   const Path strokedOutline = path.path.strokeToFill(toStrokeStyle(stroke));
   if (strokedOutline.empty()) {
     return;
   }
 
+  size_t subpathCount = 0;
+  for (const auto& cmd : strokedOutline.commands()) {
+    if (cmd.verb == Path::Verb::MoveTo) {
+      ++subpathCount;
+    }
+  }
+  const FillRule strokeFillRule =
+      (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
+
   // Pattern dispatch comes first: a stroke pattern slot was populated by the
   // driver via `endPatternTile(forStroke=true)` and consumed here.
   if (impl_->patternStrokePaint.has_value()) {
     impl_->syncTransform();
-    const double opacity = impl_->paint.strokeOpacity * impl_->paint.opacity;
+    const double opacity = impl_->paint.strokeOpacity;
     impl_->encoder->fillPathPattern(
-        strokedOutline, FillRule::EvenOdd,
+        strokedOutline, strokeFillRule,
         impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
     impl_->patternStrokePaint.reset();
     return;
@@ -1048,10 +1358,10 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // gradient-unit objectBoundingBox transform, which is relative to the
   // *original* path bounds — we deliberately do NOT use
   // `strokedOutline.bounds()` here).
-  const double effectiveOpacity = impl_->paint.strokeOpacity * impl_->paint.opacity;
+  const double effectiveOpacity = impl_->paint.strokeOpacity;
   auto strokeServer = impl_->paint.stroke;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
-                                FillRule::EvenOdd);
+                                strokeFillRule);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
@@ -1070,10 +1380,13 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
   if (!impl_->encoder) {
     return;
   }
-  // Combine per-image opacity with the inherited paint opacity so group
-  // `opacity` attributes on ancestors propagate — matches the tiny-skia /
-  // Skia backends' semantics.
-  const double combinedOpacity = params.opacity * impl_->paint.opacity;
+  // The element's own `opacity` is handled by `pushIsolatedLayer` in the
+  // driver before this call lands, so we do NOT multiply it back in here
+  // (doing so would double-apply the group opacity, producing opacity²).
+  // Match RendererTinySkia's behavior in `drawImage`: use `params.opacity`
+  // (which is the image-specific opacity component) without the
+  // paint.opacity factor.
+  const double combinedOpacity = params.opacity;
   if (combinedOpacity <= 0.0) {
     return;
   }

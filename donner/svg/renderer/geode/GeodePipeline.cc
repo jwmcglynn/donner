@@ -113,7 +113,13 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
+  // 4× MSAA. Slug's per-pixel winding test is binary — without multisample
+  // coverage, thin axis-aligned strokes stair-step at pixel boundaries and
+  // diverge from tiny-skia's 4× analytic AA (preserveAspectRatio cluster).
+  // The fragment shader writes a `@builtin(sample_mask)` computed from 4
+  // sub-pixel winding tests; the hardware resolve step averages the
+  // surviving samples into the 1-sample resolve attachment.
+  rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.CreateRenderPipeline(&rpDesc);
@@ -212,7 +218,8 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
+  // 4× MSAA to match the solid-fill pipeline — see its multisample comment.
+  rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.CreateRenderPipeline(&rpDesc);

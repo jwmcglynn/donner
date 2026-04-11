@@ -110,11 +110,10 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Geode is skeleton-stage: stroke/gradient/text/filter/image all stubbed,
-    # so the existing golden suite fails across the board. `--config=geode`
-    # runs the curated :renderer_geode_golden_tests target instead, which
-    # only exercises pure solid-fill SVGs.
-    target_compatible_with = renderer_backend_compatible_with(["skia", "tiny_skia"]),
+    # Geode runs through this suite too, using the shared (tiny-skia-authored)
+    # goldens with a widened default threshold. Per-test Geode overrides live
+    # in `geodeOverrides()` in `Renderer_tests.cc` — see the Phase 5b section
+    # of `docs/design_docs/geode_renderer.md`.
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
@@ -315,11 +314,21 @@ donner_cc_test(
 
 donner_variant_cc_test(
     name = "resvg_test_suite",
+    # The resvg suite runs hundreds of image comparisons per variant,
+    # and CI wall-clock varies a lot between warm and cold caches.
+    # Passing runs on Ubuntu GHA clock in at ~390 s for tiny_skia_text
+    # and ~570 s for text_full; slow runs balloon well past 900 s and
+    # time out under `size = "large"`. `size = "enormous"` (3600 s)
+    # gives plenty of slack without masking real regressions — the
+    # actual pass-path runtime is still ~15 min, so a hang would still
+    # show up.
+    size = "enormous",
     dep = ":resvg_test_suite_impl",
     variants = [
         [
             "tiny_skia",
             "skia",
+            "geode",
         ],
         [
             "text",

@@ -256,7 +256,12 @@ fn apply_spread(t: f32, mode: u32) -> f32 {
   return clamp(t, 0.0, 1.0);
 }
 
-// Sample the stop list at `t ∈ [0, 1]`. Returns a premultiplied-alpha color.
+// Sample the stop list at `t ∈ [0, 1]`. Returns a STRAIGHT-alpha color —
+// the caller (`fs_main`) premultiplies before returning to the blend
+// pipeline. Stops are uploaded in straight form (see `buildGradientStops`
+// + `populateSharedGradientUniforms` in GeoEncoder.cc) so that the mix()
+// below linearly interpolates straight RGB/A independently, matching
+// tiny-skia / Skia gradient behavior.
 fn sample_stops(t: f32) -> vec4f {
   let count = uniforms.stopCount;
   // Degenerate cases.
@@ -387,35 +392,76 @@ fn gradient_t(path_pos: vec2f) -> f32 {
 // Fragment stage
 // ============================================================================
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let band = bands[in.bandIndex];
-
-  // Same band-overlap fix as slug_fill.wgsl — see the comment there for the
-  // full rationale. Adjacent dilated band quads overlap by ~1 viewport pixel
-  // and double-count straddling curves; clipping to `[yMin, yMax)` ensures
-  // each pixel is owned by exactly one band.
-  if (in.sample_pos.y < band.yMin || in.sample_pos.y >= band.yMax) {
-    discard;
-  }
-
+/// Same shape as `sample_is_inside` in slug_fill.wgsl. Duplicated
+/// because WGSL modules are per-shader and the gradient pipeline uses
+/// its own uniform buffer layout.
+fn sample_is_inside(band: Band, sample_pos: vec2f) -> bool {
   var winding: i32 = 0;
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_curve(band.curveStart + i);
-    winding = winding + curve_winding(curve, in.sample_pos);
+    winding = winding + curve_winding(curve, sample_pos);
+  }
+  if (uniforms.fillRule == 0u) {
+    return winding != 0;
+  }
+  return (winding & 1) != 0;
+}
+
+/// See the FragOutput docstring in slug_fill.wgsl — the gradient path
+/// uses the same sample-mask scheme so the 4× MSAA render target
+/// receives matched coverage for solid and gradient fills.
+struct FragOutput {
+  @location(0) color: vec4f,
+  @builtin(sample_mask) mask: u32,
+};
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragOutput {
+  let band = bands[in.bandIndex];
+
+  // No pixel-center band-Y clip — see slug_fill.wgsl for the full
+  // explanation. Per-sample checks inside the loop own each sample to
+  // exactly one band.
+
+  let dx = dpdx(in.sample_pos);
+  let dy = dpdy(in.sample_pos);
+
+  // Same 4-sample pattern as slug_fill.wgsl.
+  var offsets = array<vec2f, 4>(
+    vec2f(-0.125, -0.375),
+    vec2f( 0.375, -0.125),
+    vec2f(-0.375,  0.125),
+    vec2f( 0.125,  0.375),
+  );
+
+  var mask: u32 = 0u;
+  for (var s: u32 = 0u; s < 4u; s = s + 1u) {
+    let sp = in.sample_pos + offsets[s].x * dx + offsets[s].y * dy;
+    if (sp.y < band.yMin || sp.y >= band.yMax) {
+      continue;
+    }
+    if (sample_is_inside(band, sp)) {
+      mask = mask | (1u << s);
+    }
   }
 
-  var inside: bool;
-  if (uniforms.fillRule == 0u) {
-    inside = winding != 0;
-  } else {
-    inside = (winding & 1) != 0;
-  }
-  if (!inside) {
+  if (mask == 0u) {
     discard;
   }
 
+  // Evaluate the gradient stop color at the pixel center. Per-sample
+  // gradient sampling would be ~4× the stop search; we intentionally
+  // take the cheaper per-pixel path because gradient color varies
+  // smoothly and the sample_mask already captures the hard edge AA.
   let raw_t = gradient_t(in.sample_pos);
   let t = apply_spread(raw_t, uniforms.spreadMode);
-  return sample_stops(t);
+  // `sample_stops` returns a STRAIGHT-alpha color (see upload path in
+  // GeoEncoder.cc `populateSharedGradientUniforms`). The pipeline blend
+  // is premultiplied source-over, so premultiply here before writing.
+  let straight = sample_stops(t);
+
+  var out: FragOutput;
+  out.color = vec4f(straight.rgb * straight.a, straight.a);
+  out.mask = mask;
+  return out;
 }

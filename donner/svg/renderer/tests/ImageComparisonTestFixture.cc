@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -352,6 +353,29 @@ std::string escapeFilename(std::string filename) {
       return c;
     }
   });
+  // macOS (and most common filesystems) cap filename components at 255
+  // bytes. The test runfiles paths we escape into single names can blow
+  // past that — `resvg_test_suite_geode_text` sandbox runfiles reach
+  // ~290 chars — which makes the resulting `/tmp/<escaped>.png` impossible
+  // to open for debugging. Truncate overlong names, preserving the tail
+  // (where the distinguishing test filename lives) and keeping a short
+  // hash prefix so collisions between long names stay detectable.
+  constexpr size_t kMaxComponentBytes = 240;
+  if (filename.size() > kMaxComponentBytes) {
+    // Simple 32-bit FNV-1a over the full original string.
+    uint32_t hash = 2166136261u;
+    for (char c : filename) {
+      hash ^= static_cast<uint8_t>(c);
+      hash *= 16777619u;
+    }
+    char hashBuf[9];
+    std::snprintf(hashBuf, sizeof(hashBuf), "%08x", hash);
+    // Keep the tail (the distinguishing filename + extension); replace the
+    // long prefix with an 8-char hash so the result fits in 240 bytes.
+    const size_t tailLen = kMaxComponentBytes - 9;  // 9 = 8 hash chars + '_'
+    std::string tail = filename.substr(filename.size() - tailLen);
+    filename = std::string(hashBuf) + "_" + std::move(tail);
+  }
   return filename;
 }
 
@@ -599,6 +623,15 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     GTEST_SKIP() << *skipReason;
   }
 
+  // Goldens are shared across backends. Tests that need per-backend
+  // thresholds or (rarely) per-backend golden files should do so via
+  // `ImageComparisonParams` — e.g., a wider threshold under Geode via a
+  // per-test override table, or `WithGoldenOverride(...)` as a last resort.
+  // A custom per-backend golden is explicitly treated as a "bug smell" —
+  // it means the backend's output diverges from ground truth in a way that
+  // should eventually be fixed.
+  const char* const effectiveGoldenFilename = goldenImageFilename;
+
   std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << ActiveRendererBackendName()
             << "]: ";  // No endl yet, the line will be continued
 
@@ -623,6 +656,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     if (goldenImageDirToUpdate != nullptr) {
       const std::filesystem::path goldenImagePath =
           std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+      std::filesystem::create_directories(goldenImagePath.parent_path());
       RendererImageIO::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(), snapshot.pixels,
                                                 width, height, strideInPixels);
       std::cout << "Updated golden image: " << goldenImagePath.string() << "\n";
@@ -630,13 +664,13 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
   }
 
-  // If the golden image doesn't exist and UPDATE_GOLDEN_IMAGES_DIR is set, create it from the
-  // current rendering regardless of backend.
-  if (!std::filesystem::exists(goldenImageFilename)) {
+  // If the resolved golden image doesn't exist and UPDATE_GOLDEN_IMAGES_DIR is set, create it
+  // from the current rendering regardless of backend.
+  if (!std::filesystem::exists(effectiveGoldenFilename)) {
     const char* goldenImageDirToUpdate = getenv("UPDATE_GOLDEN_IMAGES_DIR");
     if (goldenImageDirToUpdate != nullptr) {
       const std::filesystem::path goldenImagePath =
-          std::filesystem::path(goldenImageDirToUpdate) / goldenImageFilename;
+          std::filesystem::path(goldenImageDirToUpdate) / effectiveGoldenFilename;
       std::filesystem::create_directories(goldenImagePath.parent_path());
       RendererImageIO::writeRgbaPixelsToPngFile(goldenImagePath.string().c_str(), snapshot.pixels,
                                                 width, height, strideInPixels);
@@ -654,7 +688,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     return;
   }
 
-  auto maybeGoldenImage = RendererImageTestUtils::readRgbaImageFromPngFile(goldenImageFilename);
+  auto maybeGoldenImage =
+      RendererImageTestUtils::readRgbaImageFromPngFile(effectiveGoldenFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
 
   Image goldenImage = std::move(maybeGoldenImage.value());
@@ -677,12 +712,12 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
               << params.effectiveMaxMismatchedPixels() << " max)\n";
 
     const std::filesystem::path actualImagePath =
-        std::filesystem::temp_directory_path() / escapeFilename(goldenImageFilename);
+        std::filesystem::temp_directory_path() / escapeFilename(effectiveGoldenFilename);
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
                                               width, height, strideInPixels);
 
     const std::filesystem::path diffFilePath =
-        std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(goldenImageFilename));
+        std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(effectiveGoldenFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
@@ -693,7 +728,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
         std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
 
         const std::filesystem::path skpFilePath =
-            std::filesystem::temp_directory_path() / (escapeFilename(goldenImageFilename) + ".skp");
+            std::filesystem::temp_directory_path() /
+            (escapeFilename(effectiveGoldenFilename) + ".skp");
         if (WriteActiveRendererDebugSkp(document, skpFilePath)) {
           std::cout << "Load this .skp into https://debugger.skia.org/\n"
                     << "=> " << skpFilePath.string() << "\n\n";
@@ -728,7 +764,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     }
 
     std::cout << "Actual rendering: " << actualImagePath.string() << "\n";
-    std::cout << "Expected: " << goldenImageFilename << "\n";
+    std::cout << "Expected: " << effectiveGoldenFilename << "\n";
     std::cout << "Diff: " << diffFilePath.string() << "\n\n";
 
     const std::optional<TerminalPreviewConfig> previewConfig = PreviewConfigFromEnv(params);

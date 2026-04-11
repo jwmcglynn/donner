@@ -27,7 +27,26 @@ jobs:
           retry_wait_seconds: 15
           command: |
             sudo apt-get update
-            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              libc++-18-dev libc++abi-18-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev
+            # libc++ is needed because `bazelisk build //...` evaluates the
+            # `resvg_test_suite_geode_*` variant targets. Those use the
+            # `donner_variant_cc_test` multi-transition, which promotes
+            # `enable_dawn=true` for the geode sub-configuration. That
+            # pulls in Dawn via `rules_foreign_cc`, whose CMake test-
+            # compile inherits the bazel toolchain's `-stdlib=libc++`
+            # flag.
+            #
+            # The mesa-vulkan-drivers + libvulkan stack is needed at
+            # TEST time, not just build time: `bazelisk test //...` now
+            # executes the Geode test variants through the
+            # multi-transition, and Dawn's Vulkan backend needs an ICD
+            # (llvmpipe via Mesa) to initialise. Without it, geode tests
+            # crash on startup and show up as random pixel-diff
+            # failures in the general linux job — separate from the
+            # dedicated `linux-geode` job which already installed
+            # these.
 
       - name: Cache Bazel
         uses: actions/cache@v5

@@ -130,6 +130,12 @@ struct GeoEncoder::Impl {
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
+  // 4× multisampled color attachment. All draws land here and the
+  // hardware resolves into `target` at the end of each render pass.
+  wgpu::Texture msaaTarget;
+  wgpu::TextureView msaaTargetView;
+  // 1-sample resolve texture. External code (image blit, readback)
+  // samples / copies from this texture, never the MSAA color.
   wgpu::Texture target;
   wgpu::TextureView targetView;
   wgpu::CommandEncoder commandEncoder;
@@ -159,6 +165,44 @@ struct GeoEncoder::Impl {
 
   // Current transform — applied to MVP for the next draw.
   Transform2d transform = Transform2d();  // Identity.
+
+  // Current scissor rectangle in target-pixel coords. An empty/unset
+  // scissor means "no clipping" (full target extent). Applied to each
+  // render pass as it opens via `SetScissorRect` — subsequent pushClip /
+  // popClip updates also re-apply during the currently-active pass.
+  //
+  // `scissorActive == false` means the scissor has never been set OR was
+  // popped back to the default, and draws should rasterize into the full
+  // target. `scissorActive == true` means the current scissor is
+  // `scissorX,scissorY,scissorW,scissorH` (all in target-pixel units).
+  bool scissorActive = false;
+  uint32_t scissorX = 0;
+  uint32_t scissorY = 0;
+  uint32_t scissorW = 0;
+  uint32_t scissorH = 0;
+
+  /// Apply the current scissor to the open render pass. No-op if the
+  /// pass isn't open yet — `ensurePassOpen` will call this on first
+  /// open. Safe to call whenever `scissorActive` / `scissor*` changes.
+  void applyScissorIfPassOpen() {
+    if (!passOpen) {
+      return;
+    }
+    if (scissorActive) {
+      // Clamp to the target so out-of-bounds scissor rects don't trigger
+      // WebGPU validation errors. Required when the clip rect is outside
+      // the current viewport (e.g., a nested SVG positioned at the edge).
+      uint32_t x = std::min(scissorX, targetWidth);
+      uint32_t y = std::min(scissorY, targetHeight);
+      uint32_t maxW = targetWidth - x;
+      uint32_t maxH = targetHeight - y;
+      uint32_t w = std::min(scissorW, maxW);
+      uint32_t h = std::min(scissorH, maxH);
+      pass.SetScissorRect(x, y, w, h);
+    } else {
+      pass.SetScissorRect(0, 0, targetWidth, targetHeight);
+    }
+  }
 
   /// Lazily create the dummy texture + sampler used by the solid-fill path.
   void ensureDummyResources() {
@@ -205,8 +249,15 @@ struct GeoEncoder::Impl {
     if (passOpen) {
       return;
     }
+    // 4× MSAA color attachment with per-pass resolve. The MSAA view is
+    // the draw target; WebGPU implicitly resolves into `targetView` at
+    // pass end. `storeOp = Store` on the MSAA attachment preserves its
+    // state for a subsequent pass (see `setLoadPreserve()` — we may
+    // reopen a pass to continue drawing on top of the previous MSAA
+    // contents, e.g., after a nested-layer composite).
     wgpu::RenderPassColorAttachment color = {};
-    color.view = targetView;
+    color.view = msaaTargetView;
+    color.resolveTarget = targetView;
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = clearColor;
@@ -223,6 +274,11 @@ struct GeoEncoder::Impl {
     currentPipeline = BoundPipeline::kNone;
     currentPipelineIsGradient = false;
     passOpen = true;
+    // Install any deferred scissor that the renderer requested before the
+    // pass was open (e.g., a `pushClip` made before the first draw of the
+    // encoder). Also ensures a fresh pass re-applies the scissor if a
+    // previous pass was finished and a new one opened.
+    applyScissorIfPassOpen();
   }
 
   /// Track which pipeline is currently bound so we can emit `SetPipeline`
@@ -308,16 +364,19 @@ struct GeoEncoder::Impl {
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target)
+                       const GeodeImagePipeline& imagePipeline,
+                       const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget)
     : impl_(std::make_unique<Impl>()) {
   impl_->device = &device;
   impl_->pipeline = &fillPipeline;
   impl_->gradientPipeline = &gradientPipeline;
   impl_->imagePipeline = &imagePipeline;
-  impl_->target = target;
-  impl_->targetView = target.CreateView();
-  impl_->targetWidth = target.GetWidth();
-  impl_->targetHeight = target.GetHeight();
+  impl_->msaaTarget = msaaTarget;
+  impl_->msaaTargetView = msaaTarget.CreateView();
+  impl_->target = resolveTarget;
+  impl_->targetView = resolveTarget.CreateView();
+  impl_->targetWidth = resolveTarget.GetWidth();
+  impl_->targetHeight = resolveTarget.GetHeight();
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = "GeoEncoder";
@@ -351,6 +410,27 @@ void GeoEncoder::clear(const css::RGBA& color) {
 
 void GeoEncoder::setTransform(const Transform2d& transform) {
   impl_->transform = transform;
+}
+
+void GeoEncoder::setScissorRect(int32_t x, int32_t y, int32_t w, int32_t h) {
+  // Clamp negative / overflowing values at the u32 boundary so WebGPU's
+  // strict validation never sees an out-of-range value. A scissor with
+  // zero area is valid (clips everything).
+  const int32_t clampedX = std::max(0, x);
+  const int32_t clampedY = std::max(0, y);
+  const int32_t clampedW = std::max(0, w - (clampedX - x));
+  const int32_t clampedH = std::max(0, h - (clampedY - y));
+  impl_->scissorActive = true;
+  impl_->scissorX = static_cast<uint32_t>(clampedX);
+  impl_->scissorY = static_cast<uint32_t>(clampedY);
+  impl_->scissorW = static_cast<uint32_t>(clampedW);
+  impl_->scissorH = static_cast<uint32_t>(clampedH);
+  impl_->applyScissorIfPassOpen();
+}
+
+void GeoEncoder::clearScissorRect() {
+  impl_->scissorActive = false;
+  impl_->applyScissorIfPassOpen();
 }
 
 void GeoEncoder::setLoadPreserve() {
@@ -570,18 +650,23 @@ void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& grad
   u.row1[2] = static_cast<float>(gradientFromPath.data[5]);
   u.row1[3] = 0.0f;
 
-  // Premultiply each stop's RGB by A for the blend pipeline. Clamp the stop
-  // count to the shader's hard cap; overflow was warned about at the caller.
+  // Upload stops in STRAIGHT (unpremultiplied) alpha. The shader's
+  // `sample_stops` linearly interpolates between these values and then the
+  // fragment stage premultiplies at output before the premultiplied-alpha
+  // blend pipeline composites onto the framebuffer. This matches tiny-skia /
+  // Skia gradient behavior — e.g. `a-stop-opacity-001` transitions from
+  // white to black@0.2 and expects straight-space interpolation, not
+  // premultiplied-space mix. Clamp the stop count to the shader's hard cap;
+  // overflow was warned about at the caller.
   const uint32_t stopCount =
       std::min<uint32_t>(kMaxGradientStops, static_cast<uint32_t>(stops.size()));
   u.stopCount = stopCount;
   for (uint32_t i = 0; i < stopCount; ++i) {
     const StopT& s = stops[i];
-    const float a = s.rgba[3];
-    u.stopColors[i * 4 + 0] = s.rgba[0] * a;
-    u.stopColors[i * 4 + 1] = s.rgba[1] * a;
-    u.stopColors[i * 4 + 2] = s.rgba[2] * a;
-    u.stopColors[i * 4 + 3] = a;
+    u.stopColors[i * 4 + 0] = s.rgba[0];
+    u.stopColors[i * 4 + 1] = s.rgba[1];
+    u.stopColors[i * 4 + 2] = s.rgba[2];
+    u.stopColors[i * 4 + 3] = s.rgba[3];
     // Packed 4-per-vec4: stop i lives in stopOffsets[i/4].(x|y|z|w).
     u.stopOffsets[i] = s.offset;
   }
@@ -777,6 +862,46 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   impl_->pass.SetVertexBuffer(0, vb, 0, vbSize);
   impl_->pass.SetBindGroup(0, bindGroup);
   impl_->pass.Draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+}
+
+void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
+  if (!src) {
+    return;
+  }
+  impl_->ensurePassOpen();
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  // Identity MVP: map target-pixel coords (0..W, 0..H) directly to clip
+  // space (-1..+1 with Y flipped). This is the same math
+  // `Impl::buildMvp` does with `transform == identity`.
+  const double sx = 2.0 / static_cast<double>(impl_->targetWidth);
+  const double sy = -2.0 / static_cast<double>(impl_->targetHeight);
+  float mvp[16] = {0};
+  mvp[0] = static_cast<float>(sx);
+  mvp[5] = static_cast<float>(sy);
+  mvp[10] = 1.0f;
+  mvp[12] = -1.0f;
+  mvp[13] = 1.0f;
+  mvp[15] = 1.0f;
+
+  GeodeTextureEncoder::QuadParams qp;
+  qp.destRect = Box2d(Vector2d(0.0, 0.0),
+                      Vector2d(static_cast<double>(impl_->targetWidth),
+                               static_cast<double>(impl_->targetHeight)));
+  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  qp.opacity = opacity;
+  qp.filter = GeodeTextureEncoder::Filter::Linear;
+  // Layer textures are offscreen render targets produced by the Geode
+  // premultiplied source-over pipeline, so their storage is already in
+  // premultiplied-alpha form. The shader needs to skip its default
+  // straight→premult conversion, otherwise nested `pushIsolatedLayer`
+  // calls double-darken the RGB channel (e.g.
+  // structure/use/opacity-inheritance where a use opacity=0.5 wraps a
+  // rect opacity=0.5 and should composite to 0.25).
+  qp.sourceIsPremultiplied = true;
+
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
 }
 
 void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,

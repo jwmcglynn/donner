@@ -428,13 +428,21 @@ TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
   EXPECT_EQ(unshifted[3], 0u) << "Unshifted origin should be transparent";
 }
 
-/// `ImageParams::opacity` should multiply with the paint's overall
-/// `opacity` so group `opacity` attributes on ancestors propagate.
+/// `ImageParams::opacity` controls fade at the draw call; ancestor
+/// `opacity` attributes are applied by the driver via
+/// `pushIsolatedLayer`, *not* by multiplying `PaintParams::opacity`
+/// into the draw itself. This test verifies both channels:
+///  * `paint.opacity` alone does NOT attenuate a direct `drawImage`
+///    (because it only takes effect at layer composite time)
+///  * `params.opacity = 0.5` on its own halves the output alpha
 TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
   RendererGeode renderer;
   beginFrame(renderer);
 
-  // paint.opacity = 0.5, ImageParams.opacity = 0.5 → combined = 0.25.
+  // paint.opacity is intentionally set but should NOT affect the raster:
+  // it is only honored by the driver's group-opacity path
+  // (pushIsolatedLayer/popIsolatedLayer). params.opacity = 0.5 is the
+  // only channel that fades the draw here.
   PaintParams paint;
   paint.opacity = 0.5;
   renderer.setPaint(paint);
@@ -453,9 +461,9 @@ TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  // Straight-alpha: R=255, A≈64 (255 * 0.25).
+  // Straight-alpha: R=255, A≈128 (255 * 0.5 from params.opacity only).
   EXPECT_NEAR(center[0], 255u, 2u) << "Straight-alpha R preserved";
-  EXPECT_NEAR(center[3], 64u, 2u) << "Combined alpha";
+  EXPECT_NEAR(center[3], 128u, 2u) << "params.opacity applied once";
 }
 
 /// Empty image data (width/height = 0) and a zero-size target rect both
