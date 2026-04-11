@@ -29,6 +29,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/FileOffset.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLNode.h"
@@ -84,6 +85,7 @@ struct ViewerState {
   std::optional<donner::svg::SVGRectElement> boundsShape;
   std::optional<donner::svg::SVGPathElement> selectedPathOutline;
   std::optional<donner::svg::SVGElement> selectedElement;
+  std::optional<donner::ParseDiagnostic> lastParseError;
   bool valid = false;
 
   void loadFromString(std::string_view source) {
@@ -101,8 +103,10 @@ struct ViewerState {
     ParseWarningSink disabled = ParseWarningSink::Disabled();
     ParseResult<SVGDocument> maybe = SVGParser::ParseSVG(source, disabled);
     if (maybe.hasError()) {
+      lastParseError = std::move(maybe.error());
       return;
     }
+    lastParseError.reset();
 
     document = std::move(maybe.result());
     controller = DonnerController(document);
@@ -192,6 +196,19 @@ struct ViewerState {
   }
 };
 
+/// Build a `TextEditor::ErrorMarkers` map from a parser diagnostic.
+/// `TextEditor` keys markers by 1-based line number; diagnostics with no
+/// resolved line info land on line 1 so the user always sees something.
+donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(
+    const donner::ParseDiagnostic& diag) {
+  donner::editor::TextEditor::ErrorMarkers markers;
+  const int line = diag.range.start.lineInfo.has_value()
+                       ? static_cast<int>(diag.range.start.lineInfo->line)
+                       : 1;
+  markers.emplace(line, std::string(std::string_view(diag.reason)));
+  return markers;
+}
+
 /// Convert a `FileOffset` from donner's XML source location into a
 /// `TextEditor` coordinate. donner's line is 1-based; `TextEditor` is
 /// 0-based.
@@ -273,6 +290,20 @@ int main(int argc, char** argv) {
   textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
   textEditor.setText(initialSource);
 
+  // Track the current source-pane error marker so we only push into
+  // `TextEditor` when the parse-error state actually changes (avoids
+  // copying the marker map every frame).
+  constexpr int kNoErrorLine = -1;
+  int lastShownErrorLine = kNoErrorLine;
+  std::string lastShownErrorReason;
+  if (state.lastParseError.has_value()) {
+    textEditor.setErrorMarkers(ParseErrorToMarkers(*state.lastParseError));
+    lastShownErrorLine = state.lastParseError->range.start.lineInfo.has_value()
+                             ? static_cast<int>(state.lastParseError->range.start.lineInfo->line)
+                             : 1;
+    lastShownErrorReason.assign(std::string_view(state.lastParseError->reason));
+  }
+
   donner::svg::Renderer renderer;
   GLuint texture = 0;
   glGenTextures(1, &texture);
@@ -333,6 +364,25 @@ int main(int argc, char** argv) {
       // document and wipe any selection state we just built up via the
       // click handler below.
       textEditor.resetTextChanged();
+    }
+
+    // Sync the source pane's error markers with the most recent parse
+    // diagnostic. Diff against the previous frame so we don't push the
+    // same marker map every frame.
+    if (state.lastParseError.has_value()) {
+      const int line = state.lastParseError->range.start.lineInfo.has_value()
+                           ? static_cast<int>(state.lastParseError->range.start.lineInfo->line)
+                           : 1;
+      const std::string_view reasonSv = state.lastParseError->reason;
+      if (line != lastShownErrorLine || reasonSv != lastShownErrorReason) {
+        textEditor.setErrorMarkers(ParseErrorToMarkers(*state.lastParseError));
+        lastShownErrorLine = line;
+        lastShownErrorReason.assign(reasonSv);
+      }
+    } else if (lastShownErrorLine != kNoErrorLine) {
+      textEditor.setErrorMarkers({});
+      lastShownErrorLine = kNoErrorLine;
+      lastShownErrorReason.clear();
     }
     ImGui::End();
 

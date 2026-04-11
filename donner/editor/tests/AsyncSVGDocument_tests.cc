@@ -102,5 +102,29 @@ TEST(AsyncSVGDocumentTest, FlushIsNoOpWhenQueueIsEmpty) {
   EXPECT_EQ(doc.currentFrameVersion(), versionAfterLoad);
 }
 
+TEST(AsyncSVGDocumentTest, FailedLoadStashesParseErrorAndKeepsOldDocument) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  EXPECT_FALSE(doc.lastParseError().has_value());
+
+  // Truly malformed XML — unclosed tag, no '>'.
+  EXPECT_FALSE(doc.loadFromString("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+  ASSERT_TRUE(doc.lastParseError().has_value());
+
+  // The original document is still intact and queryable so the user can
+  // keep editing on top of the prior valid state.
+  EXPECT_TRUE(doc.hasDocument());
+  EXPECT_TRUE(doc.document().querySelector("#r1").has_value());
+}
+
+TEST(AsyncSVGDocumentTest, SuccessfulReloadClearsParseError) {
+  AsyncSVGDocument doc;
+  EXPECT_FALSE(doc.loadFromString("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+  ASSERT_TRUE(doc.lastParseError().has_value());
+
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  EXPECT_FALSE(doc.lastParseError().has_value());
+}
+
 }  // namespace
 }  // namespace donner::editor

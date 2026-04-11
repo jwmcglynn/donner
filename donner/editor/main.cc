@@ -26,6 +26,7 @@
 #include <string>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
@@ -167,6 +168,19 @@ struct ViewTransform {
 
 void GlfwErrorCallback(int error, const char* description) {
   std::cerr << "GLFW error " << error << ": " << description << "\n";
+}
+
+/// Build a `TextEditor::ErrorMarkers` map from a parser diagnostic. The
+/// map is keyed by 1-based line number (`TextEditor`'s convention) and
+/// values are the human-readable reason. Diagnostics without resolved
+/// line info land on line 1 so the user always sees *something*.
+donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(
+    const donner::ParseDiagnostic& diag) {
+  donner::editor::TextEditor::ErrorMarkers markers;
+  const auto& start = diag.range.start;
+  const int line = start.lineInfo.has_value() ? static_cast<int>(start.lineInfo->line) : 1;
+  markers.emplace(line, std::string(std::string_view(diag.reason)));
+  return markers;
 }
 
 /// Convert a donner `FileOffset` (1-based line) into a `TextEditor`
@@ -348,6 +362,24 @@ int main(int argc, char** argv) {
   int textureWidth = 0;
   int textureHeight = 0;
 
+  // Track the source pane's parse error so we only push markers into
+  // `TextEditor` when the diagnostic state actually changes (error
+  // appeared, error cleared, or error moved to a different line).
+  // `kNoErrorLine` is the sentinel for "no current error".
+  constexpr int kNoErrorLine = -1;
+  int lastShownErrorLine = kNoErrorLine;
+  std::string lastShownErrorReason;
+  // Surface the initial parse failure (if any) so the user sees the
+  // marker on the very first frame.
+  if (auto initialErr = app.document().lastParseError(); initialErr.has_value()) {
+    textEditor.setErrorMarkers(ParseErrorToMarkers(*initialErr));
+    lastShownErrorLine =
+        initialErr->range.start.lineInfo.has_value()
+            ? static_cast<int>(initialErr->range.start.lineInfo->line)
+            : 1;
+    lastShownErrorReason = std::string(std::string_view(initialErr->reason));
+  }
+
   ViewTransform view;
   bool panning = false;
   ImVec2 lastPanMouse(0.0f, 0.0f);
@@ -370,6 +402,30 @@ int main(int argc, char** argv) {
     {
       ZoneScopedN("flushFrame");
       app.flushFrame();
+    }
+
+    // Sync the source pane's error markers with the document's most
+    // recent parse diagnostic. The diagnostic is set by ReplaceDocument
+    // when re-parsing fails (typed-mid-edit syntax errors). We diff
+    // against the previous frame to avoid copying the marker map every
+    // frame.
+    {
+      const auto& parseError = app.document().lastParseError();
+      if (parseError.has_value()) {
+        const int line = parseError->range.start.lineInfo.has_value()
+                             ? static_cast<int>(parseError->range.start.lineInfo->line)
+                             : 1;
+        const std::string_view reasonSv = parseError->reason;
+        if (line != lastShownErrorLine || reasonSv != lastShownErrorReason) {
+          textEditor.setErrorMarkers(ParseErrorToMarkers(*parseError));
+          lastShownErrorLine = line;
+          lastShownErrorReason.assign(reasonSv);
+        }
+      } else if (lastShownErrorLine != kNoErrorLine) {
+        textEditor.setErrorMarkers({});
+        lastShownErrorLine = kNoErrorLine;
+        lastShownErrorReason.clear();
+      }
     }
 
     // Re-render whenever the document version changes, the selection

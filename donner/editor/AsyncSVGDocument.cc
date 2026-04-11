@@ -11,6 +11,7 @@ AsyncSVGDocument::AsyncSVGDocument() = default;
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
   queue_.clear();
+  lastParseError_.reset();
   frameVersion_.fetch_add(1, std::memory_order_release);
 }
 
@@ -36,6 +37,12 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
   ParseWarningSink sink;
   auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink);
   if (result.hasError()) {
+    // Stash the diagnostic so the source pane can show a line marker.
+    // Leave the existing document in place — the user can keep editing
+    // until the source parses again. We deliberately do NOT bump the
+    // frame version: the renderer's view of the document is unchanged,
+    // and the source pane polls `lastParseError()` directly.
+    lastParseError_ = std::move(result.error());
     return false;
   }
   setDocument(std::move(result.result()));

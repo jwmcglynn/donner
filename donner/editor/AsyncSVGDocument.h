@@ -17,6 +17,7 @@
 #include <optional>
 #include <string_view>
 
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/CommandQueue.h"
 #include "donner/svg/SVGDocument.h"
 
@@ -72,8 +73,18 @@ public:
   }
 
   // Test hook: re-parse a string into a fresh document via `SVGParser`.
-  // Returns true on success.
+  // Returns true on success. On failure, the existing document is left
+  // intact and `lastParseError()` returns the diagnostic from the parser
+  // (so the caller can surface a line + reason in a text editor).
   [[nodiscard]] bool loadFromString(std::string_view svgBytes);
+
+  /// The diagnostic from the most recent failed `loadFromString` /
+  /// `ReplaceDocumentCommand`. Cleared on every successful parse — so
+  /// `has_value()` is the live "is the source pane currently invalid?"
+  /// signal.
+  [[nodiscard]] const std::optional<ParseDiagnostic>& lastParseError() const {
+    return lastParseError_;
+  }
 
 private:
   // Apply a single (already-coalesced) command. SetTransform finds the
@@ -85,6 +96,7 @@ private:
   std::optional<svg::SVGDocument> document_;
   CommandQueue queue_;
   std::atomic<std::uint64_t> frameVersion_{0};
+  std::optional<ParseDiagnostic> lastParseError_;
 };
 
 }  // namespace donner::editor
