@@ -75,6 +75,8 @@ class GenerateBuildReportTests(unittest.TestCase):
                 self._notice_build_result("notice-text-full"),
             ("bazel", "build", "//third_party/licenses:notice_skia_text_full"):
                 self._notice_build_result("notice-skia-text-full"),
+            ("bazel", "build", "//third_party/licenses:notice_editor"):
+                self._notice_build_result("notice-editor"),
             (
                 "bazel",
                 "cquery",
@@ -155,6 +157,7 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("- woff2", section.content)
         self.assertIn("### skia + text-full", section.content)
         self.assertIn("- skia", section.content)
+        self.assertIn("### editor (skia + text-full + imgui/glfw/tracy)", section.content)
 
     def test_external_dependencies_section_annotates_with_licenses(self):
         """When a license manifest is available, each dep is annotated with
@@ -188,6 +191,8 @@ class GenerateBuildReportTests(unittest.TestCase):
                     self._notice_build_result("notice-text-full"),
                 ("bazel", "build", "//third_party/licenses:notice_skia_text_full"):
                     self._notice_build_result("notice-skia-text-full"),
+                ("bazel", "build", "//third_party/licenses:notice_editor"):
+                    self._notice_build_result("notice-editor"),
             }
             for configs in ([], ["--config=text-full"],
                             ["--config=skia", "--config=text-full"]):
