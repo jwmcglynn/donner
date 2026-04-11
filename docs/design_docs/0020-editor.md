@@ -223,19 +223,22 @@ comments where useful.
         scope and rename to describe its real meaning. Editor targets
         do not permanently depend on `gui_supported` — if the fix
         lands, the editor builds under every toolchain.
-- [ ] Milestone 1.5: AsyncSVGDocument command-queue refactor
-  - [ ] **Decision (already made):** replace the prototype's
+- [x] Milestone 1.5: AsyncSVGDocument command-queue design note
+  - [x] **Decision (already made):** replace the prototype's
         mutex-guarded document snapshot with a **single-threaded command
         queue flushed at frame boundaries**. All DOM mutations land on
         the main thread; the render thread consumes a committed
         snapshot handed off by the flush. See Proposed Architecture for
         the details of the hand-off.
-  - [ ] Write up the concrete queue shape (command type, batching
-        policy, snapshot ownership) inline in Proposed Architecture
-        before any tool code is written against it.
-  - [ ] Land the refactor as an empty-body change to the prototype's
-        `AsyncSVGDocument` — same public surface, new internals —
-        before Milestone 2 starts.
+  - [x] Write up the concrete queue shape (`EditorCommand` cases,
+        coalescing rules, snapshot ownership, frame loop pseudocode,
+        selection state hand-off, test plan) inline in Proposed
+        Architecture, "Concrete shape (M1.5)" subsection. Done
+        before Milestone 2 begins so no tool code lands against an
+        unsettled concurrency model. The actual `AsyncSVGDocument`
+        port lives in M2 — there is no prototype version in donner to
+        refactor; M2 is when it first arrives, built directly to the
+        M1.5 design.
 - [ ] Milestone 2: Editor skeleton + mutation seam + example viewer
   - [ ] Create `//donner/editor` package with `donner_cc_library` targets:
         `:viewport_geometry`, `:tracy_wrapper`, `:text_buffer`, `:text_editor`,
@@ -566,8 +569,192 @@ flushed at frame boundaries**. Shape:
   plus a version counter, and the render thread compares the counter
   to detect updates.
 
-The full shape (exact `EditorCommand` cases, snapshot representation)
-is written up as part of Milestone 1.5 before Milestone 2 begins.
+#### Concrete shape (M1.5)
+
+This is the design note that gates Milestone 2. It is deliberately
+narrow: only the cases needed for the **Select-only** editor scope of
+this migration. New tools (path, node-edit, …) extend the
+`EditorCommand` variant in their own follow-up milestones.
+
+##### `EditorCommand` cases
+
+```cpp
+namespace donner::editor {
+
+// Discriminated union of every UI-thread→DOM mutation in the M2 scope.
+// One case per logical operation, NOT one per ECS write — coalescing
+// across multi-write operations happens inside the dispatch, not at the
+// command granularity.
+struct EditorCommand {
+  enum class Kind : uint8_t {
+    SetTransform,        // SelectTool drag, undo/redo replay
+    ReplaceDocument,     // File load OR text-pane edit (full re-parse)
+  };
+
+  Kind kind;
+
+  // SetTransform payload.
+  // entity is invalid for ReplaceDocument.
+  Entity entity = entt::null;
+  Transformd transform;
+
+  // ReplaceDocument payload.
+  // bytes is empty for SetTransform.
+  // Stored by value because the source buffer (TextEditor or file
+  // contents) may go out of scope before the queue flushes.
+  std::string bytes;
+};
+
+}  // namespace donner::editor
+```
+
+**What's deliberately not here**: `SetAttribute`, `InsertElement`,
+`RemoveElement`, `SetSelection`, `SetCanvasViewport`. Selection and
+viewport are editor-state-only, not DOM mutations, and bypass the
+queue (they update `EditorApp` fields directly and the next frame's
+`OverlayRenderer` pass picks them up). The other three return when
+path tools / element edit tools land.
+
+##### Batching policy
+
+The queue coalesces aggressively. The rules, applied at flush time:
+
+1. **`ReplaceDocument` is exclusive.** If a `ReplaceDocument` is in
+   the queue, every command queued *before* it is dropped — the
+   document about to replace them makes their entity references
+   invalid anyway. Commands queued *after* it apply against the new
+   document.
+2. **`SetTransform` collapses by entity.** If multiple `SetTransform`
+   commands target the same `Entity`, only the most recent transform
+   is applied at flush. A drag that produces 60 mouse-move
+   `SetTransform` commands per second flushes as a single
+   `setTransform()` call into the ECS.
+3. **No reordering across commands targeting different entities.**
+   Coalescing only collapses redundant writes; it does not reorder
+   semantically distinct operations.
+
+Coalescing happens in `EditorApp::flushCommandQueue()`, which the main
+loop calls once per frame. The pre-coalesce queue is a `std::deque`
+(no allocations on the steady-state hot path because the deque's
+chunk allocations amortize). The post-coalesce pass walks the deque
+once and produces a small `std::vector<EditorCommand>` of effective
+operations to apply.
+
+##### Snapshot ownership and the frame loop
+
+The render thread is conceptually a one-frame-pipelined consumer of
+the document. The UI thread always owns the document; the render
+thread holds a `const SVGDocument*` for the duration of its pass and
+the UI thread guarantees no mutations happen during that window.
+
+Frame loop pseudocode (UI thread):
+
+```
+main_loop:
+  1. Poll input → push EditorCommands into queue.
+  2. Wait for renderer to finish frame N-1 (block, but typically
+     non-blocking because pipelined).
+  3. Drain + coalesce queue.
+  4. Apply effective commands → DOM mutations + DirtyFlagsComponent.
+  5. Bump frame version counter (atomic).
+  6. Signal renderer: "start frame N".
+  7. Compose ImGui UI for frame N (panels, menus, text editor).
+  8. Present frame N-1's bitmap (which the renderer just finished)
+     into the GLFW back buffer + ImGui draw list.
+  9. swap buffers, vsync.
+```
+
+Render thread (one):
+
+```
+render_loop:
+  1. Wait for "start frame V" signal.
+  2. Read SVGDocument at frame V (no locking — UI thread is in
+     step 7+ on a higher-numbered frame).
+  3. Walk render tree → emit RendererInterface calls → produce
+     RendererBitmap.
+  4. Issue OverlayRenderer canvas-style calls into the same target
+     (selection chrome reads editor state via a *separate* shared
+     atomic snapshot, see "Selection state hand-off" below).
+  5. Signal: "frame V done".
+  6. loop.
+```
+
+The pipeline has exactly one frame of input lag: input from frame N
+shows up on screen as frame N+1. At 60 Hz this is ~16 ms — within the
+threshold for "feels live" on a desktop. Tools that need
+near-zero-latency feedback (e.g. cursor preview) draw via ImGui draw
+lists on the UI thread, not via `RendererInterface`, so they bypass
+the lag.
+
+##### Selection state hand-off
+
+Selection isn't in `EditorCommand` because it's render-affecting only
+through `OverlayRenderer`, not the document. But the renderer thread
+still needs to read it. The mechanism:
+
+```cpp
+struct SelectionSnapshot {
+  Entity selected = entt::null;
+  Boxd bounds;        // cached document-space bounds at selection time
+  uint64_t version;   // monotonic, bumped by UI thread on change
+};
+
+// EditorApp owns the canonical selection state. At step 6 of the UI
+// loop ("signal renderer"), it also publishes the current selection
+// to a `std::atomic<SelectionSnapshot*>` that the render thread reads.
+// SelectionSnapshot is small enough to fit in a few cache lines, so
+// the publish is a pointer swap, not a copy.
+```
+
+Selection updates that happen mid-frame (e.g. user clicks an element)
+go into editor state immediately and become visible to the renderer
+on the *next* frame's snapshot publish. The one-frame lag is
+identical to document mutations.
+
+##### What this design is NOT
+
+- **Not a general DOM concurrency framework.** The queue exists to
+  serialize one-writer, one-reader access. Multi-writer scenarios
+  (e.g. background SVG parse + UI tool mutations) are out of scope;
+  if they appear later, the parse runs on the UI thread or it
+  produces a complete document delivered as a `ReplaceDocument`.
+- **Not lock-free in the strict sense.** The "wait for renderer
+  done" step in the main loop is a condvar wait. The hot path
+  (steady-state interactive editing) is non-blocking because the
+  renderer always finishes before the UI thread is ready to flush;
+  the wait only blocks under render-thread overload, which is the
+  signal that we need to widen the budget or change the architecture.
+- **Not a long-term solution if rendering becomes too slow.** If
+  perf testing shows we can't hit the 1000-element drag target on
+  the reference machine, the next step is **not** mutex-on-document
+  (back to the prototype) but rather **incremental invalidation**
+  cutting the per-frame render cost to "only what changed." That is
+  exactly what `incremental_invalidation.md` is supposed to deliver,
+  and the editor is its proving ground. The two efforts compose.
+
+##### Test plan for M1.5
+
+The refactor lands as an empty-body change to the prototype's
+`AsyncSVGDocument` (same public surface, new internals) before any
+tool code is written against it. Test coverage:
+
+- **`editor_command_queue_tests`** — pure unit test of queue +
+  coalescing. No ImGui, no GL, no document. Asserts:
+  - Multiple `SetTransform` for the same entity coalesce to the
+    last one.
+  - `SetTransform` for different entities preserve order.
+  - `ReplaceDocument` drops everything queued before it.
+  - Empty flush is a no-op.
+- **`editor_async_svg_document_tests`** — integration test of the
+  refactored `AsyncSVGDocument` against a real (small) document.
+  Asserts that frame V+1 sees the post-flush state, that reading
+  frame V's snapshot during a mutation does not crash, and that the
+  pipelined frame model produces deterministic output for a fixed
+  command sequence.
+
+Both tests live in the **headless tier** (`bazel test //...`, no
+window, no GL).
 
 ### Editor is default-path, not feature-flagged
 

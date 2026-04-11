@@ -1,7 +1,7 @@
 """Donner Editor: in-tree migration of the external `donner-editor` prototype.
 
 This package is the destination for the editor migration described in
-`docs/design_docs/0020-editor.md`. Milestone 1 lands the package skeleton,
+`docs/design_docs/0020-editor.md`. Milestone 1 landed the package skeleton,
 build-system foundation, and dependency wiring; subsequent milestones add
 the actual editor source.
 
@@ -11,4 +11,81 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
+load("//build_defs:rules.bzl", "donner_cc_library")
+
 package(default_visibility = ["//donner/editor:__subpackages__"])
+
+donner_cc_library(
+    name = "viewport_geometry",
+    srcs = ["ViewportGeometry.cc"],
+    hdrs = ["ViewportGeometry.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "command_queue",
+    srcs = ["CommandQueue.cc"],
+    hdrs = [
+        "CommandQueue.h",
+        "EditorCommand.h",
+    ],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "async_svg_document",
+    srcs = ["AsyncSVGDocument.cc"],
+    hdrs = ["AsyncSVGDocument.h"],
+    deps = [
+        ":command_queue",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "text_buffer",
+    hdrs = ["TextBuffer.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+# Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
+# library pulls in the real Tracy client; otherwise the macros are no-ops.
+# Tracy is linked into every editor build (including release + WASM), runtime-
+# gated by a UI toggle — see the Security section of docs/design_docs/0020-editor.md.
+donner_cc_library(
+    name = "tracy_wrapper",
+    hdrs = ["TracyWrapper.h"],
+    defines = ["ENABLE_TRACY"],
+    deps = [
+        "@tracy//:tracy_client",
+    ],
+)
+
+donner_cc_library(
+    name = "text_editor",
+    srcs = ["TextEditor.cc"],
+    hdrs = ["TextEditor.h"],
+    deps = [
+        ":text_buffer",
+        "//donner/base",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "undo_timeline",
+    srcs = ["UndoTimeline.cc"],
+    hdrs = ["UndoTimeline.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+    ],
+)

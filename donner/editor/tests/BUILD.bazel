@@ -1,0 +1,38 @@
+load("//build_defs:rules.bzl", "donner_cc_test")
+
+donner_cc_test(
+    name = "viewport_geometry_tests",
+    srcs = ["ViewportGeometry_tests.cc"],
+    deps = [
+        "//donner/editor:viewport_geometry",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "command_queue_tests",
+    srcs = ["CommandQueue_tests.cc"],
+    deps = [
+        "//donner/editor:command_queue",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "async_svg_document_tests",
+    srcs = ["AsyncSVGDocument_tests.cc"],
+    deps = [
+        "//donner/editor:async_svg_document",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "text_buffer_tests",
+    srcs = ["TextBuffer_tests.cc"],
+    deps = [
+        "//donner/editor:text_buffer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
