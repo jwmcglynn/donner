@@ -27,6 +27,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/Notice.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextBuffer.h"
@@ -228,6 +229,56 @@ int main(int argc, char** argv) {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    // Main menu bar. Kept deliberately minimal — Help → About is the
+    // only required entry for this milestone, but the bar exists so
+    // future menus (File, Edit, Window, etc.) can slot in without
+    // restructuring.
+    bool openAboutPopup = false;
+    if (ImGui::BeginMainMenuBar()) {
+      if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("About Donner Editor")) {
+          openAboutPopup = true;
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::EndMainMenuBar();
+    }
+    if (openAboutPopup) {
+      ImGui::OpenPopup("About Donner Editor");
+    }
+
+    // About popup — displays the embedded open-source notice. Required
+    // for every distributed build to satisfy the attribution obligations
+    // of the imgui, glfw, tracy, skia, freetype, and harfbuzz licenses.
+    // Text comes from `//third_party/licenses:notice_editor` embedded
+    // via `//donner/editor:notice`.
+    {
+      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+      ImGui::SetNextWindowSize(ImVec2(displaySize.x * 0.7f, displaySize.y * 0.8f),
+                               ImGuiCond_Appearing);
+      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
+                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("About Donner Editor", nullptr, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextUnformatted("Donner Editor — in-tree SVG editor built on donner/svg");
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Open-source license notices:");
+        ImGui::Spacing();
+        if (ImGui::BeginChild("##notice_scroll",
+                              ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing()),
+                              /*border=*/true)) {
+          const auto& notice = donner::embedded::kEditorNoticeText;
+          ImGui::TextUnformatted(reinterpret_cast<const char*>(notice.data()),
+                                 reinterpret_cast<const char*>(notice.data() + notice.size()));
+        }
+        ImGui::EndChild();
+        if (ImGui::Button("Close")) {
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
+    }
 
     // Global keyboard shortcuts. ImGui translates Cmd on macOS and Ctrl
     // elsewhere into `Super`/`Ctrl` key mods, so we accept either.

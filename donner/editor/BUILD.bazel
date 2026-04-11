@@ -11,6 +11,7 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
+load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 
 # Editor libraries are public so the //examples:svg_viewer target (in the
@@ -101,6 +102,27 @@ donner_cc_library(
     ],
 )
 
+# Extracts the notice_editor.txt file from the license aggregation
+# rule so it can be embedded into the editor binary. The rule produces
+# both `.txt` and `.json`; we only want the text for the About dialog.
+filegroup(
+    name = "notice_editor_txt",
+    srcs = ["//third_party/licenses:notice_editor"],
+    output_group = "notice",
+)
+
+# Embed the NOTICE text into the editor binary. `//donner/editor:notice`
+# exposes `donner::embedded::kEditorNoticeText` as a
+# `std::span<const unsigned char>`. The editor's Help → About dialog
+# displays this.
+embed_resources(
+    name = "notice",
+    resources = {
+        "kEditorNoticeText": ":notice_editor_txt",
+    },
+    header_output = "donner/editor/Notice.h",
+)
+
 # The full Donner editor binary. Wires EditorApp + SelectTool +
 # OverlayRenderer + TextEditor into an ImGui shell with a live source
 # pane and a click-and-drag render pane. The minimal viewer demo lives
@@ -117,6 +139,7 @@ donner_cc_binary(
     }),
     deps = [
         ":editor_app",
+        ":notice",
         ":overlay_renderer",
         ":select_tool",
         ":text_editor",
