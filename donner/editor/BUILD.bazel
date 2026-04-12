@@ -77,6 +77,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "change_classifier",
+    srcs = ["ChangeClassifier.cc"],
+    hdrs = ["ChangeClassifier.h"],
+    deps = [
+        ":command_queue",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "editor_app",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],
@@ -161,6 +173,7 @@ donner_cc_binary(
     }),
     deps = [
         ":attribute_writeback",
+        ":change_classifier",
         ":editor_app",
         ":notice",
         ":overlay_renderer",

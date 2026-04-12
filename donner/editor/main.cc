@@ -30,6 +30,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/ChangeClassifier.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/TextPatch.h"
@@ -388,6 +389,11 @@ int main(int argc, char** argv) {
   ImVec2 lastPanMouse(0.0f, 0.0f);
   FrameHistory frameHistory;
 
+  // Previous frame's source text — used by the M5 change classifier to
+  // diff against the current text and determine whether the edit lands
+  // inside a single attribute value.
+  std::string previousSourceText = initialSource;
+
   // ---------------------------------------------------------------------------
   // Main loop
   // ---------------------------------------------------------------------------
@@ -612,8 +618,27 @@ int main(int argc, char** argv) {
     ImGui::Begin("Source", nullptr, kPaneFlags);
     textEditor.render("##source");
     if (textEditor.isTextChanged()) {
-      app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(
-          textEditor.getText()));
+      const std::string newSource = textEditor.getText();
+
+      bool handled = false;
+      if (app.structuredEditingEnabled() && app.hasDocument()) {
+        // M5 incremental path: try to classify the edit as an in-
+        // attribute-value change. If successful, emit a SetAttribute
+        // command that preserves tree identity. Otherwise fall back
+        // to a full ReplaceDocument.
+        auto classified = donner::editor::classifyTextChange(
+            app.document().document(), previousSourceText, newSource);
+        if (classified.command.has_value()) {
+          app.applyMutation(std::move(*classified.command));
+          handled = true;
+        }
+      }
+
+      if (!handled) {
+        app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(newSource));
+      }
+
+      previousSourceText = newSource;
       // `isTextChanged` is sticky until explicitly reset — without this
       // the next frame would re-submit another ReplaceDocument command
       // and clobber any in-progress drag state.

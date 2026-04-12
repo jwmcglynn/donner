@@ -93,6 +93,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "change_classifier_tests",
+    srcs = ["ChangeClassifier_tests.cc"],
+    deps = [
+        "//donner/editor:change_classifier",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "attribute_writeback_tests",
     srcs = ["AttributeWriteback_tests.cc"],
     deps = [

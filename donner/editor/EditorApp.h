@@ -133,6 +133,20 @@ public:
   /// command queue so the mutation seam is preserved.
   void redo();
 
+  // ---------------------------------------------------------------------------
+  // Structured editing (M5)
+  // ---------------------------------------------------------------------------
+
+  /// Enable or disable the structured-editing incremental path (M5).
+  /// When enabled, text edits that land inside a known attribute value
+  /// dispatch to `SetAttributeCommand` instead of `ReplaceDocumentCommand`,
+  /// preserving tree identity. Defaults to `false` — the flag is flipped
+  /// after the fuzzing soak (M8 in the design doc).
+  void setStructuredEditingEnabled(bool enabled) { structuredEditingEnabled_ = enabled; }
+
+  /// Whether the structured-editing incremental path is active.
+  [[nodiscard]] bool structuredEditingEnabled() const { return structuredEditingEnabled_; }
+
 private:
   AsyncSVGDocument document_;
   std::optional<svg::SVGElement> selectedElement_;
@@ -142,6 +156,8 @@ private:
   // version counter advances past the version we built the controller for.
   std::optional<svg::DonnerController> controller_;
   std::uint64_t controllerVersion_ = 0;
+
+  bool structuredEditingEnabled_ = false;
 };
 
 }  // namespace donner::editor
