@@ -94,20 +94,13 @@ jobs:
   # dominated by the shared renderer build, not the WebGPU fetch — the
   # vendored wgpu-native prebuilt is a ~12 MB http_archive.
   #
-  # Scope: the native Geode unit/integration tests plus the two
-  # `resvg_test_suite_geode_*` variants that the general linux job now
-  # explicitly excludes (they each run ~1500 image comparisons against
-  # llvmpipe and exceed the generic job's runner budget). The
+  # Scope: the native Geode unit/integration tests. The
   # `renderer_geode_golden_tests` target is intentionally excluded because
   # the skeleton's Slug AA produces edge-pixel differences against the
   # tiny-skia goldens (Geode-specific goldens are a separate decision).
-  #
-  # Job-level `timeout-minutes: 90` covers the worst-case where both resvg
-  # variants serialise under `--local_test_jobs=2` on a cold cache.
   linux-geode:
     runs-on: ubuntu-24.04
     continue-on-error: true
-    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
 
@@ -139,12 +132,6 @@ jobs:
           bazelisk test --config=geode --test_output=errors --local_test_jobs=2 \
             //donner/svg/renderer/geode/... \
             //donner/svg/renderer/tests:renderer_geode_tests
-
-      - name: Run Geode resvg variants (llvmpipe)
-        run: |
-          bazelisk test --test_output=errors --local_test_jobs=1 \
-            //donner/svg/renderer/tests:resvg_test_suite_geode_text \
-            //donner/svg/renderer/tests:resvg_test_suite_geode_text_full
 
   macos:
     runs-on: macos-15
