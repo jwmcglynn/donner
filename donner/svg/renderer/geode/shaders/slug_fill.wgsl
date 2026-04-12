@@ -43,9 +43,20 @@ struct Uniforms {
   paintMode: u32,
   // Pattern alpha multiplier (e.g., fill-opacity). 1.0 for solid paint.
   patternOpacity: f32,
-  // Padding to 16-byte alignment. Total struct size MUST match the CPU-side
-  // Uniforms struct in GeoEncoder.cc.
+  // Nonzero when a convex 4-vertex clip polygon is active. When 0, the
+  // `clipPolygonPlanes` field is ignored.
+  hasClipPolygon: u32,
+  // Nonzero when a path-clip mask texture is bound at binding 5 and
+  // should be sampled for per-pixel clip coverage. When 0, the mask
+  // binding still holds a 1x1 dummy texture (value 1.0) so the shader
+  // can unconditionally sample without tripping WebGPU validation.
+  hasClipMask: u32,
   _pad0: u32,
+  _pad1: u32,
+  // Four inward-facing half-planes in viewport-pixel space, one per polygon
+  // edge. `plane.xyz = (nx, ny, c)` with `nx*x + ny*y + c >= 0` inside. The
+  // `w` component is padding for std140-style alignment.
+  clipPolygonPlanes: array<vec4f, 4>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -81,6 +92,16 @@ struct Band {
 // 1x1 dummy texture is bound and the shader never samples it.
 @group(0) @binding(3) var patternTexture: texture_2d<f32>;
 @group(0) @binding(4) var patternSampler: sampler;
+
+// Path-clip mask texture (Phase 3b). R8Unorm, 1-sample (resolved from a
+// 4× MSAA render target before this draw). Always bound — when
+// `uniforms.hasClipMask == 0u` a 1x1 dummy texture with value 1.0 is
+// bound so the shader can unconditionally `textureSample` at the pixel
+// center without needing branchless paths or bind group layout
+// variants. The sampler uses linear filtering so the clip edge
+// interpolates smoothly across pixels.
+@group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
+@group(0) @binding(6) var clipMaskSampler: sampler;
 
 // ============================================================================
 // Vertex stage
@@ -237,6 +258,26 @@ fn curve_winding(curve: Quadratic, sample: vec2f) -> i32 {
 // Fragment stage
 // ============================================================================
 
+/// Test whether a sample position (in viewport-pixel space) lies inside
+/// the active convex clip polygon. Returns `true` when no polygon is
+/// active, so callers can unconditionally AND this into their coverage
+/// decision.
+fn sample_in_clip_polygon(pixel_pos: vec2f) -> bool {
+  if (uniforms.hasClipPolygon == 0u) {
+    return true;
+  }
+  for (var i = 0u; i < 4u; i = i + 1u) {
+    let plane = uniforms.clipPolygonPlanes[i];
+    // Small epsilon so samples exactly on the polygon boundary count as
+    // inside — matches the inclusive-at-boundary convention of the
+    // scissor rect fallback.
+    if (plane.x * pixel_pos.x + plane.y * pixel_pos.y + plane.z < -1e-4) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Test whether a single sub-pixel sample position is inside the fill,
 /// per the active fill rule. Shared between `fs_main` sample-mask loop
 /// and any future per-sample helpers.
@@ -268,6 +309,12 @@ struct FragOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
   let band = bands[in.bandIndex];
+
+  // Framebuffer-pixel center of this fragment. WGSL specifies that
+  // reading `@builtin(position)` in the fragment stage returns the pixel
+  // coordinates (x + 0.5, y + 0.5) — this is what the clip polygon's
+  // half-plane equations are expressed in.
+  let pixel_center = in.clip_pos.xy;
 
   // NO pixel-center band-Y clip. The previous single-sample path
   // discarded fragments whose pixel center fell outside the band's
@@ -319,6 +366,14 @@ fn fs_main(in: VertexOutput) -> FragOutput {
       continue;
     }
 
+    // Convex clip-polygon test, in viewport-pixel space. The polygon
+    // planes were uploaded by `GeoEncoder::setClipPolygon`; no-op when
+    // inactive.
+    let pixel_sample = pixel_center + offsets[s];
+    if (!sample_in_clip_polygon(pixel_sample)) {
+      continue;
+    }
+
     if (sample_is_inside(band, sp)) {
       mask = mask | (1u << s);
     }
@@ -328,6 +383,24 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     discard;
   }
 
+  // Path-clip mask: sample the pre-rendered clip mask texture at the
+  // pixel center and fold its coverage into the fragment colour. The
+  // mask texture was resolved from a 4× MSAA render target so its
+  // alpha channel already carries fractional edge coverage; sampling
+  // with a linear filter interpolates that across pixel boundaries.
+  // When no mask is active, `hasClipMask == 0` and we skip the work
+  // entirely — the dummy texture's 1.0 value would also work but the
+  // branch shaves a texture fetch off the hot path.
+  var clipCoverage: f32 = 1.0;
+  if (uniforms.hasClipMask != 0u) {
+    let mask_uv = pixel_center / uniforms.viewport;
+    clipCoverage = clamp(textureSample(clipMaskTexture, clipMaskSampler, mask_uv).r,
+                         0.0, 1.0);
+    if (clipCoverage <= 0.0) {
+      discard;
+    }
+  }
+
   var out: FragOutput;
   out.mask = mask;
 
@@ -335,7 +408,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // `uniforms.color` is already premultiplied by the host encoder.
     // The hardware routes this one color to the selected samples and
     // resolves to fractional coverage after the pass.
-    out.color = uniforms.color;
+    out.color = uniforms.color * clipCoverage;
     return out;
   }
 
@@ -348,7 +421,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   );
   let uv = wrapped / uniforms.tileSize;
   var sampled = textureSample(patternTexture, patternSampler, uv);
-  sampled = sampled * uniforms.patternOpacity;
+  sampled = sampled * uniforms.patternOpacity * clipCoverage;
   out.color = sampled;
   return out;
 }

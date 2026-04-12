@@ -103,4 +103,48 @@ private:
   wgpu::RenderPipeline pipeline_;
 };
 
+/**
+ * Caches a compiled `wgpu::RenderPipeline` for the path-clip mask shader
+ * (`shaders/slug_mask.wgsl`) plus its bind-group layout.
+ *
+ * The mask pipeline is a stripped-down sibling of @ref GeodePipeline —
+ * it reuses the same vertex shader, the same band/curve storage SSBOs,
+ * and the same 4× MSAA coverage path, but the fragment stage writes a
+ * single-channel coverage value into an `R8Unorm` color attachment. The
+ * resulting mask texture is then sampled by @ref GeodePipeline and
+ * @ref GeodeGradientPipeline as a clip coverage multiplier.
+ *
+ * The bind group layout is:
+ * - binding 0: uniform buffer (mvp, viewport, fillRule).
+ * - binding 1: storage buffer (read-only) — Band[].
+ * - binding 2: storage buffer (read-only) — curve data (flat f32[]).
+ *
+ * No texture / sampler bindings — the mask pipeline doesn't read from
+ * any texture input. Multiple paths belonging to a single clip layer
+ * are unioned on the hardware side via `BlendOperation::Max`.
+ */
+class GeodeMaskPipeline {
+public:
+  /**
+   * Create a Slug mask pipeline for the given device. Renders into an
+   * R8Unorm MSAA texture (the mask target is allocated by the caller).
+   */
+  explicit GeodeMaskPipeline(const wgpu::Device& device);
+
+  ~GeodeMaskPipeline() = default;
+  GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;
+  GeodeMaskPipeline& operator=(const GeodeMaskPipeline&) = delete;
+  GeodeMaskPipeline(GeodeMaskPipeline&&) noexcept = default;
+  GeodeMaskPipeline& operator=(GeodeMaskPipeline&&) noexcept = default;
+
+  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  /// The color format the pipeline targets. Always `R8Unorm`.
+  wgpu::TextureFormat colorFormat() const { return wgpu::TextureFormat::R8Unorm; }
+
+private:
+  wgpu::BindGroupLayout bindGroupLayout_;
+  wgpu::RenderPipeline pipeline_;
+};
+
 }  // namespace donner::geode

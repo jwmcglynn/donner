@@ -204,6 +204,74 @@ public:
   void clearScissorRect();
 
   /**
+   * Activate a convex 4-vertex clip polygon (Phase 3a).
+   *
+   * Unlike `setScissorRect`, this clips to the exact parallelogram
+   * described by the 4 corners — used for `<symbol>` / `<svg>` /
+   * `<use>` viewports that have a non-axis-aligned ancestor transform
+   * where WebGPU's rectangular scissor can only express the AABB of
+   * the transformed rect, not the true polygon. The fragment shader
+   * tests each of 4 edge half-planes against its sub-pixel sample
+   * positions and AND's the result into `@builtin(sample_mask)` so
+   * clipping integrates with the 4× MSAA coverage path.
+   *
+   * @param corners 4 polygon vertices in target-pixel space, given in
+   *   consistent (clockwise OR counter-clockwise) winding order. The
+   *   encoder normalises edge normals so a fragment strictly INSIDE
+   *   the polygon satisfies every half-plane test.
+   */
+  void setClipPolygon(const Vector2d corners[4]);
+
+  /// Clear any active clip polygon, restoring unclipped rasterisation
+  /// (or falling back to just the scissor rect, if one is set).
+  void clearClipPolygon();
+
+  /**
+   * Phase 3b: open a new render pass that writes into the given mask
+   * texture pair. Used by `RendererGeode::pushClip` to materialise a
+   * path-based clip into an R8Unorm coverage texture that subsequent
+   * fill/gradient draws can sample.
+   *
+   * The main render pass, if open, is closed first. Subsequent
+   * `fillPathIntoMask` calls add paths to the mask via the Slug mask
+   * pipeline. `endMaskPass` closes the mask pass and re-opens the
+   * main pass (with `LoadOp::Load`) when the next draw lands.
+   *
+   * @param msaaMask 4× MSAA R8Unorm render target. Must be the same
+   *   size as this encoder's target. Cleared to 0 at the start of
+   *   the pass.
+   * @param resolveMask 1-sample R8Unorm resolve target. Sampled by
+   *   `setClipMask` after `endMaskPass`.
+   */
+  void beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask);
+
+  /**
+   * Fill `path` into the currently open mask pass using the Slug mask
+   * pipeline. Must be called between `beginMaskPass` and `endMaskPass`.
+   * The current encoder transform applies (so clip paths use the same
+   * device-pixel mapping as the content being clipped).
+   */
+  void fillPathIntoMask(const Path& path, FillRule rule);
+
+  /// Close the mask render pass opened by `beginMaskPass`.
+  void endMaskPass();
+
+  /**
+   * Bind `maskView` as the clip mask texture for subsequent fill /
+   * gradient draws. The view must reference a 1-sample R8Unorm
+   * texture the same size as the encoder's target — typically the
+   * resolve texture produced by `beginMaskPass` + `endMaskPass`.
+   *
+   * The shader samples `.r` at the pixel center and multiplies it
+   * into fragment coverage, so the mask represents a pre-rendered
+   * clip region in [0, 1].
+   */
+  void setClipMask(const wgpu::TextureView& maskView);
+
+  /// Remove any active clip mask, restoring unclipped rasterisation.
+  void clearClipMask();
+
+  /**
    * Blit an offscreen texture across the entire target with an alpha
    * multiplier. Used by `RendererGeode::popIsolatedLayer` to composite a
    * sub-layer's content back onto the outer target. The source texture
@@ -216,6 +284,24 @@ public:
    * @param opacity Overall alpha multiplier in [0, 1].
    */
   void blitFullTarget(const wgpu::Texture& src, double opacity);
+
+  /**
+   * Phase 3c `<mask>` compositing. Same as @ref blitFullTarget but
+   * additionally samples a luminance mask texture and multiplies the
+   * content by the mask's BT.709 luminance (× alpha, matching
+   * tiny-skia's `Mask::fromPixmap(Luminance)`). When `maskBounds` is
+   * provided, pixels outside the rect are discarded so the `<mask>`
+   * element's x/y/width/height are honoured.
+   *
+   * @param content Offscreen RGBA8 content texture, premultiplied,
+   *   same size as this encoder's target.
+   * @param mask Offscreen RGBA8 mask texture, premultiplied, same
+   *   size as `content`. The mask's luminance × alpha becomes a
+   *   per-pixel coverage multiplier on the content.
+   * @param maskBounds Optional clip rect in target-pixel space.
+   */
+  void blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
+                            const std::optional<Box2d>& maskBounds);
 
   /**
    * Draw a raster image into the given destination rectangle.

@@ -36,9 +36,31 @@ struct alignas(16) Uniforms {
   uint32_t fillRule;          // 160 .. 164
   uint32_t paintMode;         // 164 .. 168
   float patternOpacity;       // 168 .. 172
-  uint32_t _pad0;             // 172 .. 176 pad struct to 176 (mat4 alignment)
+  uint32_t hasClipPolygon;    // 172 .. 176 — 0 = no clip, 1 = clipPolygon active
+  // Phase 3b path-clip mask flag. When nonzero, the shader samples the
+  // clip mask texture at binding 5 (linear-filtered R8Unorm) and folds
+  // its red-channel coverage into the fragment colour. A 1x1 dummy
+  // texture is always bound so the `textureSample` is always legal.
+  uint32_t hasClipMask;       // 176 .. 180
+  uint32_t _clipPad0;         // 180 .. 184 — std140 alignment for next vec4 array
+  uint32_t _clipPad1;         // 184 .. 188
+  uint32_t _clipPad2;         // 188 .. 192
+  // Phase 3a polygon clipping: a 4-vertex convex clip polygon expressed
+  // as 4 edge half-planes, one per side, in VIEWPORT-PIXEL space. Each
+  // edge is `(a, b, c)` such that `a*x + b*y + c >= 0` marks the inside
+  // half-plane (the normal `(a, b)` points into the clipped region).
+  // The fragment shader AND's these half-plane tests into its
+  // `sample_mask` output so the clip integrates with the per-sample
+  // MSAA coverage path. Used by `RendererGeode::pushClip` for
+  // transformed rectangular viewports (`<symbol>` / `<use>` /
+  // `<svg>` viewports with a non-axis-aligned transform) where the
+  // true clip shape is a parallelogram that WebGPU's rectangular
+  // scissor rect cannot express. Stored as `vec4f[4]` (vec4 = xyz + pad)
+  // so the struct stays mat4x4-aligned and the WGSL side reads
+  // `array<vec4f, 4>` directly.
+  float clipPolygonPlanes[16];  // 192 .. 256 (4 edges × vec4)
 };
-static_assert(sizeof(Uniforms) == 176, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 256, "Uniforms struct layout mismatch");
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
 /// into the first 16 floats of the output array. Used for the `mvp` and
@@ -115,8 +137,17 @@ struct alignas(16) GradientUniforms {
   uint32_t stopCount;         // 156 .. 160
   float stopColors[16 * 4];   // 160 .. 416
   float stopOffsets[4 * 4];   // 416 .. 480
+  // Phase 3a convex clip polygon + Phase 3b path-clip mask flag.
+  // Layout mirrors `slug_gradient.wgsl` — `hasClipPolygon` +
+  // `hasClipMask` + 2 pad u32 to reach vec4 alignment, then the 4
+  // half-plane rows.
+  uint32_t hasClipPolygon;    // 480 .. 484
+  uint32_t hasClipMask;       // 484 .. 488
+  uint32_t _clipPad1;         // 488 .. 492
+  uint32_t _clipPad2;         // 492 .. 496
+  float clipPolygonPlanes[16];// 496 .. 560
 };
-static_assert(sizeof(GradientUniforms) == 480,
+static_assert(sizeof(GradientUniforms) == 560,
               "GradientUniforms struct layout mismatch");
 
 /// Gradient kind values shared with `shaders/slug_gradient.wgsl`.
@@ -151,6 +182,40 @@ struct GeoEncoder::Impl {
   wgpu::TextureView dummyTextureView;
   wgpu::Sampler dummySampler;
 
+  // 1x1 R8Unorm dummy texture bound to the clip-mask slot when no
+  // clip is active. The single texel is `0xFF` so `textureSample(...).r`
+  // returns 1.0 — i.e., "this pixel is fully unclipped" — allowing
+  // the shader to sample unconditionally without branching on
+  // `hasClipMask` just to avoid an invalid texture read.
+  wgpu::Texture dummyClipMaskTexture;
+  wgpu::TextureView dummyClipMaskTextureView;
+
+  // Currently-bound clip mask state (Phase 3b). When
+  // `activeClipMaskView` is non-null, `hasClipMask == 1` in the
+  // uniforms and draws sample `activeClipMaskView` through the
+  // clip-mask binding. When null, the dummy is bound instead.
+  wgpu::TextureView activeClipMaskView;
+  wgpu::Sampler clipMaskSampler;
+
+  // Lazily-constructed mask-rendering pipeline. We build one when the
+  // first `beginMaskPass` call arrives so encoders that never touch
+  // clipping pay no construction cost. Shared across all mask passes
+  // within the lifetime of this encoder.
+  std::unique_ptr<GeodeMaskPipeline> maskPipelineOwned;
+
+  // While a mask pass is open (`maskPassOpen == true`), the main
+  // render pass is closed — draw calls that hit the mask pipeline go
+  // through `maskPass`. `beginMaskPass` saves the current `transform`
+  // so main-pass draw code picks back up exactly where it left off
+  // when the mask pass ends.
+  bool maskPassOpen = false;
+  wgpu::RenderPassEncoder maskPass;
+  // Transform active when the mask pass was opened, so mask draws use
+  // the same device-pixel space as the parent content. The mask pass
+  // always renders into the mask texture the caller passed in, which
+  // is the same size as the main target.
+  Transform2d maskPassSavedTransform = Transform2d();
+
   // Pending draws are recorded into a render pass that's lazily opened.
   // The first clear/fill triggers `beginPass()`; finish() ends it.
   bool passOpen = false;
@@ -181,6 +246,34 @@ struct GeoEncoder::Impl {
   uint32_t scissorW = 0;
   uint32_t scissorH = 0;
 
+  /// Phase 3a polygon clipping state. When `clipPolygonActive` is true,
+  /// the 4 planes in `clipPolygonPlanes` describe the inside half-plane
+  /// of each edge of a convex 4-vertex clip polygon in VIEWPORT-PIXEL
+  /// space. Each plane is `(a, b, c)` such that a fragment at
+  /// `@builtin(position).xy` is inside when `a*x + b*y + c >= 0`. The
+  /// fragment shader AND's these tests into its sample_mask so the
+  /// clip integrates with per-sample MSAA coverage.
+  ///
+  /// Set via `setClipPolygon` from `RendererGeode::pushClip` when the
+  /// current clip is a rectangular viewport with a non-axis-aligned
+  /// ancestor transform (where WebGPU's scissor rect can only describe
+  /// the AABB of the transformed rect, not the true parallelogram).
+  /// Cleared via `clearClipPolygon` when popClip restores a clip with
+  /// no active polygon.
+  bool clipPolygonActive = false;
+  float clipPolygonPlanes[16] = {0};  // 4 edges × vec4 (xyz + pad)
+
+  /// Populate the `hasClipPolygon` + `clipPolygonPlanes` fields on an
+  /// outgoing `Uniforms` / `GradientUniforms` struct. Keeps the
+  /// encoding of the clip state centralised so every draw helper that
+  /// writes a uniform picks up the same snapshot.
+  void writeClipPolygonUniforms(uint32_t& outFlag, float (&outPlanes)[16]) const {
+    outFlag = clipPolygonActive ? 1u : 0u;
+    for (size_t i = 0; i < 16; ++i) {
+      outPlanes[i] = clipPolygonPlanes[i];
+    }
+  }
+
   /// Apply the current scissor to the open render pass. No-op if the
   /// pass isn't open yet — `ensurePassOpen` will call this on first
   /// open. Safe to call whenever `scissorActive` / `scissor*` changes.
@@ -204,13 +297,15 @@ struct GeoEncoder::Impl {
     }
   }
 
-  /// Lazily create the dummy texture + sampler used by the solid-fill path.
+  /// Lazily create the dummy texture + sampler used by the solid-fill path
+  /// *and* the Phase 3b dummy clip mask texture + clip mask sampler.
   void ensureDummyResources() {
     if (dummyTextureView) {
       return;
     }
     const wgpu::Device& dev = device->device();
 
+    // --- Pattern dummy (RGBA8Unorm, 1x1, opaque black) ---
     wgpu::TextureDescriptor td = {};
     td.label = "GeoEncoderDummyPattern";
     td.size = {1u, 1u, 1u};
@@ -242,6 +337,50 @@ struct GeoEncoder::Impl {
     sd.minFilter = wgpu::FilterMode::Linear;
     sd.magFilter = wgpu::FilterMode::Linear;
     dummySampler = dev.CreateSampler(&sd);
+
+    // --- Clip-mask dummy (R8Unorm, 1x1, value 0xFF = 1.0) ---
+    wgpu::TextureDescriptor maskDummyDesc = {};
+    maskDummyDesc.label = "GeoEncoderDummyClipMask";
+    maskDummyDesc.size = {1u, 1u, 1u};
+    maskDummyDesc.format = wgpu::TextureFormat::R8Unorm;
+    maskDummyDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    maskDummyDesc.mipLevelCount = 1;
+    maskDummyDesc.sampleCount = 1;
+    maskDummyDesc.dimension = wgpu::TextureDimension::e2D;
+    dummyClipMaskTexture = dev.CreateTexture(&maskDummyDesc);
+
+    const uint8_t maskPixel[1] = {0xFF};
+    wgpu::TexelCopyTextureInfo maskDst = {};
+    maskDst.texture = dummyClipMaskTexture;
+    wgpu::TexelCopyBufferLayout maskLayout = {};
+    maskLayout.bytesPerRow = 1;
+    maskLayout.rowsPerImage = 1;
+    wgpu::Extent3D maskExtent = {1u, 1u, 1u};
+    device->queue().WriteTexture(&maskDst, maskPixel, sizeof(maskPixel), &maskLayout,
+                                 &maskExtent);
+
+    dummyClipMaskTextureView = dummyClipMaskTexture.CreateView();
+
+    // Clip mask sampler — Linear / ClampToEdge so edge coverage
+    // interpolates smoothly without wrapping back to the opposite
+    // side of the mask texture.
+    wgpu::SamplerDescriptor maskSd = {};
+    maskSd.label = "GeoEncoderClipMaskSampler";
+    maskSd.addressModeU = wgpu::AddressMode::ClampToEdge;
+    maskSd.addressModeV = wgpu::AddressMode::ClampToEdge;
+    maskSd.minFilter = wgpu::FilterMode::Linear;
+    maskSd.magFilter = wgpu::FilterMode::Linear;
+    clipMaskSampler = dev.CreateSampler(&maskSd);
+  }
+
+  /// Return the texture view that should be bound to the clip-mask
+  /// slot for the next draw — the active mask if set, or the dummy
+  /// otherwise. Always returns a valid view after `ensureDummyResources`.
+  const wgpu::TextureView& currentClipMaskView() {
+    if (activeClipMaskView) {
+      return activeClipMaskView;
+    }
+    return dummyClipMaskTextureView;
   }
 
   /// Open the render pass on demand.
@@ -433,6 +572,237 @@ void GeoEncoder::clearScissorRect() {
   impl_->applyScissorIfPassOpen();
 }
 
+void GeoEncoder::setClipPolygon(const Vector2d corners[4]) {
+  // Compute the inward-facing half-plane for each of the 4 edges of the
+  // convex polygon. Edge i runs from `corners[i]` to `corners[(i+1)%4]`,
+  // with direction `d = corners[(i+1)%4] - corners[i]`. The inward
+  // normal is `n = (-d.y, d.x)` when the winding is counter-clockwise
+  // in screen space (which in SVG's y-down coord system is "clockwise
+  // when viewed on-screen"). We DETECT the winding by computing the
+  // signed area of the polygon; if the area is negative we flip the
+  // normals so the half-plane equations always point *inside*.
+  //
+  // Each plane is stored as (a, b, c, pad) where `a*x + b*y + c >= 0`
+  // marks the inside half-plane. `c = -(a*corners[i].x + b*corners[i].y)`
+  // offsets the plane to pass through the edge start.
+
+  // Signed area (Shoelace formula / 2). Positive → CCW in standard math
+  // (y-up) but in SVG (y-down) that maps to a CW visual winding.
+  double signedArea = 0.0;
+  for (size_t i = 0; i < 4; ++i) {
+    const Vector2d& p0 = corners[i];
+    const Vector2d& p1 = corners[(i + 1) % 4];
+    signedArea += (p0.x * p1.y) - (p1.x * p0.y);
+  }
+  const double windingSign = signedArea >= 0.0 ? 1.0 : -1.0;
+
+  for (size_t i = 0; i < 4; ++i) {
+    const Vector2d& p0 = corners[i];
+    const Vector2d& p1 = corners[(i + 1) % 4];
+    const double dx = p1.x - p0.x;
+    const double dy = p1.y - p0.y;
+    // Inward normal: rotate (dx, dy) by +90° (= (-dy, dx)) and flip if
+    // the overall polygon winding is negative.
+    double nx = -dy * windingSign;
+    double ny = dx * windingSign;
+    // Normalise so the half-plane value is in viewport-pixel units
+    // (makes the per-sample test resolution-independent).
+    const double len = std::sqrt(nx * nx + ny * ny);
+    if (len > 1e-12) {
+      nx /= len;
+      ny /= len;
+    }
+    const double c = -(nx * p0.x + ny * p0.y);
+    impl_->clipPolygonPlanes[i * 4 + 0] = static_cast<float>(nx);
+    impl_->clipPolygonPlanes[i * 4 + 1] = static_cast<float>(ny);
+    impl_->clipPolygonPlanes[i * 4 + 2] = static_cast<float>(c);
+    impl_->clipPolygonPlanes[i * 4 + 3] = 0.0f;
+  }
+  impl_->clipPolygonActive = true;
+}
+
+void GeoEncoder::clearClipPolygon() {
+  impl_->clipPolygonActive = false;
+  for (size_t i = 0; i < 16; ++i) {
+    impl_->clipPolygonPlanes[i] = 0.0f;
+  }
+}
+
+// ============================================================================
+// Phase 3b: clip mask pass
+// ============================================================================
+
+void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask,
+                               const wgpu::Texture& resolveMask) {
+  if (!msaaMask || !resolveMask) {
+    return;
+  }
+
+  // Close the current main render pass so the new mask pass can open
+  // against the mask texture. A subsequent main draw will lazily
+  // reopen the main pass with `LoadOp::Load` via `setLoadPreserve()`.
+  // Only flip `loadPreserve` when the main pass was *actually* open:
+  // if no main draw has landed yet the initial clear still needs to
+  // run on the next open.
+  const bool mainPassWasOpen = impl_->passOpen;
+  if (mainPassWasOpen) {
+    impl_->pass.End();
+    impl_->passOpen = false;
+    impl_->loadPreserve = true;
+  }
+
+  // Lazily build the mask pipeline on first use.
+  if (!impl_->maskPipelineOwned) {
+    impl_->maskPipelineOwned = std::make_unique<GeodeMaskPipeline>(impl_->device->device());
+  }
+
+  impl_->maskPassSavedTransform = impl_->transform;
+
+  wgpu::TextureView msaaView = msaaMask.CreateView();
+  wgpu::TextureView resolveView = resolveMask.CreateView();
+
+  wgpu::RenderPassColorAttachment color = {};
+  color.view = msaaView;
+  color.resolveTarget = resolveView;
+  color.loadOp = wgpu::LoadOp::Clear;
+  color.storeOp = wgpu::StoreOp::Store;
+  color.clearValue = {0.0, 0.0, 0.0, 0.0};
+
+  wgpu::RenderPassDescriptor desc = {};
+  desc.colorAttachmentCount = 1;
+  desc.colorAttachments = &color;
+  desc.label = "GeoEncoderMaskPass";
+  impl_->maskPass = impl_->commandEncoder.BeginRenderPass(&desc);
+  impl_->maskPass.SetPipeline(impl_->maskPipelineOwned->pipeline());
+  // Full-target scissor so clip-path fills aren't clipped by any
+  // outer scissor still cached in the encoder state.
+  impl_->maskPass.SetScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
+  impl_->maskPassOpen = true;
+}
+
+void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule) {
+  if (!impl_->maskPassOpen) {
+    return;
+  }
+  // The mask pipeline now samples a nested clip mask via bindings
+  // 3/4, so it needs the dummy mask texture + sampler bound when
+  // no deeper layer is active. `ensureDummyResources` is idempotent
+  // and normally runs during the main draw path, but `beginMaskPass`
+  // can be called BEFORE any main draw on a fresh encoder.
+  impl_->ensureDummyResources();
+  EncodedPath encoded = GeodePathEncoder::encode(path, rule);
+  if (encoded.empty()) {
+    return;
+  }
+
+  const wgpu::Device& dev = impl_->device->device();
+  const wgpu::Queue& queue = impl_->device->queue();
+
+  const uint64_t vbSize = roundUp4(encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+  wgpu::BufferDescriptor vbDesc = {};
+  vbDesc.label = "GeodeMaskVB";
+  vbDesc.size = vbSize;
+  vbDesc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer vb = dev.CreateBuffer(&vbDesc);
+  queue.WriteBuffer(vb, 0, encoded.vertices.data(),
+                    encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+
+  const uint64_t bandsSize = roundUp4(encoded.bands.size() * sizeof(EncodedPath::Band));
+  wgpu::BufferDescriptor bandsDesc = {};
+  bandsDesc.label = "GeodeMaskBandsSSBO";
+  bandsDesc.size = bandsSize;
+  bandsDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer bandsBuf = dev.CreateBuffer(&bandsDesc);
+  queue.WriteBuffer(bandsBuf, 0, encoded.bands.data(),
+                    encoded.bands.size() * sizeof(EncodedPath::Band));
+
+  const uint64_t curveFloats = encoded.curves.size() * 6u;
+  const uint64_t curvesSize = roundUp4(curveFloats * sizeof(float));
+  wgpu::BufferDescriptor curvesDesc = {};
+  curvesDesc.label = "GeodeMaskCurvesSSBO";
+  curvesDesc.size = curvesSize;
+  curvesDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer curvesBuf = dev.CreateBuffer(&curvesDesc);
+  queue.WriteBuffer(curvesBuf, 0, encoded.curves.data(),
+                    encoded.curves.size() * sizeof(EncodedPath::Curve));
+
+  // Mask uniforms — mvp, viewport, fillRule, hasClipMask. The last
+  // field gates whether the fragment shader samples the nested clip
+  // mask at binding 3 (used for nested `<clipPath>` references —
+  // each outer-layer shape is intersected with the deeper layer's
+  // already-rendered union).
+  struct alignas(16) MaskUniforms {
+    float mvp[16];        //  0 ..  64
+    float viewport[2];    // 64 ..  72
+    uint32_t fillRule;    // 72 ..  76
+    uint32_t hasClipMask; // 76 ..  80
+  };
+  static_assert(sizeof(MaskUniforms) == 80, "MaskUniforms layout mismatch");
+
+  MaskUniforms u = {};
+  impl_->buildMvp(u.mvp);
+  u.viewport[0] = static_cast<float>(impl_->targetWidth);
+  u.viewport[1] = static_cast<float>(impl_->targetHeight);
+  u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
+  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
+
+  wgpu::BufferDescriptor uniDesc = {};
+  uniDesc.label = "GeodeMaskUniforms";
+  uniDesc.size = sizeof(MaskUniforms);
+  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer uniBuf = dev.CreateBuffer(&uniDesc);
+  queue.WriteBuffer(uniBuf, 0, &u, sizeof(MaskUniforms));
+
+  wgpu::BindGroupEntry entries[5] = {};
+  entries[0].binding = 0;
+  entries[0].buffer = uniBuf;
+  entries[0].size = sizeof(MaskUniforms);
+  entries[1].binding = 1;
+  entries[1].buffer = bandsBuf;
+  entries[1].size = bandsSize;
+  entries[2].binding = 2;
+  entries[2].buffer = curvesBuf;
+  entries[2].size = curvesSize;
+  entries[3].binding = 3;
+  entries[3].textureView = impl_->currentClipMaskView();
+  entries[4].binding = 4;
+  entries[4].sampler = impl_->clipMaskSampler;
+
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.label = "GeodeMaskBindGroup";
+  bgDesc.layout = impl_->maskPipelineOwned->bindGroupLayout();
+  bgDesc.entryCount = 5;
+  bgDesc.entries = entries;
+  wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
+
+  impl_->maskPass.SetVertexBuffer(0, vb, 0, vbSize);
+  impl_->maskPass.SetBindGroup(0, bindGroup);
+  impl_->maskPass.Draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+}
+
+void GeoEncoder::endMaskPass() {
+  if (!impl_->maskPassOpen) {
+    return;
+  }
+  impl_->maskPass.End();
+  impl_->maskPassOpen = false;
+  // Rebind pipeline tracker — the main pass will need to re-select a
+  // pipeline on its next draw.
+  impl_->currentPipeline = Impl::BoundPipeline::kNone;
+  impl_->currentPipelineIsGradient = false;
+  // Restore encoder transform in case the caller trampled it with a
+  // mask-local transform.
+  impl_->transform = impl_->maskPassSavedTransform;
+}
+
+void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
+  impl_->activeClipMaskView = maskView;
+}
+
+void GeoEncoder::clearClipMask() {
+  impl_->activeClipMaskView = wgpu::TextureView{};
+}
+
 void GeoEncoder::setLoadPreserve() {
   // No-op if a pass is already open — loadOp is a pass-construction
   // parameter and can't be changed mid-pass. The RendererGeode caller
@@ -521,6 +891,11 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule,
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
+  // Always prepare the clip-mask dummy texture + sampler; the bind
+  // group layout requires a valid texture view at binding 5 and a
+  // valid sampler at binding 6 regardless of whether a clip is
+  // active.
+  impl_->ensureDummyResources();
   impl_->ensurePassOpen();
   impl_->bindSolidPipeline();
 
@@ -583,7 +958,8 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   u.fillRule = (args.rule == FillRule::EvenOdd) ? 1u : 0u;
   u.paintMode = args.paintMode;
   u.patternOpacity = args.patternOpacity;
-  u._pad0 = 0u;
+  impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
+  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
 
   wgpu::BufferDescriptor uniDesc = {};
   uniDesc.label = "GeodeUniforms";
@@ -592,10 +968,12 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   wgpu::Buffer uniBuf = dev.CreateBuffer(&uniDesc);
   queue.WriteBuffer(uniBuf, 0, &u, sizeof(Uniforms));
 
-  // 3. Bind group — five entries: uniforms, bands SSBO, curves SSBO,
-  // pattern texture, pattern sampler. Solid-fill draws bind the dummy
-  // texture / sampler; the shader skips sampling when paintMode == 0.
-  wgpu::BindGroupEntry entries[5] = {};
+  // 3. Bind group — seven entries: uniforms, bands SSBO, curves SSBO,
+  // pattern texture, pattern sampler, clip-mask texture, clip-mask
+  // sampler. Solid-fill draws bind dummies for the pattern slot and
+  // the clip-mask slot binds either the dummy (hasClipMask == 0) or
+  // the active mask from `setClipMask`.
+  wgpu::BindGroupEntry entries[7] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
   entries[0].size = sizeof(Uniforms);
@@ -609,11 +987,15 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   entries[3].textureView = args.patternView;
   entries[4].binding = 4;
   entries[4].sampler = args.patternSampler;
+  entries[5].binding = 5;
+  entries[5].textureView = impl_->currentClipMaskView();
+  entries[6].binding = 6;
+  entries[6].sampler = impl_->clipMaskSampler;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = "GeodeBindGroup";
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 5;
+  bgDesc.entryCount = 7;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
 
@@ -680,6 +1062,9 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
     return;
   }
 
+  // The gradient bind group now has a clip-mask texture binding (see
+  // Phase 3b); we need a dummy bound when no clip is active.
+  impl_->ensureDummyResources();
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
@@ -730,6 +1115,8 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   populateSharedGradientUniforms<LinearGradientParams::Stop>(
       u, params.gradientFromPath, params.spreadMode, params.stops, rule);
   u.gradientKind = kGradientKindLinear;
+  impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
+  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
 
   u.startGrad[0] = static_cast<float>(params.startGrad.x);
   u.startGrad[1] = static_cast<float>(params.startGrad.y);
@@ -743,8 +1130,9 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   wgpu::Buffer uniBuf = dev.CreateBuffer(&uniDesc);
   queue.WriteBuffer(uniBuf, 0, &u, sizeof(GradientUniforms));
 
-  // 4. Bind group (same shape as the solid pipeline: uniform + 2 SSBOs).
-  wgpu::BindGroupEntry entries[3] = {};
+  // 4. Bind group — five entries: uniforms, bands SSBO, curves SSBO,
+  // clip-mask texture, clip-mask sampler.
+  wgpu::BindGroupEntry entries[5] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
   entries[0].size = sizeof(GradientUniforms);
@@ -754,11 +1142,15 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   entries[2].binding = 2;
   entries[2].buffer = curvesBuf;
   entries[2].size = curvesSize;
+  entries[3].binding = 3;
+  entries[3].textureView = impl_->currentClipMaskView();
+  entries[4].binding = 4;
+  entries[4].sampler = impl_->clipMaskSampler;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = "GeodeGradientBindGroup";
   bgDesc.layout = impl_->gradientPipeline->bindGroupLayout();
-  bgDesc.entryCount = 3;
+  bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
 
@@ -779,6 +1171,8 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
     return;
   }
 
+  // Dummy texture for the clip-mask slot, see fillPathLinearGradient.
+  impl_->ensureDummyResources();
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
@@ -826,6 +1220,8 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   populateSharedGradientUniforms<RadialGradientParams::Stop>(
       u, params.gradientFromPath, params.spreadMode, params.stops, rule);
   u.gradientKind = kGradientKindRadial;
+  impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
+  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
 
   u.radialCenter[0] = static_cast<float>(params.center.x);
   u.radialCenter[1] = static_cast<float>(params.center.y);
@@ -841,7 +1237,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   wgpu::Buffer uniBuf = dev.CreateBuffer(&uniDesc);
   queue.WriteBuffer(uniBuf, 0, &u, sizeof(GradientUniforms));
 
-  wgpu::BindGroupEntry entries[3] = {};
+  wgpu::BindGroupEntry entries[5] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
   entries[0].size = sizeof(GradientUniforms);
@@ -851,11 +1247,15 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   entries[2].binding = 2;
   entries[2].buffer = curvesBuf;
   entries[2].size = curvesSize;
+  entries[3].binding = 3;
+  entries[3].textureView = impl_->currentClipMaskView();
+  entries[4].binding = 4;
+  entries[4].sampler = impl_->clipMaskSampler;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = "GeodeRadialGradientBindGroup";
   bgDesc.layout = impl_->gradientPipeline->bindGroupLayout();
-  bgDesc.entryCount = 3;
+  bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
 
@@ -901,6 +1301,46 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
   qp.sourceIsPremultiplied = true;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+}
+
+void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
+                                      const std::optional<Box2d>& maskBounds) {
+  if (!content || !mask) {
+    return;
+  }
+  impl_->ensurePassOpen();
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  // Identity MVP for target-pixel → clip space, same as blitFullTarget.
+  const double sx = 2.0 / static_cast<double>(impl_->targetWidth);
+  const double sy = -2.0 / static_cast<double>(impl_->targetHeight);
+  float mvp[16] = {0};
+  mvp[0] = static_cast<float>(sx);
+  mvp[5] = static_cast<float>(sy);
+  mvp[10] = 1.0f;
+  mvp[12] = -1.0f;
+  mvp[13] = 1.0f;
+  mvp[15] = 1.0f;
+
+  GeodeTextureEncoder::QuadParams qp;
+  qp.destRect = Box2d(Vector2d(0.0, 0.0),
+                      Vector2d(static_cast<double>(impl_->targetWidth),
+                               static_cast<double>(impl_->targetHeight)));
+  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  qp.opacity = 1.0;
+  qp.filter = GeodeTextureEncoder::Filter::Linear;
+  // Both content and mask are offscreen render targets produced by
+  // Geode's premultiplied source-over pipeline, so they're already
+  // in premultiplied alpha.
+  qp.sourceIsPremultiplied = true;
+  qp.maskTexture = mask;
+  if (maskBounds.has_value()) {
+    qp.applyMaskBounds = true;
+    qp.maskBounds = *maskBounds;
+  }
+
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, content,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
 }
 
