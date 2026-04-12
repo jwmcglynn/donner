@@ -29,20 +29,6 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
               mesa-vulkan-drivers libvulkan1 libvulkan-dev
-            # mesa-vulkan-drivers + libvulkan1 are needed at TEST time:
-            # `bazelisk test //...` now executes the Geode test variants
-            # through `donner_variant_cc_test`'s multi-transition, and
-            # wgpu-native's Vulkan backend needs an ICD (llvmpipe via
-            # Mesa) to initialise on a headless Linux host. Without it,
-            # Geode tests crash on device creation and surface as random
-            # pixel-diff failures — separate from the dedicated
-            # `linux-geode` job which already installs these.
-            #
-            # libc++ is *not* required: the historical Dawn path pulled
-            # it in via `rules_foreign_cc`'s CMake test-compile, but the
-            # wgpu-native swap replaces that with an http_archive drop of
-            # a prebuilt `libwgpu_native.so`, so no cross-stdlib compile
-            # happens during fetch.
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -54,20 +40,20 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build //...
+        run: bazelisk build --config=ci //...
 
       - name: Test
         # Exclude the Skia reference variant on PRs (only run on main merges)
         # to avoid compiling the full Skia library on every PR.
         run: |
-          bazelisk test --test_output=errors --local_test_jobs=2 \
+          bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-skia_ref \
             //...
 
       - name: Test (Skia reference)
         if: github.ref == 'refs/heads/main'
         run: |
-          bazelisk test --test_output=errors --local_test_jobs=2 \
+          bazelisk test --config=ci --test_output=errors \
             //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
   # Experimental Geode (WebGPU + Slug) backend build/test on Linux.
@@ -110,19 +96,20 @@ jobs:
 
       - name: Build Geode targets
         run: |
-          bazelisk build --config=geode \
+          bazelisk build --config=ci --config=geode \
             //donner/svg/renderer/geode/... \
             //donner/svg/renderer:renderer_geode \
             //donner/svg/renderer/tests:renderer_geode_tests
 
       - name: Run Geode tests
         run: |
-          bazelisk test --config=geode --test_output=errors --local_test_jobs=2 \
+          bazelisk test --config=ci --config=geode --test_output=errors \
             //donner/svg/renderer/geode/... \
             //donner/svg/renderer/tests:renderer_geode_tests
 
   macos:
     runs-on: macos-15
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -137,16 +124,17 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build //...
+        run: bazelisk build --config=ci //...
 
       - name: Test
-        run: bazelisk test --test_output=errors //...
+        run: bazelisk test --config=ci --test_output=errors //...
 
       # Run fuzzers on macOS via the LLVM 21 toolchain (Apple Clang lacks
       # libclang_rt.fuzzer_osx.a, but --config=asan-fuzzer activates
       # --config=latest_llvm which does provide it). This closes the gap where
       # bazel test //... on macOS skips fuzzer targets.
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
+        if: github.ref == 'refs/heads/main'
         run: |
           bazelisk test \
             --config=asan-fuzzer \

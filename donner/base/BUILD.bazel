@@ -89,6 +89,7 @@ filegroup(
 
 donner_cc_test(
     name = "base_tests",
+    shard_count = 10,
     srcs = [
         "tests/BaseTestUtils_tests.cc",
         "tests/BezierUtils_tests.cc",
