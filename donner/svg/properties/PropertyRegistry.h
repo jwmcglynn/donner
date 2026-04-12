@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <map>
+
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/base/ParseResult.h"
 #include "donner/base/SmallVector.h"

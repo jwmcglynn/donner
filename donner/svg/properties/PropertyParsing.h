@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/base/EcsRegistry.h"
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseResult.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/Specificity.h"

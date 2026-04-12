@@ -3,7 +3,9 @@
 
 #include <optional>
 
-#include "donner/base/EcsRegistry.h"
+#include <map>
+
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/properties/PropertyParsing.h"

@@ -3,6 +3,8 @@
 
 #include <optional>
 
+#include <entt/entity/helper.hpp>  // entt::to_entity (2-arg overload)
+
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"

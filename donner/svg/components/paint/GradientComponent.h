@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "donner/base/EcsRegistry.h"
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/graph/Reference.h"
 

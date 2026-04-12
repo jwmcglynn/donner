@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include "donner/base/EcsRegistry.h"
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/core/Pattern.h"
 #include "donner/svg/core/PreserveAspectRatio.h"

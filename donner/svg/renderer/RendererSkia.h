@@ -2,6 +2,7 @@
 /// @file
 
 #include <functional>
+#include <map>
 #include <string>
 
 #include "donner/base/EcsRegistry.h"

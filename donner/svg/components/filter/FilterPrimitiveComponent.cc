@@ -1,5 +1,6 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
 

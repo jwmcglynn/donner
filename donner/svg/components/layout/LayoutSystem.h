@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <map>
 #include <memory>
 #include <optional>
 

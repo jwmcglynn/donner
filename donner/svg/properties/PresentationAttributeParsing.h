@@ -3,7 +3,7 @@
 
 #include <string_view>
 
-#include "donner/base/EcsRegistry.h"  // For EntityHandle
+#include "donner/base/EcsRegistry_fwd.h"  // For EntityHandle
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::parser {

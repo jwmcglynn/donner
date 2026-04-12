@@ -1,5 +1,6 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 
 namespace donner::svg::components {

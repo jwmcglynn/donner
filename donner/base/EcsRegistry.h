@@ -1,7 +1,10 @@
 #pragma once
 /// @file
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>    // entt::entity, entt::null
+#include <entt/entity/fwd.hpp>       // Forward declarations
+#include <entt/entity/handle.hpp>    // basic_handle definition
+#include <entt/entity/registry.hpp>  // basic_registry definition
 
 namespace donner {
 

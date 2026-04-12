@@ -3,7 +3,7 @@
 
 #include <memory>
 
-#include "donner/base/EcsRegistry.h"
+#include "donner/base/EcsRegistry_fwd.h"
 
 namespace donner::svg {
 
