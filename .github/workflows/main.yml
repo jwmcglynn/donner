@@ -44,25 +44,14 @@ jobs:
             # a prebuilt `libwgpu_native.so`, so no cross-stdlib compile
             # happens during fetch.
 
-      - name: Cache Bazel
-        uses: actions/cache@v5
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          path: |
-            ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
-      # bazelisk fetch downloads the toolchain and module dependencies. We retry
-      # this step specifically to tolerate GitHub / BCR / Chromium rate limits,
-      # without masking actual compilation errors in the subsequent build step.
-      - name: Fetch Bazel dependencies
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 15
-          max_attempts: 3
-          retry_wait_seconds: 30
-          command: bazelisk fetch //...
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: bazelisk build //...
@@ -116,15 +105,14 @@ jobs:
           sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
             mesa-vulkan-drivers libvulkan1 libvulkan-dev
 
-      - name: Cache Bazel
-        uses: actions/cache@v5
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          path: |
-            ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-geode-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-geode-
-            ${{ runner.os }}-bazel-
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-geode-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Geode targets
         run: |
@@ -151,22 +139,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Cache Bazel
-        uses: actions/cache@v5
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          path: |
-            /private/var/tmp/_bazel_runner/
-          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
-      - name: Fetch Bazel dependencies
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 15
-          max_attempts: 3
-          retry_wait_seconds: 30
-          command: bazelisk fetch //...
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: bazelisk build //...
