@@ -1066,11 +1066,12 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   }
 
   {
+    // After #514, single-keyword transform-origin is valid. "left,top" parses
+    // "left" as a valid single keyword; the comma is a declaration separator
+    // and "top" is a separate (ignored) token. This is correct per CSS spec.
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("transform-origin: left,top").at(0);
-    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
-                ParseErrorIs("Unexpected token in transform-origin"));
+    registry.parseStyle("transform-origin: left,top");
+    ASSERT_TRUE(registry.transformOrigin.hasValue());
   }
 
   {
