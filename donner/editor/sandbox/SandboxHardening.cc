@@ -142,6 +142,39 @@ bool InstallSeccompFilter() {
       __NR_set_tid_address,
       __NR_set_robust_list,
       __NR_rseq,
+
+      // x86_64-specific: arch_prctl is used by glibc for TLS/FS base setup.
+      // Not present on aarch64.
+#if defined(__NR_arch_prctl)
+      __NR_arch_prctl,
+#endif
+      // x86_64 glibc may use access/openat/stat during CRT init (locale,
+      // NSS) even after our FD sweep. Allow them so the child doesn't get
+      // stuck during early init on CI runners.
+#if defined(__NR_access)
+      __NR_access,
+#endif
+#if defined(__NR_openat)
+      __NR_openat,
+#endif
+#if defined(__NR_stat)
+      __NR_stat,
+#endif
+      // poll/ppoll needed by some glibc I/O paths (e.g. stdio locking).
+#if defined(__NR_poll)
+      __NR_poll,
+#endif
+#if defined(__NR_ppoll)
+      __NR_ppoll,
+#endif
+      // ioctl(TIOCGWINSZ) may be called by glibc on stderr.
+#if defined(__NR_ioctl)
+      __NR_ioctl,
+#endif
+      // sched_getaffinity used by some allocators for arena sizing.
+#if defined(__NR_sched_getaffinity)
+      __NR_sched_getaffinity,
+#endif
   };
 
   static constexpr size_t kNumAllowed =
