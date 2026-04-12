@@ -546,18 +546,40 @@ automatically.
 
 ## P2 — Medium Impact
 
-### Issue B7: Defer resvg variant matrix to merge-only CI
+### Issue B7: Replace 3×2 variant matrix with 4 product-tier CI matrix
 
 | Field | Value |
 |-------|-------|
-| **Impact** | −50% test targets on PRs |
-| **Effort** | 2 hours |
+| **Impact** | Meaningful coverage per variant + text flag bug fix |
+| **Effort** | 3–4 hours |
 
-The resvg test suite generates 3 backends × 2 text tiers = 6 variants × 16 shards = 96 test
-invocations. On PR branches, only the default backend needs to run. The full matrix catches
-regressions on `main`.
+**Bug found:** The `_multi_transition` in `rules.bzl:201` sets `text_full` but **never sets
+`//donner/svg/renderer:text`**. Since `text` defaults to `false`, all 6 transitioned variants run
+without text. The `*_text` and `*_text_full` suffixes produce identical binaries. The "6 variants"
+are really 3 (one per backend, all without text).
 
-Use `--config=dev` on PR builds (already disables backend transitions).
+**Also:** The transitioned variants don't propagate `shard_count`, so each runs as a single
+enormous test process instead of 16 shards.
+
+**Proposed fix:** Replace the 3×2 combinatorial matrix with 4 named product tiers that map to
+actual Donner build configurations:
+
+| Tier | Backend | Filters | Text | Bazel config | CI trigger |
+|------|---------|---------|------|-------------|------------|
+| **donner-tiny** | tiny-skia | no | no | `--config=tiny` | All PRs |
+| **donner** (default) | tiny-skia | yes | simple (stb) | `--config=text` | All PRs |
+| **donner-max** | tiny-skia | yes | full (FT+HB+WOFF2) | `--config=text-full` | All PRs |
+| **skia-ref** | skia | yes | full | `--config=skia --config=text-full` | main only |
+
+**Changes needed:**
+1. Fix `rules.bzl` transition to also set `//donner/svg/renderer:text=true`.
+2. Add `--config=tiny` to `.bazelrc`: `common:tiny --//donner/svg/renderer:filters=false`.
+3. Replace the `variants` list in the resvg test BUILD with the 4-tier matrix.
+4. Add `shard_count` propagation to `donner_multi_transitioned_test`.
+5. Gate `skia-ref` variant to main-only (e.g. via a `ci_full_matrix` flag or separate target).
+
+**Key files:** `build_defs/rules.bzl`, `donner/svg/renderer/tests/BUILD.bazel`,
+`.bazelrc`, `.github/workflows/main.yml`
 
 ### Issue B8: Move coverage to nightly/merge-only schedule
 
