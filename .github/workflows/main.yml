@@ -68,17 +68,18 @@ jobs:
         run: bazelisk build //...
 
       - name: Test
-        # The `resvg_test_suite_geode_*` variants run ~1500 image comparisons
-        # each through wgpu-native's Vulkan backend against Mesa `llvmpipe`
-        # (software rasteriser). On GHA `ubuntu-24.04` each variant clocks in
-        # at >30 minutes — well past the generic linux job's budget. The
-        # dedicated `linux-geode` job owns Geode test coverage; the general
-        # linux job excludes those two variants explicitly.
+        # Exclude the Skia reference variant on PRs (only run on main merges)
+        # to avoid compiling the full Skia library on every PR.
         run: |
           bazelisk test --test_output=errors --local_test_jobs=2 \
-            -- //... \
-            -//donner/svg/renderer/tests:resvg_test_suite_geode_text \
-            -//donner/svg/renderer/tests:resvg_test_suite_geode_text_full
+            --test_tag_filters=-skia_ref \
+            //...
+
+      - name: Test (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk test --test_output=errors --local_test_jobs=2 \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
   # Experimental Geode (WebGPU + Slug) backend build/test on Linux.
   #

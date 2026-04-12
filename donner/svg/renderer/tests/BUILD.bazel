@@ -323,19 +323,33 @@ donner_variant_cc_test(
     # actual pass-path runtime is still ~15 min, so a hang would still
     # show up.
     #
-    # Product tiers:
+    # Product tiers (run on every PR):
     #   tiny         - tiny-skia, no filters, no text  (donner-tiny)
     #   default_text - tiny-skia, filters, simple text (donner default)
     #   max          - tiny-skia, filters, full text   (donner-max)
-    #   skia_ref     - skia, filters, full text        (reference renderer)
+    #
+    # The Skia reference variant (skia_ref) is defined separately below
+    # and only runs on main merges to avoid compiling Skia on every PR.
     size = "enormous",
     dep = ":resvg_test_suite_impl",
     named_variants = [
         {"name": "tiny", "backend": "tiny_skia", "text": "false", "text_full": "false"},
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
         {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
-        {"name": "skia_ref", "backend": "skia", "text": "true", "text_full": "true"},
     ],
+)
+
+# Skia reference renderer variant — only built/tested on main merges.
+# Tagged "skia_ref" so CI can filter it out on PR branches.
+donner_multi_transitioned_test(
+    name = "resvg_test_suite_skia_ref",
+    size = "enormous",
+    dep = ":resvg_test_suite_impl",
+    renderer_backend = "skia",
+    tags = ["skia_ref"],
+    testonly = 1,
+    text = "true",
+    text_full = "true",
 )
 
 donner_cc_test(
