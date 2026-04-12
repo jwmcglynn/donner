@@ -1164,6 +1164,44 @@ TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
               testing::Eq(std::nullopt));
 }
 
+TEST_F(XMLParserTests, GetAttributeLocationOutOfBoundsOffset) {
+  // Regression for the structured-editing M−1 prerequisite: the editor's
+  // text-edit fast path may call GetAttributeLocation with an offset
+  // derived from a prior parse that no longer matches the current source
+  // (the user has typed bytes since). An offset past the end of the
+  // string must return std::nullopt, not crash or read past the buffer.
+  std::string_view xml = R"(<root><child attr="v"/></root>)";
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, FileOffset::Offset(9999), "attr"),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, FileOffset::Offset(xml.size()), "attr"),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, FileOffset::Offset(xml.size() + 1), "attr"),
+              testing::Eq(std::nullopt));
+}
+
+TEST_F(XMLParserTests, GetAttributeLocationMalformedInputAtOffset) {
+  // Offset points inside a well-formed region of the outer parse, but
+  // the element at that offset is no longer well-formed — the user just
+  // typed a stray character. Historically this release-asserted; now
+  // it must return std::nullopt cleanly.
+
+  // Offset points to a '<' that introduces a bogus element name.
+  std::string_view badName = R"(<root><1notaname attr="v"/></root>)";
+  const auto offsetToBadElement = FileOffset::Offset(6);  // '<' of the bogus element
+  EXPECT_THAT(XMLParser::GetAttributeLocation(badName, offsetToBadElement, "attr"),
+              testing::Eq(std::nullopt));
+
+  // Offset points at text content, not a '<'.
+  std::string_view textContent = R"(<root>plain text</root>)";
+  EXPECT_THAT(XMLParser::GetAttributeLocation(textContent, FileOffset::Offset(6), "attr"),
+              testing::Eq(std::nullopt));
+
+  // Offset points at a partially-typed attribute (unterminated quote).
+  std::string_view partialAttr = R"(<root><child attr="unterm)";
+  EXPECT_THAT(XMLParser::GetAttributeLocation(partialAttr, FileOffset::Offset(6), "attr"),
+              testing::Eq(std::nullopt));
+}
+
 TEST_F(XMLParserTests, ParameterEntitiesRecursionLimits) {
   auto result = XMLParser::Parse(R"(
     <!DOCTYPE test [

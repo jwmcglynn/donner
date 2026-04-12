@@ -262,16 +262,23 @@ land as standalone PRs in this order.
       Output: a documented list of safe vs unsafe attributes, and a
       new `AttributeParser::ClearAttribute(name)` API for the
       attribute-removal case.
-- [ ] **`xml::XMLParser::GetAttributeLocation` error recovery.** The
-      existing function (`XMLParser.h:118–120`, implementation at
-      `XMLParser.cc:1526–1545`) currently `UTILS_RELEASE_ASSERT`s
-      that the element previously parsed correctly. Editor callers
-      may pass a stale offset from a version of the source that is
-      no longer well-formed. Convert the three release-asserts in
-      `getElementAttributeLocation` (`XMLParser.cc:348, 352, 363`) to
-      `return std::nullopt`, add a fuzzer entry point that calls
-      `GetAttributeLocation(arbitrary_bytes, arbitrary_offset,
-      arbitrary_name)` and asserts no-crash.
+- [x] **`xml::XMLParser::GetAttributeLocation` error recovery.**
+      The three `UTILS_RELEASE_ASSERT`s in `getElementAttributeLocation`
+      are now graceful `return std::nullopt` branches — under
+      `-fno-exceptions` they would have terminated the editor if a
+      stale offset pointed at a now-malformed element. The outer
+      `GetAttributeLocation` also gained an explicit offset bounds
+      check so an offset past `str.size()` returns `nullopt` instead
+      of hitting `std::string_view::substr`'s `out_of_range` (which
+      calls `std::abort` in the no-exceptions build). Regression
+      tests cover: offset past end-of-string, offset at
+      `str.size()`, offset pointing at a malformed element name,
+      offset pointing at text content, and offset pointing at a
+      partially-typed unterminated attribute. The XML parser fuzzer
+      gained a dedicated arm that drives `GetAttributeLocation`
+      with random `(offset, name)` inputs (including out-of-range
+      offsets) to lock in the no-crash contract — Linux-CI only per
+      the existing fuzzer pattern.
 - [ ] **`css::Declaration` source range.** Today `Declaration` stores
       only `FileOffset sourceOffset` pointing at the name
       (`donner/css/Declaration.h:71`) — no end offset. Surgical patches

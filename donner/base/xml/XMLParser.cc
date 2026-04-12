@@ -350,15 +350,26 @@ public:
   /**
    * Used by GetAttributeLocation to re-parse just the attributes of a single element
    * starting at `<element`.
+   *
+   * Returns `std::nullopt` on any malformed input — historically this function
+   * `UTILS_RELEASE_ASSERT`ed that the caller had previously parsed the same element
+   * successfully, but the editor's structured-editing path needs to call this with
+   * offsets derived from source text that may no longer be well-formed (the user is
+   * actively typing). Rather than crash the editor, degrade gracefully: on any parse
+   * failure return `std::nullopt` and let the caller fall back to its "attribute not
+   * found" path.
    */
   std::optional<SourceRange> getElementAttributeLocation(const XMLQualifiedNameRef& name) {
     // We assume the caller has already consumed "<", so do it here.
-    UTILS_RELEASE_ASSERT_MSG(tryConsume(remaining_, "<"), "Expected element to start with '<'");
+    if (!tryConsume(remaining_, "<")) {
+      return std::nullopt;
+    }
 
     // Extract element name
     auto maybeName = consumeQualifiedName();
-    UTILS_RELEASE_ASSERT_MSG(!maybeName.hasError(),
-                             "Expected element to have previously parsed correctly");
+    if (maybeName.hasError()) {
+      return std::nullopt;
+    }
 
     // Skip whitespace between element name and attributes
     skipWhitespace(remaining_);
@@ -368,8 +379,9 @@ public:
       const FileOffset attributeStartOffset = currentOffsetWithLineNumber(remaining_);
 
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
-      UTILS_RELEASE_ASSERT_MSG(!maybeAttribute.hasError(),
-                               "Expected element to have previously parsed correctly");
+      if (maybeAttribute.hasError()) {
+        return std::nullopt;
+      }
 
       const FileOffset attributeEndOffset = currentOffsetWithLineNumber(remaining_);
       skipWhitespace(remaining_);
@@ -1585,11 +1597,21 @@ std::optional<SourceRange> XMLParser::GetAttributeLocation(
     return std::nullopt;
   }
 
+  // Bounds-check the offset against the source length. Callers may pass an offset
+  // from a prior parse that no longer lines up with the current source (e.g. the
+  // editor's source buffer has been edited since). `string_view::substr` throws
+  // `std::out_of_range` on `pos > size()`, which under `-fno-exceptions` terminates.
+  // Degrade gracefully instead.
+  const std::size_t offset = elementStartOffset.offset.value();
+  if (offset > str.size()) {
+    return std::nullopt;
+  }
+
   Options reparseOptions;
   // To avoid unnecessary conversion when we're going to discard the values anyway.
   reparseOptions.disableEntityTranslation = true;
 
-  const std::string_view elementToEnd = str.substr(elementStartOffset.offset.value());
+  const std::string_view elementToEnd = str.substr(offset);
   XMLParserImpl parser(elementToEnd, reparseOptions);
   if (auto attributeLocationInElement = parser.getElementAttributeLocation(attributeName)) {
     SourceRange result{attributeLocationInElement->start.addParentOffset(elementStartOffset),
