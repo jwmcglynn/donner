@@ -59,3 +59,39 @@ wasm_cc_binary(
     cc_target = ":wasm_reproducer",
     tags = ["manual"],
 )
+
+donner_cc_binary(
+    name = "svg_viewer",
+    srcs = ["svg_viewer.cc"],
+    copts = select({
+        "@platforms//cpu:wasm32": ["-pthread"],
+        "@platforms//cpu:wasm64": ["-pthread"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        "@platforms//cpu:wasm32": [
+            "-sALLOW_MEMORY_GROWTH=1",
+            "-sINITIAL_MEMORY=67108864",
+        ],
+        "@platforms//cpu:wasm64": [
+            "-sALLOW_MEMORY_GROWTH=1",
+            "-sINITIAL_MEMORY=67108864",
+        ],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    deps = [
+        "//donner/svg/renderer",
+        "@imgui",
+    ] + select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["//third_party/glad"],
+    }),
+)
+
+wasm_cc_binary(
+    name = "svg_viewer_web_package",
+    cc_target = ":svg_viewer",
+    tags = ["manual"],
+)

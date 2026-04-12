@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Donner SVG Viewer</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #1e1e1e; overflow: hidden; }
+  canvas#canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+  #status {
+    position: fixed;
+    bottom: 10px;
+    left: 10px;
+    color: #ccc;
+    font-family: monospace;
+    font-size: 13px;
+    z-index: 100;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+<div id="status">Loading...</div>
+<script>
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    onRuntimeInitialized: function() {
+      document.getElementById('status').style.display = 'none';
+    },
+    print: function(text) { console.log(text); },
+    printErr: function(text) { console.error(text); },
+  };
+</script>
+<script src="svg_viewer.js"></script>
+</body>
+</html>

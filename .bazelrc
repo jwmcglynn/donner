@@ -71,6 +71,9 @@ common:no-perf-opt --//build_defs:disable_perf_opt_transition=true
 # Uses wasm_cc_binary transition so deps are compiled with the emscripten toolchain.
 # Raise constexpr step limit for CompileTimeMap (default 1M is too low for large maps).
 build:wasm --cxxopt=-fconstexpr-steps=10000000
+# GLFW's BUILD adds -s USE_PTHREADS=1 linkopts on WASM, which requires all object
+# files to be compiled with atomics/bulk-memory. -pthread enables this.
+build:wasm --copt=-pthread
 # Disable perf-opt transition to avoid Emscripten toolchain variant conflicts.
 build:wasm --config=no-perf-opt
 
