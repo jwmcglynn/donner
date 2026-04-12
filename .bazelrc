@@ -102,14 +102,18 @@ build:macos-binary-size --config=binary-size
 build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
 build:macos-binary-size --copt=-gline-tables-only
 build:macos-binary-size --linkopt=-dead_strip
+build:macos-binary-size --copt=-flto=thin --linkopt=-flto=thin
 
 build --config=libc++ --config=c++20
 
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
 
-# Binary size builds
+# Binary-size builds: optimized for size with LTO and dead-code elimination.
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never
+build:binary-size --copt=-flto=thin --linkopt=-flto=thin
+build:binary-size --copt=-ffunction-sections --copt=-fdata-sections
+build:binary-size --linkopt=-Wl,--gc-sections
 
 test --test_env=LLM
 test --test_env=DONNER_RENDERER_TEST_VERBOSE
