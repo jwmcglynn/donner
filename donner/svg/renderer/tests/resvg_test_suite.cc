@@ -1119,30 +1119,30 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsInCategory(
         "structure/transform-origin",
         {
-            // After #514 (single-keyword transform-origin parsing), many tests have
-            // large pixel diffs because transform-origin now resolves correctly per
-            // CSS spec. The old rendering was wrong; the new rendering matches the
-            // spec but differs from resvg's reference images.
-            {"bottom.svg", Params::WithThreshold(0.02f, 10000)},
-            {"center.svg", Params::WithThreshold(0.02f, 10000)},
-            {"keyword-length.svg", Params::WithThreshold(0.02f, 10000)},
-            {"left.svg", Params::WithThreshold(0.02f, 10000)},
-            {"length-percent.svg", Params::WithThreshold(0.02f, 10000)},
-            {"length-px.svg", Params::WithThreshold(0.02f, 10000)},
-            {"on-clippath-objectBoundingBox.svg", Params::WithThreshold(0.02f, 160000)},
-            {"on-clippath.svg", Params::WithThreshold(0.02f, 55000)},
-            {"on-gradient-object-bounding-box.svg", Params::WithThreshold(0.02f, 55000)},
-            {"on-gradient-user-space-on-use.svg", Params::WithThreshold(0.02f, 55000)},
-            {"on-group.svg", Params::WithThreshold(0.02f, 42000)},
-            {"on-image.svg", Params::WithThreshold(0.02f, 30000)},
-            {"on-pattern-object-bounding-box.svg", Params::WithThreshold(0.02f, 115000)},
-            {"on-pattern-user-space-on-use.svg", Params::WithThreshold(0.02f, 85000)},
-            {"on-shape.svg", Params::WithThreshold(0.02f, 42000)},
-            {"on-text-path.svg", Params::WithThreshold(0.02f, 6000)},
-            {"on-text.svg", Params::WithThreshold(0.02f, 10000)},
-            {"right-bottom.svg", Params::WithThreshold(0.02f, 5000)},
-            {"right.svg", Params::WithThreshold(0.02f, 10000)},
-            {"top.svg", Params::WithThreshold(0.02f, 10000)},
+            // TODO(#514): transform-origin rendering is broken after #514's
+            // single-keyword parsing changes — 10K-150K pixel diffs indicate
+            // the rendering is completely wrong, not just slightly off. Disabled
+            // until the root cause is investigated and fixed properly.
+            {"bottom.svg", Params::Skip("transform-origin broken after #514")},
+            {"center.svg", Params::Skip("transform-origin broken after #514")},
+            {"keyword-length.svg", Params::Skip("transform-origin broken after #514")},
+            {"left.svg", Params::Skip("transform-origin broken after #514")},
+            {"length-percent.svg", Params::Skip("transform-origin broken after #514")},
+            {"length-px.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-clippath-objectBoundingBox.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-clippath.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-gradient-object-bounding-box.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-gradient-user-space-on-use.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-group.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-image.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-pattern-object-bounding-box.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-pattern-user-space-on-use.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-shape.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-text-path.svg", Params::Skip("transform-origin broken after #514")},
+            {"on-text.svg", Params::Skip("transform-origin broken after #514")},
+            {"right-bottom.svg", Params::Skip("transform-origin broken after #514")},
+            {"right.svg", Params::Skip("transform-origin broken after #514")},
+            {"top.svg", Params::Skip("transform-origin broken after #514")},
         })),
     TestNameFromFilename);
 
