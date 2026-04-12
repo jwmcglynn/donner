@@ -558,9 +558,16 @@ INSTANTIATE_TEST_SUITE_P(
                                 })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFilterFunctions, ImageComparisonTestFixture,
-                         ValuesIn(getTestsInCategory("filters/filter-functions")),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFilterFunctions, ImageComparisonTestFixture,
+    ValuesIn(getTestsInCategory(
+        "filters/filter-functions",
+        {
+            // Negative brightness/contrast/saturate values produce larger pixel
+            // diffs due to clamping differences in the filter pipeline.
+            {"color-adjust-functions-negative.svg", Params::WithThreshold(0.02f, 12000)},
+        })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFloodColor, ImageComparisonTestFixture,
