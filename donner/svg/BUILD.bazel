@@ -156,12 +156,11 @@ donner_cc_library(
         "//donner/svg/properties",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/resources:sandboxed_file_resource_loader",
-    ] + select({
-        "//donner/svg/renderer:text_enabled": [
-            "//donner/svg/text:text_engine",
-        ],
-        "//conditions:default": [],
-    }),
+        # SVGTextContentElement.cc unconditionally uses TextEngine for
+        # getComputedTextLength/getSubStringLength, so this dep is not
+        # conditional on text_enabled.
+        "//donner/svg/text:text_engine",
+    ],
 )
 
 donner_cc_library(
