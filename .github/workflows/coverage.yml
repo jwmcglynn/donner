@@ -1,12 +1,13 @@
 name: Coverage
 
-# Controls when the action will run. Triggers the workflow on push or pull request
-# events but only for the main branch
+# Runs coverage on main merges and nightly. Use workflow_dispatch for manual runs.
 on:
   push:
-    branches: ["*"]
-  pull_request:
     branches: [main]
+  schedule:
+    # Run nightly at 06:00 UTC (11pm PT)
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual triggers
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
