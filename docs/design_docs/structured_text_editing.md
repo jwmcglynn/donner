@@ -305,8 +305,13 @@ land as standalone PRs in this order.
 - [ ] `PathSpline::toSVGPathData() → RcString`. Round-trip with
       `PathParser::Parse`. Covers empty/line/cubic/quadratic/arc/closed/
       fractional + round-trip-format equivalence.
-- [ ] `Lengthd::toRcString() → RcString`. Integer values omit decimal;
-      all CSS units; round-trip with `LengthParser`.
+- [x] `Lengthd::toRcString() → RcString`. Integer values omit the
+      decimal (via `int64_t` cast to avoid `{:g}`'s scientific
+      notation for large integer-valued doubles); non-integer values
+      print via `{:g}` for shortest round-trippable form. All 17
+      CSS unit identifiers handled. Round-trip test in
+      `LengthParser_tests.cc` covers 17 units × 9 representative
+      values = 153 pairs.
 - [ ] Free function `toSVGTransformString(const Transformd&)` in
       `donner/base/`. Decomposes to simplest form: identity → empty,
       translate/scale/rotate → named forms, general → matrix. Round-

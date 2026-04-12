@@ -218,4 +218,36 @@ TEST(LengthParser, RangeNumberParseErrorPropagated) {
   EXPECT_THAT(LengthParser::Parse("abc"), ParseErrorRange(0, 1));
 }
 
+// Round-trip tests for Lengthd::toRcString — parse → serialize → parse
+// must produce the same Lengthd, for every unit supported by the parser.
+// Locks in the contract that toRcString produces output the parser
+// accepts, which is the whole point of the serializer.
+TEST(LengthParser, ToRcStringRoundTrip) {
+  constexpr Lengthd::Unit kUnits[] = {
+      Lengthd::Unit::None, Lengthd::Unit::Percent, Lengthd::Unit::Cm,
+      Lengthd::Unit::Mm,   Lengthd::Unit::Q,       Lengthd::Unit::In,
+      Lengthd::Unit::Pc,   Lengthd::Unit::Pt,      Lengthd::Unit::Px,
+      Lengthd::Unit::Em,   Lengthd::Unit::Ex,      Lengthd::Unit::Ch,
+      Lengthd::Unit::Rem,  Lengthd::Unit::Vw,      Lengthd::Unit::Vh,
+      Lengthd::Unit::Vmin, Lengthd::Unit::Vmax,
+  };
+  constexpr double kValues[] = {0.0, 1.0, 10.0, -5.0, 1.5, 0.25, 3.14, -0.5, 100.0};
+
+  LengthParser::Options options;
+  options.unitOptional = true;  // Allow Unit::None round-trips (bare numbers).
+
+  for (Lengthd::Unit unit : kUnits) {
+    for (double value : kValues) {
+      const Lengthd original(value, unit);
+      const RcString serialized = original.toRcString();
+      const auto result = LengthParser::Parse(serialized, options);
+      ASSERT_TRUE(result.hasResult())
+          << "Parse failed for " << serialized << " (from " << original << ")";
+      EXPECT_EQ(result.result().consumedChars, serialized.size())
+          << "Parser left trailing chars in " << serialized;
+      EXPECT_EQ(result.result().length, original) << "Round-trip mismatch for " << serialized;
+    }
+  }
+}
+
 }  // namespace donner::parser
