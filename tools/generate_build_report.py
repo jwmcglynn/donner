@@ -553,10 +553,29 @@ def _archive_coverage_reports(reports_root: typing.Optional[Path]) -> bool:
     return archive_path.exists()
 
 
+def _copy_bargraph_next_to_save(save_dir: Path) -> typing.Optional[str]:
+    """Copy ``binary_size_bargraph.svg`` into ``save_dir``.
+
+    Mirrors the pre-refactor behaviour: when the build report is written
+    outside the workspace (``--save /tmp/report.md``) the bargraph must be
+    alongside the markdown for the relative image link to resolve.
+    Returns the basename to use as the image-link target, or None if no
+    copy was made.
+    """
+    source = _BINARY_SIZE_OUTPUT_DIR / "binary_size_bargraph.svg"
+    if not source.exists():
+        return None
+    save_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, save_dir / "binary_size_bargraph.svg")
+    return "binary_size_bargraph.svg"
+
+
 def make_binary_size_section(
     runner: CommandRunner,
     reports_root: typing.Optional[Path],
     links: LinkTargets,
+    *,
+    local_asset_dir: typing.Optional[Path] = None,
 ) -> SectionResult:
     args = ["tools/binary_size.sh"]
     result = runner.run("binary-size", args)
@@ -584,10 +603,16 @@ def make_binary_size_section(
     content = "\n".join(lines)
     if result.success:
         copied = _copy_binary_size_reports(reports_root)
+        # If the report is being saved outside the workspace, copy the
+        # bargraph next to the saved markdown and override the image link
+        # to the bare filename, so the image renders from any viewer.
+        bargraph_link = links.binary_size_bargraph
+        if local_asset_dir is not None:
+            override = _copy_bargraph_next_to_save(local_asset_dir)
+            if override is not None:
+                bargraph_link = override
         if copied or reports_root is None:
-            # In `local` mode the bargraph lives under build-binary-size/; in
-            # `docs`/`site` modes it lives under the docs-site reports tree.
-            content += f"\n\n![Binary size bar graph]({links.binary_size_bargraph})"
+            content += f"\n\n![Binary size bar graph]({bargraph_link})"
 
     return SectionResult("Binary Size", _result_status(result), result.duration_sec, content)
 
@@ -787,6 +812,7 @@ def create_build_report(
     reports_root: typing.Optional[Path] = None,
     *,
     link_mode: str = LINK_MODE_LOCAL,
+    local_asset_dir: typing.Optional[Path] = None,
     runner: typing.Optional[CommandRunner] = None,
     metadata: typing.Optional[ReportMetadata] = None,
     command_line: typing.Optional[str] = None,
@@ -798,7 +824,11 @@ def create_build_report(
 
     sections = [make_lines_of_code_section(runner)]
     if options.all or options.binary_size:
-        sections.append(make_binary_size_section(runner, reports_root, links))
+        sections.append(
+            make_binary_size_section(
+                runner, reports_root, links, local_asset_dir=local_asset_dir
+            )
+        )
     if options.all or options.coverage:
         sections.append(make_code_coverage_section(runner, reports_root, links))
     if options.all or options.tests:
@@ -931,10 +961,18 @@ def main(argv: typing.Optional[typing.Sequence[str]] = None) -> int:
     else:
         reports_root = _default_reports_root(save_path, link_mode)
 
+    # In local mode with an explicit --save path, stage the bargraph next
+    # to the saved markdown so the image renders even when the report
+    # lives outside the workspace (e.g. --save /tmp/report.md).
+    local_asset_dir: typing.Optional[Path] = None
+    if link_mode == LINK_MODE_LOCAL and save_path is not None:
+        local_asset_dir = save_path.parent
+
     report = create_build_report(
         options,
         reports_root=reports_root,
         link_mode=link_mode,
+        local_asset_dir=local_asset_dir,
         runner=CommandRunner(progress_interval_sec=args.progress_interval_sec),
         command_line=command_line,
     )

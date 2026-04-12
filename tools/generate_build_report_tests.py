@@ -380,6 +380,62 @@ class GenerateBuildReportTests(unittest.TestCase):
         )
         self.assertIn("lines.......: 85.2%", section.content)
 
+    def test_binary_size_section_local_mode_copies_bargraph_next_to_save(self):
+        """In local mode with --save, the bargraph SVG must land beside
+        the saved markdown so the image link resolves from any viewer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            import os
+            prior_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                # Stage a fake build-binary-size/ at the faux workspace
+                # root so the section copy has a source file to grab.
+                fake_bs = tmp_path / "build-binary-size"
+                fake_bs.mkdir()
+                (fake_bs / "binary_size_bargraph.svg").write_text("<svg/>")
+
+                save_dir = tmp_path / "elsewhere"
+                save_dir.mkdir()
+
+                runner = FakeRunner(
+                    {
+                        ("tools/binary_size.sh",): generate_build_report.CommandResult(
+                            label="binary-size",
+                            args=("tools/binary_size.sh",),
+                            returncode=0,
+                            stdout="total: 1.0M",
+                            stderr="",
+                            duration_sec=1.0,
+                        )
+                    }
+                )
+                section = generate_build_report.make_binary_size_section(
+                    runner,
+                    None,  # reports_root — not used in local mode
+                    generate_build_report._resolve_link_targets(
+                        generate_build_report.LINK_MODE_LOCAL
+                    ),
+                    local_asset_dir=save_dir,
+                )
+
+                # The bargraph must have been copied next to save_dir …
+                self.assertTrue((save_dir / "binary_size_bargraph.svg").is_file())
+                # … and the image link must be the bare basename so it
+                # resolves from wherever the markdown is later viewed.
+                self.assertIn(
+                    "![Binary size bar graph](binary_size_bargraph.svg)",
+                    section.content,
+                )
+                # Sanity: when an asset dir was provided, the local
+                # workspace-relative bargraph path must not be the link.
+                self.assertNotIn(
+                    "![Binary size bar graph](build-binary-size/",
+                    section.content,
+                )
+            finally:
+                os.chdir(prior_cwd)
+
     def test_archive_coverage_reports_produces_zip(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
