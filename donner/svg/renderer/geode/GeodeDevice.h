@@ -3,7 +3,7 @@
 /// RAII wrapper around a headless WebGPU (Dawn) device.
 
 #include <memory>
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 namespace donner::geode {
 

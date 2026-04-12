@@ -26,9 +26,9 @@ Donner's BCR-published surface is a deliberate subset of the full library. The d
 | Filter effects (all 17 primitives) | ✅ | built-in |
 | Skia backend (`--config=skia`) | ❌ | Power users must consume Donner via `git_override` |
 | text-full (HarfBuzz + WOFF2) | ❌ | Power users via `git_override`; also tracked as a future follow-up BCR module |
-| Geode / Dawn WebGPU backend | ❌ | Experimental; `git_override` only; revisit post-v0.5 |
+| Geode (WebGPU + Slug) backend | ❌ | Experimental; `git_override` only; revisit post-v0.5 |
 
-The mechanism that keeps the non-BCR features invisible to BCR consumers is the `dev_dependency = True` module extension at `third_party/bazel/non_bcr_deps.bzl`. BCR strips dev-only extensions when Donner is consumed as a `bazel_dep`, so downstream users simply never see `@skia`, `@harfbuzz`, `@woff2`, or `@dawn`.
+The mechanism that keeps the non-BCR features invisible to BCR consumers is the `dev_dependency = True` module extension at `third_party/bazel/non_bcr_deps.bzl`. BCR strips dev-only extensions when Donner is consumed as a `bazel_dep`, so downstream users simply never see `@skia`, `@harfbuzz`, `@woff2`, or `@wgpu_native_*`.
 
 Every Donner target that references one of those hidden repos must be guarded by `target_compatible_with` on the relevant config_setting (e.g. `//donner/svg/renderer:text_full_enabled`, `//donner/svg/renderer:renderer_backend_skia`, `//donner/svg/renderer/geode:dawn_enabled`). If a BCR consumer's `bazel build @donner//...` ever tries to resolve one of those repos, the gating is broken — see the checklist below.
 
@@ -52,7 +52,7 @@ Do these in order. Each step is either a command to run or a one-line visual che
 - [ ] `bazel test //...` on at least the default config green
 
 ### BCR-consumer simulation (most important)
-Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is stripped and `@skia`/`@harfbuzz`/`@woff2`/`@dawn` do not exist.
+Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is stripped and `@skia`/`@harfbuzz`/`@woff2`/`@wgpu_native_*` do not exist.
 
 - [ ] No `git_repository` / `new_git_repository` / non-dev `*_override` in top-level `MODULE.bazel` (grep for them):
       ```
@@ -68,7 +68,7 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
         //donner/svg/graph/... + //donner/svg/resources/... + \
         //donner/svg/renderer:rendering_context + \
         //donner/svg/renderer:renderer_tiny_skia))' \
-        | grep -E '^@(skia|harfbuzz|woff2|dawn|resvg-test-suite|bazel_clang_tidy)'
+        | grep -E '^@(skia|harfbuzz|woff2|wgpu_native|resvg-test-suite|bazel_clang_tidy)'
       ```
       Must return **zero** matches. If there are matches, a target in that allowlist has a dep that needs `target_compatible_with` gating (or a new target was added and isn't on the `.bcr/presubmit.yml` allowlist).
 - [ ] `.bcr/presubmit.yml` `build_targets` cover every top-level library consumers might reasonably want. Add new libs here when you add them under `//donner`.
@@ -147,7 +147,7 @@ Things that are deliberately out of scope for the first few BCR releases but may
 
 - **text-full on BCR** — vendor HarfBuzz + WOFF2 via `git subtree` (~1–2 days of `BUILD.harfbuzz` work), or ship a sibling `donner-text-full` module that layers on top of `donner` and brings its own HB/WOFF2. Blocked on: deciding whether to own an additional BCR module or vendor.
 - **Separate `tiny-skia-cpp` BCR module** — it already has its own `MODULE.bazel` in `third_party/tiny-skia-cpp`; could be published independently and then consumed as a BCR `bazel_dep` from Donner. Blocked on: deciding the dev vs publish trade-off.
-- **Geode / Dawn on BCR** — Dawn is not publishable on BCR (too large, Chromium cadence). Track upstream progress, revisit for a `donner-geode` module post-v1.0.
+- **Geode / wgpu-native on BCR** — wgpu-native is distributed only as a prebuilt binary release (no upstream Bazel rules; no public source build on BCR), so the Geode backend stays `git_override`-only for the foreseeable future. Revisit post-v1.0 if someone puts up a `donner-geode` BCR module that pulls the `http_archive` in itself.
 - **Skia backend on BCR** — not realistic. Skia is a monorepo with a custom build. It will stay `git_override`-only for the foreseeable future.
 
 ## References

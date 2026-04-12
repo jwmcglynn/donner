@@ -13,6 +13,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::geode {
@@ -37,36 +38,36 @@ class GeoEncoderTest : public ::testing::Test {
     imagePipeline_ = std::make_unique<GeodeImagePipeline>(device_->device(), kFormat);
 
     wgpu::TextureDescriptor td = {};
-    td.label = "TestTarget";
+    td.label = wgpuLabel("TestTarget");
     td.size = {kSize, kSize, 1};
     td.format = kFormat;
     td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
                wgpu::TextureUsage::TextureBinding;
     td.mipLevelCount = 1;
     td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::e2D;
-    target_ = device_->device().CreateTexture(&td);
+    td.dimension = wgpu::TextureDimension::_2D;
+    target_ = device_->device().createTexture(td);
     ASSERT_TRUE(static_cast<bool>(target_));
 
     // 4× MSAA companion required by the GeoEncoder constructor. Pipelines
     // are created with `multisample.count = 4` so every render pass
     // attaches an MSAA color target that resolves into `target_`.
     wgpu::TextureDescriptor msaaDesc = {};
-    msaaDesc.label = "TestTargetMSAA";
+    msaaDesc.label = wgpuLabel("TestTargetMSAA");
     msaaDesc.size = {kSize, kSize, 1};
     msaaDesc.format = kFormat;
     msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
     msaaDesc.mipLevelCount = 1;
     msaaDesc.sampleCount = 4;
-    msaaDesc.dimension = wgpu::TextureDimension::e2D;
-    msaaTarget_ = device_->device().CreateTexture(&msaaDesc);
+    msaaDesc.dimension = wgpu::TextureDimension::_2D;
+    msaaTarget_ = device_->device().createTexture(msaaDesc);
     ASSERT_TRUE(static_cast<bool>(msaaTarget_));
 
     wgpu::BufferDescriptor bd = {};
-    bd.label = "TestReadback";
+    bd.label = wgpuLabel("TestReadback");
     bd.size = kBytesPerRow * kSize;
     bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    readback_ = device_->device().CreateBuffer(&bd);
+    readback_ = device_->device().createBuffer(bd);
     ASSERT_TRUE(static_cast<bool>(readback_));
   }
 
@@ -74,7 +75,7 @@ class GeoEncoderTest : public ::testing::Test {
   /// no padding — `kSize * kSize * 4` bytes).
   std::vector<uint8_t> readback() {
     // Copy texture → readback buffer.
-    wgpu::CommandEncoder enc = device_->device().CreateCommandEncoder();
+    wgpu::CommandEncoder enc = device_->device().createCommandEncoder();
 
     wgpu::TexelCopyTextureInfo src = {};
     src.texture = target_;
@@ -87,24 +88,35 @@ class GeoEncoderTest : public ::testing::Test {
     dst.layout.rowsPerImage = kSize;
 
     wgpu::Extent3D copySize = {kSize, kSize, 1};
-    enc.CopyTextureToBuffer(&src, &dst, &copySize);
+    enc.copyTextureToBuffer(src, dst, copySize);
 
-    wgpu::CommandBuffer cmd = enc.Finish();
-    device_->queue().Submit(1, &cmd);
+    wgpu::CommandBuffer cmd = enc.finish();
+    device_->queue().submit(1, &cmd);
 
-    // Map readback buffer.
-    bool mapDone = false;
-    readback_.MapAsync(
-        wgpu::MapMode::Read, 0, kBytesPerRow * kSize, wgpu::CallbackMode::AllowSpontaneous,
-        [&mapDone](wgpu::MapAsyncStatus status, wgpu::StringView /*msg*/) {
-          EXPECT_EQ(status, wgpu::MapAsyncStatus::Success);
-          mapDone = true;
-        });
-    while (!mapDone) {
-      device_->device().Tick();
+    // Map readback buffer. wgpu-native's `mapAsync` only exposes the
+    // callback-info form; plumb the done flag through `userdata1` and spin
+    // on `device.poll(true, nullptr)` which drains pending callbacks.
+    struct MapState {
+      bool done = false;
+      bool ok = false;
+    } mapState;
+    wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+    mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/,
+                        void* userdata1, void* /*userdata2*/) {
+      auto* s = static_cast<MapState*>(userdata1);
+      s->ok = (status == WGPUMapAsyncStatus_Success);
+      s->done = true;
+    };
+    mapCb.userdata1 = &mapState;
+    mapCb.userdata2 = nullptr;
+    readback_.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kSize, mapCb);
+    while (!mapState.done) {
+      device_->device().poll(true, nullptr);
     }
+    EXPECT_TRUE(mapState.ok) << "buffer map failed";
 
-    const uint8_t* mapped = static_cast<const uint8_t*>(readback_.GetConstMappedRange());
+    const uint8_t* mapped = static_cast<const uint8_t*>(
+        readback_.getConstMappedRange(0, kBytesPerRow * kSize));
 
     // Strip the row padding (256 bytes per row → 256 bytes per row, but the
     // visible part is kSize * 4 = 256 bytes for kSize=64, so no stripping
@@ -113,7 +125,7 @@ class GeoEncoderTest : public ::testing::Test {
     for (uint32_t y = 0; y < kSize; ++y) {
       std::copy_n(mapped + y * kBytesPerRow, kSize * 4, pixels.data() + y * kSize * 4);
     }
-    readback_.Unmap();
+    readback_.unmap();
     return pixels;
   }
 
@@ -515,14 +527,14 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
     tilePixels[i + 3] = 255;
   }
   wgpu::TextureDescriptor td = {};
-  td.label = "PatternTile";
+  td.label = wgpuLabel("PatternTile");
   td.size = {kTileDim, kTileDim, 1};
   td.format = kFormat;
   td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
   td.mipLevelCount = 1;
   td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture tile = device_->device().CreateTexture(&td);
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture tile = device_->device().createTexture(td);
   ASSERT_TRUE(static_cast<bool>(tile));
 
   wgpu::TexelCopyTextureInfo dst = {};
@@ -531,7 +543,7 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
   layout.bytesPerRow = kTileDim * 4;
   layout.rowsPerImage = kTileDim;
   wgpu::Extent3D extent = {kTileDim, kTileDim, 1};
-  device_->queue().WriteTexture(&dst, tilePixels.data(), tilePixels.size(), &layout, &extent);
+  device_->queue().writeTexture(dst, tilePixels.data(), tilePixels.size(), layout, extent);
 
   // 2. Fill a path with the pattern. The tile size in pattern-space is
   // 4x4 so the shader wraps every 4 pixels; since the path spans more than

@@ -5,13 +5,14 @@
 
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
 namespace {
 
 /// WebGPU requires `bytesPerRow` to be 256-aligned when copying buffer → texture.
-/// `queue.WriteTexture` accepts unaligned rows only on some backends, so we
+/// `queue.writeTexture` accepts unaligned rows only on some backends, so we
 /// normalize: if the natural row stride isn't 256-aligned, copy through a
 /// padded staging buffer before upload.
 constexpr uint32_t kBytesPerRowAlignment = 256u;
@@ -50,14 +51,14 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
   const wgpu::Queue& queue = device.queue();
 
   wgpu::TextureDescriptor td = {};
-  td.label = "GeodeUploadedImage";
+  td.label = wgpuLabel("GeodeUploadedImage");
   td.size = {width, height, 1};
   td.format = wgpu::TextureFormat::RGBA8Unorm;
   td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
   td.mipLevelCount = 1;
   td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture texture = dev.CreateTexture(&td);
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture texture = dev.createTexture(td);
   if (!texture) {
     return wgpu::Texture();
   }
@@ -81,7 +82,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
   if (unpaddedBytesPerRow == paddedBytesPerRow) {
     // Fast path — source rows already 256-aligned. Upload directly.
     const size_t byteCount = static_cast<size_t>(unpaddedBytesPerRow) * height;
-    queue.WriteTexture(&dst, rgbaPixels, byteCount, &layout, &writeSize);
+    queue.writeTexture(dst, rgbaPixels, byteCount, layout, writeSize);
   } else {
     // Slow path — copy into a padded staging buffer. `std::vector` is the
     // allowed allocation path (stdlib, not raw malloc/free). We size-cap on
@@ -93,7 +94,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
                   rgbaPixels + static_cast<size_t>(y) * unpaddedBytesPerRow,
                   unpaddedBytesPerRow);
     }
-    queue.WriteTexture(&dst, staging.data(), staging.size(), &layout, &writeSize);
+    queue.writeTexture(dst, staging.data(), staging.size(), layout, writeSize);
   }
 
   return texture;
@@ -133,11 +134,11 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
 
   wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = "GeodeImageBlitUniforms";
+  uniDesc.label = wgpuLabel("GeodeImageBlitUniforms");
   uniDesc.size = sizeof(Uniforms);
   uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = dev.CreateBuffer(&uniDesc);
-  queue.WriteBuffer(uniBuf, 0, &u, sizeof(Uniforms));
+  wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
+  queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
 
   // Pick sampler based on requested filter mode.
   const wgpu::Sampler& sampler =
@@ -147,9 +148,9 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   // view. When `params.maskTexture` is empty, we bind the source
   // content texture view in its place as a cheap dummy (the shader
   // ignores it because `maskMode == 0`).
-  wgpu::TextureView view = texture.CreateView();
+  wgpu::TextureView view = texture.createView();
   wgpu::TextureView maskView =
-      params.maskTexture ? params.maskTexture.CreateView() : view;
+      params.maskTexture ? params.maskTexture.createView() : view;
   wgpu::BindGroupEntry entries[4] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
@@ -162,11 +163,11 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   entries[3].textureView = maskView;
 
   wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = "GeodeImageBlitBindGroup";
+  bgDesc.label = wgpuLabel("GeodeImageBlitBindGroup");
   bgDesc.layout = pipeline.bindGroupLayout();
   bgDesc.entryCount = 4;
   bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = dev.CreateBindGroup(&bgDesc);
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
 
   // Switch to the image pipeline and record the draw call.
   // The caller is expected to restore the Slug-fill pipeline if it needs
@@ -174,9 +175,9 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   // `ensurePassOpen`, switching mid-pass requires `SetPipeline` before the
   // next fill call. `GeoEncoder` handles that by always calling
   // `SetPipeline` at the start of each draw helper.
-  pass.SetPipeline(pipeline.pipeline());
-  pass.SetBindGroup(0, bindGroup);
-  pass.Draw(6, 1, 0, 0);
+  pass.setPipeline(pipeline.pipeline());
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+  pass.draw(6, 1, 0, 0);
 }
 
 }  // namespace donner::geode

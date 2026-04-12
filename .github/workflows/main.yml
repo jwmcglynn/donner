@@ -28,25 +28,21 @@ jobs:
           command: |
             sudo apt-get update
             sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
-              libc++-18-dev libc++abi-18-dev \
               mesa-vulkan-drivers libvulkan1 libvulkan-dev
-            # libc++ is needed because `bazelisk build //...` evaluates the
-            # `resvg_test_suite_geode_*` variant targets. Those use the
-            # `donner_variant_cc_test` multi-transition, which promotes
-            # `enable_dawn=true` for the geode sub-configuration. That
-            # pulls in Dawn via `rules_foreign_cc`, whose CMake test-
-            # compile inherits the bazel toolchain's `-stdlib=libc++`
-            # flag.
+            # mesa-vulkan-drivers + libvulkan1 are needed at TEST time:
+            # `bazelisk test //...` now executes the Geode test variants
+            # through `donner_variant_cc_test`'s multi-transition, and
+            # wgpu-native's Vulkan backend needs an ICD (llvmpipe via
+            # Mesa) to initialise on a headless Linux host. Without it,
+            # Geode tests crash on device creation and surface as random
+            # pixel-diff failures — separate from the dedicated
+            # `linux-geode` job which already installs these.
             #
-            # The mesa-vulkan-drivers + libvulkan stack is needed at
-            # TEST time, not just build time: `bazelisk test //...` now
-            # executes the Geode test variants through the
-            # multi-transition, and Dawn's Vulkan backend needs an ICD
-            # (llvmpipe via Mesa) to initialise. Without it, geode tests
-            # crash on startup and show up as random pixel-diff
-            # failures in the general linux job — separate from the
-            # dedicated `linux-geode` job which already installed
-            # these.
+            # libc++ is *not* required: the historical Dawn path pulled
+            # it in via `rules_foreign_cc`'s CMake test-compile, but the
+            # wgpu-native swap replaces that with an http_archive drop of
+            # a prebuilt `libwgpu_native.so`, so no cross-stdlib compile
+            # happens during fetch.
 
       - name: Cache Bazel
         uses: actions/cache@v5
@@ -76,15 +72,16 @@ jobs:
 
   # Experimental Geode (WebGPU + Slug) backend build/test on Linux.
   #
-  # Runs `--config=geode`, which enables Dawn and Geode. The Linux CI host has
-  # no GPU, so Dawn's Vulkan backend is paired with Mesa `llvmpipe` (a
-  # software Vulkan ICD that Ubuntu ships in `mesa-vulkan-drivers`). Dawn
-  # auto-discovers llvmpipe via the standard Vulkan loader and runs against
-  # it — no env vars needed.
+  # Runs `--config=geode`, which enables the Geode renderer backend. The
+  # Linux CI host has no GPU, so wgpu-native's Vulkan backend is paired with
+  # Mesa `llvmpipe` (a software Vulkan ICD that Ubuntu ships in
+  # `mesa-vulkan-drivers`). wgpu-native auto-discovers llvmpipe via the
+  # standard Vulkan loader and runs against it — no env vars needed.
   #
   # Marked `continue-on-error: true` for now: first run against llvmpipe is
-  # unproven locally (macOS uses Metal), and the Dawn compile is ~10 min on a
-  # cold cache. Once we verify it works we can flip this to a blocking job.
+  # unproven locally (macOS uses Metal). Runtime on a cold cache is now
+  # dominated by the shared renderer build, not the WebGPU fetch — the
+  # vendored wgpu-native prebuilt is a ~12 MB http_archive.
   #
   # Scope: only the native Geode unit/integration tests. The
   # `renderer_geode_golden_tests` target is intentionally excluded because
@@ -100,8 +97,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
-            mesa-vulkan-drivers libvulkan1 libvulkan-dev \
-            libc++-18-dev libc++abi-18-dev
+            mesa-vulkan-drivers libvulkan1 libvulkan-dev
 
       - name: Cache Bazel
         uses: actions/cache@v5

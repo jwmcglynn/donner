@@ -1,7 +1,12 @@
 """Geode: GPU-native SVG rendering backend.
 
 This is an experimental backend gated behind a build flag. The default is OFF
-so existing CI does not attempt to build Dawn (~7 minutes clean).
+so existing CI does not pull in the WebGPU runtime at all. The flag name
+`enable_dawn` is historical — Geode originally built Google's Dawn from
+source via `rules_foreign_cc`'s CMake wrapper, then swapped to a prebuilt
+`wgpu-native` archive for CI latency. The bool_flag and config_setting
+names are kept stable so downstream command-line invocations don't need to
+change.
 
 To enable:
 
@@ -13,7 +18,8 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
-# Build flag controlling whether Geode's Dawn-backed targets are compiled.
+# Build flag controlling whether Geode's WebGPU-backed targets are compiled.
+# Historical name: see file-level docstring above.
 bool_flag(
     name = "enable_dawn",
     build_setting_default = False,
@@ -57,27 +63,27 @@ donner_cc_test(
 )
 
 donner_cc_library(
+    name = "geode_wgpu_util",
+    hdrs = ["GeodeWgpuUtil.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+donner_cc_library(
     name = "geode_device",
     srcs = ["GeodeDevice.cc"],
     hdrs = ["GeodeDevice.h"],
-    # Frameworks needed by Dawn's Metal backend on macOS. These cannot live
-    # on the @dawn//:webgpu_dawn cmake() rule because rules_foreign_cc applies
-    # linkopts during Dawn's own CMake compiler test.
+    # wgpu-native's prebuilt libwgpu_native.dylib ships with its Metal
+    # backend already linked, so no per-target framework linkopts are
+    # needed on macOS — unlike the previous Dawn cmake() build which
+    # required the consumer to link Metal/Foundation/QuartzCore/IOKit/
+    # IOSurface/CoreGraphics manually. Linux still needs dl + pthread
+    # because wgpu-native's .so references them but doesn't runtime-
+    # load them itself.
     linkopts = select({
-        "@platforms//os:macos": [
-            "-framework",
-            "Metal",
-            "-framework",
-            "Foundation",
-            "-framework",
-            "QuartzCore",
-            "-framework",
-            "IOKit",
-            "-framework",
-            "IOSurface",
-            "-framework",
-            "CoreGraphics",
-        ],
         "@platforms//os:linux": [
             "-ldl",
             "-lpthread",
@@ -87,8 +93,9 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":geode_wgpu_util",
         "//donner/base",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -98,6 +105,7 @@ donner_cc_test(
     target_compatible_with = _DAWN_ONLY,
     deps = [
         ":geode_device",
+        ":geode_wgpu_util",
         "//donner/base",
         "@com_google_gtest//:gtest_main",
     ],
@@ -156,11 +164,12 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -183,7 +192,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_shaders",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -195,7 +204,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_shaders",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -209,7 +218,7 @@ donner_cc_library(
         ":geode_device",
         ":geode_image_pipeline",
         "//donner/base",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -228,7 +237,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/css",
         "//donner/svg/resources:image_resource",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -241,6 +250,7 @@ donner_cc_test(
         ":geode_device",
         ":geode_image_pipeline",
         ":geode_pipeline",
+        ":geode_wgpu_util",
         "//donner/base",
         "//donner/css",
         "//donner/svg/resources:image_resource",

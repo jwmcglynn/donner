@@ -2,7 +2,7 @@
 /// @file
 /// WGSL shader sources used by the Slug rendering pipeline.
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 namespace donner::geode {
 

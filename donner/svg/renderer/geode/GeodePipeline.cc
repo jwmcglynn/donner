@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 
 #include "donner/svg/renderer/geode/GeodeShaders.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
@@ -33,7 +34,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[3].binding = 3;
   entries[3].visibility = wgpu::ShaderStage::Fragment;
   entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[3].texture.multisampled = false;
 
   entries[4].binding = 4;
@@ -44,7 +45,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[5].binding = 5;
   entries[5].visibility = wgpu::ShaderStage::Fragment;
   entries[5].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[5].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[5].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[5].texture.multisampled = false;
 
   entries[6].binding = 6;
@@ -52,18 +53,18 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
 
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = "GeodeSlugFillBGL";
+  bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
   bglDesc.entryCount = 7;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.CreateBindGroupLayout(&bglDesc);
+  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
   // ----- Pipeline layout -----
   wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = "GeodeSlugFillPL";
+  plDesc.label = wgpuLabel("GeodeSlugFillPL");
   plDesc.bindGroupLayoutCount = 1;
-  wgpu::BindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.CreatePipelineLayout(&plDesc);
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   // ----- Shader module -----
   wgpu::ShaderModule shader = createSlugFillShader(device);
@@ -107,17 +108,17 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader;
-  fragmentState.entryPoint = "fs_main";
+  fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   // ----- Render pipeline -----
   wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = "GeodeSlugFill";
+  rpDesc.label = wgpuLabel("GeodeSlugFill");
   rpDesc.layout = pipelineLayout;
 
   rpDesc.vertex.module = shader;
-  rpDesc.vertex.entryPoint = "vs_main";
+  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 1;
   rpDesc.vertex.buffers = &vbLayout;
 
@@ -134,7 +135,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.CreateRenderPipeline(&rpDesc);
+  pipeline_ = device.createRenderPipeline(rpDesc);
 }
 
 // ============================================================================
@@ -169,7 +170,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   entries[3].binding = 3;
   entries[3].visibility = wgpu::ShaderStage::Fragment;
   entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[3].texture.multisampled = false;
 
   entries[4].binding = 4;
@@ -177,17 +178,17 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
 
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = "GeodeSlugGradientBGL";
+  bglDesc.label = wgpuLabel("GeodeSlugGradientBGL");
   bglDesc.entryCount = 5;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.CreateBindGroupLayout(&bglDesc);
+  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
   wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = "GeodeSlugGradientPL";
+  plDesc.label = wgpuLabel("GeodeSlugGradientPL");
   plDesc.bindGroupLayoutCount = 1;
-  wgpu::BindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.CreatePipelineLayout(&plDesc);
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   wgpu::ShaderModule shader = createSlugGradientShader(device);
 
@@ -226,16 +227,16 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader;
-  fragmentState.entryPoint = "fs_main";
+  fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = "GeodeSlugGradient";
+  rpDesc.label = wgpuLabel("GeodeSlugGradient");
   rpDesc.layout = pipelineLayout;
 
   rpDesc.vertex.module = shader;
-  rpDesc.vertex.entryPoint = "vs_main";
+  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 1;
   rpDesc.vertex.buffers = &vbLayout;
 
@@ -247,7 +248,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.CreateRenderPipeline(&rpDesc);
+  pipeline_ = device.createRenderPipeline(rpDesc);
 }
 
 // ============================================================================
@@ -279,7 +280,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
   entries[3].binding = 3;
   entries[3].visibility = wgpu::ShaderStage::Fragment;
   entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[3].texture.multisampled = false;
 
   entries[4].binding = 4;
@@ -287,17 +288,17 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
   entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
 
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = "GeodeSlugMaskBGL";
+  bglDesc.label = wgpuLabel("GeodeSlugMaskBGL");
   bglDesc.entryCount = 5;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.CreateBindGroupLayout(&bglDesc);
+  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
   wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = "GeodeSlugMaskPL";
+  plDesc.label = wgpuLabel("GeodeSlugMaskPL");
   plDesc.bindGroupLayoutCount = 1;
-  wgpu::BindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.CreatePipelineLayout(&plDesc);
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   wgpu::ShaderModule shader = createSlugMaskShader(device);
 
@@ -341,16 +342,16 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader;
-  fragmentState.entryPoint = "fs_main";
+  fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = "GeodeSlugMask";
+  rpDesc.label = wgpuLabel("GeodeSlugMask");
   rpDesc.layout = pipelineLayout;
 
   rpDesc.vertex.module = shader;
-  rpDesc.vertex.entryPoint = "vs_main";
+  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 1;
   rpDesc.vertex.buffers = &vbLayout;
 
@@ -365,7 +366,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
   rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.CreateRenderPipeline(&rpDesc);
+  pipeline_ = device.createRenderPipeline(rpDesc);
 }
 
 }  // namespace donner::geode

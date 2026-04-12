@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 
 #include "donner/svg/renderer/geode/GeodeShaders.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
@@ -26,28 +27,28 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   entries[2].binding = 2;
   entries[2].visibility = wgpu::ShaderStage::Fragment;
   entries[2].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[2].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[2].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[2].texture.multisampled = false;
 
   entries[3].binding = 3;
   entries[3].visibility = wgpu::ShaderStage::Fragment;
   entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[3].texture.multisampled = false;
 
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = "GeodeImageBlitBGL";
+  bglDesc.label = wgpuLabel("GeodeImageBlitBGL");
   bglDesc.entryCount = 4;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.CreateBindGroupLayout(&bglDesc);
+  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
   // ----- Pipeline layout -----
   wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = "GeodeImageBlitPL";
+  plDesc.label = wgpuLabel("GeodeImageBlitPL");
   plDesc.bindGroupLayoutCount = 1;
-  wgpu::BindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.CreatePipelineLayout(&plDesc);
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   // ----- Shader module -----
   wgpu::ShaderModule shader = createImageBlitShader(device);
@@ -71,17 +72,17 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader;
-  fragmentState.entryPoint = "fs_main";
+  fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   // ----- Render pipeline -----
   // No vertex buffers — the shader generates corners from vertex_index.
   wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = "GeodeImageBlit";
+  rpDesc.label = wgpuLabel("GeodeImageBlit");
   rpDesc.layout = pipelineLayout;
   rpDesc.vertex.module = shader;
-  rpDesc.vertex.entryPoint = "vs_main";
+  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 0;
   rpDesc.vertex.buffers = nullptr;
 
@@ -97,31 +98,28 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.CreateRenderPipeline(&rpDesc);
+  pipeline_ = device.createRenderPipeline(rpDesc);
 
   // ----- Samplers -----
   // Linear (bilinear) sampler — the default for SVG's "smooth" image
   // rendering.
-  wgpu::SamplerDescriptor linearDesc = {};
-  linearDesc.label = "GeodeImageBlitLinear";
+  //
+  // `{wgpu::Default}` runs `SamplerDescriptor::setDefault()` (clamp-to-edge,
+  // nearest filtering, lodMaxClamp=32) and critically `maxAnisotropy = 1`,
+  // which wgpu-native validates as non-zero. Plain `= {}` would leave
+  // `maxAnisotropy = 0` and fail createSampler validation on native.
+  wgpu::SamplerDescriptor linearDesc{wgpu::Default};
+  linearDesc.label = wgpuLabel("GeodeImageBlitLinear");
   linearDesc.magFilter = wgpu::FilterMode::Linear;
   linearDesc.minFilter = wgpu::FilterMode::Linear;
-  linearDesc.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
-  linearDesc.addressModeU = wgpu::AddressMode::ClampToEdge;
-  linearDesc.addressModeV = wgpu::AddressMode::ClampToEdge;
-  linearDesc.addressModeW = wgpu::AddressMode::ClampToEdge;
-  linearSampler_ = device.CreateSampler(&linearDesc);
+  linearDesc.maxAnisotropy = 1;
+  linearSampler_ = device.createSampler(linearDesc);
 
   // Nearest sampler — for `image-rendering: pixelated`.
-  wgpu::SamplerDescriptor nearestDesc = {};
-  nearestDesc.label = "GeodeImageBlitNearest";
-  nearestDesc.magFilter = wgpu::FilterMode::Nearest;
-  nearestDesc.minFilter = wgpu::FilterMode::Nearest;
-  nearestDesc.mipmapFilter = wgpu::MipmapFilterMode::Nearest;
-  nearestDesc.addressModeU = wgpu::AddressMode::ClampToEdge;
-  nearestDesc.addressModeV = wgpu::AddressMode::ClampToEdge;
-  nearestDesc.addressModeW = wgpu::AddressMode::ClampToEdge;
-  nearestSampler_ = device.CreateSampler(&nearestDesc);
+  wgpu::SamplerDescriptor nearestDesc{wgpu::Default};
+  nearestDesc.label = wgpuLabel("GeodeImageBlitNearest");
+  nearestDesc.maxAnisotropy = 1;
+  nearestSampler_ = device.createSampler(nearestDesc);
 }
 
 }  // namespace donner::geode

@@ -1,6 +1,6 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -27,9 +27,15 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
+
+// Pull the Geode-local label helper into this namespace so that the many
+// `.label = wgpuLabel("…")` sites below can stay unqualified. See
+// GeodeWgpuUtil.h for the helper rationale.
+using ::donner::geode::wgpuLabel;
 
 namespace {
 
@@ -910,7 +916,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   // 1-sample resolve target: what `takeSnapshot()` copies back and what
   // pattern / layer blits sample from.
   wgpu::TextureDescriptor td = {};
-  td.label = "RendererGeodeTarget";
+  td.label = wgpuLabel("RendererGeodeTarget");
   td.size = {static_cast<uint32_t>(impl_->pixelWidth),
              static_cast<uint32_t>(impl_->pixelHeight), 1};
   td.format = kFormat;
@@ -918,21 +924,21 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
              wgpu::TextureUsage::TextureBinding;
   td.mipLevelCount = 1;
   td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::e2D;
-  impl_->target = impl_->device->device().CreateTexture(&td);
+  td.dimension = wgpu::TextureDimension::_2D;
+  impl_->target = impl_->device->device().createTexture(td);
 
   // 4× MSAA color attachment: all draws land here, hardware resolves to
   // `target` at pass end. Per-pixel fragment shader invocations can
   // write sample-masked output for sub-pixel AA (see slug_fill.wgsl).
   wgpu::TextureDescriptor msaaDesc = {};
-  msaaDesc.label = "RendererGeodeTargetMSAA";
+  msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
   msaaDesc.size = td.size;
   msaaDesc.format = kFormat;
   msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
   msaaDesc.mipLevelCount = 1;
   msaaDesc.sampleCount = 4;
-  msaaDesc.dimension = wgpu::TextureDimension::e2D;
-  impl_->msaaTarget = impl_->device->device().CreateTexture(&msaaDesc);
+  msaaDesc.dimension = wgpu::TextureDimension::_2D;
+  impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
 
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
@@ -1219,7 +1225,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   // the resolved 1-sample texture back onto the outer target with the
   // stored opacity.
   wgpu::TextureDescriptor td = {};
-  td.label = "RendererGeodeIsolatedLayer";
+  td.label = wgpuLabel("RendererGeodeIsolatedLayer");
   td.size = {static_cast<uint32_t>(impl_->pixelWidth),
              static_cast<uint32_t>(impl_->pixelHeight), 1u};
   td.format = kFormat;
@@ -1227,22 +1233,22 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
   td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture layerTexture = impl_->device->device().CreateTexture(&td);
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
   if (!layerTexture) {
     impl_->layerStack.push_back({});
     return;
   }
 
   wgpu::TextureDescriptor msaaDesc = {};
-  msaaDesc.label = "RendererGeodeIsolatedLayerMSAA";
+  msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
   msaaDesc.size = td.size;
   msaaDesc.format = kFormat;
   msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
   msaaDesc.mipLevelCount = 1;
   msaaDesc.sampleCount = 4;
-  msaaDesc.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture layerMsaaTexture = impl_->device->device().CreateTexture(&msaaDesc);
+  msaaDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
   if (!layerMsaaTexture) {
     impl_->layerStack.push_back({});
     return;
@@ -1483,7 +1489,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   // 1-sample resolve target for the pattern tile (this is what the Slug
   // fill shader samples when the tile is later used as paint).
   wgpu::TextureDescriptor td = {};
-  td.label = "RendererGeodePatternTile";
+  td.label = wgpuLabel("RendererGeodePatternTile");
   td.size = {static_cast<uint32_t>(tilePixelWidth),
              static_cast<uint32_t>(tilePixelHeight), 1u};
   td.format = kFormat;
@@ -1491,8 +1497,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
   td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture tileTexture = impl_->device->device().CreateTexture(&td);
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture tileTexture = impl_->device->device().createTexture(td);
   if (!tileTexture) {
     return;
   }
@@ -1500,14 +1506,14 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   // 4× MSAA companion render target — shares the same encoder lifetime
   // as the tile; resolved into `tileTexture` at pass end.
   wgpu::TextureDescriptor tileMsaaDesc = {};
-  tileMsaaDesc.label = "RendererGeodePatternTileMSAA";
+  tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
   tileMsaaDesc.size = td.size;
   tileMsaaDesc.format = kFormat;
   tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
   tileMsaaDesc.mipLevelCount = 1;
   tileMsaaDesc.sampleCount = 4;
-  tileMsaaDesc.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture tileMsaaTexture = impl_->device->device().CreateTexture(&tileMsaaDesc);
+  tileMsaaDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture tileMsaaTexture = impl_->device->device().createTexture(tileMsaaDesc);
   if (!tileMsaaTexture) {
     return;
   }
@@ -1810,13 +1816,13 @@ RendererBitmap RendererGeode::takeSnapshot() const {
 
   // Allocate readback buffer.
   wgpu::BufferDescriptor bd = {};
-  bd.label = "RendererGeodeReadback";
+  bd.label = wgpuLabel("RendererGeodeReadback");
   bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
   bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = impl_->device->device().CreateBuffer(&bd);
+  wgpu::Buffer readback = impl_->device->device().createBuffer(bd);
 
   // Copy texture → readback buffer.
-  wgpu::CommandEncoder enc = impl_->device->device().CreateCommandEncoder();
+  wgpu::CommandEncoder enc = impl_->device->device().createCommandEncoder();
   wgpu::TexelCopyTextureInfo src = {};
   src.texture = impl_->target;
   src.mipLevel = 0;
@@ -1826,27 +1832,41 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   dst.layout.bytesPerRow = bytesPerRow;
   dst.layout.rowsPerImage = height;
   wgpu::Extent3D copySize = {width, height, 1};
-  enc.CopyTextureToBuffer(&src, &dst, &copySize);
+  enc.copyTextureToBuffer(src, dst, copySize);
 
-  wgpu::CommandBuffer cmd = enc.Finish();
-  impl_->device->queue().Submit(1, &cmd);
+  wgpu::CommandBuffer cmd = enc.finish();
+  impl_->device->queue().submit(1, &cmd);
 
-  // Map for read.
-  bool mapDone = false;
-  bool mapOk = false;
-  readback.MapAsync(wgpu::MapMode::Read, 0, bd.size, wgpu::CallbackMode::AllowSpontaneous,
-                    [&](wgpu::MapAsyncStatus status, wgpu::StringView /*msg*/) {
-                      mapOk = (status == wgpu::MapAsyncStatus::Success);
-                      mapDone = true;
-                    });
-  while (!mapDone) {
-    impl_->device->device().Tick();
+  // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
+  // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function
+  // pointer + two void*'s rather than a std::function. We stash the "done"
+  // flag in `userdata1` so the callback can flip it and we can spin until it
+  // flips. wgpu-native guarantees `wgpuDevicePoll(wait=true)` drains pending
+  // callbacks before returning — a single `poll(true, nullptr)` is enough to
+  // wait for the map to complete.
+  struct MapState {
+    bool done = false;
+    bool ok = false;
+  } mapState;
+  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/,
+                      void* userdata1, void* /*userdata2*/) {
+    auto* s = static_cast<MapState*>(userdata1);
+    s->ok = (status == WGPUMapAsyncStatus_Success);
+    s->done = true;
+  };
+  mapCb.userdata1 = &mapState;
+  mapCb.userdata2 = nullptr;
+  readback.mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
+  while (!mapState.done) {
+    impl_->device->device().poll(true, nullptr);
   }
-  if (!mapOk) {
+  if (!mapState.ok) {
     return bitmap;
   }
 
-  const uint8_t* mapped = static_cast<const uint8_t*>(readback.GetConstMappedRange());
+  const uint8_t* mapped =
+      static_cast<const uint8_t*>(readback.getConstMappedRange(0, bd.size));
 
   // Strip row padding and unpremultiply alpha so the consumer gets a tightly
   // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
@@ -1889,7 +1909,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
       dstRow[x * 4 + 3] = srcA;
     }
   }
-  readback.Unmap();
+  readback.unmap();
   return bitmap;
 }
 

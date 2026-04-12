@@ -2,7 +2,7 @@
 /// @file
 /// Render pipeline for the Slug fill algorithm.
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 namespace donner::geode {
 

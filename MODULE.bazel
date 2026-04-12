@@ -22,13 +22,16 @@ bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 
-# rules_foreign_cc is used to wrap CMake-based third-party projects (Dawn/WebGPU).
+# rules_foreign_cc historically drove Dawn's CMake build. The Geode backend
+# now consumes prebuilt `wgpu-native` tarballs via `http_archive`, so the
+# rule is no longer load-bearing — it is kept only because other vendored
+# third-party projects still import it. Revisit if it goes completely unused.
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 
 ##
 ## Non-BCR dependencies (dev-only extension)
 ##
-# skia, harfbuzz, woff2, dawn, resvg-test-suite, and bazel_clang_tidy all live
+# skia, harfbuzz, woff2, wgpu-native, resvg-test-suite, and bazel_clang_tidy all live
 # behind `git_repository`/`new_git_repository` calls that are not permitted in
 # modules published to the Bazel Central Registry. We hide them behind a
 # module extension flagged `dev_dependency = True`, so downstream BCR consumers
@@ -44,11 +47,14 @@ non_bcr_deps = use_extension("//third_party:bazel/non_bcr_deps.bzl", "non_bcr_de
 use_repo(
     non_bcr_deps,
     "bazel_clang_tidy",
-    "dawn",
     "harfbuzz",
     "resvg-test-suite",
     "skia",
     "tracy",
+    "wgpu_native_linux_aarch64",
+    "wgpu_native_linux_x86_64",
+    "wgpu_native_macos_aarch64",
+    "wgpu_native_macos_x86_64",
     "woff2",
 )
 ##
@@ -128,8 +134,9 @@ new_local_repository(
     path = "third_party/css-parsing-tests",
 )
 
-# resvg-test-suite and dawn are fetched via the non_bcr_deps module extension
-# declared above — they are not available when donner is consumed from BCR.
+# resvg-test-suite and the wgpu-native prebuilts are fetched via the
+# non_bcr_deps module extension declared above — they are not available when
+# donner is consumed from BCR.
 
 bazel_dep(name = "rules_python", version = "1.9.0", dev_dependency = True)
 

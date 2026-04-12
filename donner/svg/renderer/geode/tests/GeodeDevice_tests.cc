@@ -4,6 +4,8 @@
 
 #include <string_view>
 
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+
 namespace donner::geode {
 
 /// Smoke test: can we instantiate a headless Dawn device at all?
@@ -25,18 +27,18 @@ TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   ASSERT_NE(device, nullptr);
 
   wgpu::TextureDescriptor desc = {};
-  desc.label = "TestRenderTarget";
+  desc.label = wgpuLabel("TestRenderTarget");
   desc.size = {64, 64, 1};
   desc.format = wgpu::TextureFormat::RGBA8Unorm;
   desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
   desc.mipLevelCount = 1;
   desc.sampleCount = 1;
-  desc.dimension = wgpu::TextureDimension::e2D;
+  desc.dimension = wgpu::TextureDimension::_2D;
 
-  wgpu::Texture texture = device->device().CreateTexture(&desc);
+  wgpu::Texture texture = device->device().createTexture(desc);
   ASSERT_TRUE(static_cast<bool>(texture));
-  EXPECT_EQ(texture.GetWidth(), 64u);
-  EXPECT_EQ(texture.GetHeight(), 64u);
+  EXPECT_EQ(texture.getWidth(), 64u);
+  EXPECT_EQ(texture.getHeight(), 64u);
 }
 
 /// Can we allocate a buffer for readback?
@@ -45,13 +47,13 @@ TEST(GeodeDevice, CanCreateReadbackBuffer) {
   ASSERT_NE(device, nullptr);
 
   wgpu::BufferDescriptor desc = {};
-  desc.label = "TestReadbackBuffer";
+  desc.label = wgpuLabel("TestReadbackBuffer");
   desc.size = 1024;
   desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
 
-  wgpu::Buffer buffer = device->device().CreateBuffer(&desc);
+  wgpu::Buffer buffer = device->device().createBuffer(desc);
   ASSERT_TRUE(static_cast<bool>(buffer));
-  EXPECT_EQ(buffer.GetSize(), 1024u);
+  EXPECT_EQ(buffer.getSize(), 1024u);
 }
 
 /// End-to-end: clear a texture to red and read back the first pixel.
@@ -72,8 +74,8 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   texDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
   texDesc.mipLevelCount = 1;
   texDesc.sampleCount = 1;
-  texDesc.dimension = wgpu::TextureDimension::e2D;
-  wgpu::Texture target = device.CreateTexture(&texDesc);
+  texDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture target = device.createTexture(texDesc);
   ASSERT_TRUE(static_cast<bool>(target));
 
   // Create readback buffer. Bytes per row must be a multiple of 256 per WebGPU spec.
@@ -82,13 +84,13 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   wgpu::BufferDescriptor bufDesc = {};
   bufDesc.size = kBufferSize;
   bufDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = device.CreateBuffer(&bufDesc);
+  wgpu::Buffer readback = device.createBuffer(bufDesc);
 
   // Encode: clear to red, then copy to buffer.
-  wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+  wgpu::CommandEncoder encoder = device.createCommandEncoder();
 
   wgpu::RenderPassColorAttachment colorAttachment = {};
-  colorAttachment.view = target.CreateView();
+  colorAttachment.view = target.createView();
   colorAttachment.loadOp = wgpu::LoadOp::Clear;
   colorAttachment.storeOp = wgpu::StoreOp::Store;
   colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};  // Red.
@@ -97,8 +99,8 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   passDesc.colorAttachmentCount = 1;
   passDesc.colorAttachments = &colorAttachment;
 
-  wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
-  pass.End();
+  wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
+  pass.end();
 
   wgpu::TexelCopyTextureInfo src = {};
   src.texture = target;
@@ -111,27 +113,40 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   dst.layout.rowsPerImage = kSize;
 
   wgpu::Extent3D copySize = {kSize, kSize, 1};
-  encoder.CopyTextureToBuffer(&src, &dst, &copySize);
+  encoder.copyTextureToBuffer(src, dst, copySize);
 
-  wgpu::CommandBuffer commands = encoder.Finish();
-  queue.Submit(1, &commands);
+  wgpu::CommandBuffer commands = encoder.finish();
+  queue.submit(1, &commands);
 
-  // Map the buffer synchronously via Tick loop.
-  bool mapDone = false;
-  readback.MapAsync(
-      wgpu::MapMode::Read, 0, kBufferSize, wgpu::CallbackMode::AllowSpontaneous,
-      [&mapDone](wgpu::MapAsyncStatus status, wgpu::StringView message) {
-        EXPECT_EQ(status, wgpu::MapAsyncStatus::Success)
-            << "Map failed: " << std::string_view(message.data, message.length);
-        mapDone = true;
-      });
+  // Map the buffer synchronously. wgpu-native's `mapAsync` only accepts a
+  // `BufferMapCallbackInfo` with a raw C callback + void* userdata, so we
+  // hand the done flag through userdata1 and spin on `device.poll(true)`
+  // until wgpu-native drains the pending callback.
+  struct MapState {
+    bool done = false;
+    bool ok = false;
+  } mapState;
+  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message,
+                      void* userdata1, void* /*userdata2*/) {
+    auto* s = static_cast<MapState*>(userdata1);
+    s->ok = (status == WGPUMapAsyncStatus_Success);
+    s->done = true;
+    if (!s->ok) {
+      (void)message;  // Keep the message parameter named for future logging.
+    }
+  };
+  mapCb.userdata1 = &mapState;
+  mapCb.userdata2 = nullptr;
+  readback.mapAsync(wgpu::MapMode::Read, 0, kBufferSize, mapCb);
 
-  // Pump the Dawn event loop until the map completes.
-  while (!mapDone) {
-    device.Tick();
+  while (!mapState.done) {
+    device.poll(true, nullptr);
   }
+  EXPECT_TRUE(mapState.ok) << "buffer map failed";
 
-  const uint8_t* pixels = static_cast<const uint8_t*>(readback.GetConstMappedRange());
+  const uint8_t* pixels =
+      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
   ASSERT_NE(pixels, nullptr);
 
   // First pixel should be red (255, 0, 0, 255).
@@ -140,7 +155,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   EXPECT_EQ(pixels[2], 0u) << "Blue channel";
   EXPECT_EQ(pixels[3], 255u) << "Alpha channel";
 
-  readback.Unmap();
+  readback.unmap();
 }
 
 }  // namespace donner::geode
