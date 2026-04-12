@@ -45,6 +45,20 @@ uint8_t* donner_render_svg(const char* svgText, int width, int height) {
     return nullptr;
   }
 
+  constexpr int kMaxDimension = 8192;
+  if (width > kMaxDimension || height > kMaxDimension) {
+    gLastError = "Dimensions exceed maximum (" + std::to_string(kMaxDimension) + "x" +
+                 std::to_string(kMaxDimension) + ")";
+    return nullptr;
+  }
+
+  const size_t area = static_cast<size_t>(width) * static_cast<size_t>(height);
+  if (area > SIZE_MAX / 4) {
+    gLastError = "Pixel buffer too large";
+    return nullptr;
+  }
+  const size_t expectedBytes = area * 4;
+
   // Parse the SVG document.
   ParseWarningSink warnings;
   ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(svgText, warnings);
@@ -67,8 +81,6 @@ uint8_t* donner_render_svg(const char* svgText, int width, int height) {
     gLastError = "Rendering produced an empty bitmap";
     return nullptr;
   }
-
-  const size_t expectedBytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
   // NOLINTNEXTLINE: malloc is required for Emscripten interop — JS frees via donner_free_pixels.
   auto* pixels = static_cast<uint8_t*>(std::malloc(expectedBytes));
   if (pixels == nullptr) {

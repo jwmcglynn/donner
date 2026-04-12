@@ -24,6 +24,7 @@ const zoomResetBtn = document.getElementById("zoom-reset") as HTMLButtonElement;
 
 // State.
 let currentSvgText = "";
+let renderGeneration = 0;
 let zoomLevel = 1.0;
 let panX = 0;
 let panY = 0;
@@ -118,21 +119,25 @@ async function renderSvg(
   width: number,
   height: number,
 ): Promise<{ imageData: ImageData | null; error: string }> {
+  const MAX_DIM = 8192;
+  const cappedWidth = Math.min(Math.max(1, Math.round(width)), MAX_DIM);
+  const cappedHeight = Math.min(Math.max(1, Math.round(height)), MAX_DIM);
+
   if (wasmModule && wasmRenderSvg && wasmFreePixels && wasmGetLastError) {
-    const ptr = wasmRenderSvg(svgText, width, height);
+    const ptr = wasmRenderSvg(svgText, cappedWidth, cappedHeight);
     if (ptr === 0) {
       return { imageData: null, error: wasmGetLastError() || "Unknown rendering error" };
     }
-    const numBytes = width * height * 4;
+    const numBytes = cappedWidth * cappedHeight * 4;
     const pixels = new Uint8ClampedArray(wasmModule.HEAPU8.buffer, ptr, numBytes);
     // Copy before freeing the WASM-side buffer.
-    const imageData = new ImageData(new Uint8ClampedArray(pixels), width, height);
+    const imageData = new ImageData(new Uint8ClampedArray(pixels), cappedWidth, cappedHeight);
     wasmFreePixels(ptr);
     return { imageData, error: "" };
   }
 
   // Fallback: mock renderer (browser-native SVG rasterisation).
-  const imageData = await mockRenderSvgAsync(svgText, width, height);
+  const imageData = await mockRenderSvgAsync(svgText, cappedWidth, cappedHeight);
   return { imageData, error: imageData ? "" : mockGetLastError() || "Unknown rendering error" };
 }
 
@@ -145,6 +150,8 @@ tryLoadWasm().catch(() => {
 
 function render(): void {
   if (!currentSvgText) return;
+
+  const generation = ++renderGeneration;
 
   const containerWidth = canvasContainer.clientWidth || 800;
   const containerHeight = canvasContainer.clientHeight || 600;
@@ -167,6 +174,9 @@ function render(): void {
 
   renderSvg(currentSvgText, renderWidth, renderHeight)
     .then(({ imageData, error }) => {
+      // A newer render was started — discard this result.
+      if (generation !== renderGeneration) return;
+
       if (!imageData) {
         showError(error);
         return;
@@ -209,6 +219,8 @@ function updateZoomLabel(): void {
 // --- Message handling ---
 
 window.addEventListener("message", (event) => {
+  if (event.origin !== "vscode-webview:" && event.origin !== "") return;
+
   const msg = event.data;
   if (!msg || typeof msg.type !== "string") return;
 

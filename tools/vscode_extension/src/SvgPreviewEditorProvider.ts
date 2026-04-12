@@ -87,10 +87,10 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
     content="default-src 'none';
              img-src ${webview.cspSource} data: blob:;
              script-src 'nonce-${nonce}' 'wasm-unsafe-eval';
-             style-src ${webview.cspSource} 'unsafe-inline';
+             style-src 'nonce-${nonce}';
              font-src ${webview.cspSource};
              connect-src ${webview.cspSource};">
-  <link rel="stylesheet" href="${styleUri}">
+  <link rel="stylesheet" nonce="${nonce}" href="${styleUri}">
   <title>Donner SVG Preview</title>
 </head>
 <body>

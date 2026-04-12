@@ -5,6 +5,10 @@
 
 let lastError = "";
 
+// SECURITY: This mock renders untrusted SVG through the browser engine.
+// It is for development only and must NOT be used in production.
+// The real WASM renderer (wasm_bridge.cc) does not execute SVG scripts.
+
 /**
  * Renders SVG text to an ImageData using the browser's native SVG pipeline.
  * Used as a fallback when the real Donner WASM module is not available.
