@@ -2,6 +2,7 @@ load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
     "donner_cc_test",
+    "donner_multi_transitioned_test",
     "donner_transitioned_cc_test",
     "donner_variant_cc_test",
     "renderer_backend_compatible_with",
