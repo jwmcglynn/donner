@@ -76,6 +76,31 @@ To regenerate the checked-in build report at `docs/build_report.md`:
 python3 tools/generate_build_report.py --all --save docs/build_report.md
 ```
 
+When saving to `docs/build_report.md` the script automatically switches to
+`--link-mode=docs`. In that mode:
+
+- The binary-size HTML report and bargraph are copied verbatim into
+  `docs/reports/binary-size/` and the build report links to them with
+  relative paths, so they render from GitHub's web view of the repo and
+  from the Doxygen site alike.
+- The lcov HTML tree from `coverage-report/` is repacked into a single
+  `docs/reports/coverage.zip` (a few MB compressed instead of ~26 MB
+  spread over hundreds of files, which keeps the working tree light and
+  fuzzy file-name search clean). The build report's coverage link points
+  at the absolute docs-site URL, since the zip can't render directly
+  from a GitHub web view.
+
+To build the Doxygen site with the bundled reports:
+
+```sh
+tools/build_docs.sh
+```
+
+`tools/build_docs.sh` runs `doxygen Doxyfile`, copies
+`docs/reports/binary-size/` into the generated HTML output, and
+extracts `docs/reports/coverage.zip` into `reports/coverage/` so the
+deployed docs site has both reports live.
+
 To collect coverage without generating the local HTML report:
 
 ```sh

@@ -292,12 +292,180 @@ class GenerateBuildReportTests(unittest.TestCase):
                 )
             }
         )
-        section = generate_build_report.make_binary_size_section(runner, None)
+        section = generate_build_report.make_binary_size_section(
+            runner,
+            None,
+            generate_build_report._resolve_link_targets(generate_build_report.LINK_MODE_LOCAL),
+        )
 
         self.assertEqual(section.status, "success")
         self.assertIn("Generated with: `tools/binary_size.sh`", section.content)
         self.assertIn("Total binary size of foo", section.content)
         self.assertNotIn("$ tools/binary_size.sh", section.content)
+
+    def test_resolve_link_targets_modes(self):
+        local = generate_build_report._resolve_link_targets(
+            generate_build_report.LINK_MODE_LOCAL
+        )
+        self.assertEqual(local.coverage_index, "coverage-report/index.html")
+        self.assertEqual(
+            local.binary_size_report,
+            "build-binary-size/binary_size_report.html",
+        )
+
+        docs = generate_build_report._resolve_link_targets(
+            generate_build_report.LINK_MODE_DOCS
+        )
+        # Coverage is shipped as a zip and unpacked by tools/build_docs.sh,
+        # so the checked-in markdown points at the deployed docs-site URL.
+        self.assertTrue(docs.coverage_index.startswith("https://"))
+        self.assertTrue(docs.coverage_index.endswith("/reports/coverage/index.html"))
+        # Binary-size is a tiny directory of pre-rendered HTML/SVG — ship
+        # in-tree and link relatively so the GitHub web view renders it.
+        self.assertEqual(
+            docs.binary_size_report,
+            "reports/binary-size/binary_size_report.html",
+        )
+
+        site = generate_build_report._resolve_link_targets(
+            generate_build_report.LINK_MODE_SITE
+        )
+        self.assertTrue(site.coverage_index.startswith("https://"))
+        self.assertTrue(site.coverage_index.endswith("/reports/coverage/index.html"))
+        self.assertTrue(site.binary_size_report.startswith("https://"))
+
+        with self.assertRaises(ValueError):
+            generate_build_report._resolve_link_targets("bogus")
+
+    def test_default_link_mode_prefers_docs_for_checked_in_report(self):
+        self.assertEqual(
+            generate_build_report._default_link_mode(Path("docs/build_report.md")),
+            generate_build_report.LINK_MODE_DOCS,
+        )
+        self.assertEqual(
+            generate_build_report._default_link_mode(Path("/tmp/report.md")),
+            generate_build_report.LINK_MODE_LOCAL,
+        )
+        self.assertEqual(
+            generate_build_report._default_link_mode(None),
+            generate_build_report.LINK_MODE_LOCAL,
+        )
+
+    def test_coverage_section_hyperlinks_to_resolved_target(self):
+        runner = FakeRunner(
+            {
+                ("tools/coverage.sh", "--quiet"): generate_build_report.CommandResult(
+                    label="code-coverage",
+                    args=("tools/coverage.sh", "--quiet"),
+                    returncode=0,
+                    stdout="Overall coverage rate:\n  lines.......: 85.2%",
+                    stderr="",
+                    duration_sec=120.0,
+                )
+            }
+        )
+        section = generate_build_report.make_code_coverage_section(
+            runner,
+            None,  # don't archive artifacts
+            generate_build_report._resolve_link_targets(
+                generate_build_report.LINK_MODE_DOCS
+            ),
+        )
+
+        self.assertEqual(section.status, "success")
+        self.assertIn(
+            f"[coverage-report/index.html]({generate_build_report.DOCS_SITE_BASE_URL}"
+            "/reports/coverage/index.html)",
+            section.content,
+        )
+        self.assertIn("lines.......: 85.2%", section.content)
+
+    def test_binary_size_section_local_mode_copies_bargraph_next_to_save(self):
+        """In local mode with --save, the bargraph SVG must land beside
+        the saved markdown so the image link resolves from any viewer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            import os
+            prior_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                # Stage a fake build-binary-size/ at the faux workspace
+                # root so the section copy has a source file to grab.
+                fake_bs = tmp_path / "build-binary-size"
+                fake_bs.mkdir()
+                (fake_bs / "binary_size_bargraph.svg").write_text("<svg/>")
+
+                save_dir = tmp_path / "elsewhere"
+                save_dir.mkdir()
+
+                runner = FakeRunner(
+                    {
+                        ("tools/binary_size.sh",): generate_build_report.CommandResult(
+                            label="binary-size",
+                            args=("tools/binary_size.sh",),
+                            returncode=0,
+                            stdout="total: 1.0M",
+                            stderr="",
+                            duration_sec=1.0,
+                        )
+                    }
+                )
+                section = generate_build_report.make_binary_size_section(
+                    runner,
+                    None,  # reports_root — not used in local mode
+                    generate_build_report._resolve_link_targets(
+                        generate_build_report.LINK_MODE_LOCAL
+                    ),
+                    local_asset_dir=save_dir,
+                )
+
+                # The bargraph must have been copied next to save_dir …
+                self.assertTrue((save_dir / "binary_size_bargraph.svg").is_file())
+                # … and the image link must be the bare basename so it
+                # resolves from wherever the markdown is later viewed.
+                self.assertIn(
+                    "![Binary size bar graph](binary_size_bargraph.svg)",
+                    section.content,
+                )
+                # Sanity: when an asset dir was provided, the local
+                # workspace-relative bargraph path must not be the link.
+                self.assertNotIn(
+                    "![Binary size bar graph](build-binary-size/",
+                    section.content,
+                )
+            finally:
+                os.chdir(prior_cwd)
+
+    def test_archive_coverage_reports_produces_zip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            # Stage a fake coverage tree alongside where the generator
+            # expects to find it (repo-relative "coverage-report/").
+            import os
+            prior_cwd = Path.cwd()
+            os.chdir(tmp)
+            try:
+                fake_cov = tmp_path / "coverage-report"
+                (fake_cov / "sub").mkdir(parents=True)
+                (fake_cov / "index.html").write_text("<html>root</html>")
+                (fake_cov / "sub" / "leaf.html").write_text("<html>leaf</html>")
+
+                reports_root = tmp_path / "docs" / "reports"
+                ok = generate_build_report._archive_coverage_reports(reports_root)
+                self.assertTrue(ok)
+
+                archive = reports_root / generate_build_report.COVERAGE_ARCHIVE_NAME
+                self.assertTrue(archive.is_file())
+
+                import zipfile
+                with zipfile.ZipFile(archive) as zf:
+                    names = sorted(zf.namelist())
+                # Top-level dir is renamed to `coverage/` so that
+                # `unzip -d reports/` produces reports/coverage/...
+                self.assertIn("coverage/index.html", names)
+                self.assertIn("coverage/sub/leaf.html", names)
+            finally:
+                os.chdir(prior_cwd)
 
     def test_command_runner_reports_progress(self):
         runner = generate_build_report.CommandRunner(

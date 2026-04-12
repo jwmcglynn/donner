@@ -37,7 +37,7 @@ jobs:
 
       - name: Generate Doxygen documentation
         run: |
-          doxygen Doxyfile
+          tools/build_docs.sh
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
