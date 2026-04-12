@@ -8,6 +8,8 @@
   },
   "devDependencies": {
     "jest-environment-jsdom": "^30.0.0",
-    "npm-run-all": "latest"
+    "npm-run-all": "latest",
+    "playwright": "^1.59.1",
+    "pngjs": "^7.0.0"
   }
 }

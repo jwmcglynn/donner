@@ -50,3 +50,4 @@ imgui.ini
 /build
 CMakeLists.txt
 third_party/public-sans/embed_resources/
+examples/svg_viewer_screenshot.png

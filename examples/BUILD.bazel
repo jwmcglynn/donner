@@ -63,11 +63,6 @@ wasm_cc_binary(
 donner_cc_binary(
     name = "svg_viewer",
     srcs = ["svg_viewer.cc"],
-    copts = select({
-        "@platforms//cpu:wasm32": ["-pthread"],
-        "@platforms//cpu:wasm64": ["-pthread"],
-        "//conditions:default": [],
-    }),
     linkopts = select({
         "@platforms//cpu:wasm32": [
             "-sALLOW_MEMORY_GROWTH=1",
@@ -93,5 +88,21 @@ donner_cc_binary(
 wasm_cc_binary(
     name = "svg_viewer_web_package",
     cc_target = ":svg_viewer",
+    tags = ["manual"],
+)
+
+donner_cc_binary(
+    name = "render_test",
+    srcs = ["render_test.cc"],
+    tags = ["manual"],
+    deps = [
+        "//donner/svg/renderer",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+    ],
+)
+
+wasm_cc_binary(
+    name = "render_test_wasm",
+    cc_target = ":render_test",
     tags = ["manual"],
 )

@@ -29,6 +29,8 @@
 <script>
   var Module = {
     canvas: document.getElementById('canvas'),
+    // Preserve drawing buffer so toDataURL/screenshots work for testing.
+    contextAttributes: { preserveDrawingBuffer: true },
     onRuntimeInitialized: function() {
       document.getElementById('status').style.display = 'none';
     },

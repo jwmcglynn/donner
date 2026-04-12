@@ -2,9 +2,9 @@ Subject: [PATCH] Add bazel build files
 Base-commit: b35641f4a3c62aa86a0b3c983d163bc0fe36026d
 
 ---
- BUILD.bazel  | 145 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ BUILD.bazel  | 143 +++++++++++++++++++++++++++++++++++++++++++++++++++
  MODULE.bazel |   10 +++++
- 2 files changed, 155 insertions(+)
+ 2 files changed, 153 insertions(+)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 
@@ -13,7 +13,7 @@ new file mode 100644
 index 00000000..952ce1c3
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,144 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +load("@bazel_skylib//lib:selects.bzl", "selects")
 +
@@ -32,7 +32,6 @@ index 00000000..952ce1c3
 +            "-s USE_GLFW=3",
 +            "-s FULL_ES3=1",
 +            "-s WASM=1",
-+            "-s USE_PTHREADS=1",
 +        ],
 +        "//conditions:default": [],
 +    }),
@@ -109,7 +108,6 @@ index 00000000..952ce1c3
 +            "-s USE_GLFW=3",
 +            "-s FULL_ES3=1",
 +            "-s WASM=1",
-+            "-s USE_PTHREADS=1",
 +        ],
 +        "//conditions:default": [
 +            "-lrt",

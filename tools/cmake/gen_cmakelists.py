@@ -89,6 +89,9 @@ _IGNORED_EXTERNAL_DEPS: Set[str] = {
     "@skia//src/pathops:pathops",
     "@skia//src/ports:fontmgr_empty_freetype",
     "@skia//src/ports:fontmgr_fontconfig_freetype",
+    # ImGui and GLFW are used by the SVG viewer (Bazel-only WASM target).
+    "@glfw//:glfw",
+    "@imgui//:imgui",
 }
 
 # Packages whose CMake build is provided manually or by FetchContent and must

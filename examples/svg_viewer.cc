@@ -35,13 +35,9 @@ namespace {
 
 // Default SVG shown on startup.
 constexpr const char* kDefaultSvg =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
-  <rect fill="#2d2d30" width="200" height="200"/>
-  <rect x="30" y="30" width="80" height="80" rx="8" fill="#e74c3c"/>
-  <circle cx="130" cy="70" r="40" fill="#3498db"/>
-  <polygon points="100,120 140,190 60,190" fill="#2ecc71"/>
-  <line x1="10" y1="10" x2="190" y2="190" stroke="#f1c40f" stroke-width="3"/>
-  <text x="100" y="110" text-anchor="middle" font-size="16" fill="white">Donner SVG</text>
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect width="100" height="100" fill="red"/>
+  <circle cx="50" cy="50" r="30" fill="blue"/>
 </svg>)";
 
 constexpr int kInitialWidth = 1280;
@@ -79,19 +75,27 @@ void uploadBitmap(AppState& state, const donner::svg::RendererBitmap& bitmap) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-#ifndef __EMSCRIPTEN__
-  const int strideInPixels =
-      bitmap.rowBytes > 0 ? static_cast<int>(bitmap.rowBytes / 4) : bitmap.dimensions.x;
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, strideInPixels);
-#endif
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, bitmap.pixels.data());
-#ifndef __EMSCRIPTEN__
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-#endif
+  // Upload the pixel data, row-by-row if rowBytes differs from tightly packed.
+  const int w = bitmap.dimensions.x;
+  const int h = bitmap.dimensions.y;
+  const size_t tightRowBytes = static_cast<size_t>(w) * 4u;
 
-  state.textureWidth = bitmap.dimensions.x;
-  state.textureHeight = bitmap.dimensions.y;
+  if (bitmap.rowBytes == tightRowBytes || bitmap.rowBytes == 0) {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 bitmap.pixels.data());
+  } else {
+    // Allocate tightly-packed buffer and copy row-by-row.
+    std::vector<uint8_t> packed(tightRowBytes * static_cast<size_t>(h));
+    for (int row = 0; row < h; ++row) {
+      std::memcpy(packed.data() + row * tightRowBytes,
+                  bitmap.pixels.data() + row * bitmap.rowBytes, tightRowBytes);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, packed.data());
+  }
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  state.textureWidth = w;
+  state.textureHeight = h;
 }
 
 void renderSvg(AppState& state) {
@@ -114,12 +118,13 @@ void renderSvg(AppState& state) {
   }
 
   SVGDocument doc = std::move(maybeDoc.result());
-  doc.setCanvasSize(800, 600);
+  doc.useAutomaticCanvasSize();
 
   RendererTinySkia renderer;
   renderer.draw(doc);
 
   RendererBitmap bitmap = renderer.takeSnapshot();
+
   if (!bitmap.empty()) {
     uploadBitmap(state, bitmap);
   }
@@ -140,6 +145,12 @@ void mainLoopIteration(void* arg) {
   ImGui_ImplGlfw_NewFrame();
   ImGui::NewFrame();
 
+  // Render SVG on first frame.
+  if (state->needsRender) {
+    renderSvg(*state);
+    state->needsRender = false;
+  }
+
   // Full-window docking area.
   const ImGuiViewport* viewport = ImGui::GetMainViewport();
   ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -147,20 +158,20 @@ void mainLoopIteration(void* arg) {
   ImGui::Begin("##MainWindow", nullptr,
                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus);
+                   ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
 
   const float availWidth = ImGui::GetContentRegionAvail().x;
   const float panelWidth = availWidth * 0.45f;
 
   // Left panel — SVG source editor.
-  ImGui::BeginChild("##CodePanel", ImVec2(panelWidth, 0), ImGuiChildFlags_Borders);
+  ImGui::BeginChild("##CodePanel", ImVec2(panelWidth, -1.0f), ImGuiChildFlags_Borders);
   ImGui::Text("SVG Source");
   ImGui::Separator();
 
   const float textHeight = ImGui::GetContentRegionAvail().y - 40.0f;
   if (ImGui::InputTextMultiline("##SvgSource", state->svgBuffer.data(),
                                 static_cast<size_t>(kSvgBufferSize),
-                                ImVec2(-FLT_MIN, textHeight),
+                                ImVec2(-FLT_MIN, textHeight > 100.0f ? textHeight : 100.0f),
                                 ImGuiInputTextFlags_AllowTabInput)) {
     state->needsRender = true;
   }
@@ -175,31 +186,26 @@ void mainLoopIteration(void* arg) {
   ImGui::SameLine();
 
   // Right panel — rendered output.
-  ImGui::BeginChild("##RenderPanel", ImVec2(0, 0), ImGuiChildFlags_Borders);
-  ImGui::Text("Rendered Output (%dx%d)", state->textureWidth, state->textureHeight);
-  ImGui::Separator();
-
-  if (state->needsRender) {
-    renderSvg(*state);
-    state->needsRender = false;
-  }
+  ImGui::BeginChild("##RenderPanel", ImVec2(0, -1.0f), ImGuiChildFlags_Borders);
 
   if (state->textureId != 0) {
+    ImGui::Text("Rendered (%dx%d)", state->textureWidth, state->textureHeight);
+    ImGui::Separator();
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    // Fit the texture in the available space maintaining aspect ratio.
     float displayW = static_cast<float>(state->textureWidth);
     float displayH = static_cast<float>(state->textureHeight);
     if (displayW > 0 && displayH > 0) {
       const float scaleX = avail.x / displayW;
       const float scaleY = avail.y / displayH;
       const float scale = (scaleX < scaleY) ? scaleX : scaleY;
-      if (scale < 1.0f) {
-        displayW *= scale;
-        displayH *= scale;
-      }
+      displayW *= scale;
+      displayH *= scale;
     }
+
     ImGui::Image(static_cast<ImTextureID>(static_cast<uintptr_t>(state->textureId)),
                  ImVec2(displayW, displayH));
+  } else {
+    ImGui::Text("No render output yet");
   }
   ImGui::EndChild();
 
@@ -282,7 +288,7 @@ int main() {
   state.svgBuffer.resize(kSvgBufferSize, '\0');
   std::strncpy(state.svgBuffer.data(), kDefaultSvg, kSvgBufferSize - 1);
 
-  std::printf("Donner SVG Viewer started.\n");
+  std::printf("Donner SVG Viewer started\n");
 
 #ifdef __EMSCRIPTEN__
   emscripten_set_main_loop_arg(mainLoopIteration, &state, 0, true);
