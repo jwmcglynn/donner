@@ -211,6 +211,10 @@ TEST_F(HardenedChildTest, ChildRefusesWhenSandboxEnvIsWrongValue) {
 }
 
 TEST_F(HardenedChildTest, ChildRunsWithCuratedEnvpAndLogsProfile) {
+#if !defined(__linux__)
+  GTEST_SKIP() << "Subprocess hardening tests require Linux (seccomp, "
+                  "close_range, minimal envp without DYLD)";
+#endif
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
          <rect width="10" height="10" fill="red"/>
@@ -233,6 +237,9 @@ TEST_F(HardenedChildTest, ChildRunsWithCuratedEnvpAndLogsProfile) {
 // ---------------------------------------------------------------------------
 
 TEST_F(HardenedChildTest, ChildRendersSuccessfullyUnderSeccomp) {
+#if !defined(__linux__)
+  GTEST_SKIP() << "Seccomp is Linux-only; macOS child fails with minimal envp";
+#endif
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
          <circle cx="10" cy="10" r="8" fill="blue" stroke="green" stroke-width="2"/>
