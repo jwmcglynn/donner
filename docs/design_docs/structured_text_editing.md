@@ -312,10 +312,23 @@ land as standalone PRs in this order.
       CSS unit identifiers handled. Round-trip test in
       `LengthParser_tests.cc` covers 17 units × 9 representative
       values = 153 pairs.
-- [ ] Free function `toSVGTransformString(const Transformd&)` in
-      `donner/base/`. Decomposes to simplest form: identity → empty,
-      translate/scale/rotate → named forms, general → matrix. Round-
-      trips with the SVG transform parser.
+- [x] Free function `toSVGTransformString(const Transform2d&)` in
+      `donner/base/Transform.h`. Decomposes to simplest form:
+      identity → empty string, pure translate → `translate(x)` or
+      `translate(x, y)`, pure uniform scale → `scale(s)`, pure
+      non-uniform scale → `scale(sx, sy)`, pure rotation around
+      origin → `rotate(deg)`, otherwise `matrix(a, b, c, d, e, f)`.
+      Rotation is checked *before* scale so `rotate(180°)` →
+      `[-1, 0, 0, -1, 0, 0]` serializes as `rotate(180)` instead of
+      `scale(-1)` (both are valid SVG but rotation is the canonical
+      form). Number formatting uses `std::format("{}", value)` for
+      shortest round-trippable double output, with an `int64_t`
+      cast for integer-valued doubles. Round-trip test in
+      `TransformParser_tests.cc` covers identity, all six translate
+      cases, three scales including reflection, three rotations
+      (including the 180° scale-collision case), skewX/skewY
+      (which fall through to `matrix(...)`), and an explicit
+      general-matrix case with exact expected string output.
 - [ ] `xml::XMLNode::serializeToString(int indentLevel = 0) →
       RcString`. Self-closing empty elements, escaped attribute values
       (via `EscapeAttributeValue` below), `<!-- -->` + `<![CDATA[ ]]>`.

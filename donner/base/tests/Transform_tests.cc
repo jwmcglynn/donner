@@ -262,4 +262,53 @@ TEST(Transform, Output) {
             "  0\t0\t1 ]\n");
 }
 
+// -----------------------------------------------------------------------------
+// toSVGTransformString — decomposition to the simplest canonical form
+// -----------------------------------------------------------------------------
+
+TEST(Transform, ToSVGTransformStringIdentity) {
+  EXPECT_EQ(toSVGTransformString(Transform2d()), "");
+}
+
+TEST(Transform, ToSVGTransformStringTranslate) {
+  EXPECT_EQ(toSVGTransformString(Transform2d::Translate(Vector2d(10.0, 20.0))),
+            "translate(10, 20)");
+  EXPECT_EQ(toSVGTransformString(Transform2d::Translate(Vector2d(1.5, -2.5))),
+            "translate(1.5, -2.5)");
+  // `y == 0` collapses to the one-argument form.
+  EXPECT_EQ(toSVGTransformString(Transform2d::Translate(Vector2d(5.0, 0.0))), "translate(5)");
+}
+
+TEST(Transform, ToSVGTransformStringScale) {
+  EXPECT_EQ(toSVGTransformString(Transform2d::Scale(2.0)), "scale(2)");
+  EXPECT_EQ(toSVGTransformString(Transform2d::Scale(Vector2d(2.0, 3.0))), "scale(2, 3)");
+  EXPECT_EQ(toSVGTransformString(Transform2d::Scale(Vector2d(0.5, 0.5))), "scale(0.5)")
+      << "uniform scale collapses to single-argument form";
+}
+
+TEST(Transform, ToSVGTransformStringRotate) {
+  const double halfPi = MathConstants<double>::kHalfPi;
+  EXPECT_EQ(toSVGTransformString(Transform2d::Rotate(halfPi)), "rotate(90)");
+  EXPECT_EQ(toSVGTransformString(Transform2d::Rotate(-halfPi)), "rotate(-90)");
+  EXPECT_EQ(toSVGTransformString(Transform2d::Rotate(MathConstants<double>::kPi)), "rotate(180)");
+}
+
+TEST(Transform, ToSVGTransformStringGeneralMatrix) {
+  // Skew isn't decomposable into translate/scale/rotate alone, so it falls through
+  // to the general matrix form.
+  const Transform2d skew = Transform2d::SkewX(MathConstants<double>::kPi / 4.0);
+  EXPECT_THAT(std::string_view(toSVGTransformString(skew)),
+              testing::StartsWith("matrix("));
+
+  // A full custom matrix.
+  Transform2d t(Transform2d::uninitialized);
+  t.data[0] = 1.5;
+  t.data[1] = 0.25;
+  t.data[2] = -0.25;
+  t.data[3] = 1.5;
+  t.data[4] = 10.0;
+  t.data[5] = 20.0;
+  EXPECT_EQ(toSVGTransformString(t), "matrix(1.5, 0.25, -0.25, 1.5, 10, 20)");
+}
+
 }  // namespace donner

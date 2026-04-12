@@ -2,10 +2,12 @@
 /// @file
 
 #include <cmath>
+#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Box.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 
 namespace donner {
@@ -310,5 +312,100 @@ using Transform2f = Transform2<float>;
 using Transform2d = Transform2<double>;
 
 /// @}
+
+namespace detail {
+
+/// Format a single `double` into the minimum-length round-trippable decimal form.
+/// Used by \ref toSVGTransformString — returns `std::string` rather than `RcString` so
+/// the pieces compose cleanly inside a final `std::format` call.
+///
+/// The integer fast-path casts to `int64_t` to avoid `std::format`'s default
+/// floating-point output (which on some implementations emits `10` as `10`, but on
+/// others as `1e+01` or `10.0`). The non-integer path uses `{}` with no format spec,
+/// which per C++20 `[format.string.std]/21.1` emits the shortest decimal representation
+/// that round-trips through `std::from_chars`. The non-default `{:g}` specifier was
+/// tried first and rejected — it defaults to 6-significant-digit precision, which
+/// drops accuracy for values like `tan(π/6) = 0.57735026918962562`.
+inline std::string FormatNumberForSVG(double value) {
+  if (value == std::trunc(value) && std::isfinite(value)) {
+    return std::format("{}", static_cast<std::int64_t>(value));
+  }
+  return std::format("{}", value);
+}
+
+}  // namespace detail
+
+/**
+ * Serialize a \ref Transform2d to its canonical SVG `transform` attribute text, decomposing
+ * to the simplest form when possible:
+ *
+ * - Identity → empty string
+ * - Pure translate (`[1 0 0 1 e f]`) → `translate(e, f)`, or `translate(e)` when `f == 0`
+ * - Pure uniform scale (`[s 0 0 s 0 0]`) → `scale(s)`
+ * - Pure non-uniform scale (`[sx 0 0 sy 0 0]`) → `scale(sx, sy)`
+ * - Pure rotation around origin (`[cos -sin sin cos 0 0]`) → `rotate(deg)`
+ * - General → `matrix(a, b, c, d, e, f)`
+ *
+ * Numbers are emitted via `{}` (integer-valued doubles) or `{:g}` (fractional) so the
+ * output is the shortest form that round-trips.  Arguments are comma-separated with a
+ * space after the comma, matching the canonical CSS transform syntax.
+ *
+ * Round-trips with `donner::svg::parser::TransformParser::Parse` for every shape above.
+ *
+ * @param transform Transform to serialize.
+ * @return Canonical SVG transform text (empty string for identity).
+ */
+inline RcString toSVGTransformString(const Transform2d& transform) {
+  if (transform.isIdentity()) {
+    return RcString("");
+  }
+
+  const double a = transform.data[0];
+  const double b = transform.data[1];
+  const double c = transform.data[2];
+  const double d = transform.data[3];
+  const double e = transform.data[4];
+  const double f = transform.data[5];
+
+  // Pure translate: upper-left is identity 2x2.
+  if (NearEquals(a, 1.0) && NearZero(b) && NearZero(c) && NearEquals(d, 1.0)) {
+    if (NearZero(f)) {
+      return RcString::fromFormat("translate({})", detail::FormatNumberForSVG(e));
+    }
+    return RcString::fromFormat("translate({}, {})", detail::FormatNumberForSVG(e),
+                                 detail::FormatNumberForSVG(f));
+  }
+
+  // Pure rotation around origin: matrix must be [cos, sin, -sin, cos, 0, 0] with
+  // `a² + b² ≈ 1` as a final sanity check against near-misses that happen to have
+  // the right symmetry but the wrong magnitude (e.g. a rotation+scale composition).
+  //
+  // This check precedes the scale detection below because `rotate(180°)` =
+  // `[-1, 0, 0, -1, 0, 0]` also satisfies the "pure scale" constraints (b=c=0,
+  // e=f=0, a=d) — but it's semantically a rotation and the canonical SVG output
+  // for that matrix is `rotate(180)`, not `scale(-1)`. Conversely, `scale(2)`
+  // has `a² + b² = 4` and fails the `NearEquals(..., 1.0)` check here, so it
+  // correctly falls through to the scale branch.
+  if (NearZero(e) && NearZero(f) && NearEquals(a, d) && NearEquals(b, -c) &&
+      NearEquals(a * a + b * b, 1.0)) {
+    const double angleDegrees = std::atan2(b, a) * MathConstants<double>::kRadToDeg;
+    return RcString::fromFormat("rotate({})", detail::FormatNumberForSVG(angleDegrees));
+  }
+
+  // Pure scale (around origin): no skew or translation.
+  if (NearZero(b) && NearZero(c) && NearZero(e) && NearZero(f)) {
+    if (NearEquals(a, d)) {
+      return RcString::fromFormat("scale({})", detail::FormatNumberForSVG(a));
+    }
+    return RcString::fromFormat("scale({}, {})", detail::FormatNumberForSVG(a),
+                                 detail::FormatNumberForSVG(d));
+  }
+
+  // General fallback.
+  return RcString::fromFormat(
+      "matrix({}, {}, {}, {}, {}, {})", detail::FormatNumberForSVG(a),
+      detail::FormatNumberForSVG(b), detail::FormatNumberForSVG(c), detail::FormatNumberForSVG(d),
+      detail::FormatNumberForSVG(e), detail::FormatNumberForSVG(f));
+}
 
 }  // namespace donner
