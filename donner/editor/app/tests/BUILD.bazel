@@ -1,0 +1,15 @@
+"""Tests for the editor MVP — headless drivers for EditorApp + EditorRepl."""
+
+load("//build_defs:rules.bzl", "donner_cc_test", "renderer_backend_compatible_with")
+
+donner_cc_test(
+    name = "editor_app_tests",
+    srcs = ["EditorApp_tests.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/editor/app:editor_app",
+        "//donner/editor/app:editor_repl",
+        "//donner/editor/sandbox:rnr_file",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

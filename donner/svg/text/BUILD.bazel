@@ -57,7 +57,10 @@ donner_cc_library(
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         ":text_backend",
         ":text_backend_simple",
