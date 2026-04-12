@@ -325,16 +325,19 @@ donner_variant_cc_test(
     # show up.
     #
     # Product tiers (run on every PR):
-    #   tiny         - tiny-skia, no filters, no text  (donner-tiny)
     #   default_text - tiny-skia, filters, simple text (donner default)
     #   max          - tiny-skia, filters, full text   (donner-max)
+    #
+    # The "tiny" tier (no filters, no text) is not included here because
+    # the resvg test suite exercises filters and text — it would need
+    # feature-gated test selection to skip those categories. TODO: add
+    # once the test harness supports config-aware test skipping.
     #
     # The Skia reference variant (skia_ref) is defined separately below
     # and only runs on main merges to avoid compiling Skia on every PR.
     size = "enormous",
     dep = ":resvg_test_suite_impl",
     named_variants = [
-        {"name": "tiny", "backend": "tiny_skia", "text": "false", "text_full": "false"},
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
         {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
     ],
