@@ -56,6 +56,15 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_patch",
+    srcs = ["TextPatch.cc"],
+    hdrs = ["TextPatch.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "editor_app",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],

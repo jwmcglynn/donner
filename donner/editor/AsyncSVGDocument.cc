@@ -1,6 +1,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -70,6 +71,23 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // setDocument path which clears the queue (already drained) and bumps
       // the version (which `flushFrame` will bump again, harmlessly).
       (void)loadFromString(command.bytes);
+      break;
+    }
+
+    case EditorCommand::Kind::SetAttribute: {
+      if (!command.element.has_value()) {
+        return;
+      }
+      // Apply the attribute change via the public SVGElement::setAttribute
+      // API — the same path the parser uses. This triggers presentation-
+      // attribute parsing, style cascade, and dirty-flag marking through
+      // the same code path as initial parse. The structured-editing M5
+      // fast path will eventually replace this with a targeted
+      // AttributeParser::ParseAndSetAttribute call, but for M3 the
+      // public setAttribute is correct and sufficient.
+      svg::SVGElement element = *command.element;
+      element.setAttribute(xml::XMLQualifiedNameRef(command.attributeName),
+                           command.attributeValue);
       break;
     }
 

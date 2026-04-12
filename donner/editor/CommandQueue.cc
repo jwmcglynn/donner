@@ -1,5 +1,6 @@
 #include "donner/editor/CommandQueue.h"
 
+#include <map>
 #include <unordered_map>
 #include <utility>
 
@@ -34,6 +35,11 @@ std::vector<EditorCommand> CommandQueue::flush() {
   // registry.
   std::unordered_map<Entity, std::size_t> setTransformSlot;
 
+  // Coalesce SetAttribute by (element, attributeName). Successive writes
+  // to the same attribute on the same element collapse to the most recent
+  // value, just like SetTransform. The key is the (entity, attrName) pair.
+  std::map<std::pair<Entity, std::string>, std::size_t> setAttributeSlot;
+
   for (std::size_t i = startIndex; i < pending_.size(); ++i) {
     EditorCommand& cmd = pending_[i];
 
@@ -43,7 +49,15 @@ std::vector<EditorCommand> CommandQueue::flush() {
       if (inserted) {
         effective.push_back(std::move(cmd));
       } else {
-        // Overwrite the previous SetTransform for this element in-place.
+        effective[it->second] = std::move(cmd);
+      }
+    } else if (cmd.kind == EditorCommand::Kind::SetAttribute && cmd.element.has_value()) {
+      const auto key =
+          std::make_pair(cmd.element->entityHandle().entity(), cmd.attributeName);
+      auto [it, inserted] = setAttributeSlot.try_emplace(key, effective.size());
+      if (inserted) {
+        effective.push_back(std::move(cmd));
+      } else {
         effective[it->second] = std::move(cmd);
       }
     } else {

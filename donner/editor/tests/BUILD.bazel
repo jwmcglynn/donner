@@ -82,3 +82,12 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "text_patch_tests",
+    srcs = ["TextPatch_tests.cc"],
+    deps = [
+        "//donner/editor:text_patch",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

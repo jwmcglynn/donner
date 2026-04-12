@@ -44,6 +44,13 @@ struct EditorCommand {
     /// reference now-invalid elements).
     ReplaceDocument,
 
+    /// Set a single attribute on the element. Used by the structured-
+    /// editing writeback path (M3) when a tool modifies an attribute
+    /// value. Coalesces by `(element, attributeName)` — successive
+    /// SetAttribute commands for the same element and attribute collapse
+    /// to the most-recently-queued value.
+    SetAttribute,
+
     /// Detach the element from its parent, making it invisible to the
     /// renderer. The ECS entity itself is NOT destroyed — it stays in
     /// the registry, just orphaned. This is a "soft delete" so any
@@ -72,6 +79,12 @@ struct EditorCommand {
   /// contents) may go out of scope before the queue flushes.
   std::string bytes;
 
+  /// SetAttribute payload: the attribute name (e.g. "transform", "fill").
+  std::string attributeName;
+
+  /// SetAttribute payload: the new attribute value.
+  std::string attributeValue;
+
   /// Builds a SetTransform command.
   static EditorCommand SetTransformCommand(svg::SVGElement element,
                                            const Transform2d& transform) {
@@ -87,6 +100,17 @@ struct EditorCommand {
     EditorCommand cmd;
     cmd.kind = Kind::ReplaceDocument;
     cmd.bytes = std::move(bytes);
+    return cmd;
+  }
+
+  /// Builds a SetAttribute command.
+  static EditorCommand SetAttributeCommand(svg::SVGElement element, std::string name,
+                                           std::string value) {
+    EditorCommand cmd;
+    cmd.kind = Kind::SetAttribute;
+    cmd.element = std::move(element);
+    cmd.attributeName = std::move(name);
+    cmd.attributeValue = std::move(value);
     return cmd;
   }
 
