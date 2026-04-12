@@ -439,48 +439,34 @@ land as standalone PRs in this order.
 
 ### M1: XML token callback API + lexer-only mode
 
-- [ ] Add `xml::XMLTokenType` enum to `donner/base/xml/`:
-      `TagOpen`, `TagName`, `TagClose`, `TagSelfClose`, `AttributeName`,
-      `AttributeValue`, `Comment`, `CData`, `TextContent`,
-      `XmlDeclaration`, `Doctype`, `EntityRef`, `ProcessingInstruction`,
-      `Whitespace`. **Drops `AttributeEquals`** (redundant — the `=` is
-      always between `AttributeName.end` and `AttributeValue.start`).
-      `AttributeValue` **includes its delimiters** (quote chars) so
-      writeback can preserve quote style. `TagOpen` is just `<`,
-      `TagName` is the name, `TagClose` is `>`, `TagSelfClose` is `/>`
-      — zero overlap.
-- [ ] **`XMLParser::Parse` becomes a template on the token sink:**
-      ```cpp
-      struct NoTokenSink {
-        void operator()(XMLTokenType, SourceRange) const noexcept {}
-      };
-      template <typename TokenSink = NoTokenSink>
-      static ParseResult<XMLDocument> Parse(std::string_view, const Options&,
-                                            TokenSink&& sink = {}) noexcept;
-      ```
-      The no-sink path is zero-overhead (dead-stripped). **No
-      `std::function` on the parse hot path** — it would add a
-      per-token indirect call, heap-capture risk, and footgun
-      `throw`-through-noexcept. The template compiles once per editor
-      sink type. Non-template overload `Parse(str, options)` stays
-      stable for existing callers.
-- [ ] **Lexer-only mode.** Add a new entry point
-      `XMLParser::Tokenize(std::string_view, TokenSink&&)` that runs
-      the tokenizer without constructing `XMLNode`s. Re-tokenizing a
-      single line for highlighting cannot afford to allocate
-      `AttributesComponent`s or walk `entt::registry` — the cost
-      dominates the per-line budget (see Perf §4). The lexer-only
-      mode is what M2 (highlighting) actually consumes; the tree-
-      building mode is what M5 (classifier) consumes.
-- [ ] **Error recovery for the lexer-only mode.** Today `parseElement`
-      is strict-fail — on first error it returns a diagnostic and
-      stops, so in a 10k-element SVG where the user is typing a
-      partial tag at line 500, tokens for lines 501+ never emit.
-      A highlighter built on that path goes dark below the cursor.
-      Lexer-only mode must synchronize on `<` and `>`, skip over
-      the malformed region emitting an `ErrorRecovery` token, and
-      continue. Tree-building mode keeps its current strict-fail
-      semantics.
+- [x] **`xml::XMLTokenType` enum** in `donner/base/xml/XMLTokenType.h`:
+      15 token types (`TagOpen`, `TagName`, `TagClose`, `TagSelfClose`,
+      `AttributeName`, `AttributeValue`, `Comment`, `CData`,
+      `TextContent`, `XmlDeclaration`, `Doctype`, `EntityRef`,
+      `ProcessingInstruction`, `Whitespace`, `ErrorRecovery`).
+      `AttributeValue` includes delimiters; `=` is emitted as
+      `Whitespace` (gap-free stream, no dedicated `AttributeEquals`).
+      `XMLToken` struct carries `type` + `SourceRange` + a `text()`
+      convenience accessor.
+- [x] **Standalone lexer-only tokenizer** in
+      `donner/base/xml/XMLTokenizer.h`: free function template
+      `Tokenize<TokenSink>(string_view, sink)`. Implemented via an
+      internal `XMLTokenizerImpl` class that splits out of the
+      template so we don't carry lambdas/gotos across scopes. The
+      tokenizer does NOT build `XMLNode`s, does NOT expand entities,
+      and does NOT touch `entt::registry`. It's a pure lexer that
+      segments the byte stream into tokens with source ranges.
+- [x] **Error recovery:** on malformed input the tokenizer emits
+      `ErrorRecovery` tokens and synchronizes to the next `<` or
+      end-of-input. Unterminated comments, CDATA, attributes, and
+      invalid element names all recover rather than aborting. The
+      token stream below the error continues normally — a
+      highlighter built on this path stays lit below the cursor.
+- [ ] **`XMLParser::ParseWithSink` (tree-building + token emission):**
+      deferred — the lexer-only `Tokenize` entry point is what M2
+      (highlighting) and M5 (classification) actually consume. The
+      tree-building variant will be added when a use case arises
+      that needs both tokens and a DOM tree in a single pass.
 - [ ] **Token-callback fuzzer.** Dedicated harness
       `XMLParser_token_callback_fuzzer.cc`: splits the input into
       source bytes + a bitstream; the sink consumes bits to decide
