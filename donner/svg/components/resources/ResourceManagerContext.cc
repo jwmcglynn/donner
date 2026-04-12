@@ -1,5 +1,6 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/FontFace.h"

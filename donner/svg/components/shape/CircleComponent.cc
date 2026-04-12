@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "donner/base/CompileTimeMap.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 
 namespace donner::svg::components {

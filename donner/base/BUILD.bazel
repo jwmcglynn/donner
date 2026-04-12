@@ -16,6 +16,7 @@ donner_cc_library(
         "ChunkedString.h",
         "CompileTimeMap.h",
         "EcsRegistry.h",
+        "EcsRegistry_fwd.h",
         "FileOffset.h",
         "Length.h",
         "MathUtils.h",

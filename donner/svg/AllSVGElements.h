@@ -6,7 +6,7 @@
  * can be used to perform constexpr lookups across all element types.
  */
 
-#include <entt/entt.hpp>
+#include <entt/entity/fwd.hpp>  // entt::type_list
 
 #include "donner/svg/SVGCircleElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"             // IWYU pragma: export

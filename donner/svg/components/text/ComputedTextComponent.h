@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>  // entt::entity, entt::null
 #include <optional>
 
 #include "donner/base/Length.h"

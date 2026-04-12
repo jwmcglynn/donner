@@ -1,5 +1,7 @@
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 
+#include "donner/base/EcsRegistry.h"
+
 namespace donner::svg::components {
 
 void RadialGradientComponent::inheritAttributes(EntityHandle handle, EntityHandle base) {

@@ -1,7 +1,7 @@
 #include "donner/svg/parser/AttributeParser.h"
 
 #include <cctype>
-#include <entt/entt.hpp>
+#include <entt/entity/fwd.hpp>  // entt::type_list, entt::type_list_element
 #include <string_view>
 
 #include "donner/base/MathUtils.h"

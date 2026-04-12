@@ -1,5 +1,7 @@
 #include "donner/base/xml/components/AttributesComponent.h"
 
+#include <entt/entity/helper.hpp>  // entt::to_entity (2-arg overload)
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 

@@ -1,5 +1,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 
+#include <entt/entity/helper.hpp>  // entt::to_entity (2-arg overload)
+
 #include "donner/base/Utils.h"
 
 namespace donner::components {

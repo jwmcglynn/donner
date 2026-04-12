@@ -4,7 +4,7 @@
 #include <map>
 #include <optional>
 
-#include "donner/base/EcsRegistry.h"
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/Length.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/properties/Property.h"

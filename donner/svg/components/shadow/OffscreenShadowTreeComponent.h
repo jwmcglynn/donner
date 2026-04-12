@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <map>
 #include <span>
 
 #include "donner/base/EcsRegistry.h"

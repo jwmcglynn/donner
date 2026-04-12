@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "donner/base/EcsRegistry.h"
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
