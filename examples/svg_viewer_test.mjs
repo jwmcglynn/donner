@@ -17,7 +17,7 @@
 import { chromium } from "playwright";
 import { createServer } from "http";
 import { readFileSync, existsSync } from "fs";
-import { join, extname, resolve as resolvePath, sep } from "path";
+import { join, extname, basename } from "path";
 import { execSync } from "child_process";
 import { createRequire } from "module";
 import { PNG } from "pngjs";
@@ -78,17 +78,20 @@ function startServer(port) {
       if (url === "/" || url === "/index.html") {
         filePath = SHELL_HTML;
       } else {
-        const resolvedRoot = resolvePath(WASM_DIR);
-        const candidate = resolvePath(join(resolvedRoot, url.slice(1)));
-        // Refuse any path that escapes WASM_DIR via `..` or similar. CodeQL
-        // (alert #21) flags the unchecked join as "uncontrolled data used in
-        // path expression" even though the server binds to 127.0.0.1 only.
-        if (candidate !== resolvedRoot && !candidate.startsWith(resolvedRoot + sep)) {
+        // Sanitize user-controlled path BEFORE any path-building. Strip to
+        // the basename so there is no directory structure to traverse; the
+        // WASM package is a flat directory of sibling files (svg_viewer.js,
+        // svg_viewer.wasm, svg_viewer.data, etc.), so basename-only access
+        // is sufficient. CodeQL (alert #21) flagged the unchecked join as
+        // "uncontrolled data used in path expression" — this sanitizer runs
+        // before the path is built, which makes the taint flow terminate.
+        const safeName = basename(url);
+        if (!safeName || safeName === "." || safeName === "..") {
           res.writeHead(403);
           res.end("Forbidden");
           return;
         }
-        filePath = candidate;
+        filePath = join(WASM_DIR, safeName);
       }
 
       try {
