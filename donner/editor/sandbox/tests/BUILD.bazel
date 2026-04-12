@@ -13,7 +13,11 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_parser_child",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # Requires Linux: child process uses seccomp + RLIMIT_AS hardening.
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]) + select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
@@ -29,7 +33,11 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_parser_child",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # Requires Linux: child process uses seccomp + RLIMIT_AS hardening.
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]) + select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
@@ -67,7 +75,11 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_parser_child",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # Requires Linux: tests seccomp-bpf filters and RLIMIT_AS/RLIMIT_CPU.
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]) + select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
