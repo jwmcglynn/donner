@@ -259,9 +259,36 @@ land as standalone PRs in this order.
       - Element-specific setters (`setDxList`, `setDyList`, etc.) are
         called directly from `AttributeParser.cc` — audit each to
         confirm the underlying setter marks dirty flags.
-      Output: a documented list of safe vs unsafe attributes, and a
-      new `AttributeParser::ClearAttribute(name)` API for the
-      attribute-removal case.
+      Output: documented below.
+
+      **Audit results (ParserBot, 2026-04-11):**
+
+      - **Safe for re-parse (overwrite semantics, marks dirty):**
+        All CSS presentation attributes via `trySetPresentationAttribute`
+        (pure assignment, not accumulation). All typed element setters
+        (`setX`, `setCx`, `setPoints`, `setDxList`, `setHref`, etc. —
+        ~30 call sites). `id`/`class`/`style` via `setAttribute`
+        dispatch (remove-and-replace).
+      - **Unsafe — stale on attribute deletion, no dirty flags:**
+        Three vector fields cleared only on re-parse of the *same*
+        attribute: `FEFuncComponent::tableValues` (line 726),
+        `FEColorMatrixComponent::values` (line 815),
+        `FEConvolveMatrixComponent::kernelMatrix` (line 1252).
+        ~80 direct `comp.field = value` writes across all filter
+        primitives + `TextPathComponent` (lines 596–1360, 1998–2014)
+        — none mark dirty flags, and `removeAttribute`'s fallback
+        `trySetPresentationAttribute(name, "initial")` doesn't reach
+        these because they aren't presentation attributes.
+      - **`SVGParserContext`:** accumulates warnings via
+        `addWarning()`/`addSubparserWarning()`. Editor must use a
+        fresh `ParseWarningSink` per edit.
+      - **`ClearAttribute` API:** needs a per-element-type dispatch
+        that resets the relevant ECS component field to its default
+        and marks `DirtyFlagsComponent::Shape`. Minimum viable:
+        `comp = ComponentType{}` for the owning component. Longer
+        term: route all ~80 direct `comp.field` writes through
+        typed setters that mark dirty, matching the pattern used
+        by the geometry-element setters.
 - [x] **`xml::XMLParser::GetAttributeLocation` error recovery.**
       The three `UTILS_RELEASE_ASSERT`s in `getElementAttributeLocation`
       are now graceful `return std::nullopt` branches — under
