@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_binary")
+load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 
 donner_cc_binary(
     name = "custom_css_parser",
@@ -40,4 +41,21 @@ donner_cc_binary(
     deps = [
         "@donner",
     ],
+)
+
+# --- WASM reproducer / SVG viewer ---
+
+donner_cc_binary(
+    name = "wasm_reproducer",
+    srcs = ["wasm_reproducer.cc"],
+    tags = ["manual"],
+    deps = [
+        "//donner/svg/renderer",
+    ],
+)
+
+wasm_cc_binary(
+    name = "wasm_reproducer_wasm",
+    cc_target = ":wasm_reproducer",
+    tags = ["manual"],
 )

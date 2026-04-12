@@ -12,7 +12,7 @@ namespace {
 
 using namespace std::string_view_literals;
 
-static constexpr auto kColors = makeCompileTimeMap(std::to_array<std::pair<std::string_view, Color>>({
+static DONNER_CONSTEXPR_MAP auto kColors = makeCompileTimeMap(std::to_array<std::pair<std::string_view, Color>>({
     {"aliceblue"sv, RgbHex(0xF0F8FF)},
     {"antiquewhite"sv, RgbHex(0xFAEBD7)},
     {"aqua"sv, RgbHex(0x00FFFF)},

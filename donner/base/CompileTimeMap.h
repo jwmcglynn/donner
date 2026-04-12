@@ -427,12 +427,30 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
  *
  * Usage:
  * ```
- * static constexpr auto kColors = makeCompileTimeMap(std::to_array<std::pair<...>>({
+ * static DONNER_CONSTEXPR_MAP auto kColors = makeCompileTimeMap(std::to_array<std::pair<...>>({
  *     {"key1"sv, value1},
  *     {"key2"sv, value2},
  * ```
  */
 ///   }));
+
+#ifdef __EMSCRIPTEN__
+// Emscripten's default constexpr step limit (~1M) is too low for large maps (Color.cc has 149
+// entries, PropertyRegistry.cc has 71+43). Since wasm_cc_binary transitions don't propagate
+// -fconstexpr-steps, degrade to const (runtime init) on WASM builds. The static_assert still
+// fires on native builds.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+#define DONNER_CONSTEXPR_MAP const
+#define makeCompileTimeMap(...)                                                  \
+  []() {                                                                        \
+    const auto _compiletime_map_result =                                        \
+        ::donner::detail::makeCompileTimeMapWithDiagnostics(__VA_ARGS__);       \
+    return _compiletime_map_result.map;                                         \
+  }()
+// NOLINTEND(cppcoreguidelines-macro-usage)
+#else
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+#define DONNER_CONSTEXPR_MAP constexpr
 #define makeCompileTimeMap(...)                                                          \
   []() constexpr {                                                                       \
     constexpr auto _compiletime_map_result =                                             \
@@ -442,5 +460,7 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
                   "detail::makeCompileTimeMapWithDiagnostics for diagnostics.");         \
     return _compiletime_map_result.map;                                                  \
   }()
+// NOLINTEND(cppcoreguidelines-macro-usage)
+#endif
 
 }  // namespace donner
