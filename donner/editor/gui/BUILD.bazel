@@ -14,6 +14,10 @@ donner_cc_library(
     name = "editor_window",
     srcs = ["EditorWindow.cc"],
     hdrs = ["EditorWindow.h"],
+    # The GUI requires a display server (X11/Wayland/Cocoa) at both compile
+    # and run time. Tagged manual so `bazel build //...` on headless CI
+    # doesn't pull in GLFW (which fails without X11 dev headers).
+    tags = ["manual"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [

@@ -99,7 +99,12 @@ SKIPPED_PACKAGES = {
     "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
     "donner/svg/renderer/geode",  # Geode (WebGPU) — Bazel-only, gated behind --enable_dawn flag
     "donner/editor",  # Donner Editor — Bazel-only, depends on imgui/glfw/tracy
+    "donner/editor/app",
+    "donner/editor/app/tests",
+    "donner/editor/gui",
     "donner/editor/resources",
+    "donner/editor/sandbox",
+    "donner/editor/sandbox/tests",
     "donner/editor/tests",
     "donner/editor/wasm",
     "third_party/stb",
