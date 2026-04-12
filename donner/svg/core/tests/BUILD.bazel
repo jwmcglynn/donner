@@ -16,6 +16,7 @@ donner_cc_library(
 
 donner_cc_test(
     name = "core_tests",
+    shard_count = 4,
     srcs = [
         "ClipPathUnits_tests.cc",
         "ClipRule_tests.cc",

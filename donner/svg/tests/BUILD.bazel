@@ -7,6 +7,7 @@ load(
 
 donner_cc_test(
     name = "svg_tests_impl",
+    shard_count = 10,
     srcs = [
         "ElementStyle_tests.cc",
         "ElementType_tests.cc",

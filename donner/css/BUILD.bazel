@@ -79,6 +79,7 @@ donner_cc_library(
 
 donner_cc_test(
     name = "css_tests",
+    shard_count = 3,
     srcs = [
         "tests/Color_tests.cc",
         "tests/Declaration_tests.cc",

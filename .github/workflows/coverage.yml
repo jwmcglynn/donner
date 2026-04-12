@@ -1,12 +1,14 @@
 name: Coverage
 
-# Controls when the action will run. Triggers the workflow on push or pull request
-# events but only for the main branch
+# Runs coverage on: main merges, initial PR open, and on-demand via workflow_dispatch.
+# Does NOT run on every push to a PR branch (saves ~30 min per commit).
 on:
   push:
-    branches: ["*"]
+    branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, reopened]
+  workflow_dispatch:  # Re-run on demand (e.g. before final merge)
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
