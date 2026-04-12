@@ -279,13 +279,19 @@ land as standalone PRs in this order.
       with random `(offset, name)` inputs (including out-of-range
       offsets) to lock in the no-crash contract — Linux-CI only per
       the existing fuzzer pattern.
-- [ ] **`css::Declaration` source range.** Today `Declaration` stores
-      only `FileOffset sourceOffset` pointing at the name
-      (`donner/css/Declaration.h:71`) — no end offset. Surgical patches
-      inside a `style="..."` attribute need the full `[start, end)` of
-      the declaration span. Extend `Declaration` with
-      `FileOffsetRange sourceRange`, populated by
-      `DeclarationListParser`. 5-line parser change plus tests.
+- [x] **`css::Declaration` source range.** Added `SourceRange
+      sourceRange` to `Declaration`, populated by
+      `consumeDeclarationGeneric`. `sourceRange.start` is the name
+      offset (as before for the deprecated `sourceOffset` field);
+      `sourceRange.end` points at the *start* of the last consumed
+      non-whitespace value token — a best-effort approximation, not
+      a byte-perfect "past the last byte" range, so editor callers
+      that need byte-perfect bounds must scan forward from
+      `sourceRange.end` through the source to the `;` or `}`.
+      `!important` markers and trailing whitespace do not pull
+      `sourceRange.end` past the last real value (covered by tests).
+      Also added `SourceRange::operator==` so `Declaration`'s
+      defaulted equality operator keeps compiling.
 - [ ] **Baseline benchmark.** Land `//donner/editor/benchmarks:
       structured_editing_bench` with representative SVG corpora and
       measure the current full-reparse keystroke-roundtrip on each.

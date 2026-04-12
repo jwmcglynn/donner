@@ -110,4 +110,53 @@ TEST(DeclarationListParser, OnlyDeclarations) {
                           DeclarationIs("name2", ElementsAre(TokenIsIdent("value2")), true)));
 }
 
+TEST(DeclarationListParser, SourceRangeSpansNameToLastValueToken) {
+  // Regression for the structured-editing M−1 prerequisite: every parsed
+  // Declaration must carry a `sourceRange` spanning the name offset to
+  // the start of the last consumed value token. The editor's inline-style
+  // surgical patcher uses this to locate a specific declaration inside a
+  // `style="…"` attribute and splice a new value into it.
+  //
+  // Byte offsets below are manually asserted so the test fails loudly if
+  // the offset plumbing drifts.
+
+  // Single declaration: `fill: red`
+  //                      0  3  6
+  const auto fillDecls = DeclarationListParser::ParseOnlyDeclarations("fill: red");
+  ASSERT_EQ(fillDecls.size(), 1u);
+  EXPECT_EQ(fillDecls[0].sourceRange.start.offset, 0u);
+  EXPECT_EQ(fillDecls[0].sourceRange.end.offset, 6u)
+      << "sourceRange.end should point at 'r' in 'red' (the last non-whitespace value)";
+
+  // Two declarations: `fill: red; stroke: blue`
+  //                    0          11      19
+  const auto twoDecls = DeclarationListParser::ParseOnlyDeclarations("fill: red; stroke: blue");
+  ASSERT_EQ(twoDecls.size(), 2u);
+  EXPECT_EQ(twoDecls[0].sourceRange.start.offset, 0u);
+  EXPECT_EQ(twoDecls[0].sourceRange.end.offset, 6u);
+  EXPECT_EQ(twoDecls[1].sourceRange.start.offset, 11u);
+  EXPECT_EQ(twoDecls[1].sourceRange.end.offset, 19u);
+
+  // With !important: `fill: red !important`
+  //                   0    5    10   14
+  // The !important tokens are popped off `values`; sourceRange.end should
+  // stay at the last *value* token (`red`), not at `!` or `important`.
+  const auto importantDecls =
+      DeclarationListParser::ParseOnlyDeclarations("fill: red !important");
+  ASSERT_EQ(importantDecls.size(), 1u);
+  EXPECT_TRUE(importantDecls[0].important);
+  EXPECT_EQ(importantDecls[0].sourceRange.start.offset, 0u);
+  EXPECT_EQ(importantDecls[0].sourceRange.end.offset, 6u)
+      << "!important markers must not pull sourceRange.end past the value";
+
+  // Multi-token value: `transform: translate(1, 2)`
+  //                     0          11
+  const auto fnDecls =
+      DeclarationListParser::ParseOnlyDeclarations("transform: translate(1, 2)");
+  ASSERT_EQ(fnDecls.size(), 1u);
+  EXPECT_EQ(fnDecls[0].sourceRange.start.offset, 0u);
+  EXPECT_EQ(fnDecls[0].sourceRange.end.offset, 11u)
+      << "function value's sourceRange.end is the function's name offset";
+}
+
 }  // namespace donner::css::parser

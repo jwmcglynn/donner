@@ -149,6 +149,9 @@ private:
 struct SourceRange {
   FileOffset start;  ///< Start of the range (inclusive).
   FileOffset end;    ///< End of the range (exclusive).
+
+  /// Equality operator.
+  bool operator==(const SourceRange& other) const = default;
 };
 
 }  // namespace donner

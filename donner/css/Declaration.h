@@ -35,6 +35,7 @@ struct Declaration {
       : name(std::move(name)),
         values(std::move(values)),
         sourceOffset(sourceOffset),
+        sourceRange{sourceOffset, sourceOffset},
         important(important) {}
 
   /// Destructor.
@@ -69,6 +70,22 @@ struct Declaration {
   RcString name;                       ///< Name of the declaration.
   std::vector<ComponentValue> values;  ///< List of component values for the declaration.
   FileOffset sourceOffset;             ///< Offset of the declaration name in the source string.
+
+  /**
+   * Source byte range of the declaration in the stylesheet or `style=""` attribute, from the
+   * first byte of the name to the offset *of* the last consumed value token.
+   *
+   * For `fill: red`, `sourceRange.start` points at `f` and `sourceRange.end` points at `r`
+   * (the start of the last value token, not past its last byte). This is deliberately a
+   * best-effort approximation: structured-editing callers that need a byte-perfect end to
+   * splice into a `style=""` value can compute the trailing bound from the source text by
+   * scanning forward from `sourceRange.end` to the `;`, closing brace, or end-of-input.
+   *
+   * `sourceRange.start == sourceRange.end` means "no consumed value tokens" — either the
+   * parser failed partway, or the caller constructed the `Declaration` directly without
+   * going through `DeclarationListParser`.
+   */
+  SourceRange sourceRange;
   bool important = false;              ///< Whether the declaration ends with `!important`.
 };
 
