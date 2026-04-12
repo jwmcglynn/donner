@@ -42,6 +42,18 @@ donner_cc_binary(
     ],
 )
 
+donner_cc_binary(
+    name = "structured_editing_perf_bench",
+    srcs = ["StructuredEditingPerfBench.cpp"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@google_benchmark//:benchmark_main",
+    ],
+)
+
 sh_test(
     name = "filter_perf_compare",
     size = "large",

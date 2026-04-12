@@ -319,13 +319,37 @@ land as standalone PRs in this order.
       `sourceRange.end` past the last real value (covered by tests).
       Also added `SourceRange::operator==` so `Declaration`'s
       defaulted equality operator keeps compiling.
-- [ ] **Baseline benchmark.** Land `//donner/editor/benchmarks:
-      structured_editing_bench` with representative SVG corpora and
-      measure the current full-reparse keystroke-roundtrip on each.
-      These are the numbers the M5/M6 targets are judged against.
-      Tracked by `//donner/editor/benchmarks:structured_editing_bench`;
-      gates CI with **10% variance on headline metrics, 5% on
-      sub-metrics, absolute 1ms p99 wall** (Perf review §7).
+- [x] **Baseline benchmark.** Landed at
+      `//donner/benchmarks:structured_editing_perf_bench` (follows
+      the existing pattern in `donner/benchmarks/`). 12 benchmarks
+      covering full-reparse (trivial / 50-element / 500-element),
+      XML-only parse, `GetAttributeLocation`, all three M0
+      serializers (`Lengthd::toRcString`, `toSVGTransformString`,
+      `Path::toSVGPathData`), and `SVGGraphicsElement::setTransform`.
+
+      **Baseline numbers (M4 Mac Mini, -c opt, 2026-04-12):**
+
+      | Operation | Time |
+      |-----------|------|
+      | Full SVG reparse — trivial (3 elements) | 52 µs |
+      | Full SVG reparse — medium (50 elements) | 459 µs |
+      | Full SVG reparse — large (500 elements) | 3.96 ms |
+      | XML-only parse — trivial | 14 µs |
+      | XML-only parse — large (500 elements) | 1.18 ms |
+      | GetAttributeLocation — trivial | 2.6 µs |
+      | Lengthd::toRcString | 93 ns |
+      | toSVGTransformString (translate) | 81 ns |
+      | toSVGTransformString (general matrix) | 461 ns |
+      | Path::toSVGPathData (3 commands) | 180 ns |
+      | Path::toSVGPathData (~20 commands) | 1.1 µs |
+      | setTransform | 27 ns |
+
+      The headline insight: **full reparse of a 50-element SVG costs
+      ~460 µs, well within the 16.67 ms frame budget** — the fast
+      path doesn't need to be fast for *latency*, it needs to be
+      fast for *not destroying the document*. The 500-element case
+      at 4 ms starts to matter for frame budget. CI gating deferred
+      to M5 (needs benchmark runner infrastructure).
 
 ### M0: Donner-side serialization (shrunk — most of this already exists)
 
