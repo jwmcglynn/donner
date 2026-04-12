@@ -648,31 +648,57 @@ ParseResult<TransformOrigin> ParseTransformOrigin(std::span<const css::Component
     return parser::ParseLengthPercentage(component, true);
   };
 
+  // Helper to detect if the first token is a Y-axis keyword (top/bottom).
+  auto isYKeyword = [](const css::ComponentValue& component) -> bool {
+    if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
+      return ident->value.equalsLowercase("top") || ident->value.equalsLowercase("bottom");
+    }
+    return false;
+  };
+
   TransformOrigin result{Lengthd(50, Lengthd::Unit::Percent), Lengthd(50, Lengthd::Unit::Percent)};
 
   if (!components.empty()) {
-    auto first = parseCoord(components.front(), false);
+    // Check if the first keyword is a Y-axis keyword before parsing.
+    const bool firstIsYKeyword = isYKeyword(components.front());
+
+    // Parse the first coordinate. If it's a Y keyword, parse with isY=true so
+    // that "top" and "bottom" are recognized.
+    auto first = parseCoord(components.front(), firstIsYKeyword);
     if (first.hasError()) {
       return std::move(first.error());
     }
-    result.x = first.result();
+    auto firstCoord = first.result();
     components = components.subspan(1);
 
+    // If no whitespace follows (single-value syntax), default the other axis to 50%.
     if (!SkipWhitespace(components)) {
-      ParseDiagnostic err;
-      err.reason = "Unexpected token in transform-origin";
-      err.range.start =
-          components.empty() ? FileOffset::EndOfString() : components.front().sourceOffset();
+      if (firstIsYKeyword) {
+        // e.g. "top" or "bottom" -> x defaults to 50%, firstCoord is the y value.
+        return TransformOrigin{Lengthd(50, Lengthd::Unit::Percent), firstCoord};
+      } else {
+        // e.g. "center", "left", "right", or a length -> y defaults to 50%.
+        return TransformOrigin{firstCoord, Lengthd(50, Lengthd::Unit::Percent)};
+      }
+    }
 
-      return err;
+    if (firstIsYKeyword) {
+      // Two-value syntax where first was a Y keyword: assign to y, parse second as x.
+      result.y = firstCoord;
+    } else {
+      result.x = firstCoord;
     }
 
     if (!components.empty()) {
-      auto second = parseCoord(components.front(), true);
+      auto second = parseCoord(components.front(), !firstIsYKeyword);
       if (second.hasError()) {
         return std::move(second.error());
       }
-      result.y = second.result();
+      if (firstIsYKeyword) {
+        result.x = second.result();
+      } else {
+        result.y = second.result();
+      }
       components = components.subspan(1);
     }
 
@@ -1126,7 +1152,7 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 70> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 71> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -1139,6 +1165,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 70> kValidPresentationAt
     {"d", true},
     {"fill", true},
     {"transform", true},
+    {"transform-origin", true},
     {"alignment-baseline", true},
     {"baseline-shift", true},
     {"clip-path", true},
