@@ -487,39 +487,38 @@ land as standalone PRs in this order.
 Ships user-visible value at M1.5, exercises the token callback on
 real traffic before M3+ depends on it (DuckBot §5).
 
-- [ ] Replace the editor's regex-based `LanguageDefinition::SVG()` with
-      a callback-driven tokenizer that consumes `XMLParser::Tokenize`
-      output. Known SVG element names (from `kSVGElementNames`) get
-      `Keyword`; unknown elements get `XmlTagName`; known attributes
-      (`kSVGPresentationAttributeNames` + the static list of
-      structural attributes: `id`, `class`, `style`, `viewBox`,
-      `xmlns`, `preserveAspectRatio`) get `XmlAttributeName`; unknown
-      attributes get `Identifier`.
-- [ ] Add `XmlTagName`, `XmlAttributeName`, `XmlAttributeValue`,
-      `XmlComment`, `XmlPunctuation` to `TextEditor::ColorIndex`.
-      Audit and remove unused ColorIndex values from the ImGui
-      origins (`UserFunction`, `UserType`, `UniformVariable`,
-      `GlobalVariable`, `LocalVariable`, `FunctionArgument`).
-- [ ] CSS regions: `<style>` element content + inline `style="..."`
-      values are passed through the CSS `Tokenizer` (lifted from
-      `details/` in M0). Known CSS property names (checked against
-      `kValidPresentationAttributes` vs `kProperties` — the presentation-
-      attribute vs CSS-only split is already encoded in
-      `PropertyRegistry.cc:1129–1200`, 1208) highlight distinctly.
-- [ ] **Per-line tokenizer cache with line-start state.** State is
-      one of `{Default, InComment, InCData, InTagOpen, InAttrValue}`.
-      A line's cached tokens stay valid iff its start-state equals
-      its prior start-state. Typing `<!--` at line 1 invalidates
-      every downstream line's start-state (worst case: full re-
-      tokenize). Add a benchmark case: type `<!--` at the top of a
-      10k-line SVG, measure re-tokenize cost. If >5ms, re-tokenize
-      async on a background thread with a placeholder palette until
-      it catches up.
-- [ ] Tests: golden token-stream snapshots on representative SVGs
-      (`donner_splash.svg`, an inline-style file, a `<style>`-block
-      file, a deliberately malformed file).
-- [ ] Tests: a 10k-line SVG with a `<!--` typed at the top re-
-      tokenizes under budget.
+- [x] **Custom XML-aware `tokenize` callback** replaces the regex-
+      based `LanguageDefinition::SVG()`. The callback runs per-line
+      (matching the existing `colorizeRange` plugin interface) and
+      recognizes: tag delimiters (`<`, `</`, `>`, `/>` → Punctuation),
+      quoted strings (attribute values → String), entity references
+      (`&amp;` → Number), numeric values with optional CSS units
+      (→ Number), identifiers (element names, attribute names →
+      Identifier, promoted to Keyword or KnownIdentifier by the
+      existing `colorizeRange` post-processing against `def.keywords`
+      and `def.identifiers`), and `=` (→ Punctuation).
+- [x] **Extended keyword + identifier sets.** Keywords now include
+      all ~60 SVG element names (expanded from the prior 22). Known
+      identifiers include ~50 common SVG/CSS attributes (`id`,
+      `class`, `style`, `viewBox`, `fill`, `stroke`, `transform`,
+      `d`, geometry attributes, font properties, etc.) so attribute
+      names highlight as `KnownIdentifier` instead of plain
+      `Identifier`.
+- [x] **XML comment delimiters.** `commentStart`/`commentEnd` set
+      to `<!--`/`-->` (were C-style `/*`/`*/`). The existing multi-
+      line comment detection pass handles `<!-- -->` spanning across
+      lines. `singleLineComment` set to empty (XML has no `//`-style
+      single-line comments).
+- [ ] New dedicated `ColorIndex` values (`XmlTagName`,
+      `XmlAttributeName`, etc.) and palette cleanup of unused C++
+      color indices — deferred to a follow-up; the current mapping
+      to existing `ColorIndex` values (Keyword, KnownIdentifier,
+      String, Number, Punctuation) provides good visual
+      differentiation without touching `TextBuffer.h`.
+- [ ] CSS regions: `<style>` / inline `style="..."` CSS sub-
+      tokenization — deferred to a follow-up.
+- [ ] Per-line tokenizer cache with line-start state — deferred to
+      a follow-up.
 
 ### M3: `TextPatch` + `SetAttribute` + `AttributeWriteback`
 

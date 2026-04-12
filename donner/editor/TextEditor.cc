@@ -3827,32 +3827,225 @@ const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::SVG() {
   static const LanguageDefinition langDef = [] {
     LanguageDefinition def;
 
-    // Keywords
+    // SVG element names — used as keywords so tag names like <rect>, <circle>
+    // highlight distinctly from unknown elements. This list is hardcoded
+    // rather than pulled from kSVGElementNames because the text_editor
+    // target must not depend on //donner/svg. Callers that want the full
+    // registry-derived list can add more via `def.keywords.insert(...)`.
     static constexpr std::array keywords{
-        "circle",  "clipPath", "defs",     "ellipse",        "feGaussianBlur",
-        "filter",  "g",        "image",    "line",           "linearGradient",
-        "marker",  "mask",     "stop",     "radialGradient", "path",
-        "pattern", "polygon",  "polyline", "rect",           "style",
-        "svg",     "use"};
+        "a",
+        "animate",
+        "animateMotion",
+        "animateTransform",
+        "circle",
+        "clipPath",
+        "defs",
+        "desc",
+        "ellipse",
+        "feBlend",
+        "feColorMatrix",
+        "feComponentTransfer",
+        "feComposite",
+        "feConvolveMatrix",
+        "feDiffuseLighting",
+        "feDisplacementMap",
+        "feDistantLight",
+        "feDropShadow",
+        "feFlood",
+        "feFuncA",
+        "feFuncB",
+        "feFuncG",
+        "feFuncR",
+        "feGaussianBlur",
+        "feImage",
+        "feMerge",
+        "feMergeNode",
+        "feMorphology",
+        "feOffset",
+        "fePointLight",
+        "feSpecularLighting",
+        "feSpotLight",
+        "feTile",
+        "feTurbulence",
+        "filter",
+        "g",
+        "image",
+        "line",
+        "linearGradient",
+        "marker",
+        "mask",
+        "mpath",
+        "path",
+        "pattern",
+        "polygon",
+        "polyline",
+        "radialGradient",
+        "rect",
+        "set",
+        "stop",
+        "style",
+        "svg",
+        "switch",
+        "symbol",
+        "text",
+        "textPath",
+        "title",
+        "tspan",
+        "use",
+    };
     def.keywords.insert(keywords.begin(), keywords.end());
 
-    // Token regex patterns
-    def.tokenRegexStrings = {
-        {"L?\\\"(\\\\.|[^\\\"])*\\\"", ColorIndex::String},
-        {"\\'\\\\?[^\\']\\'", ColorIndex::CharLiteral},
-        {"[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?[fF]?", ColorIndex::Number},
-        {"[+-]?[0-9]+[Uu]?[lL]?[lL]?", ColorIndex::Number},
-        {"0[0-7]+[Uu]?[lL]?[lL]?", ColorIndex::Number},
-        {"0[xX][0-9a-fA-F]+[uU]?[lL]?[lL]?", ColorIndex::Number},
-        {"[a-zA-Z_][a-zA-Z0-9_]*", ColorIndex::Identifier},
-        {"[\\[\\]\\{\\}\\!\\%\\^\\&\\*\\(\\)\\-\\+\\=\\~\\|\\<\\>\\?\\/"
-         "\\;\\,\\.]",
-         ColorIndex::Punctuation}};
+    // Known SVG/CSS attribute names — highlighted as KnownIdentifier.
+    static constexpr std::array knownAttrs{
+        "id",    "class",   "style",  "viewBox", "xmlns",
+        "href",  "transform", "fill",   "stroke",  "opacity",
+        "d",     "cx",      "cy",     "r",       "rx",
+        "ry",    "x",       "y",      "width",   "height",
+        "x1",    "y1",      "x2",     "y2",      "preserveAspectRatio",
+        "offset", "stop-color", "stop-opacity",
+        "font-family", "font-size", "font-weight", "font-style",
+        "text-anchor", "dominant-baseline", "stroke-width",
+        "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
+        "fill-opacity", "stroke-opacity", "fill-rule", "clip-path",
+        "clip-rule", "mask", "filter", "display", "visibility",
+        "color", "pointer-events",
+    };
+    for (const auto& attr : knownAttrs) {
+      def.identifiers.emplace(attr, TextEditor::Identifier(attr));
+    }
 
-    // Comments
-    def.commentStart = "/*";
-    def.commentEnd = "*/";
-    def.singleLineComment = "//";
+    // Custom XML-aware tokenizer. Runs per-line; multi-line comments
+    // (<!-- -->) are handled by the comment-detection pass below.
+    def.tokenize = [](const char* inBegin, const char* inEnd, const char*& outBegin,
+                      const char*& outEnd, ColorIndex& outColor) -> bool {
+      if (inBegin >= inEnd) return false;
+
+      const char* p = inBegin;
+      const char c = *p;
+
+      // Tag delimiters: <, </, />, >
+      if (c == '<') {
+        if (p + 1 < inEnd && p[1] == '/') {
+          outBegin = p;
+          outEnd = p + 2;
+          outColor = ColorIndex::Punctuation;
+          return true;
+        }
+        outBegin = p;
+        outEnd = p + 1;
+        outColor = ColorIndex::Punctuation;
+        return true;
+      }
+      if (c == '>') {
+        outBegin = p;
+        outEnd = p + 1;
+        outColor = ColorIndex::Punctuation;
+        return true;
+      }
+      if (c == '/' && p + 1 < inEnd && p[1] == '>') {
+        outBegin = p;
+        outEnd = p + 2;
+        outColor = ColorIndex::Punctuation;
+        return true;
+      }
+
+      // Quoted strings (attribute values)
+      if (c == '"' || c == '\'') {
+        const char quote = c;
+        ++p;
+        while (p < inEnd && *p != quote) {
+          ++p;
+        }
+        if (p < inEnd) ++p;  // consume closing quote
+        outBegin = inBegin;
+        outEnd = p;
+        outColor = ColorIndex::String;
+        return true;
+      }
+
+      // Entity references: &name; or &#digits; or &#xhex;
+      if (c == '&') {
+        ++p;
+        if (p < inEnd && *p == '#') {
+          ++p;
+          if (p < inEnd && (*p == 'x' || *p == 'X')) ++p;
+        }
+        while (p < inEnd && *p != ';' && *p != '<' && *p != '>' && *p != ' ' &&
+               *p != '\t' && *p != '\n') {
+          ++p;
+        }
+        if (p < inEnd && *p == ';') ++p;
+        outBegin = inBegin;
+        outEnd = p;
+        outColor = ColorIndex::Number;
+        return true;
+      }
+
+      // Numbers (attribute values like x="10.5")
+      if ((c >= '0' && c <= '9') || (c == '-' && p + 1 < inEnd && p[1] >= '0' && p[1] <= '9') ||
+          (c == '.' && p + 1 < inEnd && p[1] >= '0' && p[1] <= '9')) {
+        if (c == '-') ++p;
+        while (p < inEnd && ((*p >= '0' && *p <= '9') || *p == '.')) {
+          ++p;
+        }
+        // Handle scientific notation (e.g., 1e-5)
+        if (p < inEnd && (*p == 'e' || *p == 'E')) {
+          ++p;
+          if (p < inEnd && (*p == '+' || *p == '-')) ++p;
+          while (p < inEnd && *p >= '0' && *p <= '9') ++p;
+        }
+        // Handle unit suffixes (px, em, %)
+        if (p < inEnd && *p == '%') {
+          ++p;
+        } else {
+          const char* unitStart = p;
+          while (p < inEnd && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'))) {
+            ++p;
+          }
+          (void)unitStart;
+        }
+        outBegin = inBegin;
+        outEnd = p;
+        outColor = ColorIndex::Number;
+        return true;
+      }
+
+      // Identifiers: element names, attribute names
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':' ||
+          static_cast<unsigned char>(c) >= 0x80) {
+        ++p;
+        while (p < inEnd &&
+               ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
+                *p == '_' || *p == '-' || *p == '.' || *p == ':' ||
+                static_cast<unsigned char>(*p) >= 0x80)) {
+          ++p;
+        }
+        outBegin = inBegin;
+        outEnd = p;
+        outColor = ColorIndex::Identifier;
+        // The caller (colorizeRange) will promote Identifier → Keyword if
+        // the token text matches def.keywords, or → KnownIdentifier if it
+        // matches def.identifiers.
+        return true;
+      }
+
+      // Equals sign (structural, not colored)
+      if (c == '=') {
+        outBegin = p;
+        outEnd = p + 1;
+        outColor = ColorIndex::Punctuation;
+        return true;
+      }
+
+      // Fall through for whitespace and anything else — the caller advances
+      // past it character-by-character.
+      return false;
+    };
+
+    // XML comment delimiters for the multi-line comment detection pass.
+    def.commentStart = "<!--";
+    def.commentEnd = "-->";
+    def.singleLineComment = "";  // XML has no single-line comment syntax.
 
     // Settings
     def.caseSensitive = true;
