@@ -6,6 +6,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPolygonElement.h"
 #include "donner/svg/SVGPolylineElement.h"
+#include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -82,6 +83,24 @@ TEST(SVGMarkerElementTests, UpdateAttributes) {
   EXPECT_THAT(marker, ElementHasMarkerAttributes(AllOf(MarkerWidthEq(15), MarkerHeightEq(20),
                                                        RefXEq(7), RefYEq(8),
                                                        OrientEq(MarkerOrient::AngleDegrees(45)))));
+}
+
+TEST(SVGMarkerElementTests, ViewBoxPreserveAspectRatioAndMarkerUnits) {
+  SVGDocument document;
+  SVGMarkerElement marker = SVGMarkerElement::Create(document);
+
+  const Box2d viewBox(Vector2d(1, 2), Vector2d(11, 22));
+  marker.setViewBox(viewBox);
+  marker.setPreserveAspectRatio(
+      PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMid,
+                          PreserveAspectRatio::MeetOrSlice::Slice});
+  marker.setMarkerUnits(MarkerUnits::UserSpaceOnUse);
+
+  EXPECT_THAT(marker.viewBox(), Optional(Eq(viewBox)));
+  EXPECT_EQ(marker.preserveAspectRatio(),
+            (PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMid,
+                                 PreserveAspectRatio::MeetOrSlice::Slice}));
+  EXPECT_EQ(marker.markerUnits(), MarkerUnits::UserSpaceOnUse);
 }
 
 /// Test that a marker defined in `<defs>` is applied at the start of a path.

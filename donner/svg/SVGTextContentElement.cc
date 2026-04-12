@@ -13,7 +13,7 @@ namespace donner::svg {
 
 namespace {
 
-const TextEngine* tryGetPreparedTextEngine(EntityHandle handle) {
+TextEngine& getPreparedTextEngine(EntityHandle handle) {
   Registry& registry = *handle.registry();
   auto* textEngine = registry.ctx().find<TextEngine>();
   if (!textEngine) {
@@ -25,7 +25,7 @@ const TextEngine* tryGetPreparedTextEngine(EntityHandle handle) {
 
   ParseWarningSink warningSink;
   textEngine->prepareForElement(handle, warningSink);
-  return textEngine;
+  return *textEngine;
 }
 
 }  // namespace
@@ -55,27 +55,15 @@ void SVGTextContentElement::invalidateTextGeometry() {
 }
 
 std::vector<Path> SVGTextContentElement::computedGlyphPaths() const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->computedGlyphPaths(handle_);
-  }
-
-  return {};
+  return getPreparedTextEngine(handle_).computedGlyphPaths(handle_);
 }
 
 Box2d SVGTextContentElement::computedInkBounds() const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->computedInkBounds(handle_);
-  }
-
-  return Box2d();
+  return getPreparedTextEngine(handle_).computedInkBounds(handle_);
 }
 
 Box2d SVGTextContentElement::computedObjectBoundingBox() const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->computedObjectBoundingBox(handle_);
-  }
-
-  return Box2d();
+  return getPreparedTextEngine(handle_).computedObjectBoundingBox(handle_);
 }
 
 std::optional<Lengthd> SVGTextContentElement::textLength() const {
@@ -97,67 +85,35 @@ void SVGTextContentElement::setLengthAdjust(LengthAdjust value) {
 }
 
 long SVGTextContentElement::getNumberOfChars() const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getNumberOfChars(handle_);
-  }
-
-  return 0;
+  return getPreparedTextEngine(handle_).getNumberOfChars(handle_);
 }
 
 double SVGTextContentElement::getComputedTextLength() const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getComputedTextLength(handle_);
-  }
-
-  return 0.0;
+  return getPreparedTextEngine(handle_).getComputedTextLength(handle_);
 }
 
 double SVGTextContentElement::getSubStringLength(std::size_t charnum, std::size_t nchars) const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getSubStringLength(handle_, charnum, nchars);
-  }
-
-  return 0.0;
+  return getPreparedTextEngine(handle_).getSubStringLength(handle_, charnum, nchars);
 }
 
 Vector2d SVGTextContentElement::getStartPositionOfChar(std::size_t charnum) const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getStartPositionOfChar(handle_, charnum);
-  }
-
-  return Vector2d();
+  return getPreparedTextEngine(handle_).getStartPositionOfChar(handle_, charnum);
 }
 
 Vector2d SVGTextContentElement::getEndPositionOfChar(std::size_t charnum) const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getEndPositionOfChar(handle_, charnum);
-  }
-
-  return Vector2d();
+  return getPreparedTextEngine(handle_).getEndPositionOfChar(handle_, charnum);
 }
 
 Box2d SVGTextContentElement::getExtentOfChar(std::size_t charnum) const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getExtentOfChar(handle_, charnum);
-  }
-
-  return Box2d();
+  return getPreparedTextEngine(handle_).getExtentOfChar(handle_, charnum);
 }
 
 double SVGTextContentElement::getRotationOfChar(std::size_t charnum) const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getRotationOfChar(handle_, charnum);
-  }
-
-  return 0.0;
+  return getPreparedTextEngine(handle_).getRotationOfChar(handle_, charnum);
 }
 
 long SVGTextContentElement::getCharNumAtPosition(const Vector2d& point) const {
-  if (const TextEngine* engine = tryGetPreparedTextEngine(handle_)) {
-    return engine->getCharNumAtPosition(handle_, point);
-  }
-
-  return -1;
+  return getPreparedTextEngine(handle_).getCharNumAtPosition(handle_, point);
 }
 
 void SVGTextContentElement::selectSubString(std::size_t /*charnum*/, std::size_t /*nchars*/) {

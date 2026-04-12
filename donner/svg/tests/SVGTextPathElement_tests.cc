@@ -6,6 +6,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::Eq;
@@ -136,6 +137,15 @@ TEST(SVGTextPathElementTests, SetStartOffsetNullopt) {
   EXPECT_THAT(textPath.startOffset(), Eq(std::nullopt));
 }
 
+TEST(SVGTextPathElementTests, AccessorsReturnNulloptWithoutComponent) {
+  SVGDocument document;
+  SVGTextPathElement textPath = SVGTextPathElement::Create(document);
+  textPath.entityHandle().remove<components::TextPathComponent>();
+
+  EXPECT_EQ(textPath.href(), std::nullopt);
+  EXPECT_EQ(textPath.startOffset(), std::nullopt);
+}
+
 // ── xlink:href support (legacy namespace) ──────────────────────────────────
 
 TEST(SVGTextPathElementTests, XlinkHref) {
@@ -151,6 +161,40 @@ TEST(SVGTextPathElementTests, XlinkHref) {
   auto textPath = queryTextPath(doc);
 
   EXPECT_THAT(textPath.href(), Optional(ToStringIs("#myPath")));
+}
+
+TEST(SVGTextPathElementTests, ParseMethodSideSpacingAndPositioningLists) {
+  auto doc = instantiateSubtree(R"(
+    <svg>
+      <defs><path id="myPath" d="M 10 80 Q 95 10 180 80" /></defs>
+      <text font-family="fallback-font" font-size="16px">
+        <textPath href="#myPath" startOffset="25%" method="stretch" side="right" spacing="auto"
+                  x="1 2%" y="3" dx="4 5" dy="6 7" rotate="0 90deg">
+          Text on path
+        </textPath>
+      </text>
+    </svg>
+  )",
+                            kExperimentalOptions);
+  auto textPath = queryTextPath(doc);
+
+  EXPECT_THAT(textPath.startOffset(), Optional(LengthIs(25.0, Lengthd::Unit::Percent)));
+  EXPECT_THAT(textPath.xList(),
+              testing::ElementsAre(Lengthd(1, Lengthd::Unit::None),
+                                   Lengthd(2, Lengthd::Unit::Percent)));
+  EXPECT_THAT(textPath.yList(), testing::ElementsAre(Lengthd(3, Lengthd::Unit::None)));
+  EXPECT_THAT(textPath.dxList(),
+              testing::ElementsAre(Lengthd(4, Lengthd::Unit::None),
+                                   Lengthd(5, Lengthd::Unit::None)));
+  EXPECT_THAT(textPath.dyList(),
+              testing::ElementsAre(Lengthd(6, Lengthd::Unit::None),
+                                   Lengthd(7, Lengthd::Unit::None)));
+  EXPECT_THAT(textPath.rotateList(), testing::ElementsAre(0.0, 90.0));
+
+  const auto& component = textPath.entityHandle().get<components::TextPathComponent>();
+  EXPECT_EQ(component.method, components::TextPathMethod::Stretch);
+  EXPECT_EQ(component.side, components::TextPathSide::Right);
+  EXPECT_EQ(component.spacing, components::TextPathSpacing::Auto);
 }
 
 }  // namespace

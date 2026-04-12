@@ -11,6 +11,8 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGStopElement.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
@@ -109,6 +111,26 @@ TEST_F(PaintSystemTest, LinearGradientNoStops) {
   EXPECT_THAT(computed->stops, IsEmpty());
 }
 
+TEST_F(PaintSystemTest, CreateComputedStopReturnsExistingComponent) {
+  SVGDocument document;
+  SVGStopElement stopElement = SVGStopElement::Create(document);
+  auto& registry = document.registry();
+  auto entity = stopElement.entityHandle().entity();
+  auto& stop = registry.emplace<StopComponent>(entity);
+  auto& style = registry.emplace<ComputedStyleComponent>(entity);
+  style.properties.emplace();
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto& existing = registry.emplace<ComputedStopComponent>(entity, stop.properties, style,
+                                                           style.properties->unparsedProperties,
+                                                           disabledSink);
+
+  ParseWarningSink warningSink;
+  const ComputedStopComponent& result =
+      paintSystem.createComputedStop(stopElement.entityHandle(), stop, warningSink);
+
+  EXPECT_EQ(&result, &existing);
+}
+
 // --- Radial gradient ---
 
 TEST_F(PaintSystemTest, RadialGradientWithStops) {
@@ -154,6 +176,79 @@ TEST_F(PaintSystemTest, GradientInheritsStopsViaHref) {
   EXPECT_THAT(computed->stops, SizeIs(3));
 }
 
+TEST_F(PaintSystemTest, GradientHrefWithStructuralChildrenDoesNotCreateShadowTree) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="base">
+          <stop offset="0" stop-color="red"/>
+        </linearGradient>
+        <linearGradient id="child" href="#base">
+          <stop offset="1" stop-color="blue"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  )");
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  paintSystem.createShadowTrees(document.registry(), warningSink);
+
+  auto element = document.querySelector("#child");
+  ASSERT_TRUE(element.has_value());
+  EXPECT_FALSE(element->entityHandle().all_of<ShadowTreeComponent>());
+}
+
+TEST_F(PaintSystemTest, GradientInitializationStopsWhenShadowRootMissing) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="g">
+          <stop offset="0" stop-color="red"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#g");
+  ASSERT_TRUE(element.has_value());
+  element->entityHandle().emplace<ComputedShadowTreeComponent>();
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  paintSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+
+  auto* computed = element->entityHandle().try_get<ComputedGradientComponent>();
+  ASSERT_THAT(computed, NotNull());
+  EXPECT_THAT(computed->stops, IsEmpty());
+}
+
+TEST_F(PaintSystemTest, GradientInitializationStopsOnRecursiveShadowRoot) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="g">
+          <stop offset="0" stop-color="red"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#g");
+  ASSERT_TRUE(element.has_value());
+  auto& shadow = element->entityHandle().emplace<ComputedShadowTreeComponent>();
+  shadow.mainBranch = ComputedShadowTreeComponent::BranchStorage{
+      ShadowBranchType::Main, element->entityHandle().entity(), {}};
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(document.registry(), warningSink);
+  paintSystem.instantiateAllComputedComponents(document.registry(), warningSink);
+
+  auto* computed = element->entityHandle().try_get<ComputedGradientComponent>();
+  ASSERT_THAT(computed, NotNull());
+  EXPECT_THAT(computed->stops, IsEmpty());
+}
+
 TEST_F(PaintSystemTest, GradientHrefToNonGradientWarns) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -192,6 +287,29 @@ TEST_F(PaintSystemTest, PatternComputed) {
   auto* computed = element->entityHandle().try_get<ComputedPatternComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_TRUE(computed->initialized);
+}
+
+TEST_F(PaintSystemTest, PatternViewBoxAndPreserveAspectRatioApplied) {
+  auto document = ParseAndCompute(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <pattern id="p" width="20" height="20" viewBox="0 0 10 10"
+                 preserveAspectRatio="xMaxYMax slice">
+          <rect width="10" height="10" fill="red"/>
+        </pattern>
+      </defs>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  auto* computed = element->entityHandle().try_get<ComputedPatternComponent>();
+  ASSERT_THAT(computed, NotNull());
+  ASSERT_TRUE(computed->viewBox.has_value());
+  EXPECT_EQ(*computed->viewBox, Box2d(Vector2d(0, 0), Vector2d(10, 10)));
+  EXPECT_EQ(computed->preserveAspectRatio,
+            (PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMax,
+                                 PreserveAspectRatio::MeetOrSlice::Slice}));
 }
 
 TEST_F(PaintSystemTest, PatternHrefToNonPatternWarns) {

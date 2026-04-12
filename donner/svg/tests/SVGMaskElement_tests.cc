@@ -28,6 +28,34 @@ TEST(SVGMaskElementTests, SetMaskContentUnits) {
   EXPECT_EQ(mask->maskContentUnits(), MaskContentUnits::ObjectBoundingBox);
 }
 
+TEST(SVGMaskElementTests, SetRegionAttributesProgrammatically) {
+  SVGDocument document;
+  SVGMaskElement mask = SVGMaskElement::Create(document);
+
+  mask.setMaskUnits(MaskUnits::UserSpaceOnUse);
+  mask.setMaskContentUnits(MaskContentUnits::ObjectBoundingBox);
+  mask.setX(Lengthd(1, Lengthd::Unit::Px));
+  mask.setY(Lengthd(2, Lengthd::Unit::Px));
+  mask.setWidth(Lengthd(3, Lengthd::Unit::Px));
+  mask.setHeight(Lengthd(4, Lengthd::Unit::Px));
+
+  EXPECT_EQ(mask.maskUnits(), MaskUnits::UserSpaceOnUse);
+  EXPECT_EQ(mask.maskContentUnits(), MaskContentUnits::ObjectBoundingBox);
+  EXPECT_THAT(mask.x(), testing::Optional(Lengthd(1, Lengthd::Unit::Px)));
+  EXPECT_THAT(mask.y(), testing::Optional(Lengthd(2, Lengthd::Unit::Px)));
+  EXPECT_THAT(mask.width(), testing::Optional(Lengthd(3, Lengthd::Unit::Px)));
+  EXPECT_THAT(mask.height(), testing::Optional(Lengthd(4, Lengthd::Unit::Px)));
+
+  mask.setX(std::nullopt);
+  mask.setY(std::nullopt);
+  mask.setWidth(std::nullopt);
+  mask.setHeight(std::nullopt);
+  EXPECT_EQ(mask.x(), std::nullopt);
+  EXPECT_EQ(mask.y(), std::nullopt);
+  EXPECT_EQ(mask.width(), std::nullopt);
+  EXPECT_EQ(mask.height(), std::nullopt);
+}
+
 TEST(SVGMaskElementTests, RenderingDefaults) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <mask id="a">

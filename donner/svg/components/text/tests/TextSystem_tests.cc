@@ -8,11 +8,16 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Path.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::Eq;
@@ -308,6 +313,108 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
   EXPECT_NEAR(computed->spans[1].pathStartOffset, 50.0, 1.0);
 }
 
+TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink parseSink;
+  auto maybeResult = parser::SVGParser::ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="p" d="M 0 0 L 100 0" transform="translate(5 7)"/>
+      </defs>
+      <text id="t"><textPath href="#p" startOffset="10">Offset text</textPath></text>
+    </svg>
+  )svg",
+                                               parseSink, options);
+  ASSERT_THAT(maybeResult, NoParseError());
+  auto document = std::move(maybeResult).result();
+
+  Registry& registry = document.registry();
+  auto pathEntity = document.querySelector("#p")->entityHandle().entity();
+  registry.emplace_or_replace<ComputedLocalTransformComponent>(
+      pathEntity, Transform2d::Translate({5, 7}), CssTransform(Transform2d::Translate({5, 7})),
+      Vector2d::Zero());
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  TextSystem().instantiateAllComputedComponents(registry, warningSink);
+
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
+  EXPECT_EQ(computed->spans[1].pathSpline->points()[0], Vector2d(5, 7));
+  EXPECT_EQ(computed->spans[1].pathSpline->points()[1], Vector2d(105, 7));
+  EXPECT_DOUBLE_EQ(computed->spans[1].pathStartOffset, 10.0);
+}
+
+TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink parseSink;
+  auto maybeResult = parser::SVGParser::ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="p"/>
+      </defs>
+      <text id="t"><textPath href="#p">Spline override</textPath></text>
+    </svg>
+  )svg",
+                                               parseSink, options);
+  ASSERT_THAT(maybeResult, NoParseError());
+  auto document = std::move(maybeResult).result();
+
+  auto pathEntity = document.querySelector("#p")->entityHandle().entity();
+  Registry& registry = document.registry();
+  Path spline = PathBuilder().moveTo(Vector2d(1, 2)).lineTo(Vector2d(3, 4)).build();
+  registry.get<PathComponent>(pathEntity).splineOverride = spline;
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  TextSystem().instantiateAllComputedComponents(registry, warningSink);
+
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
+  EXPECT_EQ(computed->spans[1].pathSpline->points()[0], Vector2d(1, 2));
+  EXPECT_EQ(computed->spans[1].pathSpline->points()[1], Vector2d(3, 4));
+}
+
+TEST_F(TextSystemTest, TextPathWithInvalidReferenceMarksFailure) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath href="#missing">Missing path</textPath></text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  EXPECT_FALSE(computed->spans[1].pathSpline.has_value());
+  EXPECT_TRUE(computed->spans[1].textPathFailed);
+}
+
+TEST_F(TextSystemTest, TextPathWithEmptyReferencedPathMarksFailure) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p"/></defs>
+      <text id="t"><textPath href="#p">Empty path</textPath></text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  EXPECT_FALSE(computed->spans[1].pathSpline.has_value());
+  EXPECT_TRUE(computed->spans[1].textPathFailed);
+}
+
 TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -352,6 +459,50 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
   EXPECT_THAT(nonEmptyOnPath, testing::ElementsAre(false, true, false, false, false, true, false));
   // All spans should have a source entity for style resolution.
   EXPECT_THAT(nonEmptyHasSource, testing::ElementsAre(true, true, true, true, true, true, true));
+}
+
+TEST_F(TextSystemTest, NestedTextRootIsIgnored) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="outer">Outer<text id="inner">Inner</text>Tail</text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto outerEntity = document.querySelector("#outer")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(outerEntity);
+  ASSERT_NE(computed, nullptr);
+
+  std::vector<std::string> nonEmptyTexts;
+  for (const auto& span : computed->spans) {
+    if (!span.text.empty()) {
+      nonEmptyTexts.push_back(span.text.str());
+    }
+  }
+
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Outer", "Tail"));
+}
+
+TEST_F(TextSystemTest, NonTextChildrenAreIgnoredDuringSpanCollection) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t">Hello<g><rect width="10" height="10"/></g>World</text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  std::vector<std::string> nonEmptyTexts;
+  for (const auto& span : computed->spans) {
+    if (!span.text.empty()) {
+      nonEmptyTexts.push_back(span.text.str());
+    }
+  }
+
+  EXPECT_THAT(nonEmptyTexts, testing::ElementsAre("Hello", "World"));
 }
 
 TEST_F(TextSystemTest, NestedTextPathContentIsHidden) {
@@ -494,6 +645,212 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
 
   // Should have 3 characters (2 CJK + 1 ASCII), so 3 xList entries.
   EXPECT_EQ(computed->spans[0].xList.size(), 3u);
+}
+
+TEST_F(TextSystemTest, Utf16CountingTreatsEmojiAsTwoCodeUnits) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10 20 30">&#x1F600;A</text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(1));
+  EXPECT_EQ(computed->spans[0].xList.size(), 3u);
+}
+
+TEST_F(TextSystemTest, RotateListStopsWhenGlobalIndicesRunOut) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" rotate="15">AB</text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(1));
+  ASSERT_THAT(computed->spans[0].rotateList, SizeIs(1));
+  EXPECT_THAT(computed->spans[0].rotateList[0], testing::DoubleNear(15.0, 1e-9));
+}
+
+TEST_F(TextSystemTest, InheritedRotateListStopsAcrossChildSpans) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" rotate="15"><tspan>A</tspan><tspan>B</tspan></text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(3));
+  EXPECT_THAT(computed->spans[1].rotateList, SizeIs(1));
+  EXPECT_THAT(computed->spans[1].rotateList[0], testing::DoubleNear(15.0, 1e-9));
+  EXPECT_THAT(computed->spans[2].rotateList, IsEmpty());
+}
+
+TEST_F(TextSystemTest, XmlSpacePreserveKeepsWhitespaceAndInheritance) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" xml:space="preserve"> A
+        <tspan>	B </tspan>
+      </text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(3));
+  EXPECT_EQ(computed->spans[0].text, " A         ");
+  EXPECT_EQ(computed->spans[1].text, " B ");
+  EXPECT_EQ(computed->spans[2].text, "       ");
+}
+
+TEST_F(TextSystemTest, TextPathWithoutHrefIsHidden) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t"><textPath>Hidden text</textPath></text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  EXPECT_TRUE(computed->spans[1].hidden);
+  EXPECT_FALSE(computed->spans[1].textPathFailed);
+}
+
+TEST_F(TextSystemTest, TextPathNestedUnderTspanMarksFailure) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs><path id="p" d="M 0 0 L 10 0"/></defs>
+      <text id="t"><tspan><textPath href="#p">bad</textPath></tspan></text>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  bool foundFailedNestedTextPath = false;
+  for (const auto& span : computed->spans) {
+    if (span.text == "bad") {
+      EXPECT_FALSE(span.pathSpline.has_value());
+      foundFailedNestedTextPath = true;
+    }
+  }
+  EXPECT_TRUE(foundFailedNestedTextPath);
+}
+
+TEST_F(TextSystemTest, TextPathTransformAppliesQuadAndCurveCommands) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink parseSink;
+  auto maybeResult = parser::SVGParser::ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="quad" d="M 0 0 Q 10 5 20 0" transform="translate(1 2)"/>
+        <path id="curve" d="M 0 0 C 10 5 15 10 20 0" transform="translate(3 4)"/>
+      </defs>
+      <text id="t">
+        <textPath href="#quad">Q</textPath>
+        <textPath href="#curve">C</textPath>
+      </text>
+    </svg>
+  )svg",
+                                               parseSink, options);
+  ASSERT_THAT(maybeResult, NoParseError());
+  auto document = std::move(maybeResult).result();
+
+  Registry& registry = document.registry();
+  auto quadEntity = document.querySelector("#quad")->entityHandle().entity();
+  auto curveEntity = document.querySelector("#curve")->entityHandle().entity();
+  registry.emplace_or_replace<ComputedLocalTransformComponent>(
+      quadEntity, Transform2d::Translate({1, 2}), CssTransform(Transform2d::Translate({1, 2})),
+      Vector2d::Zero());
+  registry.emplace_or_replace<ComputedLocalTransformComponent>(
+      curveEntity, Transform2d::Translate({3, 4}), CssTransform(Transform2d::Translate({3, 4})),
+      Vector2d::Zero());
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  TextSystem().instantiateAllComputedComponents(registry, warningSink);
+
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  std::vector<const ComputedTextComponent::TextSpan*> pathSpans;
+  for (const auto& span : computed->spans) {
+    if (span.pathSpline.has_value()) {
+      pathSpans.push_back(&span);
+    }
+  }
+  ASSERT_THAT(pathSpans, SizeIs(2));
+
+  EXPECT_EQ(pathSpans[0]->text, "Q");
+  EXPECT_EQ(pathSpans[1]->text, "C");
+
+  EXPECT_EQ(pathSpans[0]->pathSpline->commands()[1].verb, Path::Verb::QuadTo);
+  EXPECT_EQ(pathSpans[0]->pathSpline->points()[0], Vector2d(1, 2));
+  EXPECT_EQ(pathSpans[0]->pathSpline->points()[1], Vector2d(11, 7));
+  EXPECT_EQ(pathSpans[0]->pathSpline->points()[2], Vector2d(21, 2));
+
+  EXPECT_EQ(pathSpans[1]->pathSpline->commands()[1].verb, Path::Verb::CurveTo);
+  EXPECT_EQ(pathSpans[1]->pathSpline->points()[0], Vector2d(3, 4));
+  EXPECT_EQ(pathSpans[1]->pathSpline->points()[1], Vector2d(13, 9));
+  EXPECT_EQ(pathSpans[1]->pathSpline->points()[2], Vector2d(18, 14));
+  EXPECT_EQ(pathSpans[1]->pathSpline->points()[3], Vector2d(23, 4));
+}
+
+TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink parseSink;
+  auto maybeResult = parser::SVGParser::ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="closed" d="M 0 0 L 10 0 Z" transform="translate(2 3)"/>
+      </defs>
+      <text id="t"><textPath href="#closed">Z</textPath></text>
+    </svg>
+  )svg",
+                                               parseSink, options);
+  ASSERT_THAT(maybeResult, NoParseError());
+  auto document = std::move(maybeResult).result();
+
+  Registry& registry = document.registry();
+  auto closedEntity = document.querySelector("#closed")->entityHandle().entity();
+  registry.emplace_or_replace<ComputedLocalTransformComponent>(
+      closedEntity, Transform2d::Translate({2, 3}), CssTransform(Transform2d::Translate({2, 3})),
+      Vector2d::Zero());
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  TextSystem().instantiateAllComputedComponents(registry, warningSink);
+
+  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+
+  const auto pathSpan =
+      std::find_if(computed->spans.begin(), computed->spans.end(),
+                   [](const auto& span) { return span.pathSpline.has_value(); });
+  ASSERT_NE(pathSpan, computed->spans.end());
+  ASSERT_TRUE(pathSpan->pathSpline.has_value());
+  EXPECT_EQ(pathSpan->pathSpline->points()[0], Vector2d(2, 3));
+  EXPECT_EQ(pathSpan->pathSpline->points()[1], Vector2d(12, 3));
+  EXPECT_EQ(pathSpan->pathSpline->commands().back().verb, Path::Verb::ClosePath);
 }
 
 // --- No warnings for valid text ---

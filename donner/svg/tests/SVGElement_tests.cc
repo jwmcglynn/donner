@@ -6,6 +6,7 @@
 #include <deque>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
@@ -13,6 +14,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -829,6 +831,13 @@ TEST_F(SVGElementTests, Transform) {
   EXPECT_THAT(element.transform(), TransformIs(1, 0, 0, 1, 1, 2));
 }
 
+TEST_F(SVGElementTests, SetTransformDirectly) {
+  auto element = create();
+  element.setTransform(Transform2d::Translate({3, 4}));
+
+  EXPECT_THAT(element.transform(), TransformEq(Transform2d::Translate({3, 4})));
+}
+
 TEST_F(SVGElementTests, AbsoluteTransform) {
   auto document = parseSVG(R"-(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -890,6 +899,21 @@ TEST_F(SVGElementTests, QuerySelector) {
     EXPECT_THAT(svgScopeResult, Optional(ElementIdEq("rect1")));
     EXPECT_THAT(svgScopeResult->type(), ElementType::Rect);
   }
+}
+
+TEST_F(SVGElementTests, ShadowTreesDoNotEnumerateChildren) {
+  auto element = create();
+  auto& registry = document_.registry();
+
+  Entity child = registry.create();
+  registry.emplace<::donner::components::TreeComponent>(child, xml::XMLQualifiedNameRef("rect"));
+  registry.emplace<components::ElementTypeComponent>(child, ElementType::Rect);
+  registry.get<::donner::components::TreeComponent>(element.entityHandle().entity())
+      .appendChild(registry, child);
+  registry.emplace<components::ShadowTreeComponent>(element.entityHandle().entity());
+
+  EXPECT_EQ(element.firstChild(), std::nullopt);
+  EXPECT_EQ(element.lastChild(), std::nullopt);
 }
 
 TEST_F(SVGElementTests, IsKnownType) {

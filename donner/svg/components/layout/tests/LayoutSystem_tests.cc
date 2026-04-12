@@ -6,9 +6,19 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg::components {
+
+namespace {
+
+constexpr std::string_view kTinyPngDataUrl =
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=";
+
+}  // namespace
 
 class LayoutSystemTest : public ::testing::Test {
 protected:
@@ -90,6 +100,26 @@ TEST_F(LayoutSystemTest, ViewportPatternWithComputedComponents) {
   layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("pattern")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
+}
+
+TEST_F(LayoutSystemTest, ParseSizedElementPresentationAttributeDirect) {
+  SVGDocument document;
+  Registry& registry = document.registry();
+  const Entity entity = registry.create();
+  EntityHandle handle(registry, entity);
+
+  EXPECT_THAT(ParseSizedElementPresentationAttribute(
+                  handle, "x", parser::PropertyParseFnParams::CreateForAttribute("25")),
+              ParseResultIs(true));
+  EXPECT_THAT(ParseSizedElementPresentationAttribute(
+                  handle, "width", parser::PropertyParseFnParams::CreateForAttribute("bogus")),
+              ParseErrorIs("Invalid length or percentage"));
+  EXPECT_THAT(ParseSizedElementPresentationAttribute(
+                  handle, "unknown", parser::PropertyParseFnParams::CreateForAttribute("10")),
+              ParseResultIs(false));
+
+  const auto& sized = handle.get<SizedElementComponent>();
+  EXPECT_THAT(sized.properties.x.get(), testing::Optional(Lengthd(25, Lengthd::Unit::None)));
 }
 
 TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
@@ -320,6 +350,33 @@ TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeReturnDefault) {
   EXPECT_GT(size.y, 0);
 }
 
+TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeInvalidReturnsZeroOrDefault) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0">
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  EXPECT_EQ(layoutSystem.calculateCanvasScaledDocumentSize(
+                registry, LayoutSystem::InvalidSizeBehavior::ZeroSize),
+            Vector2i());
+  EXPECT_EQ(layoutSystem.calculateCanvasScaledDocumentSize(
+                registry, LayoutSystem::InvalidSizeBehavior::ReturnDefault),
+            Vector2i(512, 512));
+}
+
+TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeClampsLargeDocuments) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100000 50000">
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  EXPECT_EQ(layoutSystem.calculateCanvasScaledDocumentSize(
+                registry, LayoutSystem::InvalidSizeBehavior::ReturnDefault),
+            Vector2i(8192, 4096));
+}
+
 // --- Intrinsic aspect ratio ---
 
 TEST_F(LayoutSystemTest, IntrinsicAspectRatioWithViewBox) {
@@ -342,6 +399,15 @@ TEST_F(LayoutSystemTest, IntrinsicAspectRatioSquare) {
   auto ratio = layoutSystem.intrinsicAspectRatio(document.rootEntityHandle());
   ASSERT_TRUE(ratio.has_value());
   EXPECT_NEAR(ratio.value(), 1.0f, 0.01f);
+}
+
+TEST_F(LayoutSystemTest, IntrinsicAspectRatioMissingReturnsNullopt) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+    </svg>
+  )");
+
+  EXPECT_EQ(layoutSystem.intrinsicAspectRatio(document.rootEntityHandle()), std::nullopt);
 }
 
 // --- OverridesViewBox ---
@@ -405,6 +471,18 @@ TEST_F(LayoutSystemTest, NestedSvgContentTransform) {
               TransformEq(Transform2d::Scale({0.5, 0.5}) * Transform2d::Translate({10.0, 10.0})));
 }
 
+TEST_F(LayoutSystemTest, NestedSvgWithoutViewBoxUsesBoundsAsViewBox) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <svg id="inner" x="10" y="20" width="30" height="40">
+      </svg>
+    </svg>
+  )");
+
+  EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("#inner")->entityHandle()),
+              BoxEq(Vector2i(10, 20), Vector2i(40, 60)));
+}
+
 // --- Document from canvas transform ---
 
 TEST_F(LayoutSystemTest, DocumentFromCanvasTransform) {
@@ -457,6 +535,19 @@ TEST_F(LayoutSystemTest, ClipRectForNestedSvg) {
     EXPECT_GT(clip->size().x, 0.0);
     EXPECT_GT(clip->size().y, 0.0);
   }
+}
+
+TEST_F(LayoutSystemTest, ClipRectFromComputedShadowSizedElement) {
+  SVGDocument document;
+  Registry& registry = document.registry();
+  const Entity entity = registry.create();
+  EntityHandle handle(registry, entity);
+  registry.emplace<ComputedShadowSizedElementComponent>(
+      entity, ComputedShadowSizedElementComponent{Box2d(Vector2d(1, 2), Vector2d(3, 4))});
+
+  auto clip = layoutSystem.clipRect(handle);
+  ASSERT_TRUE(clip.has_value());
+  EXPECT_EQ(*clip, Box2d(Vector2d(1, 2), Vector2d(3, 4)));
 }
 
 // --- Deep nesting transforms ---
@@ -593,6 +684,124 @@ TEST_F(LayoutSystemTest, PercentageWidthHeightNoViewBox) {
       registry, LayoutSystem::InvalidSizeBehavior::ReturnDefault);
   EXPECT_EQ(size.x, 512);
   EXPECT_EQ(size.y, 512);
+}
+
+TEST_F(LayoutSystemTest, DefiniteHeightUsesIntrinsicAspectRatio) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" height="80" viewBox="0 0 200 100">
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto size = layoutSystem.calculateDocumentSize(registry);
+  EXPECT_EQ(size, Vector2i(160, 80));
+}
+
+TEST_F(LayoutSystemTest, DefiniteDimensionWithoutAspectRatioUsesDefaultCanvasDimension) {
+  {
+    auto document = ParseSVG(R"(
+      <svg xmlns="http://www.w3.org/2000/svg" width="100">
+      </svg>
+    )");
+
+    auto size = layoutSystem.calculateDocumentSize(document.registry());
+    EXPECT_EQ(size, Vector2i(100, 512));
+  }
+
+  {
+    auto document = ParseSVG(R"(
+      <svg xmlns="http://www.w3.org/2000/svg" height="80">
+      </svg>
+    )");
+
+    auto size = layoutSystem.calculateDocumentSize(document.registry());
+    EXPECT_EQ(size, Vector2i(512, 80));
+  }
+}
+
+TEST_F(LayoutSystemTest, ImageIntrinsicSizingBranches) {
+  const std::string svg =
+      std::string(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <image id="auto" href=")") +
+      std::string(kTinyPngDataUrl) +
+      R"(" x="1" y="2"/>
+      <image id="widthOnly" href=")" +
+      std::string(kTinyPngDataUrl) +
+      R"(" x="3" y="4" width="10"/>
+      <image id="heightOnly" href=")" +
+      std::string(kTinyPngDataUrl) +
+      R"(" x="5" y="6" height="12"/>
+      <image id="explicit" href=")" +
+      std::string(kTinyPngDataUrl) +
+      R"(" x="7" y="8" width="9" height="11"/>
+    </svg>
+  )";
+  auto document = ParseSVG(svg);
+
+  auto& registry = document.registry();
+  ParseWarningSink warningSink;
+  registry.ctx().get<ResourceManagerContext>().loadResources(warningSink);
+  StyleSystem().computeAllStyles(registry, warningSink);
+  layoutSystem.instantiateAllComputedComponents(registry, warningSink);
+
+  const auto autoHandle = document.querySelector("#auto")->entityHandle();
+  const auto widthOnlyHandle = document.querySelector("#widthOnly")->entityHandle();
+  const auto heightOnlyHandle = document.querySelector("#heightOnly")->entityHandle();
+  const auto explicitHandle = document.querySelector("#explicit")->entityHandle();
+
+  EXPECT_EQ(autoHandle.get<ComputedSizedElementComponent>().bounds,
+            Box2d(Vector2d(1, 2), Vector2d(3, 4)));
+  EXPECT_EQ(widthOnlyHandle.get<ComputedSizedElementComponent>().bounds,
+            Box2d(Vector2d(3, 4), Vector2d(13, 14)));
+  EXPECT_EQ(heightOnlyHandle.get<ComputedSizedElementComponent>().bounds,
+            Box2d(Vector2d(5, 6), Vector2d(17, 18)));
+  EXPECT_EQ(explicitHandle.get<ComputedSizedElementComponent>().bounds,
+            Box2d(Vector2d(7, 8), Vector2d(16, 19)));
+}
+
+TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+      <defs>
+        <symbol id="sym" x="1" y="2" width="40" height="20"/>
+      </defs>
+      <use id="u" href="#sym" x="5" y="6" width="50" height="25"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+
+  auto useHandle = document.querySelector("#u")->entityHandle();
+  auto symbolEntity = document.querySelector("#sym")->entityHandle().entity();
+
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, useHandle, symbolEntity, ShadowBranchType::Main, warningSink));
+
+  const auto& shadowSized = registry.get<ComputedShadowSizedElementComponent>(shadowEntity);
+  EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(1, 2), Vector2d(51, 27)));
+}
+
+TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentReturnsFalseWhenNotMainBranch) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+      <defs>
+        <symbol id="sym" width="40" height="20"/>
+      </defs>
+      <use id="u" href="#sym" width="50" height="25"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+
+  EXPECT_FALSE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#sym")->entityHandle().entity(), ShadowBranchType::OffscreenFill,
+      warningSink));
 }
 
 // --- transform-origin with keywords ---

@@ -55,6 +55,25 @@ TEST(SVGTSpanElementTests, PositionAttributes) {
   EXPECT_THAT(tspan->rotate(), Optional(testing::DoubleNear(30.0, 1e-6)));
 }
 
+TEST(SVGTSpanElementTests, ClearingSinglePositionAttributesClearsLists) {
+  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(
+      R"(<tspan x="1" y="2" dx="3" dy="4" rotate="30" />)", kExperimentalOptions);
+
+  tspan->setY(std::nullopt);
+  tspan->setDx(std::nullopt);
+  tspan->setDy(std::nullopt);
+  tspan->setRotate(std::nullopt);
+
+  EXPECT_EQ(tspan->y(), std::nullopt);
+  EXPECT_TRUE(tspan->yList().empty());
+  EXPECT_EQ(tspan->dx(), std::nullopt);
+  EXPECT_TRUE(tspan->dxList().empty());
+  EXPECT_EQ(tspan->dy(), std::nullopt);
+  EXPECT_TRUE(tspan->dyList().empty());
+  EXPECT_EQ(tspan->rotate(), std::nullopt);
+  EXPECT_TRUE(tspan->rotateList().empty());
+}
+
 /// @test Test that text content is read from child text nodes.
 TEST(SVGTSpanElementTests, TextContentNodes) {
   auto tspan =

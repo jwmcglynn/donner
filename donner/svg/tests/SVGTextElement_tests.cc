@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -229,6 +230,9 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   const Vector2d start = textElement.getStartPositionOfChar(0);
   EXPECT_NEAR(start.x, 10.0, 0.5);
   EXPECT_NEAR(start.y, 20.0, 0.5);
+  const Vector2d end = textElement.getEndPositionOfChar(0);
+  EXPECT_GE(end.x, start.x);
+  EXPECT_NEAR(end.y, start.y, 1.0);
 
   const Box2d extent = textElement.getExtentOfChar(0);
   EXPECT_THAT(extent, BoxEq(Vector2Near(10.4531, 11.3281), Vector2Near(18.125, 20.0)));
@@ -250,6 +254,72 @@ TEST(SVGTextElementPublicApiTests, TextGeometryApisReturnComputedValues) {
   } else {
     EXPECT_THAT(objectBounds, BoxEq(Vector2Near(10.0, 8.6), Vector2Near(34.984, 22.7)));
   }
+}
+
+TEST(SVGTextElementPublicApiTests, AppendTextAndAdvanceTextChunkUpdateTextContent) {
+  SVGDocument document;
+  SVGTextElement text = SVGTextElement::Create(document);
+
+  EXPECT_EQ(text.textContent(), "");
+  text.advanceTextChunk();
+  text.appendText("Hello");
+  EXPECT_EQ(text.textContent(), "Hello");
+  text.advanceTextChunk();
+  text.appendText("World");
+  EXPECT_EQ(text.textContent(), "HelloWorld");
+}
+
+TEST(SVGTextElementPublicApiTests, DetachedElementMutatorsDoNotRequireTree) {
+  SVGDocument document;
+  SVGTextElement text = SVGTextElement::Create(document);
+
+  text.setTextLength(Lengthd(10.0, Lengthd::Unit::Px));
+  text.setLengthAdjust(LengthAdjust::SpacingAndGlyphs);
+
+  EXPECT_THAT(text.textLength(), Optional(LengthIs(10.0, Lengthd::Unit::Px)));
+  EXPECT_EQ(text.lengthAdjust(), LengthAdjust::SpacingAndGlyphs);
+}
+
+TEST(SVGTextElementPublicApiTests, TspanMutatorsHandleMissingTreeComponent) {
+  SVGDocument document;
+  SVGTSpanElement text = SVGTSpanElement::Create(document);
+  text.entityHandle().remove<::donner::components::TreeComponent>();
+
+  text.setTextLength(Lengthd(12.0, Lengthd::Unit::Px));
+  text.setLengthAdjust(LengthAdjust::SpacingAndGlyphs);
+
+  EXPECT_THAT(text.textLength(), Optional(LengthIs(12.0, Lengthd::Unit::Px)));
+  EXPECT_EQ(text.lengthAdjust(), LengthAdjust::SpacingAndGlyphs);
+}
+
+TEST(SVGTextElementPublicApiTests, EndPositionOfCharReturnsComputedValue) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+  const Vector2d start = textElement.getStartPositionOfChar(0);
+  const Vector2d end = textElement.getEndPositionOfChar(0);
+  EXPECT_GT(end.x, start.x);
+  EXPECT_NEAR(end.y, start.y, 1.0);
+}
+
+TEST(SVGTextElementPublicApiTests, SelectSubstringIsNoOp) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 120 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABC</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+  const double before = textElement.getComputedTextLength();
+  textElement.selectSubString(0, 2);
+  const double after = textElement.getComputedTextLength();
+  EXPECT_DOUBLE_EQ(before, after);
 }
 
 TEST(SVGTextElementPublicApiTests, TspanApisFilterToOwnSubtree) {
