@@ -2,10 +2,10 @@
 /// @file
 
 #include <cmath>
-#include <cstdint>
 #include <ostream>
 
 #include "donner/base/Box.h"
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
@@ -312,28 +312,6 @@ using Transform2f = Transform2<float>;
 using Transform2d = Transform2<double>;
 
 /// @}
-
-namespace detail {
-
-/// Format a single `double` into the minimum-length round-trippable decimal form.
-/// Used by \ref toSVGTransformString — returns `std::string` rather than `RcString` so
-/// the pieces compose cleanly inside a final `std::format` call.
-///
-/// The integer fast-path casts to `int64_t` to avoid `std::format`'s default
-/// floating-point output (which on some implementations emits `10` as `10`, but on
-/// others as `1e+01` or `10.0`). The non-integer path uses `{}` with no format spec,
-/// which per C++20 `[format.string.std]/21.1` emits the shortest decimal representation
-/// that round-trips through `std::from_chars`. The non-default `{:g}` specifier was
-/// tried first and rejected — it defaults to 6-significant-digit precision, which
-/// drops accuracy for values like `tan(π/6) = 0.57735026918962562`.
-inline std::string FormatNumberForSVG(double value) {
-  if (value == std::trunc(value) && std::isfinite(value)) {
-    return std::format("{}", static_cast<std::int64_t>(value));
-  }
-  return std::format("{}", value);
-}
-
-}  // namespace detail
 
 /**
  * Serialize a \ref Transform2d to its canonical SVG `transform` attribute text, decomposing

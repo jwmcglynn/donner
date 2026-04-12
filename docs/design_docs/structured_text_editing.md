@@ -305,7 +305,7 @@ land as standalone PRs in this order.
 - [x] `Path::toSVGPathData() → RcString` (was `PathSpline`; class is `Path`
       in the codebase). Implemented in `donner/base/Path.cc`; declaration
       in `donner/base/Path.h`. Uses `detail::FormatNumberForSVG` from
-      `donner/base/Transform.h` for the integer fast-path (`int64_t` cast)
+      `donner/base/FormatNumber.h` for the integer fast-path (`int64_t` cast)
       and shortest round-trippable `{}` form for fractional values.
       Emits uppercase absolute commands: `M x y`, `L x y`,
       `Q cx cy x y`, `C c1x c1y c2x c2y x y`, `Z`.

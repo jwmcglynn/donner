@@ -12,6 +12,7 @@ donner_cc_library(
         "BezierUtils.h",
         "Box.h",
         "FillRule.h",
+        "FormatNumber.h",
         "Path.h",
         "ChunkedString.h",
         "CompileTimeMap.h",

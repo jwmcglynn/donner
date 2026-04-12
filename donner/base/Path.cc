@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "donner/base/BezierUtils.h"
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utils.h"
 

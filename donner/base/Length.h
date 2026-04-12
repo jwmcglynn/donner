@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "donner/base/Box.h"
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
@@ -231,18 +232,8 @@ struct Length {
    */
   RcString toRcString() const {
     const char* suffix = UnitSuffix(unit);
-    // std::trunc gives a clean "has fractional part" test that works for both integral and
-    // floating-point `T`.  For integral `T` (not currently used but would compile fine), the
-    // trunc is a no-op and the integer branch always fires.
-    if (value == std::trunc(value) && std::isfinite(value)) {
-      // Cast to a 64-bit integer so `std::format` uses the "{:d}"-equivalent path and we
-      // don't get a trailing `.0` or scientific notation for very large integer-valued
-      // doubles.  `Lengthd` values in practice fit comfortably in int64_t.
-      const auto asInt = static_cast<std::int64_t>(value);
-      return RcString::fromFormat("{}{}", asInt, suffix);
-    }
-    // `{:g}` emits the shortest decimal representation that round-trips, no trailing zeros.
-    return RcString::fromFormat("{:g}{}", value, suffix);
+    return RcString::fromFormat("{}{}", detail::FormatNumberForSVG(static_cast<double>(value)),
+                                suffix);
   }
 
 private:
