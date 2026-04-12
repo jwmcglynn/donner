@@ -1075,7 +1075,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
     const auto makeResolveTexture = [&](const char* label) {
       wgpu::TextureDescriptor desc = {};
-      desc.label = label;
+      desc.label = wgpuLabel(label);
       desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                    static_cast<uint32_t>(impl_->pixelHeight), 1u};
       desc.format = wgpu::TextureFormat::R8Unorm;
@@ -1083,20 +1083,20 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
           wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
       desc.mipLevelCount = 1;
       desc.sampleCount = 1;
-      desc.dimension = wgpu::TextureDimension::e2D;
-      return dev.CreateTexture(&desc);
+      desc.dimension = wgpu::TextureDimension::_2D;
+      return dev.createTexture(desc);
     };
     const auto makeMsaaTexture = [&](const char* label) {
       wgpu::TextureDescriptor desc = {};
-      desc.label = label;
+      desc.label = wgpuLabel(label);
       desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                    static_cast<uint32_t>(impl_->pixelHeight), 1u};
       desc.format = wgpu::TextureFormat::R8Unorm;
       desc.usage = wgpu::TextureUsage::RenderAttachment;
       desc.mipLevelCount = 1;
       desc.sampleCount = 4;
-      desc.dimension = wgpu::TextureDimension::e2D;
-      return dev.CreateTexture(&desc);
+      desc.dimension = wgpu::TextureDimension::_2D;
+      return dev.createTexture(desc);
     };
 
     // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
@@ -1169,7 +1169,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
       impl_->encoder->endMaskPass();
 
-      nestedMaskView = resolveTexture.CreateView();
+      nestedMaskView = resolveTexture.createView();
 
       // Keep the intermediate textures alive until popClip.
       entry.maskLayerTextures.push_back(std::move(msaaTexture));
@@ -1335,7 +1335,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   const auto allocTexturePair = [&](const char* label, const char* msaaLabel,
                                     wgpu::Texture& outResolve, wgpu::Texture& outMsaa) {
     wgpu::TextureDescriptor td = {};
-    td.label = label;
+    td.label = wgpuLabel(label);
     td.size = {static_cast<uint32_t>(impl_->pixelWidth),
                static_cast<uint32_t>(impl_->pixelHeight), 1u};
     td.format = kFormat;
@@ -1343,18 +1343,18 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
                wgpu::TextureUsage::CopySrc;
     td.mipLevelCount = 1;
     td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::e2D;
-    outResolve = impl_->device->device().CreateTexture(&td);
+    td.dimension = wgpu::TextureDimension::_2D;
+    outResolve = impl_->device->device().createTexture(td);
 
     wgpu::TextureDescriptor msaaDesc = {};
-    msaaDesc.label = msaaLabel;
+    msaaDesc.label = wgpuLabel(msaaLabel);
     msaaDesc.size = td.size;
     msaaDesc.format = kFormat;
     msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
     msaaDesc.mipLevelCount = 1;
     msaaDesc.sampleCount = 4;
-    msaaDesc.dimension = wgpu::TextureDimension::e2D;
-    outMsaa = impl_->device->device().CreateTexture(&msaaDesc);
+    msaaDesc.dimension = wgpu::TextureDimension::_2D;
+    outMsaa = impl_->device->device().createTexture(msaaDesc);
   };
 
   Impl::MaskStackFrame frame;
