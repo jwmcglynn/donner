@@ -13,11 +13,12 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
     _token: vscode.CancellationToken,
   ): Promise<void> {
     const mediaDir = vscode.Uri.joinPath(this.context.extensionUri, "media");
+    const generatedDir = vscode.Uri.joinPath(this.context.extensionUri, "media", "generated");
     const distWebviewDir = vscode.Uri.joinPath(this.context.extensionUri, "dist", "webview");
 
     webviewPanel.webview.options = {
       enableScripts: true,
-      localResourceRoots: [mediaDir, distWebviewDir],
+      localResourceRoots: [mediaDir, generatedDir, distWebviewDir],
     };
 
     webviewPanel.webview.html = this.buildHtml(webviewPanel.webview, distWebviewDir);
@@ -85,9 +86,10 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'none';
              img-src ${webview.cspSource} data: blob:;
-             script-src 'nonce-${nonce}';
+             script-src 'nonce-${nonce}' 'wasm-unsafe-eval';
              style-src ${webview.cspSource} 'unsafe-inline';
-             font-src ${webview.cspSource};">
+             font-src ${webview.cspSource};
+             connect-src ${webview.cspSource};">
   <link rel="stylesheet" href="${styleUri}">
   <title>Donner SVG Preview</title>
 </head>
@@ -111,10 +113,5 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
 }
 
 function getNonce(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let nonce = "";
-  for (let i = 0; i < 32; i++) {
-    nonce += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return nonce;
+  return crypto.randomUUID();
 }
