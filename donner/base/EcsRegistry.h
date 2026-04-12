@@ -58,9 +58,11 @@ using EntityHandle = entt::basic_handle<Registry>;
 }  // namespace donner
 
 /// Ostream output operator for entt::entity, outputs `#<id>`.
-/// Defined outside namespace entt to avoid ADL poisoning — Clang on macOS
-/// rejects `os << "#"` inside namespace entt because it finds the entity
-/// overload as a candidate for `const char[2]`.
+/// Uses explicit function calls instead of `<<` chaining to avoid ADL:
+/// since the parameter type lives in namespace entt, `os << "#"` would
+/// find this very overload as a candidate for `const char[2]` on Clang/macOS.
 inline std::ostream& operator<<(std::ostream& os, const entt::entity& e) {
-  return os << "#" << static_cast<std::uint32_t>(e);
+  os.put('#');
+  os << static_cast<std::uint32_t>(e);
+  return os;
 }
