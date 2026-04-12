@@ -1,0 +1,46 @@
+load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+# Internal cc_binary that Emscripten's wasm_cc_binary transitions to WASM.
+cc_binary(
+    name = "donner_wasm_bin",
+    srcs = ["wasm_bridge.cc"],
+    linkopts = [
+        "-sMODULARIZE=1",
+        "-sEXPORT_ES6=1",
+        "-sENVIRONMENT=web",
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
+        "-sUSE_PTHREADS=0",
+        "-sSTACK_SIZE=1048576",
+        "--no-entry",
+    ],
+    tags = ["manual"],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+    ],
+)
+
+# Extracts .js + .wasm artefacts from the Emscripten cc_binary.
+wasm_cc_binary(
+    name = "donner_wasm",
+    cc_target = ":donner_wasm_bin",
+    outputs = [
+        "donner_wasm_bin.js",
+        "donner_wasm_bin.wasm",
+    ],
+)
+
+# Convenience filegroup for the test page and its assets.
+filegroup(
+    name = "test_page",
+    srcs = [
+        "test.html",
+        ":donner_wasm",
+    ],
+)

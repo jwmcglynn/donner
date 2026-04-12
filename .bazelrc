@@ -12,6 +12,7 @@
 ##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
 ##   --config=clang-tidy        - Build with clang-tidy checks.
 ##   --config=dev               - Disable renderer backend test transitions.
+##   --config=wasm              - Build for WebAssembly via Emscripten.
 ##
 
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
@@ -88,6 +89,16 @@ common:no-filters --//donner/svg/renderer:filters=false
 #   --config=text-full    Full text (FreeType + HarfBuzz + WOFF2)
 common:text --//donner/svg/renderer:text=true
 common:text-full --//donner/svg/renderer:text=true --//donner/svg/renderer:text_full=true
+
+# WebAssembly (Emscripten) build. Usage:
+#   bazel build --config=wasm //donner/svg/renderer/wasm:donner_wasm
+common:wasm --//donner/svg/renderer:renderer_backend=tiny_skia
+common:wasm --//donner/svg/renderer:filters=false
+common:wasm --//donner/svg/renderer:text=false
+common:wasm --//donner/svg/renderer:text_full=false
+# Disable the perf-opt transition so that all targets use the emscripten
+# toolchain without cross-configuration link conflicts.
+common:wasm --//build_defs:disable_perf_opt_transition=true
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
