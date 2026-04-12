@@ -746,4 +746,101 @@ TEST(PathParser, RangeTrailingComma) {
   EXPECT_THAT(PathParser::Parse("M1,1 h1,"), ParseErrorRange(7, 8));
 }
 
+// =============================================================================
+// toSVGPathData round-trip: parse → serialize → re-parse must yield same Path
+// =============================================================================
+
+namespace {
+
+/// Parse a path string, serialize it back, then re-parse and compare.
+/// Both the original and the round-tripped result must have no error, and the
+/// re-parsed points/commands must match the original exactly.
+void ExpectRoundTrip(std::string_view d) {
+  ParseResult<Path> first = PathParser::Parse(d);
+  ASSERT_THAT(first, NoParseError()) << "First parse of: " << d;
+
+  const Path& path = first.result();
+  RcString serialized = path.toSVGPathData();
+
+  ParseResult<Path> second = PathParser::Parse(serialized);
+  ASSERT_THAT(second, NoParseError())
+      << "Re-parse failed for serialized: " << serialized;
+
+  const Path& roundTripped = second.result();
+  ASSERT_EQ(roundTripped.verbCount(), path.verbCount())
+      << "verbCount mismatch. serialized: " << serialized;
+  ASSERT_EQ(roundTripped.points().size(), path.points().size())
+      << "points size mismatch. serialized: " << serialized;
+
+  for (size_t i = 0; i < path.verbCount(); ++i) {
+    EXPECT_EQ(roundTripped.commands()[i].verb, path.commands()[i].verb)
+        << "Command " << i << " verb mismatch. serialized: " << serialized;
+  }
+  for (size_t i = 0; i < path.points().size(); ++i) {
+    EXPECT_NEAR(roundTripped.points()[i].x, path.points()[i].x, 1e-9)
+        << "Point " << i << " x mismatch. serialized: " << serialized;
+    EXPECT_NEAR(roundTripped.points()[i].y, path.points()[i].y, 1e-9)
+        << "Point " << i << " y mismatch. serialized: " << serialized;
+  }
+}
+
+}  // namespace
+
+TEST(PathToSVGPathDataRoundTrip, Empty) {
+  ParseResult<Path> result = PathParser::Parse("");
+  ASSERT_THAT(result, NoParseError());
+  EXPECT_EQ(result.result().toSVGPathData(), "");
+}
+
+TEST(PathToSVGPathDataRoundTrip, MoveTo) {
+  ExpectRoundTrip("M 10 20");
+}
+
+TEST(PathToSVGPathDataRoundTrip, MoveToLineTo) {
+  ExpectRoundTrip("M 0 0 L 100 50");
+}
+
+TEST(PathToSVGPathDataRoundTrip, MultipleLineTo) {
+  ExpectRoundTrip("M 0 0 L 100 0 L 100 100 L 0 100");
+}
+
+TEST(PathToSVGPathDataRoundTrip, ClosedTriangle) {
+  ExpectRoundTrip("M 0 0 L 50 100 L 100 0 Z");
+}
+
+TEST(PathToSVGPathDataRoundTrip, CubicBezier) {
+  ExpectRoundTrip("M 0 0 C 0 100 100 100 100 0");
+}
+
+TEST(PathToSVGPathDataRoundTrip, QuadraticBezier) {
+  ExpectRoundTrip("M 0 0 Q 50 100 100 0");
+}
+
+TEST(PathToSVGPathDataRoundTrip, FractionalCoordinates) {
+  ExpectRoundTrip("M 1.5 2.25 L 3.14 -0.5");
+}
+
+TEST(PathToSVGPathDataRoundTrip, MultipleSubpaths) {
+  ExpectRoundTrip("M 0 0 L 10 0 Z M 20 20 L 30 20 Z");
+}
+
+TEST(PathToSVGPathDataRoundTrip, NegativeCoordinates) {
+  ExpectRoundTrip("M -10 -20 L -5 -15");
+}
+
+TEST(PathToSVGPathDataRoundTrip, AllVerbTypes) {
+  // Combine all serializable verb types in one path.
+  ExpectRoundTrip("M 0 0 L 10 0 Q 15 10 20 0 C 20 20 30 20 30 0 Z");
+}
+
+TEST(PathToSVGPathDataRoundTrip, ArcDecomposedToCubic) {
+  // Arcs are decomposed to cubic curves by PathBuilder::arcTo before being
+  // stored in the Path.  Round-tripping the serialized cubic representation
+  // must produce an equivalent Path (same verbs / points).
+  //
+  // The SVG 'a' command triggers that decomposition during Parse; the
+  // re-serialized form uses 'C' commands and round-trips cleanly.
+  ExpectRoundTrip("M 80 150 A 60 40 0 0 0 220 150");
+}
+
 }  // namespace donner::svg::parser

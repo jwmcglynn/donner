@@ -302,9 +302,23 @@ land as standalone PRs in this order.
 
 ### M0: Donner-side serialization (shrunk — most of this already exists)
 
-- [ ] `PathSpline::toSVGPathData() → RcString`. Round-trip with
-      `PathParser::Parse`. Covers empty/line/cubic/quadratic/arc/closed/
-      fractional + round-trip-format equivalence.
+- [x] `Path::toSVGPathData() → RcString` (was `PathSpline`; class is `Path`
+      in the codebase). Implemented in `donner/base/Path.cc`; declaration
+      in `donner/base/Path.h`. Uses `detail::FormatNumberForSVG` from
+      `donner/base/Transform.h` for the integer fast-path (`int64_t` cast)
+      and shortest round-trippable `{}` form for fractional values.
+      Emits uppercase absolute commands: `M x y`, `L x y`,
+      `Q cx cy x y`, `C c1x c1y c2x c2y x y`, `Z`.
+      Arc commands are not in the Path data model — `PathBuilder::arcTo`
+      decomposes them to cubic Bézier curves before storage, so they
+      appear as `C` segments in the output.
+      Unit tests in `donner/base/tests/Path_tests.cc` cover: empty path,
+      MoveTo-only, LineTo, multi-LineTo, ClosePath, QuadTo, CurveTo,
+      fractional coordinates, negative values, multiple subpaths,
+      all-verb-types, integer-no-decimal, and zero coordinates (14 tests).
+      Round-trip tests in `donner/svg/parser/tests/PathParser_tests.cc`
+      (12 tests) verify `PathParser::Parse(path.toSVGPathData())` yields
+      an equivalent Path for every verb type including arc input.
 - [x] `Lengthd::toRcString() → RcString`. Integer values omit the
       decimal (via `int64_t` cast to avoid `{:g}`'s scientific
       notation for large integer-valued doubles); non-integer values

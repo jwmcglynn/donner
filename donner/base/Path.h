@@ -296,6 +296,35 @@ public:
 
   /// @}
 
+  /// @name Serialization
+  /// @{
+
+  /**
+   * Serialize this path to its canonical SVG `d` attribute text.
+   *
+   * Commands are emitted using absolute uppercase letters with a single space
+   * between parameters.  Integers are emitted without a decimal point; fractional
+   * values use the shortest round-trippable decimal form (C++20 `{}` format).
+   *
+   * Supported verbs and output format:
+   * - MoveTo    → `M x y`
+   * - LineTo    → `L x y`
+   * - QuadTo    → `Q cx cy x y`
+   * - CurveTo   → `C c1x c1y c2x c2y x y`
+   * - ClosePath → `Z`
+   *
+   * Arc commands (`PathBuilder::arcTo`) are decomposed to cubic Bézier curves
+   * by the builder before they reach the Path data model, so they appear as
+   * one or more `C` segments here.
+   *
+   * Round-trips with `donner::svg::parser::PathParser::Parse`.
+   *
+   * @return SVG path `d` string, empty string for an empty path.
+   */
+  RcString toSVGPathData() const;
+
+  /// @}
+
   /// @name Iteration
   /// @{
 
