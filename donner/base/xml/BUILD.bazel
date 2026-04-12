@@ -18,11 +18,13 @@ donner_cc_library(
     name = "xml",
     srcs = [
         "XMLDocument.cc",
+        "XMLEscape.cc",
         "XMLNode.cc",
         "XMLParser.cc",
     ],
     hdrs = [
         "XMLDocument.h",
+        "XMLEscape.h",
         "XMLNode.h",
         "XMLParser.h",
     ],
@@ -48,6 +50,7 @@ cc_binary(
 donner_cc_test(
     name = "xml_tests",
     srcs = [
+        "tests/XMLEscape_tests.cc",
         "tests/XMLNode_tests.cc",
         "tests/XMLParser_tests.cc",
         "tests/XMLQualifiedName_tests.cc",

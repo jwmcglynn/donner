@@ -321,13 +321,26 @@ land as standalone PRs in this order.
       (via `EscapeAttributeValue` below), `<!-- -->` + `<![CDATA[ ]]>`.
       **Not responsible for preserving author whitespace** — used only
       for elements created by canvas tools without source location.
-- [ ] `xml::EscapeAttributeValue(std::string_view value,
-      char quoteChar) → RcString`. Quote-aware (`'` vs `"`), escapes
-      the five XML predefined entities, escapes C0/C1 control
-      characters per XML 1.0, rejects `\0` and surrogate halves as
-      hard errors (returns `std::optional`). Per-char dispatch,
-      total function. **Fuzzed** with the property
-      `XMLParser::Parse(source.withAttribute(escape(v))).getAttribute() == v`.
+- [x] `xml::EscapeAttributeValue(std::string_view value,
+      char quoteChar) → std::optional<RcString>`. Quote-aware
+      (escapes `"` only under `"` delimiter, `'` only under `'`,
+      passes the other through). Escapes the five XML predefined
+      entities (`<`, `>`, `&`, `"`, `'`) plus `\t`/`\n`/`\r` as
+      numeric character references (so XML attribute-value
+      whitespace normalization doesn't collapse them on reparse).
+      Rejects `\0`, C0 control chars except `\t`/`\n`/`\r`, lone
+      UTF-16 surrogates, non-characters `U+FFFE`/`U+FFFF`,
+      overlong sequences, and truncated multi-byte starts — every
+      rejection path returns `std::nullopt`. Valid multi-byte
+      UTF-8 passes through unchanged. Lives in a new
+      `donner/base/xml/XMLEscape.{h,cc}` to keep the escape
+      concern isolated from the parser. 16 unit tests cover ASCII
+      passthrough, every entity, whitespace escaping, all C0
+      rejects, every UTF-8 invalidity class, and a round-trip
+      through `XMLParser::Parse` for 10 representative inputs
+      (plain, metacharacter-heavy, tabs/newlines, multi-byte
+      UTF-8, emoji, empty) in both double- and single-quote
+      delimited forms.
 - [ ] **Already exists — drop from this plan:**
       - `Declaration::toCssText` (`donner/css/Declaration.cc:16`)
       - `ComponentValue::toCssText` (variants at
