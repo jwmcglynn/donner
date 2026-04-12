@@ -6,6 +6,8 @@ donner_cc_test(
         "SubDocumentCache_tests.cc",
     ],
     deps = [
+        "//donner/base/encoding:base64",
+        "//donner/base:base_test_utils",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",

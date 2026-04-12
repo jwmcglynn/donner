@@ -97,6 +97,33 @@ TEST(SVGRectElementTests, RoundedCorners) {
                                RyEq(6.0, Lengthd::Unit::None))));
 }
 
+TEST(SVGRectElementTests, UpdateCoordinatesAndCornerRadii) {
+  auto fragment = instantiateSubtreeElementAs<SVGRectElement>(R"(<rect />)");
+
+  fragment->setX(Lengthd(10, Lengthd::Unit::Px));
+  fragment->setY(Lengthd(20, Lengthd::Unit::Px));
+  fragment->setWidth(Lengthd(30, Lengthd::Unit::Px));
+  fragment->setHeight(Lengthd(40, Lengthd::Unit::Px));
+  fragment->setRx(Lengthd(5, Lengthd::Unit::Px));
+  fragment->setRy(Lengthd(6, Lengthd::Unit::Px));
+
+  EXPECT_THAT(fragment->x(), LengthIs(10.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->y(), LengthIs(20.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->width(), LengthIs(30.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->height(), LengthIs(40.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->rx(), Optional(LengthIs(5.0, Lengthd::Unit::Px)));
+  EXPECT_THAT(fragment->ry(), Optional(LengthIs(6.0, Lengthd::Unit::Px)));
+  EXPECT_THAT(fragment->computedRx(), LengthIs(5.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->computedRy(), LengthIs(6.0, Lengthd::Unit::Px));
+}
+
+TEST(SVGRectElementTests, ZeroSizedRectHasNoComputedSpline) {
+  auto fragment =
+      instantiateSubtreeElementAs<SVGRectElement>(R"(<rect x="10" y="20" width="0" height="0" />)");
+
+  EXPECT_EQ(fragment->computedSpline(), std::nullopt);
+}
+
 TEST(SVGRectElementTests, Units) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGRectElement>(  //
                   R"(<rect x="50px" y="0" width="30em" height="20pt" />)"),

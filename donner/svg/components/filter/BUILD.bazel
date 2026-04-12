@@ -77,3 +77,17 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "filter_component_tests",
+    srcs = [
+        "tests/FilterComponent_tests.cc",
+    ],
+    deps = [
+        ":components",
+        ":filter_effect",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

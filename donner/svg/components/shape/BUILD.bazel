@@ -72,3 +72,31 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "rect_component_tests",
+    srcs = [
+        "tests/RectComponent_tests.cc",
+    ],
+    deps = [
+        ":components",
+        "//donner/base:base_test_utils",
+        "//donner/css:core",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "circle_ellipse_component_tests",
+    srcs = [
+        "tests/CircleEllipseComponent_tests.cc",
+    ],
+    deps = [
+        ":components",
+        "//donner/base:base_test_utils",
+        "//donner/css:core",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

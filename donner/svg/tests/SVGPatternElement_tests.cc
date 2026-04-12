@@ -51,6 +51,26 @@ TEST(SVGPatternElementTests, PatternContentUnits) {
   EXPECT_THAT(pattern->patternContentUnits(), testing::Eq(PatternContentUnits::UserSpaceOnUse));
 }
 
+TEST(SVGPatternElementTests, SetViewBoxPreserveAspectRatioAndHref) {
+  SVGDocument document;
+  SVGPatternElement pattern = SVGPatternElement::Create(document);
+
+  const Box2d viewBox(Vector2d(1, 2), Vector2d(11, 22));
+  pattern.setViewBox(viewBox);
+  pattern.setPreserveAspectRatio(PreserveAspectRatio{
+      PreserveAspectRatio::Align::XMinYMax, PreserveAspectRatio::MeetOrSlice::Slice});
+  pattern.setHref(RcStringOrRef("#base"));
+
+  EXPECT_THAT(pattern.viewBox(), testing::Optional(testing::Eq(viewBox)));
+  EXPECT_EQ(pattern.preserveAspectRatio(),
+            (PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMax,
+                                 PreserveAspectRatio::MeetOrSlice::Slice}));
+  EXPECT_THAT(pattern.href(), testing::Optional(testing::Eq("#base")));
+
+  pattern.setHref(std::nullopt);
+  EXPECT_EQ(pattern.href(), std::nullopt);
+}
+
 TEST(SVGPatternElementTests, ObjectBoundingBoxRendering) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <pattern id="a" width="1" height="1">

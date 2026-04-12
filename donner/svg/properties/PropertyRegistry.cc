@@ -1098,11 +1098,11 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
         return PointerEvents::None;
       } else if (value.equalsLowercase("bounding-box")) {
         return PointerEvents::BoundingBox;
-      } else if (value.equalsLowercase("visibleFill")) {
+      } else if (value.equalsLowercase("visiblefill")) {
         return PointerEvents::VisibleFill;
-      } else if (value.equalsLowercase("visiblePainted")) {
+      } else if (value.equalsLowercase("visiblepainted")) {
         return PointerEvents::VisiblePainted;
-      } else if (value.equalsLowercase("visibleStroke")) {
+      } else if (value.equalsLowercase("visiblestroke")) {
         return PointerEvents::VisibleStroke;
       } else if (value.equalsLowercase("visible")) {
         return PointerEvents::Visible;

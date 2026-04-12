@@ -8,9 +8,13 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::Eq;
@@ -310,6 +314,190 @@ TEST_F(ShadowTreeSystemTest, ComputedShadowTreeComponentAccessors) {
   EXPECT_EQ(shadow.mainLightRoot(), donner::Entity(entt::null));
   EXPECT_EQ(shadow.offscreenShadowCount(), 0u);
   EXPECT_FALSE(shadow.findOffscreenShadow(ShadowBranchType::OffscreenFill).has_value());
+}
+
+TEST_F(ShadowTreeSystemTest, TeardownRemovesMainAndOffscreenEntities) {
+  SVGDocument document;
+  auto& registry = document.registry();
+
+  const Entity host = registry.create();
+  registry.emplace<donner::components::TreeComponent>(host, xml::XMLQualifiedNameRef("g"));
+
+  const Entity mainRoot = registry.create();
+  registry.emplace<donner::components::TreeComponent>(mainRoot, xml::XMLQualifiedNameRef("rect"));
+  registry.get<donner::components::TreeComponent>(host).appendChild(registry, mainRoot);
+
+  const Entity mainChild = registry.create();
+  registry.emplace<donner::components::TreeComponent>(mainChild, xml::XMLQualifiedNameRef("path"));
+  registry.get<donner::components::TreeComponent>(mainRoot).appendChild(registry, mainChild);
+
+  const Entity offscreenRoot = registry.create();
+  registry.emplace<donner::components::TreeComponent>(offscreenRoot, xml::XMLQualifiedNameRef("rect"));
+
+  ComputedShadowTreeComponent shadow;
+  shadow.mainBranch = ComputedShadowTreeComponent::BranchStorage{
+      ShadowBranchType::Main, entt::null, {mainRoot, mainChild}};
+  shadow.branches.push_back(ComputedShadowTreeComponent::BranchStorage{
+      ShadowBranchType::OffscreenFill, entt::null, {offscreenRoot}});
+
+  ShadowTreeSystem system;
+  system.teardown(registry, shadow);
+
+  EXPECT_FALSE(registry.valid(mainRoot));
+  EXPECT_FALSE(registry.valid(mainChild));
+  EXPECT_FALSE(registry.valid(offscreenRoot));
+  EXPECT_FALSE(shadow.mainBranch.has_value());
+  EXPECT_TRUE(shadow.branches.empty());
+}
+
+TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowTreeInvokesHandlerAndCopiesTag) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <rect id="target" width="10" height="10"/>
+      </defs>
+      <use id="nested" href="#target"/>
+      <g id="host"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto hostEntity = document.querySelector("#host")->entityHandle();
+  auto nestedEntity = document.querySelector("#nested")->entityHandle();
+  registry.emplace<DoNotInheritFillOrStrokeTag>(
+      document.querySelector("#target")->entityHandle().entity());
+
+  bool handlerCalled = false;
+  ShadowTreeSystem system([&handlerCalled](Registry&, Entity, EntityHandle, Entity, ShadowBranchType,
+                                           ParseWarningSink&) {
+    handlerCalled = true;
+    return true;
+  });
+
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+  auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main,
+                                        nestedEntity.entity(), RcString("#nested"), warnings);
+
+  EXPECT_FALSE(result.has_value());
+  ASSERT_TRUE(shadow.mainBranch.has_value());
+  EXPECT_GT(shadow.mainBranch->shadowEntities.size(), 1u);
+  EXPECT_TRUE(handlerCalled);
+
+  bool foundRootMarker = false;
+  bool foundDoNotInherit = false;
+  for (Entity entity : shadow.mainBranch->shadowEntities) {
+    foundRootMarker = foundRootMarker || registry.all_of<ShadowTreeRootComponent>(entity);
+    foundDoNotInherit =
+        foundDoNotInherit || registry.all_of<DoNotInheritFillOrStrokeTag>(entity);
+  }
+  EXPECT_TRUE(foundRootMarker);
+  EXPECT_TRUE(foundDoNotInherit);
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowRecursionWarns) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <use id="self" href="#self"/>
+      <g id="host"/>
+    </svg>
+  )");
+
+  auto hostEntity = document.querySelector("#host")->entityHandle();
+  auto selfEntity = document.querySelector("#self")->entityHandle();
+
+  ShadowTreeSystem system;
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+  auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main,
+                                        selfEntity.entity(), RcString("#self"), warnings);
+
+  EXPECT_FALSE(result.has_value());
+  ASSERT_TRUE(shadow.mainBranch.has_value());
+  EXPECT_EQ(shadow.mainBranch->shadowEntities.size(), 1u);
+  EXPECT_THAT(warnings.warnings(), SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().reason,
+              testing::HasSubstr("Shadow tree recursion detected"));
+}
+
+TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowMissingTargetWarns) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <use id="nested" href="#missing"/>
+      <g id="host"/>
+    </svg>
+  )");
+
+  auto hostEntity = document.querySelector("#host")->entityHandle();
+  auto nestedEntity = document.querySelector("#nested")->entityHandle();
+
+  ShadowTreeSystem system;
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+  auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main,
+                                        nestedEntity.entity(), RcString("#nested"), warnings);
+
+  EXPECT_FALSE(result.has_value());
+  ASSERT_TRUE(shadow.mainBranch.has_value());
+  EXPECT_TRUE(shadow.mainBranch->shadowEntities.empty());
+  EXPECT_THAT(warnings.warnings(), SizeIs(1));
+}
+
+TEST_F(ShadowTreeSystemTest, PopulateInstanceMirrorsChildrenInNonNestedBranch) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g id="target">
+        <rect id="r" width="10" height="10"/>
+        <circle id="c" r="5"/>
+      </g>
+      <g id="host"/>
+    </svg>
+  )");
+
+  auto hostEntity = document.querySelector("#host")->entityHandle();
+  auto targetEntity = document.querySelector("#target")->entityHandle().entity();
+
+  ShadowTreeSystem system;
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+  auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::Main, targetEntity,
+                                        RcString("#target"), warnings);
+
+  EXPECT_FALSE(result.has_value());
+  ASSERT_TRUE(shadow.mainBranch.has_value());
+  EXPECT_GE(shadow.mainBranch->shadowEntities.size(), 3u);
+  EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenPaintTargetParentRecursionWarns) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g id="parent">
+        <g id="host"/>
+      </g>
+      <rect id="light" width="10" height="10"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  auto hostEntity = document.querySelector("#host")->entityHandle();
+  auto lightEntity = document.querySelector("#light")->entityHandle();
+
+  auto& offscreen = registry.emplace<OffscreenShadowTreeComponent>(lightEntity.entity());
+  offscreen.setBranchHref(ShadowBranchType::OffscreenFill, "#parent");
+
+  ShadowTreeSystem system;
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+  auto result = system.populateInstance(hostEntity, shadow, ShadowBranchType::OffscreenFill,
+                                        lightEntity.entity(), RcString("#light"), warnings);
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result.value(), 0u);
+  EXPECT_EQ(shadow.offscreenShadowCount(), 1u);
+  EXPECT_TRUE(shadow.offscreenShadowRoot(0) == entt::null);
+  EXPECT_THAT(warnings.warnings(), SizeIs(1));
 }
 
 }  // namespace donner::svg::components

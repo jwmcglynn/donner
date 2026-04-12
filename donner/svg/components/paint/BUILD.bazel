@@ -71,3 +71,16 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "paint_component_tests",
+    srcs = [
+        "tests/PaintComponent_tests.cc",
+    ],
+    deps = [
+        ":components",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
