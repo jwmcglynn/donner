@@ -27,9 +27,12 @@
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/Transform.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/TextPatch.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/SelectTool.h"
@@ -425,6 +428,32 @@ int main(int argc, char** argv) {
         textEditor.setErrorMarkers({});
         lastShownErrorLine = kNoErrorLine;
         lastShownErrorReason.clear();
+      }
+    }
+
+    // Canvas→text writeback: when a drag completes, serialize the
+    // element's new transform and splice it into the source pane
+    // via AttributeWriteback. The patch is applied to the TextEditor
+    // buffer in the same frame as the canvas mutation, so the source
+    // and canvas never visibly disagree across a frame boundary.
+    if (selectTool.consumeDragCompleted() && app.hasSelection() && app.hasDocument()) {
+      const donner::svg::SVGElement& selected = *app.selectedElement();
+      if (selected.isa<donner::svg::SVGGraphicsElement>()) {
+        const donner::Transform2d xform =
+            selected.cast<donner::svg::SVGGraphicsElement>().transform();
+        const donner::RcString serialized = donner::toSVGTransformString(xform);
+
+        std::string source = textEditor.getText();
+        auto patch = donner::editor::buildAttributeWriteback(source, selected, "transform",
+                                                             std::string_view(serialized));
+        if (patch.has_value()) {
+          donner::editor::applyPatches(source, {{*patch}});
+          textEditor.setText(source);
+          // Reset the text-changed flag so the next frame's source-pane
+          // poll doesn't re-interpret our writeback as a user edit (which
+          // would trigger a ReplaceDocumentCommand and wipe the selection).
+          textEditor.resetTextChanged();
+        }
       }
     }
 

@@ -27,6 +27,19 @@ public:
   /// successful hit-test on mouse-down).
   [[nodiscard]] bool isDragging() const { return dragState_.has_value(); }
 
+  /// Returns true **exactly once** after a drag that actually moved
+  /// completes (i.e. `onMouseUp` was called and `hasMoved` was true).
+  /// The main loop polls this after `flushFrame()` to know when to
+  /// build a canvas→text writeback patch for the `transform` attribute.
+  /// Calling this function clears the flag.
+  [[nodiscard]] bool consumeDragCompleted() {
+    if (dragCompleted_) {
+      dragCompleted_ = false;
+      return true;
+    }
+    return false;
+  }
+
 private:
   struct DragState {
     svg::SVGElement element;
@@ -44,6 +57,7 @@ private:
   };
 
   std::optional<DragState> dragState_;
+  bool dragCompleted_ = false;
 };
 
 }  // namespace donner::editor

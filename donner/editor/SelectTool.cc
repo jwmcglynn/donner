@@ -78,6 +78,11 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     UndoSnapshot before{.element = dragState_->element, .transform = dragState_->startTransform};
     UndoSnapshot after{.element = dragState_->element, .transform = dragState_->currentTransform};
     editor.undoTimeline().record("Move element", std::move(before), std::move(after));
+
+    // Signal the main loop that a drag completed and the `transform`
+    // attribute should be written back into the source text. The flag
+    // is consumed (cleared) by `consumeDragCompleted()`.
+    dragCompleted_ = true;
   }
 
   dragState_.reset();

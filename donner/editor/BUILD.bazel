@@ -160,11 +160,13 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":attribute_writeback",
         ":editor_app",
         ":notice",
         ":overlay_renderer",
         ":select_tool",
         ":text_editor",
+        ":text_patch",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/svg",
