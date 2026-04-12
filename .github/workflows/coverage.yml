@@ -22,14 +22,14 @@ jobs:
           java-version: 11
           distribution: "microsoft"
 
-      - name: Cache Bazel
-        uses: actions/cache@v5
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          path: |
-            ~/.cache/bazel
-          key: ${{ runner.os }}-bazelcov-${{ hashFiles('.bazelversion', '.bazelrc', 'WORKSPACE', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazelcov-
+          bazelisk-cache: true
+          disk-cache: coverage-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
         run: |
