@@ -119,6 +119,9 @@ SKIPPED_TARGETS: Set[str] = {
     # Freetype linking is handled by EXTRA_LINK_DEPS for text_backend_full;
     # the bare "freetype" name is not a valid CMake target.
     "//third_party:freetype",
+    # svg_viewer depends on @imgui (which pulls GLFW), neither of which is
+    # wired into the CMake mirror. Bazel-only, tagged manual.
+    "//examples:svg_viewer",
 }
 
 # Bazel toolchain-internal deps that are not real C++ libraries and should not
