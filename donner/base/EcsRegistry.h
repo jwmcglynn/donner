@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <ostream>
+
 #include <entt/entity/entity.hpp>    // entt::entity, entt::null
 #include <entt/entity/fwd.hpp>       // Forward declarations
 #include <entt/entity/handle.hpp>    // basic_handle definition
@@ -57,12 +59,11 @@ using EntityHandle = entt::basic_handle<Registry>;
 
 }  // namespace donner
 
+namespace entt {
+
 /// Ostream output operator for entt::entity, outputs `#<id>`.
-/// Uses explicit function calls instead of `<<` chaining to avoid ADL:
-/// since the parameter type lives in namespace entt, `os << "#"` would
-/// find this very overload as a candidate for `const char[2]` on Clang/macOS.
-inline std::ostream& operator<<(std::ostream& os, const entt::entity& e) {
-  os.put('#');
-  os << static_cast<std::uint32_t>(e);
-  return os;
+inline std::ostream& operator<<(std::ostream& os, const entity& e) {
+  return os << "#" << static_cast<std::uint32_t>(e);
 }
+
+}  // namespace entt
