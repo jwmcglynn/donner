@@ -91,3 +91,15 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "attribute_writeback_tests",
+    srcs = ["AttributeWriteback_tests.cc"],
+    deps = [
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

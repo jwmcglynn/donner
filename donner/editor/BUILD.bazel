@@ -65,6 +65,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "attribute_writeback",
+    srcs = ["AttributeWriteback.cc"],
+    hdrs = ["AttributeWriteback.h"],
+    deps = [
+        ":text_patch",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "editor_app",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],
