@@ -1,0 +1,120 @@
+"""Tests for the Milestone S1 editor sandbox.
+
+These tests spawn `donner_parser_child` as a subprocess via `SandboxHost`,
+verify that well-formed SVG round-trips to a PNG, and — critically — verify
+the host survives adversarial input that crashes the child.
+"""
+
+load("//build_defs:rules.bzl", "donner_cc_test", "renderer_backend_compatible_with")
+
+donner_cc_test(
+    name = "sandbox_host_tests",
+    srcs = ["SandboxHost_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_parser_child",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:sandbox_host",
+        "//donner/editor/sandbox:sandbox_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "sandbox_pipeline_tests",
+    srcs = ["SandboxPipeline_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_parser_child",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:sandbox_host",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "record_replay_tests",
+    srcs = ["RecordReplay_tests.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/editor/sandbox:frame_inspector",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/sandbox:rnr_file",
+        "//donner/editor/sandbox:serializing_renderer",
+        "//donner/editor/sandbox:wire",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "sandbox_hardening_tests",
+    srcs = ["SandboxHardening_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_parser_child",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:sandbox_hardening",
+        "//donner/editor/sandbox:sandbox_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "svg_source_tests",
+    srcs = ["SvgSource_tests.cc"],
+    deps = [
+        "//donner/editor/sandbox:svg_source",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "pipelined_renderer_tests",
+    srcs = ["PipelinedRenderer_tests.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/editor/sandbox:pipelined_renderer",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "wire_format_tests",
+    srcs = ["WireFormat_tests.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/sandbox:sandbox_codecs",
+        "//donner/editor/sandbox:serializing_renderer",
+        "//donner/editor/sandbox:wire",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

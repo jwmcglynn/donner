@@ -152,6 +152,10 @@ donner_cc_library(
     name = "renderer_driver",
     srcs = ["RendererDriver.cc"],
     hdrs = ["RendererDriver.h"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         ":renderer_interface",
@@ -160,7 +164,10 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/renderer/common",
-    ],
+    ] + select({
+        ":text_enabled": ["//donner/svg/text:text_engine"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
@@ -181,7 +188,10 @@ donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+    ],
     deps = [
         "@stb//:image_write",
     ],
@@ -201,7 +211,10 @@ donner_cc_library(
     name = "terminal_image_viewer",
     srcs = ["TerminalImageViewer.cc"],
     hdrs = ["TerminalImageViewer.h"],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         ":renderer_image_io",
         "//donner/base/encoding:base64",

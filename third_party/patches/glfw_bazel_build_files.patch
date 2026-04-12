@@ -13,7 +13,7 @@ new file mode 100644
 index 00000000..952ce1c3
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,146 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +load("@bazel_skylib//lib:selects.bzl", "selects")
 +
@@ -77,6 +77,7 @@ index 00000000..952ce1c3
 +        "//conditions:default": [
 +            "src/glx_context.c",
 +            "src/linux_joystick.c",
++            "src/posix_poll.c",
 +            "src/posix_thread.c",
 +            "src/posix_time.c",
 +            "src/x11_init.c",

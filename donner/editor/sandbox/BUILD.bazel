@@ -1,0 +1,203 @@
+"""Donner Editor sandbox: isolated parser/renderer child process.
+
+Milestone S1 of the editor sandbox design (docs/design_docs/editor_sandbox.md):
+a byte-in, PNG-out child process that parses untrusted SVG in isolation, plus a
+`SandboxHost` host-side driver that spawns the child and classifies its exit.
+
+These targets are gated on the tiny_skia renderer backend — the child
+deliberately links only the lightweight backend, since pulling Skia into a
+throwaway parser child would bloat every render by tens of megabytes.
+"""
+
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "renderer_backend_compatible_with")
+
+package(default_visibility = ["//donner/editor:__subpackages__"])
+
+donner_cc_library(
+    name = "sandbox_protocol",
+    hdrs = ["SandboxProtocol.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "sandbox_hardening",
+    srcs = ["SandboxHardening.cc"],
+    hdrs = ["SandboxHardening.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "svg_source",
+    srcs = ["SvgSource.cc"],
+    hdrs = ["SvgSource.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "rnr_file",
+    srcs = ["RnrFile.cc"],
+    hdrs = ["RnrFile.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "frame_inspector",
+    srcs = ["FrameInspector.cc"],
+    hdrs = ["FrameInspector.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":replaying_renderer",
+        ":sandbox_codecs",
+        ":wire",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_cc_library(
+    name = "wire",
+    hdrs = ["Wire.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "sandbox_codecs",
+    srcs = ["SandboxCodecs.cc"],
+    hdrs = ["SandboxCodecs.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":wire",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/resources:image_resource",
+    ],
+)
+
+donner_cc_library(
+    name = "serializing_renderer",
+    srcs = ["SerializingRenderer.cc"],
+    hdrs = ["SerializingRenderer.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":sandbox_codecs",
+        ":wire",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_cc_library(
+    name = "replaying_renderer",
+    srcs = ["ReplayingRenderer.cc"],
+    hdrs = ["ReplayingRenderer.h"],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":sandbox_codecs",
+        ":wire",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
+    ] + select({
+        "//donner/svg/renderer:text_enabled": [
+            "//donner/svg/resources:font_manager",
+            "//donner/svg/text:text_engine",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_library(
+    name = "pipelined_renderer",
+    srcs = ["PipelinedRenderer.cc"],
+    hdrs = ["PipelinedRenderer.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":replaying_renderer",
+        ":serializing_renderer",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
+    ],
+)
+
+donner_cc_library(
+    name = "sandbox_host",
+    srcs = ["SandboxHost.cc"],
+    hdrs = ["SandboxHost.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":replaying_renderer",
+        ":sandbox_protocol",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
+    ],
+)
+
+donner_cc_binary(
+    name = "donner_parser_child",
+    srcs = ["parser_child_main.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":sandbox_hardening",
+        ":sandbox_protocol",
+        ":serializing_renderer",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_cc_binary(
+    name = "sandbox_render",
+    srcs = ["sandbox_render_main.cc"],
+    data = [":donner_parser_child"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":sandbox_host",
+        ":svg_source",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_tiny_skia",
+    ],
+)
+
+donner_cc_binary(
+    name = "sandbox_replay",
+    srcs = ["sandbox_replay_main.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":frame_inspector",
+        ":replaying_renderer",
+        ":rnr_file",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_tiny_skia",
+    ],
+)
+
+donner_cc_binary(
+    name = "sandbox_inspect",
+    srcs = ["sandbox_inspect_main.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":frame_inspector",
+        ":rnr_file",
+    ],
+)

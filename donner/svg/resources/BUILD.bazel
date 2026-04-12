@@ -14,7 +14,10 @@ donner_cc_library(
 donner_cc_library(
     name = "image_resource",
     hdrs = ["ImageResource.h"],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
 )
 
 donner_cc_library(
@@ -87,7 +90,10 @@ donner_cc_library(
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
     }),
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         "//donner/base",
         "//donner/base/fonts",
