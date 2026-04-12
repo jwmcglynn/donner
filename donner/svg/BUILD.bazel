@@ -156,7 +156,12 @@ donner_cc_library(
         "//donner/svg/properties",
         "//donner/svg/renderer:rendering_context",
         "//donner/svg/resources:sandboxed_file_resource_loader",
-    ],
+    ] + select({
+        "//donner/svg/renderer:text_enabled": [
+            "//donner/svg/text:text_engine",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
