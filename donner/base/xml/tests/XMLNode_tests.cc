@@ -343,4 +343,240 @@ TEST_F(XMLNodeTests, GetAttributeLocationInvalid) {
   EXPECT_THAT(node.getAttributeLocation(mismatchedXml, "attr"), Eq(std::nullopt));
 }
 
+// ---------------------------------------------------------------------------
+// serializeToString tests
+// ---------------------------------------------------------------------------
+
+TEST_F(XMLNodeTests, SerializeToString_SelfClosingElement) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "br");
+  EXPECT_EQ(el.serializeToString(), "<br/>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_ElementWithAttributes) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "rect");
+  el.setAttribute("width", "100");
+  el.setAttribute("height", "200");
+  const std::string s(std::string_view(el.serializeToString()));
+  // Must start with <rect, contain both attributes, and self-close.
+  EXPECT_THAT(s, testing::StartsWith("<rect "));
+  EXPECT_THAT(s, testing::HasSubstr("width=\"100\""));
+  EXPECT_THAT(s, testing::HasSubstr("height=\"200\""));
+  EXPECT_THAT(s, testing::EndsWith("/>"));
+}
+
+TEST_F(XMLNodeTests, SerializeToString_AttributeEscaping) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "node");
+  el.setAttribute("val", "a&b<c>d\"e");
+  const std::string s(std::string_view(el.serializeToString()));
+  EXPECT_THAT(s, testing::HasSubstr("val=\"a&amp;b&lt;c&gt;d&quot;e\""));
+}
+
+TEST_F(XMLNodeTests, SerializeToString_ElementWithTextChild) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "text");
+  XMLNode data = XMLNode::CreateDataNode(doc, "Hello, world!");
+  el.appendChild(data);
+  EXPECT_EQ(el.serializeToString(), "<text>Hello, world!</text>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_TextDataEscaping) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "p");
+  XMLNode data = XMLNode::CreateDataNode(doc, "a<b>&c");
+  el.appendChild(data);
+  EXPECT_EQ(el.serializeToString(), "<p>a&lt;b&gt;&amp;c</p>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_NestedElements) {
+  XMLDocument doc;
+  XMLNode parent = XMLNode::CreateElementNode(doc, "svg");
+  XMLNode child = XMLNode::CreateElementNode(doc, "g");
+  XMLNode grandchild = XMLNode::CreateElementNode(doc, "rect");
+  child.appendChild(grandchild);
+  parent.appendChild(child);
+
+  const std::string s(std::string_view(parent.serializeToString()));
+  EXPECT_EQ(s,
+            "<svg>\n"
+            "  <g>\n"
+            "    <rect/>\n"
+            "  </g>\n"
+            "</svg>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_IndentLevel) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "rect");
+  // At indent level 2 the element should have 4 leading spaces.
+  const std::string s(std::string_view(el.serializeToString(2)));
+  EXPECT_EQ(s, "    <rect/>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_Comment) {
+  XMLDocument doc;
+  XMLNode comment = XMLNode::CreateCommentNode(doc, " this is a comment ");
+  EXPECT_EQ(comment.serializeToString(), "<!-- this is a comment -->");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_CData) {
+  XMLDocument doc;
+  XMLNode cdata = XMLNode::CreateCDataNode(doc, "raw <data> & more");
+  EXPECT_EQ(cdata.serializeToString(), "<![CDATA[raw <data> & more]]>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_DocType) {
+  XMLDocument doc;
+  XMLNode dt = XMLNode::CreateDocTypeNode(doc, "svg");
+  EXPECT_EQ(dt.serializeToString(), "<!DOCTYPE svg>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_ProcessingInstruction) {
+  XMLDocument doc;
+  XMLNode pi = XMLNode::CreateProcessingInstructionNode(doc, "xml-stylesheet",
+                                                        "type=\"text/css\" href=\"style.css\"");
+  EXPECT_EQ(pi.serializeToString(),
+            "<?xml-stylesheet type=\"text/css\" href=\"style.css\"?>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_ProcessingInstructionNoValue) {
+  XMLDocument doc;
+  XMLNode pi = XMLNode::CreateProcessingInstructionNode(doc, "foo", "");
+  EXPECT_EQ(pi.serializeToString(), "<?foo?>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_XMLDeclaration) {
+  XMLDocument doc;
+  XMLNode decl = XMLNode::CreateXMLDeclarationNode(doc);
+  decl.setAttribute("version", "1.0");
+  decl.setAttribute("encoding", "UTF-8");
+  const std::string s(std::string_view(decl.serializeToString()));
+  EXPECT_THAT(s, testing::StartsWith("<?xml "));
+  EXPECT_THAT(s, testing::HasSubstr("version=\"1.0\""));
+  EXPECT_THAT(s, testing::HasSubstr("encoding=\"UTF-8\""));
+  EXPECT_THAT(s, testing::EndsWith("?>"));
+}
+
+TEST_F(XMLNodeTests, SerializeToString_MixedContent) {
+  // Mixed content: text nodes only → inline, no block indentation.
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "span");
+  el.appendChild(XMLNode::CreateDataNode(doc, "Hello "));
+  el.appendChild(XMLNode::CreateDataNode(doc, "world"));
+  EXPECT_EQ(el.serializeToString(), "<span>Hello world</span>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_NamespacedElement) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, XMLQualifiedNameRef("xlink", "href"));
+  EXPECT_EQ(el.serializeToString(), "<xlink:href/>");
+}
+
+TEST_F(XMLNodeTests, SerializeToString_NamespacedAttribute) {
+  XMLDocument doc;
+  XMLNode el = XMLNode::CreateElementNode(doc, "use");
+  el.setAttribute(XMLQualifiedNameRef("xlink", "href"), "#icon");
+  const std::string s(std::string_view(el.serializeToString()));
+  EXPECT_THAT(s, testing::HasSubstr("xlink:href=\"#icon\""));
+}
+
+// ---------------------------------------------------------------------------
+// Round-trip test
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Find the first child of `parent` that is an Element node, skipping whitespace Data nodes that
+/// are injected by the serializer's block indentation.
+std::optional<XMLNode> FirstElementChild(const XMLNode& parent) {
+  for (std::optional<XMLNode> child = parent.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Element) {
+      return child;
+    }
+  }
+  return std::nullopt;
+}
+
+/// Find the next sibling that is an Element node.
+std::optional<XMLNode> NextElementSibling(const XMLNode& node) {
+  for (std::optional<XMLNode> sib = node.nextSibling(); sib.has_value();
+       sib = sib->nextSibling()) {
+    if (sib->type() == XMLNode::Type::Element) {
+      return sib;
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+TEST_F(XMLNodeTests, SerializeToString_RoundTrip) {
+  // Build a tree programmatically, serialize it, then re-parse and verify structure.
+  XMLDocument doc;
+  XMLNode root = XMLNode::CreateElementNode(doc, "svg");
+  root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  root.setAttribute("width", "100");
+
+  XMLNode g = XMLNode::CreateElementNode(doc, "g");
+  g.setAttribute("id", "layer1");
+
+  XMLNode rect = XMLNode::CreateElementNode(doc, "rect");
+  rect.setAttribute("x", "10");
+  rect.setAttribute("y", "20");
+
+  XMLNode text = XMLNode::CreateElementNode(doc, "text");
+  text.appendChild(XMLNode::CreateDataNode(doc, "Hello & <world>"));
+
+  g.appendChild(rect);
+  g.appendChild(text);
+  root.appendChild(g);
+
+  const RcString serialized = root.serializeToString();
+
+  // Re-parse the serialized string.
+  ParseResult<XMLDocument> maybeDoc = XMLParser::Parse(serialized);
+  ASSERT_THAT(maybeDoc, NoParseError());
+
+  XMLDocument reparsed = std::move(maybeDoc.result());
+  XMLNode reparsedRoot = reparsed.root();
+
+  // The document root should have one child (the <svg> element).
+  // Note: block indentation adds whitespace Data nodes around element children, so we
+  // use FirstElementChild / NextElementSibling to skip them.
+  ASSERT_THAT(reparsedRoot.firstChild(), Ne(std::nullopt));
+  XMLNode svgEl = *reparsedRoot.firstChild();
+  EXPECT_THAT(svgEl.tagName(), Eq("svg"));
+  EXPECT_THAT(svgEl.getAttribute("width"), Optional(Eq("100")));
+
+  // <svg> → first element child is <g>
+  std::optional<XMLNode> maybeGEl = FirstElementChild(svgEl);
+  ASSERT_THAT(maybeGEl, Ne(std::nullopt));
+  XMLNode gEl = *maybeGEl;
+  EXPECT_THAT(gEl.tagName(), Eq("g"));
+  EXPECT_THAT(gEl.getAttribute("id"), Optional(Eq("layer1")));
+
+  // <g> → first element child is <rect>
+  std::optional<XMLNode> maybeRectEl = FirstElementChild(gEl);
+  ASSERT_THAT(maybeRectEl, Ne(std::nullopt));
+  XMLNode rectEl = *maybeRectEl;
+  EXPECT_THAT(rectEl.tagName(), Eq("rect"));
+  EXPECT_THAT(rectEl.getAttribute("x"), Optional(Eq("10")));
+  EXPECT_THAT(rectEl.getAttribute("y"), Optional(Eq("20")));
+
+  // <g> → second element child is <text>
+  std::optional<XMLNode> maybeTextEl = NextElementSibling(rectEl);
+  ASSERT_THAT(maybeTextEl, Ne(std::nullopt));
+  XMLNode textEl = *maybeTextEl;
+  EXPECT_THAT(textEl.tagName(), Eq("text"));
+
+  // <text> → first child is a Data node with unescaped value (no block indent — text-only children)
+  ASSERT_THAT(textEl.firstChild(), Ne(std::nullopt));
+  XMLNode dataNode = *textEl.firstChild();
+  EXPECT_EQ(dataNode.type(), XMLNode::Type::Data);
+  EXPECT_THAT(dataNode.value(), Optional(Eq("Hello & <world>")));
+}
+
 }  // namespace donner::xml

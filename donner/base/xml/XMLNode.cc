@@ -1,7 +1,10 @@
 #include "donner/base/xml/XMLNode.h"
 
+#include <string>
+
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
@@ -32,6 +35,43 @@ struct SourceOffsetComponent {
   std::optional<FileOffset> startOffset;
   std::optional<FileOffset> endOffset;
 };
+
+/// Escape text content (Data nodes): escape `<`, `>`, and `&`, but not quotes since
+/// we are not in an attribute context.
+std::string EscapeTextContent(std::string_view text) {
+  std::string out;
+  out.reserve(text.size() + 8);
+  for (const char ch : text) {
+    switch (ch) {
+      case '<': out.append("&lt;"); break;
+      case '>': out.append("&gt;"); break;
+      case '&': out.append("&amp;"); break;
+      default: out.push_back(ch); break;
+    }
+  }
+  return out;
+}
+
+/// Serialize an XMLQualifiedNameRef to XML syntax (ns:name or just name).
+void AppendQualifiedName(std::string& out, const XMLQualifiedNameRef& qname) {
+  if (!qname.namespacePrefix.empty()) {
+    out.append(qname.namespacePrefix);
+    out.push_back(':');
+  }
+  out.append(qname.name);
+}
+
+/// Returns true if any direct child is a non-Data/non-CData element (i.e. an Element node).
+/// Used to decide whether to apply block-level indentation.
+bool HasElementChildren(const XMLNode& node) {
+  for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Element) {
+      return true;
+    }
+  }
+  return false;
+}
 
 }  // namespace
 
@@ -255,6 +295,158 @@ std::optional<FileOffset> XMLNode::sourceEndOffset() const {
 
 void XMLNode::setSourceEndOffset(FileOffset offset) {
   handle_.get_or_emplace<SourceOffsetComponent>().endOffset = offset;
+}
+
+RcString XMLNode::serializeToString(int indentLevel) const {
+  std::string indent(static_cast<size_t>(indentLevel) * 2, ' ');
+  std::string out;
+
+  switch (type()) {
+    case Type::Document: {
+      // Serialize all children of the document node directly.
+      for (std::optional<XMLNode> child = firstChild(); child.has_value();
+           child = child->nextSibling()) {
+        out.append(child->serializeToString(indentLevel));
+        out.push_back('\n');
+      }
+      break;
+    }
+
+    case Type::Element: {
+      const XMLQualifiedNameRef tag = tagName();
+      out.append(indent);
+      out.push_back('<');
+      AppendQualifiedName(out, tag);
+
+      // Emit attributes.
+      for (const XMLQualifiedNameRef& attrName : attributes()) {
+        std::optional<RcString> attrValue = getAttribute(attrName);
+        if (!attrValue.has_value()) {
+          continue;
+        }
+        std::optional<RcString> escaped = EscapeAttributeValue(*attrValue, '"');
+        if (!escaped.has_value()) {
+          // Cannot represent this value in well-formed XML; skip attribute.
+          continue;
+        }
+        out.push_back(' ');
+        AppendQualifiedName(out, attrName);
+        out.append("=\"");
+        out.append(*escaped);
+        out.push_back('"');
+      }
+
+      const std::optional<XMLNode> firstChildNode = firstChild();
+      if (!firstChildNode.has_value()) {
+        // Self-closing empty element.
+        out.append("/>");
+      } else {
+        out.push_back('>');
+
+        // Decide whether to apply block indentation.  If all children are text/cdata we keep
+        // everything inline; if any child is an Element we indent.
+        const bool blockIndent = HasElementChildren(*this);
+
+        for (std::optional<XMLNode> child = firstChildNode; child.has_value();
+             child = child->nextSibling()) {
+          if (blockIndent) {
+            out.push_back('\n');
+            out.append(child->serializeToString(indentLevel + 1));
+          } else {
+            out.append(child->serializeToString(0));
+          }
+        }
+
+        if (blockIndent) {
+          out.push_back('\n');
+          out.append(indent);
+        }
+        out.append("</");
+        AppendQualifiedName(out, tag);
+        out.push_back('>');
+      }
+      break;
+    }
+
+    case Type::Data: {
+      const std::optional<RcString> val = value();
+      if (val.has_value()) {
+        out.append(indent);
+        out.append(EscapeTextContent(*val));
+      }
+      break;
+    }
+
+    case Type::CData: {
+      const std::optional<RcString> val = value();
+      out.append(indent);
+      out.append("<![CDATA[");
+      if (val.has_value()) {
+        out.append(*val);
+      }
+      out.append("]]>");
+      break;
+    }
+
+    case Type::Comment: {
+      const std::optional<RcString> val = value();
+      out.append(indent);
+      out.append("<!--");
+      if (val.has_value()) {
+        out.append(*val);
+      }
+      out.append("-->");
+      break;
+    }
+
+    case Type::DocType: {
+      const std::optional<RcString> val = value();
+      out.append(indent);
+      out.append("<!DOCTYPE ");
+      if (val.has_value()) {
+        out.append(*val);
+      }
+      out.push_back('>');
+      break;
+    }
+
+    case Type::ProcessingInstruction: {
+      const std::optional<RcString> val = value();
+      out.append(indent);
+      out.append("<?");
+      AppendQualifiedName(out, tagName());
+      if (val.has_value() && !val->empty()) {
+        out.push_back(' ');
+        out.append(*val);
+      }
+      out.append("?>");
+      break;
+    }
+
+    case Type::XMLDeclaration: {
+      out.append(indent);
+      out.append("<?xml");
+      for (const XMLQualifiedNameRef& attrName : attributes()) {
+        std::optional<RcString> attrValue = getAttribute(attrName);
+        if (!attrValue.has_value()) {
+          continue;
+        }
+        std::optional<RcString> escaped = EscapeAttributeValue(*attrValue, '"');
+        if (!escaped.has_value()) {
+          continue;
+        }
+        out.push_back(' ');
+        AppendQualifiedName(out, attrName);
+        out.append("=\"");
+        out.append(*escaped);
+        out.push_back('"');
+      }
+      out.append("?>");
+      break;
+    }
+  }
+
+  return RcString(out);
 }
 
 Entity XMLNode::CreateEntity(Registry& registry, Type type, const XMLQualifiedNameRef& tagName) {

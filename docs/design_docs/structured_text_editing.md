@@ -343,11 +343,16 @@ land as standalone PRs in this order.
       (including the 180° scale-collision case), skewX/skewY
       (which fall through to `matrix(...)`), and an explicit
       general-matrix case with exact expected string output.
-- [ ] `xml::XMLNode::serializeToString(int indentLevel = 0) →
+- [x] `xml::XMLNode::serializeToString(int indentLevel = 0) →
       RcString`. Self-closing empty elements, escaped attribute values
       (via `EscapeAttributeValue` below), `<!-- -->` + `<![CDATA[ ]]>`.
       **Not responsible for preserving author whitespace** — used only
       for elements created by canvas tools without source location.
+      Implemented in `XMLNode.cc` with a local `EscapeTextContent` helper
+      (escapes `<`/`>`/`&` for Data nodes). Block indentation applied when
+      an Element has child Element nodes; inline otherwise (mixed text).
+      Round-trip test verifies `XMLParser::Parse(node.serializeToString())`
+      reconstructs the original structure including unescaped Data values.
 - [x] `xml::EscapeAttributeValue(std::string_view value,
       char quoteChar) → std::optional<RcString>`. Quote-aware
       (escapes `"` only under `"` delimiter, `'` only under `'`,
