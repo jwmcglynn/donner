@@ -1141,10 +1141,18 @@ cleanup.
       ellipses, and quadratic curves (`rect2`, `ellipse1`, `skew1`,
       `quadbezier1`) all pass after the strokeToFill regressions landed
       earlier in Phase 2.
-  Outstanding: `painting/stroke-linejoin/miter` still shows a ~2-pixel
-  offset at the bevel-fallback corner tip, marked `disableBackend(Geode)`
-  with a TODO to align `emitJoin`'s outside-turn branch with tiny-skia's
-  reference.
+  Previously outstanding — `painting/stroke-linejoin/miter` truncated
+  the miter tip at the cubic-to-cubic junction (150° turn, default
+  miter-limit 4). Root cause was `Path::strokeToFill`'s loose
+  `flattenTolerance = 0.25`: the final chord of each flattened cubic
+  pointed along the leaf's AVERAGE tangent rather than the true
+  endpoint tangent, so the effective turn angle measured by
+  `emitJoin` drifted ~0.7° to ~151° — just over the ratio-4
+  bevel threshold. Tightened the default to `0.1` (only inside
+  stroke outline generation, not `Path::flatten()` itself), which
+  shrinks the chord-direction error well under the threshold.
+  Test now passes at the default miter-limit on both Geode and
+  tiny-skia, no per-file override needed.
 - [🚧] Implement `GeodeGradientEncoder`: linear, radial, and sweep gradients.
   - [x] **Linear gradients (Phase 2E).** Shipped as a sibling pipeline
     (`GeodeGradientPipeline`) + fragment shader
@@ -1289,10 +1297,28 @@ cleanup.
   clip rects), but is no longer on the critical path.
 - [x] Implement `pushIsolatedLayer`/`popIsolatedLayer`: offscreen
   render target allocation + opacity compositing. (Phase 2 landing.)
-  - [ ] Blend mode fragment shader (all 28 SVG/CSS blend modes).
-    Still pending — `popIsolatedLayer` does a plain premultiplied
-    source-over today. `painting/mix-blend-mode` + `painting/isolation`
-    remain category-gated.
+  - [x] **Phase 3d: blend mode fragment shader (all 16 SVG
+    `mix-blend-mode` values).** The existing `GeodeImagePipeline`
+    grew a third texture binding (`dstSnapshotTexture`) + a
+    `blendMode` uniform; `image_blit.wgsl` now carries the full
+    W3C Compositing Level 1 §9 suite (Normal → Luminosity,
+    including the HSL-space non-separable modes Hue / Saturation /
+    Color / Luminosity driven by the spec's `SetLum` / `SetSat` /
+    `ClipColor` helpers with the legacy 0.3/0.59/0.11 Lum
+    coefficients). `RendererGeode::popIsolatedLayer` takes the
+    blend-mode branch when the stored frame's mode is non-Normal:
+    it copies the parent's 1-sample resolve into a fresh snapshot
+    texture via `CommandEncoder::CopyTextureToTexture`, reopens the
+    parent with `LoadOp::Clear`, and dispatches
+    `GeoEncoder::blitFullTargetBlended(layer, snapshot, blendMode,
+    opacity)`. Group opacity is threaded through as the `opacity`
+    uniform so `opacity` + `mix-blend-mode` on the same element
+    composes correctly (source colour is scaled before the blend
+    formula, matching W3C Compositing 1 §7). Unlocks the full
+    `painting/mix-blend-mode` + `painting/isolation` categories —
+    21 of 22 mix-blend-mode/isolation tests pass at the default
+    threshold, no per-file overrides needed. Session delta: 666
+    → 688 passing on `resvg_test_suite_geode_text`.
 - [x] **Phase 3c: `<mask>` compositing via luminance blit.** The
   existing `GeodeImagePipeline` is extended with a second texture
   binding (luminance mask) + `maskMode` / `applyMaskBounds` /
@@ -1397,11 +1423,17 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
     * Zero-length subpath stroke caps (SVG 2 §11.4 shapes emitted
       directly from `strokeSubpath`).
   Phase 3a polygon clipping unblocked
-  `structure/symbol/with-transform-on-use{,-no-size}` — the remaining
-  per-file TODOs are `structure/image/preserveAspectRatio=xMaxYMax-
-  slice-on-svg` (polygon clip edge AA fringes 4 pixels past the 100-px
-  max — a follow-up, not a functional gap) and
-  `painting/stroke-linejoin/miter` (bevel-fallback corner drift).
+  `structure/symbol/with-transform-on-use{,-no-size}`. The
+  `painting/stroke-linejoin/miter` gate has been removed after
+  tightening `Path::strokeToFill`'s default `flattenTolerance` from
+  0.25 to 0.1 — the loose tolerance was letting each cubic leaf's
+  final chord point along its AVERAGE tangent instead of the true
+  endpoint tangent, drifting the measured turn angle ~0.7° past
+  the miter-limit-4 bevel threshold at 150° turns. The only
+  per-file TODO remaining in this bucket is
+  `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg` — a
+  4× MSAA thin-stroke fringe on nested image data URLs, unrelated
+  to stroking.
 - [x] **Track the pass-rate delta between Geode and RendererSkia.**
   After #504, `resvg_test_suite_geode_text` is **596 passing / 0
   failing / 765 skipped via feature gates** on top of the category

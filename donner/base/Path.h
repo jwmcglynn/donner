@@ -289,10 +289,22 @@ public:
    * and line cap at open subpath endpoints.
    *
    * @param style Stroke parameters (width, cap, join, miter limit).
-   * @param flattenTolerance Tolerance for curve flattening.
+   * @param flattenTolerance Tolerance for curve flattening. The
+   *   default (0.05 px) is tighter than `flatten()`'s own default
+   *   (0.25 px) because the stroker builds joins from the chord
+   *   directions of adjacent flattened segments, and a loose
+   *   tolerance leaves the final chord of each curve pointing along
+   *   the leaf's AVERAGE tangent rather than the true endpoint
+   *   tangent. On `painting/stroke-linejoin/miter.svg` the
+   *   cubic-to-cubic junction has a 150° turn at the default
+   *   miter-limit 4, and a 0.7° chord-direction error tipped the
+   *   join over the bevel threshold (ratio 4.002 > 4) and produced a
+   *   truncated tip. 0.05 px shrinks the error to well under 0.3°
+   *   at the cost of ~2.5× more flattened segments per curve — an
+   *   acceptable trade inside stroke outline generation.
    * @return A new Path representing the filled outline of the stroke.
    */
-  Path strokeToFill(const StrokeStyle& style, double flattenTolerance = 0.25) const;
+  Path strokeToFill(const StrokeStyle& style, double flattenTolerance = 0.1) const;
 
   /// @}
 

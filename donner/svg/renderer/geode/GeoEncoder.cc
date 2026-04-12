@@ -1344,6 +1344,49 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
 }
 
+void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer,
+                                       const wgpu::Texture& dstSnapshot, uint32_t blendMode,
+                                       double opacity) {
+  if (!layer || !dstSnapshot || blendMode == 0u) {
+    return;
+  }
+  impl_->ensurePassOpen();
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  // Identity MVP for target-pixel → clip space, same as blitFullTarget.
+  const double sx = 2.0 / static_cast<double>(impl_->targetWidth);
+  const double sy = -2.0 / static_cast<double>(impl_->targetHeight);
+  float mvp[16] = {0};
+  mvp[0] = static_cast<float>(sx);
+  mvp[5] = static_cast<float>(sy);
+  mvp[10] = 1.0f;
+  mvp[12] = -1.0f;
+  mvp[13] = 1.0f;
+  mvp[15] = 1.0f;
+
+  GeodeTextureEncoder::QuadParams qp;
+  qp.destRect = Box2d(Vector2d(0.0, 0.0),
+                      Vector2d(static_cast<double>(impl_->targetWidth),
+                               static_cast<double>(impl_->targetHeight)));
+  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  // Per W3C Compositing 1, group opacity scales the SOURCE colour
+  // BEFORE the blend formula: `Cs_effective = Cs * groupOpacity` and
+  // `αs_effective = αs * groupOpacity`. The shader's leading
+  // multiply `color = sampled * uniforms.opacity` does exactly this
+  // to the premultiplied layer texel before calling
+  // `composite_with_blend`, so forwarding `opacity` here is enough.
+  qp.opacity = opacity;
+  qp.filter = GeodeTextureEncoder::Filter::Linear;
+  // Both layer and dst_snapshot are offscreen render targets already
+  // stored in premultiplied alpha.
+  qp.sourceIsPremultiplied = true;
+  qp.blendMode = blendMode;
+  qp.dstSnapshotTexture = dstSnapshot;
+
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, layer,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+}
+
 void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
                            bool pixelated) {
   if (image.data.empty() || image.width <= 0 || image.height <= 0) {

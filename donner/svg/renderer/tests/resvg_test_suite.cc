@@ -83,19 +83,25 @@ geodeCategoryGate(std::string_view category) {
   // gate here. Individual per-file overrides handle any remaining
   // divergences.
 
-  // Markers: Phase 6.
-  if (category == "painting/marker") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "markers (Geode Phase 6)");
-    };
-  }
+  // Markers: Phase 6. The Geode renderer handles markers as a
+  // side-effect of the driver's marker-rendering traversal (each
+  // marker position becomes a nested `pushTransform` + child subtree
+  // walk through regular fill/stroke/drawImage calls), so the vast
+  // majority of `painting/marker` tests already pass without any
+  // Geode-specific code. The few remaining failures are handled
+  // below as per-file overrides.
+  //
+  // `orient=auto-on-M-L-Z` is the one clear structural gap: a closed
+  // 2-vertex path (line that returns along itself) produces an
+  // ambiguous bisector at the middle vertex and Geode's stroke
+  // outline ends up with dashed-looking artifacts. Disable for now
+  // until the degenerate-bisector case is hardened.
 
-  // Mix-blend-mode and isolation: Phase 9 (compositing).
-  if (category == "painting/mix-blend-mode" || category == "painting/isolation") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "mix-blend-mode / isolation (Geode Phase 9)");
-    };
-  }
+  // Phase 3d implements all 16 W3C Compositing 1 blend modes through
+  // the image_blit pipeline's `blendMode` uniform + dst-snapshot
+  // binding, so `painting/mix-blend-mode` and `painting/isolation`
+  // are no longer wholesale gated here. Per-file overrides handle
+  // any remaining divergences.
 
   return std::nullopt;
 }
@@ -198,36 +204,54 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // `painting/stroke-linejoin/miter` renders 6 stroked polylines with
-  // different `stroke-miterlimit` values. On Geode, the sharp interior
-  // joins where miter-limit falls back to bevel produce ~180 Y-delta
-  // pixels at the tip of the bevel cut vs tiny-skia's reference.
-  // Visual inspection shows the bevel IS applied but its corner is in
-  // a slightly different pixel than tiny-skia — rendering a 1-2 pixel
-  // triangle of stroke in the wrong spot. Not an AA drift; it's a
-  // geometric offset in the miter-to-bevel fallback path of
-  // `Path::strokeToFill`.
-  // TODO(geode): align the bevel-fallback corner computation in
-  // `emitJoin`'s outside-turn branch with tiny-skia's reference.
-  if (category == "painting/stroke-linejoin" && filename == "miter.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "bevel-fallback corner geometry differs from tiny-skia");
-    };
+  // Per-file overrides for `painting/marker` tests where the Geode
+  // output drifts past the default 100-pixel max. These are all
+  // variations on the same marker-edge AA drift / structural gap —
+  // the remaining 57 marker tests pass cleanly so the category-
+  // level gate is lifted:
+  //
+  //   * `default-clip`, `with-a-large-stroke`,
+  //     `with-invalid-markerUnits` — 246 px each, full-colour diffs
+  //     at the marker shape edges (4× MSAA vs tiny-skia 16×
+  //     supersample). Threshold widening doesn't help because the
+  //     diffs are 100% per pixel; disabled until Geode picks up a
+  //     finer sample pattern.
+  //   * `orient=auto-on-M-C-C-4` — 704 px. Marker orientation on
+  //     cubic control points picks a slightly different tangent
+  //     than tiny-skia's reference — structural.
+  //   * `with-an-image-child` — 321 px. Marker contains an `<image>`
+  //     element; combined image-sampling + marker-border drift.
+  //   * `orient=auto-on-M-L-Z` — degenerate bisector on a closed
+  //     2-vertex path; Geode's stroke outline ends up with visible
+  //     artefacts along the line.
+  // TODO(geode): revisit these once either (a) MSAA is upgraded
+  // past 4× or (b) markers get Geode-specific orientation /
+  // closed-path handling.
+  if (category == "painting/marker") {
+    const bool markerDisabled = filename == "default-clip.svg" ||
+                                filename == "with-a-large-stroke.svg" ||
+                                filename == "with-invalid-markerUnits.svg" ||
+                                filename == "orient=auto-on-M-C-C-4.svg" ||
+                                filename == "with-an-image-child.svg" ||
+                                filename == "orient=auto-on-M-L-Z.svg";
+    if (markerDisabled) {
+      return [](ImageComparisonParams& p) {
+        p.disableBackend(RendererBackend::Geode,
+                         "marker AA / structural edge case (Phase 6 follow-up)");
+      };
+    }
   }
 
   // `paint-servers/pattern/tiny-pattern-upscaled` renders a 2×2 tile
   // pattern scaled 10× containing a circle, tiled across a
-  // rounded-rect fill. Geode samples the pre-rendered tile via
-  // bilinear sampling at device pixels; tiny-skia rasterizes the
-  // pattern tile directly in user-space coordinates without going
-  // through an intermediate texture. The intermediate texture
-  // introduces ~3.5k pixels of sub-pixel-position drift at every
-  // circle edge inside the tile, multiplied across ~64 visible
-  // circles. The fix is to sample the pattern in user-space (without
-  // the intermediate tile texture) for the small-tile upscaled case.
-  // TODO(geode): sample the pattern directly in user-space for small
-  // tiles where the tile texture adds more error than it saves.
+  // rounded-rect fill. Geode renders the pattern tile at 20×20 via
+  // 4× MSAA, then the main fill's bilinear sampler averages 2×2
+  // texels per device pixel — effective ~16× AA quality overall, but
+  // with sub-pixel phase that differs from tiny-skia's direct 16×
+  // supersampled fill. The resulting ~512-pixel drift is concentrated
+  // at circle edges — not a structural bug, but skipping the
+  // intermediate texture (direct user-space pattern sampling) would
+  // be a Phase 5 pattern-cache rework. Left disabled until then.
   if (category == "paint-servers/pattern" && filename == "tiny-pattern-upscaled.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,

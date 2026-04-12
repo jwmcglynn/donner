@@ -8,11 +8,13 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
                                        wgpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
-  // Four bindings: uniform buffer, sampler, sampled content texture,
-  // sampled luminance-mask texture. The mask texture is only read
-  // when `uniforms.maskMode != 0`; in normal blit mode a 1x1 dummy
-  // is bound so the layout stays stable.
-  wgpu::BindGroupLayoutEntry entries[4] = {};
+  // Five bindings: uniform buffer, sampler, sampled content texture,
+  // sampled luminance-mask texture (Phase 3c), sampled parent-
+  // snapshot texture (Phase 3d blend modes). The mask and snapshot
+  // textures are only read when their respective uniform flags are
+  // non-zero; in normal blit mode both bind to a 1x1 dummy so the
+  // bind group layout stays stable across every draw.
+  wgpu::BindGroupLayoutEntry entries[5] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -35,9 +37,15 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   entries[3].texture.viewDimension = wgpu::TextureViewDimension::e2D;
   entries[3].texture.multisampled = false;
 
+  entries[4].binding = 4;
+  entries[4].visibility = wgpu::ShaderStage::Fragment;
+  entries[4].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[4].texture.viewDimension = wgpu::TextureViewDimension::e2D;
+  entries[4].texture.multisampled = false;
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = "GeodeImageBlitBGL";
-  bglDesc.entryCount = 4;
+  bglDesc.entryCount = 5;
   bglDesc.entries = entries;
   bindGroupLayout_ = device.CreateBindGroupLayout(&bglDesc);
 
