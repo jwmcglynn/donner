@@ -322,18 +322,19 @@ donner_variant_cc_test(
     # gives plenty of slack without masking real regressions — the
     # actual pass-path runtime is still ~15 min, so a hang would still
     # show up.
+    #
+    # Product tiers:
+    #   tiny         - tiny-skia, no filters, no text  (donner-tiny)
+    #   default_text - tiny-skia, filters, simple text (donner default)
+    #   max          - tiny-skia, filters, full text   (donner-max)
+    #   skia_ref     - skia, filters, full text        (reference renderer)
     size = "enormous",
     dep = ":resvg_test_suite_impl",
-    variants = [
-        [
-            "tiny_skia",
-            "skia",
-            "geode",
-        ],
-        [
-            "text",
-            "text_full",
-        ],
+    named_variants = [
+        {"name": "tiny", "backend": "tiny_skia", "text": "false", "text_full": "false"},
+        {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
+        {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
+        {"name": "skia_ref", "backend": "skia", "text": "true", "text_full": "true"},
     ],
 )
 

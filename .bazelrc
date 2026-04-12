@@ -66,6 +66,12 @@ common:dev --//build_defs:disable_backend_test_transition=true
 # cross-configuration link conflicts.  Use: --config=no-perf-opt
 common:no-perf-opt --//build_defs:disable_perf_opt_transition=true
 
+# Product tiers
+common:tiny --//donner/svg/renderer:filters=false
+# Note: 'text' and 'text-full' configs already exist
+# donner (default) = no extra config needed (filters=true, text=false by default)
+# donner-max = --config=text-full (filters=true, text=true, text_full=true)
+
 # Filter effects
 common:no-filters --//donner/svg/renderer:filters=false
 

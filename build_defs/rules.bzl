@@ -187,6 +187,7 @@ def _multi_transition_impl(settings, attr):
     if settings["//build_defs:disable_backend_test_transition"]:
         return {
             "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
+            "//donner/svg/renderer:text": settings["//donner/svg/renderer:text"],
             "//donner/svg/renderer:text_full": settings["//donner/svg/renderer:text_full"],
             "//donner/svg/renderer/geode:enable_dawn": settings["//donner/svg/renderer/geode:enable_dawn"],
         }
@@ -198,6 +199,7 @@ def _multi_transition_impl(settings, attr):
     # `--config=geode` on the command line.
     return {
         "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
+        "//donner/svg/renderer:text": attr.text == "true" or attr.text_full == "true",
         "//donner/svg/renderer:text_full": attr.text_full == "true",
         "//donner/svg/renderer/geode:enable_dawn": attr.renderer_backend == "geode",
     }
@@ -207,11 +209,13 @@ _multi_transition = transition(
     inputs = [
         "//build_defs:disable_backend_test_transition",
         "//donner/svg/renderer:renderer_backend",
+        "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
         "//donner/svg/renderer/geode:enable_dawn",
     ],
     outputs = [
         "//donner/svg/renderer:renderer_backend",
+        "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
         "//donner/svg/renderer/geode:enable_dawn",
     ],
@@ -230,6 +234,10 @@ donner_multi_transitioned_test = rule(
             mandatory = True,
             values = ["skia", "tiny_skia", "geode"],
         ),
+        "text": attr.string(
+            default = "false",
+            values = ["true", "false"],
+        ),
         "text_full": attr.string(
             default = "false",
             values = ["true", "false"],
@@ -237,39 +245,60 @@ donner_multi_transitioned_test = rule(
     },
 )
 
-def donner_variant_cc_test(name, dep, variants, **kwargs):
+def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **kwargs):
     """
-    Generate test targets for all combinations of variant axes, plus a default
+    Generate test targets for variant configurations, plus a default alias
     that inherits the active command-line config.
+
+    Supports two calling conventions:
+      1. **named_variants** (preferred): A list of dicts, each with keys
+         "name", "backend", and optionally "text" / "text_full".
+      2. **variants** (legacy Cartesian product): A list of axis lists,
+         e.g. [["tiny_skia", "skia"], ["text", "text_full"]].
 
     Args:
       name: Base name for the generated targets.
       dep: The test implementation target (tagged manual).
-      variants: List of variant axis lists, e.g. [["tiny_skia", "skia"], ["text", "text_full"]].
-        First axis is renderer backend. Second axis (optional) is text tier.
+      variants: (legacy) List of variant axis lists.
+      named_variants: List of dicts describing each variant explicitly.
       **kwargs: Additional arguments passed to the generated test rules.
 
     Generated targets:
-      {name}                          - alias to the default (no transition, uses active config)
-      {name}_{backend}_{text_tier}    - explicit variant, e.g. resvg_test_suite_tiny_skia_text_full
+      {name}                  - alias to the default (no transition, uses active config)
+      {name}_{variant_name}   - explicit variant
     """
-    backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
-    text_tiers = variants[1] if len(variants) > 1 else ["text"]
-
-    for backend in backends:
-        for tier in text_tiers:
-            suffix = "{}_{}".format(backend, tier)
-            target_name = "{}_{}".format(name, suffix)
-            text_full_val = "true" if tier == "text_full" else "false"
-
+    if named_variants:
+        for v in named_variants:
+            target_name = "{}_{}".format(name, v["name"])
             donner_multi_transitioned_test(
                 name = target_name,
                 dep = dep,
-                renderer_backend = backend,
-                text_full = text_full_val,
+                renderer_backend = v["backend"],
+                text = v.get("text", "false"),
+                text_full = v.get("text_full", "false"),
                 testonly = 1,
                 **kwargs
             )
+    elif variants:
+        backends = variants[0] if len(variants) > 0 else ["tiny_skia"]
+        text_tiers = variants[1] if len(variants) > 1 else ["text"]
+
+        for backend in backends:
+            for tier in text_tiers:
+                suffix = "{}_{}".format(backend, tier)
+                target_name = "{}_{}".format(name, suffix)
+                text_val = "true" if tier in ["text", "text_full"] else "false"
+                text_full_val = "true" if tier == "text_full" else "false"
+
+                donner_multi_transitioned_test(
+                    name = target_name,
+                    dep = dep,
+                    renderer_backend = backend,
+                    text = text_val,
+                    text_full = text_full_val,
+                    testonly = 1,
+                    **kwargs
+                )
 
     # Default alias: uses no transition, inherits active command-line config.
     native.alias(
