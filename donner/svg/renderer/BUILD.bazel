@@ -309,8 +309,9 @@ donner_cc_library(
     name = "renderer_geode",
     srcs = ["RendererGeode.cc"],
     hdrs = ["RendererGeode.h"],
-    # Geode pulls in Dawn via GeoEncoder. Gate behind the same enable_dawn
-    # build flag that the rest of the geode/ targets use.
+    # Geode pulls in wgpu-native via GeoEncoder. Gate behind the same
+    # enable_dawn build flag (historical name — see the Geode BUILD.bazel
+    # file-level docstring) that the rest of the geode/ targets use.
     target_compatible_with = select({
         "//donner/svg/renderer/geode:dawn_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -326,8 +327,9 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_image_pipeline",
         "//donner/svg/renderer/geode:geode_pipeline",
+        "//donner/svg/renderer/geode:geode_wgpu_util",
         "//donner/svg/resources:image_resource",
-        "@dawn//:webgpu_dawn",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 

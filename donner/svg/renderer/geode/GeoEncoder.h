@@ -2,7 +2,7 @@
 /// @file
 /// Drawing API for the Geode GPU renderer.
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 #include <cstdint>
 #include <memory>

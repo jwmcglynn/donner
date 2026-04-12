@@ -215,15 +215,69 @@ without significant frame rate impact.
 ### WebGPU
 
 WebGPU provides a modern, portable graphics API that abstracts over Vulkan, Metal, and D3D12.
-Using [Dawn](https://dawn.googlesource.com/dawn) (Google's WebGPU implementation) as the
-backend gives us:
+Geode ships against [wgpu-native](https://github.com/gfx-rs/wgpu-native) (the
+Rust `wgpu` crate's C ABI surface) and uses
+[eliemichel/WebGPU-distribution](https://github.com/eliemichel/WebGPU-distribution)'s
+single-header `webgpu.hpp` C++ wrapper for idiomatic RAII handles. This gives us:
 
 - Cross-platform support (Windows, macOS, Linux, Android, iOS, Web via wasm)
 - Modern GPU features (compute shaders for v2 filters, storage buffers)
 - No platform-specific code in the renderer
 - Future path to native Vulkan/Metal for applications that need it
 
-#### Bazel vendoring strategy
+Geode originally embedded Google's Dawn (C++ WebGPU implementation) built from
+source via `rules_foreign_cc`'s `cmake()` rule — see the "Historical: Dawn
+embedding strategy" section below for the design notes and the reason for the
+pivot. Everything user-visible (flag names, WGSL shaders, ECS integration)
+carried over unchanged; only the native vendoring path moved from a
+cmake-from-source build to a prebuilt-binary drop.
+
+#### Bazel vendoring strategy (wgpu-native)
+
+wgpu-native publishes pre-built release archives on its GitHub Releases page
+for `{linux, macos, windows} × {x86_64, aarch64}`. We consume those directly
+via `http_archive`: one repository per platform tuple, each carrying an
+overlay `BUILD.wgpu_native_platform` file that exposes
+`lib/libwgpu_native.{so,dylib}` plus the `include/webgpu/{webgpu,wgpu}.h`
+headers as a single `cc_library`. `//third_party/webgpu-cpp` then `select()`s
+the matching archive for the current `(os, cpu)` and aggregates the C
+headers with the vendored `webgpu.hpp` C++ wrapper into one consumable
+`//third_party/webgpu-cpp:webgpu_cpp` target.
+
+Pins (see `//third_party/bazel/non_bcr_deps.bzl`):
+
+- `wgpu-native` tag `v24.0.3.1` — the vendored `webgpu.hpp` tracks the v24
+  C API shape (see `wgpu-native-git-tag.txt` in the upstream distribution).
+  Bumping past v24 requires regenerating `webgpu.hpp` from the matching
+  `wgpu-native` schema.
+- SHAs for each zip are captured inline. Refresh them with `shasum -a 256`
+  against the release asset when bumping.
+
+This is opt-in: Geode's entire directory is gated behind
+`--//donner/svg/renderer/geode:enable_dawn=true` (default: false; flag name
+is historical — kept stable to avoid churning command-line invocations).
+Default `bazel test //...` never fetches wgpu-native, so contributors not
+working on Geode pay zero time/disk cost for WebGPU.
+
+**Fetch + build time:** the `http_archive` is a ~12 MB download; there is no
+compile step on the critical path. On a cold GitHub Actions cache the
+Dawn-from-source build previously cost ~1 h 45 m — the wgpu-native drop
+completes in seconds. Incremental Geode edits recompile only the `donner/`
+sources that include `webgpu.hpp`.
+
+**On-disk layout:** each archive unzips to
+`include/webgpu/{webgpu,wgpu}.h` plus `lib/libwgpu_native.{so,dylib,a}`
+plus an unused `wgpu-native-meta/webgpu.yml` schema file. The overlay BUILD
+file uses `glob(..., allow_empty = True)` so the same file works cleanly
+across all four per-platform archives (each archive only carries the
+`{.so, .dylib}` appropriate for its own platform; the glob is a no-op on
+the other three).
+
+#### Historical: Dawn embedding strategy
+
+The following notes describe the original Dawn path and are retained for
+historical context. Everything below was replaced by the wgpu-native swap
+described above.
 
 Dawn does not publish itself to the Bazel Central Registry, and Dawn's upstream
 `BUILD.bazel` only covers Tint (the WGSL compiler). The actual WebGPU native
@@ -232,47 +286,36 @@ implementation has zero Bazel files — upstream's own `WORKSPACE.bazel` says:
 > NOTE: The Bazel build is best-effort and currently only support Tint
 > targets. There is no support for Dawn targets at this time.
 
-After surveying community projects, **every existing Dawn embedding goes
-through CMake**. We use `rules_foreign_cc`'s `cmake()` rule to drive Dawn's
+After surveying community projects, every existing Dawn embedding goes
+through CMake. We used `rules_foreign_cc`'s `cmake()` rule to drive Dawn's
 upstream CMake build from inside Bazel. The full pipeline:
 
-1. **Repository fetch**: `new_git_repository` clones a pinned Dawn commit.
-2. **Dependency population**: `patch_cmds` runs `tools/fetch_dawn_dependencies.py`
-   at fetch time. This Python script is Dawn's lightweight alternative to
-   depot_tools — it parses `DEPS` files and shallow-clones Abseil, SPIRV-Tools,
+1. **Repository fetch**: `new_git_repository` cloned a pinned Dawn commit.
+2. **Dependency population**: `patch_cmds` ran `tools/fetch_dawn_dependencies.py`
+   at fetch time. This Python script was Dawn's lightweight alternative to
+   depot_tools — it parsed `DEPS` files and shallow-cloned Abseil, SPIRV-Tools,
    Vulkan-Headers, etc. into `third_party/`. Unlike the build sandbox, the
-   fetch phase has network access.
-3. **Bazel package flattening**: `patch_cmds` strips nested `.git` directories
-   and nested `BUILD.bazel` files throughout the tree. This is critical —
-   Tint's upstream Bazel support ships 114+ `BUILD.bazel` files under
-   `src/tint`, and cloned submodules like Abseil have their own too. Every
-   nested `BUILD.bazel` creates a Bazel package boundary that `glob(["**"])`
-   stops recursing at, making the affected subdirectories invisible to the
-   `rules_foreign_cc` filegroup.
-4. **Monolithic CMake build**: `cmake()` configures Dawn with
+   fetch phase had network access.
+3. **Bazel package flattening**: `patch_cmds` stripped nested `.git` directories
+   and nested `BUILD.bazel` files throughout the tree. This was critical —
+   Tint's upstream Bazel support shipped 114+ `BUILD.bazel` files under
+   `src/tint`, and cloned submodules like Abseil had their own too. Every
+   nested `BUILD.bazel` created a Bazel package boundary that `glob(["**"])`
+   stopped recursing at.
+4. **Monolithic CMake build**: `cmake()` configured Dawn with
    `DAWN_BUILD_MONOLITHIC_LIBRARY=SHARED` → a single `libwebgpu_dawn.dylib`
    (~10 MB on macOS) containing Dawn native, Tint, Abseil, and SPIRV-Tools
-   with hidden internal symbols. This avoids ODR/ABI clashes with other
-   project dependencies and simplifies the consumer's link step.
-5. **Framework linkopts**: Metal/Foundation/QuartzCore/etc. linkopts live on
-   the **consuming `cc_library`**, not on the `cmake()` rule. Adding them to
-   the `cmake()` rule makes `rules_foreign_cc` apply them during Dawn's own
-   compiler-test step and breaks the build with "unknown argument:
-   `-framework Metal`".
+   with hidden internal symbols. This avoided ODR/ABI clashes with other
+   project dependencies.
+5. **Framework linkopts**: Metal/Foundation/QuartzCore/etc. linkopts lived on
+   the consuming `cc_library`, not on the `cmake()` rule.
 
-This is opt-in: Geode's entire directory is gated behind
-`--//donner/svg/renderer/geode:enable_dawn=true` (default: false). Default
-`bazel test //...` never builds Dawn, so existing CI and contributors not
-working on Geode pay zero time/disk cost for WebGPU.
-
-**Build time:** ~4.5 min clean on macOS arm64 via Bazel (vs ~7 min standalone
-CMake — Bazel's parallelism tuning is slightly better). Incremental rebuilds
-of downstream Geode code do not rebuild Dawn.
-
-**Future pivot**: if `rules_foreign_cc` friction becomes painful, the
-fallback is to vendor a prebuilt monolithic `libwebgpu_dawn` per platform
-and wrap it with `http_archive` + `cc_import`. This loses reproducibility
-benefits but avoids the nested-BUILD-file hackery.
+**Why we pivoted:** clean `bazel fetch //...` on a cold GitHub Actions cache
+was consistently ~1 h 45 m — the CMake test-compile alone was ~8 min, Dawn
+codegen ~25 min, Abseil ~20 min, and the linker pass ~5 min. The CI budget
+for the Geode backend was 30 min, so the from-source path was untenable.
+Swapping to wgpu-native's prebuilt `.so` / `.dylib` releases dropped the
+critical path to a ~12 MB download with no compile step.
 
 ## Proposed Architecture
 

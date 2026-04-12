@@ -2,7 +2,7 @@
 /// @file
 /// Render pipeline for the image-blit shader (textured quad).
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 namespace donner::geode {
 

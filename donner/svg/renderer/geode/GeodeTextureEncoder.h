@@ -2,7 +2,7 @@
 /// @file
 /// Reusable GPU texture upload + textured-quad draw helpers for Geode.
 
-#include <webgpu/webgpu_cpp.h>
+#include <webgpu/webgpu.hpp>
 
 #include <cstdint>
 #include <optional>

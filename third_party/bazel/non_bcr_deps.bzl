@@ -11,7 +11,7 @@ shipped over BCR:
 - skia            : Skia renderer backend       (--config=skia)
 - harfbuzz        : Text shaping                (--config=text-full)
 - woff2           : WOFF2 font format           (--config=text-full)
-- dawn            : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_dawn=true)
+- wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_dawn=true)
 - tracy           : In-process profiling client (//donner/editor only — see check_banned_patterns.py)
 - resvg-test-suite: Reference SVG goldens       (image comparison tests)
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
@@ -32,6 +32,7 @@ BCR versus what stays behind `git_override`.
 """
 
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_repository")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 def _non_bcr_deps_impl(_mctx):
     # Skia renderer backend. Gated on //donner/svg/renderer:renderer_backend_skia.
@@ -77,38 +78,58 @@ HBEOF""",
         ],
     )
 
-    # Dawn (WebGPU implementation) for the Geode GPU renderer.
-    # Only fetched when --//donner/svg/renderer/geode:enable_dawn=true.
-    # `patch_cmds` runs `fetch_dawn_dependencies.py` at repository fetch time
-    # (which has network access) to populate third_party/ submodules, so the
-    # downstream CMake build can run with DAWN_FETCH_DEPENDENCIES=OFF inside
-    # Bazel's sandbox.
-    new_git_repository(
-        name = "dawn",
-        build_file = "//third_party:BUILD.dawn",
-        # Pinned to a specific commit for reproducibility. Bump deliberately.
-        # From v20260403.135149 (2026-04-03).
-        commit = "fa93dacdf3931ec29ff8f42facf51db632c45308",
-        remote = "https://dawn.googlesource.com/dawn",
-        patch_cmds = [
-            "python3 tools/fetch_dawn_dependencies.py",
-            # Strip nested .git directories so Bazel's file tracking sees the
-            # submodule contents as regular source files.
-            "find third_party -name .git -type d -exec rm -rf {} + 2>/dev/null || true",
-            # Strip nested BUILD.bazel/BUILD/WORKSPACE files throughout the tree.
-            # Otherwise they create Bazel package boundaries and glob(['**']) stops
-            # recursing, leaving CMake unable to find many source subdirectories.
-            # Dawn has ~114 BUILD.bazel files under src/tint alone (Tint's upstream
-            # Bazel support for WGSL parsing), plus more in third_party submodules.
-            # The root BUILD file is provided by our overlay so the top-level one
-            # is not needed.
-            "find . -mindepth 2 \\( -name BUILD.bazel -o -name BUILD -o -name WORKSPACE -o -name WORKSPACE.bazel -o -name MODULE.bazel \\) -type f -delete 2>/dev/null || true",
-            # Remove the top-level WORKSPACE/MODULE files that Dawn ships with.
-            # (Keep our BUILD.bazel overlay which is placed at the root by Bazel's
-            # new_git_repository build_file attribute — don't remove that one.)
-            "rm -f WORKSPACE WORKSPACE.bazel MODULE.bazel",
-        ],
-    )
+    # wgpu-native (Rust/wgpu-based WebGPU implementation) for the Geode GPU
+    # renderer. Only fetched when
+    # --//donner/svg/renderer/geode:enable_dawn=true (the flag name is
+    # historical; it now selects wgpu-native, not Dawn).
+    #
+    # Previous iteration built Dawn from source via rules_foreign_cc's cmake()
+    # rule. On GitHub Actions that took ~1 h 45 m per run — too slow for the
+    # interactive merge cycle. Swapping to a pre-built wgpu-native tarball
+    # drops the "build Dawn" critical path to a ~12 MB download (single
+    # shared library + two headers), measured in seconds.
+    #
+    # One http_archive per supported (os, cpu) tuple; the wgpu_native alias
+    # in third_party/BUILD.wgpu_native picks the right one via `select()`.
+    # Tag `v24.0.3.1` is pinned because eliemichel/WebGPU-distribution's
+    # vendored `webgpu.hpp` tracks wgpu-native's v24 C API (see
+    # `wgpu-native-git-tag.txt` in their repo). Bumping wgpu-native past
+    # v24 needs a matching `webgpu.hpp` regeneration; bump deliberately.
+    # To refresh shasums, run `shasum -a 256` against the release zip and
+    # paste the result into the `sha256` below.
+    _WGPU_NATIVE_VERSION = "v24.0.3.1"
+    _WGPU_NATIVE_PLATFORMS = [
+        struct(
+            name = "wgpu_native_linux_x86_64",
+            asset = "wgpu-linux-x86_64-release.zip",
+            sha256 = "86f3eb9f74d7f1ac82ee52d9b2ab15e366ef86a932759c750b7472652836ee59",
+        ),
+        struct(
+            name = "wgpu_native_linux_aarch64",
+            asset = "wgpu-linux-aarch64-release.zip",
+            sha256 = "97786f622d6d4f9aaa87c27d165de8db65daf1d391e0bcc32a2dd9bb45fcd299",
+        ),
+        struct(
+            name = "wgpu_native_macos_aarch64",
+            asset = "wgpu-macos-aarch64-release.zip",
+            sha256 = "f140ff27234ebfa9fcca2b492d0cb499f2e197424b9edc45134bcbad0f8d3a78",
+        ),
+        struct(
+            name = "wgpu_native_macos_x86_64",
+            asset = "wgpu-macos-x86_64-release.zip",
+            sha256 = "1fbc6930e2811b7fde7f046e5300ae5dc20c451d0c3e42a10ff71efae1f565ac",
+        ),
+    ]
+    for p in _WGPU_NATIVE_PLATFORMS:
+        http_archive(
+            name = p.name,
+            url = "https://github.com/gfx-rs/wgpu-native/releases/download/{}/{}".format(
+                _WGPU_NATIVE_VERSION,
+                p.asset,
+            ),
+            sha256 = p.sha256,
+            build_file = "//third_party:BUILD.wgpu_native_platform",
+        )
 
     # Tracy in-process profiler. Only consumed under //donner/editor/...
     # Donner uses a custom BUILD file (third_party/BUILD.tracy) because Tracy
