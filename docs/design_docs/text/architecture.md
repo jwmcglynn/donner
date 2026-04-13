@@ -1,10 +1,10 @@
 # Text Rendering: Architecture
 
-[Back to hub](../text_rendering.md)
+[Back to hub](../0010-text_rendering.md)
 
 > Historical note: this document captures the original dependency evaluation and phased design
 > before the `TextEngine` / `TextBackend` refactor landed. The current shipped architecture is
-> summarized in [the hub](../text_rendering.md) and documented in
+> summarized in [the hub](../0010-text_rendering.md) and documented in
 > [text_backend_refactor.md](text_backend_refactor.md).
 
 ## Dependency Evaluation

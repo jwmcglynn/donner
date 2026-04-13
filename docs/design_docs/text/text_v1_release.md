@@ -1,6 +1,6 @@
 # Text v1 Release
 
-[Back to hub](../text_rendering.md)
+[Back to hub](../0010-text_rendering.md)
 
 **Status:** Shipped
 

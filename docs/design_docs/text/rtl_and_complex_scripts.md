@@ -1,6 +1,6 @@
 # Text Rendering: RTL Text and Complex Scripts
 
-[Back to hub](../text_rendering.md)
+[Back to hub](../0010-text_rendering.md)
 
 ## RTL Text and Complex Scripts (Phase 7) {#rtl}
 
@@ -77,7 +77,7 @@ glyphs in visual (LTR) order, but the y values should be applied in DOM order pe
 ## Color Emoji (Phase 8) {#color-emoji}
 
 **Status:** Implemented (text-full only)
-**See also:** [color_emoji.md](../color_emoji.md)
+**See also:** [0006-color_emoji.md](../0006-color_emoji.md)
 
 CBDT/CBLC color bitmap emoji support via FreeType. Enabled by adding libpng to the FreeType build
 via `single_version_override` patches. Key components:
