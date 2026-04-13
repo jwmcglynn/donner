@@ -143,6 +143,18 @@ private:
   CompositorLayer* findLayer(Entity entity);
   const CompositorLayer* findLayer(Entity entity) const;
 
+  /// Rasterize a single promoted layer into its bitmap cache.
+  void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport);
+
+  /// Rasterize the root layer (full document render for v1).
+  void rasterizeRootLayer(const RenderViewport& viewport);
+
+  /// Compose all layers onto the main render target.
+  void composeLayers(const RenderViewport& viewport);
+
+  /// Check dirty flags on promoted entities and mark affected layers.
+  void consumeDirtyFlags();
+
   /// Compute the entity range for a promoted entity.
   static std::pair<Entity, Entity> computeEntityRange(Registry& registry, Entity entity);
 

@@ -18,6 +18,8 @@ donner_cc_library(
         "//donner/svg/components",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_utils",
+        "//donner/svg/resources:image_resource",
     ],
 )
 

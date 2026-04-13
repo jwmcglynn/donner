@@ -1,11 +1,15 @@
 #include "donner/svg/compositor/CompositorController.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "donner/base/Utils.h"
 #include "donner/svg/compositor/LayerMembershipComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg::compositor {
 
@@ -93,15 +97,35 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
-  // Skeleton implementation: full re-render every frame via RendererDriver.
-  // The compositing fast path (layer caching + bitmap composition) is added in a later commit.
-  RendererDriver driver(*renderer_);
-  driver.draw(*document_);
-
-  rootDirty_ = false;
-  for (auto& layer : layers_) {
-    layer.clearDirty();
+  // If no promoted layers, take the simple full-render path.
+  if (layers_.empty()) {
+    RendererDriver driver(*renderer_);
+    driver.draw(*document_);
+    rootDirty_ = false;
+    return;
   }
+
+  // Prepare the document (styles, layout, render tree).
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(*document_, /*verbose=*/false, warningSink);
+
+  // Check dirty flags on promoted entities.
+  consumeDirtyFlags();
+
+  // Re-rasterize dirty promoted layers.
+  for (auto& layer : layers_) {
+    if (layer.isDirty() || !layer.hasValidBitmap()) {
+      rasterizeLayer(layer, viewport);
+    }
+  }
+
+  // Re-rasterize root layer if dirty.
+  if (rootDirty_ || rootBitmap_.empty()) {
+    rasterizeRootLayer(viewport);
+  }
+
+  // Compose all layers onto the main target.
+  composeLayers(viewport);
 }
 
 size_t CompositorController::layerCount() const {
@@ -128,6 +152,129 @@ const CompositorLayer* CompositorController::findLayer(Entity entity) const {
     return layer.entity() == entity;
   });
   return it != layers_.end() ? &(*it) : nullptr;
+}
+
+void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport) {
+  auto offscreen = renderer_->createOffscreenInstance();
+  if (!offscreen) {
+    // Backend doesn't support offscreen rendering. Fall back: rasterize via the main renderer
+    // using drawEntityRange, which produces the layer bitmap but ties up the main target.
+    layer.clearDirty();
+    return;
+  }
+
+  Registry& registry = document_->registry();
+
+  RendererDriver driver(*offscreen);
+  driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), viewport,
+                         Transform2d());
+
+  layer.setBitmap(offscreen->takeSnapshot());
+}
+
+void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
+  // V1 approach: render the full document into the root layer bitmap.
+  // Promoted entities are included in the root (overdrawn by promoted layer bitmaps during
+  // composition). This is correct because promoted layers are composited ON TOP with their
+  // composition transforms; the root copy at the original position is hidden under the
+  // promoted layer's bitmap at the same position (identity composition transform means exact
+  // overlap, translation means the promoted layer moves and the root shows the "hole").
+  //
+  // For correct hole-punching, v2 will skip promoted entity ranges from the root. For v1,
+  // the overlapping approach works when the promoted layer's opacity is 1.0.
+  auto offscreen = renderer_->createOffscreenInstance();
+  if (offscreen) {
+    RendererDriver driver(*offscreen);
+    driver.draw(*document_);
+    rootBitmap_ = offscreen->takeSnapshot();
+  } else {
+    // No offscreen support — render directly and snapshot.
+    RendererDriver driver(*renderer_);
+    driver.draw(*document_);
+    rootBitmap_ = renderer_->takeSnapshot();
+  }
+
+  rootDirty_ = false;
+}
+
+void CompositorController::composeLayers(const RenderViewport& viewport) {
+  renderer_->beginFrame(viewport);
+
+  // Blit the root layer bitmap.
+  if (!rootBitmap_.empty()) {
+    ImageResource rootImage;
+    rootImage.data = rootBitmap_.pixels;
+    rootImage.width = rootBitmap_.dimensions.x;
+    rootImage.height = rootBitmap_.dimensions.y;
+
+    ImageParams params;
+    params.targetRect =
+        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(rootBitmap_.dimensions.x),
+                                         static_cast<double>(rootBitmap_.dimensions.y)));
+
+    renderer_->setTransform(Transform2d());
+    renderer_->drawImage(rootImage, params);
+  }
+
+  // Blit each promoted layer with its composition transform.
+  for (const auto& layer : layers_) {
+    if (!layer.hasValidBitmap()) {
+      continue;
+    }
+
+    const RendererBitmap& bitmap = layer.bitmap();
+    ImageResource layerImage;
+    layerImage.data = bitmap.pixels;
+    layerImage.width = bitmap.dimensions.x;
+    layerImage.height = bitmap.dimensions.y;
+
+    ImageParams params;
+    params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
+                                                         static_cast<double>(bitmap.dimensions.y)));
+
+    // Apply composition transform with integer-pixel snap for translations.
+    Transform2d compositionTransform = layer.compositionTransform();
+    if (compositionTransform.isTranslation()) {
+      Vector2d t = compositionTransform.translation();
+      compositionTransform = Transform2d::Translate(std::round(t.x), std::round(t.y));
+    }
+
+    renderer_->setTransform(compositionTransform);
+    renderer_->drawImage(layerImage, params);
+  }
+
+  renderer_->endFrame();
+}
+
+void CompositorController::consumeDirtyFlags() {
+  Registry& registry = document_->registry();
+
+  auto view = registry.view<components::DirtyFlagsComponent>();
+  for (auto& layer : layers_) {
+    if (!registry.valid(layer.entity())) {
+      layer.markDirty();
+      continue;
+    }
+
+    if (view.contains(layer.entity())) {
+      const auto& dirty = view.get<components::DirtyFlagsComponent>(layer.entity());
+      if (dirty.flags != components::DirtyFlagsComponent::Flags::None) {
+        layer.markDirty();
+        rootDirty_ = true;
+      }
+    }
+  }
+
+  // Global render tree state.
+  if (registry.ctx().contains<components::RenderTreeState>()) {
+    auto& state = registry.ctx().get<components::RenderTreeState>();
+    if (state.needsFullRebuild) {
+      rootDirty_ = true;
+      for (auto& layer : layers_) {
+        layer.markDirty();
+      }
+    }
+  }
 }
 
 std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& registry,
