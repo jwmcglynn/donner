@@ -5,7 +5,7 @@ verify that well-formed SVG round-trips to a PNG, and — critically — verify
 the host survives adversarial input that crashes the child.
 """
 
-load("//build_defs:rules.bzl", "donner_cc_test", "renderer_backend_compatible_with")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_test", "renderer_backend_compatible_with")
 
 donner_cc_test(
     name = "sandbox_host_tests",
@@ -110,6 +110,18 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:renderer_tiny_skia",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "sandbox_wire_fuzzer",
+    srcs = ["SandboxWire_fuzzer.cc"],
+    corpus = "sandbox_wire_corpus",
+    deps = [
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/sandbox:wire",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
     ],
 )
 
