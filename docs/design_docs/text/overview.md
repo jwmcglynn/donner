@@ -1,6 +1,6 @@
 # Text Rendering: Overview
 
-[Back to hub](../text_rendering.md)
+[Back to hub](../0010-text_rendering.md)
 
 **Status:** Implemented (base + text_full tiers)
 **Author:** Claude Opus 4.6

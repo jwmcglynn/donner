@@ -1,6 +1,6 @@
 # Text Backend Refactor: TextBackend Abstraction
 
-[Back to hub](../text_rendering.md)
+[Back to hub](../0010-text_rendering.md)
 
 **Status:** Implemented
 **Author:** Claude Opus 4.6
@@ -592,7 +592,7 @@ on the text root entity. Font property changes (family, size, weight, style, str
 cascade through the style system and are handled by the full render tree rebuild path.
 
 This integrates with the existing incremental invalidation system (see
-[incremental_invalidation.md](../incremental_invalidation.md)).
+[0005-incremental_invalidation.md](../0005-incremental_invalidation.md)).
 
 ### Renderer integration
 

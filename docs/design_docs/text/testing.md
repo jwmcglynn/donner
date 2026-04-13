@@ -1,6 +1,6 @@
 # Text Rendering: Testing and Validation
 
-[Back to hub](../text_rendering.md)
+[Back to hub](../0010-text_rendering.md)
 
 ## Testing and Validation
 
