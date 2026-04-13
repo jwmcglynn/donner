@@ -1,5 +1,3 @@
-import { renderSvgAsync as mockRenderSvgAsync, getLastError as mockGetLastError } from "./mock_donner";
-
 // Acquire the VS Code webview API.
 const vscode = acquireVsCodeApi();
 
@@ -104,15 +102,18 @@ async function tryLoadWasm(): Promise<boolean> {
     init();
     return true;
   } catch {
-    // WASM not available — fall back to mock renderer.
+    // WASM not available — rendering will fail closed.
     wasmModule = null;
     return false;
   }
 }
 
 /**
- * Renders SVG text via the real WASM module if loaded, otherwise delegates to
- * the browser-based mock renderer.
+ * Renders SVG text via the real WASM module. Fails closed if WASM isn't
+ * loaded — we deliberately do not ship a browser-native SVG fallback, because
+ * untrusted SVG through DOMParser is an XSS vector inside the webview (the
+ * whole point of Donner here is that WASM renders safely without executing
+ * script content).
  */
 async function renderSvg(
   svgText: string,
@@ -123,25 +124,27 @@ async function renderSvg(
   const cappedWidth = Math.min(Math.max(1, Math.round(width)), MAX_DIM);
   const cappedHeight = Math.min(Math.max(1, Math.round(height)), MAX_DIM);
 
-  if (wasmModule && wasmRenderSvg && wasmFreePixels && wasmGetLastError) {
-    const ptr = wasmRenderSvg(svgText, cappedWidth, cappedHeight);
-    if (ptr === 0) {
-      return { imageData: null, error: wasmGetLastError() || "Unknown rendering error" };
-    }
-    const numBytes = cappedWidth * cappedHeight * 4;
-    const pixels = new Uint8ClampedArray(wasmModule.HEAPU8.buffer, ptr, numBytes);
-    // Copy before freeing the WASM-side buffer.
-    const imageData = new ImageData(new Uint8ClampedArray(pixels), cappedWidth, cappedHeight);
-    wasmFreePixels(ptr);
-    return { imageData, error: "" };
+  if (!(wasmModule && wasmRenderSvg && wasmFreePixels && wasmGetLastError)) {
+    return {
+      imageData: null,
+      error: "Donner WASM renderer is not loaded. Reload the preview to retry.",
+    };
   }
 
-  // Fallback: mock renderer (browser-native SVG rasterisation).
-  const imageData = await mockRenderSvgAsync(svgText, cappedWidth, cappedHeight);
-  return { imageData, error: imageData ? "" : mockGetLastError() || "Unknown rendering error" };
+  const ptr = wasmRenderSvg(svgText, cappedWidth, cappedHeight);
+  if (ptr === 0) {
+    return { imageData: null, error: wasmGetLastError() || "Unknown rendering error" };
+  }
+  const numBytes = cappedWidth * cappedHeight * 4;
+  const pixels = new Uint8ClampedArray(wasmModule.HEAPU8.buffer, ptr, numBytes);
+  // Copy before freeing the WASM-side buffer.
+  const imageData = new ImageData(new Uint8ClampedArray(pixels), cappedWidth, cappedHeight);
+  wasmFreePixels(ptr);
+  return { imageData, error: "" };
 }
 
-// Kick off WASM loading immediately; rendering works either way.
+// Kick off WASM loading immediately. Rendering requires it; if it fails to
+// load the renderSvg() path will return an error.
 tryLoadWasm().catch(() => {
   /* non-fatal */
 });

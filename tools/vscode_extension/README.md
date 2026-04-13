@@ -77,8 +77,10 @@ interface DonnerWasm {
 }
 ```
 
-The mock module (`webview/mock_donner.ts`) provides the same API surface using
-the browser's native `<img>` SVG rendering as a fallback.
+If the WASM module fails to load, the preview fails closed and displays a
+reload prompt. There is no fallback path through `DOMParser` or `<img>` — the
+whole point of rendering through Donner is that untrusted SVG never touches a
+script-capable parser inside the webview.
 
 ## Controls
 
