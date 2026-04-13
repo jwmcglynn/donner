@@ -94,7 +94,7 @@ Existing fuzzers (`find . -name "*_fuzzer.cc"`):
 - macOS needs `--config=asan-fuzzer` (LLVM 21 toolchain; Apple Clang lacks `libclang_rt.fuzzer_osx.a`).
 - Every crash becomes a corpus entry before the fix is merged. No exceptions.
 - Timeouts in fuzzers are real bugs — they represent DoS vectors. Never raise a timeout to "make the fuzzer happy".
-- Continuous fuzzing: see `docs/design_docs/continuous_fuzzing.md`. Ongoing coverage is what catches regressions that slip past the initial fuzz runs.
+- Continuous fuzzing: see `docs/design_docs/0012-continuous_fuzzing.md`. Ongoing coverage is what catches regressions that slip past the initial fuzz runs.
 
 ## Review checklist — what you look for
 

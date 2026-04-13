@@ -3,7 +3,7 @@
 /// `sandbox_inspect` — loads a `.rnr` recording and prints the decoded
 /// command stream as an indented text table. It's the text-mode version of
 /// the eventual ImGui frame inspector panel described in
-/// `docs/design_docs/editor_sandbox.md` S4, and usable today for debugging
+/// `docs/design_docs/0023-editor_sandbox.md` S4, and usable today for debugging
 /// and bug reports even before the editor UI lands.
 ///
 /// Usage:

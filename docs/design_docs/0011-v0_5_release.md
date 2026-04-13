@@ -205,7 +205,7 @@ Create and refresh examples used during release prep.
 
 Implement the v0.5 subset of computed-tree invalidation so unchanged documents can skip
 recomputation and DOM mutations carry precise dirty metadata. Detailed design in
-[incremental_invalidation.md](incremental_invalidation.md).
+[incremental_invalidation.md](./0005-incremental_invalidation.md).
 
 - [x] **DirtyFlagsComponent** — Per-entity dirty flags (Style, Layout, Transform,
   WorldTransform, Shape, Paint, Filter, RenderInstance, ShadowTree) with compound flags for
@@ -258,7 +258,7 @@ architectural uint8 quantization.
 ### Phase 11: `&lt;textPath&gt;` Implementation
 
 Implement `&lt;textPath&gt;` element support for text rendered along arbitrary paths.
-Detailed design in [text_rendering.md](text_rendering.md).
+Detailed design in [text_rendering.md](./0010-text_rendering.md).
 
 - [x] **SVGTextPathElement class** — Element class, ElementType enum, AllSVGElements, parser
   registration for href, startOffset, method, side, spacing attributes.
@@ -323,14 +323,31 @@ Correct mask luminance composition when a `<mask>` element has its own `mask=` a
 
 ### Phase 14: Release
 
+The release is cut in this exact order — **the build report commit is the commit
+that gets tagged**, so every other code change must already be on `main` before
+the build report lands:
+
+1. Every other release-blocking code change merges to `main` first.
+2. `RELEASE_NOTES.md` is updated on `main` with the final highlights for this
+   version (this is a normal commit, not the tagged one).
+3. **As the last commit**, regenerate `docs/build_report.md` against a clean
+   tree and commit it as a dedicated release commit (e.g.
+   `Release v0.5.0: regenerate build report`). Nothing else goes in that
+   commit.
+4. Tag `v0.5.0` points at the build-report commit. Any code fix discovered
+   after that point is a v0.5.1 concern, not a retroactive tag move.
+
 - [ ] **Final pre-release validation** — Warning-clean build, Doxygen warning-free, full Bazel
   test matrix across default/Skia/text-full, and final CI verification on the release commit.
 - [x] **Release notes drafted** — `RELEASE_NOTES.md` contains a `v0.5.0` entry with highlights,
   breaking changes, included artifacts, and example usage.
-- [ ] **Generate build report** — Regenerate `docs/build_report.md` with Skia/tiny-skia
-  differentiation and check it in on the final pre-release commit.
-- [ ] **Create release tag and publish** — Create and push `v0.5.0`, then create the GitHub
-  release using the `RELEASE_NOTES.md` entry as the body.
+- [ ] **Update release notes with final highlights** — Fold anything merged to `main` since the
+  drafted entry into `RELEASE_NOTES.md`. This commit must land **before** the build-report commit.
+- [ ] **Generate build report as the release commit** — After every other release-blocking change
+  is on `main`, regenerate `docs/build_report.md` with Skia/tiny-skia differentiation and commit
+  it as the tagged release commit (nothing else in that commit).
+- [ ] **Create release tag and publish** — Tag `v0.5.0` on the build-report commit and create the
+  GitHub release using the `RELEASE_NOTES.md` entry as the body.
 - [ ] **Verify release artifacts** — Confirm the GitHub release shows the correct tag, release
   notes, and attached linux/macos binaries from `release.yml`.
 - [ ] **Post-release follow-up** — Update `ProjectRoadmap.md` and announce the release.
@@ -376,13 +393,24 @@ Copied from [release_checklist.md](../release_checklist.md) and filled in for v0
 
 ### Final Commit
 
-- [ ] **Generate build report** — `docs/build_report.md` exists, but it has not been regenerated
-  with the v0.5 backend differentiation work.
-- [ ] **CI green** — Final release-commit CI verification is still pending.
+The build report is the last commit that lands before the tag. It must happen
+**after** every other blocking fix and **after** the release-notes update, and
+it must be its own dedicated commit — the tagged commit is the build-report
+commit, nothing else.
+
+- [ ] **All other blocking changes merged to `main`** — every release-blocking code change
+  and the final `RELEASE_NOTES.md` update are already on `main` before the build report commit
+  is prepared.
+- [ ] **Generate build report** — Regenerate `docs/build_report.md` against a clean tree with
+  Skia/tiny-skia backend differentiation. Commit it on `main` as the dedicated release commit
+  (e.g. `Release v0.5.0: regenerate build report`). Nothing else goes in this commit.
+- [ ] **CI green on the build-report commit** — Final release-commit CI verification on the
+  commit that will be tagged.
 
 ### Release
 
-- [ ] **Create release tag** — `git tag -a v0.5.0 -m "Donner SVG v0.5.0"` on the final commit.
+- [ ] **Create release tag** — `git tag -a v0.5.0 -m "Donner SVG v0.5.0"` on the build-report
+  commit.
 - [ ] **Push tag** — `git push origin v0.5.0`.
 - [ ] **Create GitHub Release** — Use `gh release create` with the `RELEASE_NOTES.md` entry as the
   body.

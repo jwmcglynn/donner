@@ -5,7 +5,7 @@
 /// This is the **skeleton** stage of the Geode backend: only solid-color path
 /// fills round-trip through the GPU pipeline. Stroke, gradient, pattern,
 /// image, text, clip, mask, layer, and filter operations are stubbed and will
-/// land in later phases (see `docs/design_docs/geode_renderer.md`).
+/// land in later phases (see `docs/design_docs/0017-geode_renderer.md`).
 
 #include <cstdint>
 #include <memory>

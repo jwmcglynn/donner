@@ -18,9 +18,14 @@ primitives, and a CLI tool — while maintaining the existing Skia backend.
   filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.) also supported.
 - **tiny-skia software renderer** — A new default rendering backend written in C++ that requires no
   external GPU libraries. Achieves performance within 1.5x of Skia across all rendering operations.
-  The Skia backend remains available as a build option.
+  The Skia backend remains available as a build option. A vectorized WASM SIMD128 backend ships
+  alongside the existing ARM NEON / x86 AVX2 / scalar paths and is selected automatically when
+  Donner is compiled with Emscripten's `-msimd128`.
 - **`donner-svg` CLI tool** — Render SVGs to PNG, preview in the terminal, or interactively
   inspect elements with mouse selection.
+- **WebAssembly build** — Donner's renderer and parser now build through the Emscripten toolchain
+  via `bazel build --config=wasm //...`, with an `examples/svg_viewer` demo that parses and
+  renders SVGs entirely in the browser using ImGui + emscripten-glfw.
 
 ### What's Changed
 
@@ -31,12 +36,39 @@ primitives, and a CLI tool — while maintaining the existing Skia backend.
 - **External SVG references** — `<image>` and `<use>` elements can reference external `.svg` files
   with sandboxed resource loading.
 - **`<clipPath>` `<use>` support** — `<use>` children inside `<clipPath>` now resolve correctly.
+- **`transform-origin` presentation attribute** — Accepted as both a presentation attribute
+  and a CSS property, with the single-keyword grammar (`top`/`bottom`/`left`/`right`/`center`)
+  parsed per the spec.
 - **XML entity support** — Custom `<!ENTITY>` declarations in doctypes are now parsed by default.
 - **XML parser conformance** — `Name` token validation per XML 1.0 spec.
+- **CSS Color 4** — Full CSS Color 4 parsing plus `color-profile` aliases and modern color
+  function grammar. Hex colors, `rgb()`/`rgba()`, `hsl()`/`hsla()`, `hwb()`, `lab()`, `lch()`,
+  `oklab()`, `oklch()`, and `color()` all round-trip through the parser.
+- **Unified parser diagnostics** — `ParseDiagnostic` replaces `ParseError`, carries a
+  `DiagnosticSeverity` and half-open `SourceRange`, and routes non-fatal warnings through
+  a lazy-evaluated `ParseWarningSink`. Clang/rustc-style source-context rendering via
+  `DiagnosticRenderer`.
 - **CMake support** — Full CMake build for both Skia and tiny-skia backends with feature toggles
   for text, WOFF2, and filters.
 - **Fuzzing** — Continuous fuzzing harness with Docker support; all parser surfaces fuzz-tested.
 - **74%+ code coverage** across production code (80%+ excluding vendored filter library).
+
+### Fixes and Internals
+
+- **`CompileTimeMap` 32-bit correctness fix** — The compile-time perfect-hash map used for CSS
+  named colors, presentation attributes, and shape property tables was silently broken on
+  32-bit targets: the splitmix64 finalizer performed a `>> 33` shift on `std::size_t`, which is
+  undefined behavior when `size_t` is 32 bits. The hash has been reworked to use explicit
+  `uint64_t` arithmetic. Native builds (where `size_t` is already 64-bit) are unaffected, but
+  WebAssembly builds now produce correct lookups for every property map.
+- **Modular EnTT headers** — Switched from the monolithic `entt.hpp` amalgamation to the
+  modular EnTT headers, improving clean-build compile time and making incremental rebuilds
+  after ECS-adjacent edits measurably cheaper.
+- **resvg test suite upgraded** — Upgraded the vendored `resvg-test-suite` snapshot and
+  reworked the skip mechanism to carry a reason string per skipped test, which made it
+  straightforward to enable another wave of previously-skipped cases.
+- **Filter-function CSS shorthand** — 30 additional `filter: blur()` / `brightness()` /
+  `drop-shadow()` / ... resvg tests now pass.
 
 ### Breaking API Changes
 

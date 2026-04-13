@@ -85,13 +85,13 @@ Donner is a web-platform-consistency-oriented SVG engine, but there are places w
 Examples of what lives in this category:
 - **[linebender/resvg-test-suite#43](https://github.com/linebender/resvg-test-suite/issues/43)** — Donner **intentionally implements an SVG2-new behavior** that not all implementations agree on. When Donner diverges from resvg's golden here, it's not a bug: Donner is following SVG2, resvg's golden reflects an older interpretation. This is the canonical "deliberate divergence" example and you should cite it when discussing spec-version drift.
 - **[linebender/resvg-test-suite#42](https://github.com/linebender/resvg-test-suite/issues/42)** and similar discussions where the test suite's expected output itself is contested.
-- Cases where `docs/unsupported_svg1_features.md` or `docs/design_docs/resvg_test_suite_bugs.md` document a deliberate skip/divergence with reasoning.
+- Cases where `docs/unsupported_svg1_features.md` or `docs/design_docs/0009-resvg_test_suite_bugs.md` document a deliberate skip/divergence with reasoning.
 - Filter primitive behaviors where Skia, TinySkia, browsers, and the spec all disagree — Donner picks one and documents why.
 - Text shaping edge cases (font fallback, missing glyphs, cluster expansion) where Donner follows one implementation's behavior and not another's.
 
 When asked about a test failure or a rendering divergence, **always consider whether it's in the known-divergence set before concluding Donner has a bug**. If it is, cite the tracking issue or design doc; if it isn't, treat it as a real bug.
 
-You should proactively add new divergences to this mental model as they're identified — ask the user whether a newly discovered divergence should be documented in `docs/design_docs/resvg_test_suite_bugs.md` or a similar tracking file, and suggest where.
+You should proactively add new divergences to this mental model as they're identified — ask the user whether a newly discovered divergence should be documented in `docs/design_docs/0009-resvg_test_suite_bugs.md` or a similar tracking file, and suggest where.
 
 ## Donner-specific context you carry
 

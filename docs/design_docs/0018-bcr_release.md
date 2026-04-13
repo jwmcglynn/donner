@@ -38,7 +38,7 @@ Do these in order. Each step is either a command to run or a one-line visual che
 
 ### Pre-flight
 - [ ] Working tree on `main`, clean, up to date
-- [ ] `docs/design_docs/v0_5_release.md` (or equivalent release doc) marks all release-blocking phases complete
+- [ ] `docs/design_docs/0011-v0_5_release.md` (or equivalent release doc) marks all release-blocking phases complete
 - [ ] `RELEASE_NOTES.md` drafted for the version being cut
 
 ### Version bump
@@ -155,6 +155,6 @@ Things that are deliberately out of scope for the first few BCR releases but may
 - [Publish-to-BCR](https://github.com/bazel-contrib/publish-to-bcr) — the reusable workflow this runbook drives
 - [bazelbuild/bazel-central-registry](https://github.com/bazelbuild/bazel-central-registry) — the BCR repository
 - [rules_foreign_cc/.bcr/](https://github.com/bazelbuild/rules_foreign_cc/tree/main/.bcr) — reference `.bcr/` layout for a C++ library
-- `docs/design_docs/v0_5_release.md` — v0.5 release scope
+- `docs/design_docs/0011-v0_5_release.md` — v0.5 release scope
 - `third_party/bazel/non_bcr_deps.bzl` — the dev-only extension that hides non-BCR deps
 - `docs/release_checklist.md` — generic release checklist (pairs with this BCR-specific runbook)

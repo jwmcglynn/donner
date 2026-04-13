@@ -103,7 +103,7 @@ Known subtleties:
 ## Donner-specific context
 
 - **The parser is fuzzed.** See `donner/css/parser/tests/*_fuzzer.cc`. When you find a parser bug, add a fuzzer case if one doesn't exist already. Coordinate with ParserBot on fuzzer discipline.
-- **`docs/design_docs/css_fonts.md`** has design notes for `@font-face` and font loading; read it before touching font-related CSS.
+- **`docs/design_docs/0008-css_fonts.md`** has design notes for `@font-face` and font loading; read it before touching font-related CSS.
 - **`.bazelrc` configs don't change CSS behavior** — CSS parsing is always on. The feature flags only affect rendering backends and text rendering tiers.
 - **Custom properties, `calc()`, and Selectors Level 4 coverage** are areas where Donner may be behind the spec. Check implementation status before promising a feature exists.
 

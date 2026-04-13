@@ -61,7 +61,7 @@ When creating a pull request:
 5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits.
 6. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
 
-See `docs/design_docs/ci_escape_prevention.md` for the full rationale behind these checks and the taxonomy of CI escapes they prevent.
+See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behind these checks and the taxonomy of CI escapes they prevent.
 
 ## General Practices
 

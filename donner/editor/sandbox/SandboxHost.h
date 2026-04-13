@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Host-side driver for the sandbox child process. See
-/// docs/design_docs/editor_sandbox.md (S1 for the process model, S2 for the
+/// docs/design_docs/0023-editor_sandbox.md (S1 for the process model, S2 for the
 /// wire format, S3 for the host-side replay path).
 ///
 /// `SandboxHost` spawns `donner_parser_child` as a subprocess, pipes SVG bytes

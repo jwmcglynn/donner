@@ -114,7 +114,7 @@ donner_cc_test(
     # Geode runs through this suite too, using the shared (tiny-skia-authored)
     # goldens with a widened default threshold. Per-test Geode overrides live
     # in `geodeOverrides()` in `Renderer_tests.cc` — see the Phase 5b section
-    # of `docs/design_docs/geode_renderer.md`.
+    # of `docs/design_docs/0017-geode_renderer.md`.
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",

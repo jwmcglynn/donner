@@ -73,7 +73,7 @@ took real time and must survive the migration.
 
 - Location: `donner/svg/renderer/testdata/golden/resvg-&lt;test-name&gt;.png`
 - Documented in
-  [`resvg_test_suite_bugs.md`](resvg_test_suite_bugs.md) with per-bug
+  [`0009-resvg_test_suite_bugs.md`](./0009-resvg_test_suite_bugs.md) with per-bug
   Symptom → Root Cause → Ruled Out → Resolution format
 - ~40 files; named using the **old** `a-*` / `e-*` convention
 
@@ -331,7 +331,7 @@ need:
    upstream has since fixed the bug (e.g. marker direction, filter blur
    halo), **delete the custom golden** and trust upstream.
 3. Update
-   [`resvg_test_suite_bugs.md`](resvg_test_suite_bugs.md) entries to reference
+   [`0009-resvg_test_suite_bugs.md`](./0009-resvg_test_suite_bugs.md) entries to reference
    the new names and note any that were retired.
 4. Update `Params::WithGoldenOverride(...)` paths in `resvg_test_suite.cc` to
    the new filenames.
@@ -357,7 +357,7 @@ Final PR contents:
   entries, grouped by new categories
 - `donner/svg/renderer/testdata/golden/` — renamed custom goldens (or
   deletions where upstream fixed things)
-- `docs/design_docs/resvg_test_suite_bugs.md` — updated
+- `docs/design_docs/0009-resvg_test_suite_bugs.md` — updated
 - `tools/mcp-servers/resvg-test-triage/` — updated
 - `tools/resvg_test_suite_upgrade/` — keep the rename map JSON + scripts as
   historical artifacts (useful if we ever need to re-run)
@@ -670,9 +670,9 @@ The script that generates it must:
 
 ## Related Docs
 
-- [resvg_test_suite_bugs.md](resvg_test_suite_bugs.md) — golden override
+- [resvg_test_suite_bugs.md](./0009-resvg_test_suite_bugs.md) — golden override
   rationale (will be updated in Phase 5)
-- [text_rendering.md](text_rendering.md) — text tests are a large chunk of
+- [text_rendering.md](./0010-text_rendering.md) — text tests are a large chunk of
   the upgrade scope
-- [ci_escape_prevention.md](ci_escape_prevention.md) — the migration PR must
+- [ci_escape_prevention.md](./0016-ci_escape_prevention.md) — the migration PR must
   leave `bazel test //...` clean

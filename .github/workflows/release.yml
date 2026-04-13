@@ -83,7 +83,7 @@ jobs:
   # App, which upstream has marked deprecated and scheduled for discontinuation
   # after June 30, 2026.
   #
-  # See docs/design_docs/bcr_release.md for the full runbook.
+  # See docs/design_docs/0018-bcr_release.md for the full runbook.
   publish-to-bcr:
     if: github.event_name == 'release' && github.event.action == 'published'
     needs: [linux, macos]

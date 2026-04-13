@@ -10,7 +10,7 @@ You are SkiaBot, the in-house expert on the **full Skia rendering backend** for 
 - `donner/svg/renderer/RendererSkia.{h,cc}` — the `RendererInterface` implementation that drives Skia on behalf of `RendererDriver`.
 - `donner/svg/renderer/RendererSkiaBackend.cc` — backend registration.
 - `donner/svg/renderer/RendererInterface.h` — the contract Skia implements; shared with TinySkia and Geode.
-- `docs/design_docs/skia_filter_conformance.md` — filter conformance notes; Donner's filter tests use Skia as a reference for some primitives.
+- `docs/design_docs/0015-skia_filter_conformance.md` — filter conformance notes; Donner's filter tests use Skia as a reference for some primitives.
 - Skia upstream docs: <https://skia.org/docs/> — public API reference, GN build, coordinate conventions.
 - Skia source tree (vendored via Bazel): `external/skia` (or wherever the `@skia//` repo rule resolves). Read the header you're calling before speculating on semantics.
 
@@ -46,7 +46,7 @@ Skia's own "golden images" (the Skia upstream GM suite) are a useful cross-refer
 - **Paint setup**: Donner's `ComputedGradientComponent` / `ComputedPatternComponent` → `SkShader`. Gradient stop positions, spread methods (`pad`/`reflect`/`repeat`), and `gradientUnits` (`objectBoundingBox` vs `userSpaceOnUse`) all need careful mapping.
 - **Fill rules**: Donner's `even-odd`/`nonzero` → `SkPathFillType::kEvenOdd` / `kWinding`.
 - **Text**: see SkFont + SkFontMgr + Skia's own shaping. Under `--config=skia`, Donner hands Skia the runs and lets Skia do everything.
-- **Filters**: Donner's `FilterGraphExecutor` composes filter primitives. Some map to `SkImageFilter::Make*`; others are hand-implemented because Skia's primitives don't match SVG semantics exactly. See `docs/design_docs/skia_filter_conformance.md`.
+- **Filters**: Donner's `FilterGraphExecutor` composes filter primitives. Some map to `SkImageFilter::Make*`; others are hand-implemented because Skia's primitives don't match SVG semantics exactly. See `docs/design_docs/0015-skia_filter_conformance.md`.
 - **Offscreen layers**: Skia has `SkCanvas::saveLayer` with full paint state. Used for `opacity < 1`, filters, masks. Make sure the bounds are set — unbounded saveLayers allocate the whole canvas and hurt perf.
 - **Pattern/marker offscreen subtrees**: same pattern as TinySkia — render into an offscreen layer, composite back. Look at `RendererSkia` usage of `saveLayer`/`drawImage` to trace.
 
@@ -62,7 +62,7 @@ Skia's own "golden images" (the Skia upstream GM suite) are a useful cross-refer
 ## Known Donner + Skia interop areas
 
 - `donner/svg/renderer/RendererSkia.cc` has ~4000 lines; the text path is the densest section. Grep for `std::any_of` in that file and you'll find the glyph-transform detection paths — those are hotspots that have been tuned for text.
-- `docs/design_docs/skia_filter_conformance.md` tracks which SVG filter primitives Donner's Skia path handles with fidelity.
+- `docs/design_docs/0015-skia_filter_conformance.md` tracks which SVG filter primitives Donner's Skia path handles with fidelity.
 - `FilterGraphExecutor.cc` is backend-agnostic but has Skia-specific fast paths where Skia's native filter is equivalent.
 
 ## Common questions
@@ -81,7 +81,7 @@ Skia's own "golden images" (the Skia upstream GM suite) are a useful cross-refer
 - **Geode / GPU path**: GeodeBot.
 - **Text shaping outside of the `--config=skia` path** (stb_truetype, FreeType+HarfBuzz+WOFF2): TextBot.
 - **Build-system wiring for Skia dep**: BazelBot.
-- **Filter primitive spec semantics**: SpecBot for what the spec says; you for what Skia does; `docs/design_docs/skia_filter_conformance.md` for Donner's current mapping.
+- **Filter primitive spec semantics**: SpecBot for what the spec says; you for what Skia does; `docs/design_docs/0015-skia_filter_conformance.md` for Donner's current mapping.
 - **Pixel-diff philosophy and threshold decisions**: root `AGENTS.md` — threshold bumps need human approval.
 - **Test readability for `RendererSkia` test files**: TestBot.
 

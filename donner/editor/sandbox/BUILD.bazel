@@ -1,6 +1,6 @@
 """Donner Editor sandbox: isolated parser/renderer child process.
 
-Milestone S1 of the editor sandbox design (docs/design_docs/editor_sandbox.md):
+Milestone S1 of the editor sandbox design (docs/design_docs/0023-editor_sandbox.md):
 a byte-in, PNG-out child process that parses untrusted SVG in isolation, plus a
 `SandboxHost` host-side driver that spawns the child and classifies its exit.
 

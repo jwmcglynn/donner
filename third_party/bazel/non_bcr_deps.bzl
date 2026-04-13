@@ -24,10 +24,10 @@ When / how to add a new non-BCR dep:
   2. If the dep is gated behind a config_setting / bool_flag AND every BUILD
      target referencing it has `target_compatible_with = <flag>_enabled`,
      add it to `_non_bcr_deps_impl` below.
-  3. Update the checklist in docs/design_docs/bcr_release.md (when that
+  3. Update the checklist in docs/design_docs/0018-bcr_release.md (when that
      document exists — tracked under the BCR release plan).
 
-See docs/design_docs/bcr_release.md for the fuller picture of what ships on
+See docs/design_docs/0018-bcr_release.md for the fuller picture of what ships on
 BCR versus what stays behind `git_override`.
 """
 

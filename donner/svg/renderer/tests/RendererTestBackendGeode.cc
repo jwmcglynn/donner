@@ -15,7 +15,7 @@ std::string_view ActiveRendererBackendName() {
 bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
     // Text and filter effects are stubbed in the Geode skeleton. They will
-    // be filled in during later phases (see docs/design_docs/geode_renderer.md
+    // be filled in during later phases (see docs/design_docs/0017-geode_renderer.md
     // — Phase 4 for text, Phase 7 for filters).
     case RendererBackendFeature::FilterEffects: return false;
     case RendererBackendFeature::Text: return false;

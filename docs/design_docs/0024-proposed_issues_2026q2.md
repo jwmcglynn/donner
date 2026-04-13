@@ -73,7 +73,7 @@ These features are **already parsed** — the rendering path just needs to be co
 | **Tests unblocked** | 30 (`filters/filter-functions/*`) |
 | **Complexity** | Small — this is a **bug**, not a new feature |
 | **Spec** | [Filter Effects §8 — Filter Functions](https://www.w3.org/TR/filter-effects-1/#FilterFunction) |
-| **Already tracked** | B2 in `docs/design_docs/resvg_feature_gaps.md` |
+| **Already tracked** | B2 in `docs/design_docs/0021-resvg_feature_gaps.md` |
 
 **Current state:** `PropertyRegistry::ParseFilterFunction()` correctly parses all 10 CSS filter
 functions (`blur()`, `brightness()`, `contrast()`, `drop-shadow()`, `grayscale()`, `hue-rotate()`,
@@ -90,7 +90,7 @@ functions (`blur()`, `brightness()`, `contrast()`, `drop-shadow()`, `grayscale()
 | **Tests unblocked** | 20 (`structure/transform-origin/*`) |
 | **Complexity** | Small–Medium |
 | **Spec** | [CSS Transforms 2 §6](https://www.w3.org/TR/css-transforms-2/#transform-origin-property), [SVG2 §5.1](https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes) |
-| **Already tracked** | F2 in `docs/design_docs/resvg_feature_gaps.md` |
+| **Already tracked** | F2 in `docs/design_docs/0021-resvg_feature_gaps.md` |
 
 **Current state:** Works in `style=""` attribute. `LayoutSystem.cc` computes and applies it
 correctly. The presentation-attribute parsing path (`<rect transform-origin="50% 50%">`) does not
@@ -236,7 +236,7 @@ width/height/viewBox combinations.
 | **Complexity** | Medium |
 
 For SVGs with non-square `viewBox` and no explicit `width`/`height`, Donner's intrinsic document
-size comes out wrong. Already tracked as B1 in `resvg_feature_gaps.md`.
+size comes out wrong. Already tracked as B1 in `0021-resvg_feature_gaps.md`.
 
 **Key files:** `LayoutSystem.cc`, `SizedElementComponent.h`
 
