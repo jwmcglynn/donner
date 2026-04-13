@@ -193,6 +193,28 @@ struct Transform2 {
   }
 
   /**
+   * Returns true if this transform is a pure translation (no rotation, scale, or skew).
+   *
+   * A pure translation has the form:
+   * \f[
+   * \begin{bmatrix}
+   *   1 & 0 & e  \\
+   *   0 & 1 & f  \\
+   *   0 & 0 & 1  \\
+   * \end{bmatrix}
+   * \f]
+   */
+  bool isTranslation() const {
+    return NearEquals(data[0], T(1)) && NearZero(data[1]) && NearZero(data[2]) &&
+           NearEquals(data[3], T(1));
+  }
+
+  /**
+   * Returns the translation component of this transform as a vector.
+   */
+  Vector2<T> translation() const { return Vector2<T>(data[4], data[5]); }
+
+  /**
    * Returns the determinant.
    */
   T determinant() const { return data[0] * data[3] - data[1] * data[2]; }

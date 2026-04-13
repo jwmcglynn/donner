@@ -43,6 +43,14 @@ struct RenderViewport {
 };
 
 /**
+ * Alpha channel interpretation for pixel data.
+ */
+enum class AlphaType : uint8_t {
+  Premultiplied,    //!< RGB channels are pre-multiplied by alpha.
+  Unpremultiplied,  //!< RGB channels are independent of alpha (straight alpha).
+};
+
+/**
  * CPU-readable bitmap produced by a renderer snapshot.
  */
 struct RendererBitmap {
@@ -52,6 +60,8 @@ struct RendererBitmap {
   std::vector<uint8_t> pixels;
   /// Bytes between rows; allows alignment/padding differences between renderers.
   std::size_t rowBytes = 0;
+  /// Alpha channel interpretation. Backends produce premultiplied data by default.
+  AlphaType alphaType = AlphaType::Premultiplied;
 
   /// Returns true if this bitmap has no pixel data.
   [[nodiscard]] bool empty() const {
