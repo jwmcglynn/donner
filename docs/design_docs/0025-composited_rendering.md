@@ -931,6 +931,73 @@ Dedicated test cases for the correctness edge cases enumerated above:
 
 Each test renders both paths and asserts pixel identity.
 
+## Security and Trust Boundaries
+
+### Memory budget
+
+Each compositor layer is a full-resolution RGBA bitmap. Budget:
+
+| Viewport | Bytes/layer | 8 layers | 32 layers |
+|----------|-------------|----------|-----------|
+| 1920×1080 (1080p) | 8.3 MB | 66 MB | 266 MB |
+| 2560×1440 (1440p) | 14.7 MB | 118 MB | 471 MB |
+| 3840×2160 (4K) | 33.2 MB | 265 MB | 1,061 MB |
+
+**Hard limits (compile-time constants, overridable via Bazel defines):**
+
+```cpp
+constexpr int kMaxCompositorLayers = 32;
+constexpr size_t kMaxCompositorMemoryBytes = 256 * 1024 * 1024;  // 256 MB
+```
+
+When either limit is reached, `promoteEntity()` returns `false` and
+the compositor falls back to full rendering for that entity. Layer
+count is O(promoted entities), not O(SVG elements), so the limit is
+unlikely to be hit in normal editor usage (typically 1–3 promoted
+layers during drag).
+
+### Bitmap ownership model
+
+- `CompositorLayer` **owns** its rasterized `RendererBitmap` (via
+  `std::vector<uint8_t>` inside the bitmap struct).
+- During composition, the compositor passes a **non-owning**
+  `RendererBitmap` reference to `drawImage()`. The reference is valid
+  only for the duration of the composition call.
+- `takeSnapshot()` returns a newly-allocated bitmap with its own
+  `std::vector<uint8_t>`. Ownership transfers to the caller
+  (`CompositorLayer`).
+- No shared ownership. No reference counting on bitmaps. The
+  compositor is single-threaded within a frame.
+
+### Entity validity
+
+`CompositorLayer` stores an `Entity` handle. The ECS registry may
+invalidate entities (e.g., via `removeEntity()`). The compositor
+**must** validate entity existence before accessing components:
+
+```cpp
+if (!registry_.valid(layer.entity())) {
+  demoteLayer(layer);
+  return;
+}
+```
+
+Stale entity handles are a logic error, not a security boundary, but
+the validation prevents undefined behavior from dangling entity
+references. `demoteEntity()` on an already-invalid entity is a no-op.
+
+### Trust boundary: untrusted SVG input
+
+The compositor does not introduce new trust boundaries beyond those
+already enforced by the parser and renderer. Specifically:
+
+- Layer count is bounded by `kMaxCompositorLayers`, preventing
+  unbounded memory growth from pathological promotion patterns.
+- Bitmap dimensions are clamped to viewport size (the compositor
+  never allocates larger-than-viewport bitmaps).
+- The compositor does not interpret SVG content — it operates on
+  the already-validated ECS component graph produced by the parser.
+
 ## Implementation Phases
 
 ### Phase 1: Minimum viable compositor (v1)
@@ -993,17 +1060,14 @@ Each test renders both paths and asserts pixel identity.
    resolution wastes memory; viewport DPI re-rasterizes on zoom. v1:
    viewport DPI, re-rasterize on zoom.
 
-4. **Geode offscreen rendering.** Geode's `createOffscreenInstance()`
-   needs to share the `wgpu::Device` with the main renderer. Is the
-   current `GeodeDevice` singleton pattern sufficient, or does each
-   offscreen instance need its own `GeoSurface`? (Likely the latter —
-   each layer needs an independent render target.)
+4. ~~**Geode offscreen rendering.**~~ — *Resolved:* see § Geode-specific
+   considerations above. Shared-device constructor with own
+   `GeoEncoder` and texture pair per render target.
 
-5. **Memory budget.** Each layer is a full-resolution RGBA bitmap. A
-   4K viewport (3840×2160) at 4 bytes/pixel = ~33 MB per layer. With
-   10 layers that's 330 MB. Should the compositor enforce a layer count
-   or memory limit? What happens when the limit is hit — refuse
-   promotion, or evict the least-recently-used layer?
+5. ~~**Memory budget.**~~ — *Resolved:* see § Security and Trust
+   Boundaries above. Hard limits: `kMaxCompositorLayers = 32`,
+   `kMaxCompositorMemoryBytes = 256 MB`. Promotion refused when
+   limits reached; fallback to full rendering.
 
 6. **Editor overlay interaction.** The editor's `OverlayRenderer` draws
    selection chrome *after* the document via direct `RendererInterface`
