@@ -390,6 +390,12 @@ int main(int argc, char** argv) {
   donner::editor::TextEditor textEditor;
   textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
   textEditor.setText(initialSource);
+  // Enable autocomplete. Once active, typing letters auto-triggers the
+  // suggestion popup; matches are drawn from the language definition's
+  // keyword set (SVG element names) + identifiers (SVG/CSS attribute
+  // names) + any entries added via `addAutocompleteEntry`. Ctrl+I can
+  // also explicitly open the popup.
+  textEditor.setActiveAutocomplete(true);
 
   donner::svg::Renderer renderer;
   donner::editor::AsyncRenderer asyncRenderer;
