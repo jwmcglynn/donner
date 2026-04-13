@@ -58,6 +58,37 @@ public:
   [[nodiscard]] const AsyncSVGDocument& document() const { return document_; }
 
   // ---------------------------------------------------------------------------
+  // File I/O (M7: Save)
+  // ---------------------------------------------------------------------------
+
+  /// The file path this document was loaded from, or `std::nullopt` if it
+  /// was created from scratch. Populated by the main loop via
+  /// `setCurrentFilePath` after a successful `File → Open` / argv load.
+  [[nodiscard]] const std::optional<std::string>& currentFilePath() const {
+    return currentFilePath_;
+  }
+
+  /// Set the path associated with the current document. Called by the main
+  /// loop when a file is loaded. Clears the dirty flag.
+  void setCurrentFilePath(std::string path) {
+    currentFilePath_ = std::move(path);
+    isDirty_ = false;
+  }
+
+  /// Whether the document has unsaved changes. Set automatically on every
+  /// mutation via `applyMutation`; cleared by `setCurrentFilePath` /
+  /// `markClean`.
+  [[nodiscard]] bool isDirty() const { return isDirty_; }
+
+  /// Mark the document as clean (e.g. after a successful save).
+  void markClean() { isDirty_ = false; }
+
+  /// Mark the document as dirty. The main loop calls this when the user
+  /// types in the source pane, since text-pane edits don't go through
+  /// `applyMutation`.
+  void markDirty() { isDirty_ = true; }
+
+  // ---------------------------------------------------------------------------
   // Mutation seam
   // ---------------------------------------------------------------------------
 
@@ -66,6 +97,7 @@ public:
   /// document's command queue; nothing is applied until `flushFrame()`.
   void applyMutation(EditorCommand command) {
     document_.applyMutation(std::move(command));
+    isDirty_ = true;
   }
 
   /// Drain and apply any pending mutations. Called once per frame at the
@@ -158,6 +190,9 @@ private:
   std::uint64_t controllerVersion_ = 0;
 
   bool structuredEditingEnabled_ = false;
+
+  std::optional<std::string> currentFilePath_;
+  bool isDirty_ = false;
 };
 
 }  // namespace donner::editor

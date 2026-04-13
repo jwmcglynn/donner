@@ -8,7 +8,14 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   selectedElement_.reset();
   controller_.reset();
   undoTimeline_.clear();
-  return document_.loadFromString(svgBytes);
+  const bool result = document_.loadFromString(svgBytes);
+  // A successful load resets the dirty state — the in-memory document
+  // now matches the last-loaded bytes. `setCurrentFilePath` should be
+  // called separately by the caller if the bytes came from a file.
+  if (result) {
+    isDirty_ = false;
+  }
+  return result;
 }
 
 bool EditorApp::flushFrame() {

@@ -15,8 +15,12 @@
 /// For the minimal viewer demo (no tools, no overlay chrome, just a
 /// rendered SVG and a text pane) see `//examples:svg_viewer`.
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -62,6 +66,7 @@ constexpr float kSourcePaneWidth = 560.0f;
 constexpr float kMinZoom = 0.1f;
 constexpr float kMaxZoom = 32.0f;
 constexpr float kZoomStep = 1.1f;  // Per wheel notch.
+constexpr float kTextChangeDebounceSeconds = 0.15f;  // 150ms idle before re-parse.
 constexpr std::size_t kFrameHistoryCapacity = 120;  // 2s @ 60fps.
 constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kFrameGraphWidth = 240.0f;
@@ -274,6 +279,36 @@ std::string LoadFile(const std::string& filename) {
   return std::move(out).str();
 }
 
+/// Write text to a file, refusing to follow symlinks.
+/// Returns true on success.
+bool SaveFile(const std::string& path, std::string_view content) {
+  // POSIX `open` with `O_NOFOLLOW` so we never chase a symlink that a
+  // prior attacker (or a prior process) may have placed at `path`.
+  // `O_CREAT | O_WRONLY | O_TRUNC` creates or truncates; no `O_EXCL`
+  // since Save explicitly overwrites an existing file.
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+  if (fd < 0) {
+    std::cerr << "Save failed: could not open " << path << " (errno " << errno << ")\n";
+    return false;
+  }
+
+  const char* data = content.data();
+  std::size_t remaining = content.size();
+  while (remaining > 0) {
+    const ssize_t written = ::write(fd, data, remaining);
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      std::cerr << "Save failed: write error (errno " << errno << ")\n";
+      ::close(fd);
+      return false;
+    }
+    data += written;
+    remaining -= static_cast<std::size_t>(written);
+  }
+  ::close(fd);
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -345,6 +380,8 @@ int main(int argc, char** argv) {
     // Keep running with an empty document so the user can still fix it
     // in the source pane.
   }
+  // Remember the path we loaded from so Cmd+S knows where to write.
+  app.setCurrentFilePath(svgPath);
 
   donner::editor::SelectTool selectTool;
 
@@ -394,6 +431,24 @@ int main(int argc, char** argv) {
   // inside a single attribute value.
   std::string previousSourceText = initialSource;
 
+  // Cached window title pieces so we only call glfwSetWindowTitle when
+  // something actually changes.
+  std::string lastWindowTitle;
+
+  // Debounce state for text changes. Instead of re-parsing on every
+  // keystroke, accumulate a dirty flag and only dispatch after
+  // kTextChangeDebounceSeconds of typing idle. This is the single biggest
+  // perf improvement for interactive editing — without it, every keystroke
+  // triggers the full parse→CSS→render pipeline (~100ms+ for a complex SVG).
+  bool textChangePending = false;
+  float textChangeIdleTimer = 0.0f;
+
+  // Enable the M5 incremental path by default during development. The
+  // design doc says default-off until the fuzzing soak (M8), but during
+  // active use it should be on so attribute-value edits skip the full
+  // re-parse. The flag can still be toggled at runtime for debugging.
+  app.setStructuredEditingEnabled(true);
+
   // ---------------------------------------------------------------------------
   // Main loop
   // ---------------------------------------------------------------------------
@@ -405,6 +460,25 @@ int main(int argc, char** argv) {
     frameHistory.push(ImGui::GetIO().DeltaTime * 1000.0f);
 
     glfwPollEvents();
+
+    // Update the window title with the filename + dirty indicator (`●`).
+    // Diffed against the previous frame so glfwSetWindowTitle is only
+    // called on transitions.
+    {
+      std::string title = "Donner Editor — ";
+      if (app.currentFilePath().has_value()) {
+        title += std::filesystem::path(*app.currentFilePath()).filename().string();
+      } else {
+        title += "untitled";
+      }
+      if (app.isDirty()) {
+        title += " ●";
+      }
+      if (title != lastWindowTitle) {
+        glfwSetWindowTitle(window, title.c_str());
+        lastWindowTitle = std::move(title);
+      }
+    }
 
     // Drain the command queue (ReplaceDocument from text edits,
     // SetTransform from SelectTool drags).
@@ -461,46 +535,6 @@ int main(int argc, char** argv) {
           textEditor.resetTextChanged();
         }
       }
-    }
-
-    // Re-render whenever the document version changes, the selection
-    // changes, OR the canvas size changed (the latter happens when
-    // the render pane is resized — the main loop pokes the document
-    // below before this check).
-    const auto currentVersion = app.document().currentFrameVersion();
-    const auto& currentSelection = app.selectedElement();
-    const bool selectionChanged = currentSelection != lastRenderedSelection;
-    const donner::Vector2i currentCanvasSize =
-        app.hasDocument() ? app.document().document().canvasSize() : donner::Vector2i{0, 0};
-    if ((currentVersion != lastRenderedVersion || selectionChanged ||
-         currentCanvasSize != lastRenderedCanvasSize) &&
-        app.hasDocument()) {
-      ZoneScopedN("render");
-      {
-        ZoneScopedN("renderer.draw");
-        renderer.draw(app.document().document());
-      }
-      {
-        ZoneScopedN("overlay");
-        donner::editor::OverlayRenderer::drawChrome(renderer, app);
-      }
-      const donner::svg::RendererBitmap bitmap = [&] {
-        ZoneScopedN("takeSnapshot");
-        return renderer.takeSnapshot();
-      }();
-      if (!bitmap.empty()) {
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        textureWidth = bitmap.dimensions.x;
-        textureHeight = bitmap.dimensions.y;
-      }
-      lastRenderedVersion = currentVersion;
-      lastRenderedSelection = currentSelection;
-      lastRenderedCanvasSize = currentCanvasSize;
-      (void)selectionChanged;
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -574,6 +608,18 @@ int main(int argc, char** argv) {
         app.redo();
       }
 
+      // Cmd+S: save the current source text to the loaded file path.
+      // The source pane is the canonical representation — canvas
+      // mutations have already been written back via AttributeWriteback.
+      if (ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false) && cmd && !shift) {
+        if (app.currentFilePath().has_value()) {
+          const std::string content = textEditor.getText();
+          if (SaveFile(*app.currentFilePath(), content)) {
+            app.markClean();
+          }
+        }
+      }
+
       // Escape: clear the current selection. Modal popups capture Escape
       // first (to close themselves), so this only fires when no popup is
       // active.
@@ -618,31 +664,42 @@ int main(int argc, char** argv) {
     ImGui::Begin("Source", nullptr, kPaneFlags);
     textEditor.render("##source");
     if (textEditor.isTextChanged()) {
-      const std::string newSource = textEditor.getText();
-
-      bool handled = false;
-      if (app.structuredEditingEnabled() && app.hasDocument()) {
-        // M5 incremental path: try to classify the edit as an in-
-        // attribute-value change. If successful, emit a SetAttribute
-        // command that preserves tree identity. Otherwise fall back
-        // to a full ReplaceDocument.
-        auto classified = donner::editor::classifyTextChange(
-            app.document().document(), previousSourceText, newSource);
-        if (classified.command.has_value()) {
-          app.applyMutation(std::move(*classified.command));
-          handled = true;
-        }
-      }
-
-      if (!handled) {
-        app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(newSource));
-      }
-
-      previousSourceText = newSource;
-      // `isTextChanged` is sticky until explicitly reset — without this
-      // the next frame would re-submit another ReplaceDocument command
-      // and clobber any in-progress drag state.
+      // Mark the debounce timer: we got a text change this frame. Reset
+      // the idle timer to 0 — the actual dispatch happens below when the
+      // timer exceeds the debounce threshold.
+      textChangePending = true;
+      textChangeIdleTimer = 0.0f;
+      // Mark the document dirty immediately so the title-bar indicator
+      // shows up on the very next frame, not after the debounce fires.
+      app.markDirty();
       textEditor.resetTextChanged();
+    }
+
+    // Debounced text dispatch: only fire when the user has been idle
+    // (no text changes) for kTextChangeDebounceSeconds. This avoids
+    // the full parse→CSS→render pipeline on every keystroke.
+    if (textChangePending) {
+      textChangeIdleTimer += ImGui::GetIO().DeltaTime;
+      if (textChangeIdleTimer >= kTextChangeDebounceSeconds) {
+        textChangePending = false;
+        const std::string newSource = textEditor.getText();
+
+        bool handled = false;
+        if (app.structuredEditingEnabled() && app.hasDocument()) {
+          auto classified = donner::editor::classifyTextChange(
+              app.document().document(), previousSourceText, newSource);
+          if (classified.command.has_value()) {
+            app.applyMutation(std::move(*classified.command));
+            handled = true;
+          }
+        }
+
+        if (!handled) {
+          app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(newSource));
+        }
+
+        previousSourceText = newSource;
+      }
     }
     ImGui::End();
 
@@ -657,7 +714,6 @@ int main(int argc, char** argv) {
     RenderInspector(app);
     ImGui::Text("Zoom: %.0f%%  Pan: (%.0f, %.0f)  (wheel=zoom, space+drag=pan, Cmd+0=reset)",
                 view.zoom * 100.0f, view.pan.x, view.pan.y);
-    RenderFrameGraph(frameHistory);
     ImGui::Separator();
 
     // Base canvas size = pane content region. Everything past this point
@@ -673,6 +729,48 @@ int main(int argc, char** argv) {
       const donner::Vector2i currentSize = app.document().document().canvasSize();
       if (currentSize.x != baseW || currentSize.y != baseH) {
         app.document().document().setCanvasSize(baseW, baseH);
+      }
+    }
+
+    // Re-render whenever the document version changes, the selection
+    // changes, OR the canvas size changed. This runs AFTER the canvas-
+    // size adjustment above so a ReplaceDocument that creates a new
+    // SVGDocument with its intrinsic size (e.g. 200x200) gets the pane
+    // dimensions applied before the render — no one-frame size glitch.
+    {
+      const auto currentVersion = app.document().currentFrameVersion();
+      const auto& currentSelection = app.selectedElement();
+      const bool selectionChanged = currentSelection != lastRenderedSelection;
+      const donner::Vector2i currentCanvasSize =
+          app.hasDocument() ? app.document().document().canvasSize() : donner::Vector2i{0, 0};
+      if ((currentVersion != lastRenderedVersion || selectionChanged ||
+           currentCanvasSize != lastRenderedCanvasSize) &&
+          app.hasDocument()) {
+        ZoneScopedN("render");
+        {
+          ZoneScopedN("renderer.draw");
+          renderer.draw(app.document().document());
+        }
+        {
+          ZoneScopedN("overlay");
+          donner::editor::OverlayRenderer::drawChrome(renderer, app);
+        }
+        const donner::svg::RendererBitmap bitmap = [&] {
+          ZoneScopedN("takeSnapshot");
+          return renderer.takeSnapshot();
+        }();
+        if (!bitmap.empty()) {
+          glBindTexture(GL_TEXTURE_2D, texture);
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0,
+                       GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+          textureWidth = bitmap.dimensions.x;
+          textureHeight = bitmap.dimensions.y;
+        }
+        lastRenderedVersion = currentVersion;
+        lastRenderedSelection = currentSelection;
+        lastRenderedCanvasSize = currentCanvasSize;
       }
     }
 
@@ -785,6 +883,10 @@ int main(int argc, char** argv) {
     } else {
       ImGui::TextUnformatted("(no rendered image)");
     }
+
+    // Frame-time graph at the bottom of the render pane.
+    RenderFrameGraph(frameHistory);
+
     ImGui::End();
 
     ImGui::Render();
