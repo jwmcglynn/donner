@@ -1162,6 +1162,36 @@ This is essentially the `RendererRecorder` (Phase 3 of
 repurposed as a cache. It is a reasonable v1.5 fallback if the ECS-level
 approach proves too complex, but it leaves performance on the table.
 
+## Reversibility
+
+The compositor is designed to be fully removable without changing the
+core rendering pipeline or ECS component model.
+
+**Runtime disable:** A `DONNER_DISABLE_COMPOSITOR` flag (Bazel define
++ runtime check) bypasses the compositor entirely, routing all frames
+through the existing full-render `RendererDriver::render()` path. This
+flag is the primary rollback mechanism if the compositor causes
+correctness or stability regressions.
+
+**Lazy ECS attachment:** The compositor adds one ECS component
+(`LayerMembershipComponent`) to promoted entities. This component is
+attached lazily (only when `promoteEntity()` is called) and removed on
+`demoteEntity()`. No components are modified globally — unpromoted
+entities are untouched. Removing the compositor feature deletes the
+`donner/svg/compositor/` package and the `LayerMembershipComponent`
+definition; no other ECS components or systems change.
+
+**No `RendererInterface` changes in v1:** The v1 tier-1 adapter adds
+`AlphaType` to `RendererBitmap` (a non-breaking struct field addition
+with a default value). The `RendererInterface` virtual table is
+unchanged. Reverting the compositor does not require changing any
+backend.
+
+**Test coverage invariant:** The dual-path debug assertion (composited
+output == full-render output) means the compositor can never silently
+produce wrong pixels — any regression is caught immediately and the
+fix is always "disable the compositor" until the root cause is found.
+
 ## References
 
 - [0005-incremental_invalidation](0005-incremental_invalidation.md) — dirty-flag propagation
@@ -1171,3 +1201,16 @@ approach proves too complex, but it leaves performance on the table.
 - [Chromium Compositor](https://chromium.googlesource.com/chromium/src/+/HEAD/cc/) — Chrome's layer compositor (cc/)
 - [WebKit Compositing](https://webkit.org/blog/12610/release-notes-for-safari-technology-preview-157/) — WebKit layer tree
 - [Firefox Layers](https://searchfox.org/mozilla-central/source/gfx/layers) — Gecko layer system
+
+## Next Steps
+
+1. **Implement v1 (Phase 1)** — compositor skeleton, dual-path debug
+   assertion, translation-only drag fast path, editor integration.
+   Target: separate PR off `main`, linked from this design doc.
+2. **Implement Geode `createOffscreenInstance()`** — prerequisite for
+   Geode participation in compositor tests. Can be done in parallel
+   with v1 (separate PR).
+3. **Root-cause the premultiply roundtrip in existing
+   `takeSnapshot()` → `drawImage()` paths** — this is a pre-existing
+   correctness bug independent of the compositor. Fix alongside the
+   tier-1 `AlphaType` adapter work.
