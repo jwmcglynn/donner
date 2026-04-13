@@ -628,6 +628,191 @@ during promotion for `BackgroundImage`/`BackgroundAlpha` references.
 | Inherited properties | Exact | Dirty flags cascade, layers re-rasterize |
 | Overlapping layers | Exact | SrcOver composition matches paint order |
 | BackgroundImage filter | Exact (never composite) | Disables fast path for affected elements |
+| **Hit testing during drag** | **Adjusted** | Compositor transform applied to hit-test path |
+| **Layer bitmap sizing** | **Exact** | Ink rectangle (stroke + markers + filter expansion) |
+| **Markers** | **Exact (de-promote or re-rasterize)** | Marker subtrees included in layer entity range |
+| **`feImage` cross-layer ref** | **Exact (de-promote)** | Fragment refs targeting other layers force de-promotion |
+| **Nested isolation groups** | **Exact (de-promote)** | Promoted elements inside isolation scope share parent layer |
+| **`<use>` shadow trees** | **Exact (re-rasterize)** | Dirty cascade from target to shadow instances |
+| **Pattern/gradient `currentColor`** | **Exact (re-rasterize)** | Reverse-ref map (0005) triggers re-rasterize on change |
+| **Deferred-pop stack integrity** | **Exact (de-promote)** | Groups straddling layer boundaries share one layer |
+
+### Hit testing during drag
+
+**Problem:** During drag, the promoted element's composition transform
+is applied only at composition time — it is NOT reflected in the ECS
+`AbsoluteTransformComponent`. Hit-testing uses world-space transforms
+from ECS, so clicking the visual (dragged) position misses, and
+clicking the original (pre-drag) position hits an invisible element.
+
+**Safeguard:** The compositor exposes `compositionTransformOf(entity)`
+which the hit-test path composes with the entity's world transform.
+During drag, the editor's hit-test code queries the compositor for the
+active composition transform and applies it to the hit-test point
+(inverse transform the pointer, or forward-transform the element
+bounds). When compositing is disabled or the entity is not promoted,
+this returns identity.
+
+### Layer bitmap sizing
+
+**Problem:** The layer bitmap must be large enough to contain the
+promoted element's full visual extent, including:
+
+- Stroke width and stroke alignment (`stroke-linejoin: miter` can
+  extend well beyond the geometry bbox).
+- Marker subtrees (markers extend beyond the path they decorate).
+- Filter expansion (`feMorphology`, `feGaussianBlur`, `feOffset`
+  expand the filter region beyond the geometry bbox).
+- `overflow: visible` content on `<svg>`, `<symbol>`, `<pattern>`.
+
+**Rule:** Layer bitmap dimensions = ink rectangle (computed bounding
+box including all of the above), expanded by the filter primitive
+subregion if a filter is active. The compositor queries
+`ComputedSizedElementComponent` for the base bbox, then applies
+filter region expansion from `ComputedFilterComponent`. If the ink
+rectangle exceeds the viewport, it is clipped to the viewport (content
+outside the viewport is not visible and does not need rasterization).
+
+### Markers
+
+**Problem:** Marker subtrees (`<marker>` definitions in `<defs>`)
+are instantiated during rasterization at each marker position along
+the decorated path. The marker definition entity is in `<defs>` and
+may be outside the promoted element's entity range.
+
+**Safeguard:** `drawEntityRange()` does not need marker definition
+entities in-range — marker instantiation is handled by
+`RenderingContext` which resolves marker references from `<defs>`
+regardless of entity range. The layer rasterization step calls
+`drawEntityRange()` with the promoted element's range, and the
+renderer resolves marker references globally. No special handling
+needed.
+
+However, if the marker definition itself is modified (e.g., a
+`<marker>` element's child changes), the dirty flag must cascade to
+all elements that reference that marker. This is handled by the
+existing reverse-reference map (design doc 0005). The compositor
+detects the dirty flag on the marker-using element and re-rasterizes
+its layer.
+
+### `feImage` cross-layer references
+
+**Problem:** The `feImage` filter primitive with `href="#fragment"`
+renders the referenced SVG element as the filter input. If the
+referenced element is in a different compositor layer, the compositor
+must ensure the referenced layer is rasterized before the filter
+layer. Additionally, dragging the referenced element changes the
+filter output without the filter's owning element having a dirty flag.
+
+**Safeguard (v1, conservative):** If an element has an `feImage`
+primitive whose `href` targets an element in a different compositor
+layer, de-promote the `feImage`-owning element (refuse to keep it
+in a separate layer). This ensures `feImage` always renders through
+the full path. The detection is done at promotion time by scanning
+the element's computed filter graph for `feImage` nodes with fragment
+references. This is conservative but correct; v2 can add cross-layer
+dependency tracking.
+
+### Nested isolation groups
+
+**Problem:** SVG2 and CSS Compositing Level 1 define isolation
+groups: an element with `isolation: isolate` or `mix-blend-mode !=
+normal` creates an isolated stacking context. Blend operations target
+the nearest isolation group's backdrop, not the page root.
+
+If a promoted element has `mix-blend-mode != normal` and its nearest
+isolation ancestor is NOT in the same compositor layer, the blend
+target is wrong — the element blends against the root layer's
+content instead of the isolation group's content.
+
+**Safeguard:** Elements inside an `isolation: isolate` ancestor that
+also participate in non-normal blending are not separately promotable.
+`promoteEntity()` checks the element's ancestor chain for isolation
+context boundaries. If found, the element is added to the ancestor's
+layer (if the ancestor is promoted) or promotion is refused.
+
+For v1, this is a conservative de-promotion rule. The more common
+case (element with `mix-blend-mode` that is NOT inside an explicit
+isolation group) works correctly because the blend target is the page
+root, which the root compositor layer represents.
+
+### `<use>` shadow trees
+
+**Problem:** `<use>` elements create shadow tree clones of their
+target element. The shadow tree entities are distinct from the target
+entities, but they inherit styles and may reference the same
+resources (gradients, patterns, clip-paths) as the target.
+
+**Safeguard:** Each `<use>` shadow tree instance is a separate set
+of entities. If the `<use>` element is promoted, its shadow tree
+entities are within the promoted entity range (they are children in
+the ECS tree). If the `<use>` *target* element changes (not the
+`<use>` element itself), the dirty flag cascades from the target
+to all `<use>` elements referencing it via `ShadowTreeComponent`
+dirty propagation. The compositor detects this cascade and
+re-rasterizes the affected `<use>` element's layer.
+
+### Pattern and gradient `currentColor` dependency
+
+**Problem:** `currentColor` in gradient stops or pattern content
+resolves to the `color` property of the element using the paint
+server. If a promoted element's ancestor's `color` property changes,
+the gradient/pattern output changes, but the paint server entity
+itself may not have a dirty flag.
+
+**Safeguard:** The reverse-reference map (design doc 0005) tracks
+paint server → using element dependencies. When `color` changes on
+an ancestor, `DirtyFlagsComponent::Paint` is set on descendant
+elements that use `currentColor`-dependent paint servers. The
+compositor detects this dirty flag and re-rasterizes. Until the
+reverse-reference map is implemented, this is a known limitation:
+`currentColor` changes in gradients/patterns may produce stale
+layer bitmaps. Workaround: always re-rasterize layers that use
+`currentColor`-dependent paint servers.
+
+### Deferred-pop stack integrity
+
+**Problem:** `RendererDriver` uses a deferred-pop stack for
+push/pop pairs (clip, mask, isolation, filter). If a group element
+that pushes state straddles a layer boundary (some children in layer
+A, some in layer B), the push/pop nesting breaks.
+
+**Safeguard:** The compositor's de-promotion rule is generalized:
+any element whose rendering requires push/pop state set by an
+ancestor outside its layer boundary MUST share the ancestor's layer.
+This is enforced at promotion time by walking the ancestor chain
+and checking for active clip-path, mask, filter, and isolation
+contexts. If any ancestor between the promoted element and the
+document root has such a context, the promoted element is added to
+the ancestor's layer or promotion is refused.
+
+In practice, this means elements inside `<g clip-path="...">`,
+`<g filter="...">`, `<g mask="...">`, or `<g style="isolation:
+isolate">` groups are promoted as part of the group, not
+individually. This is already the natural behavior for the
+editor's drag workflow (dragging a group promotes the group).
+
+### Compositor-specific golden tests (expanded)
+
+In addition to the base golden tests listed above, add these
+SpecBot-recommended tests:
+
+- Promoted element with `mix-blend-mode: multiply` inside
+  `isolation: isolate` parent — verify blend target is correct.
+- `feImage href="#fragment"` where fragment is in a different layer
+  — verify de-promotion and correct rendering.
+- Promoted `<path>` with `marker-mid` where marker definition
+  is in `<defs>` — verify markers render correctly in layer.
+- Promoted element with `overflow: visible` on ancestor `<svg>` —
+  verify layer bitmap includes overflow content.
+- `<use>` element promoted, target element modified — verify
+  dirty cascade triggers re-rasterization.
+- Promoted element with `fill: url(#gradient)` where gradient
+  uses `currentColor` and ancestor `color` changes — verify
+  re-rasterization.
+- Deferred-pop edge case: promote a `<rect>` inside a
+  `<g clip-path="..." mask="...">` group — verify the group
+  constraint forces shared layer.
 
 ## Backend Integration
 
