@@ -12,34 +12,42 @@ on:
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
 #
-# Self-hosted runner gate: when the repository variables
-# SELFHOSTED_LINUX_RUNNER / SELFHOSTED_MACOS_RUNNER are set to "true"
-# (configured under repo Settings → Secrets and variables → Actions →
-# Variables), runs where `github.actor == 'jwmcglynn'` route to the
-# `linux-self-hosted` and `macos-self-hosted` jobs running on the
-# mcglynn homelab self-hosted fleet (donner-runner microvm on
-# event-horizon + native launchd runner on deep-thought), both of which
-# have bazel-cache1 wired in.
+# Self-hosted runner gates. Two repository variables, one per OS, each
+# configured at repo Settings → Secrets and variables → Actions →
+# Variables:
 #
-# Anyone else — fork PRs, same-repo PRs from collaborators, runs
-# re-triggered by a non-operator, any workflow dispatch by anyone other
-# than jwmcglynn — stays on the corresponding GitHub-hosted
-# `ubuntu-24.04` / `macos-15` job. The mirrors are mutually exclusive:
-# exactly one of `linux` / `linux-self-hosted` runs per workflow, and
-# exactly one of `macos` / `macos-self-hosted`.
+#   - SELFHOSTED_LINUX_RUNNER: "true" when the linux self-hosted runner
+#     (event-horizon) is online. Adds an ADDITIONAL `linux-self-hosted`
+#     job (ARM64) on top of the GitHub-hosted x86_64 `linux` job, but
+#     only for operator runs (`github.actor == 'jwmcglynn'`). The
+#     baseline x86_64 `linux` job runs for everyone all the time —
+#     this is purely augmentation, not replacement. That way x86
+#     coverage never regresses, and the operator gets extra ARM64
+#     coverage + homelab speed on top.
+#
+#   - SELFHOSTED_MACOS_RUNNER: "true" when the macOS self-hosted runner
+#     (deep-thought) is online. Switches the macOS lane over entirely:
+#     operator runs go to `macos-self-hosted`, everyone else stays on
+#     the GitHub-hosted `macos-15` job. Mutually exclusive — exactly
+#     one macOS job runs per workflow invocation.
 #
 # `github.actor == 'jwmcglynn'` is the strictest practical gate: it
-# pins the self-hosted lane to the single operator account that owns
-# the homelab runners, so no other committer can cause a job to execute
-# on (and potentially pollute the cache of) the self-hosted fleet.
+# pins the self-hosted lane to the operator account that owns the
+# homelab runners, so no other committer — fork PRs, same-repo PRs
+# from collaborators, reruns by non-operators — can execute on or
+# pollute the cache of the self-hosted fleet.
 #
-# The gate is safe to land before the runners are registered: with both
-# variables unset, behavior is unchanged from the pre-gate workflow.
-# Flip a variable once its runner is online and the next push uses it.
+# Both gates are safe to land before the runners are registered: with
+# the variables unset, behavior is unchanged from the pre-gate
+# workflow. Flip a variable once its runner is online and the next
+# push uses it.
 
 jobs:
   linux:
-    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' }}
+    # Runs for everyone, always — this is the x86_64 baseline that
+    # must never regress. When the operator also has the self-hosted
+    # ARM64 runner available, the `linux-self-hosted` job below runs
+    # in addition to (not instead of) this one.
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -82,23 +90,27 @@ jobs:
           bazelisk test --config=ci --test_output=errors \
             //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
-  # Mirror of the `linux` job above, but on the event-horizon self-hosted
-  # runner. Selected by the gate explained at the top of this file:
+  # ARM64 augmentation of the `linux` job above, running on the
+  # event-horizon self-hosted runner. Selected by the gate explained at
+  # the top of this file:
   #
-  #   - Runs only when SELFHOSTED_LINUX_RUNNER == 'true' AND the triggering
-  #     actor is jwmcglynn.
-  #   - The `linux` job is suppressed in the same condition, so operator
-  #     runs go here exclusively.
+  #   - Runs only when SELFHOSTED_LINUX_RUNNER == 'true' AND the
+  #     triggering actor is jwmcglynn.
+  #   - Runs IN ADDITION TO the GitHub-hosted `linux` job, not instead
+  #     of it. Baseline x86_64 coverage is never lost; this is pure
+  #     ARM64 augmentation for operator runs.
   #
   # Differences from the GitHub-hosted Linux job:
   #
-  #   - No setup-bazel step. The microvm guest already has bazelisk on PATH
-  #     and writes through to bazel-cache1 (gRPC at 192.168.1.63:9092) via
-  #     /etc/bazel.bazelrc baked into the NixOS guest config; operator runs
-  #     get full read+write cache access.
-  #   - No apt-get step. The donner-runner NixOS guest config installs
-  #     fontconfig, freetype, mesa-vulkan-drivers, libvulkan via
-  #     environment.systemPackages.
+  #   - Different architecture: this runs aarch64, the GitHub-hosted
+  #     `linux` job runs x86_64. Catching a regression in only one
+  #     architecture is the primary value of running both.
+  #   - No setup-bazel step. The runner host already has bazelisk on
+  #     PATH and writes through to bazel-cache1 (gRPC at LAN address)
+  #     via /etc/bazel.bazelrc; operator runs get full read+write
+  #     cache access.
+  #   - No apt-get step. The runner's base config installs fontconfig,
+  #     freetype, mesa-vulkan-drivers, libvulkan.
   linux-self-hosted:
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' }}
     runs-on: [self-hosted, linux, arm64, event-horizon]
