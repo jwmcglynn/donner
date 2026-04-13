@@ -148,7 +148,7 @@ donner_cc_library(
     ],
 )
 
-donner_cc_library(
+donner_perf_sensitive_cc_library(
     name = "renderer_driver",
     srcs = ["RendererDriver.cc"],
     hdrs = ["RendererDriver.h"],
@@ -170,7 +170,7 @@ donner_cc_library(
     }),
 )
 
-donner_cc_library(
+donner_perf_sensitive_cc_library(
     name = "filter_graph_executor",
     srcs = ["FilterGraphExecutor.cc"],
     hdrs = ["FilterGraphExecutor.h"],
@@ -222,7 +222,7 @@ donner_cc_library(
     ],
 )
 
-donner_cc_library(
+donner_perf_sensitive_cc_library(
     name = "rendering_context",
     srcs = ["RenderingContext.cc"],
     hdrs = ["RenderingContext.h"],
@@ -346,7 +346,7 @@ donner_cc_library(
     ],
 )
 
-donner_cc_library(
+donner_perf_sensitive_cc_library(
     name = "renderer_tiny_skia",
     srcs = ["RendererTinySkia.cc"],
     hdrs = ["RendererTinySkia.h"],

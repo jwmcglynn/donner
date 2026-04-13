@@ -178,7 +178,13 @@ public:
   // Text
   // ---------------------------------------------------------------------
 
-  void setText(std::string_view text);
+  /// Replace the buffer contents with `text`. By default this scrolls
+  /// the view back to the top — appropriate for File→Open and similar
+  /// "load a different document" flows. Pass `preserveScroll=true` when
+  /// the replacement is a small in-place edit (e.g. canvas→text
+  /// writeback after a transform drag) so the user's scroll position
+  /// isn't yanked out from under them.
+  void setText(std::string_view text, bool preserveScroll = false);
   std::string getText() const;
   std::string getText(const Coordinates& start, const Coordinates& end) const;
 

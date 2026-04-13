@@ -2077,8 +2077,8 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   withinRender_ = false;
 }
 
-void TextEditor::setText(std::string_view text) {
-  core_.setText(text);
+void TextEditor::setText(std::string_view text, bool preserveScroll) {
+  core_.setText(text, preserveScroll);
 }
 
 void TextEditor::enterCharacter(ImWchar character, bool shift) {

@@ -164,6 +164,11 @@ TEST_F(TextEditorTests, ShiftRightExpandsSelection) {
 TEST_F(TextEditorTests, ShiftLeftContractsSelection) {
   editor.setText("Hello");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 3));
+  // `setSelection` doesn't move the cursor, so put it explicitly at
+  // the selection's end before contracting — `moveLeft(_, select)`
+  // grows/shrinks relative to the cursor position, not the
+  // selection bounds.
+  editor.setCursorPosition(Coordinates(0, 3));
   editor.moveLeft(1, true, false);
   // After contracting left, selection should be from (0,0) to (0,2)
   EXPECT_EQ(editor.getSelectedText(), "He")
@@ -269,8 +274,11 @@ TEST_F(TextEditorTests, UndoReversesInsertion) {
 TEST_F(TextEditorTests, UndoReversesDeletion) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 2));
+  // `delete_()` removes the character at the cursor (column 2 = first
+  // 'l'), so "Hello" → "Helo". Previously this test expected "Hllo",
+  // which is what *backspace* would produce.
   editor.delete_();
-  EXPECT_EQ(editor.getText(), "Hllo");
+  EXPECT_EQ(editor.getText(), "Helo");
   editor.undo();
   EXPECT_EQ(editor.getText(), "Hello")
       << "undo should revert deletion";
@@ -465,8 +473,11 @@ TEST_F(TextEditorTests, GetTextReturnsExactBuffer) {
 
 TEST_F(TextEditorTests, SelectionNormalizedIfStartAfterEnd) {
   editor.setText("Hello world");
-  editor.setSelection(Coordinates(0, 10), Coordinates(0, 2));
-  // setSelection should normalize so start <= end
+  // Pass the bounds in reverse order — `setSelection` should
+  // normalize them so `start <= end` and the resulting selection
+  // covers the same character range as if they'd been in order.
+  editor.setSelection(Coordinates(0, 8), Coordinates(0, 2));
+  // Half-open range [2, 8) over "Hello world" = "llo wo".
   EXPECT_EQ(editor.getSelectedText(), "llo wo")
       << "setSelection should normalize reversed ranges";
 }
@@ -483,6 +494,10 @@ TEST_F(TextEditorTests, MultipleDeletesRemoveChars) {
 
 TEST_F(TextEditorTests, InsertAfterUndoDoesNotClearRedo) {
   editor.setText("A");
+  // Drop the cursor at the end of "A" before inserting so the
+  // following inserts append rather than prepending. `setText`
+  // leaves the cursor at (0, 0).
+  editor.setCursorPosition(Coordinates(0, 1));
   editor.insertText("B");
   editor.insertText("C");
   EXPECT_EQ(editor.getText(), "ABC");
@@ -571,9 +586,12 @@ TEST_F(TextEditorTests, ShiftCtrlHomeSelectsToDocumentStart) {
 
 TEST_F(TextEditorTests, MultiLineDeleteAcrossLines) {
   editor.setText("Line1\nLine2\nLine3");
-  editor.setSelection(Coordinates(0, 2), Coordinates(2, 2));
-  editor.insertText("");  // Replace selection with nothing (empty insertion)
-  // This should leave "Li3"
+  // Select cols 2..4 across lines 0..2 (half-open). That covers
+  // "ne1\nLine2\nLine" — the trailing 4 chars on line 0, all of
+  // line 1, and the leading 4 chars on line 2. Replacing it with
+  // empty text should leave "Li" + "3" = "Li3".
+  editor.setSelection(Coordinates(0, 2), Coordinates(2, 4));
+  editor.insertText("");
   EXPECT_EQ(editor.getText(), "Li3")
       << "Replacing multi-line selection should join remaining text";
 }
@@ -645,10 +663,16 @@ TEST_F(TextEditorTests, DeleteMultipleSelectionsSuccessively) {
 
 TEST_F(TextEditorTests, UndoMultipleOperations) {
   editor.setText("A");
+  // Position cursor at end of "A" so the following inserts append
+  // rather than prepending. (`setText` leaves the cursor at the
+  // start of the buffer.)
+  editor.setCursorPosition(Coordinates(0, 1));
   editor.insertText("B");
   editor.insertText("C");
   editor.insertText("D");
   EXPECT_EQ(editor.getText(), "ABCD");
+  // Three insertText calls → three undo entries; `undo(4)` walks
+  // them all and stops at the start of the undo buffer.
   editor.undo(4);
   EXPECT_EQ(editor.getText(), "A")
       << "undo(4) should revert to 'A'";
@@ -656,6 +680,7 @@ TEST_F(TextEditorTests, UndoMultipleOperations) {
 
 TEST_F(TextEditorTests, RedoAfterMultipleUndos) {
   editor.setText("X");
+  editor.setCursorPosition(Coordinates(0, 1));
   editor.insertText("Y");
   editor.insertText("Z");
   editor.undo(2);

@@ -239,8 +239,12 @@ public:
    * Replace the entire buffer with new text.
    *
    * @param text The new text to load into the buffer.
+   * @param preserveScroll If true, the current scroll position is kept.
+   *     Use this for in-place edits (e.g. canvas→text writeback) so the
+   *     view doesn't snap back to the top. Default false matches the
+   *     "load a fresh document" behavior.
    */
-  void setText(std::string_view text);
+  void setText(std::string_view text, bool preserveScroll = false);
 
   /// True if the editor needs to be re-rendered.
   bool needsRerender() const { return scrollToTop_; }
@@ -383,7 +387,7 @@ public:
   void selectAndFocus(const Coordinates& start, const Coordinates& end) {
     setSelection(start, end);
     setCursorPosition(start);
-    // scrollToCursor_ = true;
+    scrollToCursor_ = true;
   }
 
   /**

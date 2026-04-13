@@ -485,14 +485,14 @@ TEST_F(LayoutSystemTest, NestedSvgWithoutViewBoxUsesBoundsAsViewBox) {
 
 // --- Document from canvas transform ---
 
-TEST_F(LayoutSystemTest, DocumentFromCanvasTransform) {
+TEST_F(LayoutSystemTest, CanvasFromDocumentTransform) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     </svg>
   )");
 
   auto& registry = document.registry();
-  auto transform = layoutSystem.getDocumentFromCanvasTransform(registry);
+  auto transform = layoutSystem.getCanvasFromDocumentTransform(registry);
 
   // The transform should be valid (identity or scale depending on canvas size).
   // Just verify it doesn't crash and produces a valid result.

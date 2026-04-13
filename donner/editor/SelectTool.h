@@ -2,14 +2,23 @@
 /// @file
 ///
 /// `SelectTool` is the editor's first and (in this milestone) only tool.
-/// It hit-tests the document on mouse-down, sets the editor selection, and
-/// translates the selected element by the cumulative drag delta on
-/// mouse-move while the button is held. All DOM mutations flow through
-/// `EditorApp::applyMutation()` as `EditorCommand::SetTransform` — never
-/// directly.
+/// It dispatches three different gestures off `onMouseDown`:
+///
+///   - **Click on an element** → replace the selection with that
+///     element and start a drag (move on subsequent `onMouseMove`).
+///   - **Shift+click on an element** → toggle that element in the
+///     current selection (no drag).
+///   - **Click on empty space** → start a marquee drag. Subsequent
+///     `onMouseMove` events grow the marquee rect; `onMouseUp`
+///     resolves the rect to every geometry element it intersects and
+///     replaces (or appends-to, if Shift was held) the selection.
+///
+/// All DOM mutations flow through `EditorApp::applyMutation()` as
+/// `EditorCommand::SetTransform` — never directly.
 
 #include <optional>
 
+#include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/Tool.h"
@@ -19,13 +28,24 @@ namespace donner::editor {
 
 class SelectTool final : public Tool {
 public:
-  void onMouseDown(EditorApp& editor, const Vector2d& documentPoint) override;
+  void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
+                   MouseModifiers modifiers) override;
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
   [[nodiscard]] bool isDragging() const { return dragState_.has_value(); }
+
+  /// Whether a marquee selection is currently in progress (button is
+  /// held after a `onMouseDown` that hit empty space).
+  [[nodiscard]] bool isMarqueeing() const { return marqueeState_.has_value(); }
+
+  /// The current marquee rectangle in document coordinates, or
+  /// `std::nullopt` if no marquee drag is active. Returned even on
+  /// the very first frame of a marquee (rect collapses to a single
+  /// point). Used by the overlay renderer to draw the marquee chrome.
+  [[nodiscard]] std::optional<Box2d> marqueeRect() const;
 
   /// Returns true **exactly once** after a drag that actually moved
   /// completes (i.e. `onMouseUp` was called and `hasMoved` was true).
@@ -56,7 +76,19 @@ private:
     bool hasMoved = false;
   };
 
+  /// Active marquee drag. Records the start point (the document
+  /// position of the `onMouseDown` that hit empty space), the
+  /// current point (updated on every `onMouseMove`), and whether
+  /// Shift was held — additive marquee appends to the existing
+  /// selection instead of replacing it.
+  struct MarqueeState {
+    Vector2d startDocumentPoint;
+    Vector2d currentDocumentPoint;
+    bool additive = false;
+  };
+
   std::optional<DragState> dragState_;
+  std::optional<MarqueeState> marqueeState_;
   bool dragCompleted_ = false;
 };
 

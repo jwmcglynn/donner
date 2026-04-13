@@ -15,12 +15,9 @@
 /// For the minimal viewer demo (no tools, no overlay chrome, just a
 /// rendered SVG and a text pane) see `//examples:svg_viewer`.
 
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
-#include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +26,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -39,17 +38,21 @@
 #include "donner/editor/ChangeClassifier.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
-#include "donner/editor/TextPatch.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/PinchEventMonitor.h"
+#include "donner/editor/RenderPaneGesture.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/TextPatch.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/renderer/Renderer.h"
-
 #include "glad/glad.h"
 
 extern "C" {
@@ -62,17 +65,30 @@ extern "C" {
 
 namespace {
 
-constexpr int kInitialWindowWidth = 1280;
-constexpr int kInitialWindowHeight = 800;
+constexpr int kInitialWindowWidth = 1600;
+constexpr int kInitialWindowHeight = 900;
 constexpr float kSourcePaneWidth = 560.0f;
-constexpr float kMinZoom = 0.1f;
-constexpr float kMaxZoom = 32.0f;
-constexpr float kZoomStep = 1.1f;  // Per wheel notch.
+constexpr float kInspectorPaneWidth = 320.0f;
+constexpr float kTreeViewHeightFraction = 0.4f;
+// Zoom min/max live on `ViewportState`; the per-step factors stay
+// here because they're tied to user-input cadence rather than the
+// transform model.
+constexpr float kWheelZoomStep = 1.1f;     // Per Cmd+wheel notch.
+constexpr float kKeyboardZoomStep = 1.5f;  // Per Cmd+Plus / Cmd+Minus / menu click.
+// GLFW normalizes precise trackpad scroll deltas down to ~0.1 units on
+// macOS. Multiplying back by 10 gives pan deltas in roughly screen-pixel
+// scale while keeping coarse wheel notches modest.
+constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr float kTextChangeDebounceSeconds = 0.15f;  // 150ms idle before re-parse.
-constexpr std::size_t kFrameHistoryCapacity = 120;  // 2s @ 60fps.
+constexpr std::size_t kFrameHistoryCapacity = 120;   // 2s @ 60fps.
 constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
+constexpr ImU32 kSelectionChromeColor = IM_COL32(0x00, 0xc8, 0xff, 0xff);
+constexpr float kSelectionChromeThickness = 1.5f;
+constexpr ImU32 kMarqueeFillColor = IM_COL32(0x00, 0xc8, 0xff, 0x33);
+constexpr ImU32 kMarqueeStrokeColor = IM_COL32(0xff, 0xff, 0xff, 0xff);
+constexpr float kMarqueeStrokeThickness = 1.5f;
 
 /// Fixed-size ring buffer of recent frame times (in milliseconds). Used by
 /// the diagnostic frame-time graph drawn in the Render pane header.
@@ -93,8 +109,7 @@ struct FrameHistory {
     if (samples == 0) {
       return 0.0f;
     }
-    const std::size_t idx =
-        (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+    const std::size_t idx = (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
     return deltaMs[idx];
   }
 
@@ -107,26 +122,78 @@ struct FrameHistory {
   }
 };
 
-/// Render a compact bar graph of the recent frame-time history plus the
-/// most recent frame's ms / FPS as text. Each bar is one sample; red if
+/// Raw scroll events queued from GLFW until the next ImGui frame.
+struct PendingScrollEvents {
+  GLFWscrollfun previousCallback = nullptr;
+  std::vector<donner::editor::RenderPaneScrollEvent> events;
+};
+
+[[nodiscard]] bool IsZoomModifierHeld(GLFWwindow* window) {
+  return glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+         glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+}
+
+void EditorScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+  auto* state = static_cast<PendingScrollEvents*>(glfwGetWindowUserPointer(window));
+  if (state == nullptr) {
+    return;
+  }
+
+  if (state->previousCallback != nullptr) {
+    state->previousCallback(window, xoffset, yoffset);
+  }
+
+  double cursorX = 0.0;
+  double cursorY = 0.0;
+  glfwGetCursorPos(window, &cursorX, &cursorY);
+  state->events.push_back(donner::editor::RenderPaneScrollEvent{
+      .scrollDelta = donner::Vector2d(xoffset, yoffset),
+      .cursorScreen = donner::Vector2d(cursorX, cursorY),
+      .zoomModifierHeld = IsZoomModifierHeld(window),
+  });
+}
+
+/// Render a compact bar graph of the recent frame-time history plus a
+/// smoothed ms / FPS readout below it. Each bar is one sample; red if
 /// over the 16.67ms/60fps budget, green otherwise. A horizontal line
 /// marks the target budget. Samples read left-to-right in chronological
 /// order (oldest on the left).
 void RenderFrameGraph(const FrameHistory& history) {
   const ImVec2 origin = ImGui::GetCursorScreenPos();
   ImDrawList* dl = ImGui::GetWindowDrawList();
+  const float latestMs = history.latest();
+  const float latestFps = latestMs > 0.0f ? 1000.0f / latestMs : 0.0f;
+  static float msEma = 0.0f;
+  static float fpsEma = 0.0f;
+  static double lastDisplayUpdateTime = 0.0;
+  static float displayedMs = 0.0f;
+  static float displayedFps = 0.0f;
+
+  msEma = msEma == 0.0f ? latestMs : 0.9f * msEma + 0.1f * latestMs;
+  fpsEma = fpsEma == 0.0f ? latestFps : 0.9f * fpsEma + 0.1f * latestFps;
+  const double now = ImGui::GetTime();
+  if (displayedMs == 0.0f || now - lastDisplayUpdateTime > 0.25) {
+    displayedMs = msEma;
+    displayedFps = fpsEma;
+    lastDisplayUpdateTime = now;
+  }
 
   // Background panel + budget line.
   const ImVec2 bottomRight(origin.x + kFrameGraphWidth, origin.y + kFrameGraphHeight);
   dl->AddRectFilled(origin, bottomRight, IM_COL32(30, 30, 30, 255));
 
-  // Vertical scale: the higher of (2× budget) and the history max, so
-  // the budget line sits at the 50% mark in steady-state and the graph
-  // autoscales when frames go long.
-  const float scaleMs = std::max(kTargetFrameMs * 2.0f, history.max());
+  // Vertical scale: fixed at 2× the 60fps budget so the budget line
+  // always sits at the 50% mark and ms-to-pixel ratio stays constant.
+  // Bars taller than the graph just clip at the top — no autoscale,
+  // since rescaling on every spike makes it impossible to compare
+  // frame times across snapshots.
+  constexpr float scaleMs = kTargetFrameMs * 2.0f;
 
   // Budget line — horizontal guide at kTargetFrameMs.
-  const float budgetY = origin.y + kFrameGraphHeight - (kTargetFrameMs / scaleMs) * kFrameGraphHeight;
+  const float budgetY =
+      origin.y + kFrameGraphHeight - (kTargetFrameMs / scaleMs) * kFrameGraphHeight;
   dl->AddLine(ImVec2(origin.x, budgetY), ImVec2(bottomRight.x, budgetY),
               IM_COL32(255, 255, 255, 80), 1.0f);
 
@@ -136,14 +203,12 @@ void RenderFrameGraph(const FrameHistory& history) {
   const float barWidth = kFrameGraphWidth / static_cast<float>(kFrameHistoryCapacity);
   for (std::size_t i = 0; i < history.samples; ++i) {
     const std::size_t readIdx =
-        (history.writeIndex + kFrameHistoryCapacity - history.samples + i) %
-        kFrameHistoryCapacity;
+        (history.writeIndex + kFrameHistoryCapacity - history.samples + i) % kFrameHistoryCapacity;
     const float ms = history.deltaMs[readIdx];
     const float clamped = std::min(ms, scaleMs);
     const float barHeight = (clamped / scaleMs) * kFrameGraphHeight;
     const bool overBudget = ms > kTargetFrameMs;
-    const ImU32 color =
-        overBudget ? IM_COL32(220, 60, 60, 255) : IM_COL32(80, 200, 100, 255);
+    const ImU32 color = overBudget ? IM_COL32(220, 60, 60, 255) : IM_COL32(80, 200, 100, 255);
 
     const float x = origin.x + static_cast<float>(i) * barWidth;
     dl->AddRectFilled(ImVec2(x, origin.y + kFrameGraphHeight - barHeight),
@@ -153,40 +218,121 @@ void RenderFrameGraph(const FrameHistory& history) {
   // Advance the ImGui cursor past the graph so subsequent widgets lay out
   // to the right / below without overlapping.
   ImGui::Dummy(ImVec2(kFrameGraphWidth, kFrameGraphHeight));
-  ImGui::SameLine();
-  const float latestMs = history.latest();
-  const float fps = latestMs > 0.0f ? 1000.0f / latestMs : 0.0f;
   const ImU32 textColor =
-      latestMs > kTargetFrameMs ? IM_COL32(220, 60, 60, 255) : IM_COL32(255, 255, 255, 255);
+      displayedMs > kTargetFrameMs ? IM_COL32(220, 60, 60, 255) : IM_COL32(255, 255, 255, 255);
   ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-  ImGui::Text("%.2f ms / %.1f FPS", latestMs, fps);
+  ImGui::Text("%.2f ms / %.1f FPS", displayedMs, displayedFps);
   ImGui::PopStyleColor();
 }
 
-/// Pan + zoom state for the render pane. At zoom 1.0 and pan (0, 0), the
-/// rendered bitmap exactly fills the pane's content region. Zoom scales
-/// the image around the cursor; pan offsets its origin in pane-local
-/// pixels.
-struct ViewTransform {
-  float zoom = 1.0f;
-  ImVec2 pan = ImVec2(0.0f, 0.0f);
-
-  void reset() {
-    zoom = 1.0f;
-    pan = ImVec2(0.0f, 0.0f);
-  }
-};
-
 void GlfwErrorCallback(int error, const char* description) {
   std::cerr << "GLFW error " << error << ": " << description << "\n";
+}
+
+bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
+                      const donner::svg::SVGElement& node) {
+  for (std::optional<donner::svg::SVGElement> current = node; current.has_value();
+       current = current->parentElement()) {
+    if (*current == ancestor) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsSelectedInTree(std::span<const donner::svg::SVGElement> selection,
+                      const donner::svg::SVGElement& element) {
+  return std::find(selection.begin(), selection.end(), element) != selection.end();
+}
+
+std::string BuildTreeNodeLabel(const donner::svg::SVGElement& element) {
+  const std::string_view tagName = element.tagName().name;
+  std::string label = "<";
+  label.append(tagName.data(), tagName.size());
+  label.push_back('>');
+
+  const donner::RcString id = element.id();
+  const std::string_view idSv = id;
+  if (!idSv.empty()) {
+    label.push_back(' ');
+    label.push_back('#');
+    label.append(idSv.data(), idSv.size());
+  }
+
+  return label;
+}
+
+struct TreeViewState {
+  std::optional<donner::svg::SVGElement> scrollTarget;
+  bool pendingScroll = false;
+  bool selectionChangedInTree = false;
+};
+
+bool RenderTreeRecursive(donner::editor::EditorApp& app, const donner::svg::SVGElement& element,
+                         TreeViewState& state) {
+  const bool hasChildren = element.firstChild().has_value();
+  const bool onSelectionPath = state.pendingScroll && state.scrollTarget.has_value() &&
+                               IsAncestorOrSelf(element, *state.scrollTarget);
+  if (hasChildren && onSelectionPath) {
+    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+  }
+
+  ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow |
+                                 ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                                 ImGuiTreeNodeFlags_SpanAvailWidth;
+  if (!hasChildren) {
+    nodeFlags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+  }
+  if (IsSelectedInTree(std::span<const donner::svg::SVGElement>(app.selectedElements()), element)) {
+    nodeFlags |= ImGuiTreeNodeFlags_Selected;
+  }
+
+  const donner::Entity entity = element.entityHandle().entity();
+  ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(entity)));
+  const std::string label = BuildTreeNodeLabel(element);
+  const bool nodeOpen = ImGui::TreeNodeEx(label.c_str(), nodeFlags);
+
+  if (ImGui::IsItemClicked()) {
+    const bool toggleSelection = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    if (toggleSelection) {
+      app.toggleInSelection(element);
+    } else {
+      app.setSelection(element);
+    }
+    state.selectionChangedInTree = true;
+    state.pendingScroll = false;
+  }
+
+  if (state.pendingScroll && state.scrollTarget.has_value() && *state.scrollTarget == element) {
+    ImGui::SetScrollHereY();
+    state.pendingScroll = false;
+  }
+
+  if (nodeOpen && hasChildren) {
+    for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
+      RenderTreeRecursive(app, *child, state);
+    }
+    ImGui::TreePop();
+  }
+
+  ImGui::PopID();
+  return state.selectionChangedInTree;
+}
+
+void RenderTreeView(donner::editor::EditorApp& app, TreeViewState& state) {
+  if (!app.hasDocument()) {
+    ImGui::TextDisabled("(no document)");
+    return;
+  }
+
+  RenderTreeRecursive(app, app.document().document().svgElement(), state);
 }
 
 /// Build a `TextEditor::ErrorMarkers` map from a parser diagnostic. The
 /// map is keyed by 1-based line number (`TextEditor`'s convention) and
 /// values are the human-readable reason. Diagnostics without resolved
 /// line info land on line 1 so the user always sees *something*.
-donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(
-    const donner::ParseDiagnostic& diag) {
+donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(const donner::ParseDiagnostic& diag) {
   donner::editor::TextEditor::ErrorMarkers markers;
   const auto& start = diag.range.start;
   const int line = start.lineInfo.has_value() ? static_cast<int>(start.lineInfo->line) : 1;
@@ -242,11 +388,29 @@ void RenderInspector(const donner::editor::EditorApp& app) {
   // Local (parent-from-entity) transform via the public `SVGGraphicsElement`
   // API — the same quantity SelectTool drags and UndoTimeline snapshots.
   if (selected.isa<donner::svg::SVGGraphicsElement>()) {
-    const donner::Transform2d xform =
-        selected.cast<donner::svg::SVGGraphicsElement>().transform();
+    const donner::Transform2d xform = selected.cast<donner::svg::SVGGraphicsElement>().transform();
     ImGui::Text("Transform: [%.3f %.3f %.3f %.3f  %.2f %.2f]", xform.data[0], xform.data[1],
                 xform.data[2], xform.data[3], xform.data[4], xform.data[5]);
   }
+}
+
+/// Best-effort document viewBox lookup for the editor's render pane.
+/// Returns the SVG root element's `viewBox` attribute when present;
+/// otherwise falls back to the document's intrinsic natural size as
+/// computed by `canvasSize()` (which is what the renderer would have
+/// rasterized into anyway). Final fallback for completely degenerate
+/// documents is a unit box, which keeps `ViewportState` math finite
+/// without crashing.
+donner::Box2d ResolveDocumentViewBox(donner::svg::SVGDocument& document) {
+  if (auto viewBox = document.svgElement().viewBox(); viewBox.has_value()) {
+    return *viewBox;
+  }
+  const donner::Vector2i intrinsic = document.canvasSize();
+  if (intrinsic.x > 0 && intrinsic.y > 0) {
+    return donner::Box2d::FromXYWH(0.0, 0.0, static_cast<double>(intrinsic.x),
+                                   static_cast<double>(intrinsic.y));
+  }
+  return donner::Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
 /// Highlight an element's XML source span in the text editor. No-op if
@@ -281,34 +445,16 @@ std::string LoadFile(const std::string& filename) {
   return std::move(out).str();
 }
 
-/// Write text to a file, refusing to follow symlinks.
-/// Returns true on success.
-bool SaveFile(const std::string& path, std::string_view content) {
-  // POSIX `open` with `O_NOFOLLOW` so we never chase a symlink that a
-  // prior attacker (or a prior process) may have placed at `path`.
-  // `O_CREAT | O_WRONLY | O_TRUNC` creates or truncates; no `O_EXCL`
-  // since Save explicitly overwrites an existing file.
-  const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-  if (fd < 0) {
-    std::cerr << "Save failed: could not open " << path << " (errno " << errno << ")\n";
-    return false;
+std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
+  std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  if (!text.empty() && text.back() == '\0') {
+    text.pop_back();
   }
+  return text;
+}
 
-  const char* data = content.data();
-  std::size_t remaining = content.size();
-  while (remaining > 0) {
-    const ssize_t written = ::write(fd, data, remaining);
-    if (written < 0) {
-      if (errno == EINTR) continue;
-      std::cerr << "Save failed: write error (errno " << errno << ")\n";
-      ::close(fd);
-      return false;
-    }
-    data += written;
-    remaining -= static_cast<std::size_t>(written);
-  }
-  ::close(fd);
-  return true;
+void LogNotImplementedAction(std::string_view action) {
+  std::cerr << action << ": Not implemented yet\n";
 }
 
 }  // namespace
@@ -343,8 +489,8 @@ int main(int argc, char** argv) {
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-  GLFWwindow* window = glfwCreateWindow(kInitialWindowWidth, kInitialWindowHeight,
-                                        "Donner Editor", nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(kInitialWindowWidth, kInitialWindowHeight, "Donner Editor",
+                                        nullptr, nullptr);
   if (!window) {
     std::cerr << "Failed to create GLFW window\n";
     glfwTerminate();
@@ -373,15 +519,37 @@ int main(int argc, char** argv) {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
+  // ImGui's GLFW backend already consumes scroll callbacks for
+  // `io.MouseWheel`. Install a thin wrapper on top so we can retain
+  // the raw per-event scroll sequence for render-pane gesture routing
+  // while still forwarding every event back into ImGui unchanged.
+  PendingScrollEvents pendingScrollEvents;
+  glfwSetWindowUserPointer(window, &pendingScrollEvents);
+  pendingScrollEvents.previousCallback = glfwSetScrollCallback(window, EditorScrollCallback);
+  (void)donner::editor::InstallPinchEventMonitor(window, &pendingScrollEvents.events,
+                                                 kWheelZoomStep);
+
   // ---------------------------------------------------------------------------
   // Editor state
   // ---------------------------------------------------------------------------
+  // Startup-timing instrumentation: print where the time is going on
+  // first launch so we can chase the "took a few seconds for the SVG
+  // to appear" report. Cheap to leave in until we have a proper
+  // perf-profiling story.
+  using SteadyClock = std::chrono::steady_clock;
+  const auto editorStart = SteadyClock::now();
+  const auto msSinceStart = [&editorStart]() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - editorStart)
+        .count();
+  };
+
   donner::editor::EditorApp app;
   if (!app.loadFromString(initialSource)) {
     std::cerr << "Failed to parse SVG file: " << svgPath << "\n";
     // Keep running with an empty document so the user can still fix it
     // in the source pane.
   }
+  std::cerr << "[startup] +" << msSinceStart() << "ms loadFromString done\n";
   // Remember the path we loaded from so Cmd+S knows where to write.
   app.setCurrentFilePath(svgPath);
 
@@ -396,6 +564,7 @@ int main(int argc, char** argv) {
   // names) + any entries added via `addAutocompleteEntry`. Ctrl+I can
   // also explicitly open the popup.
   textEditor.setActiveAutocomplete(true);
+  std::string editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText);
 
   donner::svg::Renderer renderer;
   donner::editor::AsyncRenderer asyncRenderer;
@@ -405,8 +574,43 @@ int main(int argc, char** argv) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
+  // Selection path outlines live in a *second* pixmap drawn by a
+  // *second* renderer instance, layered on top of the document
+  // texture at display time. The AABB and marquee moved to the ImGui
+  // draw list so click / drag feedback shows up in the same frame
+  // without waiting for a Skia re-rasterize.
+  donner::svg::Renderer overlayRenderer;
+  GLuint overlayTexture = 0;
+  glGenTextures(1, &overlayTexture);
+  glBindTexture(GL_TEXTURE_2D, overlayTexture);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  int overlayTextureWidth = 0;
+  int overlayTextureHeight = 0;
+  std::optional<donner::svg::RendererBitmap> pendingOverlayBitmap;
+  std::uint64_t pendingOverlayVersion = 0;
+  std::uint64_t displayedDocVersion = 0;
+  // Tracks the selection vector (multi-select aware) snapshotted at
+  // the last successful overlay re-render. Stored as a value so the
+  // change-detection compare is straightforward; the contents are
+  // shallow `SVGElement` handles, so the copy cost is in the noise.
+  std::vector<donner::svg::SVGElement> lastOverlaySelectionVec;
+  donner::Vector2i lastOverlayCanvasSize{0, 0};
+  // Sentinel: forces the first frame to always re-rasterize the
+  // overlay so it lines up with the freshly-rendered document
+  // bitmap. After the first frame, the version-change trigger keeps
+  // it in sync with `flushFrame` mutations; the upload itself is
+  // deferred until the matching document bitmap lands.
+  std::uint64_t lastOverlayVersion = std::numeric_limits<std::uint64_t>::max();
+  // Cached document-space selection bounds used by the immediate-mode
+  // AABB draw. Refreshed eagerly on selection-changing clicks and on
+  // any later document-version change that could move the selected
+  // geometry.
+  std::vector<donner::svg::SVGElement> lastSelectionBoundsSelectionVec;
+  std::vector<donner::Box2d> cachedSelectionBoundsDoc;
+  std::uint64_t lastSelectionBoundsVersion = std::numeric_limits<std::uint64_t>::max();
+
   std::uint64_t lastRenderedVersion = 0;
-  std::optional<donner::svg::SVGElement> lastRenderedSelection;
   std::optional<donner::svg::SVGElement> lastHighlightedSelection;
   donner::Vector2i lastRenderedCanvasSize{0, 0};
   int textureWidth = 0;
@@ -423,17 +627,39 @@ int main(int argc, char** argv) {
   // marker on the very first frame.
   if (auto initialErr = app.document().lastParseError(); initialErr.has_value()) {
     textEditor.setErrorMarkers(ParseErrorToMarkers(*initialErr));
-    lastShownErrorLine =
-        initialErr->range.start.lineInfo.has_value()
-            ? static_cast<int>(initialErr->range.start.lineInfo->line)
-            : 1;
+    lastShownErrorLine = initialErr->range.start.lineInfo.has_value()
+                             ? static_cast<int>(initialErr->range.start.lineInfo->line)
+                             : 1;
     lastShownErrorReason = std::string(std::string_view(initialErr->reason));
   }
 
-  ViewTransform view;
+  // Single source of truth for the render pane's coordinate system.
+  // See `docs/design_docs/0025-editor_ux.md`. Inputs (paneOrigin,
+  // paneSize, viewBox, DPR) are refreshed at the top of every frame
+  // from the live ImGui / GLFW state; user input only ever mutates
+  // `zoom`, `panDocPoint`, `panScreenPoint` via the helpers on the
+  // struct. Default-constructed → `zoom = 1.0` (= 100%).
+  donner::editor::ViewportState viewport;
+  // Set true after the first frame in which we know a non-zero pane
+  // size, so we can call `resetTo100Percent()` once and anchor the
+  // initial document center to the pane center.
+  bool viewportInitialized = false;
+
   bool panning = false;
   ImVec2 lastPanMouse(0.0f, 0.0f);
   FrameHistory frameHistory;
+
+  // A click captured by ImGui that hasn't yet been processed by
+  // `SelectTool` because the async render worker was busy at the
+  // time. Drained on the next frame the worker is idle. Without this
+  // buffer, clicks arriving during the initial render (which can
+  // take a few hundred ms on a complex SVG) are silently dropped and
+  // the user sees their mouse-downs go nowhere.
+  struct PendingClick {
+    donner::Vector2d documentPoint;
+    donner::editor::MouseModifiers modifiers;
+  };
+  std::optional<PendingClick> pendingClick;
 
   // Previous frame's source text — used by the M5 change classifier to
   // diff against the current text and determine whether the edit lands
@@ -444,16 +670,28 @@ int main(int argc, char** argv) {
   // something actually changes.
   std::string lastWindowTitle;
 
-  // Save As popup state.
-  char saveAsPathBuffer[1024] = {};
-  bool openSaveAsPopup = false;
-
-  // Debounce state for text changes. Instead of re-parsing on every
-  // keystroke, accumulate a dirty flag and only dispatch after
-  // kTextChangeDebounceSeconds of typing idle. This is the single biggest
-  // perf improvement for interactive editing — without it, every keystroke
-  // triggers the full parse→CSS→render pipeline (~100ms+ for a complex SVG).
+  // Leading-edge + trailing debounce state for text changes.
+  //
+  // Every keystroke would otherwise trigger the full parse→CSS→
+  // render pipeline; on a complex SVG that's ~100ms+ of CPU per
+  // press even in opt mode, which overwhelms the typing rate. We
+  // still need to debounce, but the *pure* trailing debounce that
+  // lived here before felt broken: the user would delete a character,
+  // wait, see nothing, press another key, and only then watch the
+  // previous change land. The effect was "every edit takes one extra
+  // key press to take effect", even though the 150 ms trailing wait
+  // was the actual cause.
+  //
+  // Leading-edge fixes that: fire immediately on the first
+  // keystroke after an idle period, then throttle subsequent edits
+  // until the timer expires, and emit one final trailing dispatch
+  // at idle so in-flight mid-burst edits aren't lost. The result is
+  // that the canvas updates on the very first frame after a
+  // keystroke when the user has been idle, and the trailing
+  // dispatch cleans up any changes that were throttled out of the
+  // middle of a typing burst.
   bool textChangePending = false;
+  bool textDispatchThrottled = false;
   float textChangeIdleTimer = 0.0f;
 
   // Enable the M5 incremental path by default during development. The
@@ -461,6 +699,30 @@ int main(int argc, char** argv) {
   // active use it should be on so attribute-value edits skip the full
   // re-parse. The flag can still be toggled at runtime for debugging.
   app.setStructuredEditingEnabled(true);
+
+  std::cerr << "[startup] +" << msSinceStart() << "ms entering main loop\n";
+
+  // One-shot guards so the startup-timing prints fire exactly once
+  // each, on the frames we care about. Cheap to leave in.
+  bool loggedFirstRenderRequest = false;
+  bool loggedFirstTextureLanded = false;
+  std::optional<donner::svg::SVGElement> lastTreeSelection;
+  bool treeviewPendingScroll = false;
+  bool treeSelectionOriginatedInTree = false;
+
+  const auto refreshSelectionBoundsCache = [&]() {
+    if (!app.hasDocument()) {
+      cachedSelectionBoundsDoc.clear();
+      lastSelectionBoundsSelectionVec.clear();
+      lastSelectionBoundsVersion = std::numeric_limits<std::uint64_t>::max();
+      return;
+    }
+
+    cachedSelectionBoundsDoc = donner::editor::SnapshotSelectionWorldBounds(
+        std::span<const donner::svg::SVGElement>(app.selectedElements()));
+    lastSelectionBoundsSelectionVec = app.selectedElements();
+    lastSelectionBoundsVersion = app.document().currentFrameVersion();
+  };
 
   // ---------------------------------------------------------------------------
   // Main loop
@@ -495,8 +757,10 @@ int main(int argc, char** argv) {
 
     // First, check if a prior async render has completed and pick up
     // the bitmap if so.
-    if (auto bitmapOpt = asyncRenderer.pollResult(); bitmapOpt.has_value() && !bitmapOpt->empty()) {
-      const auto& bitmap = *bitmapOpt;
+    if (auto resultOpt = asyncRenderer.pollResult();
+        resultOpt.has_value() && !resultOpt->bitmap.empty()) {
+      const auto& result = *resultOpt;
+      const auto& bitmap = result.bitmap;
       glBindTexture(GL_TEXTURE_2D, texture);
       glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
@@ -504,6 +768,30 @@ int main(int argc, char** argv) {
       glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
       textureWidth = bitmap.dimensions.x;
       textureHeight = bitmap.dimensions.y;
+      displayedDocVersion = result.version;
+      if (pendingOverlayBitmap.has_value() && pendingOverlayVersion == displayedDocVersion) {
+        const auto& overlayBitmap = *pendingOverlayBitmap;
+        if (!overlayBitmap.empty()) {
+          glBindTexture(GL_TEXTURE_2D, overlayTexture);
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(overlayBitmap.rowBytes / 4u));
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, overlayBitmap.dimensions.x,
+                       overlayBitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                       overlayBitmap.pixels.data());
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+          overlayTextureWidth = overlayBitmap.dimensions.x;
+          overlayTextureHeight = overlayBitmap.dimensions.y;
+        } else {
+          overlayTextureWidth = 0;
+          overlayTextureHeight = 0;
+        }
+        pendingOverlayBitmap.reset();
+        pendingOverlayVersion = 0;
+      }
+      if (!loggedFirstTextureLanded) {
+        loggedFirstTextureLanded = true;
+        std::cerr << "[startup] +" << msSinceStart() << "ms first texture landed ("
+                  << bitmap.dimensions.x << "x" << bitmap.dimensions.y << ")\n";
+      }
     }
 
     // Drain the command queue (ReplaceDocument from text edits,
@@ -560,7 +848,10 @@ int main(int argc, char** argv) {
                                                              std::string_view(serialized));
         if (patch.has_value()) {
           donner::editor::applyPatches(source, {{*patch}});
-          textEditor.setText(source);
+          // `preserveScroll=true` so a click that registers as a tiny
+          // drag (mouse jitter inside a 1-pixel window) doesn't yank
+          // the source pane back to line 0 via the writeback path.
+          textEditor.setText(source, /*preserveScroll=*/true);
           // Reset the text-changed flag so the next frame's source-pane
           // poll doesn't re-interpret our writeback as a user edit (which
           // would trigger a ReplaceDocumentCommand and wipe the selection).
@@ -573,173 +864,117 @@ int main(int argc, char** argv) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Main menu bar. Kept deliberately minimal — Help → About is the
-    // only required entry for this milestone, but the bar exists so
-    // future menus (File, Edit, Window, etc.) can slot in without
-    // restructuring.
+    int windowWidth = 0;
+    int windowHeight = 0;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    const float menuBarHeight = ImGui::GetFrameHeight();
+    const float paneOriginY = menuBarHeight;
+    const float paneHeight = std::max(0.0f, static_cast<float>(windowHeight) - menuBarHeight);
+    const float renderPaneWidth =
+        std::max(0.0f, static_cast<float>(windowWidth) - kSourcePaneWidth - kInspectorPaneWidth);
+    const float rightPaneX = static_cast<float>(windowWidth) - kInspectorPaneWidth;
+    const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
+    const float rightPaneContentHeight = std::max(0.0f, paneHeight - rightPaneGap);
+    const float treePaneHeight = rightPaneContentHeight * kTreeViewHeightFraction;
+    const float inspectorPaneY = paneOriginY + treePaneHeight + rightPaneGap;
+    const float inspectorPaneHeight = std::max(0.0f, paneHeight - treePaneHeight - rightPaneGap);
+    const donner::Vector2d renderPaneOrigin(kSourcePaneWidth, paneOriginY);
+    const donner::Vector2d renderPaneSize(renderPaneWidth, paneHeight);
+
+    // Keyboard shortcuts that target the render pane use the current
+    // frame's fixed pane layout even though the pane itself renders
+    // later in the frame.
+    viewport.paneOrigin = renderPaneOrigin;
+    viewport.paneSize = renderPaneSize;
+    if (app.hasDocument()) {
+      viewport.documentViewBox = ResolveDocumentViewBox(app.document().document());
+    }
+
+    const auto applyZoom = [&](double factor, const donner::Vector2d& focalScreen) {
+      viewport.zoomAround(viewport.zoom * factor, focalScreen);
+    };
+
+    const auto triggerOpenStub = [&]() {
+      // TODO: Route this through a real file picker once the in-tree
+      // editor grows an open-file workflow.
+      LogNotImplementedAction("Open");
+    };
+    const auto triggerSaveStub = [&]() {
+      // TODO: Route this through a real save path once the in-tree
+      // editor grows persistence UI.
+      LogNotImplementedAction("Save");
+    };
+    const auto triggerSaveAsStub = [&]() {
+      // TODO: Replace this stub with a real Save As flow when the
+      // in-tree editor grows a file chooser.
+      LogNotImplementedAction("Save As");
+    };
+    const auto triggerUndo = [&]() {
+      if (app.canUndo()) {
+        app.undo();
+      }
+    };
+    const auto triggerRedo = [&]() { app.redo(); };
+    const auto triggerZoomIn = [&]() { applyZoom(kKeyboardZoomStep, viewport.paneCenter()); };
+    const auto triggerZoomOut = [&]() {
+      applyZoom(1.0 / kKeyboardZoomStep, viewport.paneCenter());
+    };
+    const auto triggerActualSize = [&]() { viewport.resetTo100Percent(); };
+
+    const bool sourcePaneFocused = textEditor.isFocused();
+    const bool canCanvasRedo = app.undoTimeline().entryCount() > 0;
     bool openAboutPopup = false;
-    bool menuSaveRequested = false;
-    bool menuSaveAsRequested = false;
-    if (ImGui::BeginMainMenuBar()) {
-      if (ImGui::BeginMenu("File")) {
-        const bool saveEnabled = app.currentFilePath().has_value();
-        if (ImGui::MenuItem("Save", "Cmd+S", false, saveEnabled)) {
-          menuSaveRequested = true;
-        }
-        if (ImGui::MenuItem("Save As…", "Cmd+Shift+S")) {
-          menuSaveAsRequested = true;
-        }
-        ImGui::EndMenu();
-      }
-      if (ImGui::BeginMenu("Help")) {
-        if (ImGui::MenuItem("About Donner Editor")) {
-          openAboutPopup = true;
-        }
-        ImGui::EndMenu();
-      }
-      ImGui::EndMainMenuBar();
-    }
-    if (openAboutPopup) {
-      ImGui::OpenPopup("About Donner Editor");
-    }
+    bool openLicensesPopup = false;
 
-    // Menu-driven Save / Save As (keyboard shortcuts are handled below
-    // in the main shortcut block and share the same logic).
-    if (menuSaveRequested && app.currentFilePath().has_value()) {
-      const std::string content = textEditor.getText();
-      if (SaveFile(*app.currentFilePath(), content)) {
-        app.markClean();
-      }
-    }
-    if (menuSaveAsRequested) {
-      if (app.currentFilePath().has_value()) {
-        std::strncpy(saveAsPathBuffer, app.currentFilePath()->c_str(),
-                     sizeof(saveAsPathBuffer) - 1);
-        saveAsPathBuffer[sizeof(saveAsPathBuffer) - 1] = '\0';
-      } else {
-        saveAsPathBuffer[0] = '\0';
-      }
-      openSaveAsPopup = true;
-    }
-
-    if (openSaveAsPopup) {
-      ImGui::OpenPopup("Save As");
-      openSaveAsPopup = false;
-    }
-
-    // Save As popup: a simple text-input prompt for the target path.
-    // Native file dialogs will come via nfd_extended in a follow-up.
+    // Global keyboard shortcuts. The source pane keeps its own text
+    // editing shortcuts; these handlers only cover app-level actions
+    // or render-pane actions that do not belong to `TextEditor`.
     {
-      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-      ImGui::SetNextWindowSize(ImVec2(600.0f, 0.0f), ImGuiCond_Appearing);
-      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
-                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-      if (ImGui::BeginPopupModal("Save As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Save the current document to:");
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const bool enterPressed =
-            ImGui::InputText("##saveaspath", saveAsPathBuffer, sizeof(saveAsPathBuffer),
-                             ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::Spacing();
-        const bool saveClicked = ImGui::Button("Save", ImVec2(120.0f, 0.0f));
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
-          ImGui::CloseCurrentPopup();
-        }
-
-        if ((enterPressed || saveClicked) && saveAsPathBuffer[0] != '\0') {
-          const std::string newPath(saveAsPathBuffer);
-          const std::string content = textEditor.getText();
-          if (SaveFile(newPath, content)) {
-            app.setCurrentFilePath(newPath);
-            app.markClean();
-            ImGui::CloseCurrentPopup();
-          }
-        }
-        ImGui::EndPopup();
-      }
-    }
-
-    // About popup — displays the embedded open-source notice. Required
-    // for every distributed build to satisfy the attribution obligations
-    // of the imgui, glfw, tracy, skia, freetype, and harfbuzz licenses.
-    // Text comes from `//third_party/licenses:notice_editor` embedded
-    // via `//donner/editor:notice`.
-    {
-      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-      ImGui::SetNextWindowSize(ImVec2(displaySize.x * 0.7f, displaySize.y * 0.8f),
-                               ImGuiCond_Appearing);
-      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
-                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-      if (ImGui::BeginPopupModal("About Donner Editor", nullptr, ImGuiWindowFlags_NoCollapse)) {
-        ImGui::TextUnformatted("Donner Editor — in-tree SVG editor built on donner/svg");
-        ImGui::Separator();
-        ImGui::Spacing();
-        ImGui::TextUnformatted("Open-source license notices:");
-        ImGui::Spacing();
-        if (ImGui::BeginChild("##notice_scroll",
-                              ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing()),
-                              /*border=*/true)) {
-          const auto& notice = donner::embedded::kEditorNoticeText;
-          ImGui::TextUnformatted(reinterpret_cast<const char*>(notice.data()),
-                                 reinterpret_cast<const char*>(notice.data() + notice.size()));
-        }
-        ImGui::EndChild();
-        if (ImGui::Button("Close")) {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-      }
-    }
-
-    // Global keyboard shortcuts. ImGui translates Cmd on macOS and Ctrl
-    // elsewhere into `Super`/`Ctrl` key mods, so we accept either.
-    {
+      const bool anyPopupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
       const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
       const bool shift = ImGui::GetIO().KeyShift;
       const bool pressedZ = ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false);
 
-      if (pressedZ && cmd && !shift) {
-        // Cmd+Z: undo
-        if (app.canUndo()) {
-          app.undo();
-        }
-      } else if (pressedZ && cmd && shift) {
-        // Cmd+Shift+Z: redo (break chain + undo-of-undo)
-        app.redo();
+      if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
+        triggerOpenStub();
       }
 
-      // Cmd+S: save the current source text to the loaded file path.
-      // If there's no file path yet (new document), fall through to
-      // Save As. Cmd+Shift+S always prompts.
-      //
-      // The source pane is the canonical representation — canvas
-      // mutations have already been written back via AttributeWriteback.
-      if (ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false) && cmd) {
-        if (!shift && app.currentFilePath().has_value()) {
-          const std::string content = textEditor.getText();
-          if (SaveFile(*app.currentFilePath(), content)) {
-            app.markClean();
-          }
+      if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
+        if (shift) {
+          triggerSaveAsStub();
         } else {
-          // Save As: open the prompt popup. Pre-populate with the
-          // current path (or empty).
-          if (app.currentFilePath().has_value()) {
-            std::strncpy(saveAsPathBuffer, app.currentFilePath()->c_str(),
-                         sizeof(saveAsPathBuffer) - 1);
-            saveAsPathBuffer[sizeof(saveAsPathBuffer) - 1] = '\0';
-          } else {
-            saveAsPathBuffer[0] = '\0';
-          }
-          openSaveAsPopup = true;
+          triggerSaveStub();
         }
+      }
+
+      if (!sourcePaneFocused) {
+        if (pressedZ && cmd && !shift) {
+          triggerUndo();
+        } else if (pressedZ && cmd && shift) {
+          triggerRedo();
+        }
+      }
+
+      if (!anyPopupOpen && cmd &&
+          (ImGui::IsKeyPressed(ImGuiKey_Equal, /*repeat=*/false) ||
+           ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, /*repeat=*/false))) {
+        triggerZoomIn();
+      }
+      if (!anyPopupOpen && cmd &&
+          (ImGui::IsKeyPressed(ImGuiKey_Minus, /*repeat=*/false) ||
+           ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, /*repeat=*/false))) {
+        triggerZoomOut();
+      }
+      if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_0, /*repeat=*/false)) {
+        triggerActualSize();
       }
 
       // Escape: clear the current selection. Modal popups capture Escape
       // first (to close themselves), so this only fires when no popup is
       // active.
-      if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) &&
-          ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) && app.hasSelection()) {
+      if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
+          app.hasSelection()) {
         app.setSelection(std::nullopt);
       }
 
@@ -750,18 +985,150 @@ int main(int argc, char** argv) {
       // (see `EditorCommand::Kind::DeleteElement`).
       const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
                              ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
-      if (deleteKey && app.hasSelection() &&
-          !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) &&
-          !ImGui::GetIO().WantCaptureKeyboard) {
+      if (deleteKey && app.hasSelection() && !anyPopupOpen && !ImGui::GetIO().WantCaptureKeyboard) {
         const donner::svg::SVGElement element = *app.selectedElement();
         app.setSelection(std::nullopt);
         app.applyMutation(donner::editor::EditorCommand::DeleteElementCommand(element));
       }
     }
 
-    int windowWidth = 0;
-    int windowHeight = 0;
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+    if (ImGui::BeginMainMenuBar()) {
+      if (ImGui::BeginMenu("Donner")) {
+        if (ImGui::MenuItem("About...")) {
+          openAboutPopup = true;
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open...", "Cmd+O")) {
+          triggerOpenStub();
+        }
+        if (ImGui::MenuItem("Save", "Cmd+S")) {
+          triggerSaveStub();
+        }
+        if (ImGui::MenuItem("Save As...", "Cmd+Shift+S")) {
+          triggerSaveAsStub();
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Undo", "Cmd+Z", false, app.canUndo())) {
+          triggerUndo();
+        }
+        if (ImGui::MenuItem("Redo", "Cmd+Shift+Z", false, canCanvasRedo)) {
+          triggerRedo();
+        }
+        ImGui::Separator();
+
+        if (!sourcePaneFocused) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::MenuItem("Cut", "Cmd+X", false, sourcePaneFocused)) {
+          textEditor.cut();
+        }
+        if (!sourcePaneFocused) {
+          ImGui::EndDisabled();
+        }
+
+        if (!sourcePaneFocused) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::MenuItem("Copy", "Cmd+C", false, sourcePaneFocused)) {
+          textEditor.copy();
+        }
+        if (!sourcePaneFocused) {
+          ImGui::EndDisabled();
+        }
+
+        if (!sourcePaneFocused) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::MenuItem("Paste", "Cmd+V", false, sourcePaneFocused)) {
+          textEditor.paste();
+        }
+        if (!sourcePaneFocused) {
+          ImGui::EndDisabled();
+        }
+
+        if (!sourcePaneFocused) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::MenuItem("Select All", "Cmd+A", false, sourcePaneFocused)) {
+          textEditor.selectAll();
+        }
+        if (!sourcePaneFocused) {
+          ImGui::EndDisabled();
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("View")) {
+        if (ImGui::MenuItem("Zoom In", "Cmd+=")) {
+          triggerZoomIn();
+        }
+        if (ImGui::MenuItem("Zoom Out", "Cmd+-")) {
+          triggerZoomOut();
+        }
+        if (ImGui::MenuItem("Actual Size", "Cmd+0")) {
+          triggerActualSize();
+        }
+        ImGui::EndMenu();
+      }
+
+      ImGui::EndMainMenuBar();
+    }
+    if (openAboutPopup) {
+      ImGui::OpenPopup("About Donner SVG Editor");
+    }
+
+    {
+      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+      ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
+                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("About Donner SVG Editor", nullptr,
+                                 ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("About Donner SVG Editor");
+        ImGui::Separator();
+        ImGui::TextUnformatted("(c) 2024-2026 Jeff McGlynn");
+        ImGui::Spacing();
+        ImGui::TextWrapped("A C++20 SVG rendering engine with a lightweight editor.");
+        ImGui::TextUnformatted("https://github.com/jwmcglynn/donner");
+        ImGui::Separator();
+        if (ImGui::Button("Show Licenses")) {
+          openLicensesPopup = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close")) {
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
+    }
+    if (openLicensesPopup) {
+      ImGui::OpenPopup("Third-Party Licenses");
+    }
+
+    {
+      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+      ImGui::SetNextWindowSize(ImVec2(displaySize.x * 0.75f, displaySize.y * 0.8f),
+                               ImGuiCond_Appearing);
+      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
+                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("Third-Party Licenses", nullptr, ImGuiWindowFlags_NoCollapse)) {
+        ImGui::TextUnformatted("Third-party license notices");
+        ImGui::Separator();
+        ImGui::InputTextMultiline(
+            "##third_party_licenses", editorNoticeText.data(), editorNoticeText.size() + 1,
+            ImVec2(-FLT_MIN, -ImGui::GetFrameHeightWithSpacing()), ImGuiInputTextFlags_ReadOnly);
+        if (ImGui::Button("Close")) {
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
+    }
 
     // Windows are locked in place: positions and sizes are re-asserted
     // every frame with `ImGuiCond_Always`, and the NoMove / NoResize /
@@ -769,109 +1136,221 @@ int main(int argc, char** argv) {
     // around (otherwise a click-and-drag on the image surface falls
     // through to the parent window and the user ends up moving the
     // pane instead of the editor target).
-    const ImGuiWindowFlags kPaneFlags =
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+    const ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
 
     // Source pane.
-    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, static_cast<float>(windowHeight)),
-                             ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, paneHeight), ImGuiCond_Always);
     ImGui::Begin("Source", nullptr, kPaneFlags);
     textEditor.render("##source");
+
+    // Dispatch the current text buffer as an EditorCommand. Used by
+    // both the leading-edge and trailing-edge paths below.
+    const auto dispatchTextChange = [&]() {
+      const std::string newSource = textEditor.getText();
+      if (newSource == previousSourceText) {
+        return;
+      }
+
+      bool handled = false;
+      if (app.structuredEditingEnabled() && app.hasDocument()) {
+        auto classified = donner::editor::classifyTextChange(app.document().document(),
+                                                             previousSourceText, newSource);
+        if (classified.command.has_value()) {
+          app.applyMutation(std::move(*classified.command));
+          handled = true;
+        }
+      }
+
+      if (!handled) {
+        app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(newSource));
+      }
+
+      previousSourceText = newSource;
+    };
+
     if (textEditor.isTextChanged()) {
-      // Mark the debounce timer: we got a text change this frame. Reset
-      // the idle timer to 0 — the actual dispatch happens below when the
-      // timer exceeds the debounce threshold.
-      textChangePending = true;
-      textChangeIdleTimer = 0.0f;
       // Mark the document dirty immediately so the title-bar indicator
-      // shows up on the very next frame, not after the debounce fires.
+      // shows up on the very next frame.
       app.markDirty();
       textEditor.resetTextChanged();
-    }
 
-    // Debounced text dispatch: only fire when the user has been idle
-    // (no text changes) for kTextChangeDebounceSeconds. This avoids
-    // the full parse→CSS→render pipeline on every keystroke.
-    if (textChangePending) {
+      if (!textDispatchThrottled) {
+        // Leading-edge fire: no dispatch in the last
+        // kTextChangeDebounceSeconds window, so run this one
+        // immediately. The canvas updates on the very next frame
+        // after the keystroke — no perceptible "one extra press"
+        // latency.
+        dispatchTextChange();
+        textDispatchThrottled = true;
+        textChangePending = false;
+      } else {
+        // Inside the throttle window: stash this edit as "pending"
+        // so the trailing dispatch catches it when the user stops
+        // typing for `kTextChangeDebounceSeconds`.
+        textChangePending = true;
+      }
+      textChangeIdleTimer = 0.0f;
+    } else if (textDispatchThrottled) {
+      // No new edit this frame. Advance the idle timer; when it
+      // expires, drop the throttle and (if there were throttled
+      // edits) flush the final state.
       textChangeIdleTimer += ImGui::GetIO().DeltaTime;
       if (textChangeIdleTimer >= kTextChangeDebounceSeconds) {
-        textChangePending = false;
-        const std::string newSource = textEditor.getText();
-
-        bool handled = false;
-        if (app.structuredEditingEnabled() && app.hasDocument()) {
-          auto classified = donner::editor::classifyTextChange(
-              app.document().document(), previousSourceText, newSource);
-          if (classified.command.has_value()) {
-            app.applyMutation(std::move(*classified.command));
-            handled = true;
-          }
+        if (textChangePending) {
+          dispatchTextChange();
+          textChangePending = false;
         }
-
-        if (!handled) {
-          app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(newSource));
-        }
-
-        previousSourceText = newSource;
+        textDispatchThrottled = false;
+        textChangeIdleTimer = 0.0f;
       }
     }
     ImGui::End();
 
     // Render pane + SelectTool interaction.
-    ImGui::SetNextWindowPos(ImVec2(kSourcePaneWidth, 0), ImGuiCond_Always);
+    // Sits between the source pane (left) and the inspector pane (right).
+    // This pane holds ONLY the rendered image and the frame graph — no
+    // headers, so `paneOrigin` (captured below) stays stable frame-to-
+    // frame and click math doesn't drift when the inspector changes size.
+    ImGui::SetNextWindowPos(
+        ImVec2(static_cast<float>(renderPaneOrigin.x), static_cast<float>(renderPaneOrigin.y)),
+        ImGuiCond_Always);
     ImGui::SetNextWindowSize(
-        ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth, static_cast<float>(windowHeight)),
+        ImVec2(static_cast<float>(renderPaneSize.x), static_cast<float>(renderPaneSize.y)),
         ImGuiCond_Always);
     ImGui::Begin("Render", nullptr, kPaneFlags);
 
-    // Inspector header — always-visible summary of what's selected.
-    // The inspector reads the selected element's transform/bounds
-    // from the ECS, so it's only safe to render when the async
-    // renderer is idle. While busy, show a placeholder.
-    if (!asyncRenderer.isBusy()) {
-      RenderInspector(app);
-    } else {
-      ImGui::TextDisabled("(rendering…)");
-    }
-    ImGui::Text("Zoom: %.0f%%  Pan: (%.0f, %.0f)  (wheel=zoom, space+drag=pan, Cmd+0=reset)",
-                view.zoom * 100.0f, view.pan.x, view.pan.y);
-    ImGui::Separator();
-
-    // Base canvas size = pane content region. Everything past this point
-    // works in pane-local coordinates where (0,0) is the top-left of the
-    // render area below the inspector header. Zoom scales the bitmap at
-    // display time; pan offsets it.
+    // Refresh the viewport's per-frame inputs from ImGui / GLFW. Pane
+    // origin and size come from the current ImGui layout; viewBox
+    // comes from the SVG document; DPR comes from GLFW. Zoom and pan
+    // are persistent state and are mutated only by user input handlers
+    // below.
     const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
-    const ImVec2 paneOrigin = ImGui::GetCursorScreenPos();
-    const int baseW = static_cast<int>(contentRegion.x);
-    const int baseH = static_cast<int>(contentRegion.y);
+    const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
+    viewport.paneOrigin = donner::Vector2d(paneOriginImGui.x, paneOriginImGui.y);
+    viewport.paneSize = donner::Vector2d(contentRegion.x, contentRegion.y);
+    {
+      float xScale = 1.0f;
+      float yScale = 1.0f;
+      glfwGetWindowContentScale(window, &xScale, &yScale);
+      viewport.devicePixelRatio = static_cast<double>(xScale);
+    }
+    if (app.hasDocument()) {
+      viewport.documentViewBox = ResolveDocumentViewBox(app.document().document());
+    }
 
-    // Canvas-size adjustment + async render request. Both gated on the
-    // render thread being idle — if a render is in flight, we can't
-    // touch the document (the worker holds exclusive access).
-    if (!asyncRenderer.isBusy() && app.hasDocument() && baseW > 0 && baseH > 0) {
+    // First frame after the pane has a non-zero size: snap to 100%
+    // with the viewBox center pinned to the pane center. Subsequent
+    // frames preserve the user's zoom/pan state.
+    if (!viewportInitialized && viewport.paneSize.x > 0.0 && viewport.paneSize.y > 0.0 &&
+        app.hasDocument()) {
+      viewport.resetTo100Percent();
+      viewportInitialized = true;
+    }
+
+    // Canvas-size dispatch + async render request + overlay re-render.
+    // Both renderer paths need exclusive access to the document, so
+    // both are gated on the worker thread being idle. Once we hand
+    // the document to the worker (`requestRender`), nothing in this
+    // frame may touch it again until the next frame's `pollResult`
+    // / `flushFrame`.
+    if (!asyncRenderer.isBusy() && app.hasDocument() && viewport.paneSize.x > 0.0 &&
+        viewport.paneSize.y > 0.0) {
+      const donner::Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
       const donner::Vector2i currentSize = app.document().document().canvasSize();
-      if (currentSize.x != baseW || currentSize.y != baseH) {
-        app.document().document().setCanvasSize(baseW, baseH);
+      if (currentSize.x != desiredCanvasSize.x || currentSize.y != desiredCanvasSize.y) {
+        app.document().document().setCanvasSize(desiredCanvasSize.x, desiredCanvasSize.y);
+      }
+      const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
+      const auto currentVersion = app.document().currentFrameVersion();
+
+      // Refresh the cached document-space selection bounds before we
+      // hand the document to the worker. Triggers on selection changes
+      // (click / shift-click / marquee resolve / clear) and on any
+      // document version change that may have moved the selected
+      // geometry.
+      //
+      // The separate overlay re-render runs FIRST so the doc-render
+      // request below can kick the worker without racing us. It only
+      // needs to track selection, canvas size, and document version
+      // now that AABBs and marquee chrome are immediate-mode draws.
+      //
+      // The version check ensures we re-rasterize the overlay against
+      // the latest flushed document state. Upload is deferred until
+      // the matching document bitmap lands so the chrome and SVG stay
+      // lock-step during drags.
+      const auto& overlaySelection = app.selectedElements();
+      const bool selectionBoundsChanged = overlaySelection != lastSelectionBoundsSelectionVec;
+      if (selectionBoundsChanged || currentVersion != lastSelectionBoundsVersion) {
+        refreshSelectionBoundsCache();
       }
 
-      // Request a new render if anything that affects the output has
-      // changed since the last completed render.
-      const auto currentVersion = app.document().currentFrameVersion();
-      const auto& currentSelection = app.selectedElement();
-      const bool selectionChanged = currentSelection != lastRenderedSelection;
-      const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
-      if (currentVersion != lastRenderedVersion || selectionChanged ||
-          currentCanvasSize != lastRenderedCanvasSize) {
+      const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec;
+      if (selectionDiffers || currentCanvasSize != lastOverlayCanvasSize ||
+          currentVersion != lastOverlayVersion) {
+        donner::svg::RenderViewport overlayViewport;
+        // Renderer rasterizes at logical viewBox dimensions, so we
+        // pass the *logical* canvas size (= currentCanvasSize / dpr)
+        // and the DPR separately. The renderer's own internal scale
+        // multiplies them back together to get device pixels.
+        overlayViewport.size =
+            donner::Vector2d(static_cast<double>(currentCanvasSize.x) / viewport.devicePixelRatio,
+                             static_cast<double>(currentCanvasSize.y) / viewport.devicePixelRatio);
+        overlayViewport.devicePixelRatio = viewport.devicePixelRatio;
+        overlayRenderer.beginFrame(overlayViewport);
+        const donner::Transform2d canvasFromDoc =
+            app.document().document().canvasFromDocumentTransform();
+        donner::editor::OverlayRenderer::drawChromeWithTransform(
+            overlayRenderer, std::span<const donner::svg::SVGElement>(overlaySelection),
+            canvasFromDoc);
+        overlayRenderer.endFrame();
+        donner::svg::RendererBitmap overlayBitmap = overlayRenderer.takeSnapshot();
+        pendingOverlayBitmap = std::move(overlayBitmap);
+        pendingOverlayVersion = currentVersion;
+        if (currentVersion == displayedDocVersion && pendingOverlayBitmap.has_value() &&
+            !pendingOverlayBitmap->empty()) {
+          const auto& readyOverlayBitmap = *pendingOverlayBitmap;
+          glBindTexture(GL_TEXTURE_2D, overlayTexture);
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(readyOverlayBitmap.rowBytes / 4u));
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, readyOverlayBitmap.dimensions.x,
+                       readyOverlayBitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                       readyOverlayBitmap.pixels.data());
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+          overlayTextureWidth = readyOverlayBitmap.dimensions.x;
+          overlayTextureHeight = readyOverlayBitmap.dimensions.y;
+          pendingOverlayBitmap.reset();
+          pendingOverlayVersion = 0;
+        } else if (currentVersion == displayedDocVersion) {
+          overlayTextureWidth = 0;
+          overlayTextureHeight = 0;
+          pendingOverlayBitmap.reset();
+          pendingOverlayVersion = 0;
+        }
+        lastOverlaySelectionVec = overlaySelection;
+        lastOverlayCanvasSize = currentCanvasSize;
+        lastOverlayVersion = currentVersion;
+      }
+
+      // Request a new SVG render if anything that affects the bitmap
+      // has changed. Selection is deliberately NOT in the trigger set:
+      // the document bitmap doesn't depend on the selection, and
+      // selection chrome lives in the overlay texture above.
+      if (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize) {
         donner::editor::RenderRequest req;
         req.renderer = &renderer;
         req.document = &app.document().document();
-        req.selection = currentSelection;
+        req.version = currentVersion;
+        req.selection = std::nullopt;
         asyncRenderer.requestRender(req);
+        if (!loggedFirstRenderRequest) {
+          loggedFirstRenderRequest = true;
+          std::cerr << "[startup] +" << msSinceStart()
+                    << "ms first render request kicked off (canvas " << currentCanvasSize.x << "x"
+                    << currentCanvasSize.y << ")\n";
+        }
 
         lastRenderedVersion = currentVersion;
-        lastRenderedSelection = currentSelection;
         lastRenderedCanvasSize = currentCanvasSize;
       }
     }
@@ -882,14 +1361,16 @@ int main(int argc, char** argv) {
     ImGui::InvisibleButton("##render_canvas", contentRegion,
                            ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
     const bool paneHovered = ImGui::IsItemHovered();
+    const donner::Box2d paneRect = donner::Box2d::FromXYWH(
+        viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x, viewport.paneSize.y);
 
     // Space+drag → pan. Middle-click+drag is a common alternative; both
     // work. `panning` is a one-frame edge-detected state so the first
     // frame of a drag captures the starting mouse position.
     const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
     const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-    if (paneHovered && (spaceHeld || middleDown) &&
-        ImGui::IsMouseDown(ImGuiMouseButton_Left) && !panning) {
+    if (paneHovered && (spaceHeld || middleDown) && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+        !panning) {
       panning = true;
       lastPanMouse = ImGui::GetMousePos();
     } else if (middleDown && !panning) {
@@ -898,8 +1379,7 @@ int main(int argc, char** argv) {
     }
     if (panning) {
       const ImVec2 now = ImGui::GetMousePos();
-      view.pan.x += now.x - lastPanMouse.x;
-      view.pan.y += now.y - lastPanMouse.y;
+      viewport.panBy(donner::Vector2d(now.x - lastPanMouse.x, now.y - lastPanMouse.y));
       lastPanMouse = now;
       if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
           !ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
@@ -907,52 +1387,72 @@ int main(int argc, char** argv) {
       }
     }
 
-    // Mouse wheel → zoom around the cursor. To keep the point under the
-    // cursor stationary across the zoom, compute the pre-zoom pane-local
-    // coordinate of the cursor, change the zoom, then shift the pan so
-    // the same bitmap pixel lands at the same pane-local coordinate.
-    const float wheel = ImGui::GetIO().MouseWheel;
-    if (paneHovered && wheel != 0.0f && !panning) {
-      const ImVec2 mouse = ImGui::GetMousePos();
-      const ImVec2 mousePaneLocal(mouse.x - paneOrigin.x, mouse.y - paneOrigin.y);
-      const ImVec2 bitmapUnderCursor((mousePaneLocal.x - view.pan.x) / view.zoom,
-                                     (mousePaneLocal.y - view.pan.y) / view.zoom);
-      const float factor = wheel > 0.0f ? kZoomStep : 1.0f / kZoomStep;
-      const float newZoom = std::clamp(view.zoom * factor, kMinZoom, kMaxZoom);
-      view.pan.x = mousePaneLocal.x - bitmapUnderCursor.x * newZoom;
-      view.pan.y = mousePaneLocal.y - bitmapUnderCursor.y * newZoom;
-      view.zoom = newZoom;
+    // Raw GLFW scroll events are queued in the window callback above
+    // so we can preserve event order and cursor position instead of
+    // relying on ImGui's per-frame wheel accumulation. This lets the
+    // render pane treat bare two-finger scroll as pan and modified
+    // scroll as zoom while leaving the keyboard/menu zoom paths alone.
+    // TODO: If GLFW gains first-class touch callbacks on Linux/Wayland,
+    // route single-finger touch through the existing left-click / drag
+    // pipeline instead of adding a parallel tool path here.
+    const donner::editor::RenderPaneGestureContext gestureContext{
+        .paneRect = paneRect,
+        .mouseDragPanActive = panning,
+    };
+    for (const auto& event : pendingScrollEvents.events) {
+      const auto action = donner::editor::ClassifyRenderPaneScrollGesture(
+          event, gestureContext, kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
+      if (!action.has_value()) {
+        continue;
+      }
+      donner::editor::ApplyRenderPaneGesture(viewport, *action);
     }
-
-    // Keyboard shortcut for reset view.
-    if (ImGui::IsKeyPressed(ImGuiKey_0) &&
-        (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper)) {
-      view.reset();
-    }
+    pendingScrollEvents.events.clear();
 
     if (textureWidth > 0 && textureHeight > 0) {
-      const ImVec2 imageOrigin(paneOrigin.x + view.pan.x, paneOrigin.y + view.pan.y);
-      const ImVec2 imageSize(static_cast<float>(textureWidth) * view.zoom,
-                             static_cast<float>(textureHeight) * view.zoom);
+      // The on-screen rectangle of the document image is computed from
+      // the viewport, NOT from the texture dimensions. The texture's
+      // resolution only affects sampling fidelity; layout is purely a
+      // function of `viewport`. So we can stretch a stale low-res
+      // texture into the new on-screen rect during a zoom transient
+      // and the click math (which also goes through `viewport`) stays
+      // consistent with what the user sees.
+      const donner::Box2d screenRect = viewport.imageScreenRect();
+      const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
+                               static_cast<float>(screenRect.topLeft.y));
+      const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
+                                    static_cast<float>(screenRect.bottomRight.y));
 
-      // Draw the image via the foreground draw list so it composites
-      // into the pane without interfering with the InvisibleButton's
-      // event consumption.
-      ImGui::GetWindowDrawList()->AddImage(
-          static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)), imageOrigin,
-          ImVec2(imageOrigin.x + imageSize.x, imageOrigin.y + imageSize.y));
+      // Draw the document image into the pane's foreground draw list,
+      // followed by the overlay texture composited at the same screen
+      // rectangle.
+      ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
+      const auto DrawCheckerboard = [](ImDrawList* drawList, const ImVec2& topLeft,
+                                       const ImVec2& bottomRight) {
+        constexpr float kCheckerSize = 16.0f;
+        for (float y = topLeft.y; y < bottomRight.y; y += kCheckerSize) {
+          const int row = static_cast<int>((y - topLeft.y) / kCheckerSize);
+          const float clippedBottom = std::min(y + kCheckerSize, bottomRight.y);
+          for (float x = topLeft.x; x < bottomRight.x; x += kCheckerSize) {
+            const int column = static_cast<int>((x - topLeft.x) / kCheckerSize);
+            const float clippedRight = std::min(x + kCheckerSize, bottomRight.x);
+            const ImU32 color =
+                ((row + column) % 2 == 0) ? IM_COL32(60, 60, 60, 255) : IM_COL32(40, 40, 40, 255);
+            drawList->AddRectFilled(ImVec2(x, y), ImVec2(clippedRight, clippedBottom), color);
+          }
+        }
+      };
+      DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
+      paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
+                             imageOrigin, imageBottomRight);
+      if (overlayTextureWidth > 0 && overlayTextureHeight > 0) {
+        paneDrawList->AddImage(
+            static_cast<ImTextureID>(static_cast<std::uintptr_t>(overlayTexture)), imageOrigin,
+            imageBottomRight);
+      }
 
-      // Screen → pane-local → canvas → document. The canvas→document
-      // step is baked into the renderer's documentFromCanvasTransform
-      // (it accounts for viewBox scaling), and the pane-local → canvas
-      // step divides out the editor zoom.
-      const donner::Transform2d documentFromCanvas =
-          app.document().document().documentFromCanvasTransform();
-      const auto screenToDocument = [&](const ImVec2& screenPoint) {
-        const donner::Vector2d canvasPoint(
-            (screenPoint.x - paneOrigin.x - view.pan.x) / view.zoom,
-            (screenPoint.y - paneOrigin.y - view.pan.y) / view.zoom);
-        return documentFromCanvas.transformPosition(canvasPoint);
+      const auto screenToDocument = [&](const ImVec2& screenPoint) -> donner::Vector2d {
+        return viewport.screenToDocument(donner::Vector2d(screenPoint.x, screenPoint.y));
       };
 
       // Only treat a click as a tool event when it's NOT a pan gesture.
@@ -960,21 +1460,65 @@ int main(int argc, char** argv) {
       // must not fire while the render thread holds the document.
       const bool toolEligible = paneHovered && !panning && !spaceHeld;
 
-      if (!asyncRenderer.isBusy() && toolEligible &&
-          ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        selectTool.onMouseDown(app, screenToDocument(ImGui::GetMousePos()));
+      // Buffer the click position when ImGui sees the press event,
+      // even if the worker is currently busy. This lets clicks that
+      // arrive during a slow initial render still register — they'll
+      // be processed on the next idle frame instead of getting
+      // silently dropped. Without this, the user perceives "clicks
+      // are broken" until the worker happens to be idle at exactly
+      // the right moment.
+      if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        donner::editor::MouseModifiers modifiers;
+        modifiers.shift = ImGui::GetIO().KeyShift;
+        pendingClick = PendingClick{
+            .documentPoint = screenToDocument(ImGui::GetMousePos()),
+            .modifiers = modifiers,
+        };
       }
-      // Drag continues even after the cursor leaves the image.
-      // onMouseMove reads cached drag-start state and queues a command —
-      // it's safe during a render. onMouseUp only records undo state.
-      if (selectTool.isDragging()) {
+      if (pendingClick.has_value() && !asyncRenderer.isBusy()) {
+        selectTool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
+        refreshSelectionBoundsCache();
+        pendingClick.reset();
+      }
+      // Drag *or* marquee continues even after the cursor leaves the
+      // image. `onMouseMove` reads cached drag/marquee state and is
+      // safe during a render. `onMouseUp` records undo state and (for
+      // marqueeing) resolves the rect to a selection set.
+      if (selectTool.isDragging() || selectTool.isMarqueeing()) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
           selectTool.onMouseMove(app, screenToDocument(ImGui::GetMousePos()),
                                  /*buttonHeld=*/true);
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
           selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
+          if (!asyncRenderer.isBusy()) {
+            refreshSelectionBoundsCache();
+          }
         }
+      }
+
+      for (const donner::Box2d& screenRect : donner::editor::ComputeSelectionAabbScreenRects(
+               viewport, std::span<const donner::Box2d>(cachedSelectionBoundsDoc))) {
+        paneDrawList->AddRect(ImVec2(static_cast<float>(screenRect.topLeft.x),
+                                     static_cast<float>(screenRect.topLeft.y)),
+                              ImVec2(static_cast<float>(screenRect.bottomRight.x),
+                                     static_cast<float>(screenRect.bottomRight.y)),
+                              kSelectionChromeColor, 0.0f, ImDrawFlags_None,
+                              kSelectionChromeThickness);
+      }
+
+      if (auto marqueeRectDoc = selectTool.marqueeRect(); marqueeRectDoc.has_value()) {
+        const donner::Box2d marqueeRectScreen = viewport.documentToScreen(*marqueeRectDoc);
+        paneDrawList->AddRectFilled(ImVec2(static_cast<float>(marqueeRectScreen.topLeft.x),
+                                           static_cast<float>(marqueeRectScreen.topLeft.y)),
+                                    ImVec2(static_cast<float>(marqueeRectScreen.bottomRight.x),
+                                           static_cast<float>(marqueeRectScreen.bottomRight.y)),
+                                    kMarqueeFillColor);
+        paneDrawList->AddRect(ImVec2(static_cast<float>(marqueeRectScreen.topLeft.x),
+                                     static_cast<float>(marqueeRectScreen.topLeft.y)),
+                              ImVec2(static_cast<float>(marqueeRectScreen.bottomRight.x),
+                                     static_cast<float>(marqueeRectScreen.bottomRight.y)),
+                              kMarqueeStrokeColor, 0.0f, ImDrawFlags_None, kMarqueeStrokeThickness);
       }
 
       // Whenever the selection changes, jump the source pane to the
@@ -991,8 +1535,74 @@ int main(int argc, char** argv) {
       ImGui::TextUnformatted("(no rendered image)");
     }
 
-    // Frame-time graph at the bottom of the render pane.
-    RenderFrameGraph(frameHistory);
+    // Frame-time graph pinned to the bottom of the render pane. The
+    // image's `InvisibleButton` consumes the entire content region so
+    // the ImGui cursor sits at the bottom of the pane by this point;
+    // we rewind it to (left-margin, paneHeight - graphHeight) so the
+    // graph always lands at the same on-screen position regardless of
+    // how the content above grew.
+    {
+      constexpr float kFramePadding = 8.0f;
+      const float graphHeight = kFrameGraphHeight + ImGui::GetTextLineHeightWithSpacing();
+      ImGui::SetCursorPos(ImVec2(kFramePadding, contentRegion.y - graphHeight - kFramePadding));
+      RenderFrameGraph(frameHistory);
+    }
+
+    ImGui::End();
+
+    const auto& selectionBeforeTree = app.selectedElement();
+    if (selectionBeforeTree != lastTreeSelection) {
+      treeviewPendingScroll = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree;
+    }
+    treeSelectionOriginatedInTree = false;
+
+    ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, treePaneHeight), ImGuiCond_Always);
+    ImGui::Begin("Tree View", nullptr, kPaneFlags);
+
+    if (!asyncRenderer.isBusy()) {
+      TreeViewState treeState{
+          .scrollTarget = selectionBeforeTree,
+          .pendingScroll = treeviewPendingScroll,
+      };
+      RenderTreeView(app, treeState);
+      treeviewPendingScroll = treeState.pendingScroll;
+      if (treeState.selectionChangedInTree) {
+        treeSelectionOriginatedInTree = true;
+        treeviewPendingScroll = false;
+      }
+    } else {
+      ImGui::TextDisabled("(rendering...)");
+    }
+
+    ImGui::End();
+    lastTreeSelection = app.selectedElement();
+
+    // Inspector pane — right-side sidebar containing the selected-element
+    // summary, zoom/pan readout, and anything else that changes size at
+    // runtime. Lives in its own window so the Render pane's cursor
+    // position stays stable between frames (see the click-math test in
+    // ViewportGeometry_tests.cc).
+    ImGui::SetNextWindowPos(ImVec2(rightPaneX, inspectorPaneY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
+    ImGui::Begin("Inspector", nullptr, kPaneFlags);
+
+    // Selection summary. Only safe to read when the async renderer is
+    // idle — otherwise the worker holds exclusive access to the document.
+    if (!asyncRenderer.isBusy()) {
+      RenderInspector(app);
+    } else {
+      ImGui::TextDisabled("(rendering…)");
+    }
+    ImGui::Separator();
+    ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);
+    ImGui::Text("Pan anchor: doc=(%.1f, %.1f) screen=(%.0f, %.0f)", viewport.panDocPoint.x,
+                viewport.panDocPoint.y, viewport.panScreenPoint.x, viewport.panScreenPoint.y);
+    ImGui::Text("DPR: %.2fx", viewport.devicePixelRatio);
+    ImGui::TextDisabled("scroll = pan");
+    ImGui::TextDisabled("Cmd+scroll = zoom");
+    ImGui::TextDisabled("space+drag = pan");
+    ImGui::TextDisabled("Cmd+0 = 100%%");
 
     ImGui::End();
 
@@ -1012,7 +1622,10 @@ int main(int argc, char** argv) {
   // ---------------------------------------------------------------------------
   // Teardown
   // ---------------------------------------------------------------------------
+  glfwSetScrollCallback(window, pendingScrollEvents.previousCallback);
+  glfwSetWindowUserPointer(window, nullptr);
   glDeleteTextures(1, &texture);
+  glDeleteTextures(1, &overlayTexture);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

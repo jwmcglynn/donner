@@ -414,11 +414,11 @@ int main(int argc, char** argv) {
 
       if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 mouse = ImGui::GetMousePos();
-        // Map screen → canvas → document via the canvas-to-document
-        // transform. When the canvas is scaled to fit the pane, the
-        // transform bakes in the scale factor.
+        // Map screen → canvas → document. `canvasFromDocumentTransform()`
+        // maps document viewBox coordinates to canvas pixels; we need the
+        // opposite direction for click math, so invert it.
         const donner::Transform2d documentFromCanvas =
-            state.document.documentFromCanvasTransform();
+            state.document.canvasFromDocumentTransform().inverse();
         const donner::Vector2d canvasPoint(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y);
         const auto sourceRange = state.handleClick(documentFromCanvas.transformPosition(canvasPoint));
         if (sourceRange.has_value()) {

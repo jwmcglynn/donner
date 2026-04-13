@@ -309,7 +309,7 @@ Transform2d LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
          Transform2d::Translate(-computedTransform.transformOrigin);
 }
 
-Transform2d LayoutSystem::getDocumentFromCanvasTransform(Registry& registry) {
+Transform2d LayoutSystem::getCanvasFromDocumentTransform(Registry& registry) {
   EntityHandle rootEntity(registry, registry.ctx().get<SVGDocumentContext>().rootEntity);
   if (rootEntity.all_of<SizedElementComponent>()) {
     ParseWarningSink disabledSink = ParseWarningSink::Disabled();

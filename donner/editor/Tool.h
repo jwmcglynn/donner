@@ -18,6 +18,16 @@ namespace donner::editor {
 
 class EditorApp;
 
+/// Modifier-key state captured at the moment a mouse event was
+/// dispatched. Tools use this for shift-add-to-selection, alt-clone,
+/// etc. Default-constructed = no modifiers, which keeps existing
+/// callsites that don't care about modifiers source-compatible.
+struct MouseModifiers {
+  /// Shift held — used by `SelectTool` to toggle/extend selection
+  /// rather than replacing it.
+  bool shift = false;
+};
+
 /// Abstract editor pointer tool. Implementations are stateless across
 /// document load (the editor recreates them on document change is fine
 /// since `Tool` instances are cheap), but may carry per-drag state.
@@ -31,8 +41,13 @@ public:
   Tool(Tool&&) = delete;
   Tool& operator=(Tool&&) = delete;
 
-  /// Mouse button (left) was pressed at `documentPoint`.
-  virtual void onMouseDown(EditorApp& editor, const Vector2d& documentPoint) = 0;
+  /// Mouse button (left) was pressed at `documentPoint`. `modifiers`
+  /// captures the modifier-key state at the moment of the press;
+  /// implementations that don't care can ignore it. Default arguments
+  /// on virtuals are banned by the style guide, so callers that don't
+  /// need modifier state should pass `MouseModifiers{}` explicitly.
+  virtual void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
+                           MouseModifiers modifiers) = 0;
 
   /// Mouse moved to `documentPoint`. `buttonHeld` is true while the left
   /// button is down — i.e., this is a drag continuation rather than a

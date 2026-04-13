@@ -141,9 +141,18 @@ public:
   int height() const { return canvasSize().y; }
 
   /**
-   * Get the scale transform from the canvas to the SVG document.
+   * Returns the transform that maps points from the SVG document's viewBox
+   * coordinate space into the canvas-scaled output space. This bakes in the
+   * `preserveAspectRatio` fit (letterbox offset + uniform scale) between the
+   * viewBox and the current canvas size.
+   *
+   * Naming: per the `destFromSource` convention, applying this transform to
+   * a viewBox-space point yields a canvas-space point — i.e. it is
+   * `canvasFromDocument`, despite an earlier misnomer. Callers that need the
+   * opposite direction (canvas pixel → document viewBox coordinate, e.g.
+   * click math in editors/viewers) should invert it.
    */
-  Transform2d documentFromCanvasTransform() const;
+  Transform2d canvasFromDocumentTransform() const;
 
   /**
    * Returns true if the two SVGDocument handles reference the same underlying document.

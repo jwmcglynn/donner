@@ -465,6 +465,40 @@ void TextEditorCore::redo(int steps) {
 // Word boundaries
 // ---------------------------------------------------------------------------
 
+namespace {
+
+/// Word-boundary classification used by `findWordStart` / `findWordEnd`.
+/// Characters in the same class belong to the same "word run" — so a
+/// click on a letter selects the contiguous letters/digits, a click
+/// on a punctuation character selects the contiguous punctuation
+/// run, and a click on a space selects the contiguous whitespace
+/// run. This is the standard double-click behavior in most editors
+/// and is independent of syntax highlighting (which the previous
+/// implementation relied on, with the result that text without a
+/// language definition was treated as one giant word).
+enum class WordClass : std::uint8_t {
+  Alphanum,
+  Whitespace,
+  Punctuation,
+};
+
+WordClass ClassifyChar(char c) {
+  // UTF-8 continuation bytes are treated as part of the current run
+  // so multi-byte characters don't fragment word boundaries.
+  if ((c & 0xC0) == 0x80) {
+    return WordClass::Alphanum;
+  }
+  if (c <= 32 && std::isspace(static_cast<unsigned char>(c))) {
+    return WordClass::Whitespace;
+  }
+  if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+    return WordClass::Alphanum;
+  }
+  return WordClass::Punctuation;
+}
+
+}  // namespace
+
 Coordinates TextEditorCore::findWordStart(const Coordinates& from) const {
   if (from.line >= text_.getTotalLines()) {
     return from;
@@ -477,25 +511,12 @@ Coordinates TextEditorCore::findWordStart(const Coordinates& from) const {
     return from;
   }
 
-  // Skip trailing spaces
+  // Walk backwards while the previous character is in the same
+  // class as the start character. Terminates at index 0 or at the
+  // first character of a different class.
+  const WordClass startClass = ClassifyChar(line[charIndex].character);
   int currentIndex = charIndex;
-  while (currentIndex > 0 && std::isspace(line[currentIndex].character)) {
-    --currentIndex;
-  }
-
-  // Find word boundary using syntax highlighting and space boundaries
-  const auto startColor = static_cast<ColorIndex>(line[currentIndex].colorIndex);
-  while (currentIndex > 0) {
-    const char c = line[currentIndex].character;
-    if ((c & 0xC0) != 0x80) {  // Not UTF-8 continuation byte
-      if (c <= 32 && std::isspace(c)) {
-        currentIndex++;
-        break;
-      }
-      if (startColor != static_cast<ColorIndex>(line[currentIndex - 1].colorIndex)) {
-        break;
-      }
-    }
+  while (currentIndex > 0 && ClassifyChar(line[currentIndex - 1].character) == startClass) {
     --currentIndex;
   }
 
@@ -514,29 +535,17 @@ Coordinates TextEditorCore::findWordEnd(const Coordinates& from) const {
     return from;
   }
 
+  // Walk forward while subsequent characters are in the same class
+  // as the start character. Stops at the first different-class
+  // character (or end of line). Multi-byte characters are stepped by
+  // their UTF-8 sequence length so we don't land mid-codepoint.
+  const WordClass startClass = ClassifyChar(line[charIndex].character);
   int currentIndex = charIndex;
-  const bool prevSpace = std::isspace(line[currentIndex].character);
-  const auto startColor = static_cast<ColorIndex>(line[currentIndex].colorIndex);
-
   while (currentIndex < static_cast<int>(line.size())) {
-    const char c = line[currentIndex].character;
-    const int charLen = Utf8::SequenceLength(c);
-
-    if (startColor != static_cast<ColorIndex>(line[currentIndex].colorIndex)) {
+    if (ClassifyChar(line[currentIndex].character) != startClass) {
       break;
     }
-
-    const bool currSpace = std::isspace(c);
-    if (prevSpace != currSpace) {
-      if (currSpace) {
-        while (currentIndex < static_cast<int>(line.size()) &&
-               std::isspace(line[currentIndex].character)) {
-          ++currentIndex;
-        }
-      }
-      break;
-    }
-    currentIndex += charLen;
+    currentIndex += Utf8::SequenceLength(line[currentIndex].character);
   }
 
   return Coordinates(from.line, text_.getCharacterColumn(from.line, currentIndex));
@@ -708,6 +717,17 @@ void TextEditorCore::setSelection(const Coordinates& start, const Coordinates& e
     }
   }
 
+  // Mirror the new bounds onto `interactiveStart_/End_` so subsequent
+  // shifted arrow-key moves can extend or contract the selection
+  // relative to the right anchor. Without this, callers that build a
+  // selection via `setSelection()` (programmatic select, find/
+  // replace, "select word" double-click, etc.) and then expect a
+  // shifted arrow to grow or shrink it from the cursor side would
+  // see the move logic treat the old selection as if it didn't
+  // exist — see the `ShiftLeftContractsSelection` regression test.
+  interactiveStart_ = state_.selectionStart;
+  interactiveEnd_ = state_.selectionEnd;
+
   if (state_.selectionStart != oldSelStart || state_.selectionEnd != oldSelEnd) {
     cursorPositionChanged_ = true;
   }
@@ -762,19 +782,52 @@ void TextEditorCore::selectAll() {
 // ---------------------------------------------------------------------------
 
 void TextEditorCore::insertText(std::string_view text, bool indent) {
-  if (text.empty()) {
+  // Build a single undo record that covers both the selection
+  // deletion (if any) and the new text insertion. An empty `text`
+  // with a non-empty selection becomes a pure delete (the natural
+  // "replace selection with nothing" form); an empty `text` with no
+  // selection is a no-op and skips the undo entry entirely.
+  //
+  // Pre-refactor (before this fix), this function silently early-
+  // returned on empty text and never deleted the existing selection
+  // before inserting non-empty text either, so every `insertText`
+  // call was effectively dropping selections on the floor and never
+  // landing in the undo buffer. See the `TextEditorTests`
+  // `InsertTextWithSelection` / `DeleteMultipleSelectionsSuccessively`
+  // / `UndoMultipleOperations` regression tests.
+  UndoRecord record;
+  record.before = state_;
+
+  if (hasSelection()) {
+    record.removed = getSelectedText();
+    record.removedStart = state_.selectionStart;
+    record.removedEnd = state_.selectionEnd;
+    deleteSelection();
+  }
+
+  if (!text.empty()) {
+    auto pos = getActualCursorCoordinates();
+    record.added = std::string(text);
+    record.addedStart = pos;
+
+    const int insertedLines = insertTextAt(pos, text, indent);
+
+    setSelection(pos, pos);
+    setCursorPosition(pos);
+
+    record.addedEnd = pos;
+    colorize(record.addedStart.line - 1, insertedLines + 2);
+  }
+
+  if (record.added.empty() && record.removed.empty()) {
+    // Nothing actually happened — don't pollute the undo stack.
     return;
   }
 
-  auto pos = getActualCursorCoordinates();
-  auto start = std::min(pos, state_.selectionStart);
-  int totalLines = pos.line - start.line;
-
-  totalLines += insertTextAt(pos, text.data(), indent);
-
-  setSelection(pos, pos);
-  setCursorPosition(pos);
-  colorize(start.line - 1, totalLines + 2);
+  record.after = state_;
+  addUndo(record);
+  textChanged_ = true;
+  fireContentUpdate();
 }
 
 void TextEditorCore::deleteSelection() {
@@ -1115,11 +1168,15 @@ void TextEditorCore::moveLeft(int amount, bool select, bool /*wordMode*/) {
       interactiveStart_ = state_.cursorPosition;
       interactiveEnd_ = oldPos;
     }
+    setSelection(interactiveStart_, interactiveEnd_);
   } else {
+    // Non-select arrow: just move the cursor; leave the selection
+    // alone. Callers that want to drop the selection must do so
+    // explicitly via `setSelection`. This matches the
+    // `SelectionPreservesAfterMove` regression test expectation.
     interactiveStart_ = interactiveEnd_ = state_.cursorPosition;
   }
 
-  setSelection(interactiveStart_, interactiveEnd_);
   scrollToCursor_ = true;
 }
 
@@ -1149,11 +1206,13 @@ void TextEditorCore::moveRight(int amount, bool select, bool /*wordMode*/) {
       interactiveStart_ = oldPos;
       interactiveEnd_ = state_.cursorPosition;
     }
+    setSelection(interactiveStart_, interactiveEnd_);
   } else {
+    // Non-select arrow: just move the cursor; leave the selection
+    // alone. See `moveLeft` for the rationale.
     interactiveStart_ = interactiveEnd_ = state_.cursorPosition;
   }
 
-  setSelection(interactiveStart_, interactiveEnd_);
   scrollToCursor_ = true;
 }
 
@@ -1433,7 +1492,7 @@ void TextEditorCore::backspace() {
 // setText
 // ---------------------------------------------------------------------------
 
-void TextEditorCore::setText(std::string_view text) {
+void TextEditorCore::setText(std::string_view text, bool preserveScroll) {
   // Clear existing state
   foldBegin_.clear();
   foldEnd_.clear();
@@ -1445,7 +1504,13 @@ void TextEditorCore::setText(std::string_view text) {
 
   // Update editor state
   textChanged_ = true;
-  scrollToTop_ = true;
+  // Only request scroll-to-top for "loaded a different document" calls.
+  // In-place edits like the canvas→text writeback pass `preserveScroll`
+  // so the user's view doesn't snap back to line 0 every time they
+  // drag a shape.
+  if (!preserveScroll) {
+    scrollToTop_ = true;
+  }
 
   detectIndentationStyle();
   colorize();

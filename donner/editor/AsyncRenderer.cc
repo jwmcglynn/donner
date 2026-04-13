@@ -33,14 +33,14 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
   cv_.notify_one();
 }
 
-std::optional<svg::RendererBitmap> AsyncRenderer::pollResult() {
+std::optional<RenderResult> AsyncRenderer::pollResult() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (state_ != State::Done) {
     return std::nullopt;
   }
   state_ = State::Idle;
   busy_.store(false, std::memory_order_release);
-  return std::move(resultBitmap_);
+  return std::move(result_);
 }
 
 void AsyncRenderer::workerLoop() {
@@ -59,18 +59,18 @@ void AsyncRenderer::workerLoop() {
     // `isBusy()` / `pollResult()` while we work.
     if (request.renderer != nullptr && request.document != nullptr) {
       request.renderer->draw(*request.document);
-      // Draw selection chrome using the snapshot captured at request
-      // time. The overlay renderer touches ECS (via worldBounds) but
-      // the worker thread owns the document during the render so that's
-      // safe — it only can't touch EditorApp, which is why we use the
-      // snapshot-based overload.
-      OverlayRenderer::drawChrome(*request.renderer, request.selection);
+      // Selection chrome is no longer baked into the bitmap — main.cc
+      // draws it via the ImGui draw list every frame so clicks don't
+      // pay the SVG re-rasterize cost. The `request.selection` field
+      // is left in place for back-compat callers but ignored here.
+      (void)request.selection;
       svg::RendererBitmap bitmap = request.renderer->takeSnapshot();
 
       std::lock_guard<std::mutex> lock(mutex_);
       // Only transition to Done if we weren't shut down mid-render.
       if (state_ == State::Busy) {
-        resultBitmap_ = std::move(bitmap);
+        result_.bitmap = std::move(bitmap);
+        result_.version = request.version;
         state_ = State::Done;
       }
     } else {

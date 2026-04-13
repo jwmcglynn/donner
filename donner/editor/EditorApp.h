@@ -17,7 +17,9 @@
 
 #include <optional>
 #include <string_view>
+#include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/EditorCommand.h"
@@ -108,20 +110,45 @@ public:
   // Selection
   // ---------------------------------------------------------------------------
 
-  /// The currently-selected element, or `std::nullopt` if nothing is
-  /// selected.
+  /// All currently-selected elements, in selection order. Empty when
+  /// nothing is selected. Multi-element selections come from
+  /// shift+click and marquee-drag (Milestone 4 of the editor UX
+  /// design doc).
+  [[nodiscard]] const std::vector<svg::SVGElement>& selectedElements() const {
+    return selection_;
+  }
+
+  /// Single-element accessor for back-compat with single-select call
+  /// sites (overlay chrome, source-pane highlight, drag writeback,
+  /// inspector, etc.). Returns the *first* selected element, or
+  /// `std::nullopt` if nothing is selected. Cached so the
+  /// `const optional&` reference stays stable across calls.
   [[nodiscard]] const std::optional<svg::SVGElement>& selectedElement() const {
-    return selectedElement_;
+    return cachedFirstSelection_;
   }
 
   /// Whether anything is selected.
-  [[nodiscard]] bool hasSelection() const { return selectedElement_.has_value(); }
+  [[nodiscard]] bool hasSelection() const { return !selection_.empty(); }
 
   /// Replace the current selection with a single element. Pass
-  /// `std::nullopt` to clear the selection.
-  void setSelection(std::optional<svg::SVGElement> element) {
-    selectedElement_ = std::move(element);
-  }
+  /// `std::nullopt` to clear.
+  void setSelection(std::optional<svg::SVGElement> element);
+
+  /// Replace the current selection with the given list. Use this for
+  /// marquee-resolved multi-selects.
+  void setSelection(std::vector<svg::SVGElement> elements);
+
+  /// Add `element` to the current selection if it isn't already
+  /// selected; remove it if it is. The natural Shift+click handler.
+  void toggleInSelection(const svg::SVGElement& element);
+
+  /// Append `element` to the current selection without disturbing
+  /// existing entries. No-op if `element` is already selected.
+  void addToSelection(const svg::SVGElement& element);
+
+  /// Drop every entry from the selection. Equivalent to
+  /// `setSelection(std::nullopt)` but reads better at clear sites.
+  void clearSelection() { setSelection(std::nullopt); }
 
   // ---------------------------------------------------------------------------
   // Hit testing
@@ -131,6 +158,12 @@ public:
   /// or `std::nullopt` if no element is hit. Coordinates are in the SVG
   /// canvas space (the same space as the root `<svg>` viewBox).
   [[nodiscard]] std::optional<svg::SVGGeometryElement> hitTest(const Vector2d& documentPoint);
+
+  /// Find every geometry element whose world-space bounding box
+  /// intersects `documentRect`. Used by marquee selection. Returns
+  /// elements in document order (root-to-leaf depth-first), so
+  /// callers that care about z-order can rely on a stable sequence.
+  [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
 
   // ---------------------------------------------------------------------------
   // Undo
@@ -180,8 +213,17 @@ public:
   [[nodiscard]] bool structuredEditingEnabled() const { return structuredEditingEnabled_; }
 
 private:
+  /// Refreshes `cachedFirstSelection_` after `selection_` changes so
+  /// the `selectedElement()` accessor can return a stable
+  /// `const optional&`. Centralized so we can't forget it on a new
+  /// mutation path.
+  void refreshFirstSelectionCache();
+
   AsyncSVGDocument document_;
-  std::optional<svg::SVGElement> selectedElement_;
+  std::vector<svg::SVGElement> selection_;
+  /// Mirrors `selection_.front()` (or `std::nullopt`) so the
+  /// single-element compatibility accessor can hand out a reference.
+  std::optional<svg::SVGElement> cachedFirstSelection_;
   UndoTimeline undoTimeline_;
 
   // Lazily-rebuilt hit-test controller. Recreated whenever the document's

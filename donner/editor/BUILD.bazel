@@ -30,6 +30,66 @@ donner_cc_library(
     ],
 )
 
+# Single source of truth for the editor render pane's screen↔document
+# coordinate mapping, including zoom, pan, DPR, and the focal-point-
+# preserving zoom math. See `docs/design_docs/0025-editor_ux.md`.
+donner_cc_library(
+    name = "viewport_state",
+    srcs = ["ViewportState.cc"],
+    hdrs = ["ViewportState.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "selection_aabb",
+    srcs = ["SelectionAabb.cc"],
+    hdrs = ["SelectionAabb.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "render_pane_gesture",
+    srcs = ["RenderPaneGesture.cc"],
+    hdrs = ["RenderPaneGesture.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "pinch_event_monitor",
+    srcs = ["PinchEventMonitor.cc"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["PinchEventMonitorStub.cc"],
+    }),
+    hdrs = ["PinchEventMonitor.h"],
+    deps = [
+        ":render_pane_gesture",
+    ],
+)
+
+objc_library(
+    name = "pinch_event_monitor_macos",
+    srcs = ["PinchEventMonitorMac.mm"],
+    copts = ["-fblocks"],
+    sdk_frameworks = ["Cocoa"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":pinch_event_monitor",
+        "@glfw",
+    ],
+)
+
 donner_cc_library(
     name = "command_queue",
     srcs = ["CommandQueue.cc"],
@@ -190,11 +250,18 @@ donner_cc_binary(
         ":editor_app",
         ":notice",
         ":overlay_renderer",
+        ":pinch_event_monitor",
+        ":selection_aabb",
+    ] + select({
+        "@platforms//os:macos": [":pinch_event_monitor_macos"],
+        "//conditions:default": [],
+    }) + [
+        ":render_pane_gesture",
         ":select_tool",
         ":text_editor",
         ":text_patch",
-        ":viewport_geometry",
         ":tracy_wrapper",
+        ":viewport_state",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/renderer",

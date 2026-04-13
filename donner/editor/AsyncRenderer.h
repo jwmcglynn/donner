@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -46,10 +47,19 @@ namespace donner::editor {
 struct RenderRequest {
   svg::Renderer* renderer = nullptr;
   svg::SVGDocument* document = nullptr;
+  /// Document frame version snapshotted at request time so the UI can
+  /// match the landed bitmap with other same-version assets.
+  std::uint64_t version = 0;
   /// Snapshot of the selection at request time (used for overlay chrome).
   /// The worker holds this optional by value, so if the UI thread clears
   /// the selection mid-render the worker still draws the pre-render chrome.
   std::optional<svg::SVGElement> selection;
+};
+
+/// Bitmap plus the document version it was rendered from.
+struct RenderResult {
+  svg::RendererBitmap bitmap;
+  std::uint64_t version = 0;
 };
 
 class AsyncRenderer {
@@ -76,7 +86,7 @@ public:
   /// resulting bitmap and transitions the worker back to idle. Returns
   /// `std::nullopt` if no render is pending-ready (either still busy
   /// or idle with nothing to hand off).
-  std::optional<svg::RendererBitmap> pollResult();
+  std::optional<RenderResult> pollResult();
 
 private:
   void workerLoop();
@@ -88,7 +98,7 @@ private:
   enum class State : std::uint8_t {
     Idle,    ///< No work. Worker is blocked on `cv_`.
     Busy,    ///< Render in progress on the worker.
-    Done,    ///< Render finished; bitmap available in `resultBitmap_`.
+    Done,    ///< Render finished; bitmap available in `result_`.
     Shutdown ///< Destructor requested shutdown; worker exits.
   };
 
@@ -96,7 +106,7 @@ private:
   std::atomic<bool> busy_{false};
 
   RenderRequest pendingRequest_;
-  svg::RendererBitmap resultBitmap_;
+  RenderResult result_;
 };
 
 }  // namespace donner::editor

@@ -2,10 +2,37 @@
 
 namespace donner::editor {
 
+namespace {
+
+/// AABB-vs-AABB intersection test. Returns true if the two boxes
+/// overlap by any non-zero amount, including edge-touching contact.
+/// Used by `hitTestRect` to decide which elements a marquee covers.
+bool BoxesIntersect(const Box2d& a, const Box2d& b) {
+  return a.topLeft.x <= b.bottomRight.x && a.bottomRight.x >= b.topLeft.x &&
+         a.topLeft.y <= b.bottomRight.y && a.bottomRight.y >= b.topLeft.y;
+}
+
+/// Depth-first walk of the SVG tree rooted at `node`, invoking
+/// `visit(geometry)` on every `SVGGeometryElement` encountered. Used
+/// by `hitTestRect` so marquee selection lives entirely on top of
+/// the public DOM API — no ECS reach-through.
+template <typename Visitor>
+void ForEachGeometryElement(const svg::SVGElement& node, Visitor& visit) {
+  if (node.isa<svg::SVGGeometryElement>()) {
+    visit(node.cast<svg::SVGGeometryElement>());
+  }
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
+    ForEachGeometryElement(*child, visit);
+  }
+}
+
+}  // namespace
+
 EditorApp::EditorApp() = default;
 
 bool EditorApp::loadFromString(std::string_view svgBytes) {
-  selectedElement_.reset();
+  selection_.clear();
+  refreshFirstSelectionCache();
   controller_.reset();
   undoTimeline_.clear();
   const bool result = document_.loadFromString(svgBytes);
@@ -20,6 +47,51 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
 
 bool EditorApp::flushFrame() {
   return document_.flushFrame();
+}
+
+void EditorApp::setSelection(std::optional<svg::SVGElement> element) {
+  selection_.clear();
+  if (element.has_value()) {
+    selection_.push_back(std::move(*element));
+  }
+  refreshFirstSelectionCache();
+}
+
+void EditorApp::setSelection(std::vector<svg::SVGElement> elements) {
+  selection_ = std::move(elements);
+  refreshFirstSelectionCache();
+}
+
+void EditorApp::toggleInSelection(const svg::SVGElement& element) {
+  // SVGElement equality compares the underlying entt handle, so a
+  // linear scan is correct (and fine for the typical N ≤ 100 case).
+  for (auto it = selection_.begin(); it != selection_.end(); ++it) {
+    if (*it == element) {
+      selection_.erase(it);
+      refreshFirstSelectionCache();
+      return;
+    }
+  }
+  selection_.push_back(element);
+  refreshFirstSelectionCache();
+}
+
+void EditorApp::addToSelection(const svg::SVGElement& element) {
+  for (const auto& existing : selection_) {
+    if (existing == element) {
+      return;
+    }
+  }
+  selection_.push_back(element);
+  refreshFirstSelectionCache();
+}
+
+void EditorApp::refreshFirstSelectionCache() {
+  if (selection_.empty()) {
+    cachedFirstSelection_.reset();
+  } else {
+    cachedFirstSelection_ = selection_.front();
+  }
 }
 
 void EditorApp::undo() {
@@ -61,6 +133,29 @@ std::optional<svg::SVGGeometryElement> EditorApp::hitTest(const Vector2d& docume
   }
 
   return controller_->findIntersecting(documentPoint);
+}
+
+std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documentRect) {
+  std::vector<svg::SVGGeometryElement> hits;
+  if (!document_.hasDocument()) {
+    return hits;
+  }
+
+  // Walk the live document and collect every geometry element whose
+  // world-space AABB intersects the marquee rect. We don't go through
+  // `DonnerController` because it's point-only; the linear walk is
+  // simple, allocation-light, and fine for documents up to a few
+  // thousand elements (the typical editor workload).
+  const svg::SVGElement root = document_.document().svgElement();
+  auto visit = [&](const svg::SVGGeometryElement& geometry) {
+    if (auto bounds = geometry.worldBounds(); bounds.has_value()) {
+      if (BoxesIntersect(*bounds, documentRect)) {
+        hits.push_back(geometry);
+      }
+    }
+  };
+  ForEachGeometryElement(root, visit);
+  return hits;
 }
 
 }  // namespace donner::editor

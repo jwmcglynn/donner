@@ -14,10 +14,12 @@ _SIMD_NATIVE_WASM_COPTS = select({
     "//conditions:default": [],
 })
 
-_OPT_MODE_COPTS = select({
-    "//bazel/config:compilation_mode_opt": ["-O3"],
-    "//conditions:default": [],
-})
+_FORCED_PERF_COPTS = [
+    # tiny-skia is the default renderer hot path for Donner's editor, so keep
+    # it optimized even when the top-level Bazel invocation is fastbuild/dbg.
+    "-O3",
+    "-DNDEBUG",
+]
 
 def tiny_skia_cc_library(
         name,
@@ -33,7 +35,13 @@ def tiny_skia_cc_library(
         srcs = srcs,
         hdrs = hdrs,
         deps = deps,
-        copts = ["-std=c++20", "-ffp-contract=off", "-Wall"] + _OPT_MODE_COPTS + _SIMD_NATIVE_X86_COPTS + _SIMD_NATIVE_WASM_COPTS + copts,
+        copts = (
+            ["-std=c++20", "-ffp-contract=off", "-Wall"] +
+            _FORCED_PERF_COPTS +
+            _SIMD_NATIVE_X86_COPTS +
+            _SIMD_NATIVE_WASM_COPTS +
+            copts
+        ),
         defines = defines,
         visibility = visibility,
         **kwargs

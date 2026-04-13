@@ -10,6 +10,50 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "selection_aabb_tests",
+    srcs = ["SelectionAabb_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_viewport_tests",
+    srcs = ["RenderPaneViewport_tests.cc"],
+    deps = [
+        "//donner/editor:viewport_state",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_click_tests",
+    srcs = ["RenderPaneClick_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_gesture_tests",
+    srcs = ["RenderPaneGesture_tests.cc"],
+    deps = [
+        "//donner/editor:pinch_event_monitor",
+        "//donner/editor:render_pane_gesture",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "command_queue_tests",
     srcs = ["CommandQueue_tests.cc"],
     deps = [
@@ -35,6 +79,7 @@ donner_cc_test(
     srcs = ["EditorApp_tests.cc"],
     deps = [
         "//donner/editor:editor_app",
+        "//donner/editor:viewport_geometry",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],

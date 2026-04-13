@@ -93,11 +93,14 @@ public:
   Transform2d getEntityFromParentTransform(EntityHandle entity);
 
   /**
-   * Get the scale transform from the canvas to the SVG document.
+   * Get the transform that maps viewBox-space points to canvas-scaled output
+   * space, baking in the root `preserveAspectRatio` fit. Despite the previous
+   * `getDocumentFromCanvasTransform` name, this is a `canvasFromDocument`
+   * transform (input = document/viewBox, output = canvas).
    *
    * @param registry ECS registry
    */
-  Transform2d getDocumentFromCanvasTransform(Registry& registry);
+  Transform2d getCanvasFromDocumentTransform(Registry& registry);
 
   /**
    * Get the transform for entityContent-from-entity, which is an additional transform for specific
