@@ -5,10 +5,12 @@ donner_cc_library(
     srcs = [
         "CompositorController.cc",
         "CompositorLayer.cc",
+        "DragSession.cc",
     ],
     hdrs = [
         "CompositorController.h",
         "CompositorLayer.h",
+        "DragSession.h",
         "LayerMembershipComponent.h",
     ],
     visibility = ["//visibility:public"],
@@ -41,6 +43,19 @@ donner_cc_test(
     name = "compositor_tests",
     srcs = [
         "CompositorController_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "drag_session_tests",
+    srcs = [
+        "DragSession_tests.cc",
     ],
     deps = [
         ":compositor",
