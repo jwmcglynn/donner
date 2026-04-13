@@ -174,9 +174,7 @@ jobs:
             //donner/svg/renderer/tests:renderer_geode_tests
 
   macos:
-    if: >
-      (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
-      && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn')
+    if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn') }}
     runs-on: macos-15
     steps:
       - name: Checkout
