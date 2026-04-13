@@ -114,6 +114,23 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "sandbox_diff_tests",
+    srcs = ["SandboxDiff_tests.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    deps = [
+        "//donner/base",
+        "//donner/editor/sandbox:frame_inspector",
+        "//donner/editor/sandbox:rnr_file",
+        "//donner/editor/sandbox:sandbox_diff_lib",
+        "//donner/editor/sandbox:serializing_renderer",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "wire_format_tests",
     srcs = ["WireFormat_tests.cc"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
