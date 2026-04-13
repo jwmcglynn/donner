@@ -201,3 +201,27 @@ donner_cc_binary(
         ":rnr_file",
     ],
 )
+
+donner_cc_library(
+    name = "sandbox_diff_lib",
+    srcs = ["SandboxDiff.cc"],
+    hdrs = ["SandboxDiff.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":frame_inspector",
+        ":rnr_file",
+    ],
+)
+
+donner_cc_binary(
+    name = "sandbox_diff",
+    srcs = ["sandbox_diff_main.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":frame_inspector",
+        ":rnr_file",
+        ":sandbox_diff_lib",
+    ],
+)
