@@ -3949,17 +3949,21 @@ const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::SVG() {
         return true;
       }
 
-      // Quoted strings (attribute values)
+      // Quoted strings (attribute values). Emit the opening/closing
+      // quote chars as Punctuation and just the inner value as String,
+      // so double-click on the value text selects the contents without
+      // the quote delimiters (double-click boundaries track color
+      // changes, per findWordStart/findWordEnd).
       if (c == '"' || c == '\'') {
-        const char quote = c;
-        ++p;
-        while (p < inEnd && *p != quote) {
-          ++p;
-        }
-        if (p < inEnd) ++p;  // consume closing quote
-        outBegin = inBegin;
-        outEnd = p;
-        outColor = ColorIndex::String;
+        // First call: emit the opening quote as Punctuation (1 char)
+        // and let the next tokenizer invocation handle the inner
+        // value. Since the tokenizer is called in a loop until
+        // end-of-line, the subsequent iterations will colorize the
+        // inner value char by char via the identifier/number/etc.
+        // paths below. The closing quote is emitted similarly.
+        outBegin = p;
+        outEnd = p + 1;
+        outColor = ColorIndex::Punctuation;
         return true;
       }
 
