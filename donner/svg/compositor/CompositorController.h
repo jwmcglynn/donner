@@ -138,6 +138,13 @@ public:
    */
   [[nodiscard]] SVGDocument& document() { return *document_; }
 
+  /**
+   * Returns the fallback reasons for a promoted entity, or FallbackReason::None if not promoted.
+   *
+   * @param entity The entity to query.
+   */
+  [[nodiscard]] FallbackReason fallbackReasonsOf(Entity entity) const;
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
@@ -157,6 +164,10 @@ private:
 
   /// Compute the entity range for a promoted entity.
   static std::pair<Entity, Entity> computeEntityRange(Registry& registry, Entity entity);
+
+  /// Inspect a RenderingInstanceComponent and return which fallback reasons apply.
+  static FallbackReason detectFallbackReasons(
+      const components::RenderingInstanceComponent& instance);
 
   /// Next layer ID to assign.
   uint32_t nextLayerId_ = 1;

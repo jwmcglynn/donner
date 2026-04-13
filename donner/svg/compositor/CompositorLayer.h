@@ -11,6 +11,54 @@
 namespace donner::svg::compositor {
 
 /**
+ * Flags indicating which compositing features on a promoted entity require conservative fallback
+ * (full re-rasterization on every frame rather than bitmap caching).
+ *
+ * Each flag corresponds to an SVG feature that cannot be correctly rendered in isolation when the
+ * entity is composited separately from the rest of the scene.
+ */
+enum class FallbackReason : uint16_t {
+  None = 0,
+
+  /// Entity has mix-blend-mode != normal, requiring interaction with backdrop.
+  BlendMode = 1 << 0,
+
+  /// Entity has a filter effect, which may reference sourceGraphic/BackgroundImage.
+  Filter = 1 << 1,
+
+  /// Entity has a clip-path referencing elements outside the promoted subtree.
+  ClipPath = 1 << 2,
+
+  /// Entity has a mask referencing elements outside the promoted subtree.
+  Mask = 1 << 3,
+
+  /// Entity has markers, whose rendering depends on the containing document context.
+  Markers = 1 << 4,
+
+  /// Entity has a paint server (gradient/pattern) referencing external elements.
+  ExternalPaint = 1 << 5,
+
+  /// Entity establishes an isolation group (opacity < 1 composed with siblings).
+  IsolatedLayer = 1 << 6,
+};
+
+/// Bitwise OR.
+inline constexpr FallbackReason operator|(FallbackReason a, FallbackReason b) {
+  return static_cast<FallbackReason>(static_cast<uint16_t>(a) | static_cast<uint16_t>(b));
+}
+
+/// Bitwise AND.
+inline constexpr FallbackReason operator&(FallbackReason a, FallbackReason b) {
+  return static_cast<FallbackReason>(static_cast<uint16_t>(a) & static_cast<uint16_t>(b));
+}
+
+/// Bitwise OR assignment.
+inline constexpr FallbackReason& operator|=(FallbackReason& a, FallbackReason b) {
+  a = a | b;
+  return a;
+}
+
+/**
  * Represents a single compositor layer with its cached bitmap and dirty state.
  *
  * Each layer corresponds to a promoted entity subtree. The layer caches its rasterized output and
@@ -55,6 +103,14 @@ public:
   /// Returns true if the layer has a valid cached bitmap.
   [[nodiscard]] bool hasValidBitmap() const { return !bitmap_.empty(); }
 
+  /// Returns the fallback reasons for this layer, or FallbackReason::None.
+  [[nodiscard]] FallbackReason fallbackReasons() const { return fallbackReasons_; }
+
+  /// Returns true if this layer requires conservative fallback (re-rasterize every frame).
+  [[nodiscard]] bool requiresConservativeFallback() const {
+    return fallbackReasons_ != FallbackReason::None;
+  }
+
   /// @}
 
   /// @name Mutators
@@ -77,6 +133,9 @@ public:
     compositionTransform_ = transform;
   }
 
+  /// Set the fallback reasons for this layer.
+  void setFallbackReasons(FallbackReason reasons) { fallbackReasons_ = reasons; }
+
   /// @}
 
 private:
@@ -86,6 +145,7 @@ private:
   Entity lastEntity_;
   RendererBitmap bitmap_;
   Transform2d compositionTransform_;
+  FallbackReason fallbackReasons_ = FallbackReason::None;
   bool dirty_ = true;
 };
 

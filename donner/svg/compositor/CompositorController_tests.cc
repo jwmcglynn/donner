@@ -6,6 +6,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/LayerMembershipComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using ::testing::_;
@@ -282,6 +283,139 @@ TEST_F(CompositorControllerTest, MoveConstructor) {
   CompositorController moved(std::move(compositor));
   EXPECT_EQ(moved.layerCount(), 1u);
   EXPECT_TRUE(moved.isPromoted(entity));
+}
+
+TEST_F(CompositorControllerTest, SimpleFillNoFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  // Must prepare document to populate RenderingInstanceComponent.
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+  EXPECT_EQ(compositor.fallbackReasonsOf(entity), FallbackReason::None);
+}
+
+TEST_F(CompositorControllerTest, FilterTriggersFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="blur"><feGaussianBlur stdDeviation="5" /></filter>
+    </defs>
+    <rect id="target" width="10" height="10" fill="red" filter="url(#blur)" />
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::Filter, FallbackReason::None);
+}
+
+TEST_F(CompositorControllerTest, ClipPathTriggersFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <clipPath id="cp"><rect width="5" height="5" /></clipPath>
+    </defs>
+    <rect id="target" width="10" height="10" fill="red" clip-path="url(#cp)" />
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::ClipPath, FallbackReason::None);
+}
+
+TEST_F(CompositorControllerTest, MaskTriggersFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <mask id="m"><rect width="10" height="10" fill="white" /></mask>
+    </defs>
+    <rect id="target" width="10" height="10" fill="red" mask="url(#m)" />
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::Mask, FallbackReason::None);
+}
+
+TEST_F(CompositorControllerTest, OpacityTriggersFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" opacity="0.5" />
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::IsolatedLayer,
+            FallbackReason::None);
+}
+
+TEST_F(CompositorControllerTest, GradientFillTriggersFallback) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <linearGradient id="g">
+        <stop offset="0" stop-color="red" />
+        <stop offset="1" stop-color="blue" />
+      </linearGradient>
+    </defs>
+    <rect id="target" width="10" height="10" fill="url(#g)" />
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::ExternalPaint,
+            FallbackReason::None);
+}
+
+TEST_F(CompositorControllerTest, FallbackReasonsOfUnpromotedEntity) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_EQ(compositor.fallbackReasonsOf(entity), FallbackReason::None);
 }
 
 }  // namespace donner::svg::compositor

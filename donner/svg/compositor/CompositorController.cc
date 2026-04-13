@@ -46,6 +46,12 @@ bool CompositorController::promoteEntity(Entity entity) {
   const uint32_t layerId = nextLayerId_++;
   layers_.emplace_back(layerId, entity, firstEntity, lastEntity);
 
+  // Detect compositing features that require conservative fallback.
+  if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+    layers_.back().setFallbackReasons(detectFallbackReasons(instance));
+  }
+
   registry.emplace<LayerMembershipComponent>(entity, LayerMembershipComponent{layerId});
 
   rootDirty_ = true;
@@ -93,6 +99,11 @@ Transform2d CompositorController::compositionTransformOf(Entity entity) const {
   return layer ? layer->compositionTransform() : Transform2d();
 }
 
+FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
+  const CompositorLayer* layer = findLayer(entity);
+  return layer ? layer->fallbackReasons() : FallbackReason::None;
+}
+
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
@@ -112,9 +123,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // Check dirty flags on promoted entities.
   consumeDirtyFlags();
 
-  // Re-rasterize dirty promoted layers.
+  // Re-rasterize dirty promoted layers. Layers requiring conservative fallback are always dirty.
   for (auto& layer : layers_) {
-    if (layer.isDirty() || !layer.hasValidBitmap()) {
+    if (layer.requiresConservativeFallback() || layer.isDirty() || !layer.hasValidBitmap()) {
       rasterizeLayer(layer, viewport);
     }
   }
@@ -287,6 +298,45 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   }
 
   return {entity, entity};
+}
+
+FallbackReason CompositorController::detectFallbackReasons(
+    const components::RenderingInstanceComponent& instance) {
+  FallbackReason reasons = FallbackReason::None;
+
+  // Isolated layers (opacity < 1, isolation groups) interact with the backdrop.
+  if (instance.isolatedLayer) {
+    reasons |= FallbackReason::IsolatedLayer;
+  }
+
+  // Filters may reference BackgroundImage or other backdrop-dependent inputs.
+  if (instance.resolvedFilter.has_value()) {
+    reasons |= FallbackReason::Filter;
+  }
+
+  // Clip paths reference elements that may be outside the promoted subtree.
+  if (instance.clipPath.has_value()) {
+    reasons |= FallbackReason::ClipPath;
+  }
+
+  // Masks reference elements that may be outside the promoted subtree.
+  if (instance.mask.has_value()) {
+    reasons |= FallbackReason::Mask;
+  }
+
+  // Markers depend on the containing document context.
+  if (instance.markerStart.has_value() || instance.markerMid.has_value() ||
+      instance.markerEnd.has_value()) {
+    reasons |= FallbackReason::Markers;
+  }
+
+  // Paint servers with resolved references (gradients/patterns) may reference external elements.
+  if (std::holds_alternative<components::PaintResolvedReference>(instance.resolvedFill) ||
+      std::holds_alternative<components::PaintResolvedReference>(instance.resolvedStroke)) {
+    reasons |= FallbackReason::ExternalPaint;
+  }
+
+  return reasons;
 }
 
 }  // namespace donner::svg::compositor

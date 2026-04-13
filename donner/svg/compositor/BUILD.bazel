@@ -47,6 +47,7 @@ donner_cc_test(
     deps = [
         ":compositor",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_utils",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
