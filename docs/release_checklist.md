@@ -50,17 +50,28 @@ the version number.
 
 ## Final Commit
 
-- [ ] **Generate build report** — Run `docs/build_report.md` generation and check in the updated
-  report on the final pre-release commit. This also refreshes
-  `docs/reports/coverage.zip` (lcov HTML, repacked as a single archive
-  to keep the working tree small) and `docs/reports/binary-size/`, which
-  `tools/build_docs.sh` extracts/copies into the Doxygen site — commit
-  those too.
-- [ ] **CI green** — Verify the final commit passes all CI checks.
+The build report commit is **the commit that gets tagged**. It must land
+*after* every other release-blocking code change and *after* the
+`RELEASE_NOTES.md` update, and it must be its own dedicated commit — nothing
+else goes in it. Any code fix discovered after the tag is a point-release
+concern; the tag never moves retroactively.
+
+- [ ] **All other blocking changes are already on `main`** — every release-blocking
+  code change, plus the final `RELEASE_NOTES.md` update, has merged before you
+  prepare the build-report commit.
+- [ ] **Generate build report** — Run `docs/build_report.md` generation against a clean tree and
+  commit it as a dedicated release commit (e.g. `Release vX.Y.Z: regenerate build report`).
+  Nothing else in this commit. This step also refreshes
+  `docs/reports/coverage.zip` (lcov HTML, repacked as a single archive to keep
+  the working tree small) and `docs/reports/binary-size/`, which
+  `tools/build_docs.sh` extracts/copies into the Doxygen site — commit those
+  with the build report.
+- [ ] **CI green** — Verify the build-report commit passes all CI checks. This is the commit
+  that will be tagged, so it must be green end-to-end.
 
 ## Release
 
-- [ ] **Create release tag** — `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the final commit.
+- [ ] **Create release tag** — `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the build-report commit.
 - [ ] **Push tag** — `git push origin vX.Y.Z`.
 - [ ] **Create GitHub Release** — Use `gh release create`:
   ```sh
