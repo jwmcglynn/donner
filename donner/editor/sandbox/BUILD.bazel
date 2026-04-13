@@ -72,6 +72,7 @@ donner_cc_library(
         ":wire",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/renderer:resolved_gradient",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/resources:image_resource",
     ],
@@ -107,6 +108,7 @@ donner_cc_library(
         ":sandbox_codecs",
         ":wire",
         "//donner/base",
+        "//donner/svg/renderer:resolved_gradient",
         "//donner/svg/renderer:renderer_interface",
     ] + select({
         "//donner/svg/renderer:text_enabled": [

@@ -131,6 +131,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "resolved_gradient",
+    srcs = ["ResolvedGradient.cc"],
+    hdrs = ["ResolvedGradient.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_interface",
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg/components",
+        "//donner/svg/core",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_interface",
     hdrs = [
         "RendererInterface.h",

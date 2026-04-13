@@ -6,10 +6,6 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/css/FontFace.h"
 #include "donner/editor/sandbox/SandboxCodecs.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/paint/GradientComponent.h"
-#include "donner/svg/components/paint/LinearGradientComponent.h"
-#include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/resources/ImageResource.h"
 
@@ -40,36 +36,7 @@ struct ReplayingRenderer::Impl {
   /// the components `RendererTinySkia::makeFillPaint` / `makeStrokePaint`
   /// look up during paint resolution.
   svg::components::ResolvedPaintServer MaterializeGradient(const WireGradient& g) {
-    const Entity entity = registry.create();
-    auto& computed =
-        registry.emplace<svg::components::ComputedGradientComponent>(entity);
-    computed.initialized = true;
-    computed.gradientUnits = g.units;
-    computed.spreadMethod = g.spreadMethod;
-    computed.stops = g.stops;
-
-    if (g.kind == WireGradient::Kind::kLinear) {
-      auto& lin =
-          registry.emplace<svg::components::ComputedLinearGradientComponent>(entity);
-      lin.x1 = g.x1;
-      lin.y1 = g.y1;
-      lin.x2 = g.x2;
-      lin.y2 = g.y2;
-    } else {
-      auto& rad =
-          registry.emplace<svg::components::ComputedRadialGradientComponent>(entity);
-      rad.cx = g.cx;
-      rad.cy = g.cy;
-      rad.r = g.r;
-      rad.fx = g.fx;
-      rad.fy = g.fy;
-      rad.fr = g.fr;
-    }
-
-    svg::components::PaintResolvedReference out;
-    out.reference = svg::ResolvedReference{EntityHandle(registry, entity)};
-    out.fallback = g.fallback;
-    return out;
+    return svg::MaterializeResolvedGradient(registry, g);
   }
 };
 
@@ -95,8 +62,7 @@ bool ReadHeader(WireReader& r) {
 
 }  // namespace
 
-ReplayStatus ReplayingRenderer::pumpFrame(std::span<const uint8_t> wire,
-                                          ReplayReport& report) {
+ReplayStatus ReplayingRenderer::pumpFrame(std::span<const uint8_t> wire, ReplayReport& report) {
   report = ReplayReport{};
   WireReader r(wire);
 
@@ -124,13 +90,9 @@ ReplayStatus ReplayingRenderer::pumpFrame(std::span<const uint8_t> wire,
     const DispatchOutcome outcome = handleMessage(r, opcode);
 
     switch (outcome) {
-      case DispatchOutcome::kHandled:
-        break;
-      case DispatchOutcome::kUnsupported:
-        ++report.unsupportedCount;
-        break;
-      case DispatchOutcome::kDecodeError:
-        return ReplayStatus::kMalformed;
+      case DispatchOutcome::kHandled: break;
+      case DispatchOutcome::kUnsupported: ++report.unsupportedCount; break;
+      case DispatchOutcome::kDecodeError: return ReplayStatus::kMalformed;
       case DispatchOutcome::kUnknownOpcode: {
         // Skip the remaining payload and report the unknown opcode.
         const std::size_t consumed = r.position() - payloadStart;
@@ -156,12 +118,10 @@ ReplayStatus ReplayingRenderer::pumpFrame(std::span<const uint8_t> wire,
   if (!sawEndFrame) {
     return ReplayStatus::kEndOfStream;
   }
-  return report.unsupportedCount == 0 ? ReplayStatus::kOk
-                                       : ReplayStatus::kEncounteredUnsupported;
+  return report.unsupportedCount == 0 ? ReplayStatus::kOk : ReplayStatus::kEncounteredUnsupported;
 }
 
-ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
-    WireReader& r, Opcode opcode) {
+ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(WireReader& r, Opcode opcode) {
   switch (opcode) {
     case Opcode::kBeginFrame: {
       svg::RenderViewport viewport;
@@ -173,9 +133,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       return DispatchOutcome::kHandled;
     }
 
-    case Opcode::kEndFrame:
-      target_.endFrame();
-      return DispatchOutcome::kHandled;
+    case Opcode::kEndFrame: target_.endFrame(); return DispatchOutcome::kHandled;
 
     case Opcode::kSetTransform: {
       Transform2d t;
@@ -191,9 +149,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       return DispatchOutcome::kHandled;
     }
 
-    case Opcode::kPopTransform:
-      target_.popTransform();
-      return DispatchOutcome::kHandled;
+    case Opcode::kPopTransform: target_.popTransform(); return DispatchOutcome::kHandled;
 
     case Opcode::kPushClip: {
       svg::ResolvedClip clip;
@@ -202,9 +158,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       return DispatchOutcome::kHandled;
     }
 
-    case Opcode::kPopClip:
-      target_.popClip();
-      return DispatchOutcome::kHandled;
+    case Opcode::kPopClip: target_.popClip(); return DispatchOutcome::kHandled;
 
     case Opcode::kPushIsolatedLayer: {
       double opacity = 0;
@@ -215,9 +169,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       return DispatchOutcome::kHandled;
     }
 
-    case Opcode::kPopIsolatedLayer:
-      target_.popIsolatedLayer();
-      return DispatchOutcome::kHandled;
+    case Opcode::kPopIsolatedLayer: target_.popIsolatedLayer(); return DispatchOutcome::kHandled;
 
     case Opcode::kSetPaint: {
       svg::PaintParams paint;
@@ -284,9 +236,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       target_.transitionMaskToContent();
       return DispatchOutcome::kHandled;
 
-    case Opcode::kPopMask:
-      target_.popMask();
-      return DispatchOutcome::kHandled;
+    case Opcode::kPopMask: target_.popMask(); return DispatchOutcome::kHandled;
 
     case Opcode::kBeginPatternTile: {
       Box2d tileRect;
@@ -321,9 +271,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       return DispatchOutcome::kHandled;
     }
 
-    case Opcode::kPopFilterLayer:
-      target_.popFilterLayer();
-      return DispatchOutcome::kHandled;
+    case Opcode::kPopFilterLayer: target_.popFilterLayer(); return DispatchOutcome::kHandled;
 
     case Opcode::kDrawImage: {
       svg::ImageResource image;
@@ -338,8 +286,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       svg::components::ComputedTextComponent textComp;
       svg::TextParams params;
       if (!DecodeComputedTextComponent(r, textComp)) return DispatchOutcome::kDecodeError;
-      if (!DecodeTextParams(r, params, &impl_->lastFontFaces))
-        return DispatchOutcome::kDecodeError;
+      if (!DecodeTextParams(r, params, &impl_->lastFontFaces)) return DispatchOutcome::kDecodeError;
       // Point the span at stable storage that outlives the drawText call.
       params.fontFaces = impl_->lastFontFaces;
 #ifdef DONNER_TEXT_ENABLED
@@ -347,10 +294,8 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       // registry so the backend's drawText can resolve fonts and lay out
       // glyphs. FontManager must be created first — TextEngine depends on it.
       if (!impl_->registry.ctx().contains<svg::TextEngine>()) {
-        auto& fontManager =
-            impl_->registry.ctx().emplace<svg::FontManager>(impl_->registry);
-        impl_->registry.ctx().emplace<svg::TextEngine>(fontManager,
-                                                       impl_->registry);
+        auto& fontManager = impl_->registry.ctx().emplace<svg::FontManager>(impl_->registry);
+        impl_->registry.ctx().emplace<svg::TextEngine>(fontManager, impl_->registry);
       }
 #endif
       target_.drawText(impl_->registry, textComp, params);
@@ -369,8 +314,7 @@ ReplayingRenderer::DispatchOutcome ReplayingRenderer::handleMessage(
       return DispatchOutcome::kDecodeError;
 
     case Opcode::kInvalid:
-    default:
-      return DispatchOutcome::kUnknownOpcode;
+    default: return DispatchOutcome::kUnknownOpcode;
   }
 }
 
