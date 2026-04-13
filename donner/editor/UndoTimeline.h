@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/base/Transform.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/svg/SVGElement.h"
 
 namespace donner::editor {
@@ -24,6 +25,10 @@ struct UndoSnapshot {
 
   /// The captured transform.
   Transform2d transform;
+
+  /// Stable locator for the element, used to resolve a live handle after a
+  /// self-initiated ReplaceDocument swaps the document identity.
+  std::optional<AttributeWritebackTarget> writebackTarget;
 };
 
 /// Capture the current transform of an SVGElement as an undo snapshot.
@@ -76,7 +81,7 @@ public:
   void record(std::string_view label, UndoSnapshot before, UndoSnapshot after);
 
   /// Undo the next entry in the current undo chain. If no chain is active, starts a new chain
-  /// from the end of the timeline. Returns the snapshot that was applied, or nullopt if
+  /// from the end of the timeline. Returns the snapshot the caller should apply, or nullopt if
   /// there is nothing to undo.
   std::optional<UndoSnapshot> undo();
 

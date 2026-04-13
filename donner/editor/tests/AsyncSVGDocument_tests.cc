@@ -22,6 +22,7 @@ TEST(AsyncSVGDocumentTest, EmptyByDefault) {
   EXPECT_EQ(doc.currentFrameVersion(), 0u);
   EXPECT_FALSE(doc.flushFrame());
   EXPECT_EQ(doc.currentFrameVersion(), 0u);
+  EXPECT_FALSE(doc.lastFlushResult().appliedCommands);
 }
 
 TEST(AsyncSVGDocumentTest, LoadFromStringSucceedsAndBumpsVersion) {
@@ -62,9 +63,12 @@ TEST(AsyncSVGDocumentTest, MultipleSetTransformsCoalesceAtFlush) {
   ASSERT_TRUE(rect.has_value());
 
   // Three writes, only the last should apply.
-  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(1.0, 0.0))));
-  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(2.0, 0.0))));
-  doc.applyMutation(EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(3.0, 0.0))));
+  doc.applyMutation(
+      EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(1.0, 0.0))));
+  doc.applyMutation(
+      EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(2.0, 0.0))));
+  doc.applyMutation(
+      EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(3.0, 0.0))));
   EXPECT_EQ(doc.queue().size(), 3u);
 
   EXPECT_TRUE(doc.flushFrame());
@@ -83,14 +87,40 @@ TEST(AsyncSVGDocumentTest, ReplaceDocumentSwapsTheTreeAndDropsPriorMutations) {
 
   // Queue a SetTransform, then a ReplaceDocument. The SetTransform must
   // be dropped because its target entity belongs to the doomed document.
-  doc.applyMutation(EditorCommand::SetTransformCommand(
-      *rect, Transform2d::Translate(Vector2d(99.0, 99.0))));
+  doc.applyMutation(
+      EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(99.0, 99.0))));
   doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kReplacementSvg)));
 
   EXPECT_TRUE(doc.flushFrame());
+  EXPECT_TRUE(doc.lastFlushResult().replacedDocument);
+  EXPECT_FALSE(doc.lastFlushResult().preserveUndoOnReparse);
 
   EXPECT_FALSE(doc.document().querySelector("#r1").has_value());
   EXPECT_TRUE(doc.document().querySelector("#r2").has_value());
+}
+
+TEST(AsyncSVGDocumentTest, PreserveUndoMetadataSurvivesWritebackReplaceDocument) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+
+  doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kReplacementSvg), true));
+
+  EXPECT_TRUE(doc.flushFrame());
+  EXPECT_TRUE(doc.lastFlushResult().appliedCommands);
+  EXPECT_TRUE(doc.lastFlushResult().replacedDocument);
+  EXPECT_TRUE(doc.lastFlushResult().preserveUndoOnReparse);
+}
+
+TEST(AsyncSVGDocumentTest, MixedReplaceDocumentBatchClearsPreserveUndoMetadata) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+
+  doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kReplacementSvg), true));
+  doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kTrivialSvg)));
+
+  EXPECT_TRUE(doc.flushFrame());
+  EXPECT_TRUE(doc.lastFlushResult().replacedDocument);
+  EXPECT_FALSE(doc.lastFlushResult().preserveUndoOnReparse);
 }
 
 TEST(AsyncSVGDocumentTest, FlushIsNoOpWhenQueueIsEmpty) {

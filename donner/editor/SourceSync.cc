@@ -10,7 +10,8 @@ void QueueSourceWritebackReparse(EditorApp& app, std::string_view newSource,
                                  std::optional<std::string>* lastWritebackSourceText) {
   *previousSourceText = std::string(newSource);
   *lastWritebackSourceText = *previousSourceText;
-  app.applyMutation(EditorCommand::ReplaceDocumentCommand(*previousSourceText));
+  app.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(*previousSourceText, /*preserveUndoOnReparse=*/true));
 }
 
 DispatchSourceTextChangeResult DispatchSourceTextChange(

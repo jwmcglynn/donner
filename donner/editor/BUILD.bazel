@@ -361,6 +361,7 @@ donner_cc_library(
     srcs = ["UndoTimeline.cc"],
     hdrs = ["UndoTimeline.h"],
     deps = [
+        ":attribute_writeback",
         "//donner/base",
         "//donner/svg",
     ],

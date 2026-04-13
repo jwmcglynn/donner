@@ -8,7 +8,7 @@
 
 namespace donner::editor {
 
-std::vector<EditorCommand> CommandQueue::flush() {
+CommandQueue::FlushResult CommandQueue::flush() {
   if (pending_.empty()) {
     return {};
   }
@@ -17,14 +17,21 @@ std::vector<EditorCommand> CommandQueue::flush() {
   // Commands queued after the latest ReplaceDocument survive coalescing
   // against each other, but anything before it is logically wiped out.
   std::size_t startIndex = 0;
+  bool hadReplaceDocument = false;
+  bool allReplaceDocumentPreserveUndo = true;
   for (std::size_t i = 0; i < pending_.size(); ++i) {
     if (pending_[i].kind == EditorCommand::Kind::ReplaceDocument) {
+      hadReplaceDocument = true;
+      allReplaceDocumentPreserveUndo =
+          allReplaceDocumentPreserveUndo && pending_[i].preserveUndoOnReparse;
       startIndex = i;
     }
   }
 
-  std::vector<EditorCommand> effective;
-  effective.reserve(pending_.size() - startIndex);
+  FlushResult result;
+  result.hadReplaceDocument = hadReplaceDocument;
+  result.preserveUndoOnReparse = hadReplaceDocument && allReplaceDocumentPreserveUndo;
+  result.effectiveCommands.reserve(pending_.size() - startIndex);
 
   // Coalesce SetTransform by element identity. We walk forward and remember
   // the index each element's most recent SetTransform landed at; later
@@ -45,30 +52,29 @@ std::vector<EditorCommand> CommandQueue::flush() {
 
     if (cmd.kind == EditorCommand::Kind::SetTransform && cmd.element.has_value()) {
       const Entity key = cmd.element->entityHandle().entity();
-      auto [it, inserted] = setTransformSlot.try_emplace(key, effective.size());
+      auto [it, inserted] = setTransformSlot.try_emplace(key, result.effectiveCommands.size());
       if (inserted) {
-        effective.push_back(std::move(cmd));
+        result.effectiveCommands.push_back(std::move(cmd));
       } else {
-        effective[it->second] = std::move(cmd);
+        result.effectiveCommands[it->second] = std::move(cmd);
       }
     } else if (cmd.kind == EditorCommand::Kind::SetAttribute && cmd.element.has_value()) {
-      const auto key =
-          std::make_pair(cmd.element->entityHandle().entity(), cmd.attributeName);
-      auto [it, inserted] = setAttributeSlot.try_emplace(key, effective.size());
+      const auto key = std::make_pair(cmd.element->entityHandle().entity(), cmd.attributeName);
+      auto [it, inserted] = setAttributeSlot.try_emplace(key, result.effectiveCommands.size());
       if (inserted) {
-        effective.push_back(std::move(cmd));
+        result.effectiveCommands.push_back(std::move(cmd));
       } else {
-        effective[it->second] = std::move(cmd);
+        result.effectiveCommands[it->second] = std::move(cmd);
       }
     } else {
       // ReplaceDocument or DeleteElement: just emit. (At most one
       // ReplaceDocument survives the startIndex walk above.)
-      effective.push_back(std::move(cmd));
+      result.effectiveCommands.push_back(std::move(cmd));
     }
   }
 
   pending_.clear();
-  return effective;
+  return result;
 }
 
 }  // namespace donner::editor

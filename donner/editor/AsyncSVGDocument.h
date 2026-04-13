@@ -30,6 +30,12 @@ namespace donner::editor {
 /// operation is `currentFrameVersion()` which the render thread can poll.
 class AsyncSVGDocument {
 public:
+  struct FlushResult {
+    bool appliedCommands = false;
+    bool replacedDocument = false;
+    bool preserveUndoOnReparse = false;
+  };
+
   AsyncSVGDocument();
   ~AsyncSVGDocument() = default;
 
@@ -65,6 +71,9 @@ public:
   /// itself was replaced via `setDocument` since the last flush.
   bool flushFrame();
 
+  /// Metadata from the most recent `flushFrame()` call.
+  [[nodiscard]] const FlushResult& lastFlushResult() const { return lastFlushResult_; }
+
   /// Monotonic frame version counter. Bumped on every state change visible
   /// to the renderer (mutation flush or document replacement). The render
   /// thread polls this to detect updates without locking the document.
@@ -97,6 +106,7 @@ private:
   CommandQueue queue_;
   std::atomic<std::uint64_t> frameVersion_{0};
   std::optional<ParseDiagnostic> lastParseError_;
+  FlushResult lastFlushResult_;
 };
 
 }  // namespace donner::editor

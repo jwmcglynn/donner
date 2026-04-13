@@ -154,8 +154,12 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   // element actually moved — a click that never saw a mouse-move event
   // is a no-op for undo purposes.
   if (dragState_->hasMoved) {
-    UndoSnapshot before{.element = dragState_->element, .transform = dragState_->startTransform};
-    UndoSnapshot after{.element = dragState_->element, .transform = dragState_->currentTransform};
+    UndoSnapshot before{.element = dragState_->element,
+                        .transform = dragState_->startTransform,
+                        .writebackTarget = dragState_->writebackTarget};
+    UndoSnapshot after{.element = dragState_->element,
+                       .transform = dragState_->currentTransform,
+                       .writebackTarget = dragState_->writebackTarget};
     editor.undoTimeline().record("Move element", std::move(before), std::move(after));
 
     if (dragState_->writebackTarget.has_value()) {

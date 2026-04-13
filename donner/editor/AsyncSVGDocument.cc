@@ -17,19 +17,25 @@ void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
 }
 
 bool AsyncSVGDocument::flushFrame() {
+  lastFlushResult_ = {};
   if (queue_.empty()) {
     return false;
   }
 
-  const auto effective = queue_.flush();
-  if (effective.empty()) {
+  const auto queueFlush = queue_.flush();
+  if (queueFlush.effectiveCommands.empty()) {
     return false;
   }
 
-  for (const auto& cmd : effective) {
+  for (const auto& cmd : queueFlush.effectiveCommands) {
     applyOne(cmd);
   }
 
+  lastFlushResult_ = FlushResult{
+      .appliedCommands = true,
+      .replacedDocument = queueFlush.hadReplaceDocument,
+      .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
+  };
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
 }
@@ -86,8 +92,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // AttributeParser::ParseAndSetAttribute call, but for M3 the
       // public setAttribute is correct and sufficient.
       svg::SVGElement element = *command.element;
-      element.setAttribute(xml::XMLQualifiedNameRef(command.attributeName),
-                           command.attributeValue);
+      element.setAttribute(xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
       break;
     }
 

@@ -66,6 +66,7 @@ bool EditorApp::flushFrame() {
     return false;
   }
 
+  const auto& documentFlush = document_.lastFlushResult();
   if (documentBeforeFlush.has_value() && document_.hasDocument() &&
       !(*documentBeforeFlush == document_.document())) {
     std::vector<svg::SVGElement> remappedSelection;
@@ -81,7 +82,9 @@ bool EditorApp::flushFrame() {
     refreshFirstSelectionCache();
     controller_.reset();
     controllerVersion_ = 0;
-    undoTimeline_.clear();
+    if (!(documentFlush.replacedDocument && documentFlush.preserveUndoOnReparse)) {
+      undoTimeline_.clear();
+    }
   }
 
   return true;
@@ -138,11 +141,20 @@ void EditorApp::undo() {
     return;
   }
 
+  svg::SVGElement liveElement = snapshot->element;
+  if (document_.hasDocument() && snapshot->writebackTarget.has_value()) {
+    if (auto resolved =
+            resolveAttributeWritebackTarget(document_.document(), *snapshot->writebackTarget);
+        resolved.has_value()) {
+      liveElement = *resolved;
+    }
+  }
+
   // Route the restored transform through the command queue so every
   // DOM write — tool drags, text-pane re-parse, and undo — goes through
   // the same mutation seam. The queue coalesces with any pending
   // commands and applies on the next `flushFrame()`.
-  applyMutation(EditorCommand::SetTransformCommand(snapshot->element, snapshot->transform));
+  applyMutation(EditorCommand::SetTransformCommand(liveElement, snapshot->transform));
 
   // Capture the source-text writeback target BEFORE the command drains
   // so the path-based target resolves against the in-sync document.
@@ -152,7 +164,10 @@ void EditorApp::undo() {
   // in the source must agree. Without this the DOM reverts but the
   // source keeps the post-drag text, and the next edit lands on the
   // wrong baseline.
-  if (auto target = captureAttributeWritebackTarget(snapshot->element); target.has_value()) {
+  if (snapshot->writebackTarget.has_value()) {
+    enqueueTransformWriteback(CompletedTransformWriteback{.target = *snapshot->writebackTarget,
+                                                          .transform = snapshot->transform});
+  } else if (auto target = captureAttributeWritebackTarget(liveElement); target.has_value()) {
     enqueueTransformWriteback(CompletedTransformWriteback{.target = std::move(*target),
                                                           .transform = snapshot->transform});
   }

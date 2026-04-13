@@ -41,11 +41,11 @@ void RemoveSubstringOrAssert(std::string* source, std::string_view needle) {
   source->erase(pos, needle.size());
 }
 
-bool ApplyCompletedDragWriteback(std::string* source,
-                                 const SelectTool::CompletedDragWriteback& writeback) {
-  const RcString serialized = toSVGTransformString(writeback.transform);
+bool ApplyCompletedDragWriteback(std::string* source, const AttributeWritebackTarget& target,
+                                 const Transform2d& transform) {
+  const RcString serialized = toSVGTransformString(transform);
   if (std::string_view(serialized).empty()) {
-    auto patch = buildAttributeRemoveWriteback(*source, writeback.target, "transform");
+    auto patch = buildAttributeRemoveWriteback(*source, target, "transform");
     if (!patch.has_value()) {
       return true;
     }
@@ -54,14 +54,23 @@ bool ApplyCompletedDragWriteback(std::string* source,
     return result.applied == 1u;
   }
 
-  auto patch =
-      buildAttributeWriteback(*source, writeback.target, "transform", std::string_view(serialized));
+  auto patch = buildAttributeWriteback(*source, target, "transform", std::string_view(serialized));
   if (!patch.has_value()) {
     return false;
   }
 
   const auto result = applyPatches(*source, {{*patch}});
   return result.applied == 1u;
+}
+
+bool ApplyCompletedDragWriteback(std::string* source,
+                                 const SelectTool::CompletedDragWriteback& writeback) {
+  return ApplyCompletedDragWriteback(source, writeback.target, writeback.transform);
+}
+
+bool ApplyCompletedDragWriteback(std::string* source,
+                                 const EditorApp::CompletedTransformWriteback& writeback) {
+  return ApplyCompletedDragWriteback(source, writeback.target, writeback.transform);
 }
 
 bool ApplyElementRemoveWriteback(std::string* source, const AttributeWritebackTarget& target) {
@@ -106,6 +115,28 @@ bool QueueDragWritebackReparse(EditorApp& app, std::string* source, std::string*
 
   QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
   return true;
+}
+
+bool QueueTransformWritebackReparse(EditorApp& app, std::string* source,
+                                    std::string* previousSourceText,
+                                    std::optional<std::string>* lastWritebackSourceText,
+                                    const EditorApp::CompletedTransformWriteback& writeback) {
+  if (!ApplyCompletedDragWriteback(source, writeback)) {
+    return false;
+  }
+
+  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
+  return true;
+}
+
+bool FlushQueuedWritebackReparse(EditorApp& app, std::string_view source,
+                                 std::string* previousSourceText,
+                                 std::optional<std::string>* lastWritebackSourceText) {
+  const auto dispatch =
+      DispatchSourceTextChange(app, source, previousSourceText, lastWritebackSourceText);
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_TRUE(dispatch.skippedSelfWriteback);
+  return app.flushFrame();
 }
 
 bool QueueElementRemoveWritebackReparse(EditorApp& app, std::string* source,
@@ -240,6 +271,132 @@ TEST(EditorSyncTest, UndoToIdentityRemovesTransformAttributeFromSource) {
   EXPECT_EQ(circle->getAttribute("cx"), std::optional<RcString>(RcString("40")));
   EXPECT_EQ(circle->getAttribute("cy"), std::optional<RcString>(RcString("40")));
   EXPECT_EQ(circle->getAttribute("r"), std::optional<RcString>(RcString("10")));
+}
+
+TEST(EditorSyncTest, DragWritebackReparsePreservesUndoAndReplaysAgainstLiveDocument) {
+  EditorApp app;
+  SelectTool tool;
+  ASSERT_TRUE(app.loadFromString(kCircleAt40Svg));
+
+  std::string source(kCircleAt40Svg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  auto writeback = DragCircleBy(app, tool, Vector2d(40.0, 40.0), 10.0);
+  ASSERT_TRUE(writeback.has_value());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_TRUE(app.canUndo());
+
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *writeback));
+  ASSERT_TRUE(
+      FlushQueuedWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText));
+  EXPECT_TRUE(app.document().lastFlushResult().preserveUndoOnReparse);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_TRUE(app.canUndo());
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+
+  auto circle = app.document().document().querySelector("#c");
+  ASSERT_TRUE(circle.has_value());
+  EXPECT_DOUBLE_EQ(circle->cast<svg::SVGGraphicsElement>().transform().data[4], 0.0);
+  EXPECT_TRUE(app.consumeTransformWriteback().has_value());
+}
+
+TEST(EditorSyncTest, UserReplaceDocumentClearsUndoTimeline) {
+  EditorApp app;
+  SelectTool tool;
+  ASSERT_TRUE(app.loadFromString(kCircleAt40Svg));
+
+  ASSERT_TRUE(DragCircleBy(app, tool, Vector2d(40.0, 40.0), 5.0).has_value());
+  ASSERT_EQ(app.undoTimeline().entryCount(), 1u);
+
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kCircleSvg)));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_FALSE(app.document().lastFlushResult().preserveUndoOnReparse);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorSyncTest, MixedWritebackAndUserReplaceDocumentClearsUndoTimeline) {
+  EditorApp app;
+  SelectTool tool;
+  ASSERT_TRUE(app.loadFromString(kCircleAt40Svg));
+
+  std::string source(kCircleAt40Svg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  auto writeback = DragCircleBy(app, tool, Vector2d(40.0, 40.0), 5.0);
+  ASSERT_TRUE(writeback.has_value());
+  ASSERT_EQ(app.undoTimeline().entryCount(), 1u);
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *writeback));
+
+  std::string userEditedSource = source;
+  RemoveSubstringOrAssert(&userEditedSource, " cx=\"40\"");
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(userEditedSource));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_FALSE(app.document().lastFlushResult().preserveUndoOnReparse);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  EXPECT_FALSE(app.canUndo());
+
+  auto circle = app.document().document().querySelector("#c");
+  ASSERT_TRUE(circle.has_value());
+  EXPECT_FALSE(circle->getAttribute("cx").has_value());
+}
+
+TEST(EditorSyncTest, DragUndoDragUndoChainSurvivesWritebackReparses) {
+  EditorApp app;
+  SelectTool tool;
+  ASSERT_TRUE(app.loadFromString(kCircleAt40Svg));
+
+  std::string source(kCircleAt40Svg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  auto firstWriteback = DragCircleBy(app, tool, Vector2d(40.0, 40.0), 5.0);
+  ASSERT_TRUE(firstWriteback.has_value());
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *firstWriteback));
+  ASSERT_TRUE(
+      FlushQueuedWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText));
+  EXPECT_TRUE(app.canUndo());
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  auto firstUndoWriteback = app.consumeTransformWriteback();
+  ASSERT_TRUE(firstUndoWriteback.has_value());
+  ASSERT_TRUE(QueueTransformWritebackReparse(app, &source, &previousSourceText,
+                                             &lastWritebackSourceText, *firstUndoWriteback));
+  ASSERT_TRUE(
+      FlushQueuedWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText));
+
+  auto circleAfterFirstUndo = app.document().document().querySelector("#c");
+  ASSERT_TRUE(circleAfterFirstUndo.has_value());
+  EXPECT_DOUBLE_EQ(circleAfterFirstUndo->cast<svg::SVGGraphicsElement>().transform().data[4], 0.0);
+
+  auto secondWriteback = DragCircleBy(app, tool, Vector2d(40.0, 40.0), 8.0);
+  ASSERT_TRUE(secondWriteback.has_value());
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *secondWriteback));
+  ASSERT_TRUE(
+      FlushQueuedWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText));
+  EXPECT_TRUE(app.canUndo());
+
+  auto movedCircle = app.document().document().querySelector("#c");
+  ASSERT_TRUE(movedCircle.has_value());
+  EXPECT_DOUBLE_EQ(movedCircle->cast<svg::SVGGraphicsElement>().transform().data[4], 8.0);
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+
+  auto circleAfterSecondUndo = app.document().document().querySelector("#c");
+  ASSERT_TRUE(circleAfterSecondUndo.has_value());
+  EXPECT_DOUBLE_EQ(circleAfterSecondUndo->cast<svg::SVGGraphicsElement>().transform().data[4], 0.0);
 }
 
 TEST(EditorSyncTest, DeleteMutationWritesElementRemovalBackToSource) {
@@ -382,9 +539,12 @@ TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocume
   EXPECT_TRUE(dispatch.skippedSelfWriteback);
 
   auto effective = app.document().queue().flush();
-  ASSERT_EQ(effective.size(), 1u);
-  EXPECT_EQ(effective.front().kind, EditorCommand::Kind::ReplaceDocument);
-  EXPECT_EQ(effective.front().bytes, source);
+  ASSERT_EQ(effective.effectiveCommands.size(), 1u);
+  EXPECT_EQ(effective.effectiveCommands.front().kind, EditorCommand::Kind::ReplaceDocument);
+  EXPECT_EQ(effective.effectiveCommands.front().bytes, source);
+  EXPECT_TRUE(effective.effectiveCommands.front().preserveUndoOnReparse);
+  EXPECT_TRUE(effective.hadReplaceDocument);
+  EXPECT_TRUE(effective.preserveUndoOnReparse);
 }
 
 TEST(EditorSyncTest, SelectionSurvivesForcedReparseAfterDragWriteback) {

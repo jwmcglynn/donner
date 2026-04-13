@@ -51,8 +51,11 @@ TEST_F(CommandQueueTest, EmptyFlushReturnsNothing) {
   EXPECT_TRUE(queue.empty());
   EXPECT_EQ(queue.size(), 0u);
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   EXPECT_TRUE(effective.empty());
+  EXPECT_FALSE(flushResult.hadReplaceDocument);
+  EXPECT_FALSE(flushResult.preserveUndoOnReparse);
   EXPECT_TRUE(queue.empty());
 }
 
@@ -62,7 +65,8 @@ TEST_F(CommandQueueTest, SetTransformsForDifferentEntitiesPreserveOrder) {
   queue.push(EditorCommand::SetTransformCommand(*b, MakeTranslation(0.0, 2.0)));
   queue.push(EditorCommand::SetTransformCommand(*c, MakeTranslation(3.0, 4.0)));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 3u);
   EXPECT_TRUE(effective[0].element == a);
   EXPECT_TRUE(effective[1].element == b);
@@ -76,7 +80,8 @@ TEST_F(CommandQueueTest, MultipleSetTransformsForSameEntityCollapse) {
   queue.push(EditorCommand::SetTransformCommand(*a, MakeTranslation(2.0, 0.0)));
   queue.push(EditorCommand::SetTransformCommand(*a, MakeTranslation(3.0, 0.0)));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 1u);
   EXPECT_TRUE(effective[0].element == a);
   // The most recent transform (translation by 3.0) wins.
@@ -92,7 +97,8 @@ TEST_F(CommandQueueTest, CoalescingPreservesPerEntityOrderForDistinctEntities) {
   queue.push(EditorCommand::SetTransformCommand(*a, MakeTranslation(3.0, 0.0)));
   queue.push(EditorCommand::SetTransformCommand(*b, MakeTranslation(4.0, 0.0)));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 2u);
   EXPECT_TRUE(effective[0].element == a);
   EXPECT_DOUBLE_EQ(effective[0].transform.data[4], 3.0);
@@ -106,10 +112,13 @@ TEST_F(CommandQueueTest, ReplaceDocumentDropsAllPriorCommands) {
   queue.push(EditorCommand::SetTransformCommand(*b, MakeTranslation(2.0, 0.0)));
   queue.push(EditorCommand::ReplaceDocumentCommand("<svg/>"));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 1u);
   EXPECT_EQ(effective[0].kind, EditorCommand::Kind::ReplaceDocument);
   EXPECT_EQ(effective[0].bytes, "<svg/>");
+  EXPECT_TRUE(flushResult.hadReplaceDocument);
+  EXPECT_FALSE(flushResult.preserveUndoOnReparse);
 }
 
 TEST_F(CommandQueueTest, CommandsAfterReplaceDocumentSurvive) {
@@ -118,7 +127,8 @@ TEST_F(CommandQueueTest, CommandsAfterReplaceDocumentSurvive) {
   queue.push(EditorCommand::ReplaceDocumentCommand("<svg/>"));
   queue.push(EditorCommand::SetTransformCommand(*b, MakeTranslation(5.0, 0.0)));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 2u);
   EXPECT_EQ(effective[0].kind, EditorCommand::Kind::ReplaceDocument);
   EXPECT_EQ(effective[1].kind, EditorCommand::Kind::SetTransform);
@@ -133,12 +143,40 @@ TEST_F(CommandQueueTest, MultipleReplaceDocumentKeepsOnlyLatestAndCommandsAfter)
   queue.push(EditorCommand::ReplaceDocumentCommand("second"));
   queue.push(EditorCommand::SetTransformCommand(*c, MakeTranslation(3.0, 0.0)));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 2u);
   EXPECT_EQ(effective[0].kind, EditorCommand::Kind::ReplaceDocument);
   EXPECT_EQ(effective[0].bytes, "second");
   EXPECT_EQ(effective[1].kind, EditorCommand::Kind::SetTransform);
   EXPECT_TRUE(effective[1].element == c);
+  EXPECT_TRUE(flushResult.hadReplaceDocument);
+  EXPECT_FALSE(flushResult.preserveUndoOnReparse);
+}
+
+TEST_F(CommandQueueTest, PreserveUndoReparseSurvivesSingleReplaceDocumentBatch) {
+  CommandQueue queue;
+  queue.push(EditorCommand::ReplaceDocumentCommand("writeback", /*preserveUndoOnReparse=*/true));
+
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
+  ASSERT_EQ(effective.size(), 1u);
+  EXPECT_TRUE(flushResult.hadReplaceDocument);
+  EXPECT_TRUE(flushResult.preserveUndoOnReparse);
+  EXPECT_TRUE(effective.front().preserveUndoOnReparse);
+}
+
+TEST_F(CommandQueueTest, UserReplaceInMixedBatchClearsPreserveUndoMetadata) {
+  CommandQueue queue;
+  queue.push(EditorCommand::ReplaceDocumentCommand("writeback", /*preserveUndoOnReparse=*/true));
+  queue.push(EditorCommand::ReplaceDocumentCommand("user-edit"));
+
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
+  ASSERT_EQ(effective.size(), 1u);
+  EXPECT_EQ(effective.front().bytes, "user-edit");
+  EXPECT_TRUE(flushResult.hadReplaceDocument);
+  EXPECT_FALSE(flushResult.preserveUndoOnReparse);
 }
 
 TEST_F(CommandQueueTest, ClearDropsPendingWithoutFlushing) {
@@ -150,7 +188,8 @@ TEST_F(CommandQueueTest, ClearDropsPendingWithoutFlushing) {
   queue.clear();
   EXPECT_TRUE(queue.empty());
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   EXPECT_TRUE(effective.empty());
 }
 
@@ -160,7 +199,8 @@ TEST_F(CommandQueueTest, DeleteElementCommandNotCoalesced) {
   queue.push(EditorCommand::DeleteElementCommand(*b));
   queue.push(EditorCommand::DeleteElementCommand(*c));
 
-  const auto effective = queue.flush();
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
   ASSERT_EQ(effective.size(), 3u);
   EXPECT_EQ(effective[0].kind, EditorCommand::Kind::SetTransform);
   EXPECT_EQ(effective[1].kind, EditorCommand::Kind::DeleteElement);

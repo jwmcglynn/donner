@@ -1,5 +1,6 @@
 #include "donner/editor/UndoTimeline.h"
 
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
@@ -13,6 +14,7 @@ UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element) {
   return UndoSnapshot{
       .element = element,
       .transform = graphicsElement.transform(),
+      .writebackTarget = captureAttributeWritebackTarget(element),
   };
 }
 
@@ -72,9 +74,6 @@ std::optional<UndoSnapshot> UndoTimeline::undo() {
   // reallocate, invalidating any reference into `entries_`.
   const size_t cursorAtEntry = undoCursor_;
   UndoEntry targetCopy = entries_[cursorAtEntry];
-
-  // Apply the "before" snapshot to reverse this entry.
-  applySnapshot(targetCopy.before);
 
   // Record the undo as a new timeline entry (appended after chainStart_, so not revisited).
   entries_.push_back(UndoEntry{

@@ -33,6 +33,18 @@ namespace donner::editor {
 
 class CommandQueue {
 public:
+  struct FlushResult {
+    std::vector<EditorCommand> effectiveCommands;
+
+    /// True when any ReplaceDocument was drained from the raw pending batch.
+    bool hadReplaceDocument = false;
+
+    /// True only when the drained batch contained at least one
+    /// ReplaceDocument and every drained ReplaceDocument carried the
+    /// preserve-undo marker.
+    bool preserveUndoOnReparse = false;
+  };
+
   /// Push a command onto the queue. UI thread only.
   void push(EditorCommand command) { pending_.push_back(std::move(command)); }
 
@@ -41,7 +53,7 @@ public:
   /// After `flush()` returns, the queue is empty.
   ///
   /// `flush()` is called once per frame at the start of the main loop.
-  [[nodiscard]] std::vector<EditorCommand> flush();
+  [[nodiscard]] FlushResult flush();
 
   /// Whether the queue currently holds any pending commands. Useful for
   /// frame-skip optimizations (no need to re-render if nothing changed).

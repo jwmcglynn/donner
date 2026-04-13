@@ -79,6 +79,13 @@ struct EditorCommand {
   /// contents) may go out of scope before the queue flushes.
   std::string bytes;
 
+  /// ReplaceDocument payload: preserve the undo timeline if this reparse
+  /// is the only ReplaceDocument in the flushed batch. Used by the
+  /// editor's self-initiated source writeback path, which reparses to
+  /// refresh XML source offsets without representing a new user-authored
+  /// document baseline.
+  bool preserveUndoOnReparse = false;
+
   /// SetAttribute payload: the attribute name (e.g. "transform", "fill").
   std::string attributeName;
 
@@ -86,8 +93,7 @@ struct EditorCommand {
   std::string attributeValue;
 
   /// Builds a SetTransform command.
-  static EditorCommand SetTransformCommand(svg::SVGElement element,
-                                           const Transform2d& transform) {
+  static EditorCommand SetTransformCommand(svg::SVGElement element, const Transform2d& transform) {
     EditorCommand cmd;
     cmd.kind = Kind::SetTransform;
     cmd.element = std::move(element);
@@ -96,10 +102,12 @@ struct EditorCommand {
   }
 
   /// Builds a ReplaceDocument command from owned bytes.
-  static EditorCommand ReplaceDocumentCommand(std::string bytes) {
+  static EditorCommand ReplaceDocumentCommand(std::string bytes,
+                                              bool preserveUndoOnReparse = false) {
     EditorCommand cmd;
     cmd.kind = Kind::ReplaceDocument;
     cmd.bytes = std::move(bytes);
+    cmd.preserveUndoOnReparse = preserveUndoOnReparse;
     return cmd;
   }
 
