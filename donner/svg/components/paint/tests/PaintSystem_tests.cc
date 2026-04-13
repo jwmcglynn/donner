@@ -1,5 +1,5 @@
 /**
- * @file Tests for PaintSystem: computed gradient and pattern resolution from SVG paint server
+ * Tests for PaintSystem: computed gradient and pattern resolution from SVG paint server
  * elements.
  */
 

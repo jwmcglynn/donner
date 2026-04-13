@@ -1,5 +1,5 @@
 /**
- * @file Tests for Stroke helpers, such as \ref donner::svg::StrokeLinecap, \ref
+ * Tests for Stroke helpers, such as \ref donner::svg::StrokeLinecap, \ref
  * donner::svg::StrokeLinejoin, and \ref donner::svg::StrokeDasharray.
  */
 

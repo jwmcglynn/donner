@@ -1,5 +1,5 @@
 /**
- * @file Tests for FilterSystem: computed filter graph generation from SVG filter elements.
+ * Tests for FilterSystem: computed filter graph generation from SVG filter elements.
  */
 
 #include "donner/svg/components/filter/FilterSystem.h"

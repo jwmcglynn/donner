@@ -1,5 +1,5 @@
 /**
- * @file Tests for \ref donner::svg::MaskUnits and \ref donner::svg::MaskContentUnits enums and its
+ * Tests for \ref donner::svg::MaskUnits and \ref donner::svg::MaskContentUnits enums and its
  * ostream output operators.
  */
 

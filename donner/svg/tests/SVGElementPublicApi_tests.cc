@@ -1,5 +1,5 @@
 /**
- * @file Tests for SVG element public APIs: SVGSVGElement, SVGImageElement, SVGUseElement,
+ * Tests for SVG element public APIs: SVGSVGElement, SVGImageElement, SVGUseElement,
  * SVGStopElement, SVGTextPositioningElement.
  */
 

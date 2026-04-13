@@ -1,5 +1,5 @@
 /**
- * @file Tests for \ref donner::svg::FillRule enum and its ostream output operator.
+ * Tests for \ref donner::svg::FillRule enum and its ostream output operator.
  */
 
 #include "donner/base/FillRule.h"

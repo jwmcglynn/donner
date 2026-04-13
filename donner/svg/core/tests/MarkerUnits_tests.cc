@@ -1,5 +1,5 @@
 /**
- * @file Tests for \ref donner::svg::MarkerUnits enum and its ostream output operator.
+ * Tests for \ref donner::svg::MarkerUnits enum and its ostream output operator.
  */
 
 #include "donner/svg/core/MarkerUnits.h"

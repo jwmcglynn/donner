@@ -1,5 +1,5 @@
 /**
- * @file Tests for TextSystem.
+ * Tests for TextSystem.
  */
 
 #include "donner/svg/components/text/TextSystem.h"

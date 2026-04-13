@@ -1,5 +1,5 @@
 /**
- * @file Tests for ostream output operators across CSS types.
+ * Tests for ostream output operators across CSS types.
  *
  * Covers operator<< for types that don't have dedicated test files exercising their
  * string output: Combinator, AttrMatcher, Specificity::SpecialType, AnbValue, and

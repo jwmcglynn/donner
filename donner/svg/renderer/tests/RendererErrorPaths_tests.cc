@@ -1,5 +1,5 @@
 /**
- * @file Tests for renderer error and edge-case paths.
+ * Tests for renderer error and edge-case paths.
  *
  * Exercises failure modes: empty snapshots, invalid file paths, broken SVG references,
  * degenerate geometry, and RendererImageIO edge cases.

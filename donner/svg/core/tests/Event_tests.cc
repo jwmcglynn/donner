@@ -1,5 +1,5 @@
 /**
- * @file Tests for \ref donner::svg::EventType enum, its ostream output operator, and
+ * Tests for \ref donner::svg::EventType enum, its ostream output operator, and
  * \ref donner::svg::eventBubbles.
  */
 

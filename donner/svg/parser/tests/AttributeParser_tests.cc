@@ -1,5 +1,5 @@
 /**
- * @file Tests for AttributeParser: verifies that XML attributes are correctly parsed and applied
+ * Tests for AttributeParser: verifies that XML attributes are correctly parsed and applied
  * to SVG elements across all element types.
  */
 

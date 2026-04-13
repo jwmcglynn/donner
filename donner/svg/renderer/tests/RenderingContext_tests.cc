@@ -1,5 +1,5 @@
 /**
- * @file Tests for RenderingContext: render tree instantiation, hit testing, and bounds queries.
+ * Tests for RenderingContext: render tree instantiation, hit testing, and bounds queries.
  */
 
 #include "donner/svg/renderer/RenderingContext.h"
