@@ -133,6 +133,11 @@ public:
    */
   [[nodiscard]] size_t totalBitmapMemory() const;
 
+  /**
+   * Returns a reference to the underlying SVG document.
+   */
+  [[nodiscard]] SVGDocument& document() { return *document_; }
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);

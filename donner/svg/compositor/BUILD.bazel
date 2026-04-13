@@ -21,6 +21,20 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "dual_path_verifier",
+    testonly = 1,
+    srcs = ["DualPathVerifier.cc"],
+    hdrs = ["DualPathVerifier.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":compositor",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
 donner_cc_test(
     name = "compositor_tests",
     srcs = [
@@ -28,6 +42,20 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "dual_path_verifier_tests",
+    srcs = [
+        "DualPathVerifier_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        ":dual_path_verifier",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
