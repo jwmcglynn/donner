@@ -633,21 +633,25 @@ during promotion for `BackgroundImage`/`BackgroundAlpha` references.
 
 ### Minimum primitive set
 
-The compositor needs these `RendererInterface` primitives. All three
-backends already implement them:
+The compositor needs these `RendererInterface` primitives:
 
 | Primitive | Used for | TinySkia | Skia | Geode |
 |-----------|----------|----------|------|-------|
-| `createOffscreenInstance()` | Layer rasterization into separate buffer | ✅ | ✅ | ✅ (via `GeoSurface`) |
+| `createOffscreenInstance()` | Layer rasterization into separate buffer | ✅ | ✅ | ❌ (returns `nullptr`; needs shared-device constructor) |
 | `beginFrame()` / `endFrame()` | Frame lifecycle for offscreen and main targets | ✅ | ✅ | ✅ |
 | `drawImage()` | Blit layer bitmap to main target | ✅ | ✅ | ✅ (`GeodeImagePipeline`) |
 | `setTransform()` | Composition transform for layer blit | ✅ | ✅ | ✅ |
-| `pushIsolatedLayer()` / `popIsolatedLayer()` | Opacity/blend during composition | ✅ | ✅ | 🚧 (stub) |
-| `pushClip()` / `popClip()` | Clip during composition | ✅ | ✅ | 🚧 (stub) |
-| `pushMask()` / `popMask()` | Mask during layer rasterization | ✅ | ✅ | 🚧 (stub) |
-| `pushFilterLayer()` / `popFilterLayer()` | Filter during layer rasterization | ✅ (via `FilterGraphExecutor`) | ✅ | ❌ (future) |
+| `pushIsolatedLayer()` / `popIsolatedLayer()` | Opacity/blend during composition | ✅ | ✅ | ✅ (opacity only; `MixBlendMode != Normal` pending) |
+| `pushClip()` / `popClip()` | Clip during composition | ✅ | ✅ | ✅ (rect + polygon + path-mask clips) |
+| `pushMask()` / `popMask()` | Mask during layer rasterization | ✅ | ✅ | ✅ (Phase 3c luminance mask compositing) |
+| `pushFilterLayer()` / `popFilterLayer()` | Filter during layer rasterization | ✅ (via `FilterGraphExecutor`) | ✅ | ❌ (no-op stub) |
 | `takeSnapshot()` | Extract layer bitmap for cross-layer composition | ✅ | ✅ | ✅ |
 | `RendererDriver::drawEntityRange()` | Rasterize a subset of entities | ✅ | ✅ | ✅ |
+
+**Geode v1 participation:** Geode can participate in compositor testing
+for the translation-only drag path on scenes without filters or
+non-normal blend modes. Compositor tests for Geode should be gated
+behind a feature check that excludes filter/blend-mode cases.
 
 ### No new `RendererInterface` virtuals in v1
 
@@ -660,24 +664,55 @@ copy), but no new virtual methods.
 ### Skia-specific considerations
 
 Skia's `SkPicture` recording could cache draw commands per layer and
-replay them without re-traversing the ECS. This optimization lives
-entirely inside `RendererSkia` — the compositor calls `drawEntityRange()`
-and the backend decides internally whether to re-record or replay a
-cached picture. Not needed for v1 but a natural v2 optimization.
+replay them without re-traversing the ECS. However, this is only
+valuable if combined with sub-layer dirty rectangles (Phase 4): for
+whole-layer re-rasterization, the compositor's bitmap cache already
+skips both ECS traversal and rasterization for clean layers, making
+`SkPicture` redundant. Phase 3's Skia optimization is gated on Phase 4.
+
+**`takeSnapshot()` → `drawImage()` path:** Skia's internal composition
+(e.g., `popFilterLayer`, `popMask`, `endPatternTile`) uses
+`surface->makeImageSnapshot()` → `canvas->drawImage()` — a zero-copy
+path via copy-on-write `SkImage`. The compositor's v1 path goes through
+`takeSnapshot()` (CPU readback) → `ImageResource` → `drawImage()`
+(re-upload), which involves 4 full-resolution copies. This is acceptable
+for v1 (bottleneck is rasterization, not composition), but v2 should add
+a `LayerHandle` abstraction that Skia implements via `SkImage` COW.
+
+**`saveLayer` allocation during composition:** `pushIsolatedLayer()` maps
+to `saveLayer(nullptr, &paint)`, which allocates a full-canvas-sized
+offscreen bitmap. During composition blits (one bitmap per layer), this
+is wasteful — opacity and blend mode can be applied directly on the
+`SkPaint` passed to `drawImageRect()`. The v1 impact is manageable
+(sequential composition limits peak to 1 extra saveLayer at a time), but
+the memory budget (§ Security) must account for it.
 
 ### Geode-specific considerations
 
 Geode renders to GPU textures via `GeoSurface`. Layer bitmaps can be
 retained as GPU textures across frames, avoiding the CPU readback path
 (`takeSnapshot()` → `drawImage()`). In v1, the compositor goes through
-the CPU readback path for simplicity. v2 can add a `RendererInterface`
-method like `retainLayerTexture()` / `blitRetainedTexture()` that Geode
-overrides for zero-copy GPU composition.
+the CPU readback path for simplicity. v2 can add a `LayerHandle`
+abstraction to `RendererInterface` (see § v2 Layer Handle below).
+
+**`createOffscreenInstance()` prerequisite:** Geode does not currently
+override `createOffscreenInstance()` (returns `nullptr` from the base
+class default). Implementation requires a shared-device constructor:
+offscreen instances share the parent's `GeodeDevice` and pipeline
+state objects (`GeodePipeline`, `GeodeGradientPipeline`,
+`GeodeImagePipeline`) while maintaining their own `GeoEncoder` and
+texture pair per render target. This matches the existing
+`pushIsolatedLayer` pattern, which already creates new
+encoder+texture pairs on the shared device. Pipeline state objects
+are device-scoped in WebGPU and can be reused across any number of
+render targets.
 
 Geode's current `drawImage` implementation (`GeodeImagePipeline` +
-`GeodeTextureEncoder::drawTexturedQuad`) is already designed for this:
-it accepts pre-uploaded `wgpu::Texture` handles. The adapter would skip
-the CPU readback and pass the GPU texture directly.
+`GeodeTextureEncoder::drawTexturedQuad`) is already designed for
+pre-uploaded `wgpu::Texture` handles. The v2 `LayerHandle` adapter
+would skip the CPU readback and pass the GPU texture directly via
+`surface->makeImageSnapshot()` (Skia) or texture handle retention
+(Geode).
 
 ## Editor Interaction Model
 
