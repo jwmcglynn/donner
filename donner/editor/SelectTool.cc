@@ -83,6 +83,18 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
 
   const Vector2d deltaDoc = documentPoint - dragState_->startDocumentPoint;
 
+  // Drag threshold: swallow sub-pixel jitter so a click that accidentally
+  // moves 0.0001 document units between mouse-down and mouse-up doesn't
+  // latch `hasMoved` and fire a near-identity writeback. The threshold is
+  // checked against the squared delta magnitude in document units; once
+  // the drag has actually moved past it the element tracks the cursor
+  // exactly from that point on.
+  constexpr double kDragThresholdDocUnits = 1.0;
+  constexpr double kDragThresholdSq = kDragThresholdDocUnits * kDragThresholdDocUnits;
+  if (!dragState_->hasMoved && deltaDoc.lengthSquared() < kDragThresholdSq) {
+    return;
+  }
+
   // donner's Transform2 uses "row-major post-multiply" semantics: in
   // `R * T * A`, A is applied first and R last. To translate the element
   // in *parent* space (document space, since we assume top-level

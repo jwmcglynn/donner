@@ -141,6 +141,19 @@ void EditorApp::undo() {
   // the same mutation seam. The queue coalesces with any pending
   // commands and applies on the next `flushFrame()`.
   applyMutation(EditorCommand::SetTransformCommand(snapshot->element, snapshot->transform));
+
+  // Capture the source-text writeback target BEFORE the command drains
+  // so the path-based target resolves against the in-sync document.
+  // The writeback will be applied by `main.cc` after `flushFrame()`
+  // lands the undone transform on the element — at that point the
+  // transform the user sees on the canvas and the `transform=` value
+  // in the source must agree. Without this the DOM reverts but the
+  // source keeps the post-drag text, and the next edit lands on the
+  // wrong baseline.
+  if (auto target = captureAttributeWritebackTarget(snapshot->element); target.has_value()) {
+    enqueueTransformWriteback(
+        CompletedTransformWriteback{.target = std::move(*target), .transform = snapshot->transform});
+  }
 }
 
 void EditorApp::redo() {

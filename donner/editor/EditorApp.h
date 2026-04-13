@@ -20,8 +20,10 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncSVGDocument.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/DonnerController.h"
@@ -212,6 +214,41 @@ public:
   /// Whether the structured-editing incremental path is active.
   [[nodiscard]] bool structuredEditingEnabled() const { return structuredEditingEnabled_; }
 
+  // ---------------------------------------------------------------------------
+  // Canvas → text writeback queue
+  // ---------------------------------------------------------------------------
+
+  /// Payload describing a completed DOM-side transform mutation that needs
+  /// to be spliced into the source text. `target` is a stable path-based
+  /// reference captured while the source was still in sync with the DOM;
+  /// `transform` is the local (parent-space) transform that should appear
+  /// in the element's `transform=` attribute.
+  struct CompletedTransformWriteback {
+    AttributeWritebackTarget target;
+    Transform2d transform;
+  };
+
+  /// Queue a transform writeback that `main.cc` will splice into the
+  /// source on its next `applyPendingTransformWriteback()` call. SelectTool
+  /// calls this when a drag completes; `undo()` / `redo()` call it so
+  /// undoing a canvas drag restores both the DOM transform *and* the
+  /// source text in lock-step. New entries overwrite any still-pending
+  /// writeback — coalescing is fine because the latest transform value
+  /// is always the one we want.
+  void enqueueTransformWriteback(CompletedTransformWriteback writeback) {
+    pendingTransformWriteback_ = std::move(writeback);
+  }
+
+  /// Drain the most recently queued transform writeback, if any. Called
+  /// once per frame by `main.cc`. The writeback payload is stable across
+  /// frames — callers latch it themselves if they need to retry on a
+  /// busy frame.
+  [[nodiscard]] std::optional<CompletedTransformWriteback> consumeTransformWriteback() {
+    auto result = std::move(pendingTransformWriteback_);
+    pendingTransformWriteback_.reset();
+    return result;
+  }
+
 private:
   /// Refreshes `cachedFirstSelection_` after `selection_` changes so
   /// the `selectedElement()` accessor can return a stable
@@ -232,6 +269,8 @@ private:
   std::uint64_t controllerVersion_ = 0;
 
   bool structuredEditingEnabled_ = false;
+
+  std::optional<CompletedTransformWriteback> pendingTransformWriteback_;
 
   std::optional<std::string> currentFilePath_;
   bool isDirty_ = false;

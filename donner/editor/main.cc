@@ -54,7 +54,8 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/renderer/Renderer.h"
-#include "embed_resources/PublicSansFont.h"
+#include "embed_resources/FiraCodeFont.h"
+#include "embed_resources/RobotoFont.h"
 #include "glad/glad.h"
 
 extern "C" {
@@ -515,12 +516,29 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
+  // Match the original jwmcglynn/donner-editor font combo: Roboto Regular
+  // is the default UI font (menubar, pane labels, inspector, tree view);
+  // Roboto Bold is available for emphasis; Fira Code is the monospace
+  // font pushed around the source pane's TextEditor widget.
+  //
+  // The atlas doesn't own the TTF bytes because the `embed_resources`
+  // blobs are compile-time constants that outlive the atlas.
   ImFontConfig fontCfg;
   fontCfg.FontDataOwnedByAtlas = false;
-  io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(donner::embedded::kPublicSansMediumOtf.data()),
-      static_cast<int>(donner::embedded::kPublicSansMediumOtf.size()),
+  ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(donner::embedded::kRobotoRegularTtf.data()),
+      static_cast<int>(donner::embedded::kRobotoRegularTtf.size()),
       /*size_pixels=*/15.0f, &fontCfg);
+  ImFont* uiFontBold = io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(donner::embedded::kRobotoBoldTtf.data()),
+      static_cast<int>(donner::embedded::kRobotoBoldTtf.size()),
+      /*size_pixels=*/15.0f, &fontCfg);
+  ImFont* codeFont = io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(donner::embedded::kFiraCodeRegularTtf.data()),
+      static_cast<int>(donner::embedded::kFiraCodeRegularTtf.size()),
+      /*size_pixels=*/14.0f, &fontCfg);
+  (void)uiFontRegular;
+  (void)uiFontBold;
   // imgui.ini persistence is disabled per the editor security policy in
   // docs/design_docs/editor.md.
   io.IniFilename = nullptr;
@@ -676,7 +694,7 @@ int main(int argc, char** argv) {
   // diff against the current text and determine whether the edit lands
   // inside a single attribute value.
   std::string previousSourceText = initialSource;
-  std::optional<donner::editor::SelectTool::CompletedDragWriteback> pendingTransformWriteback;
+  std::optional<donner::editor::EditorApp::CompletedTransformWriteback> pendingTransformWriteback;
 
   // Cached window title pieces so we only call glfwSetWindowTitle when
   // something actually changes.
@@ -750,8 +768,75 @@ int main(int argc, char** argv) {
     promotePendingSelectionBoundsIfReady();
   };
 
+  // Rasterize the Skia path-outline overlay for the current selection
+  // and upload it to `overlayTexture`. Must be called only when the
+  // worker thread is idle (caller's responsibility). When the current
+  // document version matches the displayed doc version (the click /
+  // selection-only fast path) the upload happens immediately so the
+  // overlay texture and the AABB promote together in the same frame.
+  // When they differ (drag / doc-mutation path) the bitmap is stashed
+  // in `pendingOverlayBitmap` and uploaded lock-step in `pollResult`
+  // when the matching doc bitmap lands.
+  //
+  // Returns true if a rasterize happened, false if nothing to redraw.
+  const auto rasterizeOverlayForCurrentSelection = [&]() -> bool {
+    if (!app.hasDocument()) {
+      return false;
+    }
+    const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
+    const auto currentVersion = app.document().currentFrameVersion();
+
+    donner::svg::RenderViewport overlayViewport;
+    overlayViewport.size =
+        donner::Vector2d(static_cast<double>(currentCanvasSize.x) / viewport.devicePixelRatio,
+                         static_cast<double>(currentCanvasSize.y) / viewport.devicePixelRatio);
+    overlayViewport.devicePixelRatio = viewport.devicePixelRatio;
+    overlayRenderer.beginFrame(overlayViewport);
+    const donner::Transform2d canvasFromDoc =
+        app.document().document().canvasFromDocumentTransform();
+    const auto& overlaySelection = app.selectedElements();
+    donner::editor::OverlayRenderer::drawChromeWithTransform(
+        overlayRenderer, std::span<const donner::svg::SVGElement>(overlaySelection), canvasFromDoc);
+    overlayRenderer.endFrame();
+    donner::svg::RendererBitmap overlayBitmap = overlayRenderer.takeSnapshot();
+    pendingOverlayBitmap = std::move(overlayBitmap);
+    pendingOverlayVersion = currentVersion;
+    if (currentVersion == displayedDocVersion && pendingOverlayBitmap.has_value() &&
+        !pendingOverlayBitmap->empty()) {
+      const auto& readyOverlayBitmap = *pendingOverlayBitmap;
+      glBindTexture(GL_TEXTURE_2D, overlayTexture);
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(readyOverlayBitmap.rowBytes / 4u));
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, readyOverlayBitmap.dimensions.x,
+                   readyOverlayBitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                   readyOverlayBitmap.pixels.data());
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+      overlayTextureWidth = readyOverlayBitmap.dimensions.x;
+      overlayTextureHeight = readyOverlayBitmap.dimensions.y;
+      pendingOverlayBitmap.reset();
+      pendingOverlayVersion = 0;
+    } else if (currentVersion == displayedDocVersion) {
+      overlayTextureWidth = 0;
+      overlayTextureHeight = 0;
+      pendingOverlayBitmap.reset();
+      pendingOverlayVersion = 0;
+    }
+    lastOverlaySelectionVec = overlaySelection;
+    lastOverlayCanvasSize = currentCanvasSize;
+    lastOverlayVersion = currentVersion;
+    return true;
+  };
+
   const auto applyPendingTransformWriteback = [&]() {
+    // Drain SelectTool first (drag completion), then EditorApp (undo /
+    // redo). Either source overwrites a previously-pending writeback
+    // because the latest transform value is always the one we want.
     if (auto completed = selectTool.consumeCompletedDragWriteback(); completed.has_value()) {
+      pendingTransformWriteback = donner::editor::EditorApp::CompletedTransformWriteback{
+          .target = std::move(completed->target),
+          .transform = completed->transform,
+      };
+    }
+    if (auto completed = app.consumeTransformWriteback(); completed.has_value()) {
       pendingTransformWriteback = std::move(*completed);
     }
 
@@ -762,6 +847,21 @@ int main(int argc, char** argv) {
     std::string source = textEditor.getText();
     const donner::RcString serialized =
         donner::toSVGTransformString(pendingTransformWriteback->transform);
+    // `toSVGTransformString` returns "" for identity. For undo of a
+    // drag that originally moved a shape, the restored transform IS
+    // the identity — which means the source should have its
+    // `transform=` attribute *removed*, not replaced with an empty
+    // string. For drag completion, an empty serialize means "no real
+    // movement", so we skip the patch entirely.
+    //
+    // For now we take the safer fallback: skip the patch when empty.
+    // Undo-to-identity will still leave the existing `transform="…"`
+    // attribute in place; fixing that requires an attribute-removal
+    // patch which is a follow-up. Document this as a known gap.
+    if (std::string_view(serialized).empty()) {
+      pendingTransformWriteback.reset();
+      return;
+    }
     auto patch = donner::editor::buildAttributeWriteback(source, pendingTransformWriteback->target,
                                                          "transform", std::string_view(serialized));
     if (!patch.has_value()) {
@@ -1170,8 +1270,9 @@ int main(int argc, char** argv) {
     ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, paneHeight), ImGuiCond_Always);
     ImGui::Begin("Source", nullptr, kPaneFlags);
-    // TODO: Give the source editor its own monospace font instead of inheriting the UI font.
+    ImGui::PushFont(codeFont);
     textEditor.render("##source");
+    ImGui::PopFont();
 
     // Dispatch the current text buffer as an EditorCommand. Used by
     // both the leading-edge and trailing-edge paths below.
@@ -1317,47 +1418,7 @@ int main(int argc, char** argv) {
       const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec;
       if (selectionDiffers || currentCanvasSize != lastOverlayCanvasSize ||
           currentVersion != lastOverlayVersion) {
-        donner::svg::RenderViewport overlayViewport;
-        // Renderer rasterizes at logical viewBox dimensions, so we
-        // pass the *logical* canvas size (= currentCanvasSize / dpr)
-        // and the DPR separately. The renderer's own internal scale
-        // multiplies them back together to get device pixels.
-        overlayViewport.size =
-            donner::Vector2d(static_cast<double>(currentCanvasSize.x) / viewport.devicePixelRatio,
-                             static_cast<double>(currentCanvasSize.y) / viewport.devicePixelRatio);
-        overlayViewport.devicePixelRatio = viewport.devicePixelRatio;
-        overlayRenderer.beginFrame(overlayViewport);
-        const donner::Transform2d canvasFromDoc =
-            app.document().document().canvasFromDocumentTransform();
-        donner::editor::OverlayRenderer::drawChromeWithTransform(
-            overlayRenderer, std::span<const donner::svg::SVGElement>(overlaySelection),
-            canvasFromDoc);
-        overlayRenderer.endFrame();
-        donner::svg::RendererBitmap overlayBitmap = overlayRenderer.takeSnapshot();
-        pendingOverlayBitmap = std::move(overlayBitmap);
-        pendingOverlayVersion = currentVersion;
-        if (currentVersion == displayedDocVersion && pendingOverlayBitmap.has_value() &&
-            !pendingOverlayBitmap->empty()) {
-          const auto& readyOverlayBitmap = *pendingOverlayBitmap;
-          glBindTexture(GL_TEXTURE_2D, overlayTexture);
-          glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(readyOverlayBitmap.rowBytes / 4u));
-          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, readyOverlayBitmap.dimensions.x,
-                       readyOverlayBitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                       readyOverlayBitmap.pixels.data());
-          glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-          overlayTextureWidth = readyOverlayBitmap.dimensions.x;
-          overlayTextureHeight = readyOverlayBitmap.dimensions.y;
-          pendingOverlayBitmap.reset();
-          pendingOverlayVersion = 0;
-        } else if (currentVersion == displayedDocVersion) {
-          overlayTextureWidth = 0;
-          overlayTextureHeight = 0;
-          pendingOverlayBitmap.reset();
-          pendingOverlayVersion = 0;
-        }
-        lastOverlaySelectionVec = overlaySelection;
-        lastOverlayCanvasSize = currentCanvasSize;
-        lastOverlayVersion = currentVersion;
+        rasterizeOverlayForCurrentSelection();
       }
 
       // Request a new SVG render if anything that affects the bitmap
@@ -1516,6 +1577,12 @@ int main(int argc, char** argv) {
       if (pendingClick.has_value() && !asyncRenderer.isBusy()) {
         selectTool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
         refreshPendingSelectionBoundsCache();
+        // Re-rasterize the Skia overlay texture NOW (same frame, before
+        // `AddImage` is consumed at end-of-frame) so the path outline
+        // updates together with the AABB. The overlay block earlier in
+        // this frame ran with the pre-click selection; without this
+        // refresh the path outline lags 1 frame behind the AABB.
+        rasterizeOverlayForCurrentSelection();
         pendingClick.reset();
       }
       // Drag *or* marquee continues even after the cursor leaves the
@@ -1531,6 +1598,11 @@ int main(int argc, char** argv) {
           selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
           if (!asyncRenderer.isBusy()) {
             refreshPendingSelectionBoundsCache();
+            // Marquee resolve may have added new selected elements;
+            // click-to-deselect may have cleared them. Either way the
+            // overlay texture needs the new selection before the frame
+            // renders.
+            rasterizeOverlayForCurrentSelection();
           }
         }
       }

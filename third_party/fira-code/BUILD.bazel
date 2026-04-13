@@ -1,0 +1,17 @@
+load("//build_defs:embed_resources.bzl", "embed_resources")
+
+embed_resources(
+    name = "fira-code",
+    header_output = "embed_resources/FiraCodeFont.h",
+    resources = {
+        "kFiraCodeRegularTtf": "FiraCode-Regular.ttf",
+    },
+    visibility = [
+        "//donner:__subpackages__",
+    ],
+)
+
+exports_files([
+    "FiraCode-Regular.ttf",
+    "FiraCode-LICENSE.txt",
+])
