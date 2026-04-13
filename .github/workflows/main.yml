@@ -12,23 +12,34 @@ on:
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
 #
-# Self-hosted runner gate: when the repository variable
-# SELFHOSTED_LINUX_RUNNER is set to "true" (configured under repo Settings →
-# Secrets and variables → Actions → Variables), trusted commits — direct
-# pushes and pull requests opened from a branch in this same repo — route to
-# the `linux-self-hosted` job on the event-horizon donner-runner microvm
-# (4 GiB / 2 vCPU NixOS guest with bazel-cache1 wired in). Forks and any run
-# while the variable is unset stay on `ubuntu-24.04`. Only one of `linux` and
-# `linux-self-hosted` runs per workflow invocation; they are mirrors of each
-# other modulo the runner.
+# Self-hosted runner gate: when the repository variables
+# SELFHOSTED_LINUX_RUNNER / SELFHOSTED_MACOS_RUNNER are set to "true"
+# (configured under repo Settings → Secrets and variables → Actions →
+# Variables), runs where `github.actor == 'jwmcglynn'` route to the
+# `linux-self-hosted` and `macos-self-hosted` jobs running on the
+# mcglynn homelab self-hosted fleet (donner-runner microvm on
+# event-horizon + native launchd runner on deep-thought), both of which
+# have bazel-cache1 wired in.
 #
-# The `vars.SELFHOSTED_LINUX_RUNNER == 'true'` guard means this PR is safe
-# to land before the self-hosted runner is registered. Flip the variable
-# once the runner is online and the next push uses it.
+# Anyone else — fork PRs, same-repo PRs from collaborators, runs
+# re-triggered by a non-operator, any workflow dispatch by anyone other
+# than jwmcglynn — stays on the corresponding GitHub-hosted
+# `ubuntu-24.04` / `macos-15` job. The mirrors are mutually exclusive:
+# exactly one of `linux` / `linux-self-hosted` runs per workflow, and
+# exactly one of `macos` / `macos-self-hosted`.
+#
+# `github.actor == 'jwmcglynn'` is the strictest practical gate: it
+# pins the self-hosted lane to the single operator account that owns
+# the homelab runners, so no other committer can cause a job to execute
+# on (and potentially pollute the cache of) the self-hosted fleet.
+#
+# The gate is safe to land before the runners are registered: with both
+# variables unset, behavior is unchanged from the pre-gate workflow.
+# Flip a variable once its runner is online and the next push uses it.
 
 jobs:
   linux:
-    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || !(github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -74,22 +85,22 @@ jobs:
   # Mirror of the `linux` job above, but on the event-horizon self-hosted
   # runner. Selected by the gate explained at the top of this file:
   #
-  #   - Runs only when SELFHOSTED_LINUX_RUNNER == 'true' AND the trigger is a
-  #     direct push or a same-repo PR (forks never reach this job).
-  #   - The `linux` job is suppressed in the same condition, so trusted
-  #     commits run here exclusively.
+  #   - Runs only when SELFHOSTED_LINUX_RUNNER == 'true' AND the triggering
+  #     actor is jwmcglynn.
+  #   - The `linux` job is suppressed in the same condition, so operator
+  #     runs go here exclusively.
   #
   # Differences from the GitHub-hosted Linux job:
   #
   #   - No setup-bazel step. The microvm guest already has bazelisk on PATH
   #     and writes through to bazel-cache1 (gRPC at 192.168.1.63:9092) via
-  #     /etc/bazel.bazelrc baked into the NixOS guest config; trusted commits
+  #     /etc/bazel.bazelrc baked into the NixOS guest config; operator runs
   #     get full read+write cache access.
   #   - No apt-get step. The donner-runner NixOS guest config installs
   #     fontconfig, freetype, mesa-vulkan-drivers, libvulkan via
   #     environment.systemPackages.
   linux-self-hosted:
-    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' }}
     runs-on: [self-hosted, linux, arm64, event-horizon]
     steps:
       - name: Checkout
@@ -163,8 +174,10 @@ jobs:
             //donner/svg/renderer/tests:renderer_geode_tests
 
   macos:
+    if: >
+      (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+      && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn')
     runs-on: macos-15
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -200,3 +213,41 @@ jobs:
         # Marked informational for now: fuzzer tests were previously macOS-disabled
         # so we don't want to break macOS CI during the rollout. Remove `|| true`
         # and the comment once the fuzzer corpus passes cleanly on macOS.
+
+  # Mirror of the `macos` job above, but on the deep-thought self-hosted
+  # runner. Selected by the gate explained at the top of this file:
+  #
+  #   - Runs only when SELFHOSTED_MACOS_RUNNER == 'true' AND the
+  #     triggering actor is jwmcglynn.
+  #   - The `macos` job is suppressed in the same condition, so operator
+  #     runs go here exclusively.
+  #
+  # Differences from the GitHub-hosted macOS job:
+  #
+  #   - No setup-bazel step. The host has ~/bin/bazelisk on PATH and a
+  #     pre-configured ~/.bazelrc pointing at bazel-cache1 (gRPC, LAN) and
+  #     persistent ~/Library/Caches/bazel-{repo,disk}-cache.
+  #   - Same gate on `github.ref == 'refs/heads/main'` for the main-only
+  #     fuzzer test suite; that only triggers on merges.
+  macos-self-hosted:
+    if: ${{ vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' }}
+    runs-on: [self-hosted, macOS, arm64, deep-thought]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build
+        run: bazelisk build --config=ci //...
+
+      - name: Test
+        run: bazelisk test --config=ci --test_output=errors //...
+
+      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --test_output=errors \
+            --test_tag_filters=fuzz_target \
+            --build_tag_filters=fuzz_target \
+            //... || true
