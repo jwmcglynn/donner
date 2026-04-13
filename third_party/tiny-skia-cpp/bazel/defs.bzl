@@ -9,6 +9,11 @@ _SIMD_NATIVE_X86_COPTS = select({
     "//conditions:default": [],
 })
 
+_SIMD_NATIVE_WASM_COPTS = select({
+    "//bazel/config:simd_native_wasm32": ["-msimd128"],
+    "//conditions:default": [],
+})
+
 _OPT_MODE_COPTS = select({
     "//bazel/config:compilation_mode_opt": ["-O3"],
     "//conditions:default": [],
@@ -28,7 +33,7 @@ def tiny_skia_cc_library(
         srcs = srcs,
         hdrs = hdrs,
         deps = deps,
-        copts = ["-std=c++20", "-ffp-contract=off", "-Wall"] + _OPT_MODE_COPTS + _SIMD_NATIVE_X86_COPTS + copts,
+        copts = ["-std=c++20", "-ffp-contract=off", "-Wall"] + _OPT_MODE_COPTS + _SIMD_NATIVE_X86_COPTS + _SIMD_NATIVE_WASM_COPTS + copts,
         defines = defines,
         visibility = visibility,
         **kwargs
@@ -39,6 +44,6 @@ def tiny_skia_cc_binary(name, srcs, deps = [], copts = [], **kwargs):
         name = name,
         srcs = srcs,
         deps = deps,
-        copts = ["-std=c++20"] + _SIMD_NATIVE_X86_COPTS + copts,
+        copts = ["-std=c++20"] + _SIMD_NATIVE_X86_COPTS + _SIMD_NATIVE_WASM_COPTS + copts,
         **kwargs
     )

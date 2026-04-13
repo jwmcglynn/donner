@@ -5,6 +5,7 @@
 
 #include "tiny_skia/wide/backend/Aarch64NeonU32x4T.h"
 #include "tiny_skia/wide/backend/ScalarU32x4T.h"
+#include "tiny_skia/wide/backend/WasmSimd128U32x4T.h"
 #include "tiny_skia/wide/backend/X86Avx2FmaU32x8T.h"
 
 namespace tiny_skia::wide {
@@ -22,6 +23,14 @@ namespace {
 [[nodiscard]] constexpr bool useX86Avx2FmaU32x4() {
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__AVX2__) && defined(__FMA__) && \
     (defined(__x86_64__) || defined(__i386__))
+  return true;
+#else
+  return false;
+#endif
+}
+
+[[nodiscard]] constexpr bool useWasmSimd128U32x4() {
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__wasm_simd128__)
   return true;
 #else
   return false;
@@ -46,6 +55,9 @@ U32x4T U32x4T::cmpEq(const U32x4T& rhs) const {
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4CmpEq(lanes_, rhs.lanes_));
   }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4CmpEq(lanes_, rhs.lanes_));
+  }
 
   return U32x4T(backend::scalar::u32x4CmpEq(lanes_, rhs.lanes_));
 }
@@ -57,6 +69,9 @@ U32x4T U32x4T::cmpNe(const U32x4T& rhs) const {
   }
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4CmpNe(lanes_, rhs.lanes_));
+  }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4CmpNe(lanes_, rhs.lanes_));
   }
 
   return U32x4T(backend::scalar::u32x4CmpNe(lanes_, rhs.lanes_));
@@ -70,6 +85,9 @@ U32x4T U32x4T::cmpLt(const U32x4T& rhs) const {
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4CmpLt(lanes_, rhs.lanes_));
   }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4CmpLt(lanes_, rhs.lanes_));
+  }
 
   return U32x4T(backend::scalar::u32x4CmpLt(lanes_, rhs.lanes_));
 }
@@ -81,6 +99,9 @@ U32x4T U32x4T::cmpLe(const U32x4T& rhs) const {
   }
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4CmpLe(lanes_, rhs.lanes_));
+  }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4CmpLe(lanes_, rhs.lanes_));
   }
 
   return U32x4T(backend::scalar::u32x4CmpLe(lanes_, rhs.lanes_));
@@ -94,6 +115,9 @@ U32x4T U32x4T::cmpGt(const U32x4T& rhs) const {
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4CmpGt(lanes_, rhs.lanes_));
   }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4CmpGt(lanes_, rhs.lanes_));
+  }
 
   return U32x4T(backend::scalar::u32x4CmpGt(lanes_, rhs.lanes_));
 }
@@ -106,6 +130,9 @@ U32x4T U32x4T::cmpGe(const U32x4T& rhs) const {
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4CmpGe(lanes_, rhs.lanes_));
   }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4CmpGe(lanes_, rhs.lanes_));
+  }
 
   return U32x4T(backend::scalar::u32x4CmpGe(lanes_, rhs.lanes_));
 }
@@ -116,6 +143,9 @@ U32x4T U32x4T::operator~() const {
   }
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4Not(lanes_));
+  }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4Not(lanes_));
   }
 
   return U32x4T(backend::scalar::u32x4Not(lanes_));
@@ -129,6 +159,9 @@ U32x4T U32x4T::operator+(const U32x4T& rhs) const {
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4Add(lanes_, rhs.lanes_));
   }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4Add(lanes_, rhs.lanes_));
+  }
 
   return U32x4T(backend::scalar::u32x4Add(lanes_, rhs.lanes_));
 }
@@ -140,6 +173,9 @@ U32x4T U32x4T::operator&(const U32x4T& rhs) const {
   }
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4And(lanes_, rhs.lanes_));
+  }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4And(lanes_, rhs.lanes_));
   }
 
   return U32x4T(backend::scalar::u32x4And(lanes_, rhs.lanes_));
@@ -153,6 +189,9 @@ U32x4T U32x4T::operator|(const U32x4T& rhs) const {
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4Or(lanes_, rhs.lanes_));
   }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4Or(lanes_, rhs.lanes_));
+  }
 
   return U32x4T(backend::scalar::u32x4Or(lanes_, rhs.lanes_));
 }
@@ -164,6 +203,9 @@ U32x4T U32x4T::operator^(const U32x4T& rhs) const {
   }
   if constexpr (useAarch64NeonU32x4()) {
     return U32x4T(backend::aarch64_neon::u32x4Xor(lanes_, rhs.lanes_));
+  }
+  if constexpr (useWasmSimd128U32x4()) {
+    return U32x4T(backend::wasm_simd128::u32x4Xor(lanes_, rhs.lanes_));
   }
 
   return U32x4T(backend::scalar::u32x4Xor(lanes_, rhs.lanes_));

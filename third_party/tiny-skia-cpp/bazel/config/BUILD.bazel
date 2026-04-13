@@ -47,6 +47,14 @@ config_setting(
 )
 
 config_setting(
+    name = "simd_native_wasm32",
+    constraint_values = ["@platforms//cpu:wasm32"],
+    flag_values = {
+        "//bazel/config:simd_mode": "native",
+    },
+)
+
+config_setting(
     name = "compilation_mode_opt",
     values = {"compilation_mode": "opt"},
 )

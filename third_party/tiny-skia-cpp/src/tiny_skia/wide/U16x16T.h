@@ -7,6 +7,8 @@
 
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__aarch64__) && defined(__ARM_NEON)
 #include <arm_neon.h>
+#elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__wasm_simd128__)
+#include <wasm_simd128.h>
 #endif
 
 #include "tiny_skia/wide/Wide.h"
@@ -41,6 +43,30 @@ class U16x16T {
   [[nodiscard]] uint16x8_t neonLo() const { return lo_; }
   [[nodiscard]] uint16x8_t neonHi() const { return hi_; }
 
+#elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__wasm_simd128__)
+  U16x16T() : lo_(wasm_u16x8_splat(0)), hi_(wasm_u16x8_splat(0)) {}
+
+  explicit U16x16T(std::array<std::uint16_t, 16> lanes) {
+    lo_ = wasm_v128_load(lanes.data());
+    hi_ = wasm_v128_load(lanes.data() + 8);
+  }
+
+  U16x16T(v128_t lo, v128_t hi) : lo_(lo), hi_(hi) {}
+
+  [[nodiscard]] static U16x16T splat(std::uint16_t n) {
+    return U16x16T(wasm_u16x8_splat(n), wasm_u16x8_splat(n));
+  }
+
+  [[nodiscard]] std::array<std::uint16_t, 16> lanes() const {
+    std::array<std::uint16_t, 16> out{};
+    wasm_v128_store(out.data(), lo_);
+    wasm_v128_store(out.data() + 8, hi_);
+    return out;
+  }
+
+  [[nodiscard]] v128_t wasmLo() const { return lo_; }
+  [[nodiscard]] v128_t wasmHi() const { return hi_; }
+
 #else
   U16x16T() = default;
   explicit constexpr U16x16T(std::array<std::uint16_t, 16> lanes) : lanes_(lanes) {}
@@ -72,6 +98,9 @@ class U16x16T {
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__aarch64__) && defined(__ARM_NEON)
   uint16x8_t lo_;
   uint16x8_t hi_;
+#elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__wasm_simd128__)
+  v128_t lo_;
+  v128_t hi_;
 #else
   std::array<std::uint16_t, 16> lanes_{};
 #endif
@@ -81,6 +110,7 @@ class U16x16T {
 
 #include "tiny_skia/wide/backend/Aarch64NeonU16x16T.h"
 #include "tiny_skia/wide/backend/ScalarU16x16T.h"
+#include "tiny_skia/wide/backend/WasmSimd128U16x16T.h"
 #include "tiny_skia/wide/backend/X86Avx2FmaU16x16T.h"
 
 namespace tiny_skia::wide {
@@ -104,6 +134,14 @@ namespace {
 #endif
 }
 
+[[nodiscard]] constexpr bool useWasmSimd128U16x16() {
+#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__wasm_simd128__)
+  return true;
+#else
+  return false;
+#endif
+}
+
 }  // namespace
 
 inline U16x16T U16x16T::min(const U16x16T& rhs) const {
@@ -112,6 +150,9 @@ inline U16x16T U16x16T::min(const U16x16T& rhs) const {
   }
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Min(*this, rhs);
+  }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Min(*this, rhs);
   }
 
   return backend::scalar::u16x16Min(*this, rhs);
@@ -124,6 +165,9 @@ inline U16x16T U16x16T::max(const U16x16T& rhs) const {
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Max(*this, rhs);
   }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Max(*this, rhs);
+  }
 
   return backend::scalar::u16x16Max(*this, rhs);
 }
@@ -134,6 +178,9 @@ inline U16x16T U16x16T::cmpLe(const U16x16T& rhs) const {
   }
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16CmpLe(*this, rhs);
+  }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16CmpLe(*this, rhs);
   }
 
   return backend::scalar::u16x16CmpLe(*this, rhs);
@@ -146,6 +193,9 @@ inline U16x16T U16x16T::blend(const U16x16T& t, const U16x16T& e) const {
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Blend(*this, t, e);
   }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Blend(*this, t, e);
+  }
 
   return backend::scalar::u16x16Blend(*this, t, e);
 }
@@ -156,6 +206,9 @@ inline U16x16T U16x16T::operator+(const U16x16T& rhs) const {
   }
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Add(*this, rhs);
+  }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Add(*this, rhs);
   }
 
   return backend::scalar::u16x16Add(*this, rhs);
@@ -168,6 +221,9 @@ inline U16x16T U16x16T::operator-(const U16x16T& rhs) const {
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Sub(*this, rhs);
   }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Sub(*this, rhs);
+  }
 
   return backend::scalar::u16x16Sub(*this, rhs);
 }
@@ -178,6 +234,9 @@ inline U16x16T U16x16T::operator*(const U16x16T& rhs) const {
   }
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Mul(*this, rhs);
+  }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Mul(*this, rhs);
   }
 
   return backend::scalar::u16x16Mul(*this, rhs);
@@ -194,6 +253,9 @@ inline U16x16T U16x16T::operator&(const U16x16T& rhs) const {
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16And(*this, rhs);
   }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16And(*this, rhs);
+  }
 
   return backend::scalar::u16x16And(*this, rhs);
 }
@@ -205,6 +267,9 @@ inline U16x16T U16x16T::operator|(const U16x16T& rhs) const {
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Or(*this, rhs);
   }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Or(*this, rhs);
+  }
 
   return backend::scalar::u16x16Or(*this, rhs);
 }
@@ -215,6 +280,9 @@ inline U16x16T U16x16T::operator~() const {
   }
   if constexpr (useAarch64NeonU16x16()) {
     return backend::aarch64_neon::u16x16Not(*this);
+  }
+  if constexpr (useWasmSimd128U16x16()) {
+    return backend::wasm_simd128::u16x16Not(*this);
   }
 
   return backend::scalar::u16x16Not(*this);
