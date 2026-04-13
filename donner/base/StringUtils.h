@@ -126,9 +126,9 @@ public:
    * @param lhs The first string to compare, can be any case.
    * @param lowercaseRhs string to compare to, must be lowercase.
    * @pre lowercaseRhs must be an all-lowercase string.
-   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @return true If the \p lowercaseRhs is equal to the \p lhs, ignoring the case of the \p lhs.
    */
@@ -160,9 +160,9 @@ public:
    * @param lhs The first string to compare.
    * @param rhs The second string to compare.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
-   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @return true If the strings are equal.
    */
@@ -187,9 +187,9 @@ public:
    * @param str The string to check for a prefix.
    * @param otherStr The prefix to check for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
-   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @return true If the strings are equal.
    */
@@ -213,9 +213,9 @@ public:
    * @param str The string to check for a suffix.
    * @param otherStr The suffix to check for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
-   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @return true If the strings are equal.
    */
@@ -241,9 +241,9 @@ public:
    * @param str The string to check for a suffix.
    * @param otherStr The suffix to check for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
-   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @return true If the strings are equal.
    */
@@ -275,9 +275,9 @@ public:
    * @param str The string to search within.
    * @param otherStr The substring to find.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
-   * @tparam T The type of the first string, must be \ref StringLike (have `size()` and `data()
+   * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @tparam U The type of the second string, must be \ref StringLike (have `size()` and `data()
+   * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @return The position of the substring if found, or npos if not found.
    */
@@ -307,7 +307,7 @@ public:
    * }
    * ```
    *
-   * @tparam T The string type to split, must be \ref StringLike (have `size()` and `data()`
+   * @tparam T The string type to split, must be \c StringLike (have `size()` and `data()`
    * methods).
    * @param str The string to split.
    * @param ch The character to split by.
@@ -336,7 +336,7 @@ public:
    * ```
    *
    * @param str The string to trim.
-   * @tparam T The type of the string, must be \ref StringLike (have `size()` and `data()` methods).
+   * @tparam T The type of the string, must be \c StringLike (have `size()` and `data()` methods).
    * @return A view of the trimmed string.
    */
   template <StringLike T>

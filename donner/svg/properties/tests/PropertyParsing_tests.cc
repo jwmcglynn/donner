@@ -1,5 +1,5 @@
 /**
- * @file Tests for PropertyParsing utility functions.
+ * Tests for PropertyParsing utility functions.
  */
 
 #include "donner/svg/properties/PropertyParsing.h"

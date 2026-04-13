@@ -1,5 +1,5 @@
 /**
- * @file Tests for StyleSystem: CSS cascade, inheritance, and style computation from SVG elements.
+ * Tests for StyleSystem: CSS cascade, inheritance, and style computation from SVG elements.
  */
 
 #include "donner/svg/components/style/StyleSystem.h"

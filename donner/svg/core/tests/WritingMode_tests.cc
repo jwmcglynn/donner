@@ -1,5 +1,5 @@
 /**
- * @file Tests for \ref donner::svg::WritingMode enum, its ostream output operator, and
+ * Tests for \ref donner::svg::WritingMode enum, its ostream output operator, and
  * \ref donner::svg::isVertical.
  */
 

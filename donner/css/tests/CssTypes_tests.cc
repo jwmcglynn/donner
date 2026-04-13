@@ -1,5 +1,5 @@
 /**
- * @file Tests for CSS types: ComponentValue, ComplexSelector, PseudoClassSelector.
+ * Tests for CSS types: ComponentValue, ComplexSelector, PseudoClassSelector.
  */
 
 #include <gmock/gmock.h>

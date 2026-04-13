@@ -1,5 +1,5 @@
 /**
- * @file Tests for \ref donner::svg::TextAnchor enum and its ostream output operator.
+ * Tests for \ref donner::svg::TextAnchor enum and its ostream output operator.
  */
 
 #include "donner/svg/core/TextAnchor.h"

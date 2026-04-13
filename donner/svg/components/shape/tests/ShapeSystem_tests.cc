@@ -1,5 +1,5 @@
 /**
- * @file Tests for ShapeSystem: computed path generation from SVG shape elements.
+ * Tests for ShapeSystem: computed path generation from SVG shape elements.
  */
 
 #include "donner/svg/components/shape/ShapeSystem.h"

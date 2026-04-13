@@ -1,5 +1,5 @@
 /**
- * @file Tests for ShadowTreeSystem.
+ * Tests for ShadowTreeSystem.
  */
 
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
