@@ -4,11 +4,13 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -70,6 +72,52 @@ bool ApplyElementRemoveWriteback(std::string* source, const AttributeWritebackTa
 
   const auto result = applyPatches(*source, {{*patch}});
   return result.applied == 1u;
+}
+
+std::optional<SourceRange> GetNodeLocation(const svg::SVGElement& element) {
+  auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  if (!xmlNode.has_value()) {
+    return std::nullopt;
+  }
+
+  return xmlNode->getNodeLocation();
+}
+
+std::string SourceSlice(std::string_view source, const SourceRange& range) {
+  if (!range.start.offset.has_value() || !range.end.offset.has_value()) {
+    return {};
+  }
+
+  const std::size_t start = range.start.offset.value();
+  const std::size_t end = range.end.offset.value();
+  if (start > end || end > source.size()) {
+    return {};
+  }
+
+  return std::string(source.substr(start, end - start));
+}
+
+bool QueueDragWritebackReparse(EditorApp& app, std::string* source, std::string* previousSourceText,
+                               std::optional<std::string>* lastWritebackSourceText,
+                               const SelectTool::CompletedDragWriteback& writeback) {
+  if (!ApplyCompletedDragWriteback(source, writeback)) {
+    return false;
+  }
+
+  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
+  return true;
+}
+
+bool QueueElementRemoveWritebackReparse(EditorApp& app, std::string* source,
+                                        std::string* previousSourceText,
+                                        std::optional<std::string>* lastWritebackSourceText,
+                                        const AttributeWritebackTarget& target) {
+  if (!ApplyElementRemoveWriteback(source, target)) {
+    return false;
+  }
+
+  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
+  return true;
 }
 
 svg::SVGElement GetElementByIdOrDie(svg::SVGDocument& document, std::string_view selector) {
@@ -212,6 +260,157 @@ TEST(EditorSyncTest, DeleteMutationWritesElementRemovalBackToSource) {
   ASSERT_TRUE(ApplyElementRemoveWriteback(&source, pendingRemove.front().target));
   EXPECT_EQ(source.find("id=\"a\""), std::string::npos);
   EXPECT_NE(source.find("id=\"b\""), std::string::npos);
+}
+
+TEST(EditorSyncTest, DragWritebackReparseRefreshesNodeLocationAcrossRepeatedDrags) {
+  EditorApp app;
+  SelectTool tool;
+  ASSERT_TRUE(app.loadFromString(kCircleAt40Svg));
+
+  std::string source(kCircleAt40Svg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  const svg::SVGElement originalCircle = GetElementByIdOrDie(app.document().document(), "#c");
+  const auto originalLocation = GetNodeLocation(originalCircle);
+  ASSERT_TRUE(originalLocation.has_value());
+  ASSERT_TRUE(originalLocation->end.offset.has_value());
+
+  auto firstWriteback = DragCircleBy(app, tool, Vector2d(40.0, 40.0), 5.0);
+  ASSERT_TRUE(firstWriteback.has_value());
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *firstWriteback));
+
+  const auto firstDispatch =
+      DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);
+  EXPECT_FALSE(firstDispatch.dispatchedMutation);
+  EXPECT_TRUE(firstDispatch.skippedSelfWriteback);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto firstCircle = app.document().document().querySelector("#c");
+  ASSERT_TRUE(firstCircle.has_value());
+  const auto firstLocation = GetNodeLocation(*firstCircle);
+  ASSERT_TRUE(firstLocation.has_value());
+  ASSERT_TRUE(firstLocation->end.offset.has_value());
+  EXPECT_EQ(SourceSlice(source, *firstLocation),
+            "<circle id=\"c\" cx=\"40\" cy=\"40\" r=\"10\" transform=\"translate(5)\"/>");
+  EXPECT_GT(firstLocation->end.offset.value(), originalLocation->end.offset.value());
+
+  auto secondWriteback = DragCircleBy(app, tool, Vector2d(45.0, 40.0), 5.0);
+  ASSERT_TRUE(secondWriteback.has_value());
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *secondWriteback));
+
+  const auto secondDispatch =
+      DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);
+  EXPECT_FALSE(secondDispatch.dispatchedMutation);
+  EXPECT_TRUE(secondDispatch.skippedSelfWriteback);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto secondCircle = app.document().document().querySelector("#c");
+  ASSERT_TRUE(secondCircle.has_value());
+  const auto secondLocation = GetNodeLocation(*secondCircle);
+  ASSERT_TRUE(secondLocation.has_value());
+  ASSERT_TRUE(secondLocation->end.offset.has_value());
+  EXPECT_EQ(SourceSlice(source, *secondLocation),
+            "<circle id=\"c\" cx=\"40\" cy=\"40\" r=\"10\" transform=\"translate(10)\"/>");
+  EXPECT_GT(secondLocation->end.offset.value(), firstLocation->end.offset.value());
+}
+
+TEST(EditorSyncTest, DeleteWritebackReparseRefreshesFollowingElementLocation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
+
+  std::string source(kTwoRectsSvg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  const svg::SVGElement firstRect = GetElementByIdOrDie(app.document().document(), "#a");
+  const svg::SVGElement secondRect = GetElementByIdOrDie(app.document().document(), "#b");
+  const auto originalSecondLocation = GetNodeLocation(secondRect);
+  ASSERT_TRUE(originalSecondLocation.has_value());
+  ASSERT_TRUE(originalSecondLocation->start.offset.has_value());
+
+  const auto target = captureAttributeWritebackTarget(firstRect);
+  ASSERT_TRUE(target.has_value());
+  app.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{.target = *target});
+  app.applyMutation(EditorCommand::DeleteElementCommand(firstRect));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto pendingRemove = app.consumeElementRemoveWritebacks();
+  ASSERT_EQ(pendingRemove.size(), 1u);
+  ASSERT_TRUE(QueueElementRemoveWritebackReparse(
+      app, &source, &previousSourceText, &lastWritebackSourceText, pendingRemove.front().target));
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_TRUE(dispatch.skippedSelfWriteback);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto updatedSecondRect = app.document().document().querySelector("#b");
+  ASSERT_TRUE(updatedSecondRect.has_value());
+  const auto updatedSecondLocation = GetNodeLocation(*updatedSecondRect);
+  ASSERT_TRUE(updatedSecondLocation.has_value());
+  ASSERT_TRUE(updatedSecondLocation->start.offset.has_value());
+  EXPECT_EQ(SourceSlice(source, *updatedSecondLocation),
+            "<rect id=\"b\" x=\"40\" y=\"10\" width=\"10\" height=\"10\"/>");
+  EXPECT_LT(updatedSecondLocation->start.offset.value(),
+            originalSecondLocation->start.offset.value());
+}
+
+TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocument) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCircleSvg));
+
+  std::string source(kCircleSvg);
+  auto circle = app.document().document().querySelector("#c");
+  ASSERT_TRUE(circle.has_value());
+
+  auto patch = buildAttributeWriteback(source, *circle, "transform", "translate(5)");
+  ASSERT_TRUE(patch.has_value());
+  const auto patchResult = applyPatches(source, {{*patch}});
+  ASSERT_EQ(patchResult.applied, 1u);
+
+  std::string previousSourceText(kCircleSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  QueueSourceWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText);
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_TRUE(dispatch.skippedSelfWriteback);
+
+  auto effective = app.document().queue().flush();
+  ASSERT_EQ(effective.size(), 1u);
+  EXPECT_EQ(effective.front().kind, EditorCommand::Kind::ReplaceDocument);
+  EXPECT_EQ(effective.front().bytes, source);
+}
+
+TEST(EditorSyncTest, SelectionSurvivesForcedReparseAfterDragWriteback) {
+  EditorApp app;
+  SelectTool tool;
+  ASSERT_TRUE(app.loadFromString(kCircleAt40Svg));
+
+  std::string source(kCircleAt40Svg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  auto writeback = DragCircleBy(app, tool, Vector2d(40.0, 40.0), 5.0);
+  ASSERT_TRUE(writeback.has_value());
+  ASSERT_TRUE(QueueDragWritebackReparse(app, &source, &previousSourceText, &lastWritebackSourceText,
+                                        *writeback));
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);
+  EXPECT_FALSE(dispatch.dispatchedMutation);
+  EXPECT_TRUE(dispatch.skippedSelfWriteback);
+  ASSERT_TRUE(app.flushFrame());
+
+  ASSERT_TRUE(app.hasSelection());
+  ASSERT_TRUE(app.selectedElement().has_value());
+  EXPECT_EQ(app.selectedElement()->id(), "c");
+  EXPECT_EQ(app.selectedElement()->cast<svg::SVGGraphicsElement>().transform().data[4], 5.0);
 }
 
 TEST(EditorSyncTest, SelectionRemapsByIdAcrossStructuralSourceEdit) {

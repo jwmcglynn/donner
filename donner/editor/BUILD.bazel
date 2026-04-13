@@ -161,6 +161,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_sync",
+    srcs = ["SourceSync.cc"],
+    hdrs = ["SourceSync.h"],
+    deps = [
+        ":change_classifier",
+        ":editor_app",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "editor_app",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],
@@ -254,6 +266,7 @@ donner_cc_binary(
         ":overlay_renderer",
         ":pinch_event_monitor",
         ":selection_aabb",
+        ":source_sync",
     ] + select({
         "@platforms//os:macos": [":pinch_event_monitor_macos"],
         "//conditions:default": [],

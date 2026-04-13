@@ -36,7 +36,6 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AttributeWriteback.h"
-#include "donner/editor/ChangeClassifier.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/Notice.h"
@@ -45,6 +44,7 @@
 #include "donner/editor/RenderPaneGesture.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SourceSync.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TextPatch.h"
@@ -687,6 +687,7 @@ int main(int argc, char** argv) {
   // diff against the current text and determine whether the edit lands
   // inside a single attribute value.
   std::string previousSourceText = initialSource;
+  std::optional<std::string> lastWritebackSourceText;
   std::optional<donner::editor::EditorApp::CompletedTransformWriteback> pendingTransformWriteback;
   std::vector<donner::editor::EditorApp::CompletedElementRemoveWriteback>
       pendingElementRemoveWritebacks;
@@ -842,8 +843,8 @@ int main(int argc, char** argv) {
 
       donner::editor::applyPatches(source, {{*patch}});
       textEditor.setText(source, /*preserveScroll=*/true);
-      textEditor.resetTextChanged();
-      previousSourceText = std::move(source);
+      donner::editor::QueueSourceWritebackReparse(app, source, &previousSourceText,
+                                                  &lastWritebackSourceText);
       return;
     }
     auto patch = donner::editor::buildAttributeWriteback(source, pendingTransformWriteback->target,
@@ -854,8 +855,8 @@ int main(int argc, char** argv) {
 
     donner::editor::applyPatches(source, {{*patch}});
     textEditor.setText(source, /*preserveScroll=*/true);
-    textEditor.resetTextChanged();
-    previousSourceText = std::move(source);
+    donner::editor::QueueSourceWritebackReparse(app, source, &previousSourceText,
+                                                &lastWritebackSourceText);
     pendingTransformWriteback.reset();
   };
 
@@ -886,8 +887,8 @@ int main(int argc, char** argv) {
     }
 
     textEditor.setText(source, /*preserveScroll=*/true);
-    textEditor.resetTextChanged();
-    previousSourceText = std::move(source);
+    donner::editor::QueueSourceWritebackReparse(app, source, &previousSourceText,
+                                                &lastWritebackSourceText);
   };
 
   // ---------------------------------------------------------------------------
@@ -1263,6 +1264,7 @@ int main(int argc, char** argv) {
           textEditor.setText(contents);
           textEditor.resetTextChanged();
           previousSourceText = contents;
+          lastWritebackSourceText.reset();
           app.setCurrentFilePath(path.string());
           pendingTransformWriteback.reset();
           pendingElementRemoveWritebacks.clear();
@@ -1356,25 +1358,8 @@ int main(int argc, char** argv) {
     // both the leading-edge and trailing-edge paths below.
     const auto dispatchTextChange = [&]() {
       const std::string newSource = textEditor.getText();
-      if (newSource == previousSourceText) {
-        return;
-      }
-
-      bool handled = false;
-      if (app.structuredEditingEnabled() && app.hasDocument()) {
-        auto classified = donner::editor::classifyTextChange(app.document().document(),
-                                                             previousSourceText, newSource);
-        if (classified.command.has_value()) {
-          app.applyMutation(std::move(*classified.command));
-          handled = true;
-        }
-      }
-
-      if (!handled) {
-        app.applyMutation(donner::editor::EditorCommand::ReplaceDocumentCommand(newSource));
-      }
-
-      previousSourceText = newSource;
+      (void)donner::editor::DispatchSourceTextChange(app, newSource, &previousSourceText,
+                                                     &lastWritebackSourceText);
     };
 
     if (textEditor.isTextChanged()) {
