@@ -1566,13 +1566,21 @@ int main(int argc, char** argv) {
         .paneRect = paneRect,
         .mouseDragPanActive = panning,
     };
-    for (const auto& event : pendingScrollEvents.events) {
-      const auto action = donner::editor::ClassifyRenderPaneScrollGesture(
-          event, gestureContext, kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
-      if (!action.has_value()) {
-        continue;
+    // Suppress render-pane zoom/pan while an ImGui popup modal is open
+    // (About, Licenses, Open File, etc.) — the raw GLFW scroll callback
+    // fires regardless of ImGui's modal state, so without this the
+    // Licenses dialog scroll wheel would zoom the canvas underneath.
+    // Drain the queue either way so events don't pile up.
+    const bool modalCapturingInput = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+    if (!modalCapturingInput) {
+      for (const auto& event : pendingScrollEvents.events) {
+        const auto action = donner::editor::ClassifyRenderPaneScrollGesture(
+            event, gestureContext, kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
+        if (!action.has_value()) {
+          continue;
+        }
+        donner::editor::ApplyRenderPaneGesture(viewport, *action);
       }
-      donner::editor::ApplyRenderPaneGesture(viewport, *action);
     }
     pendingScrollEvents.events.clear();
 
