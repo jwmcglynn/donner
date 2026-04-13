@@ -13,6 +13,7 @@
 
 #include "donner/base/RcString.h"
 #include "donner/editor/TextBuffer.h"
+#include "donner/editor/TextEditorCore.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
@@ -22,46 +23,13 @@ namespace donner::editor {
 // Forward declaration.
 class TextEditor;
 
-/**
- * Represents the editor state for undo/redo operations.
- */
-struct EditorState {
-  Coordinates selectionStart;
-  Coordinates selectionEnd;
-  Coordinates cursorPosition;
-};
-
-/**
- * Record of a change for undo/redo functionality.
- */
-class UndoRecord {
-public:
-  UndoRecord() = default;
-  ~UndoRecord() = default;
-
-  UndoRecord(std::string_view added, const Coordinates& addedStart, const Coordinates& addedEnd,
-             std::string_view removed, const Coordinates& removedStart,
-             const Coordinates& removedEnd, const EditorState& before, const EditorState& after);
-
-  void undo(TextEditor* editor);
-  void redo(TextEditor* editor);
-
-  RcString added;
-  Coordinates addedStart;
-  Coordinates addedEnd;
-
-  RcString removed;
-  Coordinates removedStart;
-  Coordinates removedEnd;
-
-  EditorState before;
-  EditorState after;
-};
-
-struct UndoState {
-  UndoRecord record;
-  Coordinates insertPos;
-};
+// `EditorState`, `UndoRecord`, `UndoState`, `SelectionMode`, `Identifier`,
+// `Identifiers`, `Keywords`, `ErrorMarkers`, `Palette`, and
+// `LanguageDefinition` now live in `donner/editor/TextEditorCore.h` as part
+// of the headless-core refactor. The `using` aliases inside the `TextEditor`
+// class body below preserve every existing qualified name
+// (`TextEditor::Palette`, `TextEditor::LanguageDefinition`, etc.) so
+// callers don't change.
 
 /// Enum class of modifier keys that can be combined using bitwise OR.
 /// These modifiers can be applied to shortcuts for actions within the editor.
@@ -140,12 +108,11 @@ struct Shortcut {
  * redo, and more.
  */
 class TextEditor {
-  friend class UndoRecord;
   // Test-only access to private members (enterCharacter, backspace, etc.)
   // so headless unit tests can exercise the real user-facing editing
   // paths without going through ImGui input capture. Will be removed
-  // once the TextEditor refactor (see text_editor_behavior.md) extracts
-  // an ImGui-free TextEditorCore.
+  // once the TextEditor refactor (see text_editor_refactor.md) migrates
+  // the tests onto `TextEditorCore` directly (commit C3).
   friend class TextEditorTests;
   friend class TextEditorTests_UndoReversesInsertion_Test;
   friend class TextEditorTests_RedoRestoresAfterUndo_Test;
@@ -212,60 +179,18 @@ public:
     Count
   };
 
-  /**
-   * Editor selection modes that affect how text selection behaves.
-   */
-  enum class SelectionMode {
-    Normal,  //!< Character-by-character selection
-    Word,    //!< Select whole words
-    Line     //!< Select whole lines
-  };
-
-  /**
-   * Represents an identifier in the code, such as a function or variable name.
-   */
-  struct Identifier {
-    Coordinates location;  //!< Where this identifier appears in the text
-    RcString declaration;  //!< The declaration text for this identifier
-
-    Identifier() = default;
-    /* implicit */ Identifier(std::string_view decl) : declaration(decl) {}
-  };
-
+  // Type aliases re-exporting the canonical definitions from
+  // `TextEditorCore`. These keep the existing `TextEditor::Palette`,
+  // `TextEditor::LanguageDefinition`, etc. names working so call sites do
+  // not change during the refactor.
+  using SelectionMode = ::donner::editor::SelectionMode;
+  using Identifier = ::donner::editor::Identifier;
+  using Identifiers = ::donner::editor::Identifiers;
+  using Keywords = ::donner::editor::Keywords;
+  using ErrorMarkers = ::donner::editor::ErrorMarkers;
+  using Palette = ::donner::editor::Palette;
+  using LanguageDefinition = ::donner::editor::LanguageDefinition;
   using String = RcString;
-  using Identifiers = std::unordered_map<std::string, Identifier>;
-  using Keywords = std::unordered_set<std::string>;
-  using ErrorMarkers = std::map<int, std::string>;
-  using Palette = std::array<ImU32, static_cast<size_t>(ColorIndex::Max)>;
-
-  /**
-   * Definition of a programming language's syntax for highlighting.
-   */
-  struct LanguageDefinition {
-    using TokenRegexString = std::pair<std::string, ColorIndex>;
-    using TokenRegexStrings = std::vector<TokenRegexString>;
-    using TokenizeCallback =
-        std::function<bool(const char* inBegin, const char* inEnd, const char*& outBegin,
-                           const char*& outEnd, ColorIndex& paletteIndex)>;
-
-    RcString name;                        //!< Language name
-    Keywords keywords;                    //!< Language keywords
-    Identifiers identifiers;              //!< Known identifiers
-    RcString commentStart;                //!< Multi-line comment start
-    RcString commentEnd;                  //!< Multi-line comment end
-    RcString singleLineComment;           //!< Single-line comment marker
-    bool autoIndentation = true;          //!< Whether to enable auto-indentation
-    TokenizeCallback tokenize;            //!< Custom tokenization callback
-    TokenRegexStrings tokenRegexStrings;  //!< Regex patterns for syntax
-    bool caseSensitive = true;            //!< Whether keywords are case-sensitive
-
-    LanguageDefinition() = default;
-
-    /**
-     * Get the SVG language definition.
-     */
-    static const LanguageDefinition& SVG();
-  };
 
   // Constants
   static constexpr int kLineNumberSpace = 20;  //!< Width of line number margin in pixels
@@ -283,7 +208,7 @@ public:
   // Configuration
   void setLanguageDefinition(const LanguageDefinition& langDef);
   void setPalette(const Palette& value);
-  void setErrorMarkers(const ErrorMarkers& markers) { errorMarkers_ = markers; }
+  void setErrorMarkers(const ErrorMarkers& markers) { core_.setErrorMarkers(markers); }
 
   // Search and replace
 
@@ -334,21 +259,18 @@ public:
 
   // State queries
   bool isFocused() const { return focused_; }
-  bool isTextChanged() const { return textChanged_; }
+  bool isTextChanged() const { return core_.isTextChanged(); }
   bool isCursorPositionChanged() const { return cursorPositionChanged_; }
-  void resetTextChanged() {
-    textChanged_ = false;
-    changedLines_.clear();
-  }
+  void resetTextChanged() { core_.resetTextChanged(); }
 
   // Accessors
-  const LanguageDefinition& getLanguageDefinition() const { return languageDefinition_; }
-  const Palette& getPalette() const { return paletteBase_; }
+  const LanguageDefinition& getLanguageDefinition() const { return core_.getLanguageDefinition(); }
+  const Palette& getPalette() const { return core_.getPalette(); }
 
   /**
    * Returns true if syntax highlighting is enabled.
    */
-  bool isColorizerEnabled() const { return colorizerEnabled_; }
+  bool isColorizerEnabled() const { return core_.isColorizerEnabled(); }
 
   /**
    * Enable or disable syntax highlighting.
@@ -579,22 +501,22 @@ public:
   void clearHighlightedLines() { highlightedLines_.clear(); }
 
   // Editor settings
-  void setTabSize(int size) { tabSize_ = std::clamp(size, 0, 32); }
-  int getTabSize() const { return tabSize_; }
+  void setTabSize(int size) { core_.setTabSize(size); }
+  int getTabSize() const { return core_.getTabSize(); }
 
-  void setInsertSpaces(bool value) { insertSpaces_ = value; }
-  bool getInsertSpaces() const { return insertSpaces_; }
+  void setInsertSpaces(bool value) { core_.setInsertSpaces(value); }
+  bool getInsertSpaces() const { return core_.getInsertSpaces(); }
 
-  void setSmartIndent(bool value) { smartIndent_ = value; }
-  void setAutoIndentOnPaste(bool value) { autoIndentOnPaste_ = value; }
+  void setSmartIndent(bool value) { core_.setSmartIndent(value); }
+  void setAutoIndentOnPaste(bool value) { core_.setAutoIndentOnPaste(value); }
   void setHighlightLine(bool value) { highlightLine_ = value; }
-  void setCompleteBraces(bool value) { completeBraces_ = value; }
+  void setCompleteBraces(bool value) { core_.setCompleteBraces(value); }
   void setHorizontalScroll(bool value) { horizontalScroll_ = value; }
   void setSmartPredictions(bool value) { autocomplete_ = value; }
   void setFunctionDeclarationTooltip(bool value) { functionDeclarationTooltipEnabled_ = value; }
   void setFunctionTooltips(bool value) { funcTooltips_ = value; }
-  void setActiveAutocomplete(bool value) { activeAutocomplete_ = value; }
-  void setScrollbarMarkers(bool value) { scrollbarMarkers_ = value; }
+  void setActiveAutocomplete(bool value) { core_.setActiveAutocomplete(value); }
+  void setScrollbarMarkers(bool value) { core_.setScrollbarMarkers(value); }
   void setSidebarVisible(bool value) { sidebar_ = value; }
   void setSearchEnabled(bool value) { hasSearch_ = value; }
   void setHighlightBrackets(bool value) { highlightBrackets_ = value; }
@@ -707,8 +629,7 @@ public:
 
 private:
   using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;
-
-  using UndoBuffer = std::vector<UndoRecord>;
+  using UndoBuffer = TextEditorCore::UndoBuffer;
 
   float getTextDistanceToLineStart(const Coordinates& from) const;
   void ensureCursorVisible();
@@ -798,36 +719,10 @@ private:
    */
   Line& insertLine(int index, int column);
 
-  // Helpers for inserting characters
-
-  /**
-   * Handles insertion of a new line at the given coordinates.
-   *
-   * This splits the current line at the cursor position, handles
-   * auto-indentation if enabled, and updates the cursor position and fold
-   * markers accordingly.
-   *
-   * @param state The undo state to record this operation in.
-   * @param coord The coordinates where the new line should be inserted.
-   * @param smartIndent If true and auto-indentation is enabled, preserves the
-   * indentation level of the previous line.
-   */
-  void handleNewLine(UndoState& state, const Coordinates& coord, bool smartIndent);
-
-  /**
-   * Handles insertion of a regular character at the given coordinates.
-   *
-   * This handles special cases like tab expansion (if insertSpaces is enabled),
-   * fold marker updates for braces, and proper UTF-8 encoding of the input
-   * character.
-   *
-   * @param state The undo state to record this operation in.
-   * @param coord The coordinates where the character should be inserted.
-   * @param character The character to insert, as an ImWchar (UTF-32).
-   */
-  void handleRegularCharacter(UndoState& state, const Coordinates& coord, ImWchar character);
-
-  // Actual insert character
+  // `handleNewLine` and `handleRegularCharacter` moved into
+  // `TextEditorCore`. Shell forwarders are no longer required since
+  // these were private helpers only invoked by `enterCharacter`, which
+  // now lives in core.
 
   /**
    * Insert a character at the current cursor position, handling special
@@ -859,54 +754,9 @@ private:
    */
   void handleFunctionTooltip(ImWchar character, const Coordinates& curPos);
 
-  /**
-   * Handle auto-completion of matching braces and brackets.
-   * @param character The opening character that was entered
-   */
-  void handleBraceCompletion(ImWchar character);
-
-  /**
-   * Handle tab/untab for multiline selections.
-   * @param state Current undo state being built
-   * @param shift Whether shift is held (untab vs tab)
-   */
-  void handleMultiLineTab(UndoState& state, bool shift);
-
-  /**
-   * Handles deletion at the start of a line, merging it with the previous line.
-   *
-   * When backspace is pressed at the beginning of a line, this method:
-   * - Merges the current line's content with the end of the previous line
-   * - Updates error marker positions to account for the deleted line
-   * - Adjusts the cursor position to the end of the merged line
-   * - Records the operation for undo history
-   *
-   * Does nothing if called on the first line (line 0).
-   *
-   * @param pos The coordinates where the deletion occurs (start of line)
-   * @param undo The undo record to store the deletion information
-   */
-  void handleStartOfLineDelete(const Coordinates& pos, UndoRecord& undo);
-
-  /**
-   * Handles backspace of a character within a line.
-   *
-   * This handles several cases:
-   * - Multi-byte UTF-8 character sequences
-   * - Matching brace pair removal when completeBraces is enabled
-   * - Tab character expansion and column position adjustments
-   *
-   * The method:
-   * - Identifies and removes complete UTF-8 sequences
-   * - Updates cursor position accounting for tab expansion
-   * - Removes matching braces if enabled
-   * - Updates fold markers in the affected region
-   * - Records the deletion in the undo record
-   *
-   * @param pos The coordinates where the backspace occurs
-   * @param undo The undo record to store the deletion information
-   */
-  void handleMidLineBackspace(const Coordinates& pos, UndoRecord& undo);
+  // `handleBraceCompletion`, `handleMultiLineTab`,
+  // `handleStartOfLineDelete`, and `handleMidLineBackspace` all moved
+  // into `TextEditorCore` with `enterCharacter` / `backspace`.
 
   /**
    * Handles backspace operation at the current cursor position or selection.
@@ -953,9 +803,12 @@ private:
 
   void detectIndentationStyle();
 
-  enum class IndentMode { Spaces, Tabs, Auto };
-  IndentMode indentMode_ = IndentMode::Auto;
-  int detectedTabSize_ = 4;  // fallback if auto-detected
+  // The headless editing substrate. Owned by value; every moved method
+  // forwards to it via a one-line wrapper. Reference aliases below bind
+  // to its fields so the existing shell code (renderInternal, input
+  // handling, layout math) can keep using short names like `text_` and
+  // `state_` unchanged.
+  TextEditorCore core_;
 
   // Member variables following trailing underscore convention...
   bool funcTooltips_ = true;
@@ -977,13 +830,14 @@ private:
   bool functionDeclarationTooltip_ = false;
   std::string functionDeclaration_;
 
-  // Core text content
-  TextBuffer text_;
+  // Core text content — aliased to fields owned by `core_`. Binding as
+  // references avoids churn in every shell method that referenced these
+  // short names. The references are initialized in the constructor's
+  // member-initializer list.
+  TextBuffer& text_;
   float lineSpacing_ = 1.0f;  //!< Vertical spacing between lines
-  EditorState state_;         //!< Current editor state
-  UndoBuffer undoBuffer_;     //!< Buffer of undo operations
-  int undoIndex_ = 0;         //!< Current position in undo buffer
-  int replaceIndex_ = 0;      //!< Replace operation index
+  EditorState& state_;        //!< Current editor state (core-owned)
+  int& replaceIndex_;         //!< Replace operation index (core-owned)
 
   // UI state
   bool sidebar_ = true;          //!< Show sidebar
@@ -997,16 +851,18 @@ private:
   bool replaceOpened_ = false;   //!< Replace dialog is open
   std::string replaceWord_;      //!< Current replace term
 
-  // Code folding
-  bool foldEnabled_ = true;             //!< Enable code folding
-  std::vector<Coordinates> foldBegin_;  //!< Start positions of folds
-  std::vector<Coordinates> foldEnd_;    //!< End positions of folds
-  std::vector<int> foldConnection_;     //!< Fold hierarchy connections
-  std::vector<bool> fold_;              //!< Fold states (open/closed)
-  int foldedLines_ = 0;                 //!< Number of folded lines.
-  bool foldSorted_ = false;             //!< Whether folds are sorted
-  uint64_t foldLastIteration_ = 0;      //!< Last fold update iteration
-  float lastScroll_ = 0.0f;             //!< Last scroll position
+  // Code folding — begin/end positions and sorted flag live in `core_`
+  // (mutated by insertion/deletion bookkeeping); the render-side state
+  // (fold_, foldConnection_, foldedLines_, foldLastIteration_) stays here.
+  bool foldEnabled_ = true;                    //!< Enable code folding
+  std::vector<Coordinates>& foldBegin_;        //!< Start positions (core_-owned)
+  std::vector<Coordinates>& foldEnd_;          //!< End positions (core_-owned)
+  bool& foldSorted_;                           //!< Whether folds are sorted (core_)
+  std::vector<int> foldConnection_;            //!< Fold hierarchy connections
+  std::vector<bool> fold_;                     //!< Fold states (open/closed)
+  int foldedLines_ = 0;                        //!< Number of folded lines.
+  uint64_t foldLastIteration_ = 0;             //!< Last fold update iteration
+  float lastScroll_ = 0.0f;                    //!< Last scroll position
 
   // Autocomplete
   std::vector<RcString> autocompleteSearchTerms_;  //!< Terms to match against
@@ -1021,10 +877,10 @@ private:
   int snippetTagLength_ = 0;                  //!< Current placeholder length
   int snippetTagPreviousLength_ = 0;          //!< Previous placeholder length
 
-  // Autocomplete state
+  // Autocomplete state. `activeAutocomplete_` itself now lives in
+  // `core_` so editing-path helpers there can use it.
   bool requestAutocomplete_ = false;   //!< Request to show autocomplete
   bool readyForAutocomplete_ = false;  //!< Ready to show autocomplete
-  bool activeAutocomplete_ = false;    //!< Autocomplete is active
   bool autocomplete_ = true;           //!< Autocomplete enabled
   std::string autocompleteWord_;       //!< Current word being completed
   std::vector<std::pair<RcString, RcString>> autocompleteSuggestions_;  //!< Current suggestions
@@ -1037,56 +893,60 @@ private:
   // Keyboard shortcuts
   std::vector<Shortcut> shortcuts_;  //!< Configured shortcuts
 
-  // Visual markers
-  bool scrollbarMarkers_ = false;      //!< Show markers in scrollbar
-  std::vector<int> changedLines_;      //!< Lines modified since last save
+  // Visual markers. The `scrollbarMarkers_` flag + `changedLines_` diff
+  // set are owned by `core_` so insert/delete bookkeeping stays in one
+  // place; the shell reads them via aliased references.
+  bool& scrollbarMarkers_;
+  std::vector<int>& changedLines_;
   std::vector<int> highlightedLines_;  //!< Lines to highlight
 
-  // Editor settings
-  bool horizontalScroll_ = true;                         //!< Enable horizontal scrolling
-  bool completeBraces_ = true;                           //!< Auto-complete brackets/braces
-  bool showLineNumbers_ = true;                          //!< Show line numbers
-  bool highlightLine_ = true;                            //!< Highlight current line
-  bool highlightBrackets_ = false;                       //!< Highlight matching brackets
-  bool insertSpaces_ = true;                             //!< Insert spaces instead of tabs
-  bool smartIndent_ = true;                              //!< Enable smart indentation
-  bool focused_ = false;                                 //!< Editor has keyboard focus
-  int tabSize_ = 2;                                      //!< Size of tab in spaces
-  bool withinRender_ = false;                            //!< Currently rendering
-  bool scrollToCursor_ = false;                          //!< Scroll to cursor position
-  bool scrollToTop_ = false;                             //!< Scroll to top of document
-  bool textChanged_ = false;                             //!< Text content changed
-  bool colorizerEnabled_ = true;                         //!< Enable syntax highlighting
-  float textStart_ = 20.0f;                              //!< X offset where text begins
-  int leftMargin_ = kLineNumberSpace;                    //!< Left margin width
-  bool cursorPositionChanged_ = false;                   //!< Cursor position changed
-  int colorRangeMin_ = 0;                                //!< Start of syntax highlight range
-  int colorRangeMax_ = 0;                                //!< End of syntax highlight range
-  SelectionMode selectionMode_ = SelectionMode::Normal;  //!< Current selection mode
-  bool handleKeyboardInputs_ = true;                     //!< Process keyboard input
-  bool handleMouseInputs_ = true;                        //!< Process mouse input
-  bool ignoreImGuiChild_ = false;                        //!< Ignore ImGui child windows
-  bool showWhitespaces_ = false;                         //!< Show whitespace characters
-  bool autoIndentOnPaste_ = false;                       //!< Auto-indent pasted text
+  // Editor settings. `insertSpaces_`, `smartIndent_`, `tabSize_`,
+  // `scrollToCursor_`, `scrollToTop_`, `textChanged_`, `colorizerEnabled_`,
+  // `cursorPositionChanged_`, `colorRangeMin_/Max_`, `selectionMode_`,
+  // `autoIndentOnPaste_`, `completeBraces_`, `activeAutocomplete_`,
+  // `scrollbarMarkers_`, and `changedLines_` all moved into
+  // `TextEditorCore`. The reference aliases below preserve the short
+  // names used by the render / input-handling code.
+  bool horizontalScroll_ = true;        //!< Enable horizontal scrolling
+  bool showLineNumbers_ = true;         //!< Show line numbers
+  bool highlightLine_ = true;           //!< Highlight current line
+  bool highlightBrackets_ = false;      //!< Highlight matching brackets
+  bool focused_ = false;                //!< Editor has keyboard focus
+  bool withinRender_ = false;           //!< Currently rendering
+  float textStart_ = 20.0f;             //!< X offset where text begins
+  int leftMargin_ = kLineNumberSpace;   //!< Left margin width
+  bool handleKeyboardInputs_ = true;    //!< Process keyboard input
+  bool handleMouseInputs_ = true;       //!< Process mouse input
+  bool ignoreImGuiChild_ = false;       //!< Ignore ImGui child windows
+  bool showWhitespaces_ = false;        //!< Show whitespace characters
 
-  // Colors and syntax highlighting
-  Palette paletteBase_;                    //!< Base color palette
-  Palette palette_;                        //!< Current color palette
-  LanguageDefinition languageDefinition_;  //!< Language syntax definition
-  RegexList regexList_;                    //!< Syntax highlighting patterns
+  // Reference aliases into `core_` for fields accessed by the shell's
+  // render / input-capture code. These are initialized in the ctor
+  // member-initializer list.
+  int& tabSize_;
+  bool& scrollToCursor_;
+  bool& scrollToTop_;
+  bool& cursorPositionChanged_;
+  bool& textChanged_;
+  bool& autoIndentOnPaste_;
+  SelectionMode& selectionMode_;
 
-  // Layout and rendering
-  ImVec2 uiCursorPos_;            //!< Current UI cursor position
-  ImVec2 findOrigin_;             //!< Search dialog origin
-  float windowWidth_;             //!< Current window width
-  ImVec2 rightClickPos_;          //!< Position of right click
-  bool checkComments_ = true;     //!< Process comment syntax
-  ErrorMarkers errorMarkers_;     //!< Line error markers
-  ImVec2 charAdvance_;            //!< Character size
-  Coordinates interactiveStart_;  //!< Start of interactive selection
-  Coordinates interactiveEnd_;    //!< End of interactive selection
-  std::string lineBuffer_;        //!< Buffer for current line
-  uint64_t startTime_ = 0;        //!< Editor start time
+  // Colors and syntax highlighting — canonical storage in `core_`.
+  Palette& paletteBase_;                     //!< Base color palette (core_)
+  Palette& palette_;                         //!< Current (alpha-blended) palette (core_)
+  const LanguageDefinition& languageDefinition_;  //!< Language syntax (core_)
+
+  // Layout and rendering. Interactive-selection trackers moved to core_.
+  ImVec2 uiCursorPos_;                 //!< Current UI cursor position
+  ImVec2 findOrigin_;                  //!< Search dialog origin
+  float windowWidth_;                  //!< Current window width
+  ImVec2 rightClickPos_;               //!< Position of right click
+  ErrorMarkers& errorMarkers_;         //!< Line error markers (core_)
+  ImVec2 charAdvance_;                 //!< Character size
+  Coordinates& interactiveStart_;      //!< Start of interactive selection (core_)
+  Coordinates& interactiveEnd_;        //!< End of interactive selection (core_)
+  std::string lineBuffer_;             //!< Buffer for current line
+  uint64_t startTime_ = 0;             //!< Editor start time
 
   // Hover state
   Coordinates lastHoverPosition_;                        //!< Last mouse hover position
@@ -1175,16 +1035,7 @@ private:
    */
   void executeAction(ShortcutId actionId, bool& keepAutocompleteOpen, bool shift, bool ctrl);
 
-  /**
-   * Update the column position of a fold marker after text deletion that spans
-   * multiple lines. Recalculates the column position by walking through the
-   * text and accounting for tab characters.
-   *
-   * @param fold The fold marker coordinates to update
-   * @param start Start coordinates of the deleted text
-   * @param end End coordinates of the deleted text
-   */
-  void updateFoldColumn(Coordinates& fold, const Coordinates& start, const Coordinates& end);
+  // `updateFoldColumn` moved to TextEditorCore as an internal helper.
 
   /**
    * Calculate character advance width based on current font size.

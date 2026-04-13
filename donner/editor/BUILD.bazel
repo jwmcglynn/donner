@@ -251,11 +251,22 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_editor_core",
+    srcs = ["TextEditorCore.cc"],
+    hdrs = ["TextEditorCore.h"],
+    deps = [
+        ":text_buffer",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "text_editor",
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
         ":text_buffer",
+        ":text_editor_core",
         "//donner/base",
         "@imgui",
     ],
