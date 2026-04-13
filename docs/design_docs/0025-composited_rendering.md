@@ -653,13 +653,77 @@ for the translation-only drag path on scenes without filters or
 non-normal blend modes. Compositor tests for Geode should be gated
 behind a feature check that excludes filter/blend-mode cases.
 
-### No new `RendererInterface` virtuals in v1
+### `RendererBitmap` adapter and alpha model (resolved OQ#1)
 
 The compositor uses `drawImage(ImageResource, ImageParams)` to blit
 layer bitmaps. The `RendererBitmap` from `takeSnapshot()` must be
-convertible to an `ImageResource` — this may require a small adapter
-(wrapping `RendererBitmap` pixel data in an `ImageResource` without
-copy), but no new virtual methods.
+convertible to an `ImageResource`. This conversion has correctness and
+performance pitfalls that must be resolved before implementation.
+
+**Problem 1: Premultiplied alpha mismatch.** `takeSnapshot()` returns
+pixel data in **premultiplied** RGBA format (TinySkia's internal format;
+Skia's surface uses the `MakeN32` alpha type). `drawImage()` on all
+three backends assumes its `ImageResource` input contains **straight
+(non-premultiplied)** alpha and re-premultiplies on ingestion. Feeding
+premultiplied data through this path double-premultiplies, darkening all
+semi-transparent content. Additionally, the premultiply→unpremultiply→
+premultiply roundtrip introduces **±1 LSB error per channel**, violating
+the `threshold=0` correctness goal.
+
+**Problem 2: Color type mismatch.** Skia's `MakeN32` uses the platform's
+native 32-bit color type (`kBGRA_8888` on desktop Linux), but `drawImage`
+declares `kRGBA_8888`. If these differ, red and blue channels swap.
+
+**Problem 3: Allocation cost.** The generic `takeSnapshot()` → `drawImage()`
+path involves 2–4 full-resolution copies per layer blit (66–132 MB of
+allocation per frame at 4K for 2 layers). At 60 fps, this produces ~4–8
+GB/s of heap allocation churn.
+
+**Resolution: Two-tier adapter.**
+
+*Tier 1 (v1, all backends):* Add an `AlphaType` enum and `colorType`
+field to `RendererBitmap`. Add a `premultiplied` flag to `ImageResource`.
+When `drawImage` receives premultiplied data, skip the premultiply step.
+Normalize `takeSnapshot()` output to canonical premultiplied RGBA on all
+backends. This eliminates the correctness bugs and halves the allocation
+cost (removing the premultiply copy).
+
+```cpp
+enum class AlphaType : uint8_t { Premultiplied, Unpremultiplied };
+struct RendererBitmap {
+  Vector2i dimensions;
+  std::vector<uint8_t> pixels;
+  std::size_t rowBytes = 0;
+  AlphaType alphaType = AlphaType::Premultiplied;
+};
+```
+
+*Tier 2 (v2, per-backend fast path):* Add a `LayerHandle` abstraction
+to `RendererInterface` that bypasses `RendererBitmap` entirely:
+
+```cpp
+struct LayerHandle {
+  virtual ~LayerHandle() = default;
+};
+virtual std::unique_ptr<LayerHandle> retainCurrentFrame() { return nullptr; }
+virtual void drawLayer(const LayerHandle& handle, const ImageParams& params) {}
+```
+
+Skia implements `retainCurrentFrame()` via
+`surface->makeImageSnapshot()` (zero-copy COW `SkImage`). Geode retains
+the GPU texture handle. TinySkia accesses the offscreen `frame_` pixmap
+directly via `PixmapView` (no `takeSnapshot()` copy). Each backend gets
+its native fast path.
+
+*TinySkia-specific optimization:* For TinySkia, the compositor can add
+an internal `blitFrom(const RendererTinySkia& source, ...)` method that
+composites the offscreen `frame_` pixmap directly via `Painter::drawPixmap`
+on the premultiplied `PixmapView`, eliminating all copies. This does not
+change `RendererInterface` — it is a TinySkia-internal friend function.
+
+**No new `RendererInterface` virtuals in v1.** The tier-1 adapter changes
+only existing struct fields. The tier-2 `LayerHandle` virtuals are a v2
+addition.
 
 ### Skia-specific considerations
 
@@ -895,9 +959,12 @@ Each test renders both paths and asserts pixel identity.
 
 ### Phase 3: Backend optimizations (deferred)
 
-- [ ] Skia: `SkPicture` recording per layer for replay without re-traversal.
-- [ ] Geode: GPU texture retention across frames, zero-copy composition.
-- [ ] Optional `RendererInterface::composeLayer()` fast path for GPU backends.
+- [ ] Implement `LayerHandle` abstraction (§ `RendererBitmap` adapter, tier 2).
+  - Skia: `SkImage` COW via `surface->makeImageSnapshot()`.
+  - Geode: GPU texture retention, zero-copy `drawLayer()`.
+  - TinySkia: internal `blitFrom()` on premultiplied `PixmapView`.
+- [ ] Skia: `SkPicture` recording per layer (gated on Phase 4 sub-layer invalidation).
+- [ ] Pool `RendererBitmap` allocations — reuse across `takeSnapshot()` calls.
 
 ### Phase 4: Advanced features (deferred)
 
@@ -910,13 +977,10 @@ Each test renders both paths and asserts pixel identity.
 
 ## Open Questions
 
-1. **`RendererBitmap` → `ImageResource` adapter.** `drawImage()` takes
-   `ImageResource`, not `RendererBitmap`. What is the cheapest way to
-   wrap bitmap pixel data without copying? Options: (a) add a
-   `RendererBitmap`-backed `ImageResource` variant, (b) add a
-   `drawBitmap(RendererBitmap)` method to `RendererInterface`, (c)
-   memcpy into an `ImageResource`. (a) is cleanest; (b) adds a virtual;
-   (c) is wasteful.
+1. ~~**`RendererBitmap` → `ImageResource` adapter.**~~ — *Resolved:* see
+   § `RendererBitmap` adapter and alpha model above. Two-tier approach:
+   v1 adds `AlphaType` flag to `RendererBitmap` and `premultiplied`
+   flag to `ImageResource`; v2 adds `LayerHandle` abstraction.
 
 2. **Promotion cost amortization.** Promoting an element requires
    re-rasterizing the root layer without it and rasterizing the promoted
