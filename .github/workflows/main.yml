@@ -74,11 +74,21 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        # Exclude skia_ref-tagged targets (pulls in the full Skia library)
+        # to avoid the multi-minute Skia compile on every PR. Main merges
+        # still exercise it in the `Build (Skia reference)` step below.
+        run: |
+          bazelisk build --config=ci \
+            --build_tag_filters=-skia_ref \
+            //...
+
+      - name: Build (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk build --config=ci \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       - name: Test
-        # Exclude the Skia reference variant on PRs (only run on main merges)
-        # to avoid compiling the full Skia library on every PR.
         run: |
           bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-skia_ref \
@@ -119,10 +129,18 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        run: |
+          bazelisk build --config=ci \
+            --build_tag_filters=-skia_ref \
+            //...
+
+      - name: Build (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk build --config=ci \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       - name: Test
-        # Match the github-hosted job: skip skia_ref on PRs (only run on main).
         run: |
           bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-skia_ref \
@@ -202,10 +220,28 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        run: |
+          bazelisk build --config=ci \
+            --build_tag_filters=-skia_ref \
+            //...
+
+      - name: Build (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk build --config=ci \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       - name: Test
-        run: bazelisk test --config=ci --test_output=errors //...
+        run: |
+          bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-skia_ref \
+            //...
+
+      - name: Test (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk test --config=ci --test_output=errors \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       # Run fuzzers on macOS via the LLVM 21 toolchain (Apple Clang lacks
       # libclang_rt.fuzzer_osx.a, but --config=asan-fuzzer activates
@@ -247,10 +283,28 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        run: |
+          bazelisk build --config=ci \
+            --build_tag_filters=-skia_ref \
+            //...
+
+      - name: Build (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk build --config=ci \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       - name: Test
-        run: bazelisk test --config=ci --test_output=errors //...
+        run: |
+          bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-skia_ref \
+            //...
+
+      - name: Test (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk test --config=ci --test_output=errors \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
         if: github.ref == 'refs/heads/main'
