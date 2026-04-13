@@ -101,6 +101,7 @@ SKIPPED_PACKAGES = {
     "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
     "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
     "donner/svg/renderer/geode",  # Geode (WebGPU) — Bazel-only, gated behind --enable_dawn flag (historical name; now selects wgpu-native)
+    "donner/svg/renderer/wasm",  # Emscripten WASM module (cc_binary uses --no-entry); native link fails without main()
     "donner/editor",  # Donner Editor — Bazel-only, depends on imgui/glfw/tracy
     "donner/editor/app",
     "donner/editor/app/tests",
