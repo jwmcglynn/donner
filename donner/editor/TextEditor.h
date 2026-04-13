@@ -141,6 +141,17 @@ struct Shortcut {
  */
 class TextEditor {
   friend class UndoRecord;
+  // Test-only access to private members (enterCharacter, backspace, etc.)
+  // so headless unit tests can exercise the real user-facing editing
+  // paths without going through ImGui input capture. Will be removed
+  // once the TextEditor refactor (see text_editor_behavior.md) extracts
+  // an ImGui-free TextEditorCore.
+  friend class TextEditorTests;
+  friend class TextEditorTests_UndoReversesInsertion_Test;
+  friend class TextEditorTests_RedoRestoresAfterUndo_Test;
+  friend class TextEditorTests_MultipleUndoStepsBackthrough_Test;
+  friend class TextEditorTests_RedoIsClearedAfterNewEdit_Test;
+  friend class TextEditorTests_CanUndoReturnsTrueAfterEdit_Test;
 
 public:
   /**

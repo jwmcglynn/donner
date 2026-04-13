@@ -114,3 +114,13 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "text_editor_tests",
+    srcs = ["TextEditor_tests.cc"],
+    deps = [
+        "//donner/editor:text_editor",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
