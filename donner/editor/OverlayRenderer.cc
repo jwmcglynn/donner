@@ -32,7 +32,12 @@ svg::PaintParams MakeSelectionPaint() {
 }  // namespace
 
 void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
-  if (!editor.hasSelection()) {
+  drawChrome(renderer, editor.selectedElement());
+}
+
+void OverlayRenderer::drawChrome(svg::Renderer& renderer,
+                                 const std::optional<svg::SVGElement>& selection) {
+  if (!selection.has_value()) {
     return;
   }
 
@@ -42,7 +47,7 @@ void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& edito
   // results returned by `EditorApp::hitTest`, which returns
   // `SVGGeometryElement`. Non-geometry selections (which can't happen
   // in M2 but might in future tools) are skipped.
-  const svg::SVGElement& selected = *editor.selectedElement();
+  const svg::SVGElement& selected = *selection;
   if (!selected.isa<svg::SVGGeometryElement>()) {
     return;
   }

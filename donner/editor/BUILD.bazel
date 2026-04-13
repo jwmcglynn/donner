@@ -77,6 +77,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "async_renderer",
+    srcs = ["AsyncRenderer.cc"],
+    hdrs = ["AsyncRenderer.h"],
+    deps = [
+        ":overlay_renderer",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_library(
     name = "change_classifier",
     srcs = ["ChangeClassifier.cc"],
     hdrs = ["ChangeClassifier.h"],
@@ -172,6 +184,7 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":async_renderer",
         ":attribute_writeback",
         ":change_classifier",
         ":editor_app",

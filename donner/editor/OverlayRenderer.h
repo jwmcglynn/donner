@@ -25,6 +25,10 @@
 /// `Renderer::takeSnapshot()`. The renderer's frame pixmap survives across
 /// `endFrame` so additional canvas commands compose onto it directly.
 
+#include <optional>
+
+#include "donner/svg/SVGElement.h"
+
 namespace donner::svg {
 class Renderer;
 }
@@ -39,6 +43,13 @@ public:
   /// `renderer`'s active frame. No-op if there is no document or no
   /// selection.
   static void drawChrome(svg::Renderer& renderer, const EditorApp& editor);
+
+  /// Overload that takes a selection snapshot directly. Used by the
+  /// async render worker, which captures the selection at render-
+  /// request time so the draw path doesn't touch `EditorApp` (which
+  /// lives on the UI thread).
+  static void drawChrome(svg::Renderer& renderer,
+                         const std::optional<svg::SVGElement>& selection);
 };
 
 }  // namespace donner::editor

@@ -33,6 +33,7 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Transform.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/ChangeClassifier.h"
 #include "donner/editor/EditorApp.h"
@@ -390,6 +391,7 @@ int main(int argc, char** argv) {
   textEditor.setText(initialSource);
 
   donner::svg::Renderer renderer;
+  donner::editor::AsyncRenderer asyncRenderer;
   GLuint texture = 0;
   glGenTextures(1, &texture);
   glBindTexture(GL_TEXTURE_2D, texture);
@@ -480,9 +482,25 @@ int main(int argc, char** argv) {
       }
     }
 
+    // First, check if a prior async render has completed and pick up
+    // the bitmap if so.
+    if (auto bitmapOpt = asyncRenderer.pollResult(); bitmapOpt.has_value() && !bitmapOpt->empty()) {
+      const auto& bitmap = *bitmapOpt;
+      glBindTexture(GL_TEXTURE_2D, texture);
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, bitmap.pixels.data());
+      glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+      textureWidth = bitmap.dimensions.x;
+      textureHeight = bitmap.dimensions.y;
+    }
+
     // Drain the command queue (ReplaceDocument from text edits,
-    // SetTransform from SelectTool drags).
-    {
+    // SetTransform from SelectTool drags). Gated on the async renderer
+    // being idle — if a render is in flight, the document is owned by
+    // the render thread and we must not mutate it. Mutations queue up
+    // in the CommandQueue and drain on the next idle frame.
+    if (!asyncRenderer.isBusy()) {
       ZoneScopedN("flushFrame");
       app.flushFrame();
     }
@@ -516,7 +534,10 @@ int main(int argc, char** argv) {
     // via AttributeWriteback. The patch is applied to the TextEditor
     // buffer in the same frame as the canvas mutation, so the source
     // and canvas never visibly disagree across a frame boundary.
-    if (selectTool.consumeDragCompleted() && app.hasSelection() && app.hasDocument()) {
+    // Gated on the async renderer being idle because we read the
+    // element's transform via the public SVG API.
+    if (!asyncRenderer.isBusy() && selectTool.consumeDragCompleted() && app.hasSelection() &&
+        app.hasDocument()) {
       const donner::svg::SVGElement& selected = *app.selectedElement();
       if (selected.isa<donner::svg::SVGGraphicsElement>()) {
         const donner::Transform2d xform =
@@ -711,7 +732,14 @@ int main(int argc, char** argv) {
     ImGui::Begin("Render", nullptr, kPaneFlags);
 
     // Inspector header — always-visible summary of what's selected.
-    RenderInspector(app);
+    // The inspector reads the selected element's transform/bounds
+    // from the ECS, so it's only safe to render when the async
+    // renderer is idle. While busy, show a placeholder.
+    if (!asyncRenderer.isBusy()) {
+      RenderInspector(app);
+    } else {
+      ImGui::TextDisabled("(rendering…)");
+    }
     ImGui::Text("Zoom: %.0f%%  Pan: (%.0f, %.0f)  (wheel=zoom, space+drag=pan, Cmd+0=reset)",
                 view.zoom * 100.0f, view.pan.x, view.pan.y);
     ImGui::Separator();
@@ -725,49 +753,29 @@ int main(int argc, char** argv) {
     const int baseW = static_cast<int>(contentRegion.x);
     const int baseH = static_cast<int>(contentRegion.y);
 
-    if (app.hasDocument() && baseW > 0 && baseH > 0) {
+    // Canvas-size adjustment + async render request. Both gated on the
+    // render thread being idle — if a render is in flight, we can't
+    // touch the document (the worker holds exclusive access).
+    if (!asyncRenderer.isBusy() && app.hasDocument() && baseW > 0 && baseH > 0) {
       const donner::Vector2i currentSize = app.document().document().canvasSize();
       if (currentSize.x != baseW || currentSize.y != baseH) {
         app.document().document().setCanvasSize(baseW, baseH);
       }
-    }
 
-    // Re-render whenever the document version changes, the selection
-    // changes, OR the canvas size changed. This runs AFTER the canvas-
-    // size adjustment above so a ReplaceDocument that creates a new
-    // SVGDocument with its intrinsic size (e.g. 200x200) gets the pane
-    // dimensions applied before the render — no one-frame size glitch.
-    {
+      // Request a new render if anything that affects the output has
+      // changed since the last completed render.
       const auto currentVersion = app.document().currentFrameVersion();
       const auto& currentSelection = app.selectedElement();
       const bool selectionChanged = currentSelection != lastRenderedSelection;
-      const donner::Vector2i currentCanvasSize =
-          app.hasDocument() ? app.document().document().canvasSize() : donner::Vector2i{0, 0};
-      if ((currentVersion != lastRenderedVersion || selectionChanged ||
-           currentCanvasSize != lastRenderedCanvasSize) &&
-          app.hasDocument()) {
-        ZoneScopedN("render");
-        {
-          ZoneScopedN("renderer.draw");
-          renderer.draw(app.document().document());
-        }
-        {
-          ZoneScopedN("overlay");
-          donner::editor::OverlayRenderer::drawChrome(renderer, app);
-        }
-        const donner::svg::RendererBitmap bitmap = [&] {
-          ZoneScopedN("takeSnapshot");
-          return renderer.takeSnapshot();
-        }();
-        if (!bitmap.empty()) {
-          glBindTexture(GL_TEXTURE_2D, texture);
-          glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
-          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0,
-                       GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
-          glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-          textureWidth = bitmap.dimensions.x;
-          textureHeight = bitmap.dimensions.y;
-        }
+      const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
+      if (currentVersion != lastRenderedVersion || selectionChanged ||
+          currentCanvasSize != lastRenderedCanvasSize) {
+        donner::editor::RenderRequest req;
+        req.renderer = &renderer;
+        req.document = &app.document().document();
+        req.selection = currentSelection;
+        asyncRenderer.requestRender(req);
+
         lastRenderedVersion = currentVersion;
         lastRenderedSelection = currentSelection;
         lastRenderedCanvasSize = currentCanvasSize;
@@ -854,12 +862,17 @@ int main(int argc, char** argv) {
       };
 
       // Only treat a click as a tool event when it's NOT a pan gesture.
+      // Tool events that read from the document (hit test on mouse-down)
+      // must not fire while the render thread holds the document.
       const bool toolEligible = paneHovered && !panning && !spaceHeld;
 
-      if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+      if (!asyncRenderer.isBusy() && toolEligible &&
+          ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         selectTool.onMouseDown(app, screenToDocument(ImGui::GetMousePos()));
       }
       // Drag continues even after the cursor leaves the image.
+      // onMouseMove reads cached drag-start state and queues a command —
+      // it's safe during a render. onMouseUp only records undo state.
       if (selectTool.isDragging()) {
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
           selectTool.onMouseMove(app, screenToDocument(ImGui::GetMousePos()),
