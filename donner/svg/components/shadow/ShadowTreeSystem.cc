@@ -108,7 +108,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
     registry.emplace<ShadowTreeRootComponent>(shadowEntity, entity);
   }
 
-  // Handle sized element inheritance for <use> -> <symbol> shadow trees
+  // Handle sized element inheritance for &lt;use&gt; -> &lt;symbol&gt; shadow trees.
   if (branchType == ShadowBranchType::Main && sizedElementHandler_) {
     // Use the provided sized element handler callback to process sized elements
     // This avoids a direct dependency on the LayoutSystem

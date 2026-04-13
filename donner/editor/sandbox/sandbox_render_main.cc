@@ -12,7 +12,7 @@
 /// before there's a UI to drive it.
 ///
 /// Usage:
-///     sandbox_render <uri> <width> <height> <output.png>
+///     sandbox_render URI WIDTH HEIGHT OUTPUT_PNG
 ///
 /// The child binary path is expected to sit next to this binary in the same
 /// runfiles tree (`donner/editor/sandbox/donner_parser_child`). Override

@@ -336,7 +336,7 @@ TEST(SVGSymbolElementViewportTests, AdditiveXY) {
 
 /**
  * @test when refX/refY are at their defaults (0,0), the symbol's origin should align exactly with
- * the <use> position (8,8); the square therefore spans x,y in [8,11].
+ * the &lt;use&gt; position (8,8); the square therefore spans x,y in [8,11].
  */
 TEST(SVGSymbolElementRenderingTests, DefaultReferencePoint) {
   // clang-format off

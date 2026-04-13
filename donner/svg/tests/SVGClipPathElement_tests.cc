@@ -296,7 +296,7 @@ TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
 }
 
 /**
- * Verify that a clipPath can reference a shape via a direct <use> child.
+ * Verify that a clipPath can reference a shape via a direct &lt;use&gt; child.
  */
 TEST(SVGClipPathElementTests, RenderingUseChild) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
@@ -330,7 +330,7 @@ TEST(SVGClipPathElementTests, RenderingUseChild) {
 }
 
 /**
- * Verify that an invisible <use> child does not contribute geometry to a clipPath.
+ * Verify that an invisible &lt;use&gt; child does not contribute geometry to a clipPath.
  */
 TEST(SVGClipPathElementTests, RenderingUseChildDisplayNone) {
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
