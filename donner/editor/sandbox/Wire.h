@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Milestone S2 wire format for the editor sandbox. See
-/// docs/design_docs/editor_sandbox.md §"Wire format".
+/// docs/design_docs/0023-editor_sandbox.md §"Wire format".
 ///
 /// A wire stream is a sequence of messages: `u32 opcode`, `u32 payload_length`,
 /// `u8 payload[payload_length]`. Everything is little-endian, which matches

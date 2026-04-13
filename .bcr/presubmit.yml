@@ -10,7 +10,7 @@
 # hidden deps, it must be guarded with `target_compatible_with` so BCR
 # consumers can skip it cleanly.
 #
-# See docs/design_docs/bcr_release.md for the fuller release checklist.
+# See docs/design_docs/0018-bcr_release.md for the fuller release checklist.
 
 matrix:
   platform:

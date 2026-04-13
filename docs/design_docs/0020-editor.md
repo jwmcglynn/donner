@@ -398,7 +398,7 @@ interactive editor is the only artifact that proves Donner can:
 - round-trip edits without losing source fidelity,
 - preserve `ParseDiagnostic` spans across mutations,
 - mutate-at-interactive-rates against the invalidation system in
-  `docs/design_docs/incremental_invalidation.md`.
+  `docs/design_docs/0005-incremental_invalidation.md`.
 
 Nothing else in the tree produces that workload. Renderer tests, resvg tests,
 and fuzzers all parse-then-render once. If `incremental_invalidation` regresses
@@ -481,7 +481,7 @@ through the ECS. Fixing this *after* porting would require auditing every
 tool call site; fixing it *during* the port is a one-time rewrite of the
 tool surface.
 
-See `docs/design_docs/incremental_invalidation.md` for the dirty-flag
+See `docs/design_docs/0005-incremental_invalidation.md` for the dirty-flag
 contract.
 
 ### OverlayRenderer uses direct canvas-style Renderer calls
@@ -522,7 +522,7 @@ This partially reverses the earlier guidance ("no new virtuals on
 be added if the editor needs them, subject to the rule above.
 Unbounded growth remains a scope-drift risk (see watchlist).
 
-See `docs/design_docs/renderer_interface_design.md`.
+See `docs/design_docs/0003-renderer_interface_design.md`.
 
 ### AsyncSVGDocument: single-threaded command queue (decided)
 
@@ -908,15 +908,15 @@ landed a substantive editor PR.
 
 Must-align design docs (drift here = rework):
 
-- `docs/design_docs/incremental_invalidation.md` — the editor is its
+- `docs/design_docs/0005-incremental_invalidation.md` — the editor is its
   proving ground. This design commits to not bypassing the dirty-flag
   contract.
-- `docs/design_docs/renderer_interface_design.md` — OverlayRenderer
+- `docs/design_docs/0003-renderer_interface_design.md` — OverlayRenderer
   sits above, not inside, `RendererInterface`.
-- `docs/design_docs/ci_escape_prevention.md` — the banned-patterns
+- `docs/design_docs/0016-ci_escape_prevention.md` — the banned-patterns
   lint machinery for the imgui/glfw/tracy scope rule and the
   `ImGui::Text` format-string rule lives here.
-- `docs/design_docs/geode_renderer.md` — the editor must eventually
+- `docs/design_docs/0017-geode_renderer.md` — the editor must eventually
   build against all three backends via the existing `renderer_backend`
   transition. No backend-specific assumptions at the editor layer
   beyond `--config=skia` being the default for this milestone.
@@ -1042,7 +1042,7 @@ The editor's long-term direction, in roughly increasing order of scope:
       pure-ImGui file browser).
 - [ ] **Animation viewer.** A timeline scrubber + play/pause over a
       loaded animated SVG. Stresses `animation.md` the way
-      select/drag stresses `incremental_invalidation.md`. Still a
+      select/drag stresses `0005-incremental_invalidation.md`. Still a
       viewer, not an authoring tool.
 - [ ] **Structured SVG editor with bidirectional graph ↔ XML sync.**
       Incremental editing: canvas changes incrementally patch the

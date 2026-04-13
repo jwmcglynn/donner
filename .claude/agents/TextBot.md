@@ -46,9 +46,9 @@ When making text changes, **test all applicable tiers** (root `AGENTS.md` says s
 - `donner/css/FontFace.h` — `@font-face` rule representation. CSSBot owns the cascade side; you own the font-loading semantics.
 
 **Cross-references**:
-- `docs/design_docs/css_fonts.md` — design doc for `@font-face` support.
-- `docs/design_docs/text_rendering.md` — design doc for the text pipeline.
-- `docs/design_docs/color_emoji.md` — color emoji design (COLR/CPAL/sbix tables).
+- `docs/design_docs/0008-css_fonts.md` — design doc for `@font-face` support.
+- `docs/design_docs/0010-text_rendering.md` — design doc for the text pipeline.
+- `docs/design_docs/0006-color_emoji.md` — color emoji design (COLR/CPAL/sbix tables).
 - Root `AGENTS.md` → Text Rendering table.
 
 ## Shaping 101 — why text is hard
@@ -101,7 +101,7 @@ When tiers disagree on output, the hierarchy is: `--config=text-full` is canonic
 - **Text on `<textPath>` with `startOffset`** past the path length, or a path shorter than the text — implementations disagree. Ask SpecBot for the spec rule; match browser consensus.
 - **RTL text**: runs are reordered visually by the bidi algorithm; `text-anchor` applies after reordering.
 - **Font fallback**: when a glyph is missing from the selected font, behavior differs per tier. `--config=text-full` should fall back to a system font (if configured); `--config=text` may just draw `.notdef`. `--config=skia` uses Skia's own fallback chain.
-- **Color fonts** (COLR/CPAL, sbix, CBDT/CBLC, SVG-in-OT): see `docs/design_docs/color_emoji.md`. Tier support varies; don't promise color emoji across all tiers.
+- **Color fonts** (COLR/CPAL, sbix, CBDT/CBLC, SVG-in-OT): see `docs/design_docs/0006-color_emoji.md`. Tier support varies; don't promise color emoji across all tiers.
 
 ## How to answer common questions
 

@@ -93,7 +93,7 @@ whole stack falls out of one decision.
 - [ ] Land Editor M2 (mutation seam, `AsyncSVGDocument` command queue) —
   sandbox depends on the host-side command queue as the insertion point.
 - [ ] Land `RendererRecorder` as specified in
-  [renderer_interface_design.md:242](./renderer_interface_design.md) — the
+  [renderer_interface_design.md:242](./0003-renderer_interface_design.md) — the
   in-memory variant is the foundation for the wire format.
 - [ ] Prototype **Milestone S1** (byte-level sandbox loopback, no IPC yet):
   parse in a child process, return rendered PNG bytes over stdout. This
@@ -260,9 +260,9 @@ serializer.
 Prior art in tree:
 
 - `RendererRecorder` (planned, not shipped) — the tee pattern, in-memory
-  only. See [renderer_interface_design.md:242-256](./renderer_interface_design.md).
+  only. See [renderer_interface_design.md:242-256](./0003-renderer_interface_design.md).
 - `RendererInterface` — [donner/svg/renderer/RendererInterface.h:190-353](../../donner/svg/renderer/RendererInterface.h).
-- Editor design doc — [docs/design_docs/editor.md](./editor.md). The editor
+- Editor design doc — [docs/design_docs/0020-editor.md](./0020-editor.md). The editor
   currently has no sandbox story.
 - Parser entry point — [donner/svg/parser/SVGParser.h:93](../../donner/svg/parser/SVGParser.h).
   Already `noexcept`; already produces a `ParseResult`. Already the right
@@ -536,7 +536,7 @@ is flagged red.
 
 The editor's M2 milestone introduces `AsyncSVGDocument` — a single-threaded
 command queue flushed at frame boundaries
-([editor.md:226-238](./editor.md)). That's the seam.
+([editor.md:226-238](./0020-editor.md)). That's the seam.
 
 Today's M2 plan:
 ```
@@ -958,7 +958,7 @@ Three new fuzzers:
 - **Shared memory for `ImageResource`**: measure first.
 - **Windows sandboxing**: requires a separate story (Job Objects +
   AppContainer). Not blocking M1; Windows editor support is itself Future
-  Work in [editor.md](./editor.md).
+  Work in [editor.md](./0020-editor.md).
 - **DOM mirror strategy**: S3 ships read-only (option 3 from Proposed
   Architecture). Decision on option 1 vs. option 2 happens when S3 closes.
 

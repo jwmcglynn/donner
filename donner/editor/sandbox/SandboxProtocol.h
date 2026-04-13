@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Shared protocol constants between the editor host and the `donner_parser_child`
-/// sandbox binary. See docs/design_docs/editor_sandbox.md Milestone S1 for the
+/// sandbox binary. See docs/design_docs/0023-editor_sandbox.md Milestone S1 for the
 /// one-shot byte-in / PNG-out contract these exit codes implement.
 
 namespace donner::editor::sandbox {

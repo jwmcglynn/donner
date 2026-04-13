@@ -145,7 +145,7 @@ void EncodeWireGradient(WireWriter& w, const WireGradient& g);
 ///     (flattened to a `WireGradient`).
 /// Pattern paint servers and other unresolved references still fall through
 /// as stubs that decode to `None`. That's a separate milestone — see
-/// `docs/design_docs/editor_sandbox.md`.
+/// `docs/design_docs/0023-editor_sandbox.md`.
 void EncodeResolvedPaintServer(WireWriter& w, const svg::components::ResolvedPaintServer& p);
 
 /// Decodes a `ResolvedPaintServer`. When the wire carries a gradient tag

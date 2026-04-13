@@ -205,7 +205,7 @@ Create and refresh examples used during release prep.
 
 Implement the v0.5 subset of computed-tree invalidation so unchanged documents can skip
 recomputation and DOM mutations carry precise dirty metadata. Detailed design in
-[incremental_invalidation.md](incremental_invalidation.md).
+[incremental_invalidation.md](./0005-incremental_invalidation.md).
 
 - [x] **DirtyFlagsComponent** — Per-entity dirty flags (Style, Layout, Transform,
   WorldTransform, Shape, Paint, Filter, RenderInstance, ShadowTree) with compound flags for
@@ -258,7 +258,7 @@ architectural uint8 quantization.
 ### Phase 11: `&lt;textPath&gt;` Implementation
 
 Implement `&lt;textPath&gt;` element support for text rendered along arbitrary paths.
-Detailed design in [text_rendering.md](text_rendering.md).
+Detailed design in [text_rendering.md](./0010-text_rendering.md).
 
 - [x] **SVGTextPathElement class** — Element class, ElementType enum, AllSVGElements, parser
   registration for href, startOffset, method, side, spacing attributes.

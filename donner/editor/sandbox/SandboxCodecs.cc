@@ -14,7 +14,7 @@ namespace donner::editor::sandbox {
 namespace {
 
 // Upper bound on how many Command/points pairs we'll accept in a single Path.
-// Matches the per-frame cap guidance in docs/design_docs/editor_sandbox.md.
+// Matches the per-frame cap guidance in docs/design_docs/0023-editor_sandbox.md.
 constexpr uint32_t kMaxPathCommands = 10'000'000;
 constexpr uint32_t kMaxPathPoints = 20'000'000;
 constexpr uint32_t kMaxDashArrayLen = 4096;

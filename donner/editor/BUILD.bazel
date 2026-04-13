@@ -1,7 +1,7 @@
 """Donner Editor: in-tree migration of the external `donner-editor` prototype.
 
 This package is the destination for the editor migration described in
-`docs/design_docs/editor.md`. Milestone 1 lands the package skeleton,
+`docs/design_docs/0020-editor.md`. Milestone 1 lands the package skeleton,
 build-system foundation, and dependency wiring; subsequent milestones add
 the actual editor source.
 

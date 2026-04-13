@@ -29,7 +29,7 @@ Donner's rendering pipeline (see root `AGENTS.md` → Rendering Pipeline):
 3. **Rendering Instantiation** — `RenderingContext` builds `RenderingInstanceComponent` per visible element.
 4. **Backend rasterization** — `RendererDriver` iterates instances and draws.
 
-**For animation, the ideal is**: only steps 2, 3, 4 re-run, and only for the parts of the tree that actually changed. This is why incremental invalidation (see `docs/design_docs/incremental_invalidation.md`) matters — a naive "rerun everything every frame" approach will blow the frame budget on anything non-trivial.
+**For animation, the ideal is**: only steps 2, 3, 4 re-run, and only for the parts of the tree that actually changed. This is why incremental invalidation (see `docs/design_docs/0005-incremental_invalidation.md`) matters — a naive "rerun everything every frame" approach will blow the frame budget on anything non-trivial.
 
 **Your first question on any perf question should be**: "what does a profile say?" Don't optimize without measurement. The ECS architecture makes some things fast that would be slow in other engines, and some things slow that would be fast elsewhere — intuition lies.
 
@@ -93,9 +93,9 @@ Each step has its own perf pitfalls. The biggest wins are usually in **avoiding 
 
 ## Known perf references in the codebase
 
-- `docs/design_docs/filter_performance.md` — filter graph performance notes.
-- `docs/design_docs/incremental_invalidation.md` — the incremental re-render design; critical reading for animation perf.
-- `docs/design_docs/coverage_improvement.md` — not perf, but coverage work can find dead code to delete.
+- `docs/design_docs/0014-filter_performance.md` — filter graph performance notes.
+- `docs/design_docs/0005-incremental_invalidation.md` — the incremental re-render design; critical reading for animation perf.
+- `docs/design_docs/0013-coverage_improvement.md` — not perf, but coverage work can find dead code to delete.
 - `tools/binary_size.sh` — binary size tracking script (used by build reports).
 - `donner/svg/renderer/RendererSkia.cc` — has text fast-paths like the `std::any_of` glyph-transform detection. Reference for how to micro-optimize hot loops cleanly.
 

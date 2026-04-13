@@ -3,7 +3,7 @@
 ///
 /// Defense-in-depth hardening applied inside the sandbox child process
 /// immediately after startup, before it reads any untrusted input. See
-/// docs/design_docs/editor_sandbox.md §"Milestone S6".
+/// docs/design_docs/0023-editor_sandbox.md §"Milestone S6".
 ///
 /// S6.1 (this file) ships the portable hardening that works on Linux and
 /// macOS without extra dependencies:

@@ -180,4 +180,4 @@ Donner builds everything from source. The Skia backend is large and slow to buil
 
 ### How do I build the editor?
 
-The Donner Editor is in active migration into the tree under `//donner/editor`. See [docs/design_docs/editor.md](design_docs/editor.md) for the in-progress design and milestone plan.
+The Donner Editor is in active migration into the tree under `//donner/editor`. See [docs/design_docs/0020-editor.md](design_docs/0020-editor.md) for the in-progress design and milestone plan.
