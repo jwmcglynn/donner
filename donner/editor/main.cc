@@ -23,6 +23,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -437,6 +438,10 @@ int main(int argc, char** argv) {
   // something actually changes.
   std::string lastWindowTitle;
 
+  // Save As popup state.
+  char saveAsPathBuffer[1024] = {};
+  bool openSaveAsPopup = false;
+
   // Debounce state for text changes. Instead of re-parsing on every
   // keystroke, accumulate a dirty flag and only dispatch after
   // kTextChangeDebounceSeconds of typing idle. This is the single biggest
@@ -567,7 +572,19 @@ int main(int argc, char** argv) {
     // future menus (File, Edit, Window, etc.) can slot in without
     // restructuring.
     bool openAboutPopup = false;
+    bool menuSaveRequested = false;
+    bool menuSaveAsRequested = false;
     if (ImGui::BeginMainMenuBar()) {
+      if (ImGui::BeginMenu("File")) {
+        const bool saveEnabled = app.currentFilePath().has_value();
+        if (ImGui::MenuItem("Save", "Cmd+S", false, saveEnabled)) {
+          menuSaveRequested = true;
+        }
+        if (ImGui::MenuItem("Save As…", "Cmd+Shift+S")) {
+          menuSaveAsRequested = true;
+        }
+        ImGui::EndMenu();
+      }
       if (ImGui::BeginMenu("Help")) {
         if (ImGui::MenuItem("About Donner Editor")) {
           openAboutPopup = true;
@@ -578,6 +595,63 @@ int main(int argc, char** argv) {
     }
     if (openAboutPopup) {
       ImGui::OpenPopup("About Donner Editor");
+    }
+
+    // Menu-driven Save / Save As (keyboard shortcuts are handled below
+    // in the main shortcut block and share the same logic).
+    if (menuSaveRequested && app.currentFilePath().has_value()) {
+      const std::string content = textEditor.getText();
+      if (SaveFile(*app.currentFilePath(), content)) {
+        app.markClean();
+      }
+    }
+    if (menuSaveAsRequested) {
+      if (app.currentFilePath().has_value()) {
+        std::strncpy(saveAsPathBuffer, app.currentFilePath()->c_str(),
+                     sizeof(saveAsPathBuffer) - 1);
+        saveAsPathBuffer[sizeof(saveAsPathBuffer) - 1] = '\0';
+      } else {
+        saveAsPathBuffer[0] = '\0';
+      }
+      openSaveAsPopup = true;
+    }
+
+    if (openSaveAsPopup) {
+      ImGui::OpenPopup("Save As");
+      openSaveAsPopup = false;
+    }
+
+    // Save As popup: a simple text-input prompt for the target path.
+    // Native file dialogs will come via nfd_extended in a follow-up.
+    {
+      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+      ImGui::SetNextWindowSize(ImVec2(600.0f, 0.0f), ImGuiCond_Appearing);
+      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
+                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("Save As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Save the current document to:");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool enterPressed =
+            ImGui::InputText("##saveaspath", saveAsPathBuffer, sizeof(saveAsPathBuffer),
+                             ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
+        const bool saveClicked = ImGui::Button("Save", ImVec2(120.0f, 0.0f));
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+          ImGui::CloseCurrentPopup();
+        }
+
+        if ((enterPressed || saveClicked) && saveAsPathBuffer[0] != '\0') {
+          const std::string newPath(saveAsPathBuffer);
+          const std::string content = textEditor.getText();
+          if (SaveFile(newPath, content)) {
+            app.setCurrentFilePath(newPath);
+            app.markClean();
+            ImGui::CloseCurrentPopup();
+          }
+        }
+        ImGui::EndPopup();
+      }
     }
 
     // About popup — displays the embedded open-source notice. Required
@@ -630,14 +704,28 @@ int main(int argc, char** argv) {
       }
 
       // Cmd+S: save the current source text to the loaded file path.
+      // If there's no file path yet (new document), fall through to
+      // Save As. Cmd+Shift+S always prompts.
+      //
       // The source pane is the canonical representation — canvas
       // mutations have already been written back via AttributeWriteback.
-      if (ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false) && cmd && !shift) {
-        if (app.currentFilePath().has_value()) {
+      if (ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false) && cmd) {
+        if (!shift && app.currentFilePath().has_value()) {
           const std::string content = textEditor.getText();
           if (SaveFile(*app.currentFilePath(), content)) {
             app.markClean();
           }
+        } else {
+          // Save As: open the prompt popup. Pre-populate with the
+          // current path (or empty).
+          if (app.currentFilePath().has_value()) {
+            std::strncpy(saveAsPathBuffer, app.currentFilePath()->c_str(),
+                         sizeof(saveAsPathBuffer) - 1);
+            saveAsPathBuffer[sizeof(saveAsPathBuffer) - 1] = '\0';
+          } else {
+            saveAsPathBuffer[0] = '\0';
+          }
+          openSaveAsPopup = true;
         }
       }
 
