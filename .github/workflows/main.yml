@@ -11,9 +11,24 @@ on:
 # Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
+#
+# Self-hosted runner gate: when the repository variable
+# SELFHOSTED_LINUX_RUNNER is set to "true" (configured under repo Settings →
+# Secrets and variables → Actions → Variables), trusted commits — direct
+# pushes and pull requests opened from a branch in this same repo — route to
+# the `linux-self-hosted` job on the event-horizon donner-runner microvm
+# (4 GiB / 2 vCPU NixOS guest with bazel-cache1 wired in). Forks and any run
+# while the variable is unset stay on `ubuntu-24.04`. Only one of `linux` and
+# `linux-self-hosted` runs per workflow invocation; they are mirrors of each
+# other modulo the runner.
+#
+# The `vars.SELFHOSTED_LINUX_RUNNER == 'true'` guard means this PR is safe
+# to land before the self-hosted runner is registered. Flip the variable
+# once the runner is online and the next push uses it.
 
 jobs:
   linux:
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || !(github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -45,6 +60,46 @@ jobs:
       - name: Test
         # Exclude the Skia reference variant on PRs (only run on main merges)
         # to avoid compiling the full Skia library on every PR.
+        run: |
+          bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-skia_ref \
+            //...
+
+      - name: Test (Skia reference)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          bazelisk test --config=ci --test_output=errors \
+            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
+
+  # Mirror of the `linux` job above, but on the event-horizon self-hosted
+  # runner. Selected by the gate explained at the top of this file:
+  #
+  #   - Runs only when SELFHOSTED_LINUX_RUNNER == 'true' AND the trigger is a
+  #     direct push or a same-repo PR (forks never reach this job).
+  #   - The `linux` job is suppressed in the same condition, so trusted
+  #     commits run here exclusively.
+  #
+  # Differences from the GitHub-hosted Linux job:
+  #
+  #   - No setup-bazel step. The microvm guest already has bazelisk on PATH
+  #     and writes through to bazel-cache1 (gRPC at 192.168.1.63:9092) via
+  #     /etc/bazel.bazelrc baked into the NixOS guest config; trusted commits
+  #     get full read+write cache access.
+  #   - No apt-get step. The donner-runner NixOS guest config installs
+  #     fontconfig, freetype, mesa-vulkan-drivers, libvulkan via
+  #     environment.systemPackages.
+  linux-self-hosted:
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, linux, arm64, event-horizon]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build
+        run: bazelisk build --config=ci //...
+
+      - name: Test
+        # Match the github-hosted job: skip skia_ref on PRs (only run on main).
         run: |
           bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-skia_ref \
