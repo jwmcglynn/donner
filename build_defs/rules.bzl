@@ -498,11 +498,13 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
     # Request the 'opt' feature for optimized compilation without changing the
     # configuration of transitive deps (which would cause shared-library link
     # conflicts between opt and fastbuild configurations of the same dep).
+    # Explicitly unsupport 'fastbuild' and 'dbg' to avoid
+    # variant:crosstool_build_mode conflict on Emscripten toolchain.
     feature_configuration = cc_common.configure_features(
         ctx = ctx,
         cc_toolchain = cc_toolchain,
         requested_features = ctx.features + ["opt"],
-        unsupported_features = ctx.disabled_features,
+        unsupported_features = ctx.disabled_features + ["fastbuild", "dbg"],
     )
 
     compilation_contexts = [dep[CcInfo].compilation_context for dep in ctx.attr.deps]

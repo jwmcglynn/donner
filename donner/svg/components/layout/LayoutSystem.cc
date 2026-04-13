@@ -83,7 +83,7 @@ constexpr std::array<std::pair<std::string_view, SizedElementPresentationAttribu
          }},
     }};
 
-constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
+DONNER_CONSTEXPR_MAP auto kProperties = makeCompileTimeMap(kPropertyEntries);
 
 Vector2i RoundSize(Vector2f size) {
   return Vector2i(static_cast<int>(Round(size.x)), static_cast<int>(Round(size.y)));

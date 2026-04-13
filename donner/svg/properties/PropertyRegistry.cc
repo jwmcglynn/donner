@@ -1226,13 +1226,13 @@ constexpr std::array<std::pair<std::string_view, bool>, 71> kValidPresentationAt
     {"writing-mode", true},
 }};
 
-constexpr auto kValidPresentationAttributes =
+DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
     makeCompileTimeMap(kValidPresentationAttributeEntries);
 
 using PropertyParseFn = std::optional<ParseDiagnostic> (*)(PropertyRegistry& registry,
                                                       const parser::PropertyParseFnParams& params);
 
-constexpr auto kProperties =
+DONNER_CONSTEXPR_MAP auto kProperties =
     makeCompileTimeMap(
         std::to_array<std::pair<std::string_view, PropertyParseFn>>(
             {

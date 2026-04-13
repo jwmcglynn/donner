@@ -66,6 +66,14 @@ common:dev --//build_defs:disable_backend_test_transition=true
 # cross-configuration link conflicts.  Use: --config=no-perf-opt
 common:no-perf-opt --//build_defs:disable_perf_opt_transition=true
 
+# WASM / Emscripten builds.
+# Usage: bazel build --config=wasm //examples:svg_viewer_wasm
+# Uses wasm_cc_binary transition so deps are compiled with the emscripten toolchain.
+# Raise constexpr step limit for CompileTimeMap (default 1M is too low for large maps).
+build:wasm --cxxopt=-fconstexpr-steps=10000000
+# Disable perf-opt transition to avoid Emscripten toolchain variant conflicts.
+build:wasm --config=no-perf-opt
+
 # Product tiers
 common:tiny --//donner/svg/renderer:filters=false
 # Note: 'text' and 'text-full' configs already exist

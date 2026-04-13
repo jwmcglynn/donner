@@ -1,4 +1,5 @@
 load("//build_defs:rules.bzl", "donner_cc_binary")
+load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 
 donner_cc_binary(
     name = "custom_css_parser",
@@ -40,4 +41,68 @@ donner_cc_binary(
     deps = [
         "@donner",
     ],
+)
+
+# --- WASM reproducer / SVG viewer ---
+
+donner_cc_binary(
+    name = "wasm_reproducer",
+    srcs = ["wasm_reproducer.cc"],
+    tags = ["manual"],
+    deps = [
+        "//donner/svg/renderer",
+    ],
+)
+
+wasm_cc_binary(
+    name = "wasm_reproducer_wasm",
+    cc_target = ":wasm_reproducer",
+    tags = ["manual"],
+)
+
+donner_cc_binary(
+    name = "svg_viewer",
+    srcs = ["svg_viewer.cc"],
+    linkopts = select({
+        "@platforms//cpu:wasm32": [
+            "-sALLOW_MEMORY_GROWTH=1",
+            "-sINITIAL_MEMORY=67108864",
+        ],
+        "@platforms//cpu:wasm64": [
+            "-sALLOW_MEMORY_GROWTH=1",
+            "-sINITIAL_MEMORY=67108864",
+        ],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    deps = [
+        "//donner/svg/renderer",
+        "@imgui",
+    ] + select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["//third_party/glad"],
+    }),
+)
+
+wasm_cc_binary(
+    name = "svg_viewer_web_package",
+    cc_target = ":svg_viewer",
+    tags = ["manual"],
+)
+
+donner_cc_binary(
+    name = "render_test",
+    srcs = ["render_test.cc"],
+    tags = ["manual"],
+    deps = [
+        "//donner/svg/renderer",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+    ],
+)
+
+wasm_cc_binary(
+    name = "render_test_wasm",
+    cc_target = ":render_test",
+    tags = ["manual"],
 )

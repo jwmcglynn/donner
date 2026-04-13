@@ -24,9 +24,12 @@ static constexpr std::uint32_t kMaxSeedSearch = 1024U;
 
 /// Mix a base hash value with a seed to produce a new hash. Used to construct
 /// perfect-hash bucket seeds during CompileTimeMap construction.
-constexpr std::size_t mixHash(std::size_t baseHash, std::uint32_t seed) {
-  const std::size_t seedMix = static_cast<std::size_t>(seed) * 0x9e3779b97f4a7c15ULL;
-  std::size_t value = baseHash ^ seedMix;
+///
+/// Uses uint64_t explicitly to ensure correct behavior on 32-bit platforms (e.g., WASM)
+/// where std::size_t is 32 bits and the >> 33 shift would be undefined behavior.
+constexpr uint64_t mixHash(uint64_t baseHash, std::uint32_t seed) {
+  const uint64_t seedMix = static_cast<uint64_t>(seed) * 0x9e3779b97f4a7c15ULL;
+  uint64_t value = baseHash ^ seedMix;
   value ^= (value >> 33);
   value *= 0xff51afd7ed558ccdULL;
   value ^= (value >> 33);
@@ -52,18 +55,20 @@ constexpr bool supportsConstexprHash() {
 }
 
 /// Compute a constexpr-friendly hash of \p key for supported key types.
+///
+/// Returns uint64_t to ensure consistent hashing on both 32-bit and 64-bit platforms.
 template <typename Key>
-constexpr std::size_t constexprHashValue(const Key& key) {
+constexpr uint64_t constexprHashValue(const Key& key) {
   if constexpr (std::is_integral_v<Key>) {
-    constexpr std::size_t kPrime = 0x9e3779b1U;
-    return static_cast<std::size_t>(key) * kPrime;
+    constexpr uint64_t kPrime = 0x9e3779b97f4a7c15ULL;
+    return static_cast<uint64_t>(key) * kPrime;
   }
   if constexpr (std::is_enum_v<Key>) {
     using Underlying = std::underlying_type_t<Key>;
     return constexprHashValue(static_cast<Underlying>(key));
   }
   if constexpr (std::is_same_v<std::remove_cvref_t<Key>, std::string_view>) {
-    std::size_t value = 14695981039346656037ULL;
+    uint64_t value = 14695981039346656037ULL;
     for (char ch : key) {
       value ^= static_cast<unsigned char>(ch);
       value *= 1099511628211ULL;
@@ -214,18 +219,18 @@ private:
   }
 
   constexpr size_type bucketIndex(const Key& key) const {
-    return hashKey(key) % tables_.bucketCount;
+    return static_cast<size_type>(hashKey(key) % tables_.bucketCount);
   }
 
   constexpr size_type secondaryIndex(std::uint32_t seed, const Key& key) const {
     return static_cast<size_type>(mixHash(hashKey(key), seed) % kSize);
   }
 
-  constexpr size_type hashKey(const Key& key) const {
+  constexpr uint64_t hashKey(const Key& key) const {
     if constexpr (supportsConstexprHash<Key>()) {
-      return static_cast<size_type>(constexprHashValue(key));
+      return constexprHashValue(key);
     }
-    return static_cast<size_type>(hasher_(key));
+    return static_cast<uint64_t>(hasher_(key));
   }
 
   std::array<Key, N> keys_{};
@@ -282,11 +287,11 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
       duplicateKeys ? CompileTimeMapStatus::kDuplicateKey : CompileTimeMapStatus::kOk;
   CompileTimeMapDiagnostics diagnostics{};
 
-  auto dispatchHash = [&](const Key& key) constexpr -> std::size_t {
+  auto dispatchHash = [&](const Key& key) constexpr -> uint64_t {
     if constexpr (supportsConstexprHash<Key>()) {
       return constexprHashValue(key);
     }
-    return static_cast<std::size_t>(hasher(key));
+    return static_cast<uint64_t>(hasher(key));
   };
 
   auto buildTables = [&]() constexpr -> CompileTimeMapTables<N> {
@@ -303,7 +308,7 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
 
     std::array<std::size_t, N> bucketCounts{};
     for (std::size_t i = 0; i < N; ++i) {
-      const std::size_t bucket = dispatchHash(keys[i]) % tables.bucketCount;
+      const std::size_t bucket = static_cast<std::size_t>(dispatchHash(keys[i]) % tables.bucketCount);
       ++bucketCounts[bucket];
       diagnostics.maxBucketSize =
           std::max(diagnostics.maxBucketSize, static_cast<std::uint32_t>(bucketCounts[bucket]));
@@ -319,7 +324,7 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
     std::array<std::size_t, N> bucketFill{};
     std::array<std::size_t, N> bucketItems{};
     for (std::size_t i = 0; i < N; ++i) {
-      const std::size_t bucket = dispatchHash(keys[i]) % tables.bucketCount;
+      const std::size_t bucket = static_cast<std::size_t>(dispatchHash(keys[i]) % tables.bucketCount);
       const std::size_t position = bucketOffsets[bucket] + bucketFill[bucket];
       bucketItems[position] = i;
       ++bucketFill[bucket];
@@ -364,7 +369,7 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
         bool collision = false;
         for (std::size_t i = 0; i < count; ++i) {
           const std::size_t keyIndex = bucketItems[offset + i];
-          const std::size_t slot = mixHash(dispatchHash(keys[keyIndex]), seed) % N;
+          const std::size_t slot = static_cast<std::size_t>(mixHash(dispatchHash(keys[keyIndex]), seed) % N);
           for (std::size_t j = 0; j < i; ++j) {
             if (candidateSlots[offset + j] == slot) {
               collision = true;
@@ -427,12 +432,30 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
  *
  * Usage:
  * ```
- * static constexpr auto kColors = makeCompileTimeMap(std::to_array<std::pair<...>>({
+ * static DONNER_CONSTEXPR_MAP auto kColors = makeCompileTimeMap(std::to_array<std::pair<...>>({
  *     {"key1"sv, value1},
  *     {"key2"sv, value2},
  * ```
  */
 ///   }));
+
+#ifdef __EMSCRIPTEN__
+// Emscripten's default constexpr step limit (~1M) is too low for large maps (Color.cc has 149
+// entries, PropertyRegistry.cc has 71+43). Since wasm_cc_binary transitions don't propagate
+// -fconstexpr-steps, degrade to const (runtime init) on WASM builds. The static_assert still
+// fires on native builds.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+#define DONNER_CONSTEXPR_MAP const
+#define makeCompileTimeMap(...)                                                  \
+  []() {                                                                        \
+    const auto _compiletime_map_result =                                        \
+        ::donner::detail::makeCompileTimeMapWithDiagnostics(__VA_ARGS__);       \
+    return _compiletime_map_result.map;                                         \
+  }()
+// NOLINTEND(cppcoreguidelines-macro-usage)
+#else
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+#define DONNER_CONSTEXPR_MAP constexpr
 #define makeCompileTimeMap(...)                                                          \
   []() constexpr {                                                                       \
     constexpr auto _compiletime_map_result =                                             \
@@ -442,5 +465,7 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
                   "detail::makeCompileTimeMapWithDiagnostics for diagnostics.");         \
     return _compiletime_map_result.map;                                                  \
   }()
+// NOLINTEND(cppcoreguidelines-macro-usage)
+#endif
 
 }  // namespace donner

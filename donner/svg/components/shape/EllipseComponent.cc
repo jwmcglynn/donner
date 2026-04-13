@@ -56,7 +56,7 @@ constexpr std::array<std::pair<std::string_view, EllipsePresentationAttributePar
          }},
     }};
 
-constexpr auto kProperties = makeCompileTimeMap(kPropertyEntries);
+DONNER_CONSTEXPR_MAP auto kProperties = makeCompileTimeMap(kPropertyEntries);
 
 }  // namespace
 
