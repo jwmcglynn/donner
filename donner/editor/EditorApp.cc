@@ -1,5 +1,7 @@
 #include "donner/editor/EditorApp.h"
 
+#include "donner/editor/AttributeWriteback.h"
+
 namespace donner::editor {
 
 namespace {
@@ -46,7 +48,41 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
 }
 
 bool EditorApp::flushFrame() {
-  return document_.flushFrame();
+  std::optional<svg::SVGDocument> documentBeforeFlush;
+  std::vector<AttributeWritebackTarget> selectionTargets;
+  if (document_.hasDocument()) {
+    documentBeforeFlush = document_.document();
+    selectionTargets.reserve(selection_.size());
+    for (const auto& element : selection_) {
+      if (auto target = captureAttributeWritebackTarget(element); target.has_value()) {
+        selectionTargets.push_back(std::move(*target));
+      }
+    }
+  }
+
+  if (!document_.flushFrame()) {
+    return false;
+  }
+
+  if (documentBeforeFlush.has_value() && document_.hasDocument() &&
+      !(*documentBeforeFlush == document_.document())) {
+    std::vector<svg::SVGElement> remappedSelection;
+    remappedSelection.reserve(selectionTargets.size());
+    for (const auto& target : selectionTargets) {
+      if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
+          element.has_value()) {
+        remappedSelection.push_back(*element);
+      }
+    }
+
+    selection_ = std::move(remappedSelection);
+    refreshFirstSelectionCache();
+    controller_.reset();
+    controllerVersion_ = 0;
+    undoTimeline_.clear();
+  }
+
+  return true;
 }
 
 void EditorApp::setSelection(std::optional<svg::SVGElement> element) {

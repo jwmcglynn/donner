@@ -14,8 +14,8 @@ donner_cc_test(
     srcs = ["SelectionAabb_tests.cc"],
     deps = [
         "//donner/editor:editor_app",
-        "//donner/editor:selection_aabb",
         "//donner/editor:select_tool",
+        "//donner/editor:selection_aabb",
         "//donner/editor:viewport_state",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
@@ -80,6 +80,19 @@ donner_cc_test(
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:viewport_geometry",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_sync_tests",
+    srcs = ["EditorSync_tests.cc"],
+    deps = [
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_patch",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
@@ -156,6 +169,15 @@ donner_cc_test(
         "//donner/editor:text_patch",
         "//donner/svg",
         "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "text_editor_core_tests",
+    srcs = ["TextEditorCore_tests.cc"],
+    deps = [
+        "//donner/editor:text_editor_core",
         "@com_google_gtest//:gtest_main",
     ],
 )

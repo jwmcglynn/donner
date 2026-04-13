@@ -1,25 +1,158 @@
 #include "donner/editor/AttributeWriteback.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/SVGDocument.h"
 
 namespace donner::editor {
 
-std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
-                                                  const svg::SVGElement& element,
-                                                  std::string_view attrName,
-                                                  std::string_view newValue) {
-  // Get the element's source start offset so we can locate the attribute.
-  const auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
-  if (!xmlNode.has_value()) {
+namespace {
+
+std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
+                                                        const xml::XMLNode& xmlNode,
+                                                        std::string_view attrName,
+                                                        std::string_view newValue);
+
+std::string QualifiedNameToString(const xml::XMLQualifiedNameRef& name) {
+  std::string result;
+  result.reserve(name.name.size() + name.namespacePrefix.size() + 1);
+  if (!name.namespacePrefix.empty()) {
+    result.append(name.namespacePrefix);
+    result.push_back(':');
+  }
+  result.append(name.name);
+  return result;
+}
+
+bool HasExpectedOpeningTagAt(std::string_view source, std::size_t offset,
+                             const xml::XMLQualifiedNameRef& tagName) {
+  if (offset >= source.size() || source[offset] != '<') {
+    return false;
+  }
+
+  const std::string qualifiedName = QualifiedNameToString(tagName);
+  if (offset + 1 + qualifiedName.size() > source.size()) {
+    return false;
+  }
+
+  const std::string_view candidate = source.substr(offset + 1, qualifiedName.size());
+  if (candidate != qualifiedName) {
+    return false;
+  }
+
+  const std::size_t afterName = offset + 1 + qualifiedName.size();
+  if (afterName >= source.size()) {
+    return false;
+  }
+
+  const char terminator = source[afterName];
+  return terminator == '>' || terminator == '/' || terminator == ' ' || terminator == '\t' ||
+         terminator == '\n' || terminator == '\r';
+}
+
+std::optional<std::vector<AttributeWritebackPathSegment>> BuildElementPath(
+    const xml::XMLNode& node) {
+  std::vector<AttributeWritebackPathSegment> reversedPath;
+
+  for (std::optional<xml::XMLNode> current = node; current.has_value();) {
+    const std::optional<xml::XMLNode> parent = current->parentElement();
+    if (!parent.has_value()) {
+      return std::nullopt;
+    }
+
+    std::size_t childIndex = 0;
+    bool foundCurrent = false;
+    for (auto child = parent->firstChild(); child.has_value(); child = child->nextSibling()) {
+      if (child->type() != xml::XMLNode::Type::Element) {
+        continue;
+      }
+
+      if (*child == *current) {
+        foundCurrent = true;
+        break;
+      }
+
+      ++childIndex;
+    }
+
+    if (!foundCurrent) {
+      return std::nullopt;
+    }
+
+    reversedPath.push_back(AttributeWritebackPathSegment{
+        childIndex,
+        xml::XMLQualifiedName(RcString(current->tagName().namespacePrefix),
+                              RcString(current->tagName().name)),
+    });
+
+    if (parent->type() == xml::XMLNode::Type::Document) {
+      break;
+    }
+
+    current = parent;
+  }
+
+  std::reverse(reversedPath.begin(), reversedPath.end());
+  return reversedPath;
+}
+
+std::optional<xml::XMLNode> ResolveNodeInParsedDocument(
+    xml::XMLDocument& document, const std::vector<AttributeWritebackPathSegment>& path) {
+  xml::XMLNode current = document.root();
+  for (const AttributeWritebackPathSegment& segment : path) {
+    std::size_t childIndex = 0;
+    std::optional<xml::XMLNode> matchedChild;
+
+    for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
+      if (child->type() != xml::XMLNode::Type::Element) {
+        continue;
+      }
+
+      if (childIndex == segment.elementChildIndex) {
+        matchedChild = child;
+        break;
+      }
+
+      ++childIndex;
+    }
+
+    if (!matchedChild.has_value() || matchedChild->tagName() != segment.qualifiedName) {
+      return std::nullopt;
+    }
+
+    current = *matchedChild;
+  }
+
+  return current;
+}
+
+std::optional<TextPatch> BuildAttributeWritebackFromCurrentSource(
+    std::string_view source, const AttributeWritebackTarget& target, std::string_view attrName,
+    std::string_view newValue) {
+  auto parsed = xml::XMLParser::Parse(source);
+  if (parsed.hasError()) {
     return std::nullopt;
   }
 
-  const auto nodeLocation = xmlNode->getNodeLocation();
+  auto currentNode = ResolveNodeInParsedDocument(parsed.result(), target.elementPath);
+  if (!currentNode.has_value()) {
+    return std::nullopt;
+  }
+
+  return buildAttributeWritebackForNode(source, *currentNode, attrName, newValue);
+}
+
+std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
+                                                        const xml::XMLNode& xmlNode,
+                                                        std::string_view attrName,
+                                                        std::string_view newValue) {
+  const auto nodeLocation = xmlNode.getNodeLocation();
   if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value()) {
     return std::nullopt;
   }
@@ -108,6 +241,87 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
 
   // Couldn't find the tag close — source is malformed or stale.
   return std::nullopt;
+}
+
+}  // namespace
+
+std::optional<AttributeWritebackTarget> captureAttributeWritebackTarget(
+    const svg::SVGElement& element) {
+  const auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  if (!xmlNode.has_value()) {
+    return std::nullopt;
+  }
+
+  auto path = BuildElementPath(*xmlNode);
+  if (!path.has_value()) {
+    return std::nullopt;
+  }
+
+  return AttributeWritebackTarget{.elementPath = std::move(*path)};
+}
+
+std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
+    svg::SVGDocument& document, const AttributeWritebackTarget& target) {
+  if (target.elementPath.empty()) {
+    return std::nullopt;
+  }
+
+  svg::SVGElement current = document.svgElement();
+  const AttributeWritebackPathSegment& rootSegment = target.elementPath.front();
+  if (rootSegment.elementChildIndex != 0 || current.tagName() != rootSegment.qualifiedName) {
+    return std::nullopt;
+  }
+
+  for (std::size_t i = 1; i < target.elementPath.size(); ++i) {
+    const AttributeWritebackPathSegment& segment = target.elementPath[i];
+    std::size_t childIndex = 0;
+    std::optional<svg::SVGElement> matchedChild;
+    for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
+      if (childIndex == segment.elementChildIndex) {
+        matchedChild = child;
+        break;
+      }
+      ++childIndex;
+    }
+
+    if (!matchedChild.has_value() || matchedChild->tagName() != segment.qualifiedName) {
+      return std::nullopt;
+    }
+
+    current = *matchedChild;
+  }
+
+  return current;
+}
+
+std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
+                                                 const svg::SVGElement& element,
+                                                 std::string_view attrName,
+                                                 std::string_view newValue) {
+  const auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  if (!xmlNode.has_value()) {
+    return std::nullopt;
+  }
+
+  if (const auto location = xmlNode->getNodeLocation();
+      location.has_value() && location->start.offset.has_value() &&
+      HasExpectedOpeningTagAt(source, location->start.offset.value(), xmlNode->tagName())) {
+    return buildAttributeWritebackForNode(source, *xmlNode, attrName, newValue);
+  }
+
+  const auto target = captureAttributeWritebackTarget(element);
+  if (!target.has_value()) {
+    return std::nullopt;
+  }
+
+  return BuildAttributeWritebackFromCurrentSource(source, *target, attrName, newValue);
+}
+
+std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
+                                                 const AttributeWritebackTarget& target,
+                                                 std::string_view attrName,
+                                                 std::string_view newValue) {
+  return BuildAttributeWritebackFromCurrentSource(source, target, attrName, newValue);
 }
 
 }  // namespace donner::editor

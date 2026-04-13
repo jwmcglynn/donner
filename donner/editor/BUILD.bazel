@@ -166,6 +166,7 @@ donner_cc_library(
     hdrs = ["EditorApp.h"],
     deps = [
         ":async_svg_document",
+        ":attribute_writeback",
         ":command_queue",
         ":undo_timeline",
         "//donner/base",
@@ -186,6 +187,7 @@ donner_cc_library(
     srcs = ["SelectTool.cc"],
     hdrs = ["SelectTool.h"],
     deps = [
+        ":attribute_writeback",
         ":command_queue",
         ":editor_app",
         ":tool",
@@ -223,10 +225,10 @@ filegroup(
 # displays this.
 embed_resources(
     name = "notice",
+    header_output = "donner/editor/Notice.h",
     resources = {
         "kEditorNoticeText": ":notice_editor_txt",
     },
-    header_output = "donner/editor/Notice.h",
 )
 
 # The full Donner editor binary. Wires EditorApp + SelectTool +
@@ -266,6 +268,7 @@ donner_cc_binary(
         "//donner/svg",
         "//donner/svg/renderer",
         "//third_party/glad",
+        "//third_party/public-sans",
         "@glfw",
         "@imgui",
     ],

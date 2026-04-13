@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +54,7 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "embed_resources/PublicSansFont.h"
 #include "glad/glad.h"
 
 extern "C" {
@@ -163,22 +165,23 @@ void EditorScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
 void RenderFrameGraph(const FrameHistory& history) {
   const ImVec2 origin = ImGui::GetCursorScreenPos();
   ImDrawList* dl = ImGui::GetWindowDrawList();
+  // Derive FPS from the smoothed ms so the two numbers are always
+  // reciprocals. Smoothing each independently (arithmetic mean of
+  // reciprocals vs. reciprocal of arithmetic mean) overshoots FPS when
+  // frame times are bimodal — Jensen's inequality — and produces the
+  // nonsensical "ms up AND fps up" readout during drag rerenders.
   const float latestMs = history.latest();
-  const float latestFps = latestMs > 0.0f ? 1000.0f / latestMs : 0.0f;
   static float msEma = 0.0f;
-  static float fpsEma = 0.0f;
   static double lastDisplayUpdateTime = 0.0;
   static float displayedMs = 0.0f;
-  static float displayedFps = 0.0f;
 
   msEma = msEma == 0.0f ? latestMs : 0.9f * msEma + 0.1f * latestMs;
-  fpsEma = fpsEma == 0.0f ? latestFps : 0.9f * fpsEma + 0.1f * latestFps;
   const double now = ImGui::GetTime();
   if (displayedMs == 0.0f || now - lastDisplayUpdateTime > 0.25) {
     displayedMs = msEma;
-    displayedFps = fpsEma;
     lastDisplayUpdateTime = now;
   }
+  const float displayedFps = displayedMs > 0.0f ? 1000.0f / displayedMs : 0.0f;
 
   // Background panel + budget line.
   const ImVec2 bottomRight(origin.x + kFrameGraphWidth, origin.y + kFrameGraphHeight);
@@ -512,6 +515,12 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
+  ImFontConfig fontCfg;
+  fontCfg.FontDataOwnedByAtlas = false;
+  io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(donner::embedded::kPublicSansMediumOtf.data()),
+      static_cast<int>(donner::embedded::kPublicSansMediumOtf.size()),
+      /*size_pixels=*/15.0f, &fontCfg);
   // imgui.ini persistence is disabled per the editor security policy in
   // docs/design_docs/editor.md.
   io.IniFilename = nullptr;
@@ -607,7 +616,9 @@ int main(int argc, char** argv) {
   // any later document-version change that could move the selected
   // geometry.
   std::vector<donner::svg::SVGElement> lastSelectionBoundsSelectionVec;
-  std::vector<donner::Box2d> cachedSelectionBoundsDoc;
+  std::vector<donner::Box2d> pendingSelectionBoundsDoc;
+  std::uint64_t pendingSelectionBoundsVersion = 0;
+  std::vector<donner::Box2d> displayedSelectionBoundsDoc;
   std::uint64_t lastSelectionBoundsVersion = std::numeric_limits<std::uint64_t>::max();
 
   std::uint64_t lastRenderedVersion = 0;
@@ -665,6 +676,7 @@ int main(int argc, char** argv) {
   // diff against the current text and determine whether the edit lands
   // inside a single attribute value.
   std::string previousSourceText = initialSource;
+  std::optional<donner::editor::SelectTool::CompletedDragWriteback> pendingTransformWriteback;
 
   // Cached window title pieces so we only call glfwSetWindowTitle when
   // something actually changes.
@@ -710,18 +722,57 @@ int main(int argc, char** argv) {
   bool treeviewPendingScroll = false;
   bool treeSelectionOriginatedInTree = false;
 
-  const auto refreshSelectionBoundsCache = [&]() {
+  const auto promotePendingSelectionBoundsIfReady = [&]() {
+    if (pendingSelectionBoundsVersion != displayedDocVersion) {
+      return;
+    }
+
+    displayedSelectionBoundsDoc = pendingSelectionBoundsDoc;
+    pendingSelectionBoundsDoc.clear();
+    pendingSelectionBoundsVersion = 0;
+  };
+
+  const auto refreshPendingSelectionBoundsCache = [&]() {
     if (!app.hasDocument()) {
-      cachedSelectionBoundsDoc.clear();
+      pendingSelectionBoundsDoc.clear();
+      pendingSelectionBoundsVersion = 0;
+      displayedSelectionBoundsDoc.clear();
       lastSelectionBoundsSelectionVec.clear();
       lastSelectionBoundsVersion = std::numeric_limits<std::uint64_t>::max();
       return;
     }
 
-    cachedSelectionBoundsDoc = donner::editor::SnapshotSelectionWorldBounds(
+    pendingSelectionBoundsDoc = donner::editor::SnapshotSelectionWorldBounds(
         std::span<const donner::svg::SVGElement>(app.selectedElements()));
+    pendingSelectionBoundsVersion = app.document().currentFrameVersion();
     lastSelectionBoundsSelectionVec = app.selectedElements();
-    lastSelectionBoundsVersion = app.document().currentFrameVersion();
+    lastSelectionBoundsVersion = pendingSelectionBoundsVersion;
+    promotePendingSelectionBoundsIfReady();
+  };
+
+  const auto applyPendingTransformWriteback = [&]() {
+    if (auto completed = selectTool.consumeCompletedDragWriteback(); completed.has_value()) {
+      pendingTransformWriteback = std::move(*completed);
+    }
+
+    if (!pendingTransformWriteback.has_value()) {
+      return;
+    }
+
+    std::string source = textEditor.getText();
+    const donner::RcString serialized =
+        donner::toSVGTransformString(pendingTransformWriteback->transform);
+    auto patch = donner::editor::buildAttributeWriteback(source, pendingTransformWriteback->target,
+                                                         "transform", std::string_view(serialized));
+    if (!patch.has_value()) {
+      return;
+    }
+
+    donner::editor::applyPatches(source, {{*patch}});
+    textEditor.setText(source, /*preserveScroll=*/true);
+    textEditor.resetTextChanged();
+    previousSourceText = std::move(source);
+    pendingTransformWriteback.reset();
   };
 
   // ---------------------------------------------------------------------------
@@ -787,6 +838,7 @@ int main(int argc, char** argv) {
         pendingOverlayBitmap.reset();
         pendingOverlayVersion = 0;
       }
+      promotePendingSelectionBoundsIfReady();
       if (!loggedFirstTextureLanded) {
         loggedFirstTextureLanded = true;
         std::cerr << "[startup] +" << msSinceStart() << "ms first texture landed ("
@@ -828,37 +880,12 @@ int main(int argc, char** argv) {
       }
     }
 
-    // Canvas→text writeback: when a drag completes, serialize the
-    // element's new transform and splice it into the source pane
-    // via AttributeWriteback. The patch is applied to the TextEditor
-    // buffer in the same frame as the canvas mutation, so the source
-    // and canvas never visibly disagree across a frame boundary.
-    // Gated on the async renderer being idle because we read the
-    // element's transform via the public SVG API.
-    if (!asyncRenderer.isBusy() && selectTool.consumeDragCompleted() && app.hasSelection() &&
-        app.hasDocument()) {
-      const donner::svg::SVGElement& selected = *app.selectedElement();
-      if (selected.isa<donner::svg::SVGGraphicsElement>()) {
-        const donner::Transform2d xform =
-            selected.cast<donner::svg::SVGGraphicsElement>().transform();
-        const donner::RcString serialized = donner::toSVGTransformString(xform);
-
-        std::string source = textEditor.getText();
-        auto patch = donner::editor::buildAttributeWriteback(source, selected, "transform",
-                                                             std::string_view(serialized));
-        if (patch.has_value()) {
-          donner::editor::applyPatches(source, {{*patch}});
-          // `preserveScroll=true` so a click that registers as a tiny
-          // drag (mouse jitter inside a 1-pixel window) doesn't yank
-          // the source pane back to line 0 via the writeback path.
-          textEditor.setText(source, /*preserveScroll=*/true);
-          // Reset the text-changed flag so the next frame's source-pane
-          // poll doesn't re-interpret our writeback as a user edit (which
-          // would trigger a ReplaceDocumentCommand and wipe the selection).
-          textEditor.resetTextChanged();
-        }
-      }
-    }
+    // Canvas→text writeback is latched across frames. Drag completion
+    // can happen after this frame's `flushFrame()` and render request,
+    // so we snapshot the target + transform in SelectTool and retry the
+    // text splice here until it succeeds, even while the async renderer
+    // is busy.
+    applyPendingTransformWriteback();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -1143,6 +1170,7 @@ int main(int argc, char** argv) {
     ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, paneHeight), ImGuiCond_Always);
     ImGui::Begin("Source", nullptr, kPaneFlags);
+    // TODO: Give the source editor its own monospace font instead of inheriting the UI font.
     textEditor.render("##source");
 
     // Dispatch the current text buffer as an EditorCommand. Used by
@@ -1283,7 +1311,7 @@ int main(int argc, char** argv) {
       const auto& overlaySelection = app.selectedElements();
       const bool selectionBoundsChanged = overlaySelection != lastSelectionBoundsSelectionVec;
       if (selectionBoundsChanged || currentVersion != lastSelectionBoundsVersion) {
-        refreshSelectionBoundsCache();
+        refreshPendingSelectionBoundsCache();
       }
 
       const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec;
@@ -1430,17 +1458,27 @@ int main(int argc, char** argv) {
       const auto DrawCheckerboard = [](ImDrawList* drawList, const ImVec2& topLeft,
                                        const ImVec2& bottomRight) {
         constexpr float kCheckerSize = 16.0f;
-        for (float y = topLeft.y; y < bottomRight.y; y += kCheckerSize) {
-          const int row = static_cast<int>((y - topLeft.y) / kCheckerSize);
-          const float clippedBottom = std::min(y + kCheckerSize, bottomRight.y);
-          for (float x = topLeft.x; x < bottomRight.x; x += kCheckerSize) {
-            const int column = static_cast<int>((x - topLeft.x) / kCheckerSize);
-            const float clippedRight = std::min(x + kCheckerSize, bottomRight.x);
+        const ImVec2 snappedTopLeft(std::floor(topLeft.x), std::floor(topLeft.y));
+        const ImVec2 snappedBottomRight(std::floor(bottomRight.x), std::floor(bottomRight.y));
+        if (snappedTopLeft.x >= snappedBottomRight.x || snappedTopLeft.y >= snappedBottomRight.y) {
+          return;
+        }
+
+        drawList->PushClipRect(snappedTopLeft, snappedBottomRight,
+                               /*intersect_with_current_clip_rect=*/true);
+        const float startY = std::floor(snappedTopLeft.y / kCheckerSize) * kCheckerSize;
+        const float startX = std::floor(snappedTopLeft.x / kCheckerSize) * kCheckerSize;
+        for (float y = startY; y < snappedBottomRight.y; y += kCheckerSize) {
+          const int row = static_cast<int>(std::floor(y / kCheckerSize));
+          for (float x = startX; x < snappedBottomRight.x; x += kCheckerSize) {
+            const int column = static_cast<int>(std::floor(x / kCheckerSize));
             const ImU32 color =
                 ((row + column) % 2 == 0) ? IM_COL32(60, 60, 60, 255) : IM_COL32(40, 40, 40, 255);
-            drawList->AddRectFilled(ImVec2(x, y), ImVec2(clippedRight, clippedBottom), color);
+            drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + kCheckerSize, y + kCheckerSize),
+                                    color);
           }
         }
+        drawList->PopClipRect();
       };
       DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
       paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
@@ -1477,7 +1515,7 @@ int main(int argc, char** argv) {
       }
       if (pendingClick.has_value() && !asyncRenderer.isBusy()) {
         selectTool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
-        refreshSelectionBoundsCache();
+        refreshPendingSelectionBoundsCache();
         pendingClick.reset();
       }
       // Drag *or* marquee continues even after the cursor leaves the
@@ -1492,13 +1530,13 @@ int main(int argc, char** argv) {
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
           selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
           if (!asyncRenderer.isBusy()) {
-            refreshSelectionBoundsCache();
+            refreshPendingSelectionBoundsCache();
           }
         }
       }
 
       for (const donner::Box2d& screenRect : donner::editor::ComputeSelectionAabbScreenRects(
-               viewport, std::span<const donner::Box2d>(cachedSelectionBoundsDoc))) {
+               viewport, std::span<const donner::Box2d>(displayedSelectionBoundsDoc))) {
         paneDrawList->AddRect(ImVec2(static_cast<float>(screenRect.topLeft.x),
                                      static_cast<float>(screenRect.topLeft.y)),
                               ImVec2(static_cast<float>(screenRect.bottomRight.x),

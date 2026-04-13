@@ -745,7 +745,7 @@ void TextEditor::handleMouseInputs() {
     state_.cursorPosition = interactiveEnd_ = mousePos;
 
     // Create selection from start to current point
-    setSelection(interactiveStart_, interactiveEnd_, selectionMode_);
+    core_.setInteractiveSelection(interactiveStart_, interactiveEnd_, selectionMode_);
 
     // Handle autoscroll during selection
     const float mouseX = ImGui::GetMousePos().x;

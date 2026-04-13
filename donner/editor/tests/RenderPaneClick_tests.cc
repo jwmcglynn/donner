@@ -38,12 +38,10 @@ ViewportState MakeViewportFor(EditorApp& app, Vector2d paneOrigin, Vector2d pane
 // where the math works at zoom=1 but drifts at zoom=4.
 TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyZoom) {
   for (double zoom : {0.5, 1.0, 2.0, 4.0}) {
-    for (Vector2d pan : {Vector2d(0.0, 0.0), Vector2d(75.0, -40.0),
-                         Vector2d(-100.0, 30.0)}) {
+    for (Vector2d pan : {Vector2d(0.0, 0.0), Vector2d(75.0, -40.0), Vector2d(-100.0, 30.0)}) {
       EditorApp app;
       ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-      ViewportState v =
-          MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0));
+      ViewportState v = MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0));
 
       // Apply zoom around the pane center, then pan.
       v.zoomAround(zoom, v.paneCenter());
@@ -59,8 +57,7 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyZoom) {
       const auto hitR1 = app.hitTest(v.screenToDocument(r1Screen));
       ASSERT_TRUE(hitR1.has_value())
           << "  zoom=" << zoom << " pan=(" << pan.x << "," << pan.y << ")";
-      EXPECT_EQ(hitR1->id(), "r1")
-          << "  zoom=" << zoom << " pan=(" << pan.x << "," << pan.y << ")";
+      EXPECT_EQ(hitR1->id(), "r1") << "  zoom=" << zoom << " pan=(" << pan.x << "," << pan.y << ")";
 
       const Vector2d r2Screen = v.documentToScreen(r2Center);
       const auto hitR2 = app.hitTest(v.screenToDocument(r2Screen));
@@ -77,8 +74,7 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyDpr) {
   for (double dpr : {1.0, 1.5, 2.0, 3.0}) {
     EditorApp app;
     ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-    ViewportState v =
-        MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0), dpr);
+    ViewportState v = MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0), dpr);
     v.zoomAround(2.5, v.paneCenter());
 
     const Vector2d r1Screen = v.documentToScreen(Vector2d(40.0, 40.0));
@@ -94,8 +90,7 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyDpr) {
 TEST(RenderPaneClickTest, DesiredCanvasSizeIsViewBoxScaledByZoomAndDpr) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0), /*dpr=*/2.0);
+  ViewportState v = MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0), /*dpr=*/2.0);
   v.zoomAround(3.0, v.paneCenter());
 
   const Vector2i size = v.desiredCanvasSize();
@@ -151,8 +146,7 @@ TEST(RenderPaneClickTest, DprChangeDoesNotMoveOnScreenRectOrClicks) {
 TEST(RenderPaneClickTest, DprDoublesCanvasPixelsButNotScreenRect) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v1x =
-      MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0), /*dpr=*/1.0);
+  ViewportState v1x = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0), /*dpr=*/1.0);
   ViewportState v2x = v1x;
   v2x.devicePixelRatio = 2.0;
 
@@ -172,8 +166,7 @@ TEST(RenderPaneClickTest, DprDoublesCanvasPixelsButNotScreenRect) {
 TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0), /*dpr=*/2.0);
+  ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0), /*dpr=*/2.0);
   v.zoomAround(2.0, v.paneCenter());
 
   SelectTool tool;
@@ -203,8 +196,7 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
 TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0));
+  ViewportState v = MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0));
 
   // Click on r1's center to start the drag.
   SelectTool tool;
@@ -257,8 +249,7 @@ TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
 TEST(RenderPaneClickTest, BufferedClickDispatchesWhenWorkerIdle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
+  ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
 
   struct PendingClick {
     Vector2d documentPoint;
@@ -286,8 +277,7 @@ TEST(RenderPaneClickTest, BufferedClickDispatchesWhenWorkerIdle) {
     tool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
     pendingClick.reset();
   }
-  EXPECT_TRUE(app.hasSelection())
-      << "Buffered click should dispatch on the first idle frame";
+  EXPECT_TRUE(app.hasSelection()) << "Buffered click should dispatch on the first idle frame";
   EXPECT_EQ(app.selectedElement()->id(), "r1");
   EXPECT_FALSE(pendingClick.has_value());
 }
@@ -302,8 +292,7 @@ TEST(RenderPaneClickTest, BufferedClickDispatchesWhenWorkerIdle) {
 TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
+  ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
 
   SelectTool tool;
   const Vector2d r1ScreenStart = v.documentToScreen(Vector2d(40.0, 40.0));
@@ -340,8 +329,8 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   // ---- Frame N+3: IsMouseReleased = true ----
   tool.onMouseUp(app, v.screenToDocument(screenAt2));
   EXPECT_FALSE(tool.isDragging());
-  EXPECT_TRUE(tool.consumeDragCompleted())
-      << "drag-completed flag should fire so the writeback path runs";
+  EXPECT_TRUE(tool.consumeCompletedDragWriteback().has_value())
+      << "drag-completed writeback should be latched so the source sync path runs";
 }
 
 // Regression for "marquee dragging up doesn't select properly".
@@ -351,8 +340,7 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
 TEST(RenderPaneClickTest, MarqueeDragUpwardSelectsIntersectingElements) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
+  ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
 
   SelectTool tool;
   // r1 lives at (20..60, 20..60), r2 at (140..180, 140..180) in the
@@ -367,8 +355,7 @@ TEST(RenderPaneClickTest, MarqueeDragUpwardSelectsIntersectingElements) {
   // user reported broken in the editor.
   for (int step = 1; step <= 5; ++step) {
     const double t = static_cast<double>(step) / 5.0;
-    const Vector2d midScreen =
-        screenStart + (screenEnd - screenStart) * t;
+    const Vector2d midScreen = screenStart + (screenEnd - screenStart) * t;
     tool.onMouseMove(app, v.screenToDocument(midScreen), /*buttonHeld=*/true);
     ASSERT_TRUE(tool.marqueeRect().has_value());
     // The marquee rect is always normalized so `topLeft` has the
@@ -391,8 +378,7 @@ TEST(RenderPaneClickTest, MarqueeDragUpwardSelectsIntersectingElements) {
 TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderZoom) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  ViewportState v =
-      MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0));
+  ViewportState v = MakeViewportFor(app, Vector2d(0.0, 0.0), Vector2d(800.0, 600.0));
   v.zoomAround(2.0, v.paneCenter());
 
   SelectTool tool;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/UndoTimeline.h"
@@ -52,14 +53,15 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // Plain click on an element → replace selection and start a drag.
   // Capture the element's current parent-from-element transform so we
   // can compose deltas relative to it during the drag.
-  const Transform2d startTransform =
-      element.cast<svg::SVGGraphicsElement>().transform();
+  const Transform2d startTransform = element.cast<svg::SVGGraphicsElement>().transform();
+  const auto writebackTarget = captureAttributeWritebackTarget(element);
   editor.setSelection(element);
   dragState_ = DragState{
       .element = element,
       .startDocumentPoint = documentPoint,
       .startTransform = startTransform,
       .currentTransform = startTransform,
+      .writebackTarget = writebackTarget,
   };
 }
 
@@ -88,8 +90,7 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // followed by a parent-space translation:
   //
   //   new_local = Translate(delta) * old_local
-  const Transform2d newTransform =
-      Transform2d::Translate(deltaDoc) * dragState_->startTransform;
+  const Transform2d newTransform = Transform2d::Translate(deltaDoc) * dragState_->startTransform;
 
   dragState_->currentTransform = newTransform;
   dragState_->hasMoved = true;
@@ -97,8 +98,7 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // Coalescing happens in CommandQueue::flush(): the high-frequency drag
   // produces one SetTransform per mouse-move event but the queue collapses
   // them into a single effective command per entity per frame.
-  editor.applyMutation(
-      EditorCommand::SetTransformCommand(dragState_->element, newTransform));
+  editor.applyMutation(EditorCommand::SetTransformCommand(dragState_->element, newTransform));
 }
 
 void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/) {
@@ -146,10 +146,12 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     UndoSnapshot after{.element = dragState_->element, .transform = dragState_->currentTransform};
     editor.undoTimeline().record("Move element", std::move(before), std::move(after));
 
-    // Signal the main loop that a drag completed and the `transform`
-    // attribute should be written back into the source text. The flag
-    // is consumed (cleared) by `consumeDragCompleted()`.
-    dragCompleted_ = true;
+    if (dragState_->writebackTarget.has_value()) {
+      completedDragWriteback_ = CompletedDragWriteback{
+          .target = *dragState_->writebackTarget,
+          .transform = dragState_->currentTransform,
+      };
+    }
   }
 
   dragState_.reset();

@@ -28,12 +28,12 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <regex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
-#include <map>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -203,6 +203,10 @@ public:
 
   void setSelection(const Coordinates& start, const Coordinates& end,
                     SelectionMode mode = SelectionMode::Normal);
+  /// Update the visible selection during an active mouse interaction while
+  /// preserving the raw anchor/current endpoints in `interactiveStart_/End_`.
+  void setInteractiveSelection(const Coordinates& start, const Coordinates& end,
+                               SelectionMode mode = SelectionMode::Normal);
   void setSelectionStart(const Coordinates& position);
   void setSelectionEnd(const Coordinates& position);
 
@@ -431,6 +435,9 @@ private:
 
   Coordinates interactiveStart_;
   Coordinates interactiveEnd_;
+
+  void applySelection(const Coordinates& start, const Coordinates& end, SelectionMode mode,
+                      bool updateInteractiveBounds);
   SelectionMode selectionMode_ = SelectionMode::Normal;
 
   bool textChanged_ = false;

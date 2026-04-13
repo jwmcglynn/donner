@@ -125,7 +125,7 @@ Coordinates TextEditorCore::getActualCursorCoordinates() const {
 }
 
 Coordinates TextEditorCore::sanitizeCoordinates(const Coordinates& value) const {
-  int line = value.line;
+  int line = std::max(0, value.line);
   int column = value.column;
 
   // Handle out of bounds line numbers
@@ -641,8 +641,7 @@ RcString TextEditorCore::getWordAt(const Coordinates& coords) const {
   return RcString(result);
 }
 
-Coordinates TextEditorCore::findFirst(std::string_view searchText,
-                                      const Coordinates& start) const {
+Coordinates TextEditorCore::findFirst(std::string_view searchText, const Coordinates& start) const {
   const int totalLines = text_.getTotalLines();
 
   if (start.line < 0 || start.line >= totalLines) {
@@ -686,8 +685,8 @@ Coordinates TextEditorCore::findFirst(std::string_view searchText,
 // Selection + cursor
 // ---------------------------------------------------------------------------
 
-void TextEditorCore::setSelection(const Coordinates& start, const Coordinates& end,
-                                  SelectionMode mode) {
+void TextEditorCore::applySelection(const Coordinates& start, const Coordinates& end,
+                                    SelectionMode mode, bool updateInteractiveBounds) {
   const auto oldSelStart = state_.selectionStart;
   const auto oldSelEnd = state_.selectionEnd;
 
@@ -717,16 +716,18 @@ void TextEditorCore::setSelection(const Coordinates& start, const Coordinates& e
     }
   }
 
-  // Mirror the new bounds onto `interactiveStart_/End_` so subsequent
-  // shifted arrow-key moves can extend or contract the selection
-  // relative to the right anchor. Without this, callers that build a
-  // selection via `setSelection()` (programmatic select, find/
-  // replace, "select word" double-click, etc.) and then expect a
-  // shifted arrow to grow or shrink it from the cursor side would
-  // see the move logic treat the old selection as if it didn't
-  // exist — see the `ShiftLeftContractsSelection` regression test.
-  interactiveStart_ = state_.selectionStart;
-  interactiveEnd_ = state_.selectionEnd;
+  if (updateInteractiveBounds) {
+    // Mirror the new bounds onto `interactiveStart_/End_` so subsequent
+    // shifted arrow-key moves can extend or contract the selection
+    // relative to the right anchor. Without this, callers that build a
+    // selection via `setSelection()` (programmatic select, find/
+    // replace, "select word" double-click, etc.) and then expect a
+    // shifted arrow to grow or shrink it from the cursor side would
+    // see the move logic treat the old selection as if it didn't
+    // exist — see the `ShiftLeftContractsSelection` regression test.
+    interactiveStart_ = state_.selectionStart;
+    interactiveEnd_ = state_.selectionEnd;
+  }
 
   if (state_.selectionStart != oldSelStart || state_.selectionEnd != oldSelEnd) {
     cursorPositionChanged_ = true;
@@ -738,6 +739,21 @@ void TextEditorCore::setSelection(const Coordinates& start, const Coordinates& e
     replaceIndex_ += text_.getLineCharacterCount(ln) + 1;
   }
   replaceIndex_ += state_.cursorPosition.column;
+}
+
+void TextEditorCore::setSelection(const Coordinates& start, const Coordinates& end,
+                                  SelectionMode mode) {
+  applySelection(start, end, mode, true);
+}
+
+void TextEditorCore::setInteractiveSelection(const Coordinates& start, const Coordinates& end,
+                                             SelectionMode mode) {
+  const Coordinates sanitizedStart = sanitizeCoordinates(start);
+  const Coordinates sanitizedEnd = sanitizeCoordinates(end);
+
+  applySelection(sanitizedStart, sanitizedEnd, mode, false);
+  interactiveStart_ = sanitizedStart;
+  interactiveEnd_ = sanitizedEnd;
 }
 
 void TextEditorCore::setCursorPosition(const Coordinates& position) {
@@ -1947,18 +1963,55 @@ const LanguageDefinition& LanguageDefinition::SVG() {
 
     // Known SVG/CSS attribute names — highlighted as KnownIdentifier.
     static constexpr std::array knownAttrs{
-        "id",    "class",   "style",  "viewBox", "xmlns",
-        "href",  "transform", "fill",   "stroke",  "opacity",
-        "d",     "cx",      "cy",     "r",       "rx",
-        "ry",    "x",       "y",      "width",   "height",
-        "x1",    "y1",      "x2",     "y2",      "preserveAspectRatio",
-        "offset", "stop-color", "stop-opacity",
-        "font-family", "font-size", "font-weight", "font-style",
-        "text-anchor", "dominant-baseline", "stroke-width",
-        "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
-        "fill-opacity", "stroke-opacity", "fill-rule", "clip-path",
-        "clip-rule", "mask", "filter", "display", "visibility",
-        "color", "pointer-events",
+        "id",
+        "class",
+        "style",
+        "viewBox",
+        "xmlns",
+        "href",
+        "transform",
+        "fill",
+        "stroke",
+        "opacity",
+        "d",
+        "cx",
+        "cy",
+        "r",
+        "rx",
+        "ry",
+        "x",
+        "y",
+        "width",
+        "height",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "preserveAspectRatio",
+        "offset",
+        "stop-color",
+        "stop-opacity",
+        "font-family",
+        "font-size",
+        "font-weight",
+        "font-style",
+        "text-anchor",
+        "dominant-baseline",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-dasharray",
+        "fill-opacity",
+        "stroke-opacity",
+        "fill-rule",
+        "clip-path",
+        "clip-rule",
+        "mask",
+        "filter",
+        "display",
+        "visibility",
+        "color",
+        "pointer-events",
     };
     for (const auto& attr : knownAttrs) {
       def.identifiers.emplace(attr, Identifier(attr));
@@ -2013,8 +2066,8 @@ const LanguageDefinition& LanguageDefinition::SVG() {
           ++p;
           if (p < inEnd && (*p == 'x' || *p == 'X')) ++p;
         }
-        while (p < inEnd && *p != ';' && *p != '<' && *p != '>' && *p != ' ' &&
-               *p != '\t' && *p != '\n') {
+        while (p < inEnd && *p != ';' && *p != '<' && *p != '>' && *p != ' ' && *p != '\t' &&
+               *p != '\n') {
           ++p;
         }
         if (p < inEnd && *p == ';') ++p;
@@ -2055,10 +2108,9 @@ const LanguageDefinition& LanguageDefinition::SVG() {
       if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':' ||
           static_cast<unsigned char>(c) >= 0x80) {
         ++p;
-        while (p < inEnd &&
-               ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
-                *p == '_' || *p == '-' || *p == '.' || *p == ':' ||
-                static_cast<unsigned char>(*p) >= 0x80)) {
+        while (p < inEnd && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                             (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.' ||
+                             *p == ':' || static_cast<unsigned char>(*p) >= 0x80)) {
           ++p;
         }
         outBegin = inBegin;

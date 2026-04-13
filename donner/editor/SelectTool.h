@@ -21,6 +21,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGElement.h"
 
@@ -28,6 +29,12 @@ namespace donner::editor {
 
 class SelectTool final : public Tool {
 public:
+  /// Payload needed to write a completed drag back into the source pane.
+  struct CompletedDragWriteback {
+    AttributeWritebackTarget target;
+    Transform2d transform;
+  };
+
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
@@ -47,17 +54,13 @@ public:
   /// point). Used by the overlay renderer to draw the marquee chrome.
   [[nodiscard]] std::optional<Box2d> marqueeRect() const;
 
-  /// Returns true **exactly once** after a drag that actually moved
-  /// completes (i.e. `onMouseUp` was called and `hasMoved` was true).
-  /// The main loop polls this after `flushFrame()` to know when to
-  /// build a canvas→text writeback patch for the `transform` attribute.
-  /// Calling this function clears the flag.
-  [[nodiscard]] bool consumeDragCompleted() {
-    if (dragCompleted_) {
-      dragCompleted_ = false;
-      return true;
-    }
-    return false;
+  /// Returns the most recent completed drag writeback request, if any.
+  /// The payload is latched until consumed so the main loop can retry
+  /// writeback across busy frames without depending on the current selection.
+  [[nodiscard]] std::optional<CompletedDragWriteback> consumeCompletedDragWriteback() {
+    auto result = completedDragWriteback_;
+    completedDragWriteback_.reset();
+    return result;
   }
 
 private:
@@ -71,6 +74,8 @@ private:
     /// to read the element back (the queued commands may not have
     /// been flushed yet).
     Transform2d currentTransform;
+    /// Stable locator used for the later canvas→text writeback.
+    std::optional<AttributeWritebackTarget> writebackTarget;
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;
@@ -89,7 +94,7 @@ private:
 
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
-  bool dragCompleted_ = false;
+  std::optional<CompletedDragWriteback> completedDragWriteback_;
 };
 
 }  // namespace donner::editor

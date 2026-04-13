@@ -5,6 +5,7 @@
 
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
@@ -13,17 +14,68 @@ namespace {
 using testing::Eq;
 
 constexpr std::string_view kSimpleSvg =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <rect id="r1" x="10" y="20" width="50" height="30" fill="red"/>
-</svg>)";
+</svg>)svg";
+
+constexpr std::string_view kGroupedCircleSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <g id="group">
+    <circle id="c1" cx="40" cy="40" r="10"/>
+  </g>
+</svg>)svg";
+
+constexpr std::string_view kGroupedCircleSourceShiftedBeforeCircle =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <g id="group" data-note="shifted">
+    <circle id="c1" cx="40" cy="40" r="10"/>
+  </g>
+</svg>)svg";
+
+constexpr std::string_view kParentTransformSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <g id="group" transform="translate(10, 0)">
+    <circle id="c1" cx="40" cy="40" r="10"/>
+  </g>
+</svg>)svg";
+
+std::optional<svg::SVGDocument> ParseDocument(std::string_view source) {
+  ParseWarningSink sink;
+  auto result = svg::parser::SVGParser::ParseSVG(source, sink);
+  if (result.hasError()) {
+    return std::nullopt;
+  }
+
+  return std::move(result.result());
+}
+
+svg::SVGElement GetElementById(svg::SVGDocument& document, std::string_view selector) {
+  auto element = document.querySelector(selector);
+  EXPECT_TRUE(element.has_value()) << "no element matching " << selector;
+  return *element;
+}
+
+std::size_t CountSubstring(std::string_view haystack, std::string_view needle) {
+  if (needle.empty()) {
+    return 0;
+  }
+
+  std::size_t count = 0;
+  std::size_t pos = 0;
+  while ((pos = haystack.find(needle, pos)) != std::string_view::npos) {
+    ++count;
+    pos += needle.size();
+  }
+
+  return count;
+}
 
 class AttributeWritebackTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    ParseWarningSink sink;
-    auto result = svg::parser::SVGParser::ParseSVG(kSimpleSvg, sink);
-    ASSERT_TRUE(result.hasResult());
-    document_ = std::move(result.result());
+    auto document = ParseDocument(kSimpleSvg);
+    ASSERT_TRUE(document.has_value());
+    document_ = std::move(*document);
 
     auto rect = document_.querySelector("#r1");
     ASSERT_TRUE(rect.has_value());
@@ -102,6 +154,74 @@ TEST_F(AttributeWritebackTest, NulValueReturnsNullopt) {
   auto patch = buildAttributeWriteback(kSimpleSvg, *rect_, "fill",
                                        std::string_view("a\0b", 3));
   EXPECT_FALSE(patch.has_value());
+}
+
+TEST(AttributeWritebackRegressionTest, TargetCorrectnessUsesCircleNotAncestorGroup) {
+  auto document = ParseDocument(kGroupedCircleSvg);
+  ASSERT_TRUE(document.has_value());
+  svg::SVGElement circle = GetElementById(*document, "#c1");
+
+  auto patch = buildAttributeWriteback(kGroupedCircleSourceShiftedBeforeCircle, circle,
+                                       "transform", "translate(5)");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kGroupedCircleSourceShiftedBeforeCircle);
+  const auto result = applyPatches(source, {{*patch}});
+  EXPECT_EQ(result.applied, 1u);
+
+  EXPECT_THAT(source, testing::HasSubstr(
+                          "<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
+                          "transform=\"translate(5)\""));
+  EXPECT_THAT(source, testing::HasSubstr("<g id=\"group\" data-note=\"shifted\">"));
+  EXPECT_EQ(CountSubstring(source, "transform="), 1u);
+}
+
+TEST(AttributeWritebackRegressionTest, RepeatedWritebackReplacesExistingTransform) {
+  auto document = ParseDocument(kGroupedCircleSvg);
+  ASSERT_TRUE(document.has_value());
+  svg::SVGElement circle = GetElementById(*document, "#c1");
+
+  std::string source(kGroupedCircleSourceShiftedBeforeCircle);
+
+  auto firstPatch = buildAttributeWriteback(source, circle, "transform", "translate(5)");
+  ASSERT_TRUE(firstPatch.has_value());
+  auto firstResult = applyPatches(source, {{*firstPatch}});
+  ASSERT_EQ(firstResult.applied, 1u);
+
+  auto secondPatch = buildAttributeWriteback(source, circle, "transform", "translate(10)");
+  ASSERT_TRUE(secondPatch.has_value());
+  auto secondResult = applyPatches(source, {{*secondPatch}});
+  ASSERT_EQ(secondResult.applied, 1u);
+
+  EXPECT_THAT(source, testing::HasSubstr(
+                          "<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
+                          "transform=\"translate(10)\""));
+  EXPECT_EQ(CountSubstring(source, "transform="), 1u);
+}
+
+TEST(AttributeWritebackRegressionTest, SerializedTransformStaysLocalToDraggedCircle) {
+  auto document = ParseDocument(kParentTransformSvg);
+  ASSERT_TRUE(document.has_value());
+  auto circle = GetElementById(*document, "#c1").cast<svg::SVGGraphicsElement>();
+  circle.setTransform(Transform2d::Translate(Vector2d(5.0, 0.0)));
+
+  const RcString serialized = toSVGTransformString(circle.transform());
+  EXPECT_EQ(std::string_view(serialized), "translate(5)");
+
+  auto patch = buildAttributeWriteback(kParentTransformSvg, circle, "transform",
+                                       std::string_view(serialized));
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kParentTransformSvg);
+  const auto result = applyPatches(source, {{*patch}});
+  EXPECT_EQ(result.applied, 1u);
+
+  EXPECT_THAT(source,
+              testing::HasSubstr("<g id=\"group\" transform=\"translate(10, 0)\">"));
+  EXPECT_THAT(source, testing::HasSubstr(
+                          "<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
+                          "transform=\"translate(5)\""));
+  EXPECT_THAT(source, testing::Not(testing::HasSubstr("translate(15)")));
 }
 
 }  // namespace
