@@ -124,3 +124,12 @@ donner_cc_test(
         "@imgui",
     ],
 )
+
+donner_cc_test(
+    name = "clipboard_interface_tests",
+    srcs = ["ClipboardInterface_tests.cc"],
+    deps = [
+        "//donner/editor:clipboard_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

@@ -193,6 +193,7 @@ donner_cc_binary(
         ":select_tool",
         ":text_editor",
         ":text_patch",
+        ":viewport_geometry",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/svg",
@@ -208,6 +209,31 @@ donner_cc_library(
     hdrs = ["TextBuffer.h"],
     deps = [
         "//donner/base",
+    ],
+)
+
+# Abstract clipboard interface + header-only InMemoryClipboard. No
+# ImGui dependency — safe to link from headless unit tests. See
+# docs/design_docs/text_editor_refactor.md for the split rationale.
+donner_cc_library(
+    name = "clipboard_interface",
+    hdrs = [
+        "ClipboardInterface.h",
+        "InMemoryClipboard.h",
+    ],
+    deps = [],
+)
+
+# Production ClipboardInterface implementation backed by
+# ImGui::GetClipboardText / SetClipboardText. This is the only
+# editor target that touches ImGui clipboard APIs.
+donner_cc_library(
+    name = "imgui_clipboard",
+    srcs = ["ImGuiClipboard.cc"],
+    hdrs = ["ImGuiClipboard.h"],
+    deps = [
+        ":clipboard_interface",
+        "@imgui",
     ],
 )
 
