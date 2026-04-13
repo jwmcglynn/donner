@@ -18,6 +18,11 @@ std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
                                                         const xml::XMLNode& xmlNode,
                                                         std::string_view attrName,
                                                         std::string_view newValue);
+std::optional<TextPatch> buildAttributeRemoveWritebackForNode(std::string_view source,
+                                                              const xml::XMLNode& xmlNode,
+                                                              std::string_view attrName);
+std::optional<TextPatch> buildElementRemoveWritebackForNode(std::string_view source,
+                                                            const xml::XMLNode& xmlNode);
 
 std::string QualifiedNameToString(const xml::XMLQualifiedNameRef& name) {
   std::string result;
@@ -54,6 +59,19 @@ bool HasExpectedOpeningTagAt(std::string_view source, std::size_t offset,
   const char terminator = source[afterName];
   return terminator == '>' || terminator == '/' || terminator == ' ' || terminator == '\t' ||
          terminator == '\n' || terminator == '\r';
+}
+
+bool IsXmlWhitespace(char c) {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+std::size_t FindStartOfLine(std::string_view source, std::size_t offset) {
+  std::size_t lineStart = offset;
+  while (lineStart > 0 && source[lineStart - 1] != '\n' && source[lineStart - 1] != '\r') {
+    --lineStart;
+  }
+
+  return lineStart;
 }
 
 std::optional<std::vector<AttributeWritebackPathSegment>> BuildElementPath(
@@ -132,6 +150,37 @@ std::optional<xml::XMLNode> ResolveNodeInParsedDocument(
   return current;
 }
 
+std::optional<xml::XMLNode> FindNodeByIdInParsedTree(const xml::XMLNode& node,
+                                                     const AttributeWritebackTarget& target) {
+  if (target.elementPath.empty() || !target.elementId.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto targetTagName = target.elementPath.back().qualifiedName;
+  if (node.type() == xml::XMLNode::Type::Element && node.tagName() == targetTagName) {
+    if (const auto id = node.getAttribute("id"); id.has_value() && *id == *target.elementId) {
+      return node;
+    }
+  }
+
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
+    if (auto match = FindNodeByIdInParsedTree(*child, target); match.has_value()) {
+      return match;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<xml::XMLNode> ResolveNodeByTarget(xml::XMLDocument& document,
+                                                const AttributeWritebackTarget& target) {
+  if (auto byId = FindNodeByIdInParsedTree(document.root(), target); byId.has_value()) {
+    return byId;
+  }
+
+  return ResolveNodeInParsedDocument(document, target.elementPath);
+}
+
 std::optional<TextPatch> BuildAttributeWritebackFromCurrentSource(
     std::string_view source, const AttributeWritebackTarget& target, std::string_view attrName,
     std::string_view newValue) {
@@ -140,12 +189,42 @@ std::optional<TextPatch> BuildAttributeWritebackFromCurrentSource(
     return std::nullopt;
   }
 
-  auto currentNode = ResolveNodeInParsedDocument(parsed.result(), target.elementPath);
+  auto currentNode = ResolveNodeByTarget(parsed.result(), target);
   if (!currentNode.has_value()) {
     return std::nullopt;
   }
 
   return buildAttributeWritebackForNode(source, *currentNode, attrName, newValue);
+}
+
+std::optional<TextPatch> BuildAttributeRemoveWritebackFromCurrentSource(
+    std::string_view source, const AttributeWritebackTarget& target, std::string_view attrName) {
+  auto parsed = xml::XMLParser::Parse(source);
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+
+  auto currentNode = ResolveNodeByTarget(parsed.result(), target);
+  if (!currentNode.has_value()) {
+    return std::nullopt;
+  }
+
+  return buildAttributeRemoveWritebackForNode(source, *currentNode, attrName);
+}
+
+std::optional<TextPatch> BuildElementRemoveWritebackFromCurrentSource(
+    std::string_view source, const AttributeWritebackTarget& target) {
+  auto parsed = xml::XMLParser::Parse(source);
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+
+  auto currentNode = ResolveNodeByTarget(parsed.result(), target);
+  if (!currentNode.has_value()) {
+    return std::nullopt;
+  }
+
+  return buildElementRemoveWritebackForNode(source, *currentNode);
 }
 
 std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
@@ -243,6 +322,82 @@ std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
   return std::nullopt;
 }
 
+std::optional<TextPatch> buildAttributeRemoveWritebackForNode(std::string_view source,
+                                                              const xml::XMLNode& xmlNode,
+                                                              std::string_view attrName) {
+  const auto nodeLocation = xmlNode.getNodeLocation();
+  if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto attrRange =
+      xml::XMLParser::GetAttributeLocation(source, nodeLocation->start, attrName);
+  if (!attrRange.has_value()) {
+    return std::nullopt;
+  }
+
+  if (!attrRange->start.offset.has_value() || !attrRange->end.offset.has_value()) {
+    return std::nullopt;
+  }
+
+  std::size_t start = attrRange->start.offset.value();
+  std::size_t end = attrRange->end.offset.value();
+  if (start > source.size() || end > source.size() || end < start) {
+    return std::nullopt;
+  }
+
+  if (start > 0 && IsXmlWhitespace(source[start - 1])) {
+    --start;
+  } else if (end < source.size() && IsXmlWhitespace(source[end])) {
+    ++end;
+  }
+
+  return TextPatch{start, end - start, ""};
+}
+
+std::optional<TextPatch> buildElementRemoveWritebackForNode(std::string_view source,
+                                                            const xml::XMLNode& xmlNode) {
+  const auto nodeLocation = xmlNode.getNodeLocation();
+  if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
+      !nodeLocation->end.offset.has_value()) {
+    return std::nullopt;
+  }
+
+  std::size_t start = nodeLocation->start.offset.value();
+  std::size_t end = nodeLocation->end.offset.value();
+  if (start > source.size() || end > source.size() || end < start) {
+    return std::nullopt;
+  }
+
+  const std::size_t lineStart = FindStartOfLine(source, start);
+  bool onlyIndentBeforeNode = true;
+  for (std::size_t i = lineStart; i < start; ++i) {
+    if (source[i] != ' ' && source[i] != '\t') {
+      onlyIndentBeforeNode = false;
+      break;
+    }
+  }
+
+  if (onlyIndentBeforeNode) {
+    start = lineStart;
+  }
+
+  if (end < source.size()) {
+    if (source[end] == '\r') {
+      ++end;
+      if (end < source.size() && source[end] == '\n') {
+        ++end;
+      }
+    } else if (source[end] == '\n') {
+      ++end;
+    } else if (IsXmlWhitespace(source[end])) {
+      ++end;
+    }
+  }
+
+  return TextPatch{start, end - start, ""};
+}
+
 }  // namespace
 
 std::optional<AttributeWritebackTarget> captureAttributeWritebackTarget(
@@ -257,13 +412,40 @@ std::optional<AttributeWritebackTarget> captureAttributeWritebackTarget(
     return std::nullopt;
   }
 
-  return AttributeWritebackTarget{.elementPath = std::move(*path)};
+  AttributeWritebackTarget target{.elementPath = std::move(*path)};
+  const RcString elementId = element.id();
+  if (!elementId.empty()) {
+    target.elementId = elementId;
+  }
+  return target;
 }
 
 std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
     svg::SVGDocument& document, const AttributeWritebackTarget& target) {
   if (target.elementPath.empty()) {
     return std::nullopt;
+  }
+
+  if (target.elementId.has_value()) {
+    const auto targetTagName = target.elementPath.back().qualifiedName;
+    std::vector<svg::SVGElement> stack;
+    stack.push_back(document.svgElement());
+    while (!stack.empty()) {
+      svg::SVGElement current = stack.back();
+      stack.pop_back();
+      if (current.tagName() == targetTagName && current.id() == *target.elementId) {
+        return current;
+      }
+
+      std::vector<svg::SVGElement> children;
+      for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
+        children.push_back(*child);
+      }
+
+      for (auto it = children.rbegin(); it != children.rend(); ++it) {
+        stack.push_back(*it);
+      }
+    }
   }
 
   svg::SVGElement current = document.svgElement();
@@ -322,6 +504,17 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
                                                  std::string_view attrName,
                                                  std::string_view newValue) {
   return BuildAttributeWritebackFromCurrentSource(source, target, attrName, newValue);
+}
+
+std::optional<TextPatch> buildAttributeRemoveWriteback(std::string_view source,
+                                                       const AttributeWritebackTarget& target,
+                                                       std::string_view attrName) {
+  return BuildAttributeRemoveWritebackFromCurrentSource(source, target, attrName);
+}
+
+std::optional<TextPatch> buildElementRemoveWriteback(std::string_view source,
+                                                     const AttributeWritebackTarget& target) {
+  return BuildElementRemoveWritebackFromCurrentSource(source, target);
 }
 
 }  // namespace donner::editor

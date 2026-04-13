@@ -35,6 +35,7 @@ struct AttributeWritebackPathSegment {
 /// Path to an element through element children only, from the SVG root down.
 struct AttributeWritebackTarget {
   std::vector<AttributeWritebackPathSegment> elementPath;
+  std::optional<RcString> elementId;
 
   bool operator==(const AttributeWritebackTarget&) const = default;
 };
@@ -97,5 +98,32 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
                                                  const AttributeWritebackTarget& target,
                                                  std::string_view attrName,
                                                  std::string_view newValue);
+
+/**
+ * Build a \ref TextPatch that removes the given attribute from the target
+ * element in the source text.
+ *
+ * @param source The current source text (from the text editor buffer).
+ * @param target Stable locator for the target element.
+ * @param attrName The attribute name to remove (e.g. "transform").
+ * @return A `TextPatch` deleting the attribute if it exists, `std::nullopt`
+ *   if the source no longer contains the targeted element, the attribute is
+ *   already absent, or the source cannot be patched safely.
+ */
+std::optional<TextPatch> buildAttributeRemoveWriteback(std::string_view source,
+                                                       const AttributeWritebackTarget& target,
+                                                       std::string_view attrName);
+
+/**
+ * Build a \ref TextPatch that removes the target element from the source text.
+ *
+ * @param source The current source text (from the text editor buffer).
+ * @param target Stable locator for the target element.
+ * @return A `TextPatch` deleting the full element span if it exists, or
+ *   `std::nullopt` if the source no longer contains the targeted element or
+ *   cannot be patched safely.
+ */
+std::optional<TextPatch> buildElementRemoveWriteback(std::string_view source,
+                                                     const AttributeWritebackTarget& target);
 
 }  // namespace donner::editor

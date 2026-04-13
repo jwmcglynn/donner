@@ -37,6 +37,8 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   refreshFirstSelectionCache();
   controller_.reset();
   undoTimeline_.clear();
+  pendingTransformWriteback_.reset();
+  pendingElementRemoveWritebacks_.clear();
   const bool result = document_.loadFromString(svgBytes);
   // A successful load resets the dirty state — the in-memory document
   // now matches the last-loaded bytes. `setCurrentFilePath` should be
@@ -151,8 +153,8 @@ void EditorApp::undo() {
   // source keeps the post-drag text, and the next edit lands on the
   // wrong baseline.
   if (auto target = captureAttributeWritebackTarget(snapshot->element); target.has_value()) {
-    enqueueTransformWriteback(
-        CompletedTransformWriteback{.target = std::move(*target), .transform = snapshot->transform});
+    enqueueTransformWriteback(CompletedTransformWriteback{.target = std::move(*target),
+                                                          .transform = snapshot->transform});
   }
 }
 

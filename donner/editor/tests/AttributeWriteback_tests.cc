@@ -151,8 +151,7 @@ TEST_F(AttributeWritebackTest, UpdatedSourceReparses) {
 TEST_F(AttributeWritebackTest, NulValueReturnsNullopt) {
   // A value containing NUL can't be XML-escaped — buildAttributeWriteback
   // must return nullopt rather than producing invalid XML.
-  auto patch = buildAttributeWriteback(kSimpleSvg, *rect_, "fill",
-                                       std::string_view("a\0b", 3));
+  auto patch = buildAttributeWriteback(kSimpleSvg, *rect_, "fill", std::string_view("a\0b", 3));
   EXPECT_FALSE(patch.has_value());
 }
 
@@ -161,17 +160,16 @@ TEST(AttributeWritebackRegressionTest, TargetCorrectnessUsesCircleNotAncestorGro
   ASSERT_TRUE(document.has_value());
   svg::SVGElement circle = GetElementById(*document, "#c1");
 
-  auto patch = buildAttributeWriteback(kGroupedCircleSourceShiftedBeforeCircle, circle,
-                                       "transform", "translate(5)");
+  auto patch = buildAttributeWriteback(kGroupedCircleSourceShiftedBeforeCircle, circle, "transform",
+                                       "translate(5)");
   ASSERT_TRUE(patch.has_value());
 
   std::string source(kGroupedCircleSourceShiftedBeforeCircle);
   const auto result = applyPatches(source, {{*patch}});
   EXPECT_EQ(result.applied, 1u);
 
-  EXPECT_THAT(source, testing::HasSubstr(
-                          "<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
-                          "transform=\"translate(5)\""));
+  EXPECT_THAT(source, testing::HasSubstr("<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
+                                         "transform=\"translate(5)\""));
   EXPECT_THAT(source, testing::HasSubstr("<g id=\"group\" data-note=\"shifted\">"));
   EXPECT_EQ(CountSubstring(source, "transform="), 1u);
 }
@@ -193,9 +191,8 @@ TEST(AttributeWritebackRegressionTest, RepeatedWritebackReplacesExistingTransfor
   auto secondResult = applyPatches(source, {{*secondPatch}});
   ASSERT_EQ(secondResult.applied, 1u);
 
-  EXPECT_THAT(source, testing::HasSubstr(
-                          "<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
-                          "transform=\"translate(10)\""));
+  EXPECT_THAT(source, testing::HasSubstr("<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
+                                         "transform=\"translate(10)\""));
   EXPECT_EQ(CountSubstring(source, "transform="), 1u);
 }
 
@@ -216,12 +213,96 @@ TEST(AttributeWritebackRegressionTest, SerializedTransformStaysLocalToDraggedCir
   const auto result = applyPatches(source, {{*patch}});
   EXPECT_EQ(result.applied, 1u);
 
-  EXPECT_THAT(source,
-              testing::HasSubstr("<g id=\"group\" transform=\"translate(10, 0)\">"));
-  EXPECT_THAT(source, testing::HasSubstr(
-                          "<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
-                          "transform=\"translate(5)\""));
+  EXPECT_THAT(source, testing::HasSubstr("<g id=\"group\" transform=\"translate(10, 0)\">"));
+  EXPECT_THAT(source, testing::HasSubstr("<circle id=\"c1\" cx=\"40\" cy=\"40\" r=\"10\" "
+                                         "transform=\"translate(5)\""));
   EXPECT_THAT(source, testing::Not(testing::HasSubstr("translate(15)")));
+}
+
+TEST(AttributeWritebackRegressionTest, RemoveTransformAttributeWithoutLeavingWhitespace) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><circle transform="translate(5)"/></svg>)svg";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "circle");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildAttributeRemoveWriteback(kSource, *target, "transform");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(source, "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle/></svg>");
+}
+
+TEST(AttributeWritebackRegressionTest, RemoveMiddleAttributeKeepsSingleSpacing) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><circle cx="10" transform="translate(5)" r="3"/></svg>)svg";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "circle");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildAttributeRemoveWriteback(kSource, *target, "transform");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(source, "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"10\" r=\"3\"/></svg>");
+}
+
+TEST(AttributeWritebackRegressionTest, RemoveMissingAttributeReturnsNullopt) {
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><circle cx="10"/></svg>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "circle");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+
+  EXPECT_FALSE(buildAttributeRemoveWriteback(kSource, *target, "transform").has_value());
+}
+
+TEST(AttributeWritebackRegressionTest, RemoveSelfClosingElementConsumesWholeLine) {
+  constexpr std::string_view kSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\">\n  <circle id=\"a\"/>\n  <circle id=\"b\"/>\n"
+      "</svg>\n";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "#a");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildElementRemoveWriteback(kSource, *target);
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(source, "<svg xmlns=\"http://www.w3.org/2000/svg\">\n  <circle id=\"b\"/>\n</svg>\n");
+}
+
+TEST(AttributeWritebackRegressionTest, RemoveContainerElementDeletesSubtree) {
+  constexpr std::string_view kSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\">\n  <g id=\"group\">\n    <circle "
+      "id=\"child\"/>\n  </g>\n  <rect id=\"after\"/>\n</svg>\n";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement group = GetElementById(*document, "#group");
+  const auto target = captureAttributeWritebackTarget(group);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildElementRemoveWriteback(kSource, *target);
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(source, "<svg xmlns=\"http://www.w3.org/2000/svg\">\n  <rect id=\"after\"/>\n</svg>\n");
 }
 
 }  // namespace

@@ -56,4 +56,30 @@ std::vector<Box2d> ComputeSelectionAabbScreenRects(const ViewportState& viewport
   return rects;
 }
 
+void PromoteSelectionBoundsIfReady(SelectionBoundsCache& cache, std::uint64_t displayedDocVersion) {
+  if (cache.pendingVersion != displayedDocVersion) {
+    return;
+  }
+
+  cache.displayedBoundsDoc = cache.pendingBoundsDoc;
+  cache.pendingBoundsDoc.clear();
+  cache.pendingVersion = 0;
+}
+
+void RefreshSelectionBoundsCache(SelectionBoundsCache& cache,
+                                 std::span<const svg::SVGElement> selection,
+                                 std::uint64_t currentDocVersion,
+                                 std::uint64_t displayedDocVersion) {
+  cache.lastSelection.assign(selection.begin(), selection.end());
+  cache.lastRefreshVersion = currentDocVersion;
+  cache.pendingBoundsDoc = SnapshotSelectionWorldBounds(selection);
+  cache.pendingVersion = currentDocVersion;
+
+  if (selection.empty()) {
+    cache.displayedBoundsDoc.clear();
+  }
+
+  PromoteSelectionBoundsIfReady(cache, displayedDocVersion);
+}
+
 }  // namespace donner::editor

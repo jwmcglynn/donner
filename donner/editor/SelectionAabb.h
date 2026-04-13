@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -30,5 +32,23 @@ namespace donner::editor {
 /// @return Screen-space rectangles for immediate-mode drawing.
 [[nodiscard]] std::vector<Box2d> ComputeSelectionAabbScreenRects(
     const ViewportState& viewport, std::span<const Box2d> selectionBoundsDoc);
+
+/// Pending/displayed selection AABBs tracked across document-version changes.
+struct SelectionBoundsCache {
+  std::vector<svg::SVGElement> lastSelection;
+  std::vector<Box2d> pendingBoundsDoc;
+  std::uint64_t pendingVersion = 0;
+  std::vector<Box2d> displayedBoundsDoc;
+  std::uint64_t lastRefreshVersion = std::numeric_limits<std::uint64_t>::max();
+};
+
+/// Promote pending bounds when the corresponding document bitmap is visible.
+void PromoteSelectionBoundsIfReady(SelectionBoundsCache& cache, std::uint64_t displayedDocVersion);
+
+/// Refresh the cache from the current selection and document version.
+void RefreshSelectionBoundsCache(SelectionBoundsCache& cache,
+                                 std::span<const svg::SVGElement> selection,
+                                 std::uint64_t currentDocVersion,
+                                 std::uint64_t displayedDocVersion);
 
 }  // namespace donner::editor

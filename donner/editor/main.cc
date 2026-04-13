@@ -457,10 +457,6 @@ std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
   return text;
 }
 
-void LogNotImplementedAction(std::string_view action) {
-  std::cerr << action << ": Not implemented yet\n";
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -577,7 +573,8 @@ int main(int argc, char** argv) {
     // in the source pane.
   }
   std::cerr << "[startup] +" << msSinceStart() << "ms loadFromString done\n";
-  // Remember the path we loaded from so Cmd+S knows where to write.
+  // Remember the startup path so the title bar can show the filename and
+  // future save wiring can reuse it.
   app.setCurrentFilePath(svgPath);
 
   donner::editor::SelectTool selectTool;
@@ -633,11 +630,7 @@ int main(int argc, char** argv) {
   // AABB draw. Refreshed eagerly on selection-changing clicks and on
   // any later document-version change that could move the selected
   // geometry.
-  std::vector<donner::svg::SVGElement> lastSelectionBoundsSelectionVec;
-  std::vector<donner::Box2d> pendingSelectionBoundsDoc;
-  std::uint64_t pendingSelectionBoundsVersion = 0;
-  std::vector<donner::Box2d> displayedSelectionBoundsDoc;
-  std::uint64_t lastSelectionBoundsVersion = std::numeric_limits<std::uint64_t>::max();
+  donner::editor::SelectionBoundsCache selectionBoundsCache;
 
   std::uint64_t lastRenderedVersion = 0;
   std::optional<donner::svg::SVGElement> lastHighlightedSelection;
@@ -695,6 +688,8 @@ int main(int argc, char** argv) {
   // inside a single attribute value.
   std::string previousSourceText = initialSource;
   std::optional<donner::editor::EditorApp::CompletedTransformWriteback> pendingTransformWriteback;
+  std::vector<donner::editor::EditorApp::CompletedElementRemoveWriteback>
+      pendingElementRemoveWritebacks;
 
   // Cached window title pieces so we only call glfwSetWindowTitle when
   // something actually changes.
@@ -739,33 +734,23 @@ int main(int argc, char** argv) {
   std::optional<donner::svg::SVGElement> lastTreeSelection;
   bool treeviewPendingScroll = false;
   bool treeSelectionOriginatedInTree = false;
+  bool openFileModalRequested = false;
+  std::array<char, 4096> openFilePathBuffer{};
+  std::string openFileError;
 
   const auto promotePendingSelectionBoundsIfReady = [&]() {
-    if (pendingSelectionBoundsVersion != displayedDocVersion) {
-      return;
-    }
-
-    displayedSelectionBoundsDoc = pendingSelectionBoundsDoc;
-    pendingSelectionBoundsDoc.clear();
-    pendingSelectionBoundsVersion = 0;
+    donner::editor::PromoteSelectionBoundsIfReady(selectionBoundsCache, displayedDocVersion);
   };
 
   const auto refreshPendingSelectionBoundsCache = [&]() {
     if (!app.hasDocument()) {
-      pendingSelectionBoundsDoc.clear();
-      pendingSelectionBoundsVersion = 0;
-      displayedSelectionBoundsDoc.clear();
-      lastSelectionBoundsSelectionVec.clear();
-      lastSelectionBoundsVersion = std::numeric_limits<std::uint64_t>::max();
+      selectionBoundsCache = donner::editor::SelectionBoundsCache{};
       return;
     }
 
-    pendingSelectionBoundsDoc = donner::editor::SnapshotSelectionWorldBounds(
-        std::span<const donner::svg::SVGElement>(app.selectedElements()));
-    pendingSelectionBoundsVersion = app.document().currentFrameVersion();
-    lastSelectionBoundsSelectionVec = app.selectedElements();
-    lastSelectionBoundsVersion = pendingSelectionBoundsVersion;
-    promotePendingSelectionBoundsIfReady();
+    donner::editor::RefreshSelectionBoundsCache(
+        selectionBoundsCache, std::span<const donner::svg::SVGElement>(app.selectedElements()),
+        app.document().currentFrameVersion(), displayedDocVersion);
   };
 
   // Rasterize the Skia path-outline overlay for the current selection
@@ -847,19 +832,18 @@ int main(int argc, char** argv) {
     std::string source = textEditor.getText();
     const donner::RcString serialized =
         donner::toSVGTransformString(pendingTransformWriteback->transform);
-    // `toSVGTransformString` returns "" for identity. For undo of a
-    // drag that originally moved a shape, the restored transform IS
-    // the identity — which means the source should have its
-    // `transform=` attribute *removed*, not replaced with an empty
-    // string. For drag completion, an empty serialize means "no real
-    // movement", so we skip the patch entirely.
-    //
-    // For now we take the safer fallback: skip the patch when empty.
-    // Undo-to-identity will still leave the existing `transform="…"`
-    // attribute in place; fixing that requires an attribute-removal
-    // patch which is a follow-up. Document this as a known gap.
     if (std::string_view(serialized).empty()) {
+      auto patch = donner::editor::buildAttributeRemoveWriteback(
+          source, pendingTransformWriteback->target, "transform");
       pendingTransformWriteback.reset();
+      if (!patch.has_value()) {
+        return;
+      }
+
+      donner::editor::applyPatches(source, {{*patch}});
+      textEditor.setText(source, /*preserveScroll=*/true);
+      textEditor.resetTextChanged();
+      previousSourceText = std::move(source);
       return;
     }
     auto patch = donner::editor::buildAttributeWriteback(source, pendingTransformWriteback->target,
@@ -873,6 +857,37 @@ int main(int argc, char** argv) {
     textEditor.resetTextChanged();
     previousSourceText = std::move(source);
     pendingTransformWriteback.reset();
+  };
+
+  const auto applyPendingElementRemoveWritebacks = [&]() {
+    auto completed = app.consumeElementRemoveWritebacks();
+    for (auto& writeback : completed) {
+      pendingElementRemoveWritebacks.push_back(std::move(writeback));
+    }
+    if (pendingElementRemoveWritebacks.empty()) {
+      return;
+    }
+
+    std::string source = textEditor.getText();
+    bool changed = false;
+    for (const auto& pendingRemove : pendingElementRemoveWritebacks) {
+      auto patch = donner::editor::buildElementRemoveWriteback(source, pendingRemove.target);
+      if (!patch.has_value()) {
+        continue;
+      }
+
+      donner::editor::applyPatches(source, {{*patch}});
+      changed = true;
+    }
+
+    pendingElementRemoveWritebacks.clear();
+    if (!changed) {
+      return;
+    }
+
+    textEditor.setText(source, /*preserveScroll=*/true);
+    textEditor.resetTextChanged();
+    previousSourceText = std::move(source);
   };
 
   // ---------------------------------------------------------------------------
@@ -953,7 +968,9 @@ int main(int argc, char** argv) {
     // in the CommandQueue and drain on the next idle frame.
     if (!asyncRenderer.isBusy()) {
       ZoneScopedN("flushFrame");
-      app.flushFrame();
+      if (app.flushFrame()) {
+        refreshPendingSelectionBoundsCache();
+      }
     }
 
     // Sync the source pane's error markers with the document's most
@@ -985,6 +1002,7 @@ int main(int argc, char** argv) {
     // so we snapshot the target + transform in SelectTool and retry the
     // text splice here until it succeeds, even while the async renderer
     // is busy.
+    applyPendingElementRemoveWritebacks();
     applyPendingTransformWriteback();
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -1022,20 +1040,14 @@ int main(int argc, char** argv) {
       viewport.zoomAround(viewport.zoom * factor, focalScreen);
     };
 
-    const auto triggerOpenStub = [&]() {
-      // TODO: Route this through a real file picker once the in-tree
-      // editor grows an open-file workflow.
-      LogNotImplementedAction("Open");
-    };
-    const auto triggerSaveStub = [&]() {
-      // TODO: Route this through a real save path once the in-tree
-      // editor grows persistence UI.
-      LogNotImplementedAction("Save");
-    };
-    const auto triggerSaveAsStub = [&]() {
-      // TODO: Replace this stub with a real Save As flow when the
-      // in-tree editor grows a file chooser.
-      LogNotImplementedAction("Save As");
+    const auto triggerOpen = [&]() {
+      std::fill(openFilePathBuffer.begin(), openFilePathBuffer.end(), '\0');
+      if (app.currentFilePath().has_value()) {
+        std::strncpy(openFilePathBuffer.data(), app.currentFilePath()->c_str(),
+                     openFilePathBuffer.size() - 1);
+      }
+      openFileError.clear();
+      openFileModalRequested = true;
     };
     const auto triggerUndo = [&]() {
       if (app.canUndo()) {
@@ -1043,6 +1055,7 @@ int main(int argc, char** argv) {
       }
     };
     const auto triggerRedo = [&]() { app.redo(); };
+    const auto triggerQuit = [&]() { glfwSetWindowShouldClose(window, GLFW_TRUE); };
     const auto triggerZoomIn = [&]() { applyZoom(kKeyboardZoomStep, viewport.paneCenter()); };
     const auto triggerZoomOut = [&]() {
       applyZoom(1.0 / kKeyboardZoomStep, viewport.paneCenter());
@@ -1064,15 +1077,11 @@ int main(int argc, char** argv) {
       const bool pressedZ = ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false);
 
       if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
-        triggerOpenStub();
+        triggerOpen();
       }
 
-      if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
-        if (shift) {
-          triggerSaveAsStub();
-        } else {
-          triggerSaveStub();
-        }
+      if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
+        triggerQuit();
       }
 
       if (!sourcePaneFocused) {
@@ -1113,9 +1122,18 @@ int main(int argc, char** argv) {
       const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
                              ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
       if (deleteKey && app.hasSelection() && !anyPopupOpen && !ImGui::GetIO().WantCaptureKeyboard) {
-        const donner::svg::SVGElement element = *app.selectedElement();
+        const std::vector<donner::svg::SVGElement> selected = app.selectedElements();
         app.setSelection(std::nullopt);
-        app.applyMutation(donner::editor::EditorCommand::DeleteElementCommand(element));
+        for (const auto& element : selected) {
+          if (auto target = donner::editor::captureAttributeWritebackTarget(element);
+              target.has_value()) {
+            app.enqueueElementRemoveWriteback(
+                donner::editor::EditorApp::CompletedElementRemoveWriteback{
+                    .target = std::move(*target),
+                });
+          }
+          app.applyMutation(donner::editor::EditorCommand::DeleteElementCommand(element));
+        }
       }
     }
 
@@ -1124,19 +1142,17 @@ int main(int argc, char** argv) {
         if (ImGui::MenuItem("About...")) {
           openAboutPopup = true;
         }
+        if (ImGui::MenuItem("Quit Donner", "Cmd+Q")) {
+          triggerQuit();
+        }
         ImGui::EndMenu();
       }
 
       if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Open...", "Cmd+O")) {
-          triggerOpenStub();
+          triggerOpen();
         }
-        if (ImGui::MenuItem("Save", "Cmd+S")) {
-          triggerSaveStub();
-        }
-        if (ImGui::MenuItem("Save As...", "Cmd+Shift+S")) {
-          triggerSaveAsStub();
-        }
+        // TODO: Restore File → Save / Save As once persistence UI exists.
         ImGui::EndMenu();
       }
 
@@ -1208,6 +1224,68 @@ int main(int argc, char** argv) {
     }
     if (openAboutPopup) {
       ImGui::OpenPopup("About Donner SVG Editor");
+    }
+    if (openFileModalRequested) {
+      ImGui::OpenPopup("Open SVG");
+      openFileModalRequested = false;
+    }
+
+    {
+      const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+      ImGui::SetNextWindowSize(ImVec2(720.0f, 0.0f), ImGuiCond_Appearing);
+      ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f),
+                              ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("Open SVG", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Enter the SVG path to open.");
+        const bool submitted =
+            ImGui::InputText("Path", openFilePathBuffer.data(), openFilePathBuffer.size(),
+                             ImGuiInputTextFlags_EnterReturnsTrue);
+        if (!openFileError.empty()) {
+          ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", openFileError.c_str());
+        }
+
+        const auto tryOpenPath = [&]() {
+          const std::filesystem::path path(openFilePathBuffer.data());
+          std::ifstream file(path, std::ios::binary);
+          if (!file) {
+            openFileError = "Could not open file.";
+            return;
+          }
+
+          std::ostringstream out;
+          out << file.rdbuf();
+          const std::string contents = std::move(out).str();
+          if (!app.loadFromString(contents)) {
+            openFileError = "Failed to parse SVG.";
+            return;
+          }
+
+          textEditor.setText(contents);
+          textEditor.resetTextChanged();
+          previousSourceText = contents;
+          app.setCurrentFilePath(path.string());
+          pendingTransformWriteback.reset();
+          pendingElementRemoveWritebacks.clear();
+          pendingClick.reset();
+          textChangePending = false;
+          textDispatchThrottled = false;
+          textChangeIdleTimer = 0.0f;
+          lastHighlightedSelection.reset();
+          refreshPendingSelectionBoundsCache();
+          openFileError.clear();
+          ImGui::CloseCurrentPopup();
+        };
+
+        if (submitted || ImGui::Button("Open")) {
+          tryOpenPath();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+          openFileError.clear();
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
     }
 
     {
@@ -1410,8 +1488,8 @@ int main(int argc, char** argv) {
       // the matching document bitmap lands so the chrome and SVG stay
       // lock-step during drags.
       const auto& overlaySelection = app.selectedElements();
-      const bool selectionBoundsChanged = overlaySelection != lastSelectionBoundsSelectionVec;
-      if (selectionBoundsChanged || currentVersion != lastSelectionBoundsVersion) {
+      const bool selectionBoundsChanged = overlaySelection != selectionBoundsCache.lastSelection;
+      if (selectionBoundsChanged || currentVersion != selectionBoundsCache.lastRefreshVersion) {
         refreshPendingSelectionBoundsCache();
       }
 
@@ -1608,7 +1686,7 @@ int main(int argc, char** argv) {
       }
 
       for (const donner::Box2d& screenRect : donner::editor::ComputeSelectionAabbScreenRects(
-               viewport, std::span<const donner::Box2d>(displayedSelectionBoundsDoc))) {
+               viewport, std::span<const donner::Box2d>(selectionBoundsCache.displayedBoundsDoc))) {
         paneDrawList->AddRect(ImVec2(static_cast<float>(screenRect.topLeft.x),
                                      static_cast<float>(screenRect.topLeft.y)),
                               ImVec2(static_cast<float>(screenRect.bottomRight.x),

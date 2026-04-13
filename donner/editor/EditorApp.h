@@ -116,9 +116,7 @@ public:
   /// nothing is selected. Multi-element selections come from
   /// shift+click and marquee-drag (Milestone 4 of the editor UX
   /// design doc).
-  [[nodiscard]] const std::vector<svg::SVGElement>& selectedElements() const {
-    return selection_;
-  }
+  [[nodiscard]] const std::vector<svg::SVGElement>& selectedElements() const { return selection_; }
 
   /// Single-element accessor for back-compat with single-select call
   /// sites (overlay chrome, source-pane highlight, drag writeback,
@@ -228,6 +226,10 @@ public:
     Transform2d transform;
   };
 
+  struct CompletedElementRemoveWriteback {
+    AttributeWritebackTarget target;
+  };
+
   /// Queue a transform writeback that `main.cc` will splice into the
   /// source on its next `applyPendingTransformWriteback()` call. SelectTool
   /// calls this when a drag completes; `undo()` / `redo()` call it so
@@ -246,6 +248,19 @@ public:
   [[nodiscard]] std::optional<CompletedTransformWriteback> consumeTransformWriteback() {
     auto result = std::move(pendingTransformWriteback_);
     pendingTransformWriteback_.reset();
+    return result;
+  }
+
+  /// Queue an element-removal writeback that `main.cc` will splice into the
+  /// source on its next drain.
+  void enqueueElementRemoveWriteback(CompletedElementRemoveWriteback writeback) {
+    pendingElementRemoveWritebacks_.push_back(std::move(writeback));
+  }
+
+  /// Drain any queued element-removal writebacks.
+  [[nodiscard]] std::vector<CompletedElementRemoveWriteback> consumeElementRemoveWritebacks() {
+    auto result = std::move(pendingElementRemoveWritebacks_);
+    pendingElementRemoveWritebacks_.clear();
     return result;
   }
 
@@ -271,6 +286,7 @@ private:
   bool structuredEditingEnabled_ = false;
 
   std::optional<CompletedTransformWriteback> pendingTransformWriteback_;
+  std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
 
   std::optional<std::string> currentFilePath_;
   bool isDirty_ = false;

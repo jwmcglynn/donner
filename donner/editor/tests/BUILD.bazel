@@ -92,8 +92,10 @@ donner_cc_test(
         "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
+        "//donner/editor:selection_aabb",
         "//donner/editor:text_patch",
         "//donner/svg",
+        "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
     ],
 )
