@@ -113,12 +113,27 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     RendererDriver driver(*renderer_);
     driver.draw(*document_);
     rootDirty_ = false;
+    documentPrepared_ = true;
     return;
   }
 
-  // Prepare the document (styles, layout, render tree).
-  ParseWarningSink warningSink;
-  RendererUtils::prepareDocumentForRendering(*document_, /*verbose=*/false, warningSink);
+  // Only prepare the document when it hasn't been prepared yet or when dirty.
+  // prepareDocumentForRendering rebuilds the render instance tree, which is expensive.
+  // During drag (composition transform changes only), we skip preparation since the
+  // document content hasn't changed.
+  if (!documentPrepared_ || rootDirty_) {
+    ParseWarningSink warningSink;
+    RendererUtils::prepareDocumentForRendering(*document_, /*verbose=*/false, warningSink);
+    documentPrepared_ = true;
+
+    // After preparation, clear the needsFullRebuild flag so consumeDirtyFlags doesn't
+    // re-trigger a full rebuild on the next frame. The render tree instantiation process
+    // leaves needsFullRebuild=true as a side effect of invalidateRenderTree(); we consume
+    // that signal here.
+    if (document_->registry().ctx().contains<components::RenderTreeState>()) {
+      document_->registry().ctx().get<components::RenderTreeState>().needsFullRebuild = false;
+    }
+  }
 
   // Check dirty flags on promoted entities.
   consumeDirtyFlags();

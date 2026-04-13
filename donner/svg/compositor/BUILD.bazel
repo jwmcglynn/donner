@@ -79,3 +79,19 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "compositor_perf_tests",
+    size = "large",
+    srcs = [
+        "CompositorPerf_tests.cc",
+    ],
+    tags = ["perf"],
+    deps = [
+        ":compositor",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_utils",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

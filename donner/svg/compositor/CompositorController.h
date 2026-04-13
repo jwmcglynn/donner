@@ -179,6 +179,7 @@ private:
   /// Cached root layer bitmap (everything not in a promoted layer).
   RendererBitmap rootBitmap_;
   bool rootDirty_ = true;
+  bool documentPrepared_ = false;
 };
 
 }  // namespace donner::svg::compositor
