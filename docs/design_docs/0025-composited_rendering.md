@@ -30,10 +30,12 @@ as output.
 ## Goals
 
 1. **60 fps dragging a single promoted shape in a 10,000-node scene on an
-   Apple M1** (16 ms frame budget). Measured as time from
-   `EditorApp::applyMutation(TransformSet)` through composited frame
-   completion, excluding display sync. Baseline today: >200 ms for 10k
-   nodes.
+   Apple M1** (16.67 ms frame budget). Measured as time from composition
+   transform update through composited frame completion, excluding
+   display sync. Expected per-frame cost: ~5 ms on TinySkia (CPU blit
+   + premultiply-aware path), ~3 ms on Skia (saveLayer + drawImage),
+   <1 ms on Geode (GPU texture blit). Baseline today: >200 ms for
+   10k nodes (full re-render).
 
 2. **Pixel-identical composited output.** For every test in
    `renderer_tests` and `resvg_test_suite`, the composited path must
@@ -42,10 +44,14 @@ as output.
    be enumerated explicitly and capped at ≤2 LSB per channel, ≤0.1% of
    pixels).
 
-3. **Correctness verification in every CI run.** Debug builds run *both*
-   paths (full render + composited) on a subset of the test suite and
-   fail on any drift. This is not optional — it is the mechanism that
-   keeps the fast path honest.
+3. **Correctness verification in every CI run.** A Bazel test flag
+   (`--//donner/svg/compositor:dual_path_assertion=true`) enables the
+   dual-path assertion that runs *both* paths (full render + composited)
+   on a subset of the test suite and fails on any drift. This is always
+   enabled in CI and compositor-specific test targets. It is NOT
+   enabled in debug builds globally (the per-frame cost of two full
+   renders would break interactive debugging). Developers can opt-in
+   locally via `--config=compositor-debug`.
 
 4. **No backend-specific compositor code.** The compositor is a single
    implementation in `donner::svg::compositor` that emits calls through
@@ -1071,16 +1077,26 @@ different output from the full render.
 
 ### Dual-path debug assertion
 
-In debug builds (`-c dbg`), `CompositorController::renderFrame()` runs
-*both* the composited path and a full re-render, then compares the
-results pixel-by-pixel. On mismatch, it:
+When enabled via the Bazel flag
+`--//donner/svg/compositor:dual_path_assertion=true` (or
+`--config=compositor-debug`), `CompositorController::renderFrame()`
+runs *both* the composited path and a full re-render, then compares
+the results pixel-by-pixel. On mismatch, it:
 
 1. Logs the differing pixel coordinates and values.
 2. Writes both bitmaps to a temp directory for inspection.
 3. Fires `UTILS_RELEASE_ASSERT_MSG` with a descriptive message.
 
-This is expensive (2× render cost) and disabled in release builds. It
-catches drift that might not be exercised by the fixed test corpus.
+This is expensive (2× render cost) and is always enabled in CI
+compositor test targets. It is NOT enabled globally in debug builds
+(the per-frame cost would make interactive debugging unusable).
+Developers opt-in locally via `--config=compositor-debug`.
+
+**Snap to integer pixels:** During composition, all translation
+offsets are snapped to integer device pixels before the blit. This
+prevents sub-pixel filtering from introducing differences between
+the composited and full-render paths. The snap is performed as
+`round(offset)` in device-pixel coordinates.
 
 ### Property-test-style random scenes
 
@@ -1189,17 +1205,50 @@ already enforced by the parser and renderer. Specifically:
 
 **Goal:** Fluid drag of ONE promoted shape with correctness guarantees.
 
-- [ ] Create `donner/svg/compositor/` package with Bazel targets.
-- [ ] Implement `CompositorLayer` with bitmap cache and dirty tracking.
-- [ ] Implement `LayerMembershipComponent` ECS component.
-- [ ] Implement `CompositorController` with `promoteEntity` / `demoteEntity`.
-- [ ] Implement `prepareFrame()`: consume `DirtyFlagsComponent`, mark dirty layers.
-- [ ] Implement layer rasterization via `createOffscreenInstance()` + `drawEntityRange()`.
-- [ ] Implement composition pass: blit layers via `drawImage()`.
-- [ ] Implement `setLayerCompositionTransform()` for translation-only drag.
-- [ ] Wire editor drag workflow: promote on mouse-down, update transform on move, demote on up.
-- [ ] Dual-path correctness test: single-layer composited == full render for all `renderer_tests`.
-- [ ] Performance benchmark: 10k-element scene, single-element drag, measure per-frame time.
+**Prerequisites (must exist before implementation begins):**
+
+- `Transform2d::isTranslation()` — add to `donner/base/Transform.h`.
+  Returns `true` when `a() == 1 && b() == 0 && c() == 0 && d() == 1`
+  (i.e., only `e` and `f` translation components are non-zero).
+- `AlphaType` enum and `premultiplied` flag on `RendererBitmap` —
+  required for correctness of the `takeSnapshot()` → `drawImage()` path
+  (see § `RendererBitmap` adapter).
+- `createOffscreenInstance()` override in at least TinySkia and Skia
+  (already implemented). Geode override is optional for v1 (gated).
+
+**Implementation steps (correctness-first order):**
+
+1. Create `donner/svg/compositor/` package with Bazel targets.
+   - *Verify:* `bazel build //donner/svg/compositor/...` succeeds.
+2. Implement `CompositorLayer` with bitmap cache and dirty tracking.
+   - *Verify:* Unit test: construct layer, set dirty, verify state.
+3. Implement `LayerMembershipComponent` ECS component.
+   - *Verify:* Unit test: attach to entity, verify retrieval.
+4. Implement `CompositorController` with `promoteEntity` / `demoteEntity`.
+   - *Verify:* Unit test: promote/demote, verify layer creation/destruction
+     and `LayerMembershipComponent` lifecycle.
+5. **Wire dual-path debug assertion harness** (before any fast path).
+   - *Verify:* With assertion enabled, full-render == composited for a
+     trivial scene (single rect, no promotion). This proves the
+     assertion infrastructure works before fast-path code lands.
+6. Implement `prepareFrame()`: consume `DirtyFlagsComponent`, mark dirty layers.
+   - *Verify:* Unit test: modify entity, verify layer marked dirty.
+7. Implement layer rasterization via `createOffscreenInstance()` + `drawEntityRange()`.
+   - *Verify:* Integration test: promote one rect, rasterize its layer,
+     pixel-diff against full render of just that rect.
+8. Implement composition pass: blit layers via `drawImage()`.
+   - *Verify:* Integration test: full scene with one promoted rect,
+     composited output == full render (threshold=0).
+9. Implement `setLayerCompositionTransform()` for translation-only drag.
+   - *Verify:* Integration test: translate promoted rect by (10, 20),
+     composited output == full render with translated rect.
+10. Wire editor drag workflow: promote on mouse-down, update transform
+    on move, demote on up.
+    - *Verify:* Editor integration test: simulate drag sequence, verify
+      promote/demote lifecycle and frame output.
+11. Performance benchmark: 10k-element scene, single-element drag,
+    measure per-frame time.
+    - *Verify:* Assert < 16.67 ms on CI hardware (Apple M1 or equivalent).
 
 ### Phase 2: Mandatory promotion + multi-layer
 
@@ -1207,7 +1256,7 @@ already enforced by the parser and renderer. Specifically:
 - [ ] Multi-layer composition ordering.
 - [ ] Cross-layer clip-path handling (de-promote within clipped groups).
 - [ ] Compositor golden tests for all correctness edge cases.
-- [ ] Dual-path debug assertion in debug builds.
+- [ ] Dual-path assertion enabled in CI compositor test targets.
 
 ### Phase 3: Backend optimizations (deferred)
 
