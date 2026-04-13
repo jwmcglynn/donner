@@ -1062,7 +1062,7 @@ EXCLUDE_SYMLINKS       = NO
 # Note that the wildcards are matched against the file with absolute path, so to
 # exclude all test directories for example use the pattern */test/*
 
-EXCLUDE_PATTERNS       = *.py */donner/donner/*.cc */AGENTS.md */.claude/* */worktrees/* */tests/*.h *TestUtils.h MockTextBackend.h */design_template.md */developer_template.md
+EXCLUDE_PATTERNS       = *.py */donner/donner/*.cc */AGENTS.md */.claude/* */worktrees/* */tests/*.h */tests/*.cc *TestUtils.h MockTextBackend.h */design_template.md */developer_template.md
 
 # The EXCLUDE_SYMBOLS tag can be used to specify one or more symbol names
 # (namespaces, classes, functions, etc.) that should be excluded from the
