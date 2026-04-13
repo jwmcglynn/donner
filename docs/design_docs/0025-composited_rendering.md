@@ -1,0 +1,1010 @@
+# Design: Composited Rendering
+
+**Status:** Draft
+**Author:** Claude Opus 4.6
+**Created:** 2026-04-13
+
+## Summary
+
+When a user drags a shape in Donner's editor, today's pipeline re-rasterizes
+the entire document every frame — `O(N)` work regardless of what changed. This
+design introduces a **compositor** that caches rasterized content in off-screen
+backing stores (layers), so frame-to-frame cost during interactive manipulation
+is proportional to the number of *changed* layers, not total scene complexity.
+
+The compositor sits between the ECS computed tree and the
+`RendererInterface` backends. It is a shared, backend-agnostic component:
+one implementation drives TinySkia, Skia, and Geode through a narrow
+primitive set that each backend already (mostly) exposes. The critical
+invariant is **pixel-identical correctness** — composited output must match
+a full re-render within a precisely defined tolerance, verified
+continuously in tests.
+
+This design builds on [0005-incremental_invalidation](0005-incremental_invalidation.md)
+(dirty-flag propagation from DOM mutations through the ECS pipeline) and
+[0020-editor](0020-editor.md) (editor interaction model, mutation seam,
+drag/select tools). It does *not* duplicate their work — it consumes
+`DirtyFlagsComponent` as input and produces layer-level dirty notifications
+as output.
+
+## Goals
+
+1. **60 fps dragging a single promoted shape in a 10,000-node scene on an
+   Apple M1** (16 ms frame budget). Measured as time from
+   `EditorApp::applyMutation(TransformSet)` through composited frame
+   completion, excluding display sync. Baseline today: >200 ms for 10k
+   nodes.
+
+2. **Pixel-identical composited output.** For every test in
+   `renderer_tests` and `resvg_test_suite`, the composited path must
+   produce output that matches the full-render path with `threshold=0,
+   maxDiffPixels=0` (excluding documented AA-tolerance cases, which must
+   be enumerated explicitly and capped at ≤2 LSB per channel, ≤0.1% of
+   pixels).
+
+3. **Correctness verification in every CI run.** Debug builds run *both*
+   paths (full render + composited) on a subset of the test suite and
+   fail on any drift. This is not optional — it is the mechanism that
+   keeps the fast path honest.
+
+4. **No backend-specific compositor code.** The compositor is a single
+   implementation in `donner::svg::compositor` that emits calls through
+   `RendererInterface`. Backend-specific optimizations (Skia's
+   `SkPicture` cache, Geode's GPU texture retention) live behind the
+   existing `RendererInterface` virtuals or backend-internal caches, not
+   in compositor logic.
+
+5. **Editor integration via explicit promotion API.** The editor tells
+   the compositor "this entity is a drag target" through a typed API
+   (`CompositorController::promoteEntity`), not through CSS heuristics
+   alone. Promotion is always reversible.
+
+## Non-Goals
+
+1. **Sub-layer partial re-rasterization** (dirty rectangles within a
+   single layer). v1 re-rasterizes the entire layer when any element in
+   it changes. Tile-level invalidation is future work.
+
+2. **Automatic promotion heuristics** beyond the mandatory cases
+   (opacity < 1, filter, mask, `isolation: isolate`). v1 promotes only
+   what the editor explicitly requests or what SVG semantics force. CSS
+   `will-change` is parsed but not acted on until v2.
+
+3. **Concurrent/parallel layer rasterization.** Layers are rasterized
+   sequentially on the calling thread. Thread-pool rasterization is a
+   follow-up optimization.
+
+4. **Animation-driven promotion.** SMIL/CSS animation does not
+   auto-promote elements. The animation system marks dirty flags per
+   [0005](0005-incremental_invalidation.md); the compositor consumes
+   those flags like any other mutation.
+
+5. **Perspective transforms.** SVG2 does not define perspective. The
+   compositor handles affine transforms only. If a future CSS
+   `perspective` extension lands, the compositor falls back to full
+   re-render for affected subtrees.
+
+6. **Video or streaming content layers.** Layers contain static
+   rasterized content only.
+
+7. **Layer count optimization / automatic merging.** v1 does not merge
+   adjacent layers to reduce composition cost. Manual promotion is the
+   only mechanism.
+
+## Terminology
+
+| Term | Definition |
+|------|-----------|
+| **Layer** | An off-screen pixel buffer (backing store) containing the rasterized content of one or more elements. Identified by a `LayerId`. |
+| **Composition tree** | A flat, draw-order-sorted list of layers with associated transforms, opacity, blend mode, clip, and mask metadata. The compositor walks this list to produce the final frame. |
+| **Promoted element** | An element that has been assigned its own layer (backing store). All other elements share the *root layer*. |
+| **Root layer** | The default layer containing all non-promoted elements. Always exists, always layer 0. |
+| **Damage region** | The axis-aligned bounding box (in device pixels) of all pixels that changed between frames. Used to limit the composition blit area. |
+| **Layer promotion** | The act of assigning an element (and optionally its subtree) its own backing store. |
+| **Demotion** | Returning a promoted element to the root layer, releasing its backing store. |
+| **Compositor** | The component that manages layers, tracks damage, and composes layers into the final frame buffer. Does not rasterize — it delegates rasterization to `RendererInterface`. |
+| **Fast path** | The composited rendering path: rasterize only dirty layers, compose all. |
+| **Ground truth** | The full-render path: rasterize everything from scratch via `RendererDriver`. |
+
+## High-Level Architecture
+
+### Where the compositor sits
+
+```
+  DOM mutations
+       │
+       ▼
+  DirtyFlagsComponent  (from 0005-incremental_invalidation)
+       │
+       ▼
+  createComputedComponents()  ── selective recompute (style/layout/shape/paint)
+       │
+       ▼
+  instantiateRenderTree()  ── RenderingInstanceComponent, sorted by drawOrder
+       │
+       ▼
+  ┌────────────────────────────┐
+  │  CompositorController      │  ◄── NEW: this design
+  │  (donner/svg/compositor/)  │
+  │                            │
+  │  • Layer management        │
+  │  • Dirty layer tracking    │
+  │  • Composition pass        │
+  └─────────┬──────────────────┘
+            │ emits RendererInterface calls
+            ▼
+  ┌──────────────────────────┐
+  │  RendererInterface       │
+  │  (unchanged API)         │
+  └──────┬──────┬──────┬─────┘
+         │      │      │
+    TinySkia  Skia   Geode
+```
+
+### Why a shared compositor, not backend-specific
+
+Three arguments:
+
+1. **Correctness is the hard part, not rasterization.** The compositor's
+   job is deciding *what* to rasterize and *how* to compose. This logic
+   (layer assignment, damage tracking, blend/clip/mask composition order)
+   is identical regardless of whether pixels come from CPU or GPU. A
+   single implementation means one correctness proof, not three.
+
+2. **`RendererInterface` already abstracts rasterization.** The
+   compositor needs: "rasterize these entities into this buffer" and
+   "blit this buffer onto that buffer with this transform/opacity/blend."
+   Both are expressible through existing `RendererInterface` primitives
+   (`beginFrame`/`endFrame`, `drawImage`, `pushIsolatedLayer`,
+   `setTransform`). No new virtuals are needed for v1.
+
+3. **Backend-specific optimizations compose.** Skia can internally cache
+   `SkPicture` recordings per layer. Geode can retain GPU textures
+   across frames. These optimizations live *inside* the backend's
+   `RendererInterface` implementation, invisible to the compositor. The
+   compositor doesn't need to know — it just calls `drawImage` with a
+   `RendererBitmap` and the backend decides how to upload it.
+
+The risk is that the shared compositor cannot exploit backend-specific
+composition hardware (e.g., Geode could compose layers via GPU texture
+blits without CPU readback). This is acceptable for v1 because the
+bottleneck is rasterization, not composition. v2 can add an optional
+`RendererInterface::composeLayer()` fast path that GPU backends override.
+
+### Key components
+
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| `CompositorController` | `donner/svg/compositor/CompositorController.h` | Public API. Manages layer lifecycle, processes dirty flags, orchestrates rasterization and composition. |
+| `CompositorLayer` | `donner/svg/compositor/CompositorLayer.h` | Represents one layer: backing store (`RendererBitmap`), entity membership set, dirty flag, cached world-space bounds, opacity/blend/clip metadata. |
+| `CompositionTree` | `donner/svg/compositor/CompositionTree.h` | Draw-order-sorted list of `CompositorLayer`s with composition metadata. Rebuilt when layer membership or z-order changes. |
+| `DamageTracker` | `donner/svg/compositor/DamageTracker.h` | Computes dirty rectangles from layer dirty flags and transform changes. |
+| `LayerMembershipComponent` | `donner/svg/components/LayerMembershipComponent.h` | ECS component on each entity: which `LayerId` it belongs to. Entities without this component are in the root layer. |
+| `CompositorPromotionComponent` | `donner/svg/components/CompositorPromotionComponent.h` | ECS component marking an entity as explicitly promoted (by editor or by SVG semantics). Records promotion reason. |
+
+### Data flow per frame
+
+```
+1. Editor drains command queue → marks DirtyFlagsComponent on entities
+
+2. createComputedComponents() runs incremental recompute
+   (style/layout/shape/paint for dirty entities only)
+
+3. CompositorController::prepareFrame(registry)
+   a. Check DirtyFlagsComponent on all entities
+   b. For each dirty entity: look up LayerMembershipComponent → mark layer dirty
+   c. If draw order changed (tree mutation): rebuild CompositionTree
+   d. If promoted entity's subtree changed: update layer bounds
+
+4. For each dirty layer:
+   a. Create offscreen RendererInterface instance (createOffscreenInstance())
+   b. Call RendererDriver::drawEntityRange() for entities in that layer
+   c. Store resulting RendererBitmap in CompositorLayer
+
+5. Composition pass:
+   a. beginFrame() on main render target
+   b. For each layer in draw order:
+      - setTransform(layer.compositionTransform)
+      - If layer has opacity < 1 or blend != Normal:
+          pushIsolatedLayer(opacity, blendMode)
+      - drawImage(layer.bitmap, layer.targetRect)
+      - Pop isolated layer if pushed
+   c. endFrame()
+```
+
+## Layer Promotion Policy
+
+### Mandatory promotion (SVG semantics force isolation)
+
+These elements *must* get their own layer because SVG compositing
+semantics require group isolation. The compositor detects these by
+inspecting `RenderingInstanceComponent`:
+
+| Trigger | Detection | Reason |
+|---------|-----------|--------|
+| `opacity < 1.0` | `RenderingInstanceComponent::isolatedLayer == true` | Group opacity requires compositing the subtree as a unit, then applying opacity to the result. Without a layer, opacity would apply per-element. |
+| `filter` applied | `RenderingInstanceComponent::resolvedFilter.has_value()` | Filter effects operate on the composited subtree result. |
+| `mask` applied | `RenderingInstanceComponent::mask.has_value()` | Mask compositing requires an intermediate surface. |
+| `mix-blend-mode != normal` | `isolatedLayer == true` (already triggered by RendererDriver) | Non-normal blend modes require group isolation. |
+| `isolation: isolate` | `isolatedLayer == true` | Explicit CSS isolation. |
+
+**v1 simplification:** Mandatory-promotion layers are *not* cached across
+frames in v1. They are re-rasterized whenever any element in their subtree
+is dirty, same as today. The compositor simply avoids re-rasterizing
+*other* layers. This is conservative but correct — it matches the current
+`pushIsolatedLayer`/`popIsolatedLayer` behavior exactly.
+
+### Editor-requested promotion (drag targets)
+
+The editor explicitly promotes elements via
+`CompositorController::promoteEntity(entity, reason)`. Reasons:
+
+| Reason | When | Backing store lifetime |
+|--------|------|----------------------|
+| `DragTarget` | User starts dragging an element. | Promoted on mouse-down, demoted on mouse-up + idle timeout (500 ms). |
+| `WillChange` | CSS `will-change: transform` parsed. | Promoted when style is computed, demoted when property removed. |
+| `EditorHint` | Editor marks element for performance (future). | Manual promote/demote. |
+
+Editor-promoted layers are the primary optimization target. During a drag:
+
+1. The dragged element's layer is *not* re-rasterized (only its
+   composition transform changes).
+2. The root layer is *not* re-rasterized (nothing in it changed).
+3. Only the composition pass runs: blit root layer + blit drag layer
+   at new position.
+
+This reduces per-frame cost from `O(N)` rasterization to `O(L)` blits
+where `L` is the number of layers (typically 2 during a drag).
+
+### What does NOT get promoted
+
+- Individual elements in a dragged group. The group's subtree shares one
+  layer.
+- Elements the user is not interacting with, regardless of complexity.
+- Elements with only color/paint changes (re-rasterize in root layer).
+
+## Damage Tracking
+
+### Input: ECS change set
+
+After `createComputedComponents()`, dirty entities still have their
+`DirtyFlagsComponent` attached (cleared at end of frame). The
+`DamageTracker` consumes these:
+
+```cpp
+struct DamageInfo {
+  /// Layers that need re-rasterization.
+  SmallVector<LayerId, 4> dirtyLayers;
+
+  /// Union of old and new screen-space bounds of all dirty layers.
+  /// Used to limit the composition blit region.
+  Box2i
+ damageRect;
+
+  /// If true, the entire frame must be recomposed (layer order changed,
+  /// layer added/removed, or viewport resized).
+  bool fullRecompose = false;
+};
+```
+
+### Computing dirty rectangles
+
+For each entity with `DirtyFlagsComponent`:
+
+1. **Look up `LayerMembershipComponent`** → `LayerId`. Mark that layer
+   dirty.
+
+2. **Compute screen-space damage.** The damage region is the union of:
+   - The entity's *previous* screen-space bounds (cached on the layer).
+   - The entity's *current* screen-space bounds (from
+     `ComputedAbsoluteTransformComponent` + shape bounds).
+
+   This handles the case where an element moves: the old position must
+   be repainted (by the layer behind it) and the new position must be
+   painted.
+
+3. **Transform changes on promoted layers** are special: if *only* the
+   `WorldTransform` flag is set on a promoted element (no `Style`,
+   `Shape`, or `Paint` changes), the layer does **not** need
+   re-rasterization — only the composition transform changes. This is
+   the drag fast path.
+
+### Viewport boundary crossings
+
+When a promoted layer's screen-space bounds exit the viewport, the
+compositor does not rasterize it (off-screen culling). When it re-enters,
+the compositor must re-rasterize if the cached bitmap is stale. The
+`CompositorLayer` tracks a `viewportIntersects` flag; transitions from
+`false → true` force re-rasterization.
+
+### Structural changes (z-order, tree mutations)
+
+If `RenderTreeState::needsFullRebuild` is set (tree structure changed),
+the compositor:
+
+1. Rebuilds the `CompositionTree` from scratch.
+2. Re-assigns all `LayerMembershipComponent`s.
+3. Marks all layers dirty.
+4. Falls through to full re-rasterization.
+
+This is the conservative path. It is correct because it degrades to
+today's behavior. Optimizing structural changes (e.g., only rebuilding
+affected subtree layers) is future work.
+
+## Composition Pass
+
+The composition pass blits cached layer bitmaps onto the final render
+target. It runs every frame, even when no layers are dirty (because the
+viewport may have scrolled or the editor overlay needs redrawing).
+
+### Layer ordering
+
+Layers are sorted by the minimum `drawOrder` of their member entities.
+This preserves SVG paint order.
+
+### Composition operations per layer
+
+For each layer in draw order:
+
+```
+1. setTransform(layer.compositionTransform)
+   // compositionTransform = deviceFromWorld * layer.worldOffset
+   // For non-promoted layers, this is identity.
+   // For promoted layers during drag, this incorporates the drag delta.
+
+2. If layer.opacity < 1.0 || layer.blendMode != Normal:
+     pushIsolatedLayer(layer.opacity, layer.blendMode)
+
+3. If layer.clipPath.has_value():
+     pushClip(layer.resolvedClip)
+
+4. If layer.mask.has_value():
+     pushMask(layer.maskBounds)
+     // render mask content from cached mask layer
+     transitionMaskToContent()
+
+5. drawImage(layer.bitmap, layer.targetRect)
+
+6. Pop mask/clip/isolated layer in reverse order
+```
+
+### Filters during composition
+
+Filters are applied during *layer rasterization*, not during composition.
+When an element with a filter is rasterized into its layer, the filter
+pipeline runs as part of that rasterization (via `pushFilterLayer` /
+`popFilterLayer` on the offscreen `RendererInterface`). The compositor
+blits the filter's *output* — no filter logic in the composition pass.
+
+### Clip-path during composition
+
+Clip-paths that apply to a promoted element are resolved during layer
+rasterization (the offscreen pass clips to the element's clip-path).
+Clip-paths that apply to a *group* containing both promoted and
+non-promoted elements are handled by clipping the composition blit — the
+compositor applies the group's clip to the blitted layer bitmap.
+
+If a clip-path references geometry that *itself* changes (e.g., an
+animated clip), the compositor marks the affected layer dirty for
+re-rasterization. Clip-path-only changes are not compositable — the layer
+must be re-rasterized because the clip boundary changed.
+
+## Correctness Analysis
+
+This is the critical section. For each rendering feature, we enumerate
+whether the composited fast path produces identical output, and if not,
+what safeguard prevents drift.
+
+### Affine transforms
+
+**Claim: exact.** Promoted layers cache rasterized content in the layer's
+local coordinate space. During composition, the layer bitmap is blitted
+with the layer's world transform applied via `setTransform()` +
+`drawImage()`. For pure translation (the drag case), this is a
+pixel-aligned blit — no resampling, no error.
+
+For rotation/scale composition transforms, `drawImage()` resamples the
+cached bitmap. This produces output *different* from rasterizing the
+vector geometry directly at the final transform because of
+rasterization-then-transform vs. transform-then-rasterize ordering.
+
+**Safeguard:** The compositor rasterizes promoted layers at a fixed
+transform (the layer's world transform at promotion time). If the
+composition transform diverges from identity by more than pure
+translation, the compositor marks the layer for re-rasterization at the
+new transform. During drag, the editor constrains mutations to
+translation-only transforms. Rotation/scale drags trigger
+re-rasterization every frame (degrading to full-render cost for that
+layer, but not for the rest of the scene).
+
+**Conservative rule:** If `compositionTransform` is not a pure
+translation (checked via `Transform2d::isTranslation()`), re-rasterize
+the layer. This preserves pixel-identical output at the cost of losing
+the fast path for non-translational drags.
+
+### Perspective transforms
+
+**Not applicable.** SVG2 does not define perspective transforms. If CSS
+`perspective` or `transform: perspective(...)` is encountered, the parser
+ignores it (falls through to `none`). No compositor path needed.
+
+### Opacity
+
+**Claim: exact for promoted layers, under a constraint.**
+
+Group opacity (opacity < 1 on a `<g>` element) requires compositing the
+group as a unit, then applying opacity. The compositor handles this by
+rasterizing the group into its layer at full opacity, then applying
+opacity during the composition blit via `pushIsolatedLayer(opacity)`.
+This matches `RendererDriver`'s existing behavior exactly because
+`RendererDriver` already uses `pushIsolatedLayer` for the same purpose.
+
+**Constraint:** If opacity changes between frames (e.g., animated
+opacity), the compositor must re-compose with the new opacity value.
+The layer bitmap does *not* need re-rasterization — only the composition
+opacity parameter changes. `DirtyFlagsComponent::RenderInstance`
+triggers a recompose but not a re-rasterize when only opacity changed.
+
+**Edge case: opacity on a promoted element that is also a drag target.**
+The drag delta is a translation on the composition transform, and
+opacity is applied during composition. These compose correctly because
+opacity is multiplicative and translation-invariant.
+
+### Clip-path
+
+**Claim: exact for static clip-paths. Conservative fallback for dynamic
+clip-paths.**
+
+Static clip-paths (geometry doesn't change between frames) are applied
+during layer rasterization. The layer bitmap includes the clip — no clip
+logic during composition. This is exact because the clip is applied to
+vector geometry before rasterization, identical to the full-render path.
+
+If a clip-path's geometry changes (shape mutation, animated clip),
+`DirtyFlagsComponent::Shape` on the clip-path entity triggers
+re-rasterization of all layers that reference it. This is detected via a
+reverse-reference map from clip-path entities to their consumers
+(analogous to the paint-server reverse map in
+[0005-incremental_invalidation](0005-incremental_invalidation.md)).
+
+**Clip-path on a group spanning multiple layers:** If a `<g clip-path>`
+contains both promoted and non-promoted children, the clip must apply to
+the *composed* result. The compositor handles this by:
+
+1. Composing the group's layers into a temporary buffer.
+2. Applying the clip to the temporary buffer.
+3. Blitting the clipped result to the final target.
+
+This adds one temporary buffer allocation. If this proves too expensive,
+the fallback is to de-promote children within clipped groups (the
+group shares a single layer). v1 uses the de-promotion fallback.
+
+### Mask
+
+**Claim: conservative fallback.**
+
+Masks require rendering the mask content, converting to luminance, and
+applying as alpha. This is inherently a per-rasterization operation. The
+compositor does *not* attempt to cache mask bitmaps separately.
+
+**Rule:** Elements with masks always re-rasterize when marked dirty.
+The mask is applied during layer rasterization via the existing
+`pushMask` / `transitionMaskToContent` / `popMask` sequence. This is
+identical to today's full-render behavior.
+
+**Optimization opportunity (deferred):** Cache the mask bitmap separately
+and re-apply during composition when only the masked content changes (not
+the mask itself). This requires tracking mask dependencies, which adds
+complexity for marginal gain in v1.
+
+### Filter effects
+
+**Claim: conservative fallback.**
+
+Filter effects (`<filter>`) operate on the rasterized content of their
+input. The filter graph executes during layer rasterization via
+`pushFilterLayer` / `popFilterLayer`. The compositor blits the
+filter's output — it does not re-run filters during composition.
+
+**Rule:** If any element within a filtered subtree is dirty, the entire
+layer containing the filter host is re-rasterized (because the filter's
+input changed). Filter-only changes (e.g., `feGaussianBlur` stdDeviation
+animation) also trigger re-rasterization.
+
+**Why not cache filter output separately?** Filter graphs can have
+multiple inputs (`SourceGraphic`, `BackgroundImage`, other primitives).
+`BackgroundImage` depends on content *behind* the filtered element,
+which lives in a different layer. Caching filter output across layers
+requires solving cross-layer dependency tracking — too complex for v1.
+
+### mix-blend-mode
+
+**Claim: exact.** Non-normal blend modes already require isolated layer
+compositing in SVG. The compositor mirrors this: elements with
+`mix-blend-mode != normal` are promoted to their own layer (mandatory
+promotion), rasterized in isolation, and blitted with the specified blend
+mode during composition via `pushIsolatedLayer(opacity, blendMode)`.
+This matches `RendererDriver`'s existing behavior.
+
+**Edge case: `mix-blend-mode` on an element within a promoted drag
+layer.** The blend mode is applied during layer rasterization (the
+element is rasterized into the drag layer with its blend mode against
+other elements in that layer). During composition, the drag layer is
+blitted with `Normal` blend mode (unless the drag target itself has a
+non-normal blend mode, in which case the layer is blitted with that
+mode). This matches ground truth because the same isolation boundary
+exists in both paths.
+
+### Z-order changes
+
+**Claim: conservative fallback.**
+
+Any tree mutation that changes z-order (insertion, deletion, reordering)
+sets `RenderTreeState::needsFullRebuild`. The compositor responds by:
+
+1. Tearing down the `CompositionTree`.
+2. Rebuilding layer membership from scratch.
+3. Marking all layers dirty.
+4. Falling through to full re-rasterization + full recomposition.
+
+This is correct because it degrades to today's behavior. It is also rare
+during interactive editing — drag operations change transforms, not tree
+structure.
+
+### Inherited properties (currentColor, font-size units, text inheritance)
+
+**Claim: handled by incremental invalidation, not by the compositor.**
+
+Inherited property changes cascade `DirtyFlagsComponent::Style` to
+all descendants (per [0005-incremental_invalidation](0005-incremental_invalidation.md),
+§ Invalidation Propagation Rules). After `createComputedComponents()`
+runs, affected entities have updated `ComputedStyleComponent` values.
+The compositor sees these entities as dirty and re-rasterizes their
+layers.
+
+**Specific cases:**
+
+- **`currentColor` change on an ancestor:** Cascades `Style` dirty to all
+  descendants. All layers containing those descendants are re-rasterized.
+  Correct because the compositor always re-rasterizes dirty layers with
+  the latest computed styles.
+
+- **`font-size` change (affects `em`/`ex` units in descendants):**
+  Cascades `Style` + `Layout` dirty. Same path as above.
+
+- **Text inheritance (`font-family`, `text-anchor`, etc.):** Same path.
+  The compositor is downstream of style resolution and sees only the
+  final computed values.
+
+**No compositor-specific logic needed.** The correctness argument is:
+the compositor never uses stale computed styles because it only
+rasterizes after `createComputedComponents()` completes.
+
+### Overlapping transformed regions
+
+**Claim: exact for non-overlapping layers. Conservative fallback for
+overlapping promoted layers.**
+
+When two promoted layers overlap in screen space:
+
+- If neither is dirty, the cached composition is correct (nothing
+  changed).
+- If one is dirty and re-rasterized, the composition blits in draw
+  order. Because each layer's content is independently rasterized
+  against a transparent background, the composition order matches the
+  full-render paint order. This is exact.
+- If a drag moves a promoted layer to *newly overlap* with another
+  promoted layer, the composition is still exact because `drawImage`
+  with the correct blend mode (default: `SrcOver`) produces the same
+  result as if the elements were painted in that order.
+
+**Edge case: overlapping promoted layers with `BackgroundImage` filter
+input.** `BackgroundImage` captures content behind the current element.
+In a composited path, "behind" means previously composed layers — but if
+those layers were cached and not re-rasterized, the `BackgroundImage`
+may be stale.
+
+**Rule:** Elements using `BackgroundImage` or `BackgroundAlpha` filter
+inputs are *never* compositable. They force their layer and all layers
+they depend on to re-rasterize. Detection: scan `FilterGraph` inputs
+during promotion for `BackgroundImage`/`BackgroundAlpha` references.
+
+### Summary table
+
+| Feature | Fast-path correctness | Mechanism |
+|---------|----------------------|-----------|
+| Translation transform | Exact | Pixel-aligned blit |
+| Rotation/scale transform | Exact (re-rasterize) | Non-translation detected, layer re-rasterized |
+| Perspective | N/A | SVG2 doesn't define it |
+| Opacity (static) | Exact | Applied during composition blit |
+| Opacity (animated) | Exact | Recompose with new value, no re-rasterize |
+| Clip-path (static) | Exact | Applied during layer rasterization |
+| Clip-path (animated) | Exact (re-rasterize) | Dirty flag triggers re-rasterize |
+| Clip-path (cross-layer) | Exact (de-promote) | Children within clipped group share one layer |
+| Mask | Exact (re-rasterize) | Always re-rasterize masked layers |
+| Filter | Exact (re-rasterize) | Always re-rasterize filtered layers |
+| mix-blend-mode | Exact | Blended during composition, same as RendererDriver |
+| Z-order change | Exact (full rebuild) | Falls through to full re-render |
+| Inherited properties | Exact | Dirty flags cascade, layers re-rasterize |
+| Overlapping layers | Exact | SrcOver composition matches paint order |
+| BackgroundImage filter | Exact (never composite) | Disables fast path for affected elements |
+
+## Backend Integration
+
+### Minimum primitive set
+
+The compositor needs these `RendererInterface` primitives. All three
+backends already implement them:
+
+| Primitive | Used for | TinySkia | Skia | Geode |
+|-----------|----------|----------|------|-------|
+| `createOffscreenInstance()` | Layer rasterization into separate buffer | ✅ | ✅ | ✅ (via `GeoSurface`) |
+| `beginFrame()` / `endFrame()` | Frame lifecycle for offscreen and main targets | ✅ | ✅ | ✅ |
+| `drawImage()` | Blit layer bitmap to main target | ✅ | ✅ | ✅ (`GeodeImagePipeline`) |
+| `setTransform()` | Composition transform for layer blit | ✅ | ✅ | ✅ |
+| `pushIsolatedLayer()` / `popIsolatedLayer()` | Opacity/blend during composition | ✅ | ✅ | 🚧 (stub) |
+| `pushClip()` / `popClip()` | Clip during composition | ✅ | ✅ | 🚧 (stub) |
+| `pushMask()` / `popMask()` | Mask during layer rasterization | ✅ | ✅ | 🚧 (stub) |
+| `pushFilterLayer()` / `popFilterLayer()` | Filter during layer rasterization | ✅ (via `FilterGraphExecutor`) | ✅ | ❌ (future) |
+| `takeSnapshot()` | Extract layer bitmap for cross-layer composition | ✅ | ✅ | ✅ |
+| `RendererDriver::drawEntityRange()` | Rasterize a subset of entities | ✅ | ✅ | ✅ |
+
+### No new `RendererInterface` virtuals in v1
+
+The compositor uses `drawImage(ImageResource, ImageParams)` to blit
+layer bitmaps. The `RendererBitmap` from `takeSnapshot()` must be
+convertible to an `ImageResource` — this may require a small adapter
+(wrapping `RendererBitmap` pixel data in an `ImageResource` without
+copy), but no new virtual methods.
+
+### Skia-specific considerations
+
+Skia's `SkPicture` recording could cache draw commands per layer and
+replay them without re-traversing the ECS. This optimization lives
+entirely inside `RendererSkia` — the compositor calls `drawEntityRange()`
+and the backend decides internally whether to re-record or replay a
+cached picture. Not needed for v1 but a natural v2 optimization.
+
+### Geode-specific considerations
+
+Geode renders to GPU textures via `GeoSurface`. Layer bitmaps can be
+retained as GPU textures across frames, avoiding the CPU readback path
+(`takeSnapshot()` → `drawImage()`). In v1, the compositor goes through
+the CPU readback path for simplicity. v2 can add a `RendererInterface`
+method like `retainLayerTexture()` / `blitRetainedTexture()` that Geode
+overrides for zero-copy GPU composition.
+
+Geode's current `drawImage` implementation (`GeodeImagePipeline` +
+`GeodeTextureEncoder::drawTexturedQuad`) is already designed for this:
+it accepts pre-uploaded `wgpu::Texture` handles. The adapter would skip
+the CPU readback and pass the GPU texture directly.
+
+## Editor Interaction Model
+
+### API surface
+
+```cpp
+namespace donner::svg::compositor {
+
+enum class PromotionReason : uint8_t {
+  DragTarget,     ///< Editor drag in progress.
+  WillChange,     ///< CSS will-change: transform.
+  EditorHint,     ///< Manual editor hint.
+  Mandatory,      ///< SVG semantics (opacity, filter, mask, blend).
+};
+
+/// Public compositor API consumed by the editor.
+class CompositorController {
+public:
+  explicit CompositorController(Registry& registry);
+
+  /// Promote an entity to its own layer for the given reason.
+  /// If already promoted, adds the reason (reasons accumulate).
+  void promoteEntity(Entity entity, PromotionReason reason);
+
+  /// Remove a promotion reason. Layer is demoted when no reasons remain.
+  void demoteEntity(Entity entity, PromotionReason reason);
+
+  /// Update the composition-time transform for a promoted layer.
+  /// This is the fast path: no re-rasterization, only changes the
+  /// blit transform during composition.
+  void setLayerCompositionTransform(Entity entity,
+                                    const Transform2d& compositionTransform);
+
+  /// Prepare the frame: consume dirty flags, mark dirty layers.
+  /// Must be called after createComputedComponents().
+  DamageInfo prepareFrame();
+
+  /// Rasterize dirty layers and compose the final frame.
+  /// Calls into RendererInterface.
+  void renderFrame(RendererInterface& renderer,
+                   const RenderViewport& viewport);
+
+  /// Query whether compositing is active (at least one promoted layer).
+  [[nodiscard]] bool isActive() const;
+};
+
+}  // namespace donner::svg::compositor
+```
+
+### Editor drag workflow
+
+```
+1. Mouse down on element E:
+   editor calls CompositorController::promoteEntity(E, DragTarget)
+     → CompositorLayer created for E
+     → E's content rasterized into layer bitmap
+     → Root layer re-rasterized WITHOUT E (E is now in its own layer)
+
+2. Mouse move (drag delta = dx, dy):
+   editor calls CompositorController::setLayerCompositionTransform(
+       E, Transform2d::Translate(dx, dy))
+     → No rasterization. Only composition transform updated.
+     → renderFrame() blits root layer + E's layer at offset (dx, dy)
+     → Cost: O(L) blits, L = 2
+
+3. Mouse up:
+   editor calls EditorApp::applyMutation(TransformSet{E, finalTransform})
+     → DirtyFlagsComponent::Transform set on E
+     → createComputedComponents() updates E's world transform
+     → CompositorController demotes E after idle timeout
+     → E returns to root layer, root layer re-rasterized with E at
+       final position
+
+4. Idle timeout (500 ms after mouse up):
+   editor calls CompositorController::demoteEntity(E, DragTarget)
+     → Layer torn down, bitmap freed
+     → Root layer marked dirty, re-rasterized with E
+```
+
+### Promotion during drag does not trigger full re-render
+
+Key subtlety: when E is promoted (step 1), the root layer must be
+re-rasterized *without* E. This means one frame of full-rasterization
+cost at the start of the drag. Subsequent frames (step 2) are cheap.
+Similarly, demotion (step 4) triggers one re-rasterization. The cost
+model is:
+
+- Drag start: 1× full rasterization (root layer without E + E's layer)
+- Drag frames: 0× rasterization (composition only)
+- Drag end: 1× full rasterization (root layer with E at final position)
+
+For a 10,000-element scene at ~200 ms per full render, the drag start
+and end each cost ~200 ms (one frame drop), but all intervening drag
+frames are <1 ms (composition only). This is the target behavior.
+
+## Verification Strategy
+
+### Pixel-diff in tests
+
+Every `renderer_tests` and `resvg_test_suite` test case gains a second
+execution mode: render via the composited path with a trivially promoted
+root layer (all elements in one layer). Compare against the ground-truth
+full-render. Threshold: `maxDiffPixels=0, threshold=0`.
+
+This runs in CI on every PR. It catches any compositor bug that produces
+different output from the full render.
+
+### Dual-path debug assertion
+
+In debug builds (`-c dbg`), `CompositorController::renderFrame()` runs
+*both* the composited path and a full re-render, then compares the
+results pixel-by-pixel. On mismatch, it:
+
+1. Logs the differing pixel coordinates and values.
+2. Writes both bitmaps to a temp directory for inspection.
+3. Fires `UTILS_RELEASE_ASSERT_MSG` with a descriptive message.
+
+This is expensive (2× render cost) and disabled in release builds. It
+catches drift that might not be exercised by the fixed test corpus.
+
+### Property-test-style random scenes
+
+A new test target (`compositor_fuzz_tests`) generates random SVG scenes
+with:
+
+- Random element count (1–500).
+- Random transforms (translate, rotate, scale).
+- Random opacity (0.0–1.0).
+- Random clip-paths and masks.
+- Random promotion of 1–5 elements.
+- Random drag transforms on promoted elements.
+
+For each scene:
+
+1. Render via full path → bitmap A.
+2. Render via composited path → bitmap B.
+3. Assert A == B (within AA tolerance).
+
+This runs as a long-running fuzzer, not in per-PR CI. It explores the
+space of compositor edge cases that hand-written tests miss.
+
+### Compositor-specific golden tests
+
+Dedicated test cases for the correctness edge cases enumerated above:
+
+- Overlapping promoted layers with different blend modes.
+- Promoted element with animated opacity.
+- Promoted element within a clipped group.
+- Promoted element with a filter.
+- Drag that causes viewport boundary crossing.
+- `currentColor` change on ancestor of promoted element.
+
+Each test renders both paths and asserts pixel identity.
+
+## Implementation Phases
+
+### Phase 1: Minimum viable compositor (v1)
+
+**Goal:** Fluid drag of ONE promoted shape with correctness guarantees.
+
+- [ ] Create `donner/svg/compositor/` package with Bazel targets.
+- [ ] Implement `CompositorLayer` with bitmap cache and dirty tracking.
+- [ ] Implement `LayerMembershipComponent` ECS component.
+- [ ] Implement `CompositorController` with `promoteEntity` / `demoteEntity`.
+- [ ] Implement `prepareFrame()`: consume `DirtyFlagsComponent`, mark dirty layers.
+- [ ] Implement layer rasterization via `createOffscreenInstance()` + `drawEntityRange()`.
+- [ ] Implement composition pass: blit layers via `drawImage()`.
+- [ ] Implement `setLayerCompositionTransform()` for translation-only drag.
+- [ ] Wire editor drag workflow: promote on mouse-down, update transform on move, demote on up.
+- [ ] Dual-path correctness test: single-layer composited == full render for all `renderer_tests`.
+- [ ] Performance benchmark: 10k-element scene, single-element drag, measure per-frame time.
+
+### Phase 2: Mandatory promotion + multi-layer
+
+- [ ] Auto-promote elements with opacity < 1, filter, mask, blend mode.
+- [ ] Multi-layer composition ordering.
+- [ ] Cross-layer clip-path handling (de-promote within clipped groups).
+- [ ] Compositor golden tests for all correctness edge cases.
+- [ ] Dual-path debug assertion in debug builds.
+
+### Phase 3: Backend optimizations (deferred)
+
+- [ ] Skia: `SkPicture` recording per layer for replay without re-traversal.
+- [ ] Geode: GPU texture retention across frames, zero-copy composition.
+- [ ] Optional `RendererInterface::composeLayer()` fast path for GPU backends.
+
+### Phase 4: Advanced features (deferred)
+
+- [ ] Sub-layer dirty rectangles (tile-based invalidation within a layer).
+- [ ] CSS `will-change` auto-promotion.
+- [ ] Thread-pool layer rasterization.
+- [ ] Mask bitmap caching.
+- [ ] Filter output caching.
+- [ ] Automatic layer merging for adjacent non-interacting layers.
+
+## Open Questions
+
+1. **`RendererBitmap` → `ImageResource` adapter.** `drawImage()` takes
+   `ImageResource`, not `RendererBitmap`. What is the cheapest way to
+   wrap bitmap pixel data without copying? Options: (a) add a
+   `RendererBitmap`-backed `ImageResource` variant, (b) add a
+   `drawBitmap(RendererBitmap)` method to `RendererInterface`, (c)
+   memcpy into an `ImageResource`. (a) is cleanest; (b) adds a virtual;
+   (c) is wasteful.
+
+2. **Promotion cost amortization.** Promoting an element requires
+   re-rasterizing the root layer without it and rasterizing the promoted
+   layer. For large scenes, this is 2× the full-render cost on the first
+   frame. Should the compositor pre-promote likely drag targets (e.g.,
+   elements under the cursor) to hide this latency?
+
+3. **Layer bitmap resolution.** Should layers be rasterized at viewport
+   DPI or at a higher resolution for quality during zoom? Higher
+   resolution wastes memory; viewport DPI re-rasterizes on zoom. v1:
+   viewport DPI, re-rasterize on zoom.
+
+4. **Geode offscreen rendering.** Geode's `createOffscreenInstance()`
+   needs to share the `wgpu::Device` with the main renderer. Is the
+   current `GeodeDevice` singleton pattern sufficient, or does each
+   offscreen instance need its own `GeoSurface`? (Likely the latter —
+   each layer needs an independent render target.)
+
+5. **Memory budget.** Each layer is a full-resolution RGBA bitmap. A
+   4K viewport (3840×2160) at 4 bytes/pixel = ~33 MB per layer. With
+   10 layers that's 330 MB. Should the compositor enforce a layer count
+   or memory limit? What happens when the limit is hit — refuse
+   promotion, or evict the least-recently-used layer?
+
+6. **Editor overlay interaction.** The editor's `OverlayRenderer` draws
+   selection chrome *after* the document via direct `RendererInterface`
+   calls. Should the compositor be aware of the overlay, or should the
+   overlay draw on top of the composed frame? (Likely the latter — the
+   overlay is not part of the SVG document and should not participate in
+   layer management.)
+
+7. **`BackgroundImage` filter detection.** How commonly is
+   `BackgroundImage` used in real SVGs? If it is rare, disabling
+   compositing for it is cheap. If it is common, we need a better
+   strategy.
+
+## Alternatives Considered
+
+### A. No compositor — PGO the full-render path
+
+**Approach:** Use profile-guided optimization to make the full-render
+path fast enough for 60 fps interaction on 10k-node scenes.
+
+**Why it doesn't work:** The full-render path is `O(N)` in scene
+complexity by construction — every element is rasterized every frame.
+PGO can reduce constant factors (maybe 2–3×) but cannot change the
+algorithmic complexity. A 10k-node scene at ~200 ms today might reach
+~80 ms with PGO — still above the 16 ms budget. The compositor reduces
+interactive frames to `O(L)` where L is the number of layers (typically
+2), which is fundamentally different.
+
+PGO is still valuable *within* the compositor (reducing layer
+rasterization cost) and should be pursued independently.
+
+### B. Backend-specific compositors
+
+**Approach:** Each backend implements its own compositor. Skia uses
+`SkPicture` + `SkSurface` tile cache. Geode uses GPU render-to-texture
++ texture atlas. TinySkia uses software blit.
+
+**Why it doesn't work well:**
+
+1. Triples the correctness surface area. Three compositor
+   implementations means three sets of edge cases, three sets of tests,
+   and three chances to drift from ground truth.
+2. The hard part (layer assignment, damage tracking, composition order)
+   is backend-independent. Only the rasterization and blit steps differ,
+   and those are already abstracted by `RendererInterface`.
+3. Geode's compositor would need to track cross-layer dependencies
+   (clip, mask, filter) in WGSL — a significant new shader surface with
+   its own bug class.
+
+The shared compositor with backend-internal optimizations (§ Backend
+Integration) captures 90% of the per-backend benefit with 33% of the
+code.
+
+### C. Full retained-mode rendering
+
+**Approach:** Convert the entire render pipeline to retained mode — every
+element is a persistent GPU/CPU object that is updated incrementally.
+No explicit compositor or layer concept; the rendering backend maintains
+a scene graph internally and updates it when elements change.
+
+**Why it's too much for v1:**
+
+1. Retained mode requires every backend to maintain internal scene graph
+   state, which is a fundamental architectural change to
+   `RendererInterface` (currently stateless per frame).
+2. Skia has limited retained-mode support (`SkPicture` is
+   record-and-replay, not a mutable scene graph). TinySkia has none.
+   Only Geode could reasonably implement retained mode.
+3. The compositor approach is a natural stepping stone *toward* retained
+   mode: layers are persistent objects, and the composition tree is a
+   simple scene graph. If retained mode proves necessary, the compositor
+   can evolve into it. Starting with retained mode would be a
+   bet-the-project rewrite.
+
+### D. Compositor at `RendererDriver` level (not ECS-aware)
+
+**Approach:** Intercept `RendererInterface` calls from `RendererDriver`
+and cache them per layer, replaying cached call sequences for clean
+layers.
+
+**Pros:** No new ECS components. Works with the existing traversal.
+
+**Cons:** Cannot skip `RendererDriver` traversal for clean layers — the
+driver must still walk the entire render tree to produce the call
+sequence, even if the compositor discards most of it. The traversal
+itself is `O(N)` and non-trivial (pattern/mask/marker sub-traversals).
+The ECS-aware approach skips both traversal *and* rasterization for
+clean layers.
+
+This is essentially the `RendererRecorder` (Phase 3 of
+[0003-renderer_interface_design](0003-renderer_interface_design.md))
+repurposed as a cache. It is a reasonable v1.5 fallback if the ECS-level
+approach proves too complex, but it leaves performance on the table.
+
+## References
+
+- [0005-incremental_invalidation](0005-incremental_invalidation.md) — dirty-flag propagation
+- [0020-editor](0020-editor.md) — editor interaction model
+- [0003-renderer_interface_design](0003-renderer_interface_design.md) — `RendererInterface` / `RendererDriver`
+- [0017-geode_renderer](0017-geode_renderer.md) — Geode GPU backend
+- [Chromium Compositor](https://chromium.googlesource.com/chromium/src/+/HEAD/cc/) — Chrome's layer compositor (cc/)
+- [WebKit Compositing](https://webkit.org/blog/12610/release-notes-for-safari-technology-preview-157/) — WebKit layer tree
+- [Firefox Layers](https://searchfox.org/mozilla-central/source/gfx/layers) — Gecko layer system
