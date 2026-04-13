@@ -196,6 +196,12 @@ git_override(
 )
 
 #
+# WebAssembly (Emscripten SDK)
+#
+
+bazel_dep(name = "emsdk", version = "5.0.5", dev_dependency = True)
+
+#
 # SVG Viewer
 #
 
@@ -221,8 +227,3 @@ git_override(
     patch_strip = 1,
 )
 
-#
-# Emscripten SDK (WASM builds)
-#
-
-bazel_dep(name = "emsdk", version = "5.0.5", dev_dependency = True)

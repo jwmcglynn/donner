@@ -122,8 +122,14 @@ inline void split(const F32x16T& v, U16x16T& lo, U16x16T& hi) {
   lo = U16x16T(ll, lh);
   hi = U16x16T(hl, hh);
 #else
-  std::memcpy(&lo.lanes(), &loLanes, sizeof(lo.lanes()));
-  std::memcpy(&hi.lanes(), &hiLanes, sizeof(hi.lanes()));
+  // Reinterpret the 32 source bytes as a u16[16] and build a fresh U16x16T.
+  // Staging through a local is required on SIMD backends where lanes() returns
+  // by value; writing through `&lo.lanes()` would target a dead temporary.
+  std::array<std::uint16_t, 16> loArr{}, hiArr{};
+  std::memcpy(loArr.data(), loLanes.data(), sizeof(loArr));
+  std::memcpy(hiArr.data(), hiLanes.data(), sizeof(hiArr));
+  lo = U16x16T(loArr);
+  hi = U16x16T(hiArr);
 #endif
 }
 
@@ -138,8 +144,12 @@ inline F32x16T join(const U16x16T& lo, const U16x16T& hi) {
   tmp = hi.neonLo(); std::memcpy(&hiF[0], &tmp, sizeof(tmp));
   tmp = hi.neonHi(); std::memcpy(&hiF[4], &tmp, sizeof(tmp));
 #else
-  std::memcpy(&loF, &lo.lanes(), sizeof(loF));
-  std::memcpy(&hiF, &hi.lanes(), sizeof(hiF));
+  // Stage through locals — lanes() returns by value on SIMD backends, so
+  // `&lo.lanes()` would be the address of a temporary and UB to read from.
+  const auto loLanesArr = lo.lanes();
+  const auto hiLanesArr = hi.lanes();
+  std::memcpy(loF.data(), loLanesArr.data(), sizeof(loF));
+  std::memcpy(hiF.data(), hiLanesArr.data(), sizeof(hiF));
 #endif
   return F32x16T(F32x8T(loF), F32x8T(hiF));
 }

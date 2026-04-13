@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Donner SVG WASM Renderer – Test Page</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; flex-direction: column; align-items: center; padding: 2rem; gap: 1.5rem; }
+  h1 { font-size: 1.4rem; }
+  .container { display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center; }
+  .panel { background: #313244; border-radius: 8px; padding: 1rem; min-width: 320px; }
+  textarea { width: 100%; height: 260px; font-family: monospace; font-size: 0.85rem; background: #1e1e2e; color: #a6e3a1; border: 1px solid #585b70; border-radius: 4px; padding: 0.5rem; resize: vertical; }
+  canvas { border: 1px solid #585b70; border-radius: 4px; background: #fff; display: block; }
+  button { padding: 0.5rem 1.2rem; border: none; border-radius: 4px; background: #89b4fa; color: #1e1e2e; font-weight: 600; cursor: pointer; margin-top: 0.75rem; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { background: #74c7ec; }
+  #status { font-size: 0.85rem; color: #f9e2af; min-height: 1.2em; }
+  label { display: block; margin-bottom: 0.4rem; font-weight: 600; }
+  .dims { display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center; }
+  .dims input { width: 70px; background: #1e1e2e; color: #cdd6f4; border: 1px solid #585b70; border-radius: 4px; padding: 0.3rem 0.4rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>🎨 Donner SVG – WebAssembly Preview Renderer</h1>
+<p id="status">Loading WASM module…</p>
+
+<div class="container">
+  <!-- SVG input panel -->
+  <div class="panel">
+    <label for="svg-input">SVG Source</label>
+    <textarea id="svg-input"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#89b4fa"/>
+      <stop offset="100%" stop-color="#f38ba8"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" rx="24" fill="url(#g)"/>
+  <circle cx="100" cy="90" r="40" fill="#1e1e2e" opacity="0.85"/>
+  <path d="M70 130 Q100 170 130 130" stroke="#a6e3a1" stroke-width="4" fill="none" stroke-linecap="round"/>
+</svg></textarea>
+    <div class="dims">
+      <label for="w">W</label><input id="w" type="number" value="400" min="1" max="4096">
+      <label for="h">H</label><input id="h" type="number" value="400" min="1" max="4096">
+    </div>
+    <button id="render-btn" disabled>Render</button>
+  </div>
+
+  <!-- Canvas output panel -->
+  <div class="panel">
+    <label>Rendered Output</label>
+    <canvas id="canvas" width="400" height="400"></canvas>
+  </div>
+</div>
+
+<script type="module">
+  // Load the Emscripten-generated ES6 module.
+  // Adjust the path if serving from a different location.
+  import createModule from './donner_wasm_bin.js';
+
+  const status  = document.getElementById('status');
+  const btn     = document.getElementById('render-btn');
+  const svgArea = document.getElementById('svg-input');
+  const wInput  = document.getElementById('w');
+  const hInput  = document.getElementById('h');
+  const canvas  = document.getElementById('canvas');
+  const ctx     = canvas.getContext('2d');
+
+  let Module = null;
+  let donnerInit       = null;
+  let donnerRenderSvg  = null;
+  let donnerFreePixels = null;
+  let donnerGetError   = null;
+
+  async function boot() {
+    try {
+      Module = await createModule();
+
+      // Wrap exported C functions.
+      donnerInit       = Module.cwrap('donner_init', null, []);
+      donnerRenderSvg  = Module.cwrap('donner_render_svg', 'number', ['string', 'number', 'number']);
+      donnerFreePixels = Module.cwrap('donner_free_pixels', null, ['number']);
+      donnerGetError   = Module.cwrap('donner_get_last_error', 'string', []);
+
+      donnerInit();
+      status.textContent = 'WASM module ready ✓';
+      btn.disabled = false;
+    } catch (err) {
+      status.textContent = 'Failed to load WASM module: ' + err.message;
+      console.error(err);
+    }
+  }
+
+  function render() {
+    const svgText = svgArea.value;
+    const w = parseInt(wInput.value, 10) || 400;
+    const h = parseInt(hInput.value, 10) || 400;
+
+    canvas.width  = w;
+    canvas.height = h;
+
+    const t0 = performance.now();
+    const ptr = donnerRenderSvg(svgText, w, h);
+    const elapsed = (performance.now() - t0).toFixed(1);
+
+    if (ptr === 0) {
+      const err = donnerGetError();
+      status.textContent = '⚠ Render failed: ' + (err || 'unknown error');
+      return;
+    }
+
+    // Read RGBA pixel data from WASM heap.
+    const numBytes = w * h * 4;
+    const pixels = new Uint8ClampedArray(Module.HEAPU8.buffer, ptr, numBytes);
+    const imageData = new ImageData(new Uint8ClampedArray(pixels), w, h);
+    ctx.putImageData(imageData, 0, 0);
+
+    donnerFreePixels(ptr);
+    status.textContent = `Rendered ${w}×${h} in ${elapsed} ms`;
+  }
+
+  btn.addEventListener('click', render);
+  // Also render on Ctrl+Enter from the textarea.
+  svgArea.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter' && !btn.disabled) render();
+  });
+
+  boot();
+</script>
+
+</body>
+</html>

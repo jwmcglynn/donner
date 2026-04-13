@@ -1,0 +1,53 @@
+{
+  "name": "donner-svg-preview",
+  "displayName": "Donner SVG Preview",
+  "description": "Preview SVG files using the Donner SVG rendering engine",
+  "version": "0.1.0",
+  "publisher": "jwmcglynn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jwmcglynn/donner"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "donner.svgPreview",
+        "displayName": "Donner SVG Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.svg"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "donner.openSvgPreview",
+        "title": "Open with Donner SVG Preview"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "npm run compile && npx @vscode/vsce package --no-dependencies",
+    "lint": "npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
