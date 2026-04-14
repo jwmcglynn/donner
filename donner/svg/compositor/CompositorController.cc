@@ -2,16 +2,68 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "donner/base/Utils.h"
 #include "donner/svg/compositor/LayerMembershipComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg::compositor {
+
+namespace {
+
+struct HiddenVisibilityState {
+  Entity entity;
+  bool visible;
+};
+
+void HideLayerRange(Registry& registry, const CompositorLayer& layer,
+                    std::vector<HiddenVisibilityState>* hiddenEntities) {
+  if (!registry.valid(layer.firstEntity()) || !registry.valid(layer.lastEntity())) {
+    return;
+  }
+
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != layer.firstEntity()) {
+    view.advance();
+  }
+
+  while (!view.done()) {
+    const Entity entity = view.currentEntity();
+    auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+
+    const auto alreadyHidden =
+        std::find_if(hiddenEntities->begin(), hiddenEntities->end(),
+                     [entity](const HiddenVisibilityState& state) { return state.entity == entity; });
+    if (alreadyHidden == hiddenEntities->end()) {
+      hiddenEntities->push_back(HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+    }
+
+    instance.visible = false;
+
+    if (entity == layer.lastEntity()) {
+      break;
+    }
+
+    view.advance();
+  }
+}
+
+void RestoreLayerVisibility(Registry& registry,
+                            const std::vector<HiddenVisibilityState>& hiddenEntities) {
+  for (const auto& hidden : hiddenEntities) {
+    if (registry.valid(hidden.entity)) {
+      registry.get<components::RenderingInstanceComponent>(hidden.entity).visible = hidden.visible;
+    }
+  }
+}
+
+}  // namespace
 
 CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer)
     : document_(&document), renderer_(&renderer) {}
@@ -108,6 +160,16 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
+  Registry& registry = document_->registry();
+  if (registry.view<components::DirtyFlagsComponent>().begin() !=
+      registry.view<components::DirtyFlagsComponent>().end()) {
+    rootDirty_ = true;
+  }
+  if (registry.ctx().contains<components::RenderTreeState>() &&
+      registry.ctx().get<components::RenderTreeState>().needsFullRebuild) {
+    rootDirty_ = true;
+  }
+
   // If no promoted layers, take the simple full-render path.
   if (layers_.empty()) {
     RendererDriver driver(*renderer_);
@@ -125,6 +187,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     ParseWarningSink warningSink;
     RendererUtils::prepareDocumentForRendering(*document_, /*verbose=*/false, warningSink);
     documentPrepared_ = true;
+    refreshLayerMetadata();
 
     // After preparation, clear the needsFullRebuild flag so consumeDirtyFlags doesn't
     // re-trigger a full rebuild on the next frame. The render tree instantiation process
@@ -133,6 +196,18 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     if (document_->registry().ctx().contains<components::RenderTreeState>()) {
       document_->registry().ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
+  }
+
+  if (!offscreenSupportKnown_) {
+    offscreenSupported_ = renderer_->createOffscreenInstance() != nullptr;
+    offscreenSupportKnown_ = true;
+  }
+
+  if (!offscreenSupported_) {
+    RendererDriver driver(*renderer_);
+    driver.draw(*document_);
+    rootDirty_ = false;
+    return;
   }
 
   // Check dirty flags on promoted entities.
@@ -182,12 +257,7 @@ const CompositorLayer* CompositorController::findLayer(Entity entity) const {
 
 void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport) {
   auto offscreen = renderer_->createOffscreenInstance();
-  if (!offscreen) {
-    // Backend doesn't support offscreen rendering. Fall back: rasterize via the main renderer
-    // using drawEntityRange, which produces the layer bitmap but ties up the main target.
-    layer.clearDirty();
-    return;
-  }
+  UTILS_RELEASE_ASSERT(offscreen != nullptr);
 
   Registry& registry = document_->registry();
 
@@ -199,26 +269,22 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
 }
 
 void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
-  // V1 approach: render the full document into the root layer bitmap.
-  // Promoted entities are included in the root (overdrawn by promoted layer bitmaps during
-  // composition). This is correct because promoted layers are composited ON TOP with their
-  // composition transforms; the root copy at the original position is hidden under the
-  // promoted layer's bitmap at the same position (identity composition transform means exact
-  // overlap, translation means the promoted layer moves and the root shows the "hole").
-  //
-  // For correct hole-punching, v2 will skip promoted entity ranges from the root. For v1,
-  // the overlapping approach works when the promoted layer's opacity is 1.0.
+  // Render the root layer with promoted subtrees temporarily hidden so compositor translation
+  // doesn't leave a stale copy at the original position.
   auto offscreen = renderer_->createOffscreenInstance();
-  if (offscreen) {
-    RendererDriver driver(*offscreen);
-    driver.draw(*document_);
-    rootBitmap_ = offscreen->takeSnapshot();
-  } else {
-    // No offscreen support — render directly and snapshot.
-    RendererDriver driver(*renderer_);
-    driver.draw(*document_);
-    rootBitmap_ = renderer_->takeSnapshot();
+  UTILS_RELEASE_ASSERT(offscreen != nullptr);
+
+  Registry& registry = document_->registry();
+  std::vector<HiddenVisibilityState> hiddenEntities;
+  hiddenEntities.reserve(layers_.size());
+  for (const auto& layer : layers_) {
+    HideLayerRange(registry, layer, &hiddenEntities);
   }
+
+  RendererDriver driver(*offscreen);
+  driver.draw(*document_);
+  RestoreLayerVisibility(registry, hiddenEntities);
+  rootBitmap_ = offscreen->takeSnapshot();
 
   rootDirty_ = false;
 }
@@ -275,19 +341,28 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
 void CompositorController::consumeDirtyFlags() {
   Registry& registry = document_->registry();
 
-  auto view = registry.view<components::DirtyFlagsComponent>();
-  for (auto& layer : layers_) {
-    if (!registry.valid(layer.entity())) {
-      layer.markDirty();
+  auto dirtyView = registry.view<components::DirtyFlagsComponent>();
+  for (const Entity entity : dirtyView) {
+    const auto& dirty = dirtyView.get<components::DirtyFlagsComponent>(entity);
+    if (dirty.flags == components::DirtyFlagsComponent::Flags::None) {
       continue;
     }
 
-    if (view.contains(layer.entity())) {
-      const auto& dirty = view.get<components::DirtyFlagsComponent>(layer.entity());
-      if (dirty.flags != components::DirtyFlagsComponent::Flags::None) {
+    bool matchedPromotedRange = false;
+    for (auto& layer : layers_) {
+      if (!registry.valid(layer.entity())) {
         layer.markDirty();
-        rootDirty_ = true;
+        continue;
       }
+
+      if (layerContainsEntity(layer, entity)) {
+        layer.markDirty();
+        matchedPromotedRange = true;
+      }
+    }
+
+    if (!matchedPromotedRange) {
+      rootDirty_ = true;
     }
   }
 
@@ -301,6 +376,51 @@ void CompositorController::consumeDirtyFlags() {
       }
     }
   }
+}
+
+void CompositorController::refreshLayerMetadata() {
+  Registry& registry = document_->registry();
+  for (auto& layer : layers_) {
+    if (!registry.valid(layer.entity())) {
+      continue;
+    }
+
+    const auto [firstEntity, lastEntity] = computeEntityRange(registry, layer.entity());
+    layer.setEntityRange(firstEntity, lastEntity);
+
+    if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
+      const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
+      layer.setFallbackReasons(detectFallbackReasons(instance));
+    } else {
+      layer.setFallbackReasons(FallbackReason::None);
+    }
+  }
+}
+
+bool CompositorController::layerContainsEntity(const CompositorLayer& layer, Entity entity) const {
+  Registry& registry = document_->registry();
+  if (!registry.valid(layer.firstEntity()) || !registry.valid(layer.lastEntity()) ||
+      !registry.valid(entity)) {
+    return false;
+  }
+
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != layer.firstEntity()) {
+    view.advance();
+  }
+
+  while (!view.done()) {
+    const Entity current = view.currentEntity();
+    if (current == entity) {
+      return true;
+    }
+    if (current == layer.lastEntity()) {
+      return false;
+    }
+    view.advance();
+  }
+
+  return false;
 }
 
 std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& registry,

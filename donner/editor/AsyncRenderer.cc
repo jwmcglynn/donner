@@ -2,6 +2,8 @@
 
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 
@@ -67,8 +69,48 @@ void AsyncRenderer::workerLoop() {
 
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
-    if (request.document != nullptr) {
-      renderer.draw(*request.document);
+    if (request.renderer != nullptr && request.document != nullptr) {
+      if (request.dragPreview.has_value()) {
+        if (!compositor_ || compositorDocument_ != request.document ||
+            compositorRenderer_ != request.renderer) {
+          compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
+                                                                                *request.renderer);
+          compositorDocument_ = request.document;
+          compositorRenderer_ = request.renderer;
+          compositorEntity_ = entt::null;
+        }
+
+        if (compositorEntity_ != request.dragPreview->entity) {
+          if (compositorEntity_ != entt::null) {
+            compositor_->demoteEntity(compositorEntity_);
+          }
+
+          compositorEntity_ = entt::null;
+          if (compositor_->promoteEntity(request.dragPreview->entity)) {
+            compositorEntity_ = request.dragPreview->entity;
+          }
+        }
+
+        if (compositorEntity_ != entt::null) {
+          compositor_->setLayerCompositionTransform(
+              compositorEntity_, Transform2d::Translate(request.dragPreview->translation));
+
+          svg::RenderViewport viewport;
+          const Vector2i canvasSize = request.document->canvasSize();
+          viewport.size = Vector2d(canvasSize.x, canvasSize.y);
+          viewport.devicePixelRatio = 1.0;
+          compositor_->renderFrame(viewport);
+        } else {
+          request.renderer->draw(*request.document);
+        }
+      } else {
+        compositor_.reset();
+        compositorDocument_ = nullptr;
+        compositorRenderer_ = nullptr;
+        compositorEntity_ = entt::null;
+        request.renderer->draw(*request.document);
+      }
+
       // Selection chrome is no longer baked into the bitmap — main.cc
       // draws it via the ImGui draw list every frame so clicks don't
       // pay the SVG re-rasterize cost. The `request.selection` field

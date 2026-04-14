@@ -376,6 +376,29 @@ bool IsSelectedInTree(std::span<const donner::svg::SVGElement> selection,
   return std::find(selection.begin(), selection.end(), element) != selection.end();
 }
 
+bool DragPreviewsEqual(const std::optional<donner::editor::SelectTool::ActiveDragPreview>& lhs,
+                       const std::optional<donner::editor::SelectTool::ActiveDragPreview>& rhs) {
+  if (lhs.has_value() != rhs.has_value()) {
+    return false;
+  }
+  if (!lhs.has_value()) {
+    return true;
+  }
+
+  return lhs->entity == rhs->entity && lhs->translation.x == rhs->translation.x &&
+         lhs->translation.y == rhs->translation.y;
+}
+
+donner::Vector2d DragPreviewScreenOffset(
+    const std::optional<donner::editor::SelectTool::ActiveDragPreview>& dragPreview,
+    const donner::editor::ViewportState& viewport) {
+  if (!dragPreview.has_value()) {
+    return donner::Vector2d::Zero();
+  }
+
+  return dragPreview->translation * viewport.pixelsPerDocUnit();
+}
+
 std::string BuildTreeNodeLabel(const donner::svg::SVGElement& element) {
   const std::string_view tagName = element.tagName().name;
   std::string label = "<";
@@ -840,6 +863,7 @@ int main(int argc, char** argv) {
   std::uint64_t lastRenderedVersion = 0;
   std::optional<donner::svg::SVGElement> lastHighlightedSelection;
   donner::Vector2i lastRenderedCanvasSize{0, 0};
+  std::optional<donner::editor::SelectTool::ActiveDragPreview> lastRenderedDragPreview;
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -1720,6 +1744,7 @@ int main(int argc, char** argv) {
       }
       const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
       const auto currentVersion = app.document().currentFrameVersion();
+      const auto dragPreview = selectTool.activeDragPreview();
 
       // Refresh the cached document-space selection bounds before we
       // hand the document to the worker. Triggers on selection changes
@@ -1752,11 +1777,18 @@ int main(int argc, char** argv) {
       // has changed. Selection is deliberately NOT in the trigger set:
       // the document bitmap doesn't depend on the selection, and
       // selection chrome lives in the overlay texture above.
-      if (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize) {
+      if (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
+          !DragPreviewsEqual(dragPreview, lastRenderedDragPreview)) {
         donner::editor::RenderRequest req;
         req.document = &app.document().document();
         req.version = currentVersion;
         req.selection = std::nullopt;
+        if (dragPreview.has_value()) {
+          req.dragPreview = donner::editor::RenderRequest::DragPreview{
+              .entity = dragPreview->entity,
+              .translation = dragPreview->translation,
+          };
+        }
         asyncRenderer.requestRender(req);
         if (!loggedFirstRenderRequest) {
           loggedFirstRenderRequest = true;
@@ -1767,6 +1799,7 @@ int main(int argc, char** argv) {
 
         lastRenderedVersion = currentVersion;
         lastRenderedCanvasSize = currentCanvasSize;
+        lastRenderedDragPreview = dragPreview;
       }
     }
 
@@ -1851,6 +1884,8 @@ int main(int argc, char** argv) {
                                static_cast<float>(screenRect.topLeft.y));
       const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
                                     static_cast<float>(screenRect.bottomRight.y));
+      const donner::Vector2d dragScreenOffset =
+          DragPreviewScreenOffset(selectTool.activeDragPreview(), viewport);
 
       // Draw the document image into the pane's foreground draw list,
       // followed by the overlay texture composited at the same screen
@@ -1885,9 +1920,14 @@ int main(int argc, char** argv) {
       paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
                              imageOrigin, imageBottomRight);
       if (overlayTextureWidth > 0 && overlayTextureHeight > 0) {
+        const ImVec2 overlayOrigin(imageOrigin.x + static_cast<float>(dragScreenOffset.x),
+                                   imageOrigin.y + static_cast<float>(dragScreenOffset.y));
+        const ImVec2 overlayBottomRight(
+            imageBottomRight.x + static_cast<float>(dragScreenOffset.x),
+            imageBottomRight.y + static_cast<float>(dragScreenOffset.y));
         paneDrawList->AddImage(
-            static_cast<ImTextureID>(static_cast<std::uintptr_t>(overlayTexture)), imageOrigin,
-            imageBottomRight);
+            static_cast<ImTextureID>(static_cast<std::uintptr_t>(overlayTexture)), overlayOrigin,
+            overlayBottomRight);
       }
 
       const auto screenToDocument = [&](const ImVec2& screenPoint) -> donner::Vector2d {
@@ -1949,10 +1989,12 @@ int main(int argc, char** argv) {
 
       for (const donner::Box2d& screenRect : donner::editor::ComputeSelectionAabbScreenRects(
                viewport, std::span<const donner::Box2d>(selectionBoundsCache.displayedBoundsDoc))) {
-        paneDrawList->AddRect(ImVec2(static_cast<float>(screenRect.topLeft.x),
-                                     static_cast<float>(screenRect.topLeft.y)),
-                              ImVec2(static_cast<float>(screenRect.bottomRight.x),
-                                     static_cast<float>(screenRect.bottomRight.y)),
+        paneDrawList->AddRect(ImVec2(static_cast<float>(screenRect.topLeft.x + dragScreenOffset.x),
+                                     static_cast<float>(screenRect.topLeft.y + dragScreenOffset.y)),
+                              ImVec2(static_cast<float>(screenRect.bottomRight.x +
+                                                        dragScreenOffset.x),
+                                     static_cast<float>(screenRect.bottomRight.y +
+                                                        dragScreenOffset.y)),
                               kSelectionChromeColor, 0.0f, ImDrawFlags_None,
                               kSelectionChromeThickness);
       }

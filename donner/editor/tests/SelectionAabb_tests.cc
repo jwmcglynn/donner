@@ -102,12 +102,16 @@ TEST(SelectionAabbTest, SelectionChangeThenDragRefreshProducesUpdatedRects) {
 
   const Vector2d dragTargetScreen = startScreen + Vector2d(30.0, 15.0);
   tool.onMouseMove(app, viewport.screenToDocument(dragTargetScreen), /*buttonHeld=*/true);
-  app.flushFrame();
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
 
   bounds = SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
   rects = ComputeSelectionAabbScreenRects(viewport, std::span<const Box2d>(bounds));
   ASSERT_EQ(rects.size(), 1u);
-  EXPECT_EQ(rects[0], Box2d::FromXYWH(50.0, 35.0, 40.0, 40.0));
+  EXPECT_EQ(rects[0], Box2d::FromXYWH(20.0, 20.0, 40.0, 40.0));
+
+  const Box2d previewRect = Box2d(rects[0].topLeft + tool.activeDragPreview()->translation,
+                                  rects[0].bottomRight + tool.activeDragPreview()->translation);
+  EXPECT_EQ(previewRect, Box2d::FromXYWH(50.0, 35.0, 40.0, 40.0));
 }
 
 }  // namespace

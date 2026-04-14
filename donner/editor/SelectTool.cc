@@ -104,13 +104,9 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   //   new_local = Translate(delta) * old_local
   const Transform2d newTransform = Transform2d::Translate(deltaDoc) * dragState_->startTransform;
 
+  dragState_->currentDocumentDelta = deltaDoc;
   dragState_->currentTransform = newTransform;
   dragState_->hasMoved = true;
-
-  // Coalescing happens in CommandQueue::flush(): the high-frequency drag
-  // produces one SetTransform per mouse-move event but the queue collapses
-  // them into a single effective command per entity per frame.
-  editor.applyMutation(EditorCommand::SetTransformCommand(dragState_->element, newTransform));
 }
 
 void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/) {
@@ -154,6 +150,9 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   // element actually moved — a click that never saw a mouse-move event
   // is a no-op for undo purposes.
   if (dragState_->hasMoved) {
+    editor.applyMutation(
+        EditorCommand::SetTransformCommand(dragState_->element, dragState_->currentTransform));
+
     UndoSnapshot before{.element = dragState_->element,
                         .transform = dragState_->startTransform,
                         .writebackTarget = dragState_->writebackTarget};
@@ -171,6 +170,15 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   }
 
   dragState_.reset();
+}
+
+std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() const {
+  if (!dragState_.has_value()) {
+    return std::nullopt;
+  }
+
+  return ActiveDragPreview{.entity = dragState_->element.entityHandle().entity(),
+                           .translation = dragState_->currentDocumentDelta};
 }
 
 std::optional<Box2d> SelectTool::marqueeRect() const {

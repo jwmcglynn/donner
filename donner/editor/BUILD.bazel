@@ -150,6 +150,7 @@ donner_cc_library(
         ":overlay_renderer",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/compositor:compositor",
         "//donner/svg/renderer",
     ],
 )

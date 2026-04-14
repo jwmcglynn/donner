@@ -19,6 +19,7 @@
 #include <optional>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -29,6 +30,12 @@ namespace donner::editor {
 
 class SelectTool final : public Tool {
 public:
+  /// Preview state for an in-progress drag, consumed by the async renderer.
+  struct ActiveDragPreview {
+    Entity entity = entt::null;
+    Vector2d translation = Vector2d::Zero();
+  };
+
   /// Payload needed to write a completed drag back into the source pane.
   struct CompletedDragWriteback {
     AttributeWritebackTarget target;
@@ -63,17 +70,20 @@ public:
     return result;
   }
 
+  /// Returns the current drag preview, if a drag is in progress.
+  [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
+
 private:
   struct DragState {
     svg::SVGElement element;
     Vector2d startDocumentPoint;
     Transform2d startTransform;
-    /// The most recent transform SelectTool has pushed through the
-    /// command queue during this drag. Tracked so `onMouseUp` can
-    /// record an undo entry with the final drag state without having
-    /// to read the element back (the queued commands may not have
-    /// been flushed yet).
+    /// The most recent preview transform for this drag. Tracked so
+    /// `onMouseUp` can queue one final commit and record the undo
+    /// entry without reading the element back from the document.
     Transform2d currentTransform;
+    /// Current drag delta in document coordinates, used for compositor preview.
+    Vector2d currentDocumentDelta = Vector2d::Zero();
     /// Stable locator used for the later canvas→text writeback.
     std::optional<AttributeWritebackTarget> writebackTarget;
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A

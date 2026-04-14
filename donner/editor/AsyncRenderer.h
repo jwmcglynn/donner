@@ -42,12 +42,17 @@
 #include <optional>
 #include <thread>
 
+#include "donner/base/EcsRegistry.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::svg {
 class SVGDocument;
+namespace compositor {
+class CompositorController;
+}
 }
 
 namespace donner::editor {
@@ -55,6 +60,12 @@ namespace donner::editor {
 /// Per-request handoff data captured at render-request time so the
 /// worker has everything it needs without touching live UI state.
 struct RenderRequest {
+  struct DragPreview {
+    Entity entity = entt::null;
+    Vector2d translation = Vector2d::Zero();
+  };
+
+  svg::Renderer* renderer = nullptr;
   svg::SVGDocument* document = nullptr;
   /// Document frame version snapshotted at request time so the UI can
   /// match the landed bitmap with other same-version assets.
@@ -63,6 +74,8 @@ struct RenderRequest {
   /// The worker holds this optional by value, so if the UI thread clears
   /// the selection mid-render the worker still draws the pre-render chrome.
   std::optional<svg::SVGElement> selection;
+  /// Optional in-progress drag preview rendered through the compositor fast path.
+  std::optional<DragPreview> dragPreview;
 };
 
 /// Bitmap plus the document version it was rendered from.
@@ -116,6 +129,10 @@ private:
 
   RenderRequest pendingRequest_;
   RenderResult result_;
+  std::unique_ptr<svg::compositor::CompositorController> compositor_;
+  svg::SVGDocument* compositorDocument_ = nullptr;
+  svg::Renderer* compositorRenderer_ = nullptr;
+  Entity compositorEntity_ = entt::null;
 };
 
 }  // namespace donner::editor

@@ -84,6 +84,16 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
   EXPECT_DOUBLE_EQ(after.data[5], 20.0);
 }
 
+TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
+
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.x, 35.0);
+  EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.y, 20.0);
+  EXPECT_EQ(app.document().queue().size(), 0u);
+}
+
 TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(20.0, 15.0), /*buttonHeld=*/true);
@@ -91,8 +101,8 @@ TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(50.0, 35.0));
 
-  // Three SetTransform commands queued, all for the same entity.
-  EXPECT_EQ(app.document().queue().size(), 3u);
+  // Drag preview stays off-DOM until mouse-up, then queues one final transform commit.
+  EXPECT_EQ(app.document().queue().size(), 1u);
   ASSERT_TRUE(app.flushFrame());
 
   // After flush, the final transform reflects only the last move's delta:
