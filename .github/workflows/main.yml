@@ -138,11 +138,14 @@ jobs:
         # This step is idempotent; on a cold cache it's a no-op.
         #
         # Pattern note: In Bazel 8 Bzlmod mode the repository uses the canonical
-        # name "+cc_configure+local_config_cc" (not the bare "local_config_cc"
-        # from WORKSPACE mode). The wildcard "*local_config_cc*" matches both.
+        # name "rules_cc++cc_configure_extension+local_config_cc" (not bare
+        # "local_config_cc" from WORKSPACE mode). The pattern "*local_config_cc"
+        # (trailing anchor, no *) matches both while NOT matching the sibling
+        # "rules_cc++cc_configure_extension+local_config_cc_toolchains" repo —
+        # deleting that one causes "BUILD file not found" errors.
         run: |
           find /var/cache/bazel/user-root -maxdepth 5 -type d \
-            -name "*local_config_cc*" -exec rm -rf {} + 2>/dev/null || true
+            -name "*local_config_cc" -exec rm -rf {} + 2>/dev/null || true
 
       - name: Build
         # Same -skia_ref filter as the GitHub-hosted linux job above.
