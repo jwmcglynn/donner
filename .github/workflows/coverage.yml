@@ -40,7 +40,16 @@ jobs:
 
       - name: Generate coverage
         run: |
-          tools/coverage.sh --quiet --no-html
+          # Exclude //donner/editor/gui/... and //donner/editor:* — they
+          # depend on GLFW + imgui, which need X11/GL headers that the
+          # hermetic LLVM sysroot (used via --config=latest_llvm in
+          # coverage.sh) does not carry. //donner/editor/sandbox/... is
+          # GLFW-free and stays in scope.
+          tools/coverage.sh --quiet --no-html \
+            //donner/base/... \
+            //donner/css/... \
+            //donner/svg/... \
+            //donner/editor/sandbox/...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
