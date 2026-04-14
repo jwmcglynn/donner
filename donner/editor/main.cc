@@ -377,19 +377,6 @@ bool IsSelectedInTree(std::span<const donner::svg::SVGElement> selection,
   return std::find(selection.begin(), selection.end(), element) != selection.end();
 }
 
-bool DragPreviewsEqual(const std::optional<donner::editor::SelectTool::ActiveDragPreview>& lhs,
-                       const std::optional<donner::editor::SelectTool::ActiveDragPreview>& rhs) {
-  if (lhs.has_value() != rhs.has_value()) {
-    return false;
-  }
-  if (!lhs.has_value()) {
-    return true;
-  }
-
-  return lhs->entity == rhs->entity && lhs->translation.x == rhs->translation.x &&
-         lhs->translation.y == rhs->translation.y;
-}
-
 donner::Vector2d DragPreviewScreenOffset(
     const std::optional<donner::editor::SelectTool::ActiveDragPreview>& dragPreview,
     const donner::editor::ViewportState& viewport) {
@@ -844,6 +831,17 @@ int main(int argc, char** argv) {
   glBindTexture(GL_TEXTURE_2D, texture);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  GLuint dragBackgroundTexture = 0;
+  GLuint dragPromotedTexture = 0;
+  GLuint dragForegroundTexture = 0;
+  glGenTextures(1, &dragBackgroundTexture);
+  glGenTextures(1, &dragPromotedTexture);
+  glGenTextures(1, &dragForegroundTexture);
+  for (const GLuint dragTexture : {dragBackgroundTexture, dragPromotedTexture, dragForegroundTexture}) {
+    glBindTexture(GL_TEXTURE_2D, dragTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  }
 
   // Selection path outlines live in a *second* pixmap drawn by a
   // *second* renderer instance, layered on top of the document
@@ -883,6 +881,14 @@ int main(int argc, char** argv) {
   std::optional<donner::svg::SVGElement> lastHighlightedSelection;
   donner::Vector2i lastRenderedCanvasSize{0, 0};
   std::optional<donner::editor::SelectTool::ActiveDragPreview> lastRenderedDragPreview;
+  std::optional<donner::Entity> lastRenderedDragEntity;
+  bool hasDragCompositeTextures = false;
+  int dragBackgroundTextureWidth = 0;
+  int dragBackgroundTextureHeight = 0;
+  int dragPromotedTextureWidth = 0;
+  int dragPromotedTextureHeight = 0;
+  int dragForegroundTextureWidth = 0;
+  int dragForegroundTextureHeight = 0;
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -1177,17 +1183,41 @@ int main(int argc, char** argv) {
 
     // First, check if a prior async render has completed and pick up
     // the bitmap if so.
-    if (auto resultOpt = asyncRenderer.pollResult();
-        resultOpt.has_value() && !resultOpt->bitmap.empty()) {
+    if (auto resultOpt = asyncRenderer.pollResult(); resultOpt.has_value()) {
       const auto& result = *resultOpt;
-      const auto& bitmap = result.bitmap;
-      glBindTexture(GL_TEXTURE_2D, texture);
-      glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
-                   GL_UNSIGNED_BYTE, bitmap.pixels.data());
-      glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-      textureWidth = bitmap.dimensions.x;
-      textureHeight = bitmap.dimensions.y;
+      const auto uploadBitmapToTexture = [](GLuint targetTexture, const donner::svg::RendererBitmap& bitmap,
+                                            int* outWidth, int* outHeight) {
+        if (bitmap.empty()) {
+          *outWidth = 0;
+          *outHeight = 0;
+          return;
+        }
+
+        glBindTexture(GL_TEXTURE_2D, targetTexture);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        *outWidth = bitmap.dimensions.x;
+        *outHeight = bitmap.dimensions.y;
+      };
+
+      if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
+        hasDragCompositeTextures = true;
+        uploadBitmapToTexture(dragBackgroundTexture, result.compositedPreview->backgroundBitmap,
+                              &dragBackgroundTextureWidth, &dragBackgroundTextureHeight);
+        uploadBitmapToTexture(dragPromotedTexture, result.compositedPreview->promotedBitmap,
+                              &dragPromotedTextureWidth, &dragPromotedTextureHeight);
+        uploadBitmapToTexture(dragForegroundTexture, result.compositedPreview->foregroundBitmap,
+                              &dragForegroundTextureWidth, &dragForegroundTextureHeight);
+        lastRenderedDragEntity = result.compositedPreview->entity;
+      } else if (!result.bitmap.empty()) {
+        hasDragCompositeTextures = false;
+        lastRenderedDragEntity.reset();
+        const auto& bitmap = result.bitmap;
+        uploadBitmapToTexture(texture, bitmap, &textureWidth, &textureHeight);
+      }
+
       displayedDocVersion = result.version;
       if (pendingOverlayBitmap.has_value() && pendingOverlayVersion == displayedDocVersion) {
         const auto& overlayBitmap = *pendingOverlayBitmap;
@@ -1210,8 +1240,13 @@ int main(int argc, char** argv) {
       promotePendingSelectionBoundsIfReady();
       if (!loggedFirstTextureLanded) {
         loggedFirstTextureLanded = true;
-        std::cerr << "[startup] +" << msSinceStart() << "ms first texture landed ("
-                  << bitmap.dimensions.x << "x" << bitmap.dimensions.y << ")\n";
+        if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
+          std::cerr << "[startup] +" << msSinceStart()
+                    << "ms first composited texture set landed\n";
+        } else if (!result.bitmap.empty()) {
+          std::cerr << "[startup] +" << msSinceStart() << "ms first texture landed ("
+                    << result.bitmap.dimensions.x << "x" << result.bitmap.dimensions.y << ")\n";
+        }
       }
     }
 
@@ -1792,12 +1827,21 @@ int main(int argc, char** argv) {
         rasterizeOverlayForCurrentSelection();
       }
 
+      const bool needsExperimentalLayerCapture =
+          experimentalMode && dragPreview.has_value() &&
+          (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
+           !hasDragCompositeTextures || !lastRenderedDragEntity.has_value() ||
+           *lastRenderedDragEntity != dragPreview->entity);
+      const bool needsRegularRender =
+          (!experimentalMode || !dragPreview.has_value()) &&
+          (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
+           lastRenderedDragPreview.has_value());
+
       // Request a new SVG render if anything that affects the bitmap
       // has changed. Selection is deliberately NOT in the trigger set:
       // the document bitmap doesn't depend on the selection, and
       // selection chrome lives in the overlay texture above.
-      if (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
-          !DragPreviewsEqual(dragPreview, lastRenderedDragPreview)) {
+      if (needsExperimentalLayerCapture || needsRegularRender) {
         donner::editor::RenderRequest req;
         req.document = &app.document().document();
         req.version = currentVersion;
@@ -1819,6 +1863,9 @@ int main(int argc, char** argv) {
         lastRenderedVersion = currentVersion;
         lastRenderedCanvasSize = currentCanvasSize;
         lastRenderedDragPreview = dragPreview;
+        if (!dragPreview.has_value()) {
+          lastRenderedDragEntity.reset();
+        }
       }
     }
 
@@ -1890,7 +1937,7 @@ int main(int argc, char** argv) {
     }
     pendingScrollEvents.events.clear();
 
-    if (textureWidth > 0 && textureHeight > 0) {
+    if ((textureWidth > 0 && textureHeight > 0) || hasDragCompositeTextures) {
       // The on-screen rectangle of the document image is computed from
       // the viewport, NOT from the texture dimensions. The texture's
       // resolution only affects sampling fidelity; layout is purely a
@@ -1936,8 +1983,32 @@ int main(int argc, char** argv) {
         drawList->PopClipRect();
       };
       DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
-      paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
-                             imageOrigin, imageBottomRight);
+      if (experimentalMode && hasDragCompositeTextures && dragPromotedTextureWidth > 0 &&
+          dragPromotedTextureHeight > 0 && selectTool.activeDragPreview().has_value()) {
+        if (dragBackgroundTextureWidth > 0 && dragBackgroundTextureHeight > 0) {
+          paneDrawList->AddImage(
+              static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragBackgroundTexture)),
+              imageOrigin, imageBottomRight);
+        }
+
+        const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(dragScreenOffset.x),
+                                    imageOrigin.y + static_cast<float>(dragScreenOffset.y));
+        const ImVec2 promotedBottomRight(
+            imageBottomRight.x + static_cast<float>(dragScreenOffset.x),
+            imageBottomRight.y + static_cast<float>(dragScreenOffset.y));
+        paneDrawList->AddImage(
+            static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragPromotedTexture)),
+            promotedOrigin, promotedBottomRight);
+
+        if (dragForegroundTextureWidth > 0 && dragForegroundTextureHeight > 0) {
+          paneDrawList->AddImage(
+              static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragForegroundTexture)),
+              imageOrigin, imageBottomRight);
+        }
+      } else {
+        paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
+                               imageOrigin, imageBottomRight);
+      }
       if (overlayTextureWidth > 0 && overlayTextureHeight > 0) {
         const ImVec2 overlayOrigin(imageOrigin.x + static_cast<float>(dragScreenOffset.x),
                                    imageOrigin.y + static_cast<float>(dragScreenOffset.y));
@@ -2002,6 +2073,30 @@ int main(int argc, char** argv) {
             // overlay texture needs the new selection before the frame
             // renders.
             rasterizeOverlayForCurrentSelection();
+          }
+        }
+      }
+
+      if (experimentalMode && !asyncRenderer.isBusy() && app.hasDocument()) {
+        if (const auto dragPreview = selectTool.activeDragPreview(); dragPreview.has_value()) {
+          const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
+          const auto currentVersion = app.document().currentFrameVersion();
+          if (!hasDragCompositeTextures || !lastRenderedDragEntity.has_value() ||
+              *lastRenderedDragEntity != dragPreview->entity ||
+              currentVersion != lastRenderedVersion ||
+              currentCanvasSize != lastRenderedCanvasSize) {
+            donner::editor::RenderRequest req;
+            req.renderer = &renderer;
+            req.document = &app.document().document();
+            req.version = currentVersion;
+            req.dragPreview = donner::editor::RenderRequest::DragPreview{
+                .entity = dragPreview->entity,
+                .translation = dragPreview->translation,
+            };
+            asyncRenderer.requestRender(req);
+            lastRenderedVersion = currentVersion;
+            lastRenderedCanvasSize = currentCanvasSize;
+            lastRenderedDragPreview = dragPreview;
           }
         }
       }

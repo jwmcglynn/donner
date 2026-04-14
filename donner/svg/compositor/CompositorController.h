@@ -145,6 +145,18 @@ public:
    */
   [[nodiscard]] FallbackReason fallbackReasonsOf(Entity entity) const;
 
+  /// Returns true when the compositor has cached a split underlay/overlay pair for drag preview.
+  [[nodiscard]] bool hasSplitStaticLayers() const;
+
+  /// Cached underlay bitmap for the single-promoted-layer drag-preview case.
+  [[nodiscard]] const RendererBitmap& backgroundBitmap() const { return backgroundBitmap_; }
+
+  /// Cached overlay bitmap for the single-promoted-layer drag-preview case.
+  [[nodiscard]] const RendererBitmap& foregroundBitmap() const { return foregroundBitmap_; }
+
+  /// Cached bitmap for the promoted entity, or an empty bitmap if unavailable.
+  [[nodiscard]] const RendererBitmap& layerBitmapOf(Entity entity) const;
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
@@ -155,6 +167,9 @@ private:
 
   /// Rasterize the root layer (full document render for v1).
   void rasterizeRootLayer(const RenderViewport& viewport);
+
+  /// Rasterize cached underlay/overlay bitmaps for the single promoted-layer drag-preview case.
+  void rasterizeSplitRootLayers(const CompositorLayer& layer, const RenderViewport& viewport);
 
   /// Compose all layers onto the main render target.
   void composeLayers(const RenderViewport& viewport);
@@ -184,6 +199,8 @@ private:
 
   /// Cached root layer bitmap (everything not in a promoted layer).
   RendererBitmap rootBitmap_;
+  RendererBitmap backgroundBitmap_;
+  RendererBitmap foregroundBitmap_;
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
   bool offscreenSupportKnown_ = false;
