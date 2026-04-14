@@ -137,7 +137,7 @@ jobs:
         # and Bazel's hermetic include scanner allows absolute /nix/store paths.
         # This step is idempotent; on a cold cache it's a no-op.
         run: |
-          find /var/cache/bazel/user-root -maxdepth 2 -type d \
+          find /var/cache/bazel/user-root -maxdepth 4 -type d \
             -name "local_config_cc" -exec rm -rf {} + 2>/dev/null || true
 
       - name: Build
