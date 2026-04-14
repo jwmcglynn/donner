@@ -77,6 +77,10 @@ public:
 
   RendererBitmap takeSnapshot() const override { return renderer_.takeSnapshot(); }
 
+  std::unique_ptr<RendererInterface> createOffscreenInstance() const override {
+    return renderer_.createOffscreenInstance();
+  }
+
   int width() const override { return renderer_.width(); }
 
   int height() const override { return renderer_.height(); }

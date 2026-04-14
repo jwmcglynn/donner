@@ -53,6 +53,14 @@ public:
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
   MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
+
+  static RendererBitmap makeDummyBitmap() {
+    RendererBitmap bitmap;
+    bitmap.dimensions = Vector2i(1, 1);
+    bitmap.rowBytes = 4;
+    bitmap.pixels = {0, 0, 0, 255};
+    return bitmap;
+  }
 };
 
 }  // namespace
@@ -61,6 +69,20 @@ class CompositorControllerTest : public ::testing::Test {
 protected:
   SVGDocument makeDocument(std::string_view svg, Vector2i size = kTestSvgDefaultSize) {
     return instantiateSubtree(svg, parser::SVGParser::Options(), size);
+  }
+
+  void configureMockForCaching() {
+    ON_CALL(renderer_, takeSnapshot()).WillByDefault([]() {
+      return MockRendererInterface::makeDummyBitmap();
+    });
+    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([this]() {
+      auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+      ON_CALL(*offscreen, takeSnapshot()).WillByDefault([]() {
+        return MockRendererInterface::makeDummyBitmap();
+      });
+      ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+      return offscreen;
+    });
   }
 
   NiceMock<MockRendererInterface> renderer_;
@@ -265,6 +287,59 @@ TEST_F(CompositorControllerTest, RenderFrameCallsRendererDraw) {
   viewport.size = Vector2d(16, 16);
   viewport.devicePixelRatio = 1.0;
   compositor.renderFrame(viewport);
+}
+
+TEST_F(CompositorControllerTest, SinglePromotedLayerBuildsSplitStaticLayers) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="under" x="0" y="0" width="10" height="10" fill="blue" />
+    <rect id="target" x="20" y="0" width="10" height="10" fill="red" />
+    <rect id="over" x="40" y="0" width="10" height="10" fill="green" />
+  )svg");
+
+  configureMockForCaching();
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(64, 64);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  EXPECT_TRUE(compositor.hasSplitStaticLayers());
+  EXPECT_FALSE(compositor.backgroundBitmap().empty());
+  EXPECT_FALSE(compositor.layerBitmapOf(entity).empty());
+  EXPECT_FALSE(compositor.foregroundBitmap().empty());
+}
+
+TEST_F(CompositorControllerTest, MultiplePromotedLayersDoNotBuildSplitStaticLayers) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="blue" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="red" />
+    <rect id="c" x="40" y="0" width="10" height="10" fill="green" />
+  )svg");
+
+  configureMockForCaching();
+
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->entityHandle().entity()));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(64, 64);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  EXPECT_FALSE(compositor.hasSplitStaticLayers());
 }
 
 TEST_F(CompositorControllerTest, MoveConstructor) {

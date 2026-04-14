@@ -113,6 +113,10 @@ RendererBitmap Renderer::takeSnapshot() const {
   return impl_->takeSnapshot();
 }
 
+std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {
+  return impl_->createOffscreenInstance();
+}
+
 bool Renderer::save(const char* filename) {
   const RendererBitmap snapshot = takeSnapshot();
   if (snapshot.empty()) {
