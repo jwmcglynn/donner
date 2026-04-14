@@ -146,11 +146,24 @@ jobs:
         # (no BUILD file), Bazel reuses the broken state without regenerating.
         # Deleting both the directories and their @*.marker siblings forces a
         # clean cc_configure_extension evaluation that regenerates both correctly.
-        # The "*cc_configure*" pattern covers all markers and the "*local_config_cc*"
-        # pattern covers both repo directories and any WORKSPACE-mode remnants.
+        #
+        # Safety: use suffix-anchored patterns ("*+local_config_cc" and
+        # "*+local_config_cc_toolchains") rather than substring patterns like
+        # "*cc_configure*".  The substring form reaches into unrelated repos —
+        # e.g. apple_support+/crosstool/osx_cc_configure.bzl lives at exactly
+        # maxdepth 5 and would be deleted, breaking the apple_support module.
+        # The canonical Bzlmod names end with "+local_config_cc[_toolchains]",
+        # which no other CC-configure repo in this graph shares.
         run: |
           find /var/cache/bazel/user-root -maxdepth 5 \
-            \( -name "*cc_configure*" -o -name "*local_config_cc*" \) \
+            \( -name "*+local_config_cc" \
+            -o -name "local_config_cc" \
+            -o -name "*+local_config_cc_toolchains" \
+            -o -name "local_config_cc_toolchains" \
+            -o -name "*+local_config_cc.marker" \
+            -o -name "local_config_cc.marker" \
+            -o -name "*+local_config_cc_toolchains.marker" \
+            -o -name "local_config_cc_toolchains.marker" \) \
             -exec rm -rf {} + 2>/dev/null || true
 
       - name: Build
