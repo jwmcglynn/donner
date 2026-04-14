@@ -136,9 +136,13 @@ jobs:
         # detection so the -isystem paths land in cxx_builtin_include_directories
         # and Bazel's hermetic include scanner allows absolute /nix/store paths.
         # This step is idempotent; on a cold cache it's a no-op.
+        #
+        # Pattern note: In Bazel 8 Bzlmod mode the repository uses the canonical
+        # name "+cc_configure+local_config_cc" (not the bare "local_config_cc"
+        # from WORKSPACE mode). The wildcard "*local_config_cc*" matches both.
         run: |
-          find /var/cache/bazel/user-root -maxdepth 4 -type d \
-            -name "local_config_cc" -exec rm -rf {} + 2>/dev/null || true
+          find /var/cache/bazel/user-root -maxdepth 5 -type d \
+            -name "*local_config_cc*" -exec rm -rf {} + 2>/dev/null || true
 
       - name: Build
         # Same -skia_ref filter as the GitHub-hosted linux job above.
