@@ -70,7 +70,19 @@ struct RenderRequest {
 
 /// Bitmap plus the document version it was rendered from.
 struct RenderResult {
+  struct CompositedPreview {
+    svg::RendererBitmap backgroundBitmap;
+    svg::RendererBitmap promotedBitmap;
+    svg::RendererBitmap foregroundBitmap;
+    Entity entity = entt::null;
+
+    [[nodiscard]] bool valid() const {
+      return entity != entt::null && !promotedBitmap.empty();
+    }
+  };
+
   svg::RendererBitmap bitmap;
+  std::optional<CompositedPreview> compositedPreview;
   std::uint64_t version = 0;
 };
 

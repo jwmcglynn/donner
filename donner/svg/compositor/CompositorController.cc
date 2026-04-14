@@ -54,6 +54,47 @@ void HideLayerRange(Registry& registry, const CompositorLayer& layer,
   }
 }
 
+void HideEntitiesBefore(Registry& registry, Entity boundaryExclusive,
+                        std::vector<HiddenVisibilityState>* hiddenEntities) {
+  if (!registry.valid(boundaryExclusive)) {
+    return;
+  }
+
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != boundaryExclusive) {
+    const Entity entity = view.currentEntity();
+    auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+    instance.visible = false;
+    view.advance();
+  }
+}
+
+void HideEntitiesAfter(Registry& registry, Entity boundaryInclusive,
+                       std::vector<HiddenVisibilityState>* hiddenEntities) {
+  if (!registry.valid(boundaryInclusive)) {
+    return;
+  }
+
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != boundaryInclusive) {
+    view.advance();
+  }
+
+  if (view.done()) {
+    return;
+  }
+
+  view.advance();
+  while (!view.done()) {
+    const Entity entity = view.currentEntity();
+    auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+    instance.visible = false;
+    view.advance();
+  }
+}
+
 void RestoreLayerVisibility(Registry& registry,
                             const std::vector<HiddenVisibilityState>& hiddenEntities) {
   for (const auto& hidden : hiddenEntities) {
@@ -124,6 +165,8 @@ void CompositorController::demoteEntity(Entity entity) {
     layers_.erase(it);
   }
 
+  backgroundBitmap_ = RendererBitmap();
+  foregroundBitmap_ = RendererBitmap();
   rootDirty_ = true;
 }
 
@@ -156,6 +199,16 @@ FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
   return layer ? layer->fallbackReasons() : FallbackReason::None;
 }
 
+bool CompositorController::hasSplitStaticLayers() const {
+  return layers_.size() == 1 && (!backgroundBitmap_.empty() || !foregroundBitmap_.empty());
+}
+
+const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
+  static const RendererBitmap kEmptyBitmap;
+  const CompositorLayer* layer = findLayer(entity);
+  return layer ? layer->bitmap() : kEmptyBitmap;
+}
+
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
@@ -174,6 +227,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   if (layers_.empty()) {
     RendererDriver driver(*renderer_);
     driver.draw(*document_);
+    backgroundBitmap_ = RendererBitmap();
+    foregroundBitmap_ = RendererBitmap();
     rootDirty_ = false;
     documentPrepared_ = true;
     return;
@@ -234,7 +289,8 @@ size_t CompositorController::layerCount() const {
 }
 
 size_t CompositorController::totalBitmapMemory() const {
-  size_t total = rootBitmap_.pixels.size();
+  size_t total = rootBitmap_.pixels.size() + backgroundBitmap_.pixels.size() +
+                 foregroundBitmap_.pixels.size();
   for (const auto& layer : layers_) {
     total += layer.bitmap().pixels.size();
   }
@@ -269,6 +325,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
 }
 
 void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
+  if (layers_.size() == 1) {
+    rasterizeSplitRootLayers(layers_.front(), viewport);
+    rootBitmap_ = RendererBitmap();
+    rootDirty_ = false;
+    return;
+  }
+
   // Render the root layer with promoted subtrees temporarily hidden so compositor translation
   // doesn't leave a stale copy at the original position.
   auto offscreen = renderer_->createOffscreenInstance();
@@ -286,14 +349,58 @@ void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
   RestoreLayerVisibility(registry, hiddenEntities);
   rootBitmap_ = offscreen->takeSnapshot();
 
+  backgroundBitmap_ = RendererBitmap();
+  foregroundBitmap_ = RendererBitmap();
   rootDirty_ = false;
+}
+
+void CompositorController::rasterizeSplitRootLayers(const CompositorLayer& layer,
+                                                    const RenderViewport& viewport) {
+  Registry& registry = document_->registry();
+
+  auto renderMaskedDocument = [&](auto hideFn) {
+    auto offscreen = renderer_->createOffscreenInstance();
+    UTILS_RELEASE_ASSERT(offscreen != nullptr);
+
+    std::vector<HiddenVisibilityState> hiddenEntities;
+    hideFn(&hiddenEntities);
+
+    RendererDriver driver(*offscreen);
+    driver.draw(*document_);
+    RestoreLayerVisibility(registry, hiddenEntities);
+    return offscreen->takeSnapshot();
+  };
+
+  backgroundBitmap_ = renderMaskedDocument([&](std::vector<HiddenVisibilityState>* hiddenEntities) {
+    HideLayerRange(registry, layer, hiddenEntities);
+    HideEntitiesAfter(registry, layer.lastEntity(), hiddenEntities);
+  });
+
+  foregroundBitmap_ = renderMaskedDocument([&](std::vector<HiddenVisibilityState>* hiddenEntities) {
+    HideLayerRange(registry, layer, hiddenEntities);
+    HideEntitiesBefore(registry, layer.firstEntity(), hiddenEntities);
+  });
 }
 
 void CompositorController::composeLayers(const RenderViewport& viewport) {
   renderer_->beginFrame(viewport);
 
-  // Blit the root layer bitmap.
-  if (!rootBitmap_.empty()) {
+  if (hasSplitStaticLayers()) {
+    if (!backgroundBitmap_.empty()) {
+      ImageResource backgroundImage;
+      backgroundImage.data = backgroundBitmap_.pixels;
+      backgroundImage.width = backgroundBitmap_.dimensions.x;
+      backgroundImage.height = backgroundBitmap_.dimensions.y;
+
+      ImageParams params;
+      params.targetRect =
+          Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(backgroundBitmap_.dimensions.x),
+                                           static_cast<double>(backgroundBitmap_.dimensions.y)));
+
+      renderer_->setTransform(Transform2d());
+      renderer_->drawImage(backgroundImage, params);
+    }
+  } else if (!rootBitmap_.empty()) {
     ImageResource rootImage;
     rootImage.data = rootBitmap_.pixels;
     rootImage.width = rootBitmap_.dimensions.x;
@@ -333,6 +440,21 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
 
     renderer_->setTransform(compositionTransform);
     renderer_->drawImage(layerImage, params);
+  }
+
+  if (hasSplitStaticLayers() && !foregroundBitmap_.empty()) {
+    ImageResource foregroundImage;
+    foregroundImage.data = foregroundBitmap_.pixels;
+    foregroundImage.width = foregroundBitmap_.dimensions.x;
+    foregroundImage.height = foregroundBitmap_.dimensions.y;
+
+    ImageParams params;
+    params.targetRect =
+        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(foregroundBitmap_.dimensions.x),
+                                         static_cast<double>(foregroundBitmap_.dimensions.y)));
+
+    renderer_->setTransform(Transform2d());
+    renderer_->drawImage(foregroundImage, params);
   }
 
   renderer_->endFrame();

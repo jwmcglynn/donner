@@ -60,6 +60,7 @@ void AsyncRenderer::workerLoop() {
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
     if (request.renderer != nullptr && request.document != nullptr) {
+      std::optional<RenderResult::CompositedPreview> compositedPreview;
       if (request.dragPreview.has_value()) {
         if (!compositor_ || compositorDocument_ != request.document ||
             compositorRenderer_ != request.renderer) {
@@ -90,6 +91,15 @@ void AsyncRenderer::workerLoop() {
           viewport.size = Vector2d(canvasSize.x, canvasSize.y);
           viewport.devicePixelRatio = 1.0;
           compositor_->renderFrame(viewport);
+
+          if (compositor_->hasSplitStaticLayers()) {
+            compositedPreview = RenderResult::CompositedPreview{
+                .backgroundBitmap = compositor_->backgroundBitmap(),
+                .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
+                .foregroundBitmap = compositor_->foregroundBitmap(),
+                .entity = compositorEntity_,
+            };
+          }
         } else {
           request.renderer->draw(*request.document);
         }
@@ -106,12 +116,16 @@ void AsyncRenderer::workerLoop() {
       // pay the SVG re-rasterize cost. The `request.selection` field
       // is left in place for back-compat callers but ignored here.
       (void)request.selection;
-      svg::RendererBitmap bitmap = request.renderer->takeSnapshot();
+      svg::RendererBitmap bitmap;
+      if (!compositedPreview.has_value()) {
+        bitmap = request.renderer->takeSnapshot();
+      }
 
       std::lock_guard<std::mutex> lock(mutex_);
       // Only transition to Done if we weren't shut down mid-render.
       if (state_ == State::Busy) {
         result_.bitmap = std::move(bitmap);
+        result_.compositedPreview = std::move(compositedPreview);
         result_.version = request.version;
         state_ = State::Done;
       }
