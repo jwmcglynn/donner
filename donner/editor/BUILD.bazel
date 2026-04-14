@@ -196,6 +196,15 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "experimental_drag_presentation",
+    hdrs = ["ExperimentalDragPresentation.h"],
+    deps = [
+        ":select_tool",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "select_tool",
     srcs = ["SelectTool.cc"],
     hdrs = ["SelectTool.h"],
@@ -263,6 +272,7 @@ donner_cc_binary(
         ":attribute_writeback",
         ":change_classifier",
         ":editor_app",
+        ":experimental_drag_presentation",
         ":notice",
         ":overlay_renderer",
         ":pinch_event_monitor",

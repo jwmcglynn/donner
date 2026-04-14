@@ -39,6 +39,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PinchEventMonitor.h"
@@ -674,9 +675,7 @@ int main(int argc, char** argv) {
   std::uint64_t lastRenderedVersion = 0;
   std::optional<donner::svg::SVGElement> lastHighlightedSelection;
   donner::Vector2i lastRenderedCanvasSize{0, 0};
-  std::optional<donner::editor::SelectTool::ActiveDragPreview> lastRenderedDragPreview;
-  std::optional<donner::Entity> lastRenderedDragEntity;
-  bool hasDragCompositeTextures = false;
+  donner::editor::ExperimentalDragPresentation experimentalDragPresentation;
   int dragBackgroundTextureWidth = 0;
   int dragBackgroundTextureHeight = 0;
   int dragPromotedTextureWidth = 0;
@@ -800,6 +799,19 @@ int main(int argc, char** argv) {
     donner::editor::RefreshSelectionBoundsCache(
         selectionBoundsCache, std::span<const donner::svg::SVGElement>(app.selectedElements()),
         app.document().currentFrameVersion(), displayedDocVersion);
+  };
+
+  const auto selectedExperimentalEntity = [&]() -> donner::Entity {
+    if (!experimentalMode || !app.selectedElement().has_value()) {
+      return entt::null;
+    }
+
+    const auto& selected = *app.selectedElement();
+    if (!selected.isa<donner::svg::SVGGraphicsElement>()) {
+      return entt::null;
+    }
+
+    return selected.entityHandle().entity();
   };
 
   // Rasterize the Skia path-outline overlay for the current selection
@@ -992,19 +1004,20 @@ int main(int argc, char** argv) {
       };
 
       if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
-        hasDragCompositeTextures = true;
         uploadBitmapToTexture(dragBackgroundTexture, result.compositedPreview->backgroundBitmap,
                               &dragBackgroundTextureWidth, &dragBackgroundTextureHeight);
         uploadBitmapToTexture(dragPromotedTexture, result.compositedPreview->promotedBitmap,
                               &dragPromotedTextureWidth, &dragPromotedTextureHeight);
         uploadBitmapToTexture(dragForegroundTexture, result.compositedPreview->foregroundBitmap,
                               &dragForegroundTextureWidth, &dragForegroundTextureHeight);
-        lastRenderedDragEntity = result.compositedPreview->entity;
+        experimentalDragPresentation.noteCachedTextures(
+            result.compositedPreview->entity, result.version,
+            donner::Vector2i(result.compositedPreview->promotedBitmap.dimensions.x,
+                             result.compositedPreview->promotedBitmap.dimensions.y));
       } else if (!result.bitmap.empty()) {
-        hasDragCompositeTextures = false;
-        lastRenderedDragEntity.reset();
         const auto& bitmap = result.bitmap;
         uploadBitmapToTexture(texture, bitmap, &textureWidth, &textureHeight);
+        experimentalDragPresentation.noteFullRenderLanded(result.version);
       }
 
       displayedDocVersion = result.version;
@@ -1350,6 +1363,13 @@ int main(int argc, char** argv) {
           textDispatchThrottled = false;
           textChangeIdleTimer = 0.0f;
           lastHighlightedSelection.reset();
+          experimentalDragPresentation = donner::editor::ExperimentalDragPresentation{};
+          dragBackgroundTextureWidth = 0;
+          dragBackgroundTextureHeight = 0;
+          dragPromotedTextureWidth = 0;
+          dragPromotedTextureHeight = 0;
+          dragForegroundTextureWidth = 0;
+          dragForegroundTextureHeight = 0;
           refreshPendingSelectionBoundsCache();
           openFileError.clear();
           ImGui::CloseCurrentPopup();
@@ -1534,6 +1554,9 @@ int main(int argc, char** argv) {
       const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
       const auto currentVersion = app.document().currentFrameVersion();
       const auto dragPreview = selectTool.activeDragPreview();
+      const donner::Entity prewarmEntity = selectedExperimentalEntity();
+      experimentalDragPresentation.clearSettlingIfSelectionChanged(prewarmEntity,
+                                                                   dragPreview.has_value());
 
       // Refresh the cached document-space selection bounds before we
       // hand the document to the worker. Triggers on selection changes
@@ -1564,19 +1587,23 @@ int main(int argc, char** argv) {
 
       const bool needsExperimentalLayerCapture =
           experimentalMode && dragPreview.has_value() &&
-          (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
-           !hasDragCompositeTextures || !lastRenderedDragEntity.has_value() ||
-           *lastRenderedDragEntity != dragPreview->entity);
+          (!experimentalDragPresentation.hasCachedTextures ||
+           experimentalDragPresentation.cachedEntity != dragPreview->entity ||
+           experimentalDragPresentation.cachedVersion != currentVersion ||
+           experimentalDragPresentation.cachedCanvasSize != currentCanvasSize);
+      const bool needsExperimentalPrewarm =
+          experimentalDragPresentation.shouldPrewarm(prewarmEntity, currentVersion,
+                                                     currentCanvasSize, /*dragActive=*/false);
       const bool needsRegularRender =
           (!experimentalMode || !dragPreview.has_value()) &&
           (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
-           lastRenderedDragPreview.has_value());
+           experimentalDragPresentation.waitingForFullRender);
 
       // Request a new SVG render if anything that affects the bitmap
       // has changed. Selection is deliberately NOT in the trigger set:
       // the document bitmap doesn't depend on the selection, and
       // selection chrome lives in the overlay texture above.
-      if (needsExperimentalLayerCapture || needsRegularRender) {
+      if (needsExperimentalLayerCapture || needsExperimentalPrewarm || needsRegularRender) {
         donner::editor::RenderRequest req;
         req.renderer = &renderer;
         req.document = &app.document().document();
@@ -1587,6 +1614,11 @@ int main(int argc, char** argv) {
               .entity = dragPreview->entity,
               .translation = dragPreview->translation,
           };
+        } else if (needsExperimentalPrewarm) {
+          req.dragPreview = donner::editor::RenderRequest::DragPreview{
+              .entity = prewarmEntity,
+              .translation = donner::Vector2d::Zero(),
+          };
         }
         asyncRenderer.requestRender(req);
         if (!loggedFirstRenderRequest) {
@@ -1596,11 +1628,9 @@ int main(int argc, char** argv) {
                     << currentCanvasSize.y << ")\n";
         }
 
-        lastRenderedVersion = currentVersion;
-        lastRenderedCanvasSize = currentCanvasSize;
-        lastRenderedDragPreview = dragPreview;
-        if (!dragPreview.has_value()) {
-          lastRenderedDragEntity.reset();
+        if (needsRegularRender) {
+          lastRenderedVersion = currentVersion;
+          lastRenderedCanvasSize = currentCanvasSize;
         }
       }
     }
@@ -1667,7 +1697,10 @@ int main(int argc, char** argv) {
     }
     pendingScrollEvents.events.clear();
 
-    if ((textureWidth > 0 && textureHeight > 0) || hasDragCompositeTextures) {
+    const auto displayedDragPreview =
+        experimentalDragPresentation.presentationPreview(selectTool.activeDragPreview());
+    if ((textureWidth > 0 && textureHeight > 0) ||
+        experimentalDragPresentation.hasCachedTextures) {
       // The on-screen rectangle of the document image is computed from
       // the viewport, NOT from the texture dimensions. The texture's
       // resolution only affects sampling fidelity; layout is purely a
@@ -1681,7 +1714,7 @@ int main(int argc, char** argv) {
       const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
                                     static_cast<float>(screenRect.bottomRight.y));
       const donner::Vector2d dragScreenOffset =
-          DragPreviewScreenOffset(selectTool.activeDragPreview(), viewport);
+          DragPreviewScreenOffset(displayedDragPreview, viewport);
 
       // Draw the document image into the pane's foreground draw list,
       // followed by the overlay texture composited at the same screen
@@ -1713,8 +1746,11 @@ int main(int argc, char** argv) {
         drawList->PopClipRect();
       };
       DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
-      if (experimentalMode && hasDragCompositeTextures && dragPromotedTextureWidth > 0 &&
-          dragPromotedTextureHeight > 0 && selectTool.activeDragPreview().has_value()) {
+      if (experimentalMode &&
+          experimentalDragPresentation.shouldDisplayCompositedLayers(
+              selectTool.activeDragPreview()) &&
+          dragPromotedTextureWidth > 0 && dragPromotedTextureHeight > 0 &&
+          displayedDragPreview.has_value()) {
         if (dragBackgroundTextureWidth > 0 && dragBackgroundTextureHeight > 0) {
           paneDrawList->AddImage(
               static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragBackgroundTexture)),
@@ -1795,7 +1831,12 @@ int main(int argc, char** argv) {
                                  /*buttonHeld=*/true);
         }
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+          const auto previewBeforeRelease = selectTool.activeDragPreview();
           selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
+          if (experimentalMode && previewBeforeRelease.has_value()) {
+            experimentalDragPresentation.beginSettling(
+                previewBeforeRelease, app.document().currentFrameVersion() + 1);
+          }
           if (!asyncRenderer.isBusy()) {
             refreshPendingSelectionBoundsCache();
             // Marquee resolve may have added new selected elements;
@@ -1808,26 +1849,35 @@ int main(int argc, char** argv) {
       }
 
       if (experimentalMode && !asyncRenderer.isBusy() && app.hasDocument()) {
-        if (const auto dragPreview = selectTool.activeDragPreview(); dragPreview.has_value()) {
-          const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
-          const auto currentVersion = app.document().currentFrameVersion();
-          if (!hasDragCompositeTextures || !lastRenderedDragEntity.has_value() ||
-              *lastRenderedDragEntity != dragPreview->entity ||
-              currentVersion != lastRenderedVersion ||
-              currentCanvasSize != lastRenderedCanvasSize) {
-            donner::editor::RenderRequest req;
-            req.renderer = &renderer;
-            req.document = &app.document().document();
-            req.version = currentVersion;
-            req.dragPreview = donner::editor::RenderRequest::DragPreview{
-                .entity = dragPreview->entity,
-                .translation = dragPreview->translation,
-            };
-            asyncRenderer.requestRender(req);
-            lastRenderedVersion = currentVersion;
-            lastRenderedCanvasSize = currentCanvasSize;
-            lastRenderedDragPreview = dragPreview;
-          }
+        const auto dragPreview = selectTool.activeDragPreview();
+        const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
+        const auto currentVersion = app.document().currentFrameVersion();
+        const donner::Entity prewarmEntity = selectedExperimentalEntity();
+        experimentalDragPresentation.clearSettlingIfSelectionChanged(prewarmEntity,
+                                                                     dragPreview.has_value());
+
+        const bool needsDragCapture =
+            dragPreview.has_value() &&
+            (!experimentalDragPresentation.hasCachedTextures ||
+             experimentalDragPresentation.cachedEntity != dragPreview->entity ||
+             experimentalDragPresentation.cachedVersion != currentVersion ||
+             experimentalDragPresentation.cachedCanvasSize != currentCanvasSize);
+        const bool needsPrewarm =
+            !dragPreview.has_value() &&
+            experimentalDragPresentation.shouldPrewarm(prewarmEntity, currentVersion,
+                                                       currentCanvasSize, /*dragActive=*/false);
+
+        if (needsDragCapture || needsPrewarm) {
+          donner::editor::RenderRequest req;
+          req.renderer = &renderer;
+          req.document = &app.document().document();
+          req.version = currentVersion;
+          req.dragPreview = donner::editor::RenderRequest::DragPreview{
+              .entity = needsDragCapture ? dragPreview->entity : prewarmEntity,
+              .translation =
+                  needsDragCapture ? dragPreview->translation : donner::Vector2d::Zero(),
+          };
+          asyncRenderer.requestRender(req);
         }
       }
 
