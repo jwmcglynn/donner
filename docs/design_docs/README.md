@@ -57,6 +57,7 @@ conventions automated agents should follow when editing design docs.
 | 0022 | [resvg_test_suite_upgrade](0022-resvg_test_suite_upgrade.md)                           | Design                                                                     | Upgrading the vendored resvg test suite snapshot to a newer revision. |
 | 0023 | [editor_sandbox](0023-editor_sandbox.md)                                               | Design                                                                    | Browser-style process isolation for the editor's parser / renderer. |
 | 0024 | [proposed_issues_2026q2](0024-proposed_issues_2026q2.md)                               | Draft                                                                      | Q2 2026 wishlist: feature gaps and CI improvements. |
+| 0025 | [composited_rendering](0025-composited_rendering.md)                                   | Draft                                                                      | Layer-based compositor for fluid editor dragging without full re-render. |
 
 ## Cross-reference: developer docs
 
