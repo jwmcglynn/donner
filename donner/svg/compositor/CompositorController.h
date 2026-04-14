@@ -162,6 +162,12 @@ private:
   /// Check dirty flags on promoted entities and mark affected layers.
   void consumeDirtyFlags();
 
+  /// Refresh cached render ranges and fallback metadata after render-tree preparation.
+  void refreshLayerMetadata();
+
+  /// Returns true if the entity is currently within the layer's cached render range.
+  bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
+
   /// Compute the entity range for a promoted entity.
   static std::pair<Entity, Entity> computeEntityRange(Registry& registry, Entity entity);
 
@@ -180,6 +186,8 @@ private:
   RendererBitmap rootBitmap_;
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
+  bool offscreenSupportKnown_ = false;
+  bool offscreenSupported_ = false;
 };
 
 }  // namespace donner::svg::compositor

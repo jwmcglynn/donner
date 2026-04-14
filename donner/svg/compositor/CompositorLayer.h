@@ -136,6 +136,12 @@ public:
   /// Set the fallback reasons for this layer.
   void setFallbackReasons(FallbackReason reasons) { fallbackReasons_ = reasons; }
 
+  /// Update the entity range rendered into this layer.
+  void setEntityRange(Entity firstEntity, Entity lastEntity) {
+    firstEntity_ = firstEntity;
+    lastEntity_ = lastEntity;
+  }
+
   /// @}
 
 private:
