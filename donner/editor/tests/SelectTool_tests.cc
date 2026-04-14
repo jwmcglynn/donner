@@ -85,6 +85,7 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
 }
 
 TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
+  tool.setCompositedDragPreviewEnabled(true);
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
 
@@ -101,8 +102,8 @@ TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(50.0, 35.0));
 
-  // Drag preview stays off-DOM until mouse-up, then queues one final transform commit.
-  EXPECT_EQ(app.document().queue().size(), 1u);
+  // Three SetTransform commands queued, all for the same entity.
+  EXPECT_EQ(app.document().queue().size(), 3u);
   ASSERT_TRUE(app.flushFrame());
 
   // After flush, the final transform reflects only the last move's delta:

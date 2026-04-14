@@ -10,6 +10,7 @@
 ///
 /// ```sh
 /// bazel run //donner/editor -- donner_splash.svg
+/// bazel run //donner/editor -- --experimental donner_splash.svg
 /// ```
 ///
 /// For the minimal viewer demo (no tools, no overlay chrome, just a
@@ -616,17 +617,34 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(bwd);
   }
 
+  bool experimentalMode = false;
+
 #ifdef __EMSCRIPTEN__
   const std::string initialSource = EmbeddedBytesToString(donner::embedded::kEditorIconSvg);
   const std::optional<std::string> initialPath = std::string("donner_icon.svg");
 #else
-  if (argc != 2) {
-    std::cerr << "Usage: donner-editor <filename>\n";
+  std::optional<std::string> svgPath;
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg(argv[i]);
+    if (arg == "--experimental") {
+      experimentalMode = true;
+      continue;
+    }
+
+    if (svgPath.has_value()) {
+      std::cerr << "Usage: donner-editor [--experimental] <filename>\n";
+      return 1;
+    }
+
+    svgPath = std::string(arg);
+  }
+
+  if (!svgPath.has_value()) {
+    std::cerr << "Usage: donner-editor [--experimental] <filename>\n";
     return 1;
   }
 
-  const std::string svgPath = argv[1];
-  const std::string initialSource = LoadFile(svgPath);
+  const std::string initialSource = LoadFile(*svgPath);
   if (initialSource.empty()) {
     return 1;
   }
@@ -799,6 +817,7 @@ int main(int argc, char** argv) {
   }
 
   donner::editor::SelectTool selectTool;
+  selectTool.setCompositedDragPreviewEnabled(experimentalMode);
 
   donner::editor::TextEditor textEditor;
   textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());

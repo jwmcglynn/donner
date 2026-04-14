@@ -88,6 +88,7 @@ TEST(SelectionAabbTest, SelectionChangeThenDragRefreshProducesUpdatedRects) {
 
   ViewportState viewport = MakeViewport();
   SelectTool tool;
+  tool.setCompositedDragPreviewEnabled(true);
 
   const Vector2d startScreen(40.0, 40.0);
   tool.onMouseDown(app, viewport.screenToDocument(startScreen), MouseModifiers{});
