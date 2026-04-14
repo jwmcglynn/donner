@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <fcntl.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -106,6 +107,16 @@ TEST(SandboxHardeningUnitTest, AppliesResourceLimitsWithSandboxEnv) {
 
 class HardenedChildTest : public ::testing::Test {
 protected:
+  void SetUp() override {
+    // The child can exit before the parent finishes writing stdin (e.g. when
+    // the hardening check rejects an empty envp in the "refuses" tests). Once
+    // the child closes its read end, the parent's ::write() would raise
+    // SIGPIPE and kill the gtest process mid-test, producing a bazel
+    // "Broken pipe" failure with no diagnostics. Ignore SIGPIPE so writes
+    // that race with a just-exited child return EPIPE instead.
+    ::signal(SIGPIPE, SIG_IGN);
+  }
+
   std::string ChildPath() {
     return Runfiles::instance().Rlocation("donner/editor/sandbox/donner_parser_child");
   }
@@ -170,9 +181,20 @@ protected:
     ::close(stderrFds[1]);
     ::close(devNull);
 
-    // Write stdin, close, drain stderr, reap.
+    // Write stdin, close, drain stderr, reap. The child may have already
+    // exited (and closed its stdin read end) by the time we get here — write
+    // failures with EPIPE are expected in that case and intentionally
+    // ignored. SIGPIPE is disabled in SetUp() so the signal does not kill
+    // the test process.
     if (!stdinBytes.empty()) {
-      ::write(stdinFds[1], stdinBytes.data(), stdinBytes.size());
+      const void* data = stdinBytes.data();
+      std::size_t remaining = stdinBytes.size();
+      while (remaining > 0) {
+        const ssize_t n = ::write(stdinFds[1], data, remaining);
+        if (n < 0) break;  // EPIPE, EINTR — child is gone or will be reaped below.
+        remaining -= static_cast<std::size_t>(n);
+        data = static_cast<const char*>(data) + n;
+      }
     }
     ::close(stdinFds[1]);
 
