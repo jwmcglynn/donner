@@ -129,17 +129,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build
-        # Also excludes fuzz_target: NixOS clang doesn't ship
-        # <fuzzer/FuzzedDataProvider.h> on its default include path
-        # the way Ubuntu's clang-18 does, so fuzz targets fail
-        # compilation with "file not found" under `bazelisk build //...`
-        # without any fuzzer sanitizer flag. Consistent with the
-        # main-only Skia reference pattern: fuzz targets build+test
-        # only on main merges (where the GitHub-hosted linux job
-        # runs them).
+        # Same -skia_ref filter as the GitHub-hosted linux job above.
+        # fuzz targets ARE built here: the donner-runner NixOS guest
+        # now -isystem's compiler-rt-libc's include dir into every
+        # bazel cc action via /etc/bazel.bazelrc, so
+        # <fuzzer/FuzzedDataProvider.h> resolves the same way it does
+        # on Ubuntu's apt clang-18.
         run: |
           bazelisk build --config=ci \
-            --build_tag_filters=-skia_ref,-fuzz_target \
+            --build_tag_filters=-skia_ref \
             //...
 
       - name: Build (Skia reference)
@@ -149,12 +147,12 @@ jobs:
             //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
       - name: Test
-        # Match the build filter above — fuzz targets aren't built so
-        # they can't be tested on self-hosted; they run on the
-        # GitHub-hosted `linux` job instead.
+        # Matches the build filter above; fuzz targets are exercised
+        # on self-hosted now that the runner guest provides the
+        # libFuzzer headers via bazelrc -isystem.
         run: |
           bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-skia_ref,-fuzz_target \
+            --test_tag_filters=-skia_ref \
             //...
 
       - name: Test (Skia reference)
