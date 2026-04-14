@@ -1,8 +1,12 @@
 #pragma once
 /// @file
 
+#include <cmath>
+
 #include "donner/base/Box.h"
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 
 namespace donner {
@@ -213,7 +217,52 @@ struct Length {
     return os << length.value << length.unit;
   }
 
+  /**
+   * Serialize this length to its canonical CSS text form, e.g. `10`, `10px`, `50%`, `1.5em`.
+   *
+   * - Integer-valued lengths omit the decimal point: `10px`, not `10.000000px`.
+   * - Non-integer lengths print with the minimum precision required to round-trip, via
+   *   `std::format`'s `{:g}` specifier.
+   * - `LengthUnit::None` produces a bare number with no unit suffix.
+   * - `LengthUnit::Percent` uses `%`; absolute and relative units use their CSS identifiers
+   *   (see \ref operator<<(LengthUnit)).
+   *
+   * Round-trips with `donner::parser::LengthParser::Parse` for every unit supported by the
+   * parser.
+   */
+  RcString toRcString() const {
+    const char* suffix = UnitSuffix(unit);
+    return RcString::fromFormat("{}{}", detail::FormatNumberForSVG(static_cast<double>(value)),
+                                suffix);
+  }
+
 private:
+  /// Returns the CSS unit suffix string for a \ref LengthUnit.  Distinct from
+  /// `operator<<(LengthUnit)` because that one writes to an ostream; this one returns a
+  /// bare C-string for use with `std::format`.
+  static constexpr const char* UnitSuffix(Unit u) {
+    switch (u) {
+      case Unit::None: return "";
+      case Unit::Percent: return "%";
+      case Unit::Cm: return "cm";
+      case Unit::Mm: return "mm";
+      case Unit::Q: return "q";
+      case Unit::In: return "in";
+      case Unit::Pc: return "pc";
+      case Unit::Pt: return "pt";
+      case Unit::Px: return "px";
+      case Unit::Em: return "em";
+      case Unit::Ex: return "ex";
+      case Unit::Ch: return "ch";
+      case Unit::Rem: return "rem";
+      case Unit::Vw: return "vw";
+      case Unit::Vh: return "vh";
+      case Unit::Vmin: return "vmin";
+      case Unit::Vmax: return "vmax";
+    }
+    UTILS_UNREACHABLE();
+  }
+
   static T diagonalExtent(const Box2<T>& box) {
     // Using the SVG spec's definition of normalized diagonal length:
     // > The normalized diagonal length must be calculated with

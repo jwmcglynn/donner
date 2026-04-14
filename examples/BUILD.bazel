@@ -43,15 +43,12 @@ donner_cc_binary(
     ],
 )
 
-# --- WASM reproducer / SVG viewer ---
-
+# --- WASM reproducer ---
 donner_cc_binary(
     name = "wasm_reproducer",
     srcs = ["wasm_reproducer.cc"],
     tags = ["manual"],
-    deps = [
-        "//donner/svg/renderer",
-    ],
+    deps = ["//donner/svg/renderer"],
 )
 
 wasm_cc_binary(
@@ -60,37 +57,31 @@ wasm_cc_binary(
     tags = ["manual"],
 )
 
+# --- SVG viewer (macOS/Linux only; pulls in the editor TextEditor widget) ---
 donner_cc_binary(
     name = "svg_viewer",
     srcs = ["svg_viewer.cc"],
-    linkopts = select({
-        "@platforms//cpu:wasm32": [
-            "-sALLOW_MEMORY_GROWTH=1",
-            "-sINITIAL_MEMORY=67108864",
-        ],
-        "@platforms//cpu:wasm64": [
-            "-sALLOW_MEMORY_GROWTH=1",
-            "-sINITIAL_MEMORY=67108864",
-        ],
-        "//conditions:default": [],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
     }),
-    tags = ["manual"],
     deps = [
-        "//donner/svg/renderer",
+        "//:donner",
+        # The viewer is intentionally minimal: donner core for the DOM,
+        # parser, hit-test, and renderer; glad/glfw/imgui for the ImGui
+        # shell; and exactly one library from //donner/editor — the
+        # TextEditor widget. The full editor binary with EditorApp,
+        # SelectTool, OverlayRenderer, and the command queue lives at
+        # //donner/editor:editor.
+        "//donner/editor:text_editor",
+        "//third_party/glad",
+        "@glfw",
         "@imgui",
-    ] + select({
-        "@platforms//cpu:wasm32": [],
-        "@platforms//cpu:wasm64": [],
-        "//conditions:default": ["//third_party/glad"],
-    }),
+    ],
 )
 
-wasm_cc_binary(
-    name = "svg_viewer_web_package",
-    cc_target = ":svg_viewer",
-    tags = ["manual"],
-)
-
+# --- Render test ---
 donner_cc_binary(
     name = "render_test",
     srcs = ["render_test.cc"],

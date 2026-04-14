@@ -1762,16 +1762,6 @@ TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
   Path filled = path.strokeToFill(style);
   ASSERT_FALSE(filled.empty());
 
-  // The first LineTo in the stroke polygon must start the left contour on
-  // segment 0's offset and NOT backtrack (y should move monotonically along
-  // the first segment's offset direction before any inside-miter vertex).
-  // We assert this via the bounding box: segment 0 runs from y=50 down to
-  // y=130 in path space. After applying halfWidth=10 offset, the bounding
-  // box in y covers approximately [40, 145] (the outside miters at pts[1]
-  // extend past y=130). If the forward trace had backtracked, we'd see
-  // duplicate y coordinates along a vertical edge at x=140 (the left
-  // offset of segment 0), which manifests as the same x appearing with
-  // non-monotonic y values in the polygon output.
   const auto commands = filled.commands();
   const auto pts = filled.points();
   double lastYOnSeg0Offset = -1.0;
@@ -1781,16 +1771,13 @@ TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
       continue;
     }
     const Vector2d& p = pts[cmd.pointIndex];
-    // Only check points on segment 0's left offset (x ≈ 140).
     if (std::abs(p.x - 140.0) > 0.5) {
-      break;  // Left the seg 0 offset region; stop checking.
+      break;
     }
     if (lastYOnSeg0Offset < 0) {
       lastYOnSeg0Offset = p.y;
       continue;
     }
-    // y should be monotonically non-decreasing while we walk the seg 0
-    // offset forward. A decrease indicates a backtrack.
     ASSERT_GE(p.y, lastYOnSeg0Offset - 0.01) << "Left contour backtracked along seg 0 offset";
     if (p.y > lastYOnSeg0Offset + 0.01) {
       seenIncrease = true;
@@ -1798,6 +1785,104 @@ TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
     lastYOnSeg0Offset = p.y;
   }
   EXPECT_TRUE(seenIncrease) << "Expected at least one forward step along seg 0 offset";
+}
+
+// =============================================================================
+// Path::toSVGPathData
+// =============================================================================
+
+TEST(PathToSVGPathData, EmptyPath) {
+  Path path;
+  EXPECT_EQ(path.toSVGPathData(), "");
+}
+
+TEST(PathToSVGPathData, MoveToOnly) {
+  Path path = PathBuilder().moveTo({10, 20}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 10 20");
+}
+
+TEST(PathToSVGPathData, MoveToLineTo) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 50}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 100 50");
+}
+
+TEST(PathToSVGPathData, MultipleLineTo) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({100, 0})
+                  .lineTo({100, 100})
+                  .lineTo({0, 100})
+                  .build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 100 0 L 100 100 L 0 100");
+}
+
+TEST(PathToSVGPathData, ClosePath) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({100, 0})
+                  .lineTo({100, 100})
+                  .closePath()
+                  .build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 100 0 L 100 100 Z");
+}
+
+TEST(PathToSVGPathData, QuadTo) {
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 Q 50 100 100 0");
+}
+
+TEST(PathToSVGPathData, CurveTo) {
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 C 0 100 100 100 100 0");
+}
+
+TEST(PathToSVGPathData, FractionalCoordinates) {
+  Path path = PathBuilder().moveTo({1.5, 2.25}).lineTo({3.14, -0.5}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 1.5 2.25 L 3.14 -0.5");
+}
+
+TEST(PathToSVGPathData, NegativeCoordinates) {
+  Path path = PathBuilder().moveTo({-10, -20}).lineTo({-5, -15}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M -10 -20 L -5 -15");
+}
+
+TEST(PathToSVGPathData, MultipleSubpaths) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .closePath()
+                  .moveTo({20, 20})
+                  .lineTo({30, 20})
+                  .closePath()
+                  .build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 10 0 Z M 20 20 L 30 20 Z");
+}
+
+TEST(PathToSVGPathData, AllVerbTypes) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .quadTo({15, 10}, {20, 0})
+                  .curveTo({20, 20}, {30, 20}, {30, 0})
+                  .closePath()
+                  .build();
+  EXPECT_EQ(path.toSVGPathData(),
+            "M 0 0 L 10 0 Q 15 10 20 0 C 20 20 30 20 30 0 Z");
+}
+
+TEST(PathToSVGPathData, IntegerValuesNoDecimalPoint) {
+  Path path = PathBuilder().moveTo({1000, 2000}).lineTo({3000, 4000}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 1000 2000 L 3000 4000");
+}
+
+TEST(PathToSVGPathData, LargeNegativeIntegerValues) {
+  Path path = PathBuilder().moveTo({-1000, -2000}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M -1000 -2000");
+}
+
+TEST(PathToSVGPathData, ZeroCoordinates) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({0, 0}).build();
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 0 0");
 }
 
 }  // namespace donner

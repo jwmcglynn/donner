@@ -24,13 +24,12 @@
 #include "donner/css/Color.h"
 #include "donner/css/FontFace.h"
 #include "donner/editor/sandbox/Wire.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/ResolvedGradient.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/resources/ImageResource.h"
 
@@ -102,32 +101,7 @@ void EncodePathShape(WireWriter& w, const svg::PathShape& p);
 /// `PaintResolvedReference` to a gradient entity into plain values that
 /// cross the wire, then the replayer materializes them onto a fresh ECS
 /// entity via `GradientReplayRegistry`.
-struct WireGradient {
-  enum class Kind : uint8_t { kLinear = 0, kRadial = 1 };
-  Kind kind = Kind::kLinear;
-
-  // Common fields (apply to both linear and radial).
-  svg::GradientUnits units = svg::GradientUnits::Default;
-  svg::GradientSpreadMethod spreadMethod = svg::GradientSpreadMethod::Default;
-  std::vector<svg::GradientStop> stops;
-
-  // Linear fields — used when kind == kLinear.
-  Lengthd x1;
-  Lengthd y1;
-  Lengthd x2;
-  Lengthd y2;
-
-  // Radial fields — used when kind == kRadial.
-  Lengthd cx;
-  Lengthd cy;
-  Lengthd r;
-  std::optional<Lengthd> fx;
-  std::optional<Lengthd> fy;
-  Lengthd fr;
-
-  // Fallback color carried from the original PaintResolvedReference.
-  std::optional<css::Color> fallback;
-};
+using WireGradient = svg::ResolvedGradientData;
 
 /// Encodes a `Lengthd` as `f64 value, u8 unit`.
 void EncodeLengthd(WireWriter& w, const Lengthd& v);
@@ -163,10 +137,9 @@ void EncodePaintParams(WireWriter& w, const svg::PaintParams& p);
 /// Decodes a `PaintParams`. Fill and stroke gradients (if any) are stashed
 /// in the corresponding out-parameters rather than being flattened into the
 /// result's `ResolvedPaintServer` variants — see `DecodeResolvedPaintServer`.
-[[nodiscard]] bool DecodePaintParams(
-    WireReader& r, svg::PaintParams& out,
-    std::optional<WireGradient>* outFillGradient = nullptr,
-    std::optional<WireGradient>* outStrokeGradient = nullptr);
+[[nodiscard]] bool DecodePaintParams(WireReader& r, svg::PaintParams& out,
+                                     std::optional<WireGradient>* outFillGradient = nullptr,
+                                     std::optional<WireGradient>* outStrokeGradient = nullptr);
 
 /// Encodes the subset of `ResolvedClip` we support in S2: rect + paths +
 /// unit-transform. The optional mask is always encoded as "absent" — masks
@@ -210,10 +183,9 @@ void EncodeTextParams(WireWriter& w, const svg::TextParams& p);
 
 /// Encodes a `ComputedTextComponent` (vector of TextSpan, each carrying
 /// text content, positioning lists, paint servers, font style, etc.).
-void EncodeComputedTextComponent(WireWriter& w,
-                                 const svg::components::ComputedTextComponent& text);
-[[nodiscard]] bool DecodeComputedTextComponent(
-    WireReader& r, svg::components::ComputedTextComponent& out);
+void EncodeComputedTextComponent(WireWriter& w, const svg::components::ComputedTextComponent& text);
+[[nodiscard]] bool DecodeComputedTextComponent(WireReader& r,
+                                               svg::components::ComputedTextComponent& out);
 
 /// Encodes a `FilterGraph` as metadata only: 0 nodes (transparent
 /// pass-through), colorInterpolationFilters, primitiveUnits,

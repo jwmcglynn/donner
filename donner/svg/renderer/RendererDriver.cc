@@ -1765,13 +1765,13 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
   // traverse() will compose this with each sub-document entity's entityFromWorldTransform.
   const Transform2d subDocFromLocal =
       aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
-  const Transform2d docFromCanvas = subDocument.documentFromCanvasTransform();
+  const Transform2d canvasFromDoc = subDocument.canvasFromDocumentTransform();
   // Compose the transform chain. Transform2d operator* uses left-first order: A * B = "apply A,
-  // then B". The sub-doc root entity's entityFromWorldTransform already includes docFromCanvas^-1
-  // (mapping from document to canvas/device space). Including docFromCanvas here cancels that out,
-  // so the net result maps sub-doc element coordinates through subDocFromLocal (to parent document
-  // space), then through parentAbsoluteTransform (to device space).
-  const Transform2d baseTransform = subDocFromLocal * parentAbsoluteTransform * docFromCanvas;
+  // then B". The sub-doc root entity's entityFromWorldTransform already includes canvasFromDoc
+  // (mapping from document to canvas/device space). Including canvasFromDoc here cancels that
+  // out, so the net result maps sub-doc element coordinates through subDocFromLocal (to parent
+  // document space), then through parentAbsoluteTransform (to device space).
+  const Transform2d baseTransform = subDocFromLocal * parentAbsoluteTransform * canvasFromDoc;
 
   // Save and override layerBaseTransform for sub-document rendering.
   const Transform2d savedLayerBase = layerBaseTransform_;

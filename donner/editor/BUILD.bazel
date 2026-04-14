@@ -1,7 +1,7 @@
 """Donner Editor: in-tree migration of the external `donner-editor` prototype.
 
 This package is the destination for the editor migration described in
-`docs/design_docs/0020-editor.md`. Milestone 1 lands the package skeleton,
+`docs/design_docs/0020-editor.md`. Milestone 1 landed the package skeleton,
 build-system foundation, and dependency wiring; subsequent milestones add
 the actual editor source.
 
@@ -11,4 +11,358 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
-package(default_visibility = ["//donner/editor:__subpackages__"])
+load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+
+# Editor libraries are public so the //examples:svg_viewer target (in the
+# separate examples Bazel module) can depend on `:text_editor`. BCR
+# consumers cannot transitively use the editor libraries because
+# imgui/glfw/tracy are `dev_dependency = True` in MODULE.bazel and won't
+# resolve outside dev builds.
+package(default_visibility = ["//visibility:public"])
+
+donner_cc_library(
+    name = "viewport_geometry",
+    srcs = ["ViewportGeometry.cc"],
+    hdrs = ["ViewportGeometry.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+# Single source of truth for the editor render pane's screen↔document
+# coordinate mapping, including zoom, pan, DPR, and the focal-point-
+# preserving zoom math. See `docs/design_docs/0025-editor_ux.md`.
+donner_cc_library(
+    name = "viewport_state",
+    srcs = ["ViewportState.cc"],
+    hdrs = ["ViewportState.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "selection_aabb",
+    srcs = ["SelectionAabb.cc"],
+    hdrs = ["SelectionAabb.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "render_pane_gesture",
+    srcs = ["RenderPaneGesture.cc"],
+    hdrs = ["RenderPaneGesture.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "pinch_event_monitor",
+    srcs = ["PinchEventMonitor.cc"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["PinchEventMonitorStub.cc"],
+    }),
+    hdrs = ["PinchEventMonitor.h"],
+    deps = [
+        ":render_pane_gesture",
+    ],
+)
+
+objc_library(
+    name = "pinch_event_monitor_macos",
+    srcs = ["PinchEventMonitorMac.mm"],
+    copts = ["-fblocks"],
+    sdk_frameworks = ["Cocoa"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":pinch_event_monitor",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "command_queue",
+    srcs = ["CommandQueue.cc"],
+    hdrs = [
+        "CommandQueue.h",
+        "EditorCommand.h",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "async_svg_document",
+    srcs = ["AsyncSVGDocument.cc"],
+    hdrs = ["AsyncSVGDocument.h"],
+    deps = [
+        ":command_queue",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "text_patch",
+    srcs = ["TextPatch.cc"],
+    hdrs = ["TextPatch.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "attribute_writeback",
+    srcs = ["AttributeWriteback.cc"],
+    hdrs = ["AttributeWriteback.h"],
+    deps = [
+        ":text_patch",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "async_renderer",
+    srcs = ["AsyncRenderer.cc"],
+    hdrs = ["AsyncRenderer.h"],
+    deps = [
+        ":overlay_renderer",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_library(
+    name = "change_classifier",
+    srcs = ["ChangeClassifier.cc"],
+    hdrs = ["ChangeClassifier.h"],
+    deps = [
+        ":command_queue",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "source_sync",
+    srcs = ["SourceSync.cc"],
+    hdrs = ["SourceSync.h"],
+    deps = [
+        ":change_classifier",
+        ":editor_app",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_app",
+    srcs = ["EditorApp.cc"],
+    hdrs = ["EditorApp.h"],
+    deps = [
+        ":async_svg_document",
+        ":attribute_writeback",
+        ":command_queue",
+        ":undo_timeline",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "tool",
+    hdrs = ["Tool.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "select_tool",
+    srcs = ["SelectTool.cc"],
+    hdrs = ["SelectTool.h"],
+    deps = [
+        ":attribute_writeback",
+        ":command_queue",
+        ":editor_app",
+        ":tool",
+        ":undo_timeline",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "overlay_renderer",
+    srcs = ["OverlayRenderer.cc"],
+    hdrs = ["OverlayRenderer.h"],
+    deps = [
+        ":editor_app",
+        "//donner/base",
+        "//donner/css",
+        "//donner/svg",
+        "//donner/svg/renderer",
+    ],
+)
+
+# Extracts the notice_editor.txt file from the license aggregation
+# rule so it can be embedded into the editor binary. The rule produces
+# both `.txt` and `.json`; we only want the text for the About dialog.
+filegroup(
+    name = "notice_editor_txt",
+    srcs = ["//third_party/licenses:notice_editor"],
+    output_group = "notice",
+)
+
+# Embed the NOTICE text into the editor binary. `//donner/editor:notice`
+# exposes `donner::embedded::kEditorNoticeText` as a
+# `std::span<const unsigned char>`. The editor's Help → About dialog
+# displays this.
+embed_resources(
+    name = "notice",
+    header_output = "donner/editor/Notice.h",
+    resources = {
+        "kEditorNoticeText": ":notice_editor_txt",
+    },
+)
+
+# The full Donner editor binary. Wires EditorApp + SelectTool +
+# OverlayRenderer + TextEditor into an ImGui shell with a live source
+# pane and a click-and-drag render pane. The minimal viewer demo lives
+# at `//examples:svg_viewer`.
+#
+#     bazel run //donner/editor -- donner_splash.svg
+donner_cc_binary(
+    name = "editor",
+    srcs = ["main.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":async_renderer",
+        ":attribute_writeback",
+        ":change_classifier",
+        ":editor_app",
+        ":notice",
+        ":overlay_renderer",
+        ":pinch_event_monitor",
+        ":selection_aabb",
+        ":source_sync",
+    ] + select({
+        "@platforms//os:macos": [":pinch_event_monitor_macos"],
+        "//conditions:default": [],
+    }) + [
+        ":render_pane_gesture",
+        ":select_tool",
+        ":text_editor",
+        ":text_patch",
+        ":tracy_wrapper",
+        ":viewport_state",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//third_party/fira-code",
+        "//third_party/glad",
+        "//third_party/roboto",
+        "@glfw",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "text_buffer",
+    hdrs = ["TextBuffer.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+# Abstract clipboard interface + header-only InMemoryClipboard. No
+# ImGui dependency — safe to link from headless unit tests. See
+# docs/design_docs/text_editor_refactor.md for the split rationale.
+donner_cc_library(
+    name = "clipboard_interface",
+    hdrs = [
+        "ClipboardInterface.h",
+        "InMemoryClipboard.h",
+    ],
+    deps = [],
+)
+
+# Production ClipboardInterface implementation backed by
+# ImGui::GetClipboardText / SetClipboardText. This is the only
+# editor target that touches ImGui clipboard APIs.
+donner_cc_library(
+    name = "imgui_clipboard",
+    srcs = ["ImGuiClipboard.cc"],
+    hdrs = ["ImGuiClipboard.h"],
+    deps = [
+        ":clipboard_interface",
+        "@imgui",
+    ],
+)
+
+# Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
+# library pulls in the real Tracy client; otherwise the macros are no-ops.
+# Tracy is linked into every editor build (including release + WASM), runtime-
+# gated by a UI toggle — see the Security section of docs/design_docs/0020-editor.md.
+donner_cc_library(
+    name = "tracy_wrapper",
+    hdrs = ["TracyWrapper.h"],
+    defines = ["ENABLE_TRACY"],
+    deps = [
+        "@tracy//:tracy_client",
+    ],
+)
+
+donner_cc_library(
+    name = "text_editor_core",
+    srcs = ["TextEditorCore.cc"],
+    hdrs = ["TextEditorCore.h"],
+    deps = [
+        ":text_buffer",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "text_editor",
+    srcs = ["TextEditor.cc"],
+    hdrs = ["TextEditor.h"],
+    deps = [
+        ":text_buffer",
+        ":text_editor_core",
+        "//donner/base",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "undo_timeline",
+    srcs = ["UndoTimeline.cc"],
+    hdrs = ["UndoTimeline.h"],
+    deps = [
+        ":attribute_writeback",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)

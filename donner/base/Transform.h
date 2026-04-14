@@ -5,7 +5,9 @@
 #include <ostream>
 
 #include "donner/base/Box.h"
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 
 namespace donner {
@@ -310,5 +312,78 @@ using Transform2f = Transform2<float>;
 using Transform2d = Transform2<double>;
 
 /// @}
+
+/**
+ * Serialize a \ref Transform2d to its canonical SVG `transform` attribute text, decomposing
+ * to the simplest form when possible:
+ *
+ * - Identity → empty string
+ * - Pure translate (`[1 0 0 1 e f]`) → `translate(e, f)`, or `translate(e)` when `f == 0`
+ * - Pure uniform scale (`[s 0 0 s 0 0]`) → `scale(s)`
+ * - Pure non-uniform scale (`[sx 0 0 sy 0 0]`) → `scale(sx, sy)`
+ * - Pure rotation around origin (`[cos -sin sin cos 0 0]`) → `rotate(deg)`
+ * - General → `matrix(a, b, c, d, e, f)`
+ *
+ * Numbers are emitted via `{}` (integer-valued doubles) or `{:g}` (fractional) so the
+ * output is the shortest form that round-trips.  Arguments are comma-separated with a
+ * space after the comma, matching the canonical CSS transform syntax.
+ *
+ * Round-trips with `donner::svg::parser::TransformParser::Parse` for every shape above.
+ *
+ * @param transform Transform to serialize.
+ * @return Canonical SVG transform text (empty string for identity).
+ */
+inline RcString toSVGTransformString(const Transform2d& transform) {
+  if (transform.isIdentity()) {
+    return RcString("");
+  }
+
+  const double a = transform.data[0];
+  const double b = transform.data[1];
+  const double c = transform.data[2];
+  const double d = transform.data[3];
+  const double e = transform.data[4];
+  const double f = transform.data[5];
+
+  // Pure translate: upper-left is identity 2x2.
+  if (NearEquals(a, 1.0) && NearZero(b) && NearZero(c) && NearEquals(d, 1.0)) {
+    if (NearZero(f)) {
+      return RcString::fromFormat("translate({})", detail::FormatNumberForSVG(e));
+    }
+    return RcString::fromFormat("translate({}, {})", detail::FormatNumberForSVG(e),
+                                 detail::FormatNumberForSVG(f));
+  }
+
+  // Pure rotation around origin: matrix must be [cos, sin, -sin, cos, 0, 0] with
+  // `a² + b² ≈ 1` as a final sanity check against near-misses that happen to have
+  // the right symmetry but the wrong magnitude (e.g. a rotation+scale composition).
+  //
+  // This check precedes the scale detection below because `rotate(180°)` =
+  // `[-1, 0, 0, -1, 0, 0]` also satisfies the "pure scale" constraints (b=c=0,
+  // e=f=0, a=d) — but it's semantically a rotation and the canonical SVG output
+  // for that matrix is `rotate(180)`, not `scale(-1)`. Conversely, `scale(2)`
+  // has `a² + b² = 4` and fails the `NearEquals(..., 1.0)` check here, so it
+  // correctly falls through to the scale branch.
+  if (NearZero(e) && NearZero(f) && NearEquals(a, d) && NearEquals(b, -c) &&
+      NearEquals(a * a + b * b, 1.0)) {
+    const double angleDegrees = std::atan2(b, a) * MathConstants<double>::kRadToDeg;
+    return RcString::fromFormat("rotate({})", detail::FormatNumberForSVG(angleDegrees));
+  }
+
+  // Pure scale (around origin): no skew or translation.
+  if (NearZero(b) && NearZero(c) && NearZero(e) && NearZero(f)) {
+    if (NearEquals(a, d)) {
+      return RcString::fromFormat("scale({})", detail::FormatNumberForSVG(a));
+    }
+    return RcString::fromFormat("scale({}, {})", detail::FormatNumberForSVG(a),
+                                 detail::FormatNumberForSVG(d));
+  }
+
+  // General fallback.
+  return RcString::fromFormat(
+      "matrix({}, {}, {}, {}, {}, {})", detail::FormatNumberForSVG(a),
+      detail::FormatNumberForSVG(b), detail::FormatNumberForSVG(c), detail::FormatNumberForSVG(d),
+      detail::FormatNumberForSVG(e), detail::FormatNumberForSVG(f));
+}
 
 }  // namespace donner

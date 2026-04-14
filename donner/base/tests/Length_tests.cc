@@ -69,4 +69,41 @@ TEST(LengthTest, LengthUnitOstreamOutput) {
   EXPECT_THAT(Lengthd::Unit::Vmax, ToStringIs("vmax"));
 }
 
+TEST(LengthTest, ToRcStringIntegerValuesOmitDecimal) {
+  EXPECT_EQ(Lengthd(10.0, Lengthd::Unit::Px).toRcString(), "10px");
+  EXPECT_EQ(Lengthd(0.0).toRcString(), "0");
+  EXPECT_EQ(Lengthd(50.0, Lengthd::Unit::Percent).toRcString(), "50%");
+  EXPECT_EQ(Lengthd(-25.0, Lengthd::Unit::Px).toRcString(), "-25px");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Em).toRcString(), "1em");
+}
+
+TEST(LengthTest, ToRcStringFractionalValues) {
+  EXPECT_EQ(Lengthd(1.5, Lengthd::Unit::Em).toRcString(), "1.5em");
+  EXPECT_EQ(Lengthd(0.25, Lengthd::Unit::Px).toRcString(), "0.25px");
+  // `{:g}` trims trailing zeros and prefers the shortest round-trippable form.
+  EXPECT_EQ(Lengthd(3.14, Lengthd::Unit::Px).toRcString(), "3.14px");
+  EXPECT_EQ(Lengthd(-0.5, Lengthd::Unit::Percent).toRcString(), "-0.5%");
+}
+
+TEST(LengthTest, ToRcStringCoversAllUnits) {
+  // Integer value (1) with every unit identifier, to lock in suffix mapping.
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::None).toRcString(), "1");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Percent).toRcString(), "1%");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Cm).toRcString(), "1cm");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Mm).toRcString(), "1mm");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Q).toRcString(), "1q");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::In).toRcString(), "1in");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Pc).toRcString(), "1pc");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Pt).toRcString(), "1pt");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Px).toRcString(), "1px");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Em).toRcString(), "1em");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Ex).toRcString(), "1ex");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Ch).toRcString(), "1ch");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Rem).toRcString(), "1rem");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Vw).toRcString(), "1vw");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Vh).toRcString(), "1vh");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Vmin).toRcString(), "1vmin");
+  EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Vmax).toRcString(), "1vmax");
+}
+
 }  // namespace donner

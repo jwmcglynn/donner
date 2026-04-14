@@ -1,307 +1,452 @@
 /**
- * @file svg_viewer.cc
- * @brief Minimal WASM-compatible SVG viewer using ImGui + Donner.
+ * @example svg_viewer.cc Minimal Donner SVG viewer with a live text pane.
  *
- * Two-panel UI: left panel is an SVG source code editor, right panel shows
- * the rendered result. Re-parses and re-renders on every edit.
+ * A small ImGui demo: load an SVG, display it, click to select a shape,
+ * and edit the source in a text pane that re-parses on every keystroke.
+ * Selection chrome is drawn by injecting an `editor-only` `<rect>` and
+ * `<path>` into the document tree — no separate overlay renderer and no
+ * editor-side command queue. The **only** dependency on the editor tree
+ * is `donner::editor::TextEditor`, the syntax-aware text widget.
  *
- * Builds natively (with glad for GL loading) and as WASM (with Emscripten's
- * built-in WebGL / GLFW3 support).
+ * For the full editor binary (EditorApp + SelectTool + OverlayRenderer
+ * + command queue + mutation seam) see `//donner/editor`.
+ *
+ * To run:
+ *
+ * ```sh
+ * bazel run //examples:svg_viewer -- donner_splash.svg
+ * ```
  */
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#include <GLES3/gl3.h>
-#else
-#include <glad/glad.h>
-#endif
-
-#include <GLFW/glfw3.h>
-
-#include "backends/imgui_impl_glfw.h"
-#include "backends/imgui_impl_opengl3.h"
-#include "imgui.h"
-
-#include <cstdio>
-#include <cstring>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
-#include <vector>
 
+#include "donner/base/Box.h"
+#include "donner/base/FileOffset.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
-#include "donner/svg/SVG.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLNode.h"
+#include "donner/editor/TextBuffer.h"
+#include "donner/editor/TextEditor.h"
+#include "donner/svg/DonnerController.h"
+#include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGUnknownElement.h"
+#include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
+
+#include "glad/glad.h"
+
+extern "C" {
+#include "GLFW/glfw3.h"
+}
+
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
 
 namespace {
 
-// Default SVG shown on startup.
-constexpr const char* kDefaultSvg =
-    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
-  <rect width="100" height="100" fill="red"/>
-  <circle cx="50" cy="50" r="30" fill="blue"/>
-</svg>)";
+constexpr int kInitialWindowWidth = 1280;
+constexpr int kInitialWindowHeight = 800;
+constexpr float kSourcePaneWidth = 560.0f;
 
-constexpr int kInitialWidth = 1280;
-constexpr int kInitialHeight = 720;
-constexpr int kSvgBufferSize = 64 * 1024;  // 64 KiB text buffer
+void GlfwErrorCallback(int error, const char* description) {
+  std::cerr << "GLFW error " << error << ": " << description << "\n";
+}
 
-struct AppState {
-  GLFWwindow* window = nullptr;
-  GLuint textureId = 0;
-  int textureWidth = 0;
-  int textureHeight = 0;
+std::string LoadFile(const std::string& filename) {
+  std::ifstream file(filename, std::ios::binary);
+  if (!file) {
+    std::cerr << "Could not open file " << filename << "\n";
+    return {};
+  }
+  std::ostringstream out;
+  out << file.rdbuf();
+  return std::move(out).str();
+}
 
-  std::vector<char> svgBuffer;
-  std::string lastRenderedSvg;
-  std::string parseError;
+/// Bundles the loaded document with its hit-test controller and the
+/// editor-only overlay nodes that render the current selection. Re-parsing
+/// throws all of this away and rebuilds it.
+struct ViewerState {
+  donner::svg::SVGDocument document;
+  std::optional<donner::svg::DonnerController> controller;
+  std::optional<donner::svg::SVGRectElement> boundsShape;
+  std::optional<donner::svg::SVGPathElement> selectedPathOutline;
+  std::optional<donner::svg::SVGElement> selectedElement;
+  std::optional<donner::ParseDiagnostic> lastParseError;
+  bool valid = false;
 
-  bool needsRender = true;
+  void loadFromString(std::string_view source) {
+    using namespace donner;
+    using namespace donner::svg;
+    using namespace donner::svg::parser;
+
+    document = SVGDocument();
+    valid = false;
+    controller.reset();
+    boundsShape.reset();
+    selectedPathOutline.reset();
+    selectedElement.reset();
+
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    ParseResult<SVGDocument> maybe = SVGParser::ParseSVG(source, disabled);
+    if (maybe.hasError()) {
+      lastParseError = std::move(maybe.error());
+      return;
+    }
+    lastParseError.reset();
+
+    document = std::move(maybe.result());
+    controller = DonnerController(document);
+
+    // Inject an editor-only container holding the selection chrome as
+    // regular SVG elements. The renderer draws them alongside the real
+    // document; toggling display:inline/none shows or hides them.
+    auto editorOnly = SVGUnknownElement::Create(document, "editor-only");
+    document.svgElement().appendChild(editorOnly);
+
+    boundsShape = SVGRectElement::Create(document);
+    editorOnly.appendChild(boundsShape.value());
+    boundsShape->setStyle(
+        "display: none; fill: none; stroke: deepskyblue; stroke-width: 1px; "
+        "pointer-events: none");
+
+    selectedPathOutline = SVGPathElement::Create(document);
+    editorOnly.appendChild(selectedPathOutline.value());
+    selectedPathOutline->setStyle(
+        "display: none; fill: none; stroke: deepskyblue; stroke-width: 1px; "
+        "pointer-events: none");
+
+    valid = true;
+  }
+
+  void selectNone() {
+    selectedElement.reset();
+    if (boundsShape) {
+      boundsShape->setStyle("display: none");
+    }
+    if (selectedPathOutline) {
+      selectedPathOutline->setStyle("display: none");
+    }
+  }
+
+  void selectElement(const donner::svg::SVGElement& element) {
+    using namespace donner::svg;
+
+    selectedElement = element;
+    if (!element.isa<SVGGeometryElement>()) {
+      return;
+    }
+
+    auto geom = element.cast<SVGGeometryElement>();
+    if (auto spline = geom.computedSpline()) {
+      if (selectedPathOutline) {
+        selectedPathOutline->setStyle("display: inline");
+        selectedPathOutline->setSpline(*spline);
+        selectedPathOutline->setTransform(geom.elementFromWorld());
+      }
+      if (auto bounds = geom.worldBounds()) {
+        if (boundsShape) {
+          boundsShape->setStyle("display: inline");
+          boundsShape->setX(donner::Lengthd(bounds->topLeft.x));
+          boundsShape->setY(donner::Lengthd(bounds->topLeft.y));
+          boundsShape->setWidth(donner::Lengthd(bounds->width()));
+          boundsShape->setHeight(donner::Lengthd(bounds->height()));
+        }
+      }
+    }
+  }
+
+  /// Click a document-space point. Returns the newly-selected element's
+  /// source-location range (in the original SVG text) if the click hit a
+  /// geometry element that carries XML source offsets, so the caller can
+  /// highlight it in the text pane.
+  ///
+  /// Selection is **sticky** — clicking empty space is a no-op rather than
+  /// a deselect. Only a click that lands on an element changes the
+  /// selection. This matches the behavior of most vector editors and
+  /// avoids accidental deselection while pan/zoom lands later.
+  std::optional<donner::SourceRange> handleClick(const donner::Vector2d& documentPoint) {
+    if (!controller) {
+      return std::nullopt;
+    }
+    auto hit = controller->findIntersecting(documentPoint);
+    if (!hit.has_value()) {
+      return std::nullopt;
+    }
+
+    selectElement(*hit);
+
+    if (auto xmlNode = donner::xml::XMLNode::TryCast(hit->entityHandle())) {
+      return xmlNode->getNodeLocation();
+    }
+    return std::nullopt;
+  }
 };
 
-void glfwErrorCallback(int error, const char* description) {
-  std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
+/// Build a `TextEditor::ErrorMarkers` map from a parser diagnostic.
+/// `TextEditor` keys markers by 1-based line number; diagnostics with no
+/// resolved line info land on line 1 so the user always sees something.
+donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(
+    const donner::ParseDiagnostic& diag) {
+  donner::editor::TextEditor::ErrorMarkers markers;
+  const int line = diag.range.start.lineInfo.has_value()
+                       ? static_cast<int>(diag.range.start.lineInfo->line)
+                       : 1;
+  markers.emplace(line, std::string(std::string_view(diag.reason)));
+  return markers;
 }
 
-void uploadBitmap(AppState& state, const donner::svg::RendererBitmap& bitmap) {
-  if (bitmap.pixels.empty() || bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0) {
-    return;
+/// Convert a `FileOffset` from donner's XML source location into a
+/// `TextEditor` coordinate. donner's line is 1-based; `TextEditor` is
+/// 0-based.
+donner::editor::Coordinates FileOffsetToEditorCoordinates(const donner::FileOffset& offset) {
+  if (!offset.lineInfo.has_value()) {
+    return donner::editor::Coordinates(0, 0);
   }
-
-  if (state.textureId == 0) {
-    glGenTextures(1, &state.textureId);
-  }
-  glBindTexture(GL_TEXTURE_2D, state.textureId);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-  // Upload the pixel data, row-by-row if rowBytes differs from tightly packed.
-  const int w = bitmap.dimensions.x;
-  const int h = bitmap.dimensions.y;
-  const size_t tightRowBytes = static_cast<size_t>(w) * 4u;
-
-  if (bitmap.rowBytes == tightRowBytes || bitmap.rowBytes == 0) {
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                 bitmap.pixels.data());
-  } else {
-    // Allocate tightly-packed buffer and copy row-by-row.
-    std::vector<uint8_t> packed(tightRowBytes * static_cast<size_t>(h));
-    for (int row = 0; row < h; ++row) {
-      std::memcpy(packed.data() + row * tightRowBytes,
-                  bitmap.pixels.data() + row * bitmap.rowBytes, tightRowBytes);
-    }
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, packed.data());
-  }
-  glBindTexture(GL_TEXTURE_2D, 0);
-
-  state.textureWidth = w;
-  state.textureHeight = h;
-}
-
-void renderSvg(AppState& state) {
-  using namespace donner;
-  using namespace donner::svg;
-  using namespace donner::svg::parser;
-
-  std::string svgSource(state.svgBuffer.data());
-  if (svgSource == state.lastRenderedSvg) {
-    return;  // No change.
-  }
-  state.lastRenderedSvg = svgSource;
-  state.parseError.clear();
-
-  ParseWarningSink warnings;
-  ParseResult<SVGDocument> maybeDoc = SVGParser::ParseSVG(svgSource, warnings);
-  if (maybeDoc.hasError()) {
-    state.parseError = "Parse error: " + std::string(maybeDoc.error().reason);
-    return;
-  }
-
-  SVGDocument doc = std::move(maybeDoc.result());
-  doc.useAutomaticCanvasSize();
-
-  RendererTinySkia renderer;
-  renderer.draw(doc);
-
-  RendererBitmap bitmap = renderer.takeSnapshot();
-
-  if (!bitmap.empty()) {
-    uploadBitmap(state, bitmap);
-  }
-}
-
-void mainLoopIteration(void* arg) {
-  auto* state = static_cast<AppState*>(arg);
-
-#ifndef __EMSCRIPTEN__
-  if (glfwWindowShouldClose(state->window)) {
-    return;
-  }
-#endif
-
-  glfwPollEvents();
-
-  ImGui_ImplOpenGL3_NewFrame();
-  ImGui_ImplGlfw_NewFrame();
-  ImGui::NewFrame();
-
-  // Render SVG on first frame.
-  if (state->needsRender) {
-    renderSvg(*state);
-    state->needsRender = false;
-  }
-
-  // Full-window docking area.
-  const ImGuiViewport* viewport = ImGui::GetMainViewport();
-  ImGui::SetNextWindowPos(viewport->WorkPos);
-  ImGui::SetNextWindowSize(viewport->WorkSize);
-  ImGui::Begin("##MainWindow", nullptr,
-               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                   ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
-
-  const float availWidth = ImGui::GetContentRegionAvail().x;
-  const float panelWidth = availWidth * 0.45f;
-
-  // Left panel — SVG source editor.
-  ImGui::BeginChild("##CodePanel", ImVec2(panelWidth, -1.0f), ImGuiChildFlags_Borders);
-  ImGui::Text("SVG Source");
-  ImGui::Separator();
-
-  const float textHeight = ImGui::GetContentRegionAvail().y - 40.0f;
-  if (ImGui::InputTextMultiline("##SvgSource", state->svgBuffer.data(),
-                                static_cast<size_t>(kSvgBufferSize),
-                                ImVec2(-FLT_MIN, textHeight > 100.0f ? textHeight : 100.0f),
-                                ImGuiInputTextFlags_AllowTabInput)) {
-    state->needsRender = true;
-  }
-
-  if (!state->parseError.empty()) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-    ImGui::TextWrapped("%s", state->parseError.c_str());
-    ImGui::PopStyleColor();
-  }
-  ImGui::EndChild();
-
-  ImGui::SameLine();
-
-  // Right panel — rendered output.
-  ImGui::BeginChild("##RenderPanel", ImVec2(0, -1.0f), ImGuiChildFlags_Borders);
-
-  if (state->textureId != 0) {
-    ImGui::Text("Rendered (%dx%d)", state->textureWidth, state->textureHeight);
-    ImGui::Separator();
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    float displayW = static_cast<float>(state->textureWidth);
-    float displayH = static_cast<float>(state->textureHeight);
-    if (displayW > 0 && displayH > 0) {
-      const float scaleX = avail.x / displayW;
-      const float scaleY = avail.y / displayH;
-      const float scale = (scaleX < scaleY) ? scaleX : scaleY;
-      displayW *= scale;
-      displayH *= scale;
-    }
-
-    ImGui::Image(static_cast<ImTextureID>(static_cast<uintptr_t>(state->textureId)),
-                 ImVec2(displayW, displayH));
-  } else {
-    ImGui::Text("No render output yet");
-  }
-  ImGui::EndChild();
-
-  ImGui::End();
-
-  // Render.
-  ImGui::Render();
-  int displayW = 0;
-  int displayH = 0;
-  glfwGetFramebufferSize(state->window, &displayW, &displayH);
-  glViewport(0, 0, displayW, displayH);
-  glClearColor(0.11f, 0.11f, 0.13f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-  glfwSwapBuffers(state->window);
+  return donner::editor::Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
+                                     static_cast<int>(offset.lineInfo->offsetOnLine));
 }
 
 }  // namespace
 
-int main() {
-  glfwSetErrorCallback(&glfwErrorCallback);
-  if (glfwInit() == GLFW_FALSE) {
-    std::fprintf(stderr, "glfwInit() failed\n");
+int main(int argc, char** argv) {
+  if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
+    std::filesystem::current_path(bwd);
+  }
+
+  if (argc != 2) {
+    std::cerr << "Usage: svg_viewer <filename>\n";
     return 1;
   }
 
-#ifdef __EMSCRIPTEN__
-  // Emscripten provides WebGL 2.0 context via USE_WEBGL2=1.
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
-#else
+  const std::string svgPath = argv[1];
+  const std::string initialSource = LoadFile(svgPath);
+  if (initialSource.empty()) {
+    return 1;
+  }
+
+  // ---------------------------------------------------------------------------
+  // GLFW + OpenGL
+  // ---------------------------------------------------------------------------
+  glfwSetErrorCallback(GlfwErrorCallback);
+  if (!glfwInit()) {
+    std::cerr << "Failed to initialize GLFW\n";
+    return 1;
+  }
+
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-#endif
-#endif
+  glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-  GLFWwindow* window =
-      glfwCreateWindow(kInitialWidth, kInitialHeight, "Donner SVG Viewer", nullptr, nullptr);
-  if (window == nullptr) {
-    std::fprintf(stderr, "glfwCreateWindow() failed\n");
+  GLFWwindow* window = glfwCreateWindow(kInitialWindowWidth, kInitialWindowHeight,
+                                        "Donner SVG Viewer", nullptr, nullptr);
+  if (!window) {
+    std::cerr << "Failed to create GLFW window\n";
     glfwTerminate();
     return 1;
   }
-
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
 
-#ifndef __EMSCRIPTEN__
-  if (gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)) == 0) {
-    std::fprintf(stderr, "glad failed to load GL symbols\n");
+  if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+    std::cerr << "Failed to initialize OpenGL loader\n";
     glfwDestroyWindow(window);
     glfwTerminate();
     return 1;
   }
-#endif
 
+  // ---------------------------------------------------------------------------
+  // ImGui
+  // ---------------------------------------------------------------------------
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
-  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.IniFilename = nullptr;
-
+  io.IniFilename = nullptr;  // no persistence
   ImGui::StyleColorsDark();
-
   ImGui_ImplGlfw_InitForOpenGL(window, true);
+  ImGui_ImplOpenGL3_Init("#version 330");
 
-#ifdef __EMSCRIPTEN__
-  ImGui_ImplOpenGL3_Init("#version 300 es");
-#else
-  ImGui_ImplOpenGL3_Init("#version 330 core");
-#endif
+  // ---------------------------------------------------------------------------
+  // Viewer state
+  // ---------------------------------------------------------------------------
+  ViewerState state;
+  state.loadFromString(initialSource);
 
-  // Initialize app state.
-  AppState state;
-  state.window = window;
-  state.svgBuffer.resize(kSvgBufferSize, '\0');
-  std::strncpy(state.svgBuffer.data(), kDefaultSvg, kSvgBufferSize - 1);
+  donner::editor::TextEditor textEditor;
+  textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
+  textEditor.setText(initialSource);
 
-  std::printf("Donner SVG Viewer started\n");
+  // Track the current source-pane error marker so we only push into
+  // `TextEditor` when the parse-error state actually changes (avoids
+  // copying the marker map every frame).
+  constexpr int kNoErrorLine = -1;
+  int lastShownErrorLine = kNoErrorLine;
+  std::string lastShownErrorReason;
+  if (state.lastParseError.has_value()) {
+    textEditor.setErrorMarkers(ParseErrorToMarkers(*state.lastParseError));
+    lastShownErrorLine = state.lastParseError->range.start.lineInfo.has_value()
+                             ? static_cast<int>(state.lastParseError->range.start.lineInfo->line)
+                             : 1;
+    lastShownErrorReason.assign(std::string_view(state.lastParseError->reason));
+  }
 
-#ifdef __EMSCRIPTEN__
-  emscripten_set_main_loop_arg(mainLoopIteration, &state, 0, true);
-#else
+  donner::svg::Renderer renderer;
+  GLuint texture = 0;
+  glGenTextures(1, &texture);
+  glBindTexture(GL_TEXTURE_2D, texture);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  int textureWidth = 0;
+  int textureHeight = 0;
+
+  // ---------------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------------
   while (!glfwWindowShouldClose(window)) {
-    mainLoopIteration(&state);
-  }
-#endif
+    glfwPollEvents();
 
-  // Cleanup.
-  if (state.textureId != 0) {
-    glDeleteTextures(1, &state.textureId);
+    // Re-render every frame — this is a minimal demo and the document is
+    // small. A real application would track a dirty flag.
+    if (state.valid) {
+      renderer.draw(state.document);
+      const donner::svg::RendererBitmap bitmap = renderer.takeSnapshot();
+      if (!bitmap.empty()) {
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        textureWidth = bitmap.dimensions.x;
+        textureHeight = bitmap.dimensions.y;
+      }
+    }
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    int windowWidth = 0;
+    int windowHeight = 0;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    // Lock both panes in place. Without this, clicking on an image
+    // inside an ImGui window falls through to the parent window and
+    // tries to drag the pane around, since `ImGui::Image` doesn't
+    // consume the mouse event.
+    const ImGuiWindowFlags kPaneFlags =
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+
+    // Source pane: TextEditor with full re-parse on change.
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, static_cast<float>(windowHeight)),
+                             ImGuiCond_Always);
+    ImGui::Begin("Source", nullptr, kPaneFlags);
+    textEditor.render("##source");
+    if (textEditor.isTextChanged()) {
+      state.loadFromString(textEditor.getText());
+      // `isTextChanged` is a sticky flag — the caller is responsible for
+      // clearing it. Without this reset, every frame would re-parse the
+      // document and wipe any selection state we just built up via the
+      // click handler below.
+      textEditor.resetTextChanged();
+    }
+
+    // Sync the source pane's error markers with the most recent parse
+    // diagnostic. Diff against the previous frame so we don't push the
+    // same marker map every frame.
+    if (state.lastParseError.has_value()) {
+      const int line = state.lastParseError->range.start.lineInfo.has_value()
+                           ? static_cast<int>(state.lastParseError->range.start.lineInfo->line)
+                           : 1;
+      const std::string_view reasonSv = state.lastParseError->reason;
+      if (line != lastShownErrorLine || reasonSv != lastShownErrorReason) {
+        textEditor.setErrorMarkers(ParseErrorToMarkers(*state.lastParseError));
+        lastShownErrorLine = line;
+        lastShownErrorReason.assign(reasonSv);
+      }
+    } else if (lastShownErrorLine != kNoErrorLine) {
+      textEditor.setErrorMarkers({});
+      lastShownErrorLine = kNoErrorLine;
+      lastShownErrorReason.clear();
+    }
+    ImGui::End();
+
+    // Render pane: image + click-to-select.
+    ImGui::SetNextWindowPos(ImVec2(kSourcePaneWidth, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth,
+               static_cast<float>(windowHeight)),
+        ImGuiCond_Always);
+    ImGui::Begin("Render", nullptr, kPaneFlags);
+
+    // Size the document's canvas to the render pane so the SVG scales
+    // to fit instead of overflowing large or leaving whitespace for
+    // small documents. The original experimental viewer did the same.
+    const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
+    const int desiredW = static_cast<int>(contentRegion.x);
+    const int desiredH = static_cast<int>(contentRegion.y);
+    if (state.valid && desiredW > 0 && desiredH > 0) {
+      const donner::Vector2i currentSize = state.document.canvasSize();
+      if (currentSize.x != desiredW || currentSize.y != desiredH) {
+        state.document.setCanvasSize(desiredW, desiredH);
+      }
+    }
+
+    if (textureWidth > 0 && textureHeight > 0) {
+      const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
+      ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
+                   ImVec2(static_cast<float>(textureWidth), static_cast<float>(textureHeight)));
+
+      if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 mouse = ImGui::GetMousePos();
+        // Map screen → canvas → document. `canvasFromDocumentTransform()`
+        // maps document viewBox coordinates to canvas pixels; we need the
+        // opposite direction for click math, so invert it.
+        const donner::Transform2d documentFromCanvas =
+            state.document.canvasFromDocumentTransform().inverse();
+        const donner::Vector2d canvasPoint(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y);
+        const auto sourceRange = state.handleClick(documentFromCanvas.transformPosition(canvasPoint));
+        if (sourceRange.has_value()) {
+          textEditor.selectAndFocus(FileOffsetToEditorCoordinates(sourceRange->start),
+                                    FileOffsetToEditorCoordinates(sourceRange->end));
+        }
+      }
+    } else {
+      ImGui::TextUnformatted("(no rendered image)");
+    }
+    ImGui::End();
+
+    ImGui::Render();
+    int displayWidth = 0;
+    int displayHeight = 0;
+    glfwGetFramebufferSize(window, &displayWidth, &displayHeight);
+    glViewport(0, 0, displayWidth, displayHeight);
+    glClearColor(0.10f, 0.10f, 0.10f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    glfwSwapBuffers(window);
   }
+
+  // ---------------------------------------------------------------------------
+  // Teardown
+  // ---------------------------------------------------------------------------
+  glDeleteTextures(1, &texture);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

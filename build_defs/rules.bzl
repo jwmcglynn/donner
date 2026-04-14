@@ -513,11 +513,17 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
         actions = ctx.actions,
         feature_configuration = feature_configuration,
         cc_toolchain = cc_toolchain,
-        srcs = ctx.attr.srcs,
+        # Use `ctx.files.srcs` / `ctx.files.hdrs` (not `ctx.attr.*`) so
+        # we pass actual File objects — `cc_common.compile` rejects the
+        # list of Targets returned by `ctx.attr`. Required for
+        # perf-sensitive wrappers that carry their own source files,
+        # not just deps-only wrappers like `skia_deps`.
+        srcs = ctx.files.srcs,
         includes = ctx.attr.includes,
         defines = ctx.attr.defines,
         local_defines = ctx.attr.local_defines,
-        public_hdrs = ctx.attr.hdrs,
+        public_hdrs = ctx.files.hdrs,
+        user_compile_flags = ctx.attr.copts,
         compilation_contexts = compilation_contexts,
     )
 
@@ -533,6 +539,11 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
             user_link_flags = ctx.attr.linkopts,
             name = ctx.label.name,
             language = "c++",
+            # The editor's Darwin toolchain doesn't have an action
+            # config for the standalone dynamic-library linker action,
+            # so force the wrapper to emit a static archive instead.
+            # The top-level editor binary links it statically anyway.
+            disallow_dynamic_library = True,
         )
 
         if linking_outputs.library_to_link != None:

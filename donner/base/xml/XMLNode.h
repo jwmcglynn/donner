@@ -427,6 +427,35 @@ public:
   void setSourceEndOffset(FileOffset offset);
 
   /**
+   * Serialize this node to an XML string.
+   *
+   * Produces a normalized XML representation suitable for programmatically-created nodes
+   * (e.g. nodes created by canvas tools that have no original source location). This
+   * function does **not** preserve original author whitespace.
+   *
+   * Serialization rules per node type:
+   * - `Element` → `<tagName attr="val">children</tagName>`, or `<tagName .../>` when childless.
+   * - `Data` → text content with `<`, `>`, and `&` escaped.
+   * - `CData` → `<![CDATA[content]]>`.
+   * - `Comment` → `<!--content-->`.
+   * - `DocType` → `<!DOCTYPE content>`.
+   * - `ProcessingInstruction` → `<?name content?>`.
+   * - `XMLDeclaration` → `<?xml attributes?>`.
+   *
+   * Attribute values are escaped via \ref donner::xml::EscapeAttributeValue. If an attribute
+   * value cannot be represented in well-formed XML (e.g. it contains NUL bytes), it is
+   * omitted from the output.
+   *
+   * Child elements are indented by `indentLevel + 1` levels (2 spaces per level). Mixed
+   * content (elements that have both element and text children) is emitted inline without
+   * extra indentation.
+   *
+   * @param indentLevel Current indentation depth; each level adds 2 spaces of leading whitespace.
+   * @return The serialized XML string.
+   */
+  RcString serializeToString(int indentLevel = 0) const;
+
+  /**
    * Returns true if the two XMLNode handles reference the same underlying document.
    */
   bool operator==(const XMLNode& other) const { return handle_ == other.handle_; }

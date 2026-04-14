@@ -4,11 +4,6 @@
 #include <variant>
 #include <vector>
 
-#include "donner/svg/components/paint/GradientComponent.h"
-#include "donner/svg/components/paint/LinearGradientComponent.h"
-#include "donner/svg/components/paint/RadialGradientComponent.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
-
 namespace donner::editor::sandbox {
 
 namespace {
@@ -22,8 +17,8 @@ constexpr uint32_t kMaxClipPaths = 1024;
 
 // Reconstructs a Path from a decoded verb stream via PathBuilder. Points are
 // consumed from a cursor to keep verb/point counts cross-checked.
-bool BuildPathFromVerbs(const std::vector<Path::Verb>& verbs,
-                       const std::vector<Vector2d>& points, Path& out) {
+bool BuildPathFromVerbs(const std::vector<Path::Verb>& verbs, const std::vector<Vector2d>& points,
+                        Path& out) {
   PathBuilder builder;
   std::size_t cursor = 0;
   const auto take = [&](std::size_t n, std::span<const Vector2d>& dst) -> bool {
@@ -52,9 +47,7 @@ bool BuildPathFromVerbs(const std::vector<Path::Verb>& verbs,
         if (!take(3, pts)) return false;
         builder.curveTo(pts[0], pts[1], pts[2]);
         break;
-      case Path::Verb::ClosePath:
-        builder.closePath();
-        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
     }
   }
 
@@ -69,14 +62,10 @@ bool BuildPathFromVerbs(const std::vector<Path::Verb>& verbs,
 std::size_t PointsPerVerb(Path::Verb verb) {
   switch (verb) {
     case Path::Verb::MoveTo:
-    case Path::Verb::LineTo:
-      return 1;
-    case Path::Verb::QuadTo:
-      return 2;
-    case Path::Verb::CurveTo:
-      return 3;
-    case Path::Verb::ClosePath:
-      return 0;
+    case Path::Verb::LineTo: return 1;
+    case Path::Verb::QuadTo: return 2;
+    case Path::Verb::CurveTo: return 3;
+    case Path::Verb::ClosePath: return 0;
   }
   return 0;
 }
@@ -166,7 +155,9 @@ bool DecodeColor(WireReader& r, css::Color& out) {
 // Enums
 // -----------------------------------------------------------------------------
 
-void EncodeFillRule(WireWriter& w, FillRule v) { w.writeU8(static_cast<uint8_t>(v)); }
+void EncodeFillRule(WireWriter& w, FillRule v) {
+  w.writeU8(static_cast<uint8_t>(v));
+}
 bool DecodeFillRule(WireReader& r, FillRule& out) {
   uint8_t v = 0;
   if (!r.readU8(v)) return false;
@@ -486,55 +477,7 @@ bool DecodeWireGradient(WireReader& r, WireGradient& out) {
   return true;
 }
 
-namespace {
-
-/// Attempts to flatten a PaintResolvedReference's gradient components into a
-/// self-contained `WireGradient`. Returns `std::nullopt` if the reference
-/// doesn't resolve to a gradient (e.g., it's a pattern). The caller is the
-/// serializer side, which has live access to the sandbox-side registry, so
-/// `handle.try_get<...>()` is safe.
-std::optional<WireGradient> FlattenGradientReference(
-    const svg::components::PaintResolvedReference& ref) {
-  const auto& handle = ref.reference.handle;
-  const auto* gradient =
-      handle.try_get<svg::components::ComputedGradientComponent>();
-  if (gradient == nullptr || !gradient->initialized) {
-    return std::nullopt;
-  }
-
-  WireGradient out;
-  out.units = gradient->gradientUnits;
-  out.spreadMethod = gradient->spreadMethod;
-  out.stops = gradient->stops;
-  out.fallback = ref.fallback;
-
-  if (const auto* linear =
-          handle.try_get<svg::components::ComputedLinearGradientComponent>()) {
-    out.kind = WireGradient::Kind::kLinear;
-    out.x1 = linear->x1;
-    out.y1 = linear->y1;
-    out.x2 = linear->x2;
-    out.y2 = linear->y2;
-    return out;
-  }
-  if (const auto* radial =
-          handle.try_get<svg::components::ComputedRadialGradientComponent>()) {
-    out.kind = WireGradient::Kind::kRadial;
-    out.cx = radial->cx;
-    out.cy = radial->cy;
-    out.r = radial->r;
-    out.fx = radial->fx;
-    out.fy = radial->fy;
-    out.fr = radial->fr;
-    return out;
-  }
-  return std::nullopt;
-}
-
-}  // namespace
-
-void EncodeResolvedPaintServer(WireWriter& w,
-                               const svg::components::ResolvedPaintServer& p) {
+void EncodeResolvedPaintServer(WireWriter& w, const svg::components::ResolvedPaintServer& p) {
   if (std::holds_alternative<svg::PaintServer::None>(p)) {
     w.writeU8(kPaintTagNone);
     return;
@@ -545,29 +488,23 @@ void EncodeResolvedPaintServer(WireWriter& w,
     EncodeColor(w, solid.color);
     return;
   }
-  if (std::holds_alternative<svg::components::PaintResolvedReference>(p)) {
-    const auto& ref = std::get<svg::components::PaintResolvedReference>(p);
-    if (auto gradient = FlattenGradientReference(ref)) {
-      w.writeU8(kPaintTagGradient);
-      EncodeWireGradient(w, *gradient);
-      return;
-    }
-    // Fall through: unresolvable or pattern — emit a stub. The downstream
-    // setPaint will decode to None; pattern rendering continues to work via
-    // RendererTinySkia's patternFillPaint_ side channel.
+  if (auto gradient = svg::FlattenResolvedGradient(p)) {
+    w.writeU8(kPaintTagGradient);
+    EncodeWireGradient(w, *gradient);
+    return;
   }
+  // Fall through: unresolvable or pattern — emit a stub. The downstream
+  // setPaint will decode to None; pattern rendering continues to work via
+  // RendererTinySkia's patternFillPaint_ side channel.
   w.writeU8(kPaintTagStub);
 }
 
-bool DecodeResolvedPaintServer(WireReader& r,
-                               svg::components::ResolvedPaintServer& out,
+bool DecodeResolvedPaintServer(WireReader& r, svg::components::ResolvedPaintServer& out,
                                std::optional<WireGradient>* outPendingGradient) {
   uint8_t tag = 0;
   if (!r.readU8(tag)) return false;
   switch (tag) {
-    case kPaintTagNone:
-      out = svg::PaintServer::None{};
-      return true;
+    case kPaintTagNone: out = svg::PaintServer::None{}; return true;
     case kPaintTagSolid: {
       css::Color color(css::RGBA{});
       if (!DecodeColor(r, color)) return false;
@@ -595,9 +532,7 @@ bool DecodeResolvedPaintServer(WireReader& r,
       out = svg::PaintServer::None{};
       return true;
     }
-    default:
-      r.fail();
-      return false;
+    default: r.fail(); return false;
   }
 }
 
@@ -861,8 +796,7 @@ void EncodeTextSpan(WireWriter& w, const svg::components::ComputedTextComponent:
   w.writeI32(s.decorationDeclarationCount);
 }
 
-bool DecodeTextSpan(WireReader& r,
-                    svg::components::ComputedTextComponent::TextSpan& s) {
+bool DecodeTextSpan(WireReader& r, svg::components::ComputedTextComponent::TextSpan& s) {
   std::string text;
   if (!r.readString(text)) return false;
   s.text = RcString(text);
@@ -894,9 +828,12 @@ bool DecodeTextSpan(WireReader& r,
   if (!DecodeLengthd(r, s.fontSize)) return false;
   if (!r.readI32(s.fontWeight)) return false;
   uint8_t u = 0;
-  if (!r.readU8(u)) return false; s.fontStyle = static_cast<svg::FontStyle>(u);
-  if (!r.readU8(u)) return false; s.fontStretch = static_cast<svg::FontStretch>(u);
-  if (!r.readU8(u)) return false; s.fontVariant = static_cast<svg::FontVariant>(u);
+  if (!r.readU8(u)) return false;
+  s.fontStyle = static_cast<svg::FontStyle>(u);
+  if (!r.readU8(u)) return false;
+  s.fontStretch = static_cast<svg::FontStretch>(u);
+  if (!r.readU8(u)) return false;
+  s.fontVariant = static_cast<svg::FontVariant>(u);
   if (!r.readF64(s.strokeWidth)) return false;
   if (!r.readF64(s.strokeMiterLimit)) return false;
   if (!DecodeStrokeLinecap(r, s.strokeLinecap)) return false;
@@ -925,18 +862,24 @@ bool DecodeTextSpan(WireReader& r,
     if (!r.readF64(shift.fontSizePx)) return false;
     s.ancestorBaselineShifts.push_back(shift);
   }
-  if (!r.readU8(u)) return false; s.baselineShiftKeyword = static_cast<K>(u);
+  if (!r.readU8(u)) return false;
+  s.baselineShiftKeyword = static_cast<K>(u);
   if (!DecodeLengthd(r, s.baselineShift)) return false;
 
-  if (!r.readU8(u)) return false; s.textAnchor = static_cast<svg::TextAnchor>(u);
-  if (!r.readU8(u)) return false; s.visibility = static_cast<svg::Visibility>(u);
-  if (!r.readU8(u)) return false; s.textDecoration = static_cast<svg::TextDecoration>(u);
-  if (!r.readU8(u)) return false; s.alignmentBaseline = static_cast<svg::DominantBaseline>(u);
+  if (!r.readU8(u)) return false;
+  s.textAnchor = static_cast<svg::TextAnchor>(u);
+  if (!r.readU8(u)) return false;
+  s.visibility = static_cast<svg::Visibility>(u);
+  if (!r.readU8(u)) return false;
+  s.textDecoration = static_cast<svg::TextDecoration>(u);
+  if (!r.readU8(u)) return false;
+  s.alignmentBaseline = static_cast<svg::DominantBaseline>(u);
 
   if (!r.readF64(s.letterSpacingPx)) return false;
   if (!r.readF64(s.wordSpacingPx)) return false;
   if (!DecodeOptionalLengthd(r, s.textLength)) return false;
-  if (!r.readU8(u)) return false; s.lengthAdjust = static_cast<svg::LengthAdjust>(u);
+  if (!r.readU8(u)) return false;
+  s.lengthAdjust = static_cast<svg::LengthAdjust>(u);
 
   if (!r.readBool(s.startsNewChunk)) return false;
   if (!r.readBool(s.hidden)) return false;
@@ -966,8 +909,7 @@ void EncodeFontFaceSource(WireWriter& w, const css::FontFaceSource& src) {
   w.writeU8(static_cast<uint8_t>(src.kind));
   if (src.kind == css::FontFaceSource::Kind::Data) {
     // Data payload: write the byte vector inline.
-    const auto* dataPtr =
-        std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&src.payload);
+    const auto* dataPtr = std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&src.payload);
     if (dataPtr && *dataPtr) {
       const auto& bytes = **dataPtr;
       w.writeU32(static_cast<uint32_t>(bytes.size()));
@@ -1134,14 +1076,19 @@ bool DecodeTextParams(WireReader& r, svg::TextParams& out,
   }
 
   uint8_t u = 0;
-  if (!r.readU8(u)) return false; out.textAnchor = static_cast<svg::TextAnchor>(u);
-  if (!r.readU8(u)) return false; out.textDecoration = static_cast<svg::TextDecoration>(u);
-  if (!r.readU8(u)) return false; out.dominantBaseline = static_cast<svg::DominantBaseline>(u);
-  if (!r.readU8(u)) return false; out.writingMode = static_cast<svg::WritingMode>(u);
+  if (!r.readU8(u)) return false;
+  out.textAnchor = static_cast<svg::TextAnchor>(u);
+  if (!r.readU8(u)) return false;
+  out.textDecoration = static_cast<svg::TextDecoration>(u);
+  if (!r.readU8(u)) return false;
+  out.dominantBaseline = static_cast<svg::DominantBaseline>(u);
+  if (!r.readU8(u)) return false;
+  out.writingMode = static_cast<svg::WritingMode>(u);
   if (!r.readF64(out.letterSpacingPx)) return false;
   if (!r.readF64(out.wordSpacingPx)) return false;
   if (!DecodeOptionalLengthd(r, out.textLength)) return false;
-  if (!r.readU8(u)) return false; out.lengthAdjust = static_cast<svg::LengthAdjust>(u);
+  if (!r.readU8(u)) return false;
+  out.lengthAdjust = static_cast<svg::LengthAdjust>(u);
 
   uint32_t fontFaceCount = 0;
   if (!r.readCount(fontFaceCount, kMaxFontFaces)) return false;
@@ -1166,16 +1113,15 @@ bool DecodeTextParams(WireReader& r, svg::TextParams& out,
   return true;
 }
 
-void EncodeComputedTextComponent(
-    WireWriter& w, const svg::components::ComputedTextComponent& text) {
+void EncodeComputedTextComponent(WireWriter& w,
+                                 const svg::components::ComputedTextComponent& text) {
   w.writeU32(static_cast<uint32_t>(text.spans.size()));
   for (const auto& span : text.spans) {
     EncodeTextSpan(w, span);
   }
 }
 
-bool DecodeComputedTextComponent(
-    WireReader& r, svg::components::ComputedTextComponent& out) {
+bool DecodeComputedTextComponent(WireReader& r, svg::components::ComputedTextComponent& out) {
   uint32_t count = 0;
   if (!r.readCount(count, kMaxTextSpans)) return false;
   out.spans.clear();
@@ -1227,8 +1173,7 @@ constexpr uint8_t kFilterInputPrevious = 0;
 constexpr uint8_t kFilterInputStandard = 1;
 constexpr uint8_t kFilterInputNamed = 2;
 
-void EncodeFilterInput(WireWriter& w,
-                       const svg::components::FilterInput& input) {
+void EncodeFilterInput(WireWriter& w, const svg::components::FilterInput& input) {
   std::visit(
       [&](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
@@ -1249,9 +1194,7 @@ bool DecodeFilterInput(WireReader& r, svg::components::FilterInput& out) {
   uint8_t tag = 0;
   if (!r.readU8(tag)) return false;
   switch (tag) {
-    case kFilterInputPrevious:
-      out.value = svg::components::FilterInput::Previous{};
-      return true;
+    case kFilterInputPrevious: out.value = svg::components::FilterInput::Previous{}; return true;
     case kFilterInputStandard: {
       uint8_t v = 0;
       if (!r.readU8(v)) return false;
@@ -1268,9 +1211,7 @@ bool DecodeFilterInput(WireReader& r, svg::components::FilterInput& out) {
       out.value = svg::components::FilterInput::Named{RcString(name)};
       return true;
     }
-    default:
-      r.fail();
-      return false;
+    default: r.fail(); return false;
   }
 }
 
@@ -1292,8 +1233,7 @@ bool DecodeOptionalLenghdFilter(WireReader& r, std::optional<Lengthd>& out) {
   return true;
 }
 
-void EncodeLightSource(WireWriter& w,
-                       const svg::components::filter_primitive::LightSource& ls) {
+void EncodeLightSource(WireWriter& w, const svg::components::filter_primitive::LightSource& ls) {
   w.writeU8(static_cast<uint8_t>(ls.type));
   w.writeF64(ls.azimuth);
   w.writeF64(ls.elevation);
@@ -1308,12 +1248,10 @@ void EncodeLightSource(WireWriter& w,
   if (ls.limitingConeAngle) w.writeF64(*ls.limitingConeAngle);
 }
 
-bool DecodeLightSource(WireReader& r,
-                       svg::components::filter_primitive::LightSource& out) {
+bool DecodeLightSource(WireReader& r, svg::components::filter_primitive::LightSource& out) {
   uint8_t type = 0;
   if (!r.readU8(type)) return false;
-  if (type > static_cast<uint8_t>(
-                 svg::components::filter_primitive::LightSource::Type::Spot)) {
+  if (type > static_cast<uint8_t>(svg::components::filter_primitive::LightSource::Type::Spot)) {
     r.fail();
     return false;
   }
@@ -1339,9 +1277,8 @@ bool DecodeLightSource(WireReader& r,
   return true;
 }
 
-void EncodeTransferFunc(
-    WireWriter& w,
-    const svg::components::filter_primitive::ComponentTransfer::Func& f) {
+void EncodeTransferFunc(WireWriter& w,
+                        const svg::components::filter_primitive::ComponentTransfer::Func& f) {
   w.writeU8(static_cast<uint8_t>(f.type));
   w.writeU32(static_cast<uint32_t>(f.tableValues.size()));
   for (double v : f.tableValues) w.writeF64(v);
@@ -1352,18 +1289,16 @@ void EncodeTransferFunc(
   w.writeF64(f.offset);
 }
 
-bool DecodeTransferFunc(
-    WireReader& r,
-    svg::components::filter_primitive::ComponentTransfer::Func& out) {
+bool DecodeTransferFunc(WireReader& r,
+                        svg::components::filter_primitive::ComponentTransfer::Func& out) {
   uint8_t type = 0;
   if (!r.readU8(type)) return false;
-  if (type > static_cast<uint8_t>(
-                 svg::components::filter_primitive::ComponentTransfer::FuncType::Gamma)) {
+  if (type >
+      static_cast<uint8_t>(svg::components::filter_primitive::ComponentTransfer::FuncType::Gamma)) {
     r.fail();
     return false;
   }
-  out.type =
-      static_cast<svg::components::filter_primitive::ComponentTransfer::FuncType>(type);
+  out.type = static_cast<svg::components::filter_primitive::ComponentTransfer::FuncType>(type);
   uint32_t count = 0;
   if (!r.readCount(count, kMaxTransferTableValues)) return false;
   out.tableValues.clear();
@@ -1383,43 +1318,37 @@ bool DecodeTransferFunc(
 
 // ---- Per-primitive encoders ----
 
-void EncodeFilterPrimitive(
-    WireWriter& w,
-    const svg::components::filter_primitive::GaussianBlur& p) {
+void EncodeFilterPrimitive(WireWriter& w,
+                           const svg::components::filter_primitive::GaussianBlur& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kGaussianBlur));
   w.writeF64(p.stdDeviationX);
   w.writeF64(p.stdDeviationY);
   w.writeU8(static_cast<uint8_t>(p.edgeMode));
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Flood& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Flood& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kFlood));
   EncodeColor(w, p.floodColor);
   w.writeF64(p.floodOpacity);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Offset& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Offset& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kOffset));
   w.writeF64(p.dx);
   w.writeF64(p.dy);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Merge&) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Merge&) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kMerge));
   // Merge has no fields beyond its inputs (encoded in the FilterNode).
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Blend& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Blend& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kBlend));
   w.writeU8(static_cast<uint8_t>(p.mode));
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Composite& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Composite& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kComposite));
   w.writeU8(static_cast<uint8_t>(p.op));
   w.writeF64(p.k1);
@@ -1428,16 +1357,14 @@ void EncodeFilterPrimitive(
   w.writeF64(p.k4);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::ColorMatrix& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::ColorMatrix& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kColorMatrix));
   w.writeU8(static_cast<uint8_t>(p.type));
   w.writeU32(static_cast<uint32_t>(p.values.size()));
   for (double v : p.values) w.writeF64(v);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::DropShadow& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::DropShadow& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kDropShadow));
   w.writeF64(p.dx);
   w.writeF64(p.dy);
@@ -1447,9 +1374,8 @@ void EncodeFilterPrimitive(
   w.writeF64(p.floodOpacity);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w,
-    const svg::components::filter_primitive::ComponentTransfer& p) {
+void EncodeFilterPrimitive(WireWriter& w,
+                           const svg::components::filter_primitive::ComponentTransfer& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kComponentTransfer));
   EncodeTransferFunc(w, p.funcR);
   EncodeTransferFunc(w, p.funcG);
@@ -1457,9 +1383,8 @@ void EncodeFilterPrimitive(
   EncodeTransferFunc(w, p.funcA);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w,
-    const svg::components::filter_primitive::ConvolveMatrix& p) {
+void EncodeFilterPrimitive(WireWriter& w,
+                           const svg::components::filter_primitive::ConvolveMatrix& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kConvolveMatrix));
   w.writeI32(p.orderX);
   w.writeI32(p.orderY);
@@ -1476,21 +1401,18 @@ void EncodeFilterPrimitive(
   w.writeBool(p.preserveAlpha);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Morphology& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Morphology& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kMorphology));
   w.writeU8(static_cast<uint8_t>(p.op));
   w.writeF64(p.radiusX);
   w.writeF64(p.radiusY);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Tile&) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Tile&) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kTile));
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Turbulence& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Turbulence& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kTurbulence));
   w.writeU8(static_cast<uint8_t>(p.type));
   w.writeF64(p.baseFrequencyX);
@@ -1500,8 +1422,7 @@ void EncodeFilterPrimitive(
   w.writeBool(p.stitchTiles);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w, const svg::components::filter_primitive::Image& p) {
+void EncodeFilterPrimitive(WireWriter& w, const svg::components::filter_primitive::Image& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kImage));
   w.writeString(std::string_view(p.href));
   w.writeU8(static_cast<uint8_t>(p.preserveAspectRatio.align));
@@ -1515,18 +1436,16 @@ void EncodeFilterPrimitive(
   EncodeVector2d(w, p.fragmentRegionTopLeft);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w,
-    const svg::components::filter_primitive::DisplacementMap& p) {
+void EncodeFilterPrimitive(WireWriter& w,
+                           const svg::components::filter_primitive::DisplacementMap& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kDisplacementMap));
   w.writeF64(p.scale);
   w.writeU8(static_cast<uint8_t>(p.xChannelSelector));
   w.writeU8(static_cast<uint8_t>(p.yChannelSelector));
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w,
-    const svg::components::filter_primitive::DiffuseLighting& p) {
+void EncodeFilterPrimitive(WireWriter& w,
+                           const svg::components::filter_primitive::DiffuseLighting& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kDiffuseLighting));
   w.writeF64(p.surfaceScale);
   w.writeF64(p.diffuseConstant);
@@ -1535,9 +1454,8 @@ void EncodeFilterPrimitive(
   if (p.light) EncodeLightSource(w, *p.light);
 }
 
-void EncodeFilterPrimitive(
-    WireWriter& w,
-    const svg::components::filter_primitive::SpecularLighting& p) {
+void EncodeFilterPrimitive(WireWriter& w,
+                           const svg::components::filter_primitive::SpecularLighting& p) {
   w.writeU8(static_cast<uint8_t>(FilterPrimitiveTag::kSpecularLighting));
   w.writeF64(p.surfaceScale);
   w.writeF64(p.specularConstant);
@@ -1549,26 +1467,22 @@ void EncodeFilterPrimitive(
 
 // ---- Per-primitive decoders (dispatched by tag) ----
 
-bool DecodeFilterPrimitiveGaussianBlur(
-    WireReader& r, svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveGaussianBlur(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::GaussianBlur p;
   if (!r.readF64(p.stdDeviationX)) return false;
   if (!r.readF64(p.stdDeviationY)) return false;
   uint8_t em = 0;
   if (!r.readU8(em)) return false;
-  if (em > static_cast<uint8_t>(
-               svg::components::filter_primitive::GaussianBlur::EdgeMode::Wrap)) {
+  if (em > static_cast<uint8_t>(svg::components::filter_primitive::GaussianBlur::EdgeMode::Wrap)) {
     r.fail();
     return false;
   }
-  p.edgeMode =
-      static_cast<svg::components::filter_primitive::GaussianBlur::EdgeMode>(em);
+  p.edgeMode = static_cast<svg::components::filter_primitive::GaussianBlur::EdgeMode>(em);
   out = p;
   return true;
 }
 
-bool DecodeFilterPrimitiveFlood(WireReader& r,
-                                svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveFlood(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::Flood p;
   if (!DecodeColor(r, p.floodColor)) return false;
   if (!r.readF64(p.floodOpacity)) return false;
@@ -1576,8 +1490,7 @@ bool DecodeFilterPrimitiveFlood(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveOffset(WireReader& r,
-                                 svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveOffset(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::Offset p;
   if (!r.readF64(p.dx)) return false;
   if (!r.readF64(p.dy)) return false;
@@ -1585,18 +1498,15 @@ bool DecodeFilterPrimitiveOffset(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveMerge(WireReader& r,
-                                svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveMerge(WireReader& r, svg::components::FilterPrimitive& out) {
   out = svg::components::filter_primitive::Merge{};
   return true;
 }
 
-bool DecodeFilterPrimitiveBlend(WireReader& r,
-                                svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveBlend(WireReader& r, svg::components::FilterPrimitive& out) {
   uint8_t mode = 0;
   if (!r.readU8(mode)) return false;
-  if (mode > static_cast<uint8_t>(
-                 svg::components::filter_primitive::Blend::Mode::Luminosity)) {
+  if (mode > static_cast<uint8_t>(svg::components::filter_primitive::Blend::Mode::Luminosity)) {
     r.fail();
     return false;
   }
@@ -1606,12 +1516,11 @@ bool DecodeFilterPrimitiveBlend(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveComposite(WireReader& r,
-                                    svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveComposite(WireReader& r, svg::components::FilterPrimitive& out) {
   uint8_t op = 0;
   if (!r.readU8(op)) return false;
-  if (op > static_cast<uint8_t>(
-               svg::components::filter_primitive::Composite::Operator::Arithmetic)) {
+  if (op >
+      static_cast<uint8_t>(svg::components::filter_primitive::Composite::Operator::Arithmetic)) {
     r.fail();
     return false;
   }
@@ -1625,8 +1534,7 @@ bool DecodeFilterPrimitiveComposite(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveColorMatrix(WireReader& r,
-                                      svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveColorMatrix(WireReader& r, svg::components::FilterPrimitive& out) {
   uint8_t type = 0;
   if (!r.readU8(type)) return false;
   if (type > static_cast<uint8_t>(
@@ -1648,8 +1556,7 @@ bool DecodeFilterPrimitiveColorMatrix(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveDropShadow(WireReader& r,
-                                     svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveDropShadow(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::DropShadow p;
   if (!r.readF64(p.dx)) return false;
   if (!r.readF64(p.dy)) return false;
@@ -1661,8 +1568,7 @@ bool DecodeFilterPrimitiveDropShadow(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveComponentTransfer(
-    WireReader& r, svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveComponentTransfer(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::ComponentTransfer p;
   if (!DecodeTransferFunc(r, p.funcR)) return false;
   if (!DecodeTransferFunc(r, p.funcG)) return false;
@@ -1672,8 +1578,7 @@ bool DecodeFilterPrimitiveComponentTransfer(
   return true;
 }
 
-bool DecodeFilterPrimitiveConvolveMatrix(
-    WireReader& r, svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveConvolveMatrix(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::ConvolveMatrix p;
   if (!r.readI32(p.orderX)) return false;
   if (!r.readI32(p.orderY)) return false;
@@ -1709,24 +1614,21 @@ bool DecodeFilterPrimitiveConvolveMatrix(
   }
   uint8_t em = 0;
   if (!r.readU8(em)) return false;
-  if (em > static_cast<uint8_t>(
-               svg::components::filter_primitive::ConvolveMatrix::EdgeMode::None)) {
+  if (em >
+      static_cast<uint8_t>(svg::components::filter_primitive::ConvolveMatrix::EdgeMode::None)) {
     r.fail();
     return false;
   }
-  p.edgeMode =
-      static_cast<svg::components::filter_primitive::ConvolveMatrix::EdgeMode>(em);
+  p.edgeMode = static_cast<svg::components::filter_primitive::ConvolveMatrix::EdgeMode>(em);
   if (!r.readBool(p.preserveAlpha)) return false;
   out = p;
   return true;
 }
 
-bool DecodeFilterPrimitiveMorphology(WireReader& r,
-                                     svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveMorphology(WireReader& r, svg::components::FilterPrimitive& out) {
   uint8_t op = 0;
   if (!r.readU8(op)) return false;
-  if (op > static_cast<uint8_t>(
-               svg::components::filter_primitive::Morphology::Operator::Dilate)) {
+  if (op > static_cast<uint8_t>(svg::components::filter_primitive::Morphology::Operator::Dilate)) {
     r.fail();
     return false;
   }
@@ -1738,18 +1640,16 @@ bool DecodeFilterPrimitiveMorphology(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveTile(WireReader& r,
-                               svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveTile(WireReader& r, svg::components::FilterPrimitive& out) {
   out = svg::components::filter_primitive::Tile{};
   return true;
 }
 
-bool DecodeFilterPrimitiveTurbulence(WireReader& r,
-                                     svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveTurbulence(WireReader& r, svg::components::FilterPrimitive& out) {
   uint8_t type = 0;
   if (!r.readU8(type)) return false;
-  if (type > static_cast<uint8_t>(
-                 svg::components::filter_primitive::Turbulence::Type::Turbulence)) {
+  if (type >
+      static_cast<uint8_t>(svg::components::filter_primitive::Turbulence::Type::Turbulence)) {
     r.fail();
     return false;
   }
@@ -1764,8 +1664,7 @@ bool DecodeFilterPrimitiveTurbulence(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveImage(WireReader& r,
-                                svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveImage(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::Image p;
   std::string href;
   if (!r.readString(href)) return false;
@@ -1781,10 +1680,8 @@ bool DecodeFilterPrimitiveImage(WireReader& r,
     r.fail();
     return false;
   }
-  p.preserveAspectRatio.align =
-      static_cast<svg::PreserveAspectRatio::Align>(align);
-  p.preserveAspectRatio.meetOrSlice =
-      static_cast<svg::PreserveAspectRatio::MeetOrSlice>(mos);
+  p.preserveAspectRatio.align = static_cast<svg::PreserveAspectRatio::Align>(align);
+  p.preserveAspectRatio.meetOrSlice = static_cast<svg::PreserveAspectRatio::MeetOrSlice>(mos);
   uint32_t dataLen = 0;
   if (!r.readCount(dataLen, kMaxImageDataBytes)) return false;
   p.imageData.resize(dataLen);
@@ -1800,20 +1697,17 @@ bool DecodeFilterPrimitiveImage(WireReader& r,
   return true;
 }
 
-bool DecodeFilterPrimitiveDisplacementMap(
-    WireReader& r, svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveDisplacementMap(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::DisplacementMap p;
   if (!r.readF64(p.scale)) return false;
   uint8_t xCh = 0, yCh = 0;
   if (!r.readU8(xCh)) return false;
-  if (xCh > static_cast<uint8_t>(
-                svg::components::filter_primitive::DisplacementMap::Channel::A)) {
+  if (xCh > static_cast<uint8_t>(svg::components::filter_primitive::DisplacementMap::Channel::A)) {
     r.fail();
     return false;
   }
   if (!r.readU8(yCh)) return false;
-  if (yCh > static_cast<uint8_t>(
-                svg::components::filter_primitive::DisplacementMap::Channel::A)) {
+  if (yCh > static_cast<uint8_t>(svg::components::filter_primitive::DisplacementMap::Channel::A)) {
     r.fail();
     return false;
   }
@@ -1825,8 +1719,7 @@ bool DecodeFilterPrimitiveDisplacementMap(
   return true;
 }
 
-bool DecodeFilterPrimitiveDiffuseLighting(
-    WireReader& r, svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveDiffuseLighting(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::DiffuseLighting p;
   if (!r.readF64(p.surfaceScale)) return false;
   if (!r.readF64(p.diffuseConstant)) return false;
@@ -1842,8 +1735,7 @@ bool DecodeFilterPrimitiveDiffuseLighting(
   return true;
 }
 
-bool DecodeFilterPrimitiveSpecularLighting(
-    WireReader& r, svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveSpecularLighting(WireReader& r, svg::components::FilterPrimitive& out) {
   svg::components::filter_primitive::SpecularLighting p;
   if (!r.readF64(p.surfaceScale)) return false;
   if (!r.readF64(p.specularConstant)) return false;
@@ -1860,54 +1752,34 @@ bool DecodeFilterPrimitiveSpecularLighting(
   return true;
 }
 
-bool DecodeFilterPrimitiveByTag(WireReader& r, uint8_t tag,
-                                svg::components::FilterPrimitive& out) {
+bool DecodeFilterPrimitiveByTag(WireReader& r, uint8_t tag, svg::components::FilterPrimitive& out) {
   switch (static_cast<FilterPrimitiveTag>(tag)) {
-    case FilterPrimitiveTag::kGaussianBlur:
-      return DecodeFilterPrimitiveGaussianBlur(r, out);
-    case FilterPrimitiveTag::kFlood:
-      return DecodeFilterPrimitiveFlood(r, out);
-    case FilterPrimitiveTag::kOffset:
-      return DecodeFilterPrimitiveOffset(r, out);
-    case FilterPrimitiveTag::kMerge:
-      return DecodeFilterPrimitiveMerge(r, out);
-    case FilterPrimitiveTag::kBlend:
-      return DecodeFilterPrimitiveBlend(r, out);
-    case FilterPrimitiveTag::kComposite:
-      return DecodeFilterPrimitiveComposite(r, out);
-    case FilterPrimitiveTag::kColorMatrix:
-      return DecodeFilterPrimitiveColorMatrix(r, out);
-    case FilterPrimitiveTag::kDropShadow:
-      return DecodeFilterPrimitiveDropShadow(r, out);
+    case FilterPrimitiveTag::kGaussianBlur: return DecodeFilterPrimitiveGaussianBlur(r, out);
+    case FilterPrimitiveTag::kFlood: return DecodeFilterPrimitiveFlood(r, out);
+    case FilterPrimitiveTag::kOffset: return DecodeFilterPrimitiveOffset(r, out);
+    case FilterPrimitiveTag::kMerge: return DecodeFilterPrimitiveMerge(r, out);
+    case FilterPrimitiveTag::kBlend: return DecodeFilterPrimitiveBlend(r, out);
+    case FilterPrimitiveTag::kComposite: return DecodeFilterPrimitiveComposite(r, out);
+    case FilterPrimitiveTag::kColorMatrix: return DecodeFilterPrimitiveColorMatrix(r, out);
+    case FilterPrimitiveTag::kDropShadow: return DecodeFilterPrimitiveDropShadow(r, out);
     case FilterPrimitiveTag::kComponentTransfer:
       return DecodeFilterPrimitiveComponentTransfer(r, out);
-    case FilterPrimitiveTag::kConvolveMatrix:
-      return DecodeFilterPrimitiveConvolveMatrix(r, out);
-    case FilterPrimitiveTag::kMorphology:
-      return DecodeFilterPrimitiveMorphology(r, out);
-    case FilterPrimitiveTag::kTile:
-      return DecodeFilterPrimitiveTile(r, out);
-    case FilterPrimitiveTag::kTurbulence:
-      return DecodeFilterPrimitiveTurbulence(r, out);
-    case FilterPrimitiveTag::kImage:
-      return DecodeFilterPrimitiveImage(r, out);
-    case FilterPrimitiveTag::kDisplacementMap:
-      return DecodeFilterPrimitiveDisplacementMap(r, out);
-    case FilterPrimitiveTag::kDiffuseLighting:
-      return DecodeFilterPrimitiveDiffuseLighting(r, out);
+    case FilterPrimitiveTag::kConvolveMatrix: return DecodeFilterPrimitiveConvolveMatrix(r, out);
+    case FilterPrimitiveTag::kMorphology: return DecodeFilterPrimitiveMorphology(r, out);
+    case FilterPrimitiveTag::kTile: return DecodeFilterPrimitiveTile(r, out);
+    case FilterPrimitiveTag::kTurbulence: return DecodeFilterPrimitiveTurbulence(r, out);
+    case FilterPrimitiveTag::kImage: return DecodeFilterPrimitiveImage(r, out);
+    case FilterPrimitiveTag::kDisplacementMap: return DecodeFilterPrimitiveDisplacementMap(r, out);
+    case FilterPrimitiveTag::kDiffuseLighting: return DecodeFilterPrimitiveDiffuseLighting(r, out);
     case FilterPrimitiveTag::kSpecularLighting:
       return DecodeFilterPrimitiveSpecularLighting(r, out);
-    default:
-      r.fail();
-      return false;
+    default: r.fail(); return false;
   }
 }
 
-void EncodeFilterNode(WireWriter& w,
-                      const svg::components::FilterNode& node) {
+void EncodeFilterNode(WireWriter& w, const svg::components::FilterNode& node) {
   // Primitive (tag + fields).
-  std::visit([&](const auto& p) { EncodeFilterPrimitive(w, p); },
-             node.primitive);
+  std::visit([&](const auto& p) { EncodeFilterPrimitive(w, p); }, node.primitive);
 
   // Inputs.
   w.writeU32(static_cast<uint32_t>(node.inputs.size()));
@@ -1972,8 +1844,7 @@ bool DecodeFilterNode(WireReader& r, svg::components::FilterNode& out) {
   if (hasCif) {
     uint8_t cif = 0;
     if (!r.readU8(cif)) return false;
-    out.colorInterpolationFilters =
-        static_cast<svg::ColorInterpolationFilters>(cif);
+    out.colorInterpolationFilters = static_cast<svg::ColorInterpolationFilters>(cif);
   } else {
     out.colorInterpolationFilters.reset();
   }
@@ -2010,8 +1881,7 @@ bool DecodeFilterGraph(WireReader& r, svg::components::FilterGraph& out) {
   }
   uint8_t cif = 0;
   if (!r.readU8(cif)) return false;
-  out.colorInterpolationFilters =
-      static_cast<svg::ColorInterpolationFilters>(cif);
+  out.colorInterpolationFilters = static_cast<svg::ColorInterpolationFilters>(cif);
   uint8_t pu = 0;
   if (!r.readU8(pu)) return false;
   out.primitiveUnits = static_cast<svg::PrimitiveUnits>(pu);

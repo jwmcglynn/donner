@@ -87,7 +87,7 @@ cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) &&
 
 ## Transform Naming Convention
 
-Use **destFromSource** naming: `entityFromWorldTransform`, `deviceFromPattern`, `documentWorldFromCanvasTransform_`. Always `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
+Use **destFromSource** naming: `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`. Always `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
 
 ## Feature Flags & Build Configurations
 

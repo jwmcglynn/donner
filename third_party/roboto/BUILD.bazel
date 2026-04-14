@@ -1,0 +1,19 @@
+load("//build_defs:embed_resources.bzl", "embed_resources")
+
+embed_resources(
+    name = "roboto",
+    header_output = "embed_resources/RobotoFont.h",
+    resources = {
+        "kRobotoRegularTtf": "Roboto-Regular.ttf",
+        "kRobotoBoldTtf": "Roboto-Bold.ttf",
+    },
+    visibility = [
+        "//donner:__subpackages__",
+    ],
+)
+
+exports_files([
+    "Roboto-Regular.ttf",
+    "Roboto-Bold.ttf",
+    "Roboto-LICENSE.txt",
+])

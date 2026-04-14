@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "donner/base/BezierUtils.h"
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utils.h"
 
@@ -1198,6 +1199,83 @@ Path Path::toMonotonic() const {
   }
 
   return builder.build();
+}
+
+RcString Path::toSVGPathData() const {
+  if (commands_.empty()) {
+    return RcString("");
+  }
+
+  std::string out;
+  out.reserve(commands_.size() * 12);  // Rough estimate: ~12 chars per command.
+
+  bool first = true;
+  for (const auto& cmd : commands_) {
+    if (!first) {
+      out += ' ';
+    }
+    first = false;
+
+    switch (cmd.verb) {
+      case Verb::MoveTo: {
+        const Vector2d& p = points_[cmd.pointIndex];
+        out += 'M';
+        out += ' ';
+        out += detail::FormatNumberForSVG(p.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(p.y);
+        break;
+      }
+      case Verb::LineTo: {
+        const Vector2d& p = points_[cmd.pointIndex];
+        out += 'L';
+        out += ' ';
+        out += detail::FormatNumberForSVG(p.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(p.y);
+        break;
+      }
+      case Verb::QuadTo: {
+        const Vector2d& ctrl = points_[cmd.pointIndex];
+        const Vector2d& end = points_[cmd.pointIndex + 1];
+        out += 'Q';
+        out += ' ';
+        out += detail::FormatNumberForSVG(ctrl.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(ctrl.y);
+        out += ' ';
+        out += detail::FormatNumberForSVG(end.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(end.y);
+        break;
+      }
+      case Verb::CurveTo: {
+        const Vector2d& c1 = points_[cmd.pointIndex];
+        const Vector2d& c2 = points_[cmd.pointIndex + 1];
+        const Vector2d& end = points_[cmd.pointIndex + 2];
+        out += 'C';
+        out += ' ';
+        out += detail::FormatNumberForSVG(c1.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(c1.y);
+        out += ' ';
+        out += detail::FormatNumberForSVG(c2.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(c2.y);
+        out += ' ';
+        out += detail::FormatNumberForSVG(end.x);
+        out += ' ';
+        out += detail::FormatNumberForSVG(end.y);
+        break;
+      }
+      case Verb::ClosePath: {
+        out += 'Z';
+        break;
+      }
+    }
+  }
+
+  return RcString(out);
 }
 
 std::ostream& operator<<(std::ostream& os, const Path& path) {

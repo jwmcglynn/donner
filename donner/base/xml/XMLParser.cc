@@ -242,7 +242,12 @@ private:
 
   const int maxEntityDepth_;
   const uint64_t maxEntitySubstitutions_;
+  const uint64_t maxElements_;
+  const uint64_t maxAttributesPerElement_;
+  const int maxNestingDepth_;
   uint64_t entitySubstitutionCount_ = 0;
+  uint64_t elementCount_ = 0;
+  int nestingDepth_ = 0;
 
 public:
   explicit XMLParserImpl(std::string_view text, const XMLParser::Options& options)
@@ -251,7 +256,10 @@ public:
         remaining_(text),
         options_(options),
         maxEntityDepth_(options.maxEntityDepth),
-        maxEntitySubstitutions_(options.maxEntitySubstitutions) {}
+        maxEntitySubstitutions_(options.maxEntitySubstitutions),
+        maxElements_(options.maxElements),
+        maxAttributesPerElement_(options.maxAttributesPerElement),
+        maxNestingDepth_(options.maxNestingDepth) {}
 
   bool isWhitespace(char ch) const {
     // Whitespace is defined by multiple specs, but both match.
@@ -342,15 +350,26 @@ public:
   /**
    * Used by GetAttributeLocation to re-parse just the attributes of a single element
    * starting at `<element`.
+   *
+   * Returns `std::nullopt` on any malformed input — historically this function
+   * `UTILS_RELEASE_ASSERT`ed that the caller had previously parsed the same element
+   * successfully, but the editor's structured-editing path needs to call this with
+   * offsets derived from source text that may no longer be well-formed (the user is
+   * actively typing). Rather than crash the editor, degrade gracefully: on any parse
+   * failure return `std::nullopt` and let the caller fall back to its "attribute not
+   * found" path.
    */
   std::optional<SourceRange> getElementAttributeLocation(const XMLQualifiedNameRef& name) {
     // We assume the caller has already consumed "<", so do it here.
-    UTILS_RELEASE_ASSERT_MSG(tryConsume(remaining_, "<"), "Expected element to start with '<'");
+    if (!tryConsume(remaining_, "<")) {
+      return std::nullopt;
+    }
 
     // Extract element name
     auto maybeName = consumeQualifiedName();
-    UTILS_RELEASE_ASSERT_MSG(!maybeName.hasError(),
-                             "Expected element to have previously parsed correctly");
+    if (maybeName.hasError()) {
+      return std::nullopt;
+    }
 
     // Skip whitespace between element name and attributes
     skipWhitespace(remaining_);
@@ -360,8 +379,9 @@ public:
       const FileOffset attributeStartOffset = currentOffsetWithLineNumber(remaining_);
 
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
-      UTILS_RELEASE_ASSERT_MSG(!maybeAttribute.hasError(),
-                               "Expected element to have previously parsed correctly");
+      if (maybeAttribute.hasError()) {
+        return std::nullopt;
+      }
 
       const FileOffset attributeEndOffset = currentOffsetWithLineNumber(remaining_);
       skipWhitespace(remaining_);
@@ -942,6 +962,9 @@ private:
 
   /// Parse XML declaration (<?xml...)
   ParseResult<XMLNode> parseXMLDeclaration(FileOffset startOffset) {
+    if (auto maybeError = countTreeNode(startOffset)) {
+      return std::move(maybeError.value());
+    }
     // Create declaration
     XMLNode declaration = XMLNode::CreateXMLDeclarationNode(document_);
     declaration.setSourceStartOffset(startOffset);
@@ -974,6 +997,9 @@ private:
 
     // If Comment nodes are enabled
     if (options_.parseComments) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return std::move(maybeError.value());
+      }
       XMLNode commentNode = XMLNode::CreateCommentNode(document_, commentStr.toSingleRcString());
       commentNode.setSourceStartOffset(startOffset);
       commentNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
@@ -1052,6 +1078,9 @@ private:
     remaining_.remove_prefix(i + 1);  // consume the '>' as well
 
     if (options_.parseDoctype) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return std::move(maybeError.value());
+      }
       XMLNode docNode = XMLNode::CreateDocTypeNode(document_, doctypeStr.toSingleRcString());
       docNode.setSourceStartOffset(startOffset);
       docNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
@@ -1081,6 +1110,9 @@ private:
     const ChunkedString& piValue = maybePiValue.value();
 
     if (options_.parseProcessingInstructions) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return std::move(maybeError.value());
+      }
       XMLNode pi = XMLNode::CreateProcessingInstructionNode(document_, piName.toSingleRcString(),
                                                             piValue.toSingleRcString());
       pi.setSourceStartOffset(startOffset);
@@ -1125,6 +1157,10 @@ private:
     auto maybeCData = consumeContentsUntilEndString("]]>");
     if (!maybeCData) {
       return createParseError("CDATA node does not end with ']]>'");
+    }
+
+    if (auto maybeError = countTreeNode(startOffset)) {
+      return std::move(maybeError.value());
     }
 
     const ChunkedString& cdataStr = maybeCData.value();
@@ -1235,6 +1271,13 @@ private:
    * Parsing an element of form `<tag ...>` or `<tag .../>`.
    */
   ParseResult<XMLNode> parseElement(FileOffset startOffset) {
+    // Enforce the element count cap. Any element-ish node (including comments, doctype,
+    // PI, CDATA) also counts toward this budget via `countTreeNode` so an attacker can't
+    // route around it by piling comments.
+    if (auto maybeError = countTreeNode(startOffset)) {
+      return std::move(maybeError.value());
+    }
+
     // Extract element name
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
@@ -1257,7 +1300,14 @@ private:
 
     // Determine ending type
     if (tryConsume(remaining_, ">")) {
-      if (auto maybeError = parseNodeContents(element)) {
+      // Enter the element — bump nesting depth before recursing, restore on exit.
+      if (nestingDepth_ >= maxNestingDepth_) {
+        return createParseError("Maximum element nesting depth exceeded", startOffset);
+      }
+      ++nestingDepth_;
+      auto maybeError = parseNodeContents(element);
+      --nestingDepth_;
+      if (maybeError) {
         return std::move(maybeError.value());
       }
 
@@ -1269,6 +1319,17 @@ private:
 
     element.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
     return element;
+  }
+
+  /// Increment the element/tree-node counter and return an error if it would exceed
+  /// the configured cap. Called once per parsed element, comment, doctype, CDATA,
+  /// processing instruction, or XML declaration.
+  [[nodiscard]] std::optional<ParseDiagnostic> countTreeNode(const FileOffset& where) {
+    if (elementCount_ >= maxElements_) {
+      return createParseError("Maximum element count exceeded", where);
+    }
+    ++elementCount_;
+    return std::nullopt;
   }
 
   /**
@@ -1492,8 +1553,10 @@ private:
    * Parse XML attributes of the node, gather all attributes until `>` or `/>`
    */
   [[nodiscard]] std::optional<ParseDiagnostic> parseNodeAttributes(XMLNode& node) {
+    uint64_t attributeCount = 0;
     // For all attributes
     while (true) {
+      const FileOffset beforeAttribute = currentOffsetWithLineNumber(remaining_);
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
       if (maybeAttribute.hasError()) {
         return std::move(maybeAttribute.error());
@@ -1502,6 +1565,11 @@ private:
       skipWhitespace(remaining_);
 
       if (maybeAttribute.result().has_value()) {
+        if (attributeCount >= maxAttributesPerElement_) {
+          return createParseError("Maximum attributes-per-element count exceeded",
+                                  beforeAttribute);
+        }
+        ++attributeCount;
         const ParsedAttribute& attribute = maybeAttribute.result().value();
         node.setAttribute(attribute.name, attribute.value);
       } else {
@@ -1529,11 +1597,21 @@ std::optional<SourceRange> XMLParser::GetAttributeLocation(
     return std::nullopt;
   }
 
+  // Bounds-check the offset against the source length. Callers may pass an offset
+  // from a prior parse that no longer lines up with the current source (e.g. the
+  // editor's source buffer has been edited since). `string_view::substr` throws
+  // `std::out_of_range` on `pos > size()`, which under `-fno-exceptions` terminates.
+  // Degrade gracefully instead.
+  const std::size_t offset = elementStartOffset.offset.value();
+  if (offset > str.size()) {
+    return std::nullopt;
+  }
+
   Options reparseOptions;
   // To avoid unnecessary conversion when we're going to discard the values anyway.
   reparseOptions.disableEntityTranslation = true;
 
-  const std::string_view elementToEnd = str.substr(elementStartOffset.offset.value());
+  const std::string_view elementToEnd = str.substr(offset);
   XMLParserImpl parser(elementToEnd, reparseOptions);
   if (auto attributeLocationInElement = parser.getElementAttributeLocation(attributeName)) {
     SourceRange result{attributeLocationInElement->start.addParentOffset(elementStartOffset),

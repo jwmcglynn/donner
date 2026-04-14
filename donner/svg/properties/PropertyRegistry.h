@@ -522,6 +522,20 @@ public:
   void parseStyle(std::string_view str);
 
   /**
+   * Clear every property that was set from a `style=""` attribute, leaving presentation
+   * attributes (specificity `0,0,0`) and stylesheet-origin declarations intact. Identifies
+   * style-origin properties by their stored \ref css::Specificity::StyleAttribute() tag —
+   * the same tag \ref parseStyle applies when it writes them.
+   *
+   * Use this before re-calling \ref parseStyle on the same registry to get "replace the
+   * `style=""` contribution" semantics while preserving `fill="red"` and the like.
+   *
+   * Also clears entries from \ref unparsedProperties whose specificity matches
+   * `StyleAttribute()`.
+   */
+  void clearStyleAttributeProperties();
+
+  /**
    * Parse a common presentation attribute (CSS properties like fill, stroke, etc.) or `transform`.
    *
    * This handles properties stored in PropertyRegistry and the `transform` attribute. For

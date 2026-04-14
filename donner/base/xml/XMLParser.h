@@ -80,6 +80,31 @@ public:
      * error.
      */
     uint64_t maxEntitySubstitutions = 1'000;
+
+    /**
+     * Maximum total number of elements (and other tree-nodes) allowed in a single document
+     * parse. Defaults to 100'000 — larger than any realistic SVG but small enough to refuse
+     * a "billion-rect" DoS in bounded time. Failing to stay under this limit causes parsing
+     * to fail with a resource exhaustion error.
+     */
+    uint64_t maxElements = 100'000;
+
+    /**
+     * Maximum number of attributes permitted on a single element. Defaults to 1'000, which is
+     * far more than any realistic SVG needs. Refuses the "billion-attribute" expansion where
+     * an attacker piles thousands of attributes onto a single tag to amplify per-attribute
+     * callback / validation work.
+     */
+    uint64_t maxAttributesPerElement = 1'000;
+
+    /**
+     * Maximum element nesting depth in the parsed tree. Defaults to 256. This is the
+     * structural depth of `<a><b><c>...</c></b></a>`, orthogonal to \ref maxEntityDepth.
+     * Exceeding it causes parsing to fail with a resource exhaustion error — this protects
+     * both the parser (which recurses into `parseNodeContents`) and later consumers
+     * (CSS cascade, renderers) from unbounded stacks.
+     */
+    int maxNestingDepth = 256;
   };
 
   /**

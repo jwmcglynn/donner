@@ -1,0 +1,10 @@
+# Bazel patches consumed by examples/MODULE.bazel git_override blocks for
+# imgui and glfw. These files are intentional duplicates of
+# //third_party/patches/{imgui,glfw}_bazel_build_files.patch in the donner
+# core module — Bazel forbids cross-module patch label references, so each
+# module must keep its own copy. If you change the donner core copy, change
+# this copy too. (presubmit can be taught to check this with `cmp`.)
+exports_files([
+    "imgui_bazel_build_files.patch",
+    "glfw_bazel_build_files.patch",
+])

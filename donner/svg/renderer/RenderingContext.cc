@@ -120,11 +120,11 @@ public:
       layoutSystem = registry_.ctx().get<LayoutSystem*>();
     }
 
-    documentWorldFromCanvasTransform_ =
-        layoutSystem ? layoutSystem->getDocumentFromCanvasTransform(registry)
-                     : LayoutSystem().getDocumentFromCanvasTransform(registry);
+    canvasFromDocumentWorldTransform_ =
+        layoutSystem ? layoutSystem->getCanvasFromDocumentTransform(registry)
+                     : LayoutSystem().getCanvasFromDocumentTransform(registry);
     if (verbose_) {
-      std::cout << "Document world from canvas transform: " << documentWorldFromCanvasTransform_
+      std::cout << "Canvas from document-world transform: " << canvasFromDocumentWorldTransform_
                 << "\n";
     }
   }
@@ -212,7 +212,7 @@ public:
         LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry_, treeEntity));
     instance.entityFromWorldTransform =
         absoluteTransformComponent.entityFromWorld * (absoluteTransformComponent.worldIsCanvas
-                                                          ? documentWorldFromCanvasTransform_
+                                                          ? canvasFromDocumentWorldTransform_
                                                           : Transform2d());
 
     instance.clipRect = clipRect;
@@ -664,7 +664,7 @@ private:
   ContextPaintServers contextPaintServers_;
 
   /// Transform from the canvas to the SVG document root, for the current canvas scale.
-  Transform2d documentWorldFromCanvasTransform_;
+  Transform2d canvasFromDocumentWorldTransform_;
 
   /// Tracks mask elements currently being rendered to detect mutual recursion
   /// (e.g., mask1→mask2→mask1). When a mask reference resolves to an element already in this

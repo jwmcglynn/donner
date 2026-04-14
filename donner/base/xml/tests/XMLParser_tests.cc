@@ -834,6 +834,88 @@ TEST_F(XMLParserTests, EntitySubstitutionLimitExceeded) {
   EXPECT_THAT(result, ParseErrorIs("Entity substitution limit exceeded"));
 }
 
+TEST_F(XMLParserTests, MaxElementsLimitExceeded) {
+  // Set a tiny element cap so the test input immediately overruns it. The
+  // cap counts every tree-building node (element, CDATA, comment, doctype,
+  // PI, XML declaration) so an attacker can't sidestep it with non-element
+  // tree nodes.
+  XMLParser::Options options;
+  options.maxElements = 3;
+
+  auto result = XMLParser::Parse("<a><b/><c/><d/></a>", options);
+
+  // Expect: root <a> (1), <b/> (2), <c/> (3), <d/> (exceeds) → error on <d/>.
+  EXPECT_THAT(result, ParseErrorIs("Maximum element count exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxElementsLimitAllowsRealisticDocuments) {
+  // The default cap (100k) is far above any realistic SVG; this test
+  // documents that a 50-element input parses cleanly without bumping caps.
+  auto result = XMLParser::Parse(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g><rect/><rect/><rect/><rect/><rect/></g>
+      <g><rect/><rect/><rect/><rect/><rect/></g>
+      <g><rect/><rect/><rect/><rect/><rect/></g>
+    </svg>
+  )");
+  EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
+TEST_F(XMLParserTests, MaxAttributesPerElementLimitExceeded) {
+  XMLParser::Options options;
+  options.maxAttributesPerElement = 2;
+
+  auto result =
+      XMLParser::Parse(R"(<node a="1" b="2" c="3" d="4"/>)", options);
+
+  EXPECT_THAT(result, ParseErrorIs("Maximum attributes-per-element count exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxAttributesCapIsPerElement) {
+  // The attribute cap is **per element**, not cumulative — two elements
+  // each with the maximum attributes must both parse.
+  XMLParser::Options options;
+  options.maxAttributesPerElement = 3;
+
+  auto result = XMLParser::Parse(R"(
+    <root>
+      <a x="1" y="2" z="3"/>
+      <b x="1" y="2" z="3"/>
+    </root>
+  )",
+                                 options);
+  EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
+TEST_F(XMLParserTests, MaxNestingDepthLimitExceeded) {
+  XMLParser::Options options;
+  options.maxNestingDepth = 3;
+
+  // The root element sits at depth 0; each child pushes depth by one.
+  // With maxNestingDepth=3, <a><b><c><d></d></c></b></a> is rejected
+  // at the point where we try to enter <d> (depth 3 → 4 would exceed).
+  auto result =
+      XMLParser::Parse("<a><b><c><d><e/></d></c></b></a>", options);
+
+  EXPECT_THAT(result, ParseErrorIs("Maximum element nesting depth exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxNestingDepthAllowsSiblingSpread) {
+  // A wide-but-shallow document should parse fine under a tight nesting
+  // cap — the cap is about call-stack depth, not total element count.
+  XMLParser::Options options;
+  options.maxNestingDepth = 2;
+
+  auto result = XMLParser::Parse(R"(
+    <root>
+      <a/><a/><a/><a/><a/>
+      <a/><a/><a/><a/><a/>
+    </root>
+  )",
+                                 options);
+  EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
 TEST_F(XMLParserTests, EntitiesComposition) {
   // Test entity composition (one entity referencing another)
   auto result = XMLParser::Parse(R"(
@@ -1079,6 +1161,44 @@ TEST_F(XMLParserTests, GetAttributeLocationInvalidOffset) {
   const auto kChildOffset = FileOffset::EndOfString();
 
   EXPECT_THAT(XMLParser::GetAttributeLocation(xml, kChildOffset, "attr"),
+              testing::Eq(std::nullopt));
+}
+
+TEST_F(XMLParserTests, GetAttributeLocationOutOfBoundsOffset) {
+  // Regression for the structured-editing M−1 prerequisite: the editor's
+  // text-edit fast path may call GetAttributeLocation with an offset
+  // derived from a prior parse that no longer matches the current source
+  // (the user has typed bytes since). An offset past the end of the
+  // string must return std::nullopt, not crash or read past the buffer.
+  std::string_view xml = R"(<root><child attr="v"/></root>)";
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, FileOffset::Offset(9999), "attr"),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, FileOffset::Offset(xml.size()), "attr"),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(XMLParser::GetAttributeLocation(xml, FileOffset::Offset(xml.size() + 1), "attr"),
+              testing::Eq(std::nullopt));
+}
+
+TEST_F(XMLParserTests, GetAttributeLocationMalformedInputAtOffset) {
+  // Offset points inside a well-formed region of the outer parse, but
+  // the element at that offset is no longer well-formed — the user just
+  // typed a stray character. Historically this release-asserted; now
+  // it must return std::nullopt cleanly.
+
+  // Offset points to a '<' that introduces a bogus element name.
+  std::string_view badName = R"(<root><1notaname attr="v"/></root>)";
+  const auto offsetToBadElement = FileOffset::Offset(6);  // '<' of the bogus element
+  EXPECT_THAT(XMLParser::GetAttributeLocation(badName, offsetToBadElement, "attr"),
+              testing::Eq(std::nullopt));
+
+  // Offset points at text content, not a '<'.
+  std::string_view textContent = R"(<root>plain text</root>)";
+  EXPECT_THAT(XMLParser::GetAttributeLocation(textContent, FileOffset::Offset(6), "attr"),
+              testing::Eq(std::nullopt));
+
+  // Offset points at a partially-typed attribute (unterminated quote).
+  std::string_view partialAttr = R"(<root><child attr="unterm)";
+  EXPECT_THAT(XMLParser::GetAttributeLocation(partialAttr, FileOffset::Offset(6), "attr"),
               testing::Eq(std::nullopt));
 }
 

@@ -274,6 +274,47 @@ TEST_F(SVGElementTests, Style) {
   EXPECT_THAT(element.getAttribute("style"), testing::Optional(RcString("color: red")));
 }
 
+TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentationAttrs) {
+  // Regression for the structured-editing M−1 prerequisite (see
+  // docs/design_docs/structured_text_editing.md). `StyleComponent::setStyle`
+  // must *replace* the prior `style=""` contribution (so declarations the
+  // user removed from the source text don't linger in the ECS) while
+  // preserving properties set by presentation attributes like `fill="red"`
+  // — which live in the same PropertyRegistry but are tagged with a
+  // distinct Specificity (FromABC(0,0,0) vs StyleAttribute()).
+  auto element = create();
+  auto& styleComponent =
+      element.entityHandle().get_or_emplace<components::StyleComponent>();
+
+  // Simulate the parse path: fill="red" lands via the presentation-
+  // attribute code path, then style="stroke: green; opacity: 0.5"
+  // lands via setStyle.
+  auto fillResult = styleComponent.properties.parsePresentationAttribute(
+      "fill", "red", element.entityHandle());
+  ASSERT_TRUE(fillResult.hasResult() && fillResult.result());
+  styleComponent.setStyle("stroke: green; opacity: 0.5");
+
+  EXPECT_TRUE(styleComponent.properties.fill.hasValue());
+  EXPECT_TRUE(styleComponent.properties.stroke.hasValue());
+  EXPECT_TRUE(styleComponent.properties.opacity.hasValue());
+  EXPECT_EQ(styleComponent.properties.fill.specificity, css::Specificity::FromABC(0, 0, 0));
+  EXPECT_EQ(styleComponent.properties.stroke.specificity, css::Specificity::StyleAttribute());
+
+  // Now the editor-rewrite case: user deletes `opacity` from the
+  // style attribute and retypes the rest. setStyle must clear the
+  // prior style-origin properties (stroke AND opacity) and then
+  // re-parse the new value — but fill="red" must survive, because
+  // its specificity marks it as a presentation attribute, not
+  // style-origin.
+  styleComponent.setStyle("stroke: blue");
+
+  EXPECT_TRUE(styleComponent.properties.fill.hasValue())
+      << "fill presentation attribute must survive setStyle rewrite";
+  EXPECT_TRUE(styleComponent.properties.stroke.hasValue());
+  EXPECT_FALSE(styleComponent.properties.opacity.hasValue())
+      << "opacity must be cleared — it was style-origin and no longer appears";
+}
+
 TEST_F(SVGElementTests, UpdateStyleMarksStyleCascadeDirty) {
   auto element = create();
   element.setStyle("fill: red");

@@ -125,6 +125,12 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
   bool lastWasImportantBang = false;
   bool hitNonWhitespace = false;
   int trailingWhitespace = 0;
+  // Offset of the last non-whitespace token we consumed into the declaration. This is
+  // used to populate `declaration.sourceRange.end` as a best-effort hint for editors
+  // that want to splice into the declaration span — see Declaration.h for the exact
+  // contract. Starts at the name's offset so a declaration with no values at all has
+  // a zero-length range pinned at its name.
+  FileOffset lastConsumedNonWhitespaceOffset = offset;
 
   while (!tokenizer.isEOF()) {
     typename T::Item token = tokenizer.next();
@@ -137,6 +143,7 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
       }
     } else {
       hitNonWhitespace = true;
+      const FileOffset tokenOffset = token.offset();
 
       // As long as the next input token is anything other than an <EOF-token>, consume a
       // component value and append it to the declaration's value.
@@ -153,6 +160,7 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
               (valueToken->is<Token::Delim>() && valueToken->get<Token::Delim>().value == '!');
           if (!lastWasImportantBang || declaration.important) {
             trailingWhitespace = 0;
+            lastConsumedNonWhitespaceOffset = tokenOffset;
           }
           declaration.important = false;
         }
@@ -160,6 +168,7 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
         lastWasImportantBang = false;
         declaration.important = false;
         trailingWhitespace = 0;
+        lastConsumedNonWhitespaceOffset = tokenOffset;
       }
 
       declaration.values.emplace_back(std::move(componentValue));
@@ -177,6 +186,7 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
     declaration.values.pop_back();
   }
 
+  declaration.sourceRange = SourceRange{offset, lastConsumedNonWhitespaceOffset};
   return declaration;
 }
 

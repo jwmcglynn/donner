@@ -109,34 +109,34 @@ TEST(SVGDocument, WidthHeightAccessors) {
 
 /**
  * Verify that when the viewBox and canvas size are identical,
- * the `documentFromCanvasTransform()` is the identity transform.
+ * the `canvasFromDocumentTransform()` is the identity transform.
  */
-TEST(SVGDocument, DocumentFromCanvasTransformIdentity) {
+TEST(SVGDocument, CanvasFromDocumentTransformIdentity) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
     </svg>
   )");
 
-  const Transform2d transform = document.documentFromCanvasTransform();
+  const Transform2d transform = document.canvasFromDocumentTransform();
   EXPECT_TRUE(transform.isIdentity()) << "transform=" << transform;
 }
 
 /**
- * Verify that when the canvas size differs from the viewBox, \c documentFromCanvasTransform()
+ * Verify that when the canvas size differs from the viewBox, \c canvasFromDocumentTransform()
  * returns a transformation in `destinationFromSource` notation that maps coordinates from the
- * viewBox (source) to the canvas-scaled document space (destination).
+ * document's viewBox (source) to the canvas-scaled output space (destination).
  *
  * For a viewBox of 200×200 and a canvas size of 100×200, the transformation scales the x‑coordinate
- * by 0.5 (i.e. a point (50, 100) in the viewBox is mapped to (25, 100) in the document space),
+ * by 0.5 (i.e. a point (50, 100) in the viewBox is mapped to (25, 100) in canvas space),
  * while the y‑coordinate remains unchanged.
  */
-TEST(SVGDocument, DocumentFromCanvasTransformScaling) {
+TEST(SVGDocument, CanvasFromDocumentTransformScaling) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="100" height="200">
     </svg>
   )");
 
-  const Transform2d transform = document.documentFromCanvasTransform();
+  const Transform2d transform = document.canvasFromDocumentTransform();
   EXPECT_EQ(transform.transformPosition(Vector2d(50, 100)), Vector2d(25, 100));
 }
 

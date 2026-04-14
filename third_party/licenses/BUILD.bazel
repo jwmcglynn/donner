@@ -24,6 +24,8 @@ exports_files([
     "imgui.LICENSE.txt",
     "glfw.LICENSE.md",
     "tracy.LICENSE.txt",
+    "roboto.LICENSE.txt",
+    "fira-code.LICENSE.txt",
 ])
 
 license(
@@ -135,6 +137,25 @@ license(
     license_text = "tracy.LICENSE.txt",
 )
 
+# Roboto — UI font embedded in //donner/editor. Apache-2.0 per Google Fonts.
+license(
+    name = "roboto",
+    package_name = "Roboto",
+    package_url = "https://fonts.google.com/specimen/Roboto",
+    license_kinds = ["@rules_license//licenses/spdx:Apache-2.0"],
+    license_text = "roboto.LICENSE.txt",
+)
+
+# FiraCode — monospace source-pane font embedded in //donner/editor.
+# SIL Open Font License 1.1.
+license(
+    name = "fira-code",
+    package_name = "Fira Code",
+    package_url = "https://github.com/tonsky/FiraCode",
+    license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
+    license_text = "fira-code.LICENSE.txt",
+)
+
 # Canonical per-variant license lists. These match the build-report
 # variants in `tools/generate_build_report.py` so a Python script can
 # correlate cquery results with the aggregated manifest.
@@ -166,13 +187,14 @@ SKIA_TEXT_FULL_LICENSES = [
     "@zlib//:license",
 ]
 
-# Editor variant adds imgui, glfw, and tracy on top of the skia + text-full
-# variant. Editor-specific resources (FiraCode, Roboto fonts) get added here
-# when they land in M3.
+# Editor variant adds imgui, glfw, tracy, and the embedded editor fonts
+# (Roboto + Fira Code) on top of the skia + text-full variant.
 EDITOR_LICENSES = SKIA_TEXT_FULL_LICENSES + [
     ":imgui",
     ":glfw",
     ":tracy",
+    ":roboto",
+    ":fira-code",
 ]
 
 donner_notice_file(
