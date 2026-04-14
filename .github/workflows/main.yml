@@ -137,15 +137,21 @@ jobs:
         # and Bazel's hermetic include scanner allows absolute /nix/store paths.
         # This step is idempotent; on a cold cache it's a no-op.
         #
-        # Pattern note: In Bazel 8 Bzlmod mode the repository uses the canonical
-        # name "rules_cc++cc_configure_extension+local_config_cc" (not bare
-        # "local_config_cc" from WORKSPACE mode). The pattern "*local_config_cc"
-        # (trailing anchor, no *) matches both while NOT matching the sibling
-        # "rules_cc++cc_configure_extension+local_config_cc_toolchains" repo —
-        # deleting that one causes "BUILD file not found" errors.
+        # Pattern note: In Bazel 8 Bzlmod mode the cc_configure module extension
+        # produces two repos: "rules_cc++cc_configure_extension+local_config_cc"
+        # (compiler detection) and "rules_cc++cc_configure_extension+local_config_cc_toolchains"
+        # (toolchain registration). Both must be cleared together — deleting only
+        # the directory is not enough because Bazel checks the marker file for
+        # cache validity; if the marker exists but the directory content is broken
+        # (no BUILD file), Bazel reuses the broken state without regenerating.
+        # Deleting both the directories and their @*.marker siblings forces a
+        # clean cc_configure_extension evaluation that regenerates both correctly.
+        # The "*cc_configure*" pattern covers all markers and the "*local_config_cc*"
+        # pattern covers both repo directories and any WORKSPACE-mode remnants.
         run: |
-          find /var/cache/bazel/user-root -maxdepth 5 -type d \
-            -name "*local_config_cc" -exec rm -rf {} + 2>/dev/null || true
+          find /var/cache/bazel/user-root -maxdepth 5 \
+            \( -name "*cc_configure*" -o -name "*local_config_cc*" \) \
+            -exec rm -rf {} + 2>/dev/null || true
 
       - name: Build
         # Same -skia_ref filter as the GitHub-hosted linux job above.
