@@ -181,3 +181,13 @@ Donner builds everything from source. The Skia backend is large and slow to buil
 ### How do I build the editor?
 
 The Donner Editor is in active migration into the tree under `//donner/editor`. See [docs/design_docs/0020-editor.md](design_docs/0020-editor.md) for the in-progress design and milestone plan.
+
+Current launch syntax:
+
+```sh
+bazel run //donner/editor -- path/to/file.svg
+bazel run //donner/editor -- --experimental path/to/file.svg
+```
+
+`--experimental` enables editor-only experimental behavior such as the in-progress composited drag
+path. Without the flag, the editor uses the default non-experimental interaction path.

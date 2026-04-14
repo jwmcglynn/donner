@@ -47,6 +47,9 @@ public:
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
+  /// Enable the experimental compositor-backed drag preview path.
+  void setCompositedDragPreviewEnabled(bool enabled) { compositedDragPreviewEnabled_ = enabled; }
+
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
   [[nodiscard]] bool isDragging() const { return dragState_.has_value(); }
@@ -105,6 +108,7 @@ private:
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
+  bool compositedDragPreviewEnabled_ = false;
 };
 
 }  // namespace donner::editor

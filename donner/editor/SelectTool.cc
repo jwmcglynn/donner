@@ -107,6 +107,11 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   dragState_->currentDocumentDelta = deltaDoc;
   dragState_->currentTransform = newTransform;
   dragState_->hasMoved = true;
+
+  if (!compositedDragPreviewEnabled_) {
+    // Default path: update the live document on every drag step.
+    editor.applyMutation(EditorCommand::SetTransformCommand(dragState_->element, newTransform));
+  }
 }
 
 void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/) {
@@ -150,8 +155,10 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   // element actually moved — a click that never saw a mouse-move event
   // is a no-op for undo purposes.
   if (dragState_->hasMoved) {
-    editor.applyMutation(
-        EditorCommand::SetTransformCommand(dragState_->element, dragState_->currentTransform));
+    if (compositedDragPreviewEnabled_) {
+      editor.applyMutation(
+          EditorCommand::SetTransformCommand(dragState_->element, dragState_->currentTransform));
+    }
 
     UndoSnapshot before{.element = dragState_->element,
                         .transform = dragState_->startTransform,
@@ -173,7 +180,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
 }
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() const {
-  if (!dragState_.has_value()) {
+  if (!compositedDragPreviewEnabled_ || !dragState_.has_value()) {
     return std::nullopt;
   }
 
