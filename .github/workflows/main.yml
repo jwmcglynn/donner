@@ -125,11 +125,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Sync Bazel toolchain
+        # Force cc_autoconf to re-run by removing the cached toolchain config.
+        # On NixOS, cc_configure detects include paths by running `clang -v`;
+        # the nixpkgs cc-wrapper adds NIX_CFLAGS_COMPILE (-isystem paths for
+        # compiler-rt, X11, Vulkan, etc.) to that invocation.  But Bazel does
+        # NOT track NIX_CFLAGS_COMPILE as part of cc_configure's cache key —
+        # the rule doesn't access it via repository_ctx.os.environ, only via
+        # a subprocess.  Deleting local_config_cc forces fresh toolchain
+        # detection so the -isystem paths land in cxx_builtin_include_directories
+        # and Bazel's hermetic include scanner allows absolute /nix/store paths.
+        # This step is idempotent; on a cold cache it's a no-op.
+        run: |
+          find /var/cache/bazel/user-root -maxdepth 2 -type d \
+            -name "local_config_cc" -exec rm -rf {} + 2>/dev/null || true
+
       - name: Build
         # Same -skia_ref filter as the GitHub-hosted linux job above.
         # fuzz targets ARE built here: the donner-runner NixOS guest
-        # now -isystem's compiler-rt-libc's include dir into every
-        # bazel cc action via /etc/bazel.bazelrc, so
+        # injects compiler-rt-libc's include dir (and X11, Vulkan, etc.)
+        # via NIX_CFLAGS_COMPILE in /etc/bazel.bazelrc, so
         # <fuzzer/FuzzedDataProvider.h> resolves the same way it does
         # on Ubuntu's apt clang-18.
         run: |
