@@ -202,6 +202,15 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "experimental_drag_presentation",
+    hdrs = ["ExperimentalDragPresentation.h"],
+    deps = [
+        ":select_tool",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "select_tool",
     srcs = ["SelectTool.cc"],
     hdrs = ["SelectTool.h"],
@@ -271,6 +280,7 @@ _EDITOR_RUNTIME_DEPS = [
     ":attribute_writeback",
     ":change_classifier",
     ":editor_app",
+    ":experimental_drag_presentation",
     ":editor_icon",
     ":editor_splash",
     ":overlay_renderer",

@@ -54,6 +54,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "experimental_drag_presentation_tests",
+    srcs = ["ExperimentalDragPresentation_tests.cc"],
+    deps = [
+        "//donner/editor:experimental_drag_presentation",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "command_queue_tests",
     srcs = ["CommandQueue_tests.cc"],
     deps = [
