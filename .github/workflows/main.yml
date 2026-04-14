@@ -17,13 +17,11 @@ on:
 # Variables:
 #
 #   - SELFHOSTED_LINUX_RUNNER: "true" when the linux self-hosted runner
-#     (event-horizon) is online. Adds an ADDITIONAL `linux-self-hosted`
-#     job (ARM64) on top of the GitHub-hosted x86_64 `linux` job, but
-#     only for operator runs (`github.actor == 'jwmcglynn'`). The
-#     baseline x86_64 `linux` job runs for everyone all the time —
-#     this is purely augmentation, not replacement. That way x86
-#     coverage never regresses, and the operator gets extra ARM64
-#     coverage + homelab speed on top.
+#     (event-horizon) is online. Switches the Linux lane over entirely:
+#     operator runs go to `linux-self-hosted` (ARM64), everyone else
+#     stays on the GitHub-hosted `linux` (x86_64) job. Mutually
+#     exclusive — exactly one Linux job runs per workflow invocation
+#     for the operator. Non-operator runs always use GitHub-hosted.
 #
 #   - SELFHOSTED_MACOS_RUNNER: "true" when the macOS self-hosted runner
 #     (deep-thought) is online. Switches the macOS lane over entirely:
@@ -44,10 +42,11 @@ on:
 
 jobs:
   linux:
-    # Runs for everyone, always — this is the x86_64 baseline that
-    # must never regress. When the operator also has the self-hosted
-    # ARM64 runner available, the `linux-self-hosted` job below runs
-    # in addition to (not instead of) this one.
+    # GitHub-hosted x86_64 baseline. Suppressed for operator runs when
+    # the self-hosted ARM64 runner is active (mirrors the macOS pattern);
+    # the `linux-self-hosted` job below runs instead. Non-operator runs
+    # (fork PRs, collaborators) always use this job.
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -100,15 +99,13 @@ jobs:
           bazelisk test --config=ci --test_output=errors \
             //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
-  # ARM64 augmentation of the `linux` job above, running on the
-  # event-horizon self-hosted runner. Selected by the gate explained at
-  # the top of this file:
+  # ARM64 Linux job on the event-horizon self-hosted runner. Selected by
+  # the gate explained at the top of this file:
   #
   #   - Runs only when SELFHOSTED_LINUX_RUNNER == 'true' AND the
   #     triggering actor is jwmcglynn.
-  #   - Runs IN ADDITION TO the GitHub-hosted `linux` job, not instead
-  #     of it. Baseline x86_64 coverage is never lost; this is pure
-  #     ARM64 augmentation for operator runs.
+  #   - The `linux` job is suppressed in the same condition, so operator
+  #     runs go here exclusively (mirrors the macOS mutual-exclusion model).
   #
   # Differences from the GitHub-hosted Linux job:
   #
