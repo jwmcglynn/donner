@@ -273,8 +273,10 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   // ── Frame 3: Settling render lands ────────────────────────────────────
   // The settling render was dispatched at version 2 with zero translation.
   // The compositor rendered the element at its NEW DOM position (after
-  // SetTransformCommand).  noteCachedTextures resolves the settling.
+  // SetTransformCommand). The presentation keeps the old drag offset alive until the
+  // selection chrome refreshes, then drops to zero.
   state.noteCachedTextures(entityOld, /*version=*/2, canvasSize);
+  state.noteChromeRefreshCompleted(/*refreshedVersion=*/2);
   {
     auto snap = recordDisplay(std::nullopt, "Frame 3: settling resolved");
     EXPECT_TRUE(snap.composited) << "Frame 3: composited display expected";
@@ -298,7 +300,8 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   }
 
   // Verify prewarm is triggered for the new entity.
-  EXPECT_TRUE(state.shouldPrewarm(entityNew, /*currentVersion=*/3, canvasSize, /*dragActive=*/false))
+  EXPECT_TRUE(
+      state.shouldPrewarm(entityNew, /*currentVersion=*/3, canvasSize, /*dragActive=*/false))
       << "Frame 4: prewarm should be dispatched for new entity";
 
   // ── Frame 5: Prewarm lands ────────────────────────────────────────────
@@ -481,27 +484,26 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   };
 
   // Helper: check "what the user sees" based on state machine.
-  const auto verifyDisplay =
-      [&](const std::optional<SelectTool::ActiveDragPreview>& activeDrag,
-          const char* label) {
-        const bool useComposited = state.shouldDisplayCompositedLayers(activeDrag);
-        const auto preview = state.presentationPreview(activeDrag);
+  const auto verifyDisplay = [&](const std::optional<SelectTool::ActiveDragPreview>& activeDrag,
+                                 const char* label) {
+    const bool useComposited = state.shouldDisplayCompositedLayers(activeDrag);
+    const auto preview = state.presentationPreview(activeDrag);
 
-        if (useComposited && hasUploadedComposited && preview.has_value()) {
-          // Composited path: the promoted texture is drawn at DOM position + screen offset.
-          // The "screen offset" in document coordinates is preview->translation.
-          // We verify that composited layers are valid.
-          EXPECT_FALSE(uploadedPromoted.empty()) << label << ": promoted bitmap should exist";
-          EXPECT_FALSE(uploadedBg.empty()) << label << ": background bitmap should exist";
-        } else {
-          // Flat path: the flat bitmap is used directly.
-          ASSERT_FALSE(uploadedFlat.empty()) << label << ": flat bitmap must exist";
-          // After any post-drag render, the flat bitmap must show the element at the
-          // moved position. If it shows the original position, that's the pop.
-          EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsNotRed())
-              << label << ": flat bitmap must NOT show element at original position";
-        }
-      };
+    if (useComposited && hasUploadedComposited && preview.has_value()) {
+      // Composited path: the promoted texture is drawn at DOM position + screen offset.
+      // The "screen offset" in document coordinates is preview->translation.
+      // We verify that composited layers are valid.
+      EXPECT_FALSE(uploadedPromoted.empty()) << label << ": promoted bitmap should exist";
+      EXPECT_FALSE(uploadedBg.empty()) << label << ": background bitmap should exist";
+    } else {
+      // Flat path: the flat bitmap is used directly.
+      ASSERT_FALSE(uploadedFlat.empty()) << label << ": flat bitmap must exist";
+      // After any post-drag render, the flat bitmap must show the element at the
+      // moved position. If it shows the original position, that's the pop.
+      EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsNotRed())
+          << label << ": flat bitmap must NOT show element at original position";
+    }
+  };
 
   // ══════════════════════════════════════════════════════════════════════
   // Frame 0: Pre-drag prewarm render.
@@ -542,6 +544,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   // ══════════════════════════════════════════════════════════════════════
   doRender(Transform2d());  // Settling render at zero offset, new DOM position.
   state.noteCachedTextures(entity, /*version=*/2, Vector2i(200, 100));
+  state.noteChromeRefreshCompleted(/*refreshedVersion=*/2);
   verifyDisplay(std::nullopt, "Frame 3 (settling landed)");
 
   // The flat bitmap must show element at new position.

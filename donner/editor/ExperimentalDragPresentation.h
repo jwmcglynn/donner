@@ -19,16 +19,19 @@ struct ExperimentalDragPresentation {
   std::optional<SelectTool::ActiveDragPreview> settlingPreview;
   bool waitingForFullRender = false;
   std::uint64_t settlingTargetVersion = 0;
+  bool waitingForChromeRefresh = false;
+  std::uint64_t chromeRefreshTargetVersion = 0;
 
   /// Returns true when selection should trigger an async prewarm capture.
   [[nodiscard]] bool shouldPrewarm(Entity selectedEntity, std::uint64_t currentVersion,
                                    const Vector2i& currentCanvasSize, bool dragActive) const {
-    if (selectedEntity == entt::null || dragActive || waitingForFullRender) {
+    if (selectedEntity == entt::null || dragActive || waitingForFullRender ||
+        waitingForChromeRefresh) {
       return false;
     }
 
-    return !hasCachedTextures || cachedEntity != selectedEntity || cachedVersion != currentVersion ||
-           cachedCanvasSize != currentCanvasSize;
+    return !hasCachedTextures || cachedEntity != selectedEntity ||
+           cachedVersion != currentVersion || cachedCanvasSize != currentCanvasSize;
   }
 
   /// Mark cached composited textures as available for the given entity/version/canvas size.
@@ -40,13 +43,27 @@ struct ExperimentalDragPresentation {
 
     if (waitingForFullRender && settlingPreview.has_value() && settlingPreview->entity == entity &&
         version >= settlingTargetVersion) {
-      settlingPreview = SelectTool::ActiveDragPreview{
-          .entity = entity,
-          .translation = Vector2d::Zero(),
-      };
       waitingForFullRender = false;
       settlingTargetVersion = 0;
+      waitingForChromeRefresh = true;
+      chromeRefreshTargetVersion = version;
     }
+  }
+
+  /// Finish the settle handoff once overlay chrome and cached AABBs have refreshed to match the
+  /// settled document version. Only then is it safe to drop the old drag offset.
+  void noteChromeRefreshCompleted(std::uint64_t refreshedVersion) {
+    if (!waitingForChromeRefresh || refreshedVersion < chromeRefreshTargetVersion ||
+        !settlingPreview.has_value()) {
+      return;
+    }
+
+    settlingPreview = SelectTool::ActiveDragPreview{
+        .entity = settlingPreview->entity,
+        .translation = Vector2d::Zero(),
+    };
+    waitingForChromeRefresh = false;
+    chromeRefreshTargetVersion = 0;
   }
 
   /// Begin the post-release settling phase, keeping the last composited presentation alive.
@@ -55,10 +72,13 @@ struct ExperimentalDragPresentation {
     settlingPreview = preview;
     waitingForFullRender = preview.has_value();
     settlingTargetVersion = preview.has_value() ? targetVersion : 0;
+    waitingForChromeRefresh = false;
+    chromeRefreshTargetVersion = 0;
   }
 
   /// End settling once a fresh full render has landed.  Also clears cached texture state so the
-  /// display falls back to the just-uploaded flat texture instead of showing stale composited layers.
+  /// display falls back to the just-uploaded flat texture instead of showing stale composited
+  /// layers.
   void noteFullRenderLanded(std::uint64_t landedVersion) {
     if (waitingForFullRender && landedVersion < settlingTargetVersion) {
       return;
@@ -67,6 +87,8 @@ struct ExperimentalDragPresentation {
     settlingPreview.reset();
     waitingForFullRender = false;
     settlingTargetVersion = 0;
+    waitingForChromeRefresh = false;
+    chromeRefreshTargetVersion = 0;
     hasCachedTextures = false;
     cachedEntity = entt::null;
   }
@@ -107,7 +129,7 @@ struct ExperimentalDragPresentation {
   ///
   /// Cached textures are only cleared on explicit deselection (selectedEntity == entt::null).
   void clearSettlingIfSelectionChanged(Entity selectedEntity, bool dragActive) {
-    if (waitingForFullRender) {
+    if (waitingForFullRender || waitingForChromeRefresh) {
       return;
     }
 
