@@ -31,26 +31,26 @@ exports_files([
 license(
     name = "entt",
     package_name = "EnTT",
-    package_url = "https://github.com/skypjack/entt",
-    package_version = "3.16.0",
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@entt//:LICENSE",
+    package_url = "https://github.com/skypjack/entt",
+    package_version = "3.16.0",
 )
 
 license(
     name = "stb",
     package_name = "stb",
-    package_url = "https://github.com/nothings/stb",
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@stb//:LICENSE",
+    package_url = "https://github.com/nothings/stb",
 )
 
 license(
     name = "tiny-skia-cpp",
     package_name = "tiny-skia-cpp",
-    package_url = "https://github.com/jwmcglynn/tiny-skia-cpp",
     license_kinds = ["@rules_license//licenses/spdx:BSD-3-Clause"],
     license_text = "@tiny-skia-cpp//:LICENSE",
+    package_url = "https://github.com/jwmcglynn/tiny-skia-cpp",
 )
 
 # Brotli ships `@brotli//:LICENSE` as an exported source file but no
@@ -58,27 +58,27 @@ license(
 license(
     name = "brotli",
     package_name = "brotli",
-    package_url = "https://github.com/google/brotli",
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@brotli//:LICENSE",
+    package_url = "https://github.com/google/brotli",
 )
 
 license(
     name = "harfbuzz",
     package_name = "HarfBuzz",
-    package_url = "https://github.com/harfbuzz/harfbuzz",
     # HarfBuzz uses the "Old MIT" license; SPDX lists it as MIT with a
     # historical notice.
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@harfbuzz//:COPYING",
+    package_url = "https://github.com/harfbuzz/harfbuzz",
 )
 
 license(
     name = "woff2",
     package_name = "woff2",
-    package_url = "https://github.com/google/woff2",
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@woff2//:LICENSE",
+    package_url = "https://github.com/google/woff2",
 )
 
 # FreeType's upstream BUILD.bazel overlay only uses the legacy
@@ -87,10 +87,10 @@ license(
 license(
     name = "freetype",
     package_name = "FreeType",
-    package_url = "https://freetype.org/",
-    package_version = "2.13.3",
     license_kinds = ["@rules_license//licenses/spdx:FTL"],
     license_text = "freetype.LICENSE.txt",
+    package_url = "https://freetype.org/",
+    package_version = "2.13.3",
 )
 
 # Dear ImGui — only consumed under //donner/editor/. Donner pulls imgui via
@@ -99,11 +99,11 @@ license(
 license(
     name = "imgui",
     package_name = "Dear ImGui",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "imgui.LICENSE.txt",
     package_url = "https://github.com/ocornut/imgui",
     # Pinned to commit ee1deccc in MODULE.bazel.
     package_version = "ee1deccc",
-    license_kinds = ["@rules_license//licenses/spdx:MIT"],
-    license_text = "imgui.LICENSE.txt",
 )
 
 # GLFW — only consumed under //donner/editor/. Same vendoring story as imgui:
@@ -111,11 +111,11 @@ license(
 license(
     name = "glfw",
     package_name = "GLFW",
+    license_kinds = ["@rules_license//licenses/spdx:Zlib"],
+    license_text = "glfw.LICENSE.md",
     package_url = "https://www.glfw.org/",
     # Pinned to commit 4df5129 in MODULE.bazel.
     package_version = "4df5129",
-    license_kinds = ["@rules_license//licenses/spdx:Zlib"],
-    license_text = "glfw.LICENSE.md",
 )
 
 # Tracy profiler — only consumed under //donner/editor/. Pulled from upstream
@@ -125,10 +125,10 @@ license(
 license(
     name = "tracy",
     package_name = "Tracy Profiler",
-    package_url = "https://github.com/wolfpld/tracy",
-    package_version = "v0.12.2",
     license_kinds = ["@rules_license//licenses/spdx:BSD-3-Clause"],
     license_text = "tracy.LICENSE.txt",
+    package_url = "https://github.com/wolfpld/tracy",
+    package_version = "v0.12.2",
 )
 
 license(
@@ -143,9 +143,9 @@ license(
 license(
     name = "roboto",
     package_name = "Roboto",
-    package_url = "https://fonts.google.com/specimen/Roboto",
     license_kinds = ["@rules_license//licenses/spdx:Apache-2.0"],
     license_text = "roboto.LICENSE.txt",
+    package_url = "https://fonts.google.com/specimen/Roboto",
 )
 
 # FiraCode — monospace source-pane font embedded in //donner/editor.
@@ -153,9 +153,9 @@ license(
 license(
     name = "fira-code",
     package_name = "Fira Code",
-    package_url = "https://github.com/tonsky/FiraCode",
     license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
     license_text = "fira-code.LICENSE.txt",
+    package_url = "https://github.com/tonsky/FiraCode",
 )
 
 # Canonical per-variant license lists. These match the build-report
@@ -199,14 +199,20 @@ ALL_KNOWN_LICENSES = [
 
 donner_notice_file(
     name = "notice_default",
-    variant = "Default (tiny-skia)",
     licenses = DEFAULT_LICENSES,
+    variant = "Default (tiny-skia)",
 )
 
 donner_notice_file(
     name = "notice_text_full",
-    variant = "tiny-skia + text-full",
     licenses = TEXT_FULL_LICENSES,
+    variant = "tiny-skia + text-full",
+)
+
+donner_notice_file(
+    name = "notice_skia_text_full",
+    licenses = SKIA_TEXT_FULL_LICENSES,
+    variant = "skia + text-full",
 )
 
 donner_notice_file_auto(

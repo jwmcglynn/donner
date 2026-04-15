@@ -915,6 +915,13 @@ int main(int argc, char** argv) {
   int textureWidth = 0;
   int textureHeight = 0;
 
+  const auto applyExperimentalModeChange = [&](bool enabled) {
+    experimentalMode = enabled;
+    selectTool.setCompositedDragPreviewEnabled(experimentalMode);
+    experimentalDragPresentation = donner::editor::ExperimentalDragPresentation{};
+    compositedTextures.resetDimensions();
+  };
+
   // Track the source pane's parse error so we only push markers into
   // `TextEditor` when the diagnostic state actually changes (error
   // appeared, error cleared, or error moved to a different line).
@@ -1523,9 +1530,15 @@ int main(int argc, char** argv) {
     }
 
     if (ImGui::BeginMainMenuBar()) {
-      ImGui::PushFont(uiFontBold);
-      if (ImGui::BeginMenu("Donner SVG Editor")) {
+      const bool pushedBoldDonnerMenuFont = uiFontBold != nullptr;
+      if (pushedBoldDonnerMenuFont) {
+        ImGui::PushFont(uiFontBold);
+      }
+      const bool donnerMenuOpen = ImGui::BeginMenu("Donner");
+      if (pushedBoldDonnerMenuFont) {
         ImGui::PopFont();
+      }
+      if (donnerMenuOpen) {
         if (ImGui::MenuItem("About...")) {
           openAboutPopup = true;
         }
@@ -1535,8 +1548,6 @@ int main(int argc, char** argv) {
         }
 #endif
         ImGui::EndMenu();
-      } else {
-        ImGui::PopFont();
       }
 
       if (ImGui::BeginMenu("File")) {
@@ -1607,6 +1618,13 @@ int main(int argc, char** argv) {
         }
         if (ImGui::MenuItem("Actual Size", "Cmd+0")) {
           triggerActualSize();
+        }
+        ImGui::Separator();
+        const bool canToggleCompositedRendering =
+            donner::editor::CanToggleCompositedRendering(selectTool);
+        if (ImGui::MenuItem("Composited Rendering", nullptr, experimentalMode,
+                            canToggleCompositedRendering)) {
+          applyExperimentalModeChange(!experimentalMode);
         }
         ImGui::EndMenu();
       }

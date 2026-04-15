@@ -15,9 +15,7 @@ constexpr std::string_view kTwoRectsSvg =
 
 class SelectToolTest : public ::testing::Test {
 protected:
-  void SetUp() override {
-    ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
-  }
+  void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
 
   svg::SVGElement elementById(std::string_view id) {
     auto element = app.document().document().querySelector(id);
@@ -49,6 +47,22 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_TRUE(app.hasSelection());
   EXPECT_TRUE(selectionIs("#r1"));
   EXPECT_TRUE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, CompositedRenderingToggleAllowedOnlyWithoutActiveGesture) {
+  EXPECT_TRUE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  EXPECT_FALSE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  EXPECT_TRUE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseDown(app, Vector2d(180.0, 180.0), MouseModifiers{});
+  EXPECT_FALSE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseUp(app, Vector2d(180.0, 180.0));
+  EXPECT_TRUE(CanToggleCompositedRendering(tool));
 }
 
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {

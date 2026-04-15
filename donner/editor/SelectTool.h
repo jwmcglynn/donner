@@ -111,4 +111,9 @@ private:
   bool compositedDragPreviewEnabled_ = false;
 };
 
+/// Render-mode toggles are safe whenever there is no in-progress drag or marquee gesture.
+[[nodiscard]] inline bool CanToggleCompositedRendering(const SelectTool& tool) {
+  return !tool.isDragging() && !tool.isMarqueeing();
+}
+
 }  // namespace donner::editor
