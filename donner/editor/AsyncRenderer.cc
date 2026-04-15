@@ -79,6 +79,16 @@ void AsyncRenderer::workerLoop() {
           compositorDocument_ = request.document;
           compositorRenderer_ = request.renderer;
           compositorEntity_ = entt::null;
+          compositorDocumentVersion_ = request.version;
+        }
+
+        // Detect document rebuild (ReplaceDocumentCommand).  When the document version jumps,
+        // all entity handles from the previous document are invalid.  Reset the compositor's
+        // layers so it doesn't try to demote/iterate stale entities.
+        if (request.version != compositorDocumentVersion_) {
+          compositor_->resetAllLayers();
+          compositorEntity_ = entt::null;
+          compositorDocumentVersion_ = request.version;
         }
 
         if (compositorEntity_ != request.dragPreview->entity) {
@@ -118,6 +128,7 @@ void AsyncRenderer::workerLoop() {
         compositorDocument_ = nullptr;
         compositorRenderer_ = nullptr;
         compositorEntity_ = entt::null;
+        compositorDocumentVersion_ = 0;
         request.renderer->draw(*request.document);
       }
 
@@ -126,10 +137,11 @@ void AsyncRenderer::workerLoop() {
       // pay the SVG re-rasterize cost. The `request.selection` field
       // is left in place for back-compat callers but ignored here.
       (void)request.selection;
-      svg::RendererBitmap bitmap;
-      if (!compositedPreview.has_value()) {
-        bitmap = request.renderer->takeSnapshot();
-      }
+      // Always take a snapshot so the flat fallback texture stays current even
+      // during composited renders.  This prevents a visual "pop" when the display
+      // transitions from composited layers to the flat texture (e.g. during
+      // settling after a drag release).
+      svg::RendererBitmap bitmap = request.renderer->takeSnapshot();
 
       std::lock_guard<std::mutex> lock(mutex_);
       // Only transition to Done if we weren't shut down mid-render.

@@ -209,6 +209,23 @@ const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
   return layer ? layer->bitmap() : kEmptyBitmap;
 }
 
+void CompositorController::resetAllLayers() {
+  Registry& registry = document_->registry();
+  for (const auto& layer : layers_) {
+    if (registry.valid(layer.entity()) &&
+        registry.all_of<LayerMembershipComponent>(layer.entity())) {
+      registry.remove<LayerMembershipComponent>(layer.entity());
+    }
+  }
+
+  layers_.clear();
+  rootBitmap_ = RendererBitmap();
+  backgroundBitmap_ = RendererBitmap();
+  foregroundBitmap_ = RendererBitmap();
+  rootDirty_ = true;
+  documentPrepared_ = false;
+}
+
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
@@ -269,8 +286,12 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   consumeDirtyFlags();
 
   // Re-rasterize dirty promoted layers. Layers requiring conservative fallback are always dirty.
+  // When rootDirty_ is true the document was modified (e.g. a transform change) and all layers
+  // may need repainting — consumeDirtyFlags may have been a no-op because
+  // prepareDocumentForRendering cleared DirtyFlagsComponent before consumeDirtyFlags ran.
   for (auto& layer : layers_) {
-    if (layer.requiresConservativeFallback() || layer.isDirty() || !layer.hasValidBitmap()) {
+    if (layer.requiresConservativeFallback() || layer.isDirty() || !layer.hasValidBitmap() ||
+        rootDirty_) {
       rasterizeLayer(layer, viewport);
     }
   }

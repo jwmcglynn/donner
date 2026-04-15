@@ -8,6 +8,7 @@
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -460,6 +461,14 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedSizedElementComponent>();
   entity.remove<components::ComputedShadowSizedElementComponent>();
   entity.remove<components::ComputedViewBoxComponent>();
+
+  // Mark the entity as dirty so that the render tree is rebuilt on the next
+  // prepareDocumentForRendering call.  Without this, the render tree fast-path
+  // check in instantiateRenderTree skips recomputation because nothing sets
+  // DirtyFlagsComponent or needsFullRebuild after the compositor clears them.
+  entity.get_or_emplace<components::DirtyFlagsComponent>().mark(
+      components::DirtyFlagsComponent::Layout | components::DirtyFlagsComponent::Transform |
+      components::DirtyFlagsComponent::WorldTransform);
 }
 
 Transform2d LayoutSystem::elementContentFromViewBoxTransform(

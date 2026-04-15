@@ -145,6 +145,45 @@ struct FrameHistory {
   }
 };
 
+/// Groups the GL texture handles and cached dimensions for the three composited drag layers
+/// (background, promoted element, foreground).  Keeps the nine related variables together and
+/// provides a `resetDimensions()` to force the display path back to the flat fallback texture.
+struct CompositedTextureSet {
+  GLuint background = 0;
+  GLuint promoted = 0;
+  GLuint foreground = 0;
+
+  int backgroundWidth = 0;
+  int backgroundHeight = 0;
+  int promotedWidth = 0;
+  int promotedHeight = 0;
+  int foregroundWidth = 0;
+  int foregroundHeight = 0;
+
+  /// Zero all cached dimensions so `shouldDisplayCompositedLayers` gate in the display path
+  /// falls through to the flat texture.  The GL texture handles are kept alive.
+  void resetDimensions() {
+    backgroundWidth = 0;
+    backgroundHeight = 0;
+    promotedWidth = 0;
+    promotedHeight = 0;
+    foregroundWidth = 0;
+    foregroundHeight = 0;
+  }
+
+  /// Allocate GL texture objects for each layer.  Called once at startup.
+  void initGLTextures() {
+    glGenTextures(1, &background);
+    glGenTextures(1, &promoted);
+    glGenTextures(1, &foreground);
+    for (const GLuint tex : {background, promoted, foreground}) {
+      glBindTexture(GL_TEXTURE_2D, tex);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+  }
+};
+
 /// Raw scroll events queued from GLFW until the next ImGui frame.
 struct PendingScrollEvents {
   GLFWscrollfun previousCallback = nullptr;
@@ -832,17 +871,8 @@ int main(int argc, char** argv) {
   glBindTexture(GL_TEXTURE_2D, texture);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  GLuint dragBackgroundTexture = 0;
-  GLuint dragPromotedTexture = 0;
-  GLuint dragForegroundTexture = 0;
-  glGenTextures(1, &dragBackgroundTexture);
-  glGenTextures(1, &dragPromotedTexture);
-  glGenTextures(1, &dragForegroundTexture);
-  for (const GLuint dragTexture : {dragBackgroundTexture, dragPromotedTexture, dragForegroundTexture}) {
-    glBindTexture(GL_TEXTURE_2D, dragTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  }
+  CompositedTextureSet compositedTextures;
+  compositedTextures.initGLTextures();
 
   // Selection path outlines live in a *second* pixmap drawn by a
   // *second* renderer instance, layered on top of the document
@@ -882,12 +912,6 @@ int main(int argc, char** argv) {
   std::optional<donner::svg::SVGElement> lastHighlightedSelection;
   donner::Vector2i lastRenderedCanvasSize{0, 0};
   donner::editor::ExperimentalDragPresentation experimentalDragPresentation;
-  int dragBackgroundTextureWidth = 0;
-  int dragBackgroundTextureHeight = 0;
-  int dragPromotedTextureWidth = 0;
-  int dragPromotedTextureHeight = 0;
-  int dragForegroundTextureWidth = 0;
-  int dragForegroundTextureHeight = 0;
   int textureWidth = 0;
   int textureHeight = 0;
 
@@ -1214,21 +1238,36 @@ int main(int argc, char** argv) {
         *outHeight = bitmap.dimensions.y;
       };
 
-      if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
-        uploadBitmapToTexture(dragBackgroundTexture, result.compositedPreview->backgroundBitmap,
-                              &dragBackgroundTextureWidth, &dragBackgroundTextureHeight);
-        uploadBitmapToTexture(dragPromotedTexture, result.compositedPreview->promotedBitmap,
-                              &dragPromotedTextureWidth, &dragPromotedTextureHeight);
-        uploadBitmapToTexture(dragForegroundTexture, result.compositedPreview->foregroundBitmap,
-                              &dragForegroundTextureWidth, &dragForegroundTextureHeight);
+      const bool hasComposited =
+          result.compositedPreview.has_value() && result.compositedPreview->valid();
+      if (hasComposited) {
+        uploadBitmapToTexture(compositedTextures.background,
+                              result.compositedPreview->backgroundBitmap,
+                              &compositedTextures.backgroundWidth,
+                              &compositedTextures.backgroundHeight);
+        uploadBitmapToTexture(compositedTextures.promoted,
+                              result.compositedPreview->promotedBitmap,
+                              &compositedTextures.promotedWidth,
+                              &compositedTextures.promotedHeight);
+        uploadBitmapToTexture(compositedTextures.foreground,
+                              result.compositedPreview->foregroundBitmap,
+                              &compositedTextures.foregroundWidth,
+                              &compositedTextures.foregroundHeight);
         experimentalDragPresentation.noteCachedTextures(
             result.compositedPreview->entity, result.version,
             donner::Vector2i(result.compositedPreview->promotedBitmap.dimensions.x,
                              result.compositedPreview->promotedBitmap.dimensions.y));
-      } else if (!result.bitmap.empty()) {
-        const auto& bitmap = result.bitmap;
-        uploadBitmapToTexture(texture, bitmap, &textureWidth, &textureHeight);
-        experimentalDragPresentation.noteFullRenderLanded(result.version);
+      }
+
+      // Always upload the flat fallback bitmap so it stays current.  During composited renders the
+      // renderer now always produces a snapshot of the fully-composed scene, so the flat texture
+      // tracks the latest render.  Only notify noteFullRenderLanded for non-composited results so
+      // the settling state machine transitions correctly.
+      if (!result.bitmap.empty()) {
+        uploadBitmapToTexture(texture, result.bitmap, &textureWidth, &textureHeight);
+        if (!hasComposited) {
+          experimentalDragPresentation.noteFullRenderLanded(result.version);
+        }
       }
 
       displayedDocVersion = result.version;
@@ -1363,6 +1402,8 @@ int main(int argc, char** argv) {
       textDispatchThrottled = false;
       textChangeIdleTimer = 0.0f;
       lastHighlightedSelection.reset();
+      experimentalDragPresentation = donner::editor::ExperimentalDragPresentation{};
+      compositedTextures.resetDimensions();
       refreshPendingSelectionBoundsCache();
       openFileError.clear();
       return true;
@@ -1815,6 +1856,9 @@ int main(int argc, char** argv) {
       const donner::Entity prewarmEntity = selectedExperimentalEntity();
       experimentalDragPresentation.clearSettlingIfSelectionChanged(prewarmEntity,
                                                                    dragPreview.has_value());
+      const bool freezePresentationForSettling =
+          experimentalMode && experimentalDragPresentation.waitingForFullRender &&
+          !dragPreview.has_value();
 
       // Refresh the cached document-space selection bounds before we
       // hand the document to the worker. Triggers on selection changes
@@ -1833,13 +1877,15 @@ int main(int argc, char** argv) {
       // lock-step during drags.
       const auto& overlaySelection = app.selectedElements();
       const bool selectionBoundsChanged = overlaySelection != selectionBoundsCache.lastSelection;
-      if (selectionBoundsChanged || currentVersion != selectionBoundsCache.lastRefreshVersion) {
+      if (!freezePresentationForSettling &&
+          (selectionBoundsChanged || currentVersion != selectionBoundsCache.lastRefreshVersion)) {
         refreshPendingSelectionBoundsCache();
       }
 
       const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec;
-      if (selectionDiffers || currentCanvasSize != lastOverlayCanvasSize ||
-          currentVersion != lastOverlayVersion) {
+      if (!freezePresentationForSettling &&
+          (selectionDiffers || currentCanvasSize != lastOverlayCanvasSize ||
+           currentVersion != lastOverlayVersion)) {
         rasterizeOverlayForCurrentSelection();
       }
 
@@ -1849,13 +1895,19 @@ int main(int argc, char** argv) {
            experimentalDragPresentation.cachedEntity != dragPreview->entity ||
            experimentalDragPresentation.cachedVersion != currentVersion ||
            experimentalDragPresentation.cachedCanvasSize != currentCanvasSize);
+      const bool needsSettledSelectionRefresh =
+          experimentalMode && !dragPreview.has_value() && prewarmEntity != entt::null &&
+          experimentalDragPresentation.waitingForFullRender &&
+          experimentalDragPresentation.settlingPreview.has_value() &&
+          experimentalDragPresentation.settlingPreview->entity == prewarmEntity &&
+          currentVersion >= experimentalDragPresentation.settlingTargetVersion;
       const bool needsExperimentalPrewarm =
+          needsSettledSelectionRefresh ||
           experimentalDragPresentation.shouldPrewarm(prewarmEntity, currentVersion,
                                                      currentCanvasSize, /*dragActive=*/false);
       const bool needsRegularRender =
-          (!experimentalMode || !dragPreview.has_value()) &&
-          (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize ||
-           experimentalDragPresentation.waitingForFullRender);
+          (!experimentalMode || prewarmEntity == entt::null) &&
+          (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize);
 
       // Request a new SVG render if anything that affects the bitmap
       // has changed. Selection is deliberately NOT in the trigger set:
@@ -2012,11 +2064,11 @@ int main(int argc, char** argv) {
       if (experimentalMode &&
           experimentalDragPresentation.shouldDisplayCompositedLayers(
               selectTool.activeDragPreview()) &&
-          dragPromotedTextureWidth > 0 && dragPromotedTextureHeight > 0 &&
+          compositedTextures.promotedWidth > 0 && compositedTextures.promotedHeight > 0 &&
           displayedDragPreview.has_value()) {
-        if (dragBackgroundTextureWidth > 0 && dragBackgroundTextureHeight > 0) {
+        if (compositedTextures.backgroundWidth > 0 && compositedTextures.backgroundHeight > 0) {
           paneDrawList->AddImage(
-              static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragBackgroundTexture)),
+              static_cast<ImTextureID>(static_cast<std::uintptr_t>(compositedTextures.background)),
               imageOrigin, imageBottomRight);
         }
 
@@ -2026,12 +2078,12 @@ int main(int argc, char** argv) {
             imageBottomRight.x + static_cast<float>(dragScreenOffset.x),
             imageBottomRight.y + static_cast<float>(dragScreenOffset.y));
         paneDrawList->AddImage(
-            static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragPromotedTexture)),
+            static_cast<ImTextureID>(static_cast<std::uintptr_t>(compositedTextures.promoted)),
             promotedOrigin, promotedBottomRight);
 
-        if (dragForegroundTextureWidth > 0 && dragForegroundTextureHeight > 0) {
+        if (compositedTextures.foregroundWidth > 0 && compositedTextures.foregroundHeight > 0) {
           paneDrawList->AddImage(
-              static_cast<ImTextureID>(static_cast<std::uintptr_t>(dragForegroundTexture)),
+              static_cast<ImTextureID>(static_cast<std::uintptr_t>(compositedTextures.foreground)),
               imageOrigin, imageBottomRight);
         }
       } else {
@@ -2076,7 +2128,27 @@ int main(int argc, char** argv) {
       if (pendingClick.has_value() && !asyncRenderer.isBusy()) {
         selectTool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
         refreshPendingSelectionBoundsCache();
-        // Re-rasterize the overlay texture NOW (same frame, before
+        if (experimentalMode) {
+          const donner::Entity selectedEntity = selectedExperimentalEntity();
+          if (selectedEntity != entt::null) {
+            const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
+            const auto currentVersion = app.document().currentFrameVersion();
+            if (experimentalDragPresentation.shouldPrewarm(selectedEntity, currentVersion,
+                                                           currentCanvasSize,
+                                                           /*dragActive=*/selectTool.isDragging())) {
+              donner::editor::RenderRequest req;
+              req.renderer = &renderer;
+              req.document = &app.document().document();
+              req.version = currentVersion;
+              req.dragPreview = donner::editor::RenderRequest::DragPreview{
+                  .entity = selectedEntity,
+                  .translation = donner::Vector2d::Zero(),
+              };
+              asyncRenderer.requestRender(req);
+            }
+          }
+        }
+        // Re-rasterize the Skia overlay texture NOW (same frame, before
         // `AddImage` is consumed at end-of-frame) so the path outline
         // updates together with the AABB. The overlay block earlier in
         // this frame ran with the pre-click selection; without this
@@ -2097,10 +2169,32 @@ int main(int argc, char** argv) {
           const auto previewBeforeRelease = selectTool.activeDragPreview();
           selectTool.onMouseUp(app, screenToDocument(ImGui::GetMousePos()));
           if (experimentalMode && previewBeforeRelease.has_value()) {
-            experimentalDragPresentation.beginSettling(
-                previewBeforeRelease, app.document().currentFrameVersion() + 1);
-          }
-          if (!asyncRenderer.isBusy()) {
+            bool flushedReleaseMutation = false;
+            if (!asyncRenderer.isBusy() && app.flushFrame()) {
+              flushedReleaseMutation = true;
+              // Freeze overlay/bounds during settling so they stay aligned with the
+              // composited presentation until the new full render lands.
+            }
+
+            const auto settledVersion =
+                app.document().currentFrameVersion() + (flushedReleaseMutation ? 0u : 1u);
+            experimentalDragPresentation.beginSettling(previewBeforeRelease, settledVersion);
+
+            if (!asyncRenderer.isBusy()) {
+              const donner::Entity selectedEntity = selectedExperimentalEntity();
+              if (selectedEntity != entt::null) {
+                donner::editor::RenderRequest req;
+                req.renderer = &renderer;
+                req.document = &app.document().document();
+                req.version = app.document().currentFrameVersion();
+                req.dragPreview = donner::editor::RenderRequest::DragPreview{
+                    .entity = selectedEntity,
+                    .translation = donner::Vector2d::Zero(),
+                };
+                asyncRenderer.requestRender(req);
+              }
+            }
+          } else if (!asyncRenderer.isBusy()) {
             refreshPendingSelectionBoundsCache();
             // Marquee resolve may have added new selected elements;
             // click-to-deselect may have cleared them. Either way the
