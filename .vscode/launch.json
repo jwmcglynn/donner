@@ -7,6 +7,20 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "editor",
+      "program": "${workspaceFolder}/bazel-bin/donner/editor/editor",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "donner_splash.svg",
+        "--experimental",
+      ],
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "examples/svg_to_png",
       "program": "${workspaceFolder}/bazel-bin/examples/svg_to_png",
       "cwd": "${workspaceFolder}",
