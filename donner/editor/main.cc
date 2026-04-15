@@ -1221,7 +1221,8 @@ int main(int argc, char** argv) {
     // the bitmap if so.
     if (auto resultOpt = asyncRenderer.pollResult(); resultOpt.has_value()) {
       const auto& result = *resultOpt;
-      const auto uploadBitmapToTexture = [](GLuint targetTexture, const donner::svg::RendererBitmap& bitmap,
+      const auto uploadBitmapToTexture = [](GLuint targetTexture,
+                                            const donner::svg::RendererBitmap& bitmap,
                                             int* outWidth, int* outHeight) {
         if (bitmap.empty()) {
           *outWidth = 0;
@@ -1241,18 +1242,15 @@ int main(int argc, char** argv) {
       const bool hasComposited =
           result.compositedPreview.has_value() && result.compositedPreview->valid();
       if (hasComposited) {
-        uploadBitmapToTexture(compositedTextures.background,
-                              result.compositedPreview->backgroundBitmap,
-                              &compositedTextures.backgroundWidth,
-                              &compositedTextures.backgroundHeight);
-        uploadBitmapToTexture(compositedTextures.promoted,
-                              result.compositedPreview->promotedBitmap,
+        uploadBitmapToTexture(
+            compositedTextures.background, result.compositedPreview->backgroundBitmap,
+            &compositedTextures.backgroundWidth, &compositedTextures.backgroundHeight);
+        uploadBitmapToTexture(compositedTextures.promoted, result.compositedPreview->promotedBitmap,
                               &compositedTextures.promotedWidth,
                               &compositedTextures.promotedHeight);
-        uploadBitmapToTexture(compositedTextures.foreground,
-                              result.compositedPreview->foregroundBitmap,
-                              &compositedTextures.foregroundWidth,
-                              &compositedTextures.foregroundHeight);
+        uploadBitmapToTexture(
+            compositedTextures.foreground, result.compositedPreview->foregroundBitmap,
+            &compositedTextures.foregroundWidth, &compositedTextures.foregroundHeight);
         experimentalDragPresentation.noteCachedTextures(
             result.compositedPreview->entity, result.version,
             donner::Vector2i(result.compositedPreview->promotedBitmap.dimensions.x,
@@ -1271,6 +1269,12 @@ int main(int argc, char** argv) {
       }
 
       displayedDocVersion = result.version;
+      if (hasComposited && experimentalDragPresentation.waitingForChromeRefresh &&
+          app.hasDocument()) {
+        refreshPendingSelectionBoundsCache();
+        rasterizeOverlayForCurrentSelection();
+        experimentalDragPresentation.noteChromeRefreshCompleted(displayedDocVersion);
+      }
       if (pendingOverlayBitmap.has_value() && pendingOverlayVersion == displayedDocVersion) {
         const auto& overlayBitmap = *pendingOverlayBitmap;
         if (!overlayBitmap.empty()) {
@@ -2014,8 +2018,7 @@ int main(int argc, char** argv) {
 
     const auto displayedDragPreview =
         experimentalDragPresentation.presentationPreview(selectTool.activeDragPreview());
-    if ((textureWidth > 0 && textureHeight > 0) ||
-        experimentalDragPresentation.hasCachedTextures) {
+    if ((textureWidth > 0 && textureHeight > 0) || experimentalDragPresentation.hasCachedTextures) {
       // The on-screen rectangle of the document image is computed from
       // the viewport, NOT from the texture dimensions. The texture's
       // resolution only affects sampling fidelity; layout is purely a
@@ -2133,9 +2136,9 @@ int main(int argc, char** argv) {
           if (selectedEntity != entt::null) {
             const donner::Vector2i currentCanvasSize = app.document().document().canvasSize();
             const auto currentVersion = app.document().currentFrameVersion();
-            if (experimentalDragPresentation.shouldPrewarm(selectedEntity, currentVersion,
-                                                           currentCanvasSize,
-                                                           /*dragActive=*/selectTool.isDragging())) {
+            if (experimentalDragPresentation.shouldPrewarm(
+                    selectedEntity, currentVersion, currentCanvasSize,
+                    /*dragActive=*/selectTool.isDragging())) {
               donner::editor::RenderRequest req;
               req.renderer = &renderer;
               req.document = &app.document().document();
@@ -2231,8 +2234,7 @@ int main(int argc, char** argv) {
           req.version = currentVersion;
           req.dragPreview = donner::editor::RenderRequest::DragPreview{
               .entity = needsDragCapture ? dragPreview->entity : prewarmEntity,
-              .translation =
-                  needsDragCapture ? dragPreview->translation : donner::Vector2d::Zero(),
+              .translation = needsDragCapture ? dragPreview->translation : donner::Vector2d::Zero(),
           };
           asyncRenderer.requestRender(req);
         }
@@ -2240,14 +2242,12 @@ int main(int argc, char** argv) {
 
       for (const donner::Box2d& screenRect : donner::editor::ComputeSelectionAabbScreenRects(
                viewport, std::span<const donner::Box2d>(selectionBoundsCache.displayedBoundsDoc))) {
-        paneDrawList->AddRect(ImVec2(static_cast<float>(screenRect.topLeft.x + dragScreenOffset.x),
-                                     static_cast<float>(screenRect.topLeft.y + dragScreenOffset.y)),
-                              ImVec2(static_cast<float>(screenRect.bottomRight.x +
-                                                        dragScreenOffset.x),
-                                     static_cast<float>(screenRect.bottomRight.y +
-                                                        dragScreenOffset.y)),
-                              kSelectionChromeColor, 0.0f, ImDrawFlags_None,
-                              kSelectionChromeThickness);
+        paneDrawList->AddRect(
+            ImVec2(static_cast<float>(screenRect.topLeft.x + dragScreenOffset.x),
+                   static_cast<float>(screenRect.topLeft.y + dragScreenOffset.y)),
+            ImVec2(static_cast<float>(screenRect.bottomRight.x + dragScreenOffset.x),
+                   static_cast<float>(screenRect.bottomRight.y + dragScreenOffset.y)),
+            kSelectionChromeColor, 0.0f, ImDrawFlags_None, kSelectionChromeThickness);
       }
 
       if (auto marqueeRectDoc = selectTool.marqueeRect(); marqueeRectDoc.has_value()) {

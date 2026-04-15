@@ -790,6 +790,11 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
 
+  // Shadow-tree teardown recreates tree entities with fresh ComputedStyleComponent placeholders.
+  // Force StyleSystem down the full recompute path so those placeholders are populated before the
+  // later paint/mask/marker passes walk all styled entities.
+  renderState.needsFullStyleRecompute = true;
+
   createComputedComponents(warningSink);
 
   registry_.clear<DirtyFlagsComponent>();
