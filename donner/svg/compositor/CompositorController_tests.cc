@@ -493,4 +493,78 @@ TEST_F(CompositorControllerTest, FallbackReasonsOfUnpromotedEntity) {
   EXPECT_EQ(compositor.fallbackReasonsOf(entity), FallbackReason::None);
 }
 
+TEST_F(CompositorControllerTest, ResetAllLayersClearsPromotedEntities) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="under" width="10" height="10" fill="blue" />
+    <rect id="target" width="10" height="10" fill="red" />
+    <rect id="over" width="10" height="10" fill="green" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  configureMockForCaching();
+
+  EXPECT_TRUE(compositor.promoteEntity(entity));
+  EXPECT_EQ(compositor.layerCount(), 1u);
+  EXPECT_TRUE(compositor.isPromoted(entity));
+
+  // Render to populate bitmaps.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_GT(compositor.totalBitmapMemory(), 0u);
+
+  // Reset should clear everything.
+  compositor.resetAllLayers();
+  EXPECT_EQ(compositor.layerCount(), 0u);
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.totalBitmapMemory(), 0u);
+}
+
+TEST_F(CompositorControllerTest, ResetAllLayersRemovesLayerMembershipComponent) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_TRUE(compositor.promoteEntity(entity));
+
+  // Verify component was added.
+  EXPECT_TRUE(document.registry().all_of<LayerMembershipComponent>(entity));
+
+  compositor.resetAllLayers();
+
+  // Verify component was removed.
+  EXPECT_FALSE(document.registry().all_of<LayerMembershipComponent>(entity));
+}
+
+TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  configureMockForCaching();
+
+  EXPECT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  compositor.resetAllLayers();
+  EXPECT_EQ(compositor.layerCount(), 0u);
+
+  // Re-promote after reset should work.
+  EXPECT_TRUE(compositor.promoteEntity(entity));
+  EXPECT_EQ(compositor.layerCount(), 1u);
+  EXPECT_TRUE(compositor.isPromoted(entity));
+}
+
 }  // namespace donner::svg::compositor

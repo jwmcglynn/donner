@@ -157,6 +157,15 @@ public:
   /// Cached bitmap for the promoted entity, or an empty bitmap if unavailable.
   [[nodiscard]] const RendererBitmap& layerBitmapOf(Entity entity) const;
 
+  /**
+   * Clear all layers and cached state.
+   *
+   * Called when the underlying document is rebuilt (e.g., after `ReplaceDocumentCommand`), which
+   * invalidates all entity handles. After this call, `layerCount()` is 0 and all cached bitmaps
+   * are released.  The next `renderFrame()` will do a full render.
+   */
+  void resetAllLayers();
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);

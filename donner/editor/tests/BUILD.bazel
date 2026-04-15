@@ -216,6 +216,20 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "drag_release_pop_back_tests",
+    srcs = ["DragReleasePopBack_tests.cc"],
+    deps = [
+        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:select_tool",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "clipboard_interface_tests",
     srcs = ["ClipboardInterface_tests.cc"],
     deps = [

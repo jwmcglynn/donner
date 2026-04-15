@@ -135,6 +135,9 @@ private:
   svg::SVGDocument* compositorDocument_ = nullptr;
   svg::Renderer* compositorRenderer_ = nullptr;
   Entity compositorEntity_ = entt::null;
+  /// Document version at the time the compositor was last configured.  Used to detect
+  /// document rebuilds (ReplaceDocumentCommand) that invalidate all entity handles.
+  std::uint64_t compositorDocumentVersion_ = 0;
 };
 
 }  // namespace donner::editor
