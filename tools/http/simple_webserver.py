@@ -2,6 +2,7 @@ import http.server
 import socketserver
 import argparse
 import functools
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -84,18 +85,40 @@ def detect_lan_ip() -> str | None:
     return None
 
 
-def ensure_local_certificate(cert_dir: Path, lan_ip: str | None) -> tuple[Path, Path]:
+def classify_host_san(bind_host: str, lan_ip: str | None) -> tuple[list[str], list[str], str | None]:
+    dns_names = ["localhost"]
+    ip_addresses = ["127.0.0.1"]
+    url_host = None
+
+    if bind_host not in ("", "0.0.0.0"):
+        try:
+            ipaddress.ip_address(bind_host)
+        except ValueError:
+            if bind_host != "localhost":
+                dns_names.append(bind_host)
+            url_host = bind_host
+        else:
+            if bind_host != "127.0.0.1":
+                ip_addresses.append(bind_host)
+            url_host = bind_host
+    elif lan_ip:
+        ip_addresses.append(lan_ip)
+        url_host = lan_ip
+
+    return dns_names, ip_addresses, url_host
+
+
+def ensure_local_certificate(cert_dir: Path, bind_host: str, lan_ip: str | None) -> tuple[Path, Path]:
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / "server-cert.pem"
     key_path = cert_dir / "server-key.pem"
     meta_path = cert_dir / "server-meta.json"
 
+    dns_names, ip_addresses, _ = classify_host_san(bind_host, lan_ip)
     sans = {
-        "dns": ["localhost"],
-        "ip": ["127.0.0.1"],
+        "dns": dns_names,
+        "ip": ip_addresses,
     }
-    if lan_ip:
-        sans["ip"].append(lan_ip)
 
     existing_meta = None
     if meta_path.exists():
@@ -182,7 +205,7 @@ if args.certfile or args.keyfile:
     certfile = Path(args.certfile)
     keyfile = Path(args.keyfile)
 elif args.https:
-    certfile, keyfile = ensure_local_certificate(Path(args.cert_dir), lan_ip)
+    certfile, keyfile = ensure_local_certificate(Path(args.cert_dir), bind_host, lan_ip)
 
 socketserver.ThreadingTCPServer.allow_reuse_address = True
 handler = functools.partial(CrossOriginHandler, directory=serve_dir)
@@ -193,7 +216,8 @@ if args.https:
     https_port = find_free_port_excluding(bind_host, {http_port})
 
     localhost_url = f"http://127.0.0.1:{http_port}"
-    lan_url = f"https://{lan_ip}:{https_port}" if lan_ip else None
+    _, _, https_url_host = classify_host_san(bind_host, lan_ip)
+    lan_url = f"https://{https_url_host}:{https_port}" if https_url_host else None
 
     http_server = socketserver.ThreadingTCPServer((http_bind_host, http_port), handler)
     https_server = socketserver.ThreadingTCPServer((bind_host, https_port), handler)
