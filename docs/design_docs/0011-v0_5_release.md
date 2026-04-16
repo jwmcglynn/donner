@@ -337,7 +337,7 @@ the build report lands:
 4. Tag `v0.5.0` points at the build-report commit. Any code fix discovered
    after that point is a v0.5.1 concern, not a retroactive tag move.
 
-- [ ] **Final pre-release validation** — Local warning-clean builds and the full Bazel test
+- [x] **Final pre-release validation** — Local warning-clean builds and the full Bazel test
   matrix across default/Skia/text-full completed on 2026-04-16. Remaining work: final CI
   verification on the release commit. Doxygen warnings are waived for v0.5 and are not a release
   blocker.

@@ -26,6 +26,10 @@ primitives, and a CLI tool — while maintaining the existing Skia backend.
 - **WebAssembly build** — Donner's renderer and parser now build through the Emscripten toolchain
   via `bazel build --config=wasm //...`, with an `examples/svg_viewer` demo that parses and
   renders SVGs entirely in the browser using ImGui + emscripten-glfw.
+- **Donner Editor** — A new in-tree SVG editor lives under `donner/editor/`, shipping both as a
+  native desktop application and as a WebAssembly edition that runs entirely in the browser.
+- **`.svgz` support** — `SVGParser` auto-detects the gzip magic bytes and decompresses `.svgz`
+  input transparently, so gzipped SVG files load without any extra ceremony at the call site.
 
 ### What's Changed
 
@@ -139,7 +143,7 @@ donner-svg input.svg --interactive
 Or when building from source:
 
 ```sh
-bazel run //donner/svg/tool:donner-svg -- input.svg --output output.png
+bazel run //donner/svg/tool -- input.svg --output output.png
 ```
 
 ---
