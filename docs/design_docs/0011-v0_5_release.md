@@ -407,10 +407,10 @@ The build report is the last commit that lands before the tag. It must happen
 it must be its own dedicated commit — the tagged commit is the build-report
 commit, nothing else.
 
-- [ ] **All other blocking changes merged to `main`** — every release-blocking code change
+- [x] **All other blocking changes merged to `main`** — every release-blocking code change
   and the final `RELEASE_NOTES.md` update are already on `main` before the build report commit
   is prepared.
-- [ ] **Generate build report** — Regenerate `docs/build_report.md` against a clean tree with
+- [x] **Generate build report** — Regenerate `docs/build_report.md` against a clean tree with
   Skia/tiny-skia backend differentiation. Commit it on `main` as the dedicated release commit
   (e.g. `Release v0.5.0: regenerate build report`). Nothing else goes in this commit.
 - [ ] **CI green on the build-report commit** — Final release-commit CI verification on the
