@@ -10,6 +10,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "viewport_interaction_controller_tests",
+    srcs = ["ViewportInteractionController_tests.cc"],
+    deps = [
+        "//donner/editor:viewport_interaction_controller",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "selection_aabb_tests",
     srcs = ["SelectionAabb_tests.cc"],
     deps = [

@@ -4,11 +4,11 @@
 // glad must be included before GLFW so it takes precedence.
 #include <GLFW/glfw3.h>
 
+#include <cstdio>
+
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "imgui.h"
-
-#include <cstdio>
 
 namespace donner::editor::gui {
 
@@ -37,8 +37,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-  window_ = glfwCreateWindow(options_.initialWidth, options_.initialHeight,
-                             options_.title.c_str(), /*monitor=*/nullptr,
+  window_ = glfwCreateWindow(options_.initialWidth, options_.initialHeight, options_.title.c_str(),
+                             /*monitor=*/nullptr,
                              /*share=*/nullptr);
   if (window_ == nullptr) {
     std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed\n");
@@ -98,6 +98,52 @@ bool EditorWindow::shouldClose() const {
   return window_ == nullptr || glfwWindowShouldClose(window_) != 0;
 }
 
+void EditorWindow::setTitle(std::string_view title) {
+  if (window_ == nullptr) {
+    return;
+  }
+
+  glfwSetWindowTitle(window_, std::string(title).c_str());
+}
+
+Vector2i EditorWindow::windowSize() const {
+  if (window_ == nullptr) {
+    return Vector2i::Zero();
+  }
+
+  int width = 0;
+  int height = 0;
+  glfwGetWindowSize(window_, &width, &height);
+  return Vector2i(width, height);
+}
+
+Vector2d EditorWindow::contentScale() const {
+  if (window_ == nullptr) {
+    return Vector2d::Zero();
+  }
+
+  float xScale = 1.0f;
+  float yScale = 1.0f;
+  glfwGetWindowContentScale(window_, &xScale, &yScale);
+  return Vector2d(xScale, yScale);
+}
+
+void EditorWindow::setUserPointer(void* pointer) {
+  if (window_ == nullptr) {
+    return;
+  }
+
+  glfwSetWindowUserPointer(window_, pointer);
+}
+
+GLFWscrollfun EditorWindow::setScrollCallback(GLFWscrollfun callback) {
+  if (window_ == nullptr) {
+    return nullptr;
+  }
+
+  return glfwSetScrollCallback(window_, callback);
+}
+
 void EditorWindow::pollEvents() {
   glfwPollEvents();
 }
@@ -114,8 +160,8 @@ void EditorWindow::endFrame() {
   int displayH = 0;
   glfwGetFramebufferSize(window_, &displayW, &displayH);
   glViewport(0, 0, displayW, displayH);
-  glClearColor(options_.clearColor[0], options_.clearColor[1],
-               options_.clearColor[2], options_.clearColor[3]);
+  glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+               options_.clearColor[3]);
   glClear(GL_COLOR_BUFFER_BIT);
   ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
   glfwSwapBuffers(window_);
@@ -138,9 +184,8 @@ void EditorWindow::uploadBitmap(const svg::RendererBitmap& bitmap) {
   const int strideInPixels =
       bitmap.rowBytes > 0 ? static_cast<int>(bitmap.rowBytes / 4) : bitmap.dimensions.x;
   glPixelStorei(GL_UNPACK_ROW_LENGTH, strideInPixels);
-  glTexImage2D(GL_TEXTURE_2D, /*level=*/0, GL_RGBA, bitmap.dimensions.x,
-               bitmap.dimensions.y, /*border=*/0, GL_RGBA, GL_UNSIGNED_BYTE,
-               bitmap.pixels.data());
+  glTexImage2D(GL_TEXTURE_2D, /*level=*/0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y,
+               /*border=*/0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
   textureWidth_ = bitmap.dimensions.x;

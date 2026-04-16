@@ -1,11 +1,10 @@
 #pragma once
 /// @file
 ///
-/// `EditorRepl` is the stdin/stdout-driven command loop that sits on top
-/// of `EditorApp`. It exists so that the MVP can be driven (and tested)
-/// without an ImGui window — the shell layer is a thin parser that maps
-/// line-based text commands to `EditorApp` methods and writes
-/// human-readable output.
+/// `RenderSessionRepl` is the stdin/stdout-driven command loop that sits on top
+/// of `RenderSession`. It exists so that the sandbox/render-session tooling can be driven (and
+/// tested) without an ImGui window — the shell layer is a thin parser that maps line-based text
+/// commands to `RenderSession` methods and writes human-readable output.
 ///
 /// The REPL is parameterized by `std::istream&` + `std::ostream&` instead
 /// of hard-coding `std::cin`/`std::cout`, so headless tests can feed a
@@ -31,10 +30,10 @@
 
 namespace donner::editor::app {
 
-class EditorApp;
+class RenderSession;
 
 /// Runtime options for the REPL. Defaults match the interactive binary.
-struct EditorReplOptions {
+struct RenderSessionReplOptions {
   /// Prompt string printed before each command line. Tests pass an empty
   /// string so captured output doesn't include decoration.
   std::string prompt = "donner> ";
@@ -47,10 +46,10 @@ struct EditorReplOptions {
   bool printBanner = true;
 };
 
-class EditorRepl {
+class RenderSessionRepl {
 public:
-  EditorRepl(EditorApp& app, std::istream& in, std::ostream& out,
-             EditorReplOptions options = {});
+  RenderSessionRepl(RenderSession& app, std::istream& in, std::ostream& out,
+                    RenderSessionReplOptions options = {});
 
   /// Runs the command loop until EOF or a `quit`/`exit` command. Returns
   /// the number of commands successfully dispatched.
@@ -72,10 +71,10 @@ private:
   void cmdRecord(const std::string& path);
   void cmdWatch(const std::string& arg);
 
-  EditorApp& app_;
+  RenderSession& app_;
   std::istream& in_;
   std::ostream& out_;
-  EditorReplOptions options_;
+  RenderSessionReplOptions options_;
   bool quit_ = false;
 };
 

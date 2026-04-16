@@ -22,10 +22,13 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
+#include "donner/base/Vector2.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 struct GLFWwindow;
+using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
 
 namespace donner::editor::gui {
 
@@ -82,6 +85,21 @@ public:
   /// first upload.
   [[nodiscard]] int textureWidth() const { return textureWidth_; }
   [[nodiscard]] int textureHeight() const { return textureHeight_; }
+
+  /// Update the native window title.
+  void setTitle(std::string_view title);
+
+  /// Logical window size in screen coordinates.
+  [[nodiscard]] Vector2i windowSize() const;
+
+  /// Backing display content scale (for example 2.0 on a Retina display).
+  [[nodiscard]] Vector2d contentScale() const;
+
+  /// Install a GLFW user pointer on the wrapped window.
+  void setUserPointer(void* pointer);
+
+  /// Replace the GLFW scroll callback, returning the previous callback.
+  [[nodiscard]] GLFWscrollfun setScrollCallback(GLFWscrollfun callback);
 
   /// Raw GLFW window handle. Exposed for advanced use cases (custom key
   /// bindings, drag-and-drop setup). The main MVP binary doesn't need it.

@@ -1,10 +1,12 @@
 /// @file
 ///
-/// MVP editor tests covering `EditorApp` state transitions and `EditorRepl`
+/// Sandbox render-session tests covering `RenderSession` state transitions and `RenderSessionRepl`
 /// command dispatch. These are fully headless — the REPL is driven by an
 /// in-memory `std::stringstream` instead of a TTY, and the status chips
 /// and `.rnr` files are asserted without touching the terminal image
 /// viewer path (which is noisy to match against).
+
+#include "donner/editor/app/EditorApp.h"
 
 #include <gtest/gtest.h>
 
@@ -14,14 +16,13 @@
 #include <string>
 #include <string_view>
 
-#include "donner/editor/app/EditorApp.h"
 #include "donner/editor/app/EditorRepl.h"
 #include "donner/editor/sandbox/RnrFile.h"
 
 namespace donner::editor::app {
 namespace {
 
-class EditorAppTest : public ::testing::Test {
+class RenderSessionTest : public ::testing::Test {
 protected:
   void SetUp() override {
     tmpDir_ = std::filesystem::path(::testing::TempDir()) /
@@ -41,8 +42,8 @@ protected:
     return path;
   }
 
-  EditorAppOptions Options() {
-    EditorAppOptions opts;
+  RenderSessionOptions Options() {
+    RenderSessionOptions opts;
     opts.defaultWidth = 64;
     opts.defaultHeight = 48;
     opts.sourceOptions.baseDirectory = tmpDir_;
@@ -58,22 +59,22 @@ constexpr std::string_view kSimpleSvg =
      </svg>)";
 
 // -----------------------------------------------------------------------------
-// EditorApp core
+// RenderSession core
 // -----------------------------------------------------------------------------
 
-TEST_F(EditorAppTest, EmptyStateBeforeNavigate) {
-  EditorApp app(Options());
-  EXPECT_EQ(app.current().status, EditorStatus::kEmpty);
+TEST_F(RenderSessionTest, EmptyStateBeforeNavigate) {
+  RenderSession app(Options());
+  EXPECT_EQ(app.current().status, RenderSessionStatus::kEmpty);
   EXPECT_TRUE(app.current().uri.empty());
   EXPECT_TRUE(app.lastGoodBitmap().pixels.empty());
 }
 
-TEST_F(EditorAppTest, NavigateSucceedsOnValidFile) {
+TEST_F(RenderSessionTest, NavigateSucceedsOnValidFile) {
   WriteSvg("red.svg", kSimpleSvg);
-  EditorApp app(Options());
+  RenderSession app(Options());
 
   const auto& snap = app.navigate("red.svg");
-  ASSERT_EQ(snap.status, EditorStatus::kRendered) << snap.message;
+  ASSERT_EQ(snap.status, RenderSessionStatus::kRendered) << snap.message;
   EXPECT_EQ(snap.uri, "red.svg");
   EXPECT_EQ(snap.bitmap.dimensions.x, 64);
   EXPECT_EQ(snap.bitmap.dimensions.y, 48);
@@ -84,16 +85,16 @@ TEST_F(EditorAppTest, NavigateSucceedsOnValidFile) {
   EXPECT_EQ(app.lastGoodBitmap().pixels, snap.bitmap.pixels);
 }
 
-TEST_F(EditorAppTest, FetchErrorKeepsPreviousBitmap) {
+TEST_F(RenderSessionTest, FetchErrorKeepsPreviousBitmap) {
   WriteSvg("red.svg", kSimpleSvg);
-  EditorApp app(Options());
+  RenderSession app(Options());
   app.navigate("red.svg");
   const auto goodBytes = app.lastGoodBitmap().pixels;
   ASSERT_FALSE(goodBytes.empty());
 
   // Second navigation fails at the fetch step.
   const auto& bad = app.navigate("does_not_exist.svg");
-  EXPECT_EQ(bad.status, EditorStatus::kFetchError);
+  EXPECT_EQ(bad.status, RenderSessionStatus::kFetchError);
   EXPECT_TRUE(bad.bitmap.pixels.empty());
   EXPECT_FALSE(bad.message.empty());
 
@@ -102,37 +103,37 @@ TEST_F(EditorAppTest, FetchErrorKeepsPreviousBitmap) {
   EXPECT_EQ(app.lastGoodBitmap().pixels, goodBytes);
 }
 
-TEST_F(EditorAppTest, ParseErrorSurfacesDistinctStatus) {
+TEST_F(RenderSessionTest, ParseErrorSurfacesDistinctStatus) {
   WriteSvg("garbage.svg", "this is not svg at all");
-  EditorApp app(Options());
+  RenderSession app(Options());
   const auto& snap = app.navigate("garbage.svg");
-  EXPECT_EQ(snap.status, EditorStatus::kParseError);
+  EXPECT_EQ(snap.status, RenderSessionStatus::kParseError);
   EXPECT_FALSE(snap.message.empty());
   EXPECT_NE(snap.message.find("parse"), std::string::npos);
 }
 
-TEST_F(EditorAppTest, ResizeReRendersAtNewViewport) {
+TEST_F(RenderSessionTest, ResizeReRendersAtNewViewport) {
   WriteSvg("red.svg", kSimpleSvg);
-  EditorApp app(Options());
+  RenderSession app(Options());
   app.navigate("red.svg");
 
   // kSimpleSvg is 64x48 (4:3) — request a 128x96 canvas to match the
   // source aspect ratio so Donner's preserveAspectRatio doesn't letterbox
   // the result into an unexpected height.
   const auto& resized = app.resize(128, 96);
-  EXPECT_EQ(resized.status, EditorStatus::kRendered) << resized.message;
+  EXPECT_EQ(resized.status, RenderSessionStatus::kRendered) << resized.message;
   EXPECT_EQ(resized.bitmap.dimensions.x, 128);
   EXPECT_EQ(resized.bitmap.dimensions.y, 96);
 }
 
-TEST_F(EditorAppTest, ReloadPicksUpFileChanges) {
+TEST_F(RenderSessionTest, ReloadPicksUpFileChanges) {
   const auto path = WriteSvg("live.svg",
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+                             R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
          <rect width="32" height="32" fill="red"/>
        </svg>)");
-  EditorApp app(Options());
+  RenderSession app(Options());
   const auto& first = app.navigate("live.svg");
-  ASSERT_EQ(first.status, EditorStatus::kRendered);
+  ASSERT_EQ(first.status, RenderSessionStatus::kRendered);
   const auto firstPixels = first.bitmap.pixels;
 
   // Replace the file contents with a differently-colored rect.
@@ -146,36 +147,35 @@ TEST_F(EditorAppTest, ReloadPicksUpFileChanges) {
   }
 
   const auto& reloaded = app.reload();
-  ASSERT_EQ(reloaded.status, EditorStatus::kRendered);
-  EXPECT_NE(reloaded.bitmap.pixels, firstPixels)
-      << "reload should have picked up the file edit";
+  ASSERT_EQ(reloaded.status, RenderSessionStatus::kRendered);
+  EXPECT_NE(reloaded.bitmap.pixels, firstPixels) << "reload should have picked up the file edit";
 }
 
 // -----------------------------------------------------------------------------
-// EditorApp watch / pollForChanges
+// RenderSession watch / pollForChanges
 // -----------------------------------------------------------------------------
 
-TEST_F(EditorAppTest, PollForChangesReturnsFalseWhenWatchDisabled) {
+TEST_F(RenderSessionTest, PollForChangesReturnsFalseWhenWatchDisabled) {
   WriteSvg("red.svg", kSimpleSvg);
-  EditorApp app(Options());
+  RenderSession app(Options());
   app.navigate("red.svg");
   // Watch is disabled by default.
   EXPECT_FALSE(app.watchEnabled());
   EXPECT_FALSE(app.pollForChanges());
 }
 
-TEST_F(EditorAppTest, PollForChangesReturnsFalseWhenNoFileLoaded) {
-  EditorApp app(Options());
+TEST_F(RenderSessionTest, PollForChangesReturnsFalseWhenNoFileLoaded) {
+  RenderSession app(Options());
   app.setWatchEnabled(true);
   EXPECT_FALSE(app.pollForChanges());
 }
 
-TEST_F(EditorAppTest, PollForChangesDetectsFileModification) {
+TEST_F(RenderSessionTest, PollForChangesDetectsFileModification) {
   const auto path = WriteSvg("watch.svg",
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+                             R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
          <rect width="32" height="32" fill="red"/>
        </svg>)");
-  EditorApp app(Options());
+  RenderSession app(Options());
   app.navigate("watch.svg");
   app.setWatchEnabled(true);
   const auto firstPixels = app.lastGoodBitmap().pixels;
@@ -196,8 +196,7 @@ TEST_F(EditorAppTest, PollForChangesDetectsFileModification) {
 
   // Touch the file to ensure the mtime differs — some filesystems have
   // coarse timestamps (1s resolution).
-  std::filesystem::last_write_time(
-      path, std::filesystem::file_time_type::clock::now());
+  std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now());
 
   EXPECT_TRUE(app.pollForChanges());
   EXPECT_NE(app.lastGoodBitmap().pixels, firstPixels)
@@ -208,13 +207,13 @@ TEST_F(EditorAppTest, PollForChangesDetectsFileModification) {
 }
 
 // -----------------------------------------------------------------------------
-// EditorRepl command dispatch
+// RenderSessionRepl command dispatch
 // -----------------------------------------------------------------------------
 
-class EditorReplTest : public EditorAppTest {
+class RenderSessionReplTest : public RenderSessionTest {
 protected:
-  EditorReplOptions ReplOptions() {
-    EditorReplOptions opts;
+  RenderSessionReplOptions ReplOptions() {
+    RenderSessionReplOptions opts;
     opts.printBanner = false;
     opts.prompt = "";
     opts.showEnabled = false;  // don't touch terminal image viewer in tests
@@ -222,21 +221,21 @@ protected:
   }
 };
 
-TEST_F(EditorReplTest, HelpListsAllCommands) {
-  EditorApp app(Options());
+TEST_F(RenderSessionReplTest, HelpListsAllCommands) {
+  RenderSession app(Options());
   std::stringstream in("help\nquit\n");
   std::stringstream out;
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   const auto text = out.str();
-  for (const auto* cmd : {"load ", "reload", "resize", "show", "save ", "inspect",
-                          "record", "quit"}) {
+  for (const auto* cmd :
+       {"load ", "reload", "resize", "show", "save ", "inspect", "record", "quit"}) {
     EXPECT_NE(text.find(cmd), std::string::npos) << "help missing: " << cmd;
   }
 }
 
-TEST_F(EditorReplTest, LoadStatusSaveCycle) {
+TEST_F(RenderSessionReplTest, LoadStatusSaveCycle) {
   WriteSvg("red.svg", kSimpleSvg);
   const auto pngPath = tmpDir_ / "out.png";
 
@@ -247,8 +246,8 @@ TEST_F(EditorReplTest, LoadStatusSaveCycle) {
      << "quit\n";
   std::stringstream out;
 
-  EditorApp app(Options());
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSession app(Options());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   const int dispatched = repl.run();
   EXPECT_EQ(dispatched, 4);
 
@@ -268,7 +267,7 @@ TEST_F(EditorReplTest, LoadStatusSaveCycle) {
   }
 }
 
-TEST_F(EditorReplTest, RecordWritesValidRnrFile) {
+TEST_F(RenderSessionReplTest, RecordWritesValidRnrFile) {
   WriteSvg("red.svg", kSimpleSvg);
   const auto rnrPath = tmpDir_ / "demo.rnr";
 
@@ -278,8 +277,8 @@ TEST_F(EditorReplTest, RecordWritesValidRnrFile) {
      << "quit\n";
   std::stringstream out;
 
-  EditorApp app(Options());
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSession app(Options());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   EXPECT_NE(out.str().find("record: wrote"), std::string::npos);
@@ -294,14 +293,14 @@ TEST_F(EditorReplTest, RecordWritesValidRnrFile) {
   EXPECT_FALSE(wire.empty());
 }
 
-TEST_F(EditorReplTest, InspectProducesCommandDump) {
+TEST_F(RenderSessionReplTest, InspectProducesCommandDump) {
   WriteSvg("red.svg", kSimpleSvg);
 
   std::stringstream in("load red.svg\ninspect\nquit\n");
   std::stringstream out;
 
-  EditorApp app(Options());
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSession app(Options());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   const auto text = out.str();
@@ -310,43 +309,43 @@ TEST_F(EditorReplTest, InspectProducesCommandDump) {
   EXPECT_NE(text.find("drawPath"), std::string::npos);
 }
 
-TEST_F(EditorReplTest, UnknownCommandDoesNotCrash) {
-  EditorApp app(Options());
+TEST_F(RenderSessionReplTest, UnknownCommandDoesNotCrash) {
+  RenderSession app(Options());
   std::stringstream in("frobnicate\nquit\n");
   std::stringstream out;
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
   EXPECT_NE(out.str().find("unknown command"), std::string::npos);
 }
 
-TEST_F(EditorReplTest, InspectWithNoFrameReportsError) {
-  EditorApp app(Options());
+TEST_F(RenderSessionReplTest, InspectWithNoFrameReportsError) {
+  RenderSession app(Options());
   std::stringstream in("inspect\nquit\n");
   std::stringstream out;
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
   EXPECT_NE(out.str().find("no frame available"), std::string::npos);
 }
 
-TEST_F(EditorReplTest, ResizeCommandParsesDimensions) {
+TEST_F(RenderSessionReplTest, ResizeCommandParsesDimensions) {
   WriteSvg("red.svg", kSimpleSvg);
   // Match the SVG's 4:3 aspect so preserveAspectRatio doesn't letterbox.
   std::stringstream in("load red.svg\nresize 128 96\nstatus\nquit\n");
   std::stringstream out;
 
-  EditorApp app(Options());
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSession app(Options());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   const auto text = out.str();
   EXPECT_NE(text.find("rendered 128x96"), std::string::npos) << text;
 }
 
-TEST_F(EditorReplTest, WatchOnOffCommand) {
-  EditorApp app(Options());
+TEST_F(RenderSessionReplTest, WatchOnOffCommand) {
+  RenderSession app(Options());
   std::stringstream in("watch on\nwatch off\nquit\n");
   std::stringstream out;
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   const auto text = out.str();
@@ -356,22 +355,22 @@ TEST_F(EditorReplTest, WatchOnOffCommand) {
   EXPECT_FALSE(app.watchEnabled());
 }
 
-TEST_F(EditorReplTest, WatchInvalidArgPrintsUsage) {
-  EditorApp app(Options());
+TEST_F(RenderSessionReplTest, WatchInvalidArgPrintsUsage) {
+  RenderSession app(Options());
   std::stringstream in("watch maybe\nquit\n");
   std::stringstream out;
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   const auto text = out.str();
   EXPECT_NE(text.find("usage: watch on|off"), std::string::npos) << text;
 }
 
-TEST_F(EditorReplTest, HelpListsWatchCommand) {
-  EditorApp app(Options());
+TEST_F(RenderSessionReplTest, HelpListsWatchCommand) {
+  RenderSession app(Options());
   std::stringstream in("help\nquit\n");
   std::stringstream out;
-  EditorRepl repl(app, in, out, ReplOptions());
+  RenderSessionRepl repl(app, in, out, ReplOptions());
   repl.run();
 
   const auto text = out.str();

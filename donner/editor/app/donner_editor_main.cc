@@ -1,9 +1,9 @@
 /// @file
 ///
-/// `donner_editor` — the MVP editor binary. Spins up an `EditorApp` and an
-/// `EditorRepl` driven by stdin/stdout, so you can:
+/// `render_repl` — a non-GUI render/debug REPL. Spins up a `RenderSession` and a
+/// `RenderSessionRepl` driven by stdin/stdout.
 ///
-///     $ bazel run //donner/editor/app:donner_editor
+///     $ bazel run //donner/editor/app:render_repl
 ///     donner> load donner_splash.svg
 ///     [rendered 512x384] uri=donner_splash.svg
 ///     donner> show       # prints an ANSI approximation to the terminal
@@ -30,18 +30,18 @@ int main(int argc, char* argv[]) {
     std::filesystem::current_path(bwd, ec);
   }
 
-  donner::editor::app::EditorAppOptions options;
+  donner::editor::app::RenderSessionOptions options;
   // Fetch paths relative to the invoking user's cwd.
   options.sourceOptions.baseDirectory = std::filesystem::current_path();
 
   // Accept a one-shot initial URL as argv[1] so the binary is scriptable:
-  //   donner_editor mini.svg
-  donner::editor::app::EditorApp app(std::move(options));
+  //   render_repl mini.svg
+  donner::editor::app::RenderSession app(std::move(options));
   if (argc > 1) {
     app.navigate(argv[1]);
   }
 
-  donner::editor::app::EditorRepl repl(app, std::cin, std::cout);
+  donner::editor::app::RenderSessionRepl repl(app, std::cin, std::cout);
   repl.run();
   return 0;
 }

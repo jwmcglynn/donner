@@ -13,27 +13,27 @@ namespace donner::editor::app {
 
 namespace {
 
-std::string_view StatusLabel(EditorStatus status) {
+std::string_view StatusLabel(RenderSessionStatus status) {
   switch (status) {
-    case EditorStatus::kEmpty:         return "empty";
-    case EditorStatus::kLoading:       return "loading";
-    case EditorStatus::kRendered:      return "rendered";
-    case EditorStatus::kRenderedLossy: return "rendered (lossy)";
-    case EditorStatus::kFetchError:    return "fetch error";
-    case EditorStatus::kParseError:    return "parse error";
-    case EditorStatus::kRenderError:   return "render error";
+    case RenderSessionStatus::kEmpty: return "empty";
+    case RenderSessionStatus::kLoading: return "loading";
+    case RenderSessionStatus::kRendered: return "rendered";
+    case RenderSessionStatus::kRenderedLossy: return "rendered (lossy)";
+    case RenderSessionStatus::kFetchError: return "fetch error";
+    case RenderSessionStatus::kParseError: return "parse error";
+    case RenderSessionStatus::kRenderError: return "render error";
   }
   return "?";
 }
 
-EditorStatus FetchStatusToEditorStatus(sandbox::SvgFetchStatus status) {
-  if (status == sandbox::SvgFetchStatus::kOk) return EditorStatus::kRendered;
-  return EditorStatus::kFetchError;
+RenderSessionStatus FetchStatusToRenderSessionStatus(sandbox::SvgFetchStatus status) {
+  if (status == sandbox::SvgFetchStatus::kOk) return RenderSessionStatus::kRendered;
+  return RenderSessionStatus::kFetchError;
 }
 
 }  // namespace
 
-EditorApp::EditorApp(EditorAppOptions options)
+RenderSession::RenderSession(RenderSessionOptions options)
     : options_(std::move(options)),
       source_(options_.sourceOptions),
       width_(options_.defaultWidth),
@@ -45,16 +45,16 @@ EditorApp::EditorApp(EditorAppOptions options)
   current_.message = "no document loaded";
 }
 
-EditorApp::~EditorApp() = default;
+RenderSession::~RenderSession() = default;
 
-const EditorSnapshot& EditorApp::navigate(std::string_view uri) {
-  current_ = EditorSnapshot{};
+const RenderSessionSnapshot& RenderSession::navigate(std::string_view uri) {
+  current_ = RenderSessionSnapshot{};
   current_.uri = std::string(uri);
-  current_.status = EditorStatus::kLoading;
+  current_.status = RenderSessionStatus::kLoading;
 
   const auto fetch = source_.fetch(uri);
   if (fetch.status != sandbox::SvgFetchStatus::kOk) {
-    current_.status = FetchStatusToEditorStatus(fetch.status);
+    current_.status = FetchStatusToRenderSessionStatus(fetch.status);
     std::ostringstream msg;
     msg << StatusLabel(current_.status) << ": " << fetch.diagnostics;
     current_.message = std::move(msg).str();
@@ -76,7 +76,7 @@ const EditorSnapshot& EditorApp::navigate(std::string_view uri) {
   return renderCachedBytes(uri);
 }
 
-const EditorSnapshot& EditorApp::reload() {
+const RenderSessionSnapshot& RenderSession::reload() {
   if (current_.uri.empty() && rawBytes_.empty()) {
     current_.message = "reload: no document loaded";
     return current_;
@@ -86,7 +86,7 @@ const EditorSnapshot& EditorApp::reload() {
   return navigate(uri);
 }
 
-const EditorSnapshot& EditorApp::resize(int width, int height) {
+const RenderSessionSnapshot& RenderSession::resize(int width, int height) {
   if (width <= 0 || height <= 0) {
     current_.message = "resize: width/height must be positive";
     return current_;
@@ -100,17 +100,16 @@ const EditorSnapshot& EditorApp::resize(int width, int height) {
   return renderCachedBytes(current_.uri);
 }
 
-const EditorSnapshot& EditorApp::renderCachedBytes(std::string_view uri) {
+const RenderSessionSnapshot& RenderSession::renderCachedBytes(std::string_view uri) {
   // Parse on the main thread. We need to pass a real `SVGDocument` to the
   // pipelined renderer — serialization happens inside `submit()`, which
   // runs on the caller (main) thread too.
   ParseWarningSink warnings;
-  const std::string_view svgView(reinterpret_cast<const char*>(rawBytes_.data()),
-                                 rawBytes_.size());
+  const std::string_view svgView(reinterpret_cast<const char*>(rawBytes_.data()), rawBytes_.size());
   auto parseResult = svg::parser::SVGParser::ParseSVG(svgView, warnings);
   if (parseResult.hasError()) {
     current_.uri = std::string(uri);
-    current_.status = EditorStatus::kParseError;
+    current_.status = RenderSessionStatus::kParseError;
     std::ostringstream msg;
     msg << parseResult.error();
     current_.message = "parse error: " + std::move(msg).str();
@@ -123,7 +122,7 @@ const EditorSnapshot& EditorApp::renderCachedBytes(std::string_view uri) {
   auto frame = pipeline_->waitForFrame(frameId);
   if (!frame.has_value() || !frame->ok) {
     current_.uri = std::string(uri);
-    current_.status = EditorStatus::kRenderError;
+    current_.status = RenderSessionStatus::kRenderError;
     current_.message = "render error: worker returned no frame";
     return current_;
   }
@@ -131,8 +130,8 @@ const EditorSnapshot& EditorApp::renderCachedBytes(std::string_view uri) {
   current_.uri = std::string(uri);
   current_.bitmap = std::move(frame->bitmap);
   current_.unsupportedCount = frame->unsupportedCount;
-  current_.status = frame->unsupportedCount == 0 ? EditorStatus::kRendered
-                                                  : EditorStatus::kRenderedLossy;
+  current_.status = frame->unsupportedCount == 0 ? RenderSessionStatus::kRendered
+                                                 : RenderSessionStatus::kRenderedLossy;
 
   // The pipelined renderer currently doesn't surface the wire bytes it
   // handed to the worker — the wire buffer is consumed inside the worker
@@ -163,7 +162,7 @@ const EditorSnapshot& EditorApp::renderCachedBytes(std::string_view uri) {
   return current_;
 }
 
-bool EditorApp::pollForChanges() {
+bool RenderSession::pollForChanges() {
   if (!watchEnabled_ || loadedPath_.empty()) {
     return false;
   }

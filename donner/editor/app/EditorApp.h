@@ -1,22 +1,21 @@
 #pragma once
 /// @file
 ///
-/// **EditorApp** — the headless core of the Donner Editor MVP. Owns the
+/// **RenderSession** — the headless sandbox/render-session core used by REPL and tooling. Owns the
 /// current document state (URI, raw bytes, rendered bitmap, wire stream)
 /// and exposes a narrow state-transition API that higher layers (a REPL, a
 /// GLFW/ImGui shell, a wasm frontend) call into.
 ///
 /// This is deliberately UI-free: no ImGui, no GLFW, no GL, no stdin/stdout.
 /// The UI layer takes an `EditorApp&` and drives it — tests can do the
-/// same. That mirrors the editor design doc's mutation-seam principle for
-/// M2 (`EditorApp::applyMutation`) at the coarsest possible granularity:
+/// same.
 /// right now the only mutation the MVP supports is "navigate to a new URI
 /// and re-render."
 ///
 /// Rendering is delegated to a `PipelinedRenderer` by default — the same
 /// multi-threaded wire-based pipeline that S3.6 landed — so the main
 /// thread never blocks on rasterization. The backing renderer is
-/// pluggable via `EditorAppOptions` for tests that want deterministic
+/// pluggable via `RenderSessionOptions` for tests that want deterministic
 /// synchronous execution or sandbox isolation.
 
 #include <cstdint>
@@ -34,21 +33,21 @@ namespace donner::editor::app {
 
 /// High-level state the editor can be in. The REPL uses this to decide
 /// what status chip / prompt decoration to show the user.
-enum class EditorStatus {
-  kEmpty,         ///< No document loaded yet.
-  kLoading,       ///< Navigation in flight (rare — our pipeline is synchronous today).
-  kRendered,      ///< A bitmap is available and was rendered cleanly.
-  kRenderedLossy, ///< Rendered, but the wire stream contained `kUnsupported` messages.
-  kFetchError,    ///< `SvgSource::fetch` failed. Previous bitmap is retained.
-  kParseError,    ///< Parser returned an error. Previous bitmap is retained.
-  kRenderError,   ///< Rasterization failed post-parse. Previous bitmap is retained.
+enum class RenderSessionStatus {
+  kEmpty,          ///< No document loaded yet.
+  kLoading,        ///< Navigation in flight (rare — our pipeline is synchronous today).
+  kRendered,       ///< A bitmap is available and was rendered cleanly.
+  kRenderedLossy,  ///< Rendered, but the wire stream contained `kUnsupported` messages.
+  kFetchError,     ///< `SvgSource::fetch` failed. Previous bitmap is retained.
+  kParseError,     ///< Parser returned an error. Previous bitmap is retained.
+  kRenderError,    ///< Rasterization failed post-parse. Previous bitmap is retained.
 };
 
 /// Render mode — which sandbox variant powers the pipeline. The MVP only
 /// wires `kInProcessThread` today; the `kSandboxedProcess` variant is
 /// reserved so the option struct is forward-compatible when the
 /// `SandboxHost`-backed renderer lands.
-enum class EditorRenderMode {
+enum class RenderSessionMode {
   /// Default. Main thread parses + drives, worker thread rasterizes. Zero
   /// process overhead, fully deterministic when `waitForFrame` is used.
   kInProcessThread,
@@ -57,10 +56,10 @@ enum class EditorRenderMode {
   kSandboxedProcess,
 };
 
-struct EditorAppOptions {
+struct RenderSessionOptions {
   /// Which pipeline to use. `kInProcessThread` is the only mode MVP
   /// implements today.
-  EditorRenderMode renderMode = EditorRenderMode::kInProcessThread;
+  RenderSessionMode renderMode = RenderSessionMode::kInProcessThread;
 
   /// Default viewport used for navigations that don't carry an explicit
   /// width/height. Matches typical desktop editor previews.
@@ -75,8 +74,8 @@ struct EditorAppOptions {
 /// Snapshot of the most recent navigation result. All fields are read-only
 /// after `EditorApp::navigate` returns — subsequent navigations produce a
 /// new snapshot.
-struct EditorSnapshot {
-  EditorStatus status = EditorStatus::kEmpty;
+struct RenderSessionSnapshot {
+  RenderSessionStatus status = RenderSessionStatus::kEmpty;
   /// Resolved URI the snapshot corresponds to, or empty for `kEmpty`.
   std::string uri;
   /// RGBA snapshot of the rendered frame. Empty if no render has succeeded.
@@ -92,31 +91,31 @@ struct EditorSnapshot {
   std::string message;
 };
 
-class EditorApp {
+class RenderSession {
 public:
-  explicit EditorApp(EditorAppOptions options = {});
-  ~EditorApp();
+  explicit RenderSession(RenderSessionOptions options = {});
+  ~RenderSession();
 
-  EditorApp(const EditorApp&) = delete;
-  EditorApp& operator=(const EditorApp&) = delete;
+  RenderSession(const RenderSession&) = delete;
+  RenderSession& operator=(const RenderSession&) = delete;
 
   /// Fetches `uri`, drives the renderer at the configured viewport, and
   /// blocks until a new frame is available on the worker. Returns the
   /// updated snapshot. On any error, the previous successful frame's
   /// bitmap is retained (accessible via `lastGoodBitmap()`) and the new
   /// snapshot's status reflects the failure.
-  const EditorSnapshot& navigate(std::string_view uri);
+  const RenderSessionSnapshot& navigate(std::string_view uri);
 
   /// Fetches the current URI again with the same viewport, useful for
   /// "reload the file after editing it in an external editor" workflows.
   /// No-op when no URI is loaded yet.
-  const EditorSnapshot& reload();
+  const RenderSessionSnapshot& reload();
 
   /// Re-renders the currently-loaded document at a new viewport. Cheaper
   /// than a full navigate because no fetch happens.
-  const EditorSnapshot& resize(int width, int height);
+  const RenderSessionSnapshot& resize(int width, int height);
 
-  [[nodiscard]] const EditorSnapshot& current() const { return current_; }
+  [[nodiscard]] const RenderSessionSnapshot& current() const { return current_; }
   [[nodiscard]] int width() const { return width_; }
   [[nodiscard]] int height() const { return height_; }
 
@@ -144,16 +143,16 @@ private:
   /// Runs the cached raw SVG bytes through the pipeline and updates
   /// `current_` + `lastGood*_` according to the outcome. Common helper for
   /// navigate/reload/resize.
-  const EditorSnapshot& renderCachedBytes(std::string_view uri);
+  const RenderSessionSnapshot& renderCachedBytes(std::string_view uri);
 
-  EditorAppOptions options_;
+  RenderSessionOptions options_;
   donner::editor::sandbox::SvgSource source_;
   std::unique_ptr<donner::editor::sandbox::PipelinedRenderer> pipeline_;
 
   int width_;
   int height_;
 
-  EditorSnapshot current_;
+  RenderSessionSnapshot current_;
   std::vector<uint8_t> rawBytes_;  ///< Last successfully-fetched bytes, for reload/resize.
   svg::RendererBitmap lastGoodBitmap_;
   std::vector<uint8_t> lastGoodWire_;
