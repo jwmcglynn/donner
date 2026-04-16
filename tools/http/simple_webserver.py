@@ -199,6 +199,7 @@ if args.https:
     https_server = socketserver.ThreadingTCPServer((bind_host, https_port), handler)
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certfile=str(certfile), keyfile=str(keyfile))
     https_server.socket = context.wrap_socket(https_server.socket, server_side=True)
 
