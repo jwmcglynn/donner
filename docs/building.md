@@ -180,4 +180,22 @@ Donner builds everything from source. The Skia backend is large and slow to buil
 
 ### How do I build the editor?
 
-The Donner Editor is in active migration into the tree under `//donner/editor`. See [docs/design_docs/0020-editor.md](design_docs/0020-editor.md) for the in-progress design and milestone plan.
+The full native editor lives at `//donner/editor:editor`:
+
+```sh
+bazel run //donner/editor -- donner_splash.svg
+```
+
+The browser build lives at `//donner/editor/wasm` and is toolchain-gated behind
+`--config=editor-wasm`:
+
+```sh
+bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
+bazel run --config=editor-wasm //donner/editor/wasm:serve_http
+bazel run --config=editor-wasm //donner/editor/wasm:serve_http -- --https
+```
+
+Use `-- --https` for LAN access with the generated local certificate. Then open
+the served `index.html` in a browser. See
+[docs/design_docs/0020-editor.md](design_docs/0020-editor.md) for the editor
+design and milestone plan.

@@ -1,0 +1,74 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+exports_files(["LICENSE.txt"])
+
+cc_library(
+    name = "emscripten-glfw",
+    srcs = [
+        "src/cpp/emscripten/glfw3/Clipboard.cpp",
+        "src/cpp/emscripten/glfw3/Context.cpp",
+        "src/cpp/emscripten/glfw3/ErrorHandler.cpp",
+        "src/cpp/emscripten/glfw3/Keyboard.cpp",
+        "src/cpp/emscripten/glfw3/Window.cpp",
+        "src/cpp/glfw3.cpp",
+    ],
+    hdrs = [
+        # From "include/GLFW"
+        "include/GLFW/emscripten_glfw3.h",
+        "include/GLFW/emscripten_glfw3_version.h",
+
+        # From "external/GLFW"
+        "external/GLFW/glfw3.h",
+        "external/GLFW/glfw3native.h",
+
+        # Headers in "src/cpp/emscripten/glfw3"
+        "src/cpp/emscripten/glfw3/Clipboard.h",
+        "src/cpp/emscripten/glfw3/Config.h",
+        "src/cpp/emscripten/glfw3/Context.h",
+        "src/cpp/emscripten/glfw3/Cursor.h",
+        "src/cpp/emscripten/glfw3/ErrorHandler.h",
+        "src/cpp/emscripten/glfw3/Events.h",
+        "src/cpp/emscripten/glfw3/Keyboard.h",
+        "src/cpp/emscripten/glfw3/KeyboardMapping.h",
+        "src/cpp/emscripten/glfw3/Monitor.h",
+        "src/cpp/emscripten/glfw3/Mouse.h",
+        "src/cpp/emscripten/glfw3/Object.h",
+        "src/cpp/emscripten/glfw3/Types.h",
+        "src/cpp/emscripten/glfw3/Window.h",
+    ],
+    additional_linker_inputs = [
+        ":emscripten_glfw3_js_library",
+    ],
+    copts = [
+        # Disable joystick and multi-window by default
+        "-DEMSCRIPTEN_GLFW3_DISABLE_JOYSTICK",
+        "-DEMSCRIPTEN_GLFW3_DISABLE_MULTI_WINDOW_SUPPORT",
+    ],
+    # Make sure we can find <GLFW/emscripten_glfw3.h> and <GLFW/glfw3.h>.
+    includes = [
+        "external",  # so #include <GLFW/glfw3.h> resolves
+        "include",  # so #include <GLFW/emscripten_glfw3.h> resolves
+    ],
+    linkopts = [
+        "-lGL",
+        "--js-library",
+        "$(location :emscripten_glfw3_js_library)",
+        "-s MIN_WEBGL_VERSION=2",
+        "-s WASM=1",
+        "-s USE_PTHREADS=1",
+    ],
+    target_compatible_with = select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "emscripten_glfw3_js_library",
+    srcs = [
+        "src/js/lib_emscripten_glfw3.js",
+    ],
+    visibility = ["//visibility:public"],
+)

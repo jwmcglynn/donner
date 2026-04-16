@@ -1,0 +1,134 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//tools/http:serve_http.bzl", "serve_http")
+load(":web_package.bzl", "web_package")
+
+package(default_visibility = ["//visibility:public"])
+
+bool_flag(
+    name = "enable_wasm",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "wasm_enabled",
+    flag_values = {
+        ":enable_wasm": "True",
+    },
+)
+
+_EDITOR_WASM_RUNTIME_DEPS = [
+    "//donner/base",
+    "//donner/editor:async_renderer",
+    "//donner/editor:attribute_writeback",
+    "//donner/editor:change_classifier",
+    "//donner/editor:editor_app",
+    "//donner/editor:editor_icon",
+    "//donner/editor:editor_splash",
+    "//donner/editor:overlay_renderer",
+    "//donner/editor:pinch_event_monitor",
+    "//donner/editor:render_pane_gesture",
+    "//donner/editor:selection_aabb",
+    "//donner/editor:select_tool",
+    "//donner/editor:source_sync",
+    "//donner/editor:text_editor",
+    "//donner/editor:text_patch",
+    "//donner/editor:tracy_wrapper",
+    "//donner/editor:viewport_state",
+    "//donner/svg",
+    "//donner/svg/renderer",
+    "//third_party/emscripten-glfw",
+    "//third_party/fira-code",
+    "//third_party/roboto",
+    "@glfw",
+    "@imgui",
+]
+
+cc_library(
+    name = "notice_inputs",
+    deps = _EDITOR_WASM_RUNTIME_DEPS,
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+cc_binary(
+    name = "_editor_wasm_binary",
+    srcs = ["//donner/editor:main.cc"],
+    copts = [
+        "-pthread",
+    ],
+    linkopts = [
+        "-pthread",
+        "-sASYNCIFY",
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sMAXIMUM_MEMORY=512MB",
+        "-sEXIT_RUNTIME=0",
+        "-sEXPORTED_FUNCTIONS=_main,_OnBrowserFileReadyPath",
+        "-sEXPORTED_RUNTIME_METHODS=ccall",
+        "-sPTHREAD_POOL_SIZE=2",
+        "-sSTACK_SIZE=1048576",
+        "-sUSE_PTHREADS=1",
+        "-sENVIRONMENT=web,worker",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = _EDITOR_WASM_RUNTIME_DEPS + ["//donner/editor:notice"],
+)
+
+wasm_cc_binary(
+    name = "wasm",
+    cc_target = ":_editor_wasm_binary",
+    outputs = [
+        "editor.js",
+        "editor.wasm",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+web_package(
+    name = "wasm_web_package",
+    srcs = [
+        "//:donner_icon.svg",
+        "enable-threads.js",
+        "index.html",
+    ],
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    wasm_deps = [":wasm"],
+)
+
+serve_http(
+    name = "serve_http",
+    dir = ":wasm_web_package",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)

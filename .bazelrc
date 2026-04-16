@@ -93,12 +93,18 @@ common:text-full --//donner/svg/renderer:text=true --//donner/svg/renderer:text_
 # WebAssembly (Emscripten) build. Usage:
 #   bazel build --config=wasm //donner/svg/renderer/wasm:donner_wasm
 common:wasm --//donner/svg/renderer:renderer_backend=tiny_skia
-common:wasm --//donner/svg/renderer:filters=false
 common:wasm --//donner/svg/renderer:text=false
 common:wasm --//donner/svg/renderer:text_full=false
 # Disable the perf-opt transition so that all targets use the emscripten
 # toolchain without cross-configuration link conflicts.
 common:wasm --//build_defs:disable_perf_opt_transition=true
+
+# Full editor wasm build. Usage:
+#   bazel build --config=editor-wasm //donner/editor/wasm:wasm
+common:editor-wasm --config=wasm
+common:editor-wasm --//donner/editor/wasm:enable_wasm=true
+build:editor-wasm --copt=-pthread
+build:editor-wasm --linkopt=-pthread
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++

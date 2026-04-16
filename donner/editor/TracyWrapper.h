@@ -17,6 +17,12 @@
 #define ZoneScoped \
   do {             \
   } while (0, 0)
+#define ZoneScopedN(name) \
+  do {                    \
+  } while (0, 0)
+#define FrameMark \
+  do {            \
+  } while (0, 0)
 #define FrameMarkStart(name) \
   do {                       \
   } while (0, 0)

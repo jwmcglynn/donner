@@ -140,6 +140,27 @@ class GenerateBuildReportTests(unittest.TestCase):
                 stderr="",
                 duration_sec=3.0,
             ),
+            (
+                "bazel",
+                "cquery",
+                "deps(//donner/editor:editor)",
+                "--output=starlark",
+                "--starlark:expr=target.label",
+            ): generate_build_report.CommandResult(
+                label="editor",
+                args=(),
+                returncode=0,
+                stdout="\n".join(
+                    [
+                        "@+_repo_rules+entt//:entt",
+                        "@+_repo_rules+tiny-skia-cpp//src:tiny_skia",
+                        "@imgui+//:imgui",
+                        "@glfw+//:glfw",
+                    ]
+                ),
+                stderr="",
+                duration_sec=1.5,
+            ),
         }
         section = generate_build_report.make_external_dependencies_section(
             FakeRunner(results),
@@ -157,7 +178,7 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("- woff2", section.content)
         self.assertIn("### skia + text-full", section.content)
         self.assertIn("- skia", section.content)
-        self.assertIn("### editor (skia + text-full + imgui/glfw/tracy)", section.content)
+        self.assertIn("### editor (tiny-skia + imgui/glfw/tracy + editor fonts)", section.content)
 
     def test_external_dependencies_section_annotates_with_licenses(self):
         """When a license manifest is available, each dep is annotated with
@@ -212,6 +233,22 @@ class GenerateBuildReportTests(unittest.TestCase):
                     stderr="",
                     duration_sec=0.1,
                 )
+            results[
+                (
+                    "bazel",
+                    "cquery",
+                    "deps(//donner/editor:editor)",
+                    "--output=starlark",
+                    "--starlark:expr=target.label",
+                )
+            ] = generate_build_report.CommandResult(
+                label="editor-cquery",
+                args=(),
+                returncode=0,
+                stdout="@+_repo_rules+entt//:entt",
+                stderr="",
+                duration_sec=0.1,
+            )
 
             section = generate_build_report.make_external_dependencies_section(
                 FakeRunner(results),

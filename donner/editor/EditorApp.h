@@ -92,6 +92,21 @@ public:
   /// `applyMutation`.
   void markDirty() { isDirty_ = true; }
 
+  /// Record the current source text as the "clean" baseline. Used after
+  /// loading or saving a document so later source edits can determine
+  /// whether the in-memory text has diverged from the last persisted bytes.
+  void setCleanSourceText(std::string_view sourceText) {
+    cleanSourceText_.assign(sourceText);
+    isDirty_ = false;
+  }
+
+  /// Recompute the dirty flag from the current source text. This allows the
+  /// editor to clear the dirty indicator when the user undoes or edits back
+  /// to the last clean baseline.
+  void syncDirtyFromSource(std::string_view currentSourceText) {
+    isDirty_ = currentSourceText != cleanSourceText_;
+  }
+
   // ---------------------------------------------------------------------------
   // Mutation seam
   // ---------------------------------------------------------------------------
@@ -289,6 +304,7 @@ private:
   std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
 
   std::optional<std::string> currentFilePath_;
+  std::string cleanSourceText_;
   bool isDirty_ = false;
 };
 

@@ -7,6 +7,10 @@ STB_COPTS = [
     "-Wno-self-assign",
 ]
 
+STB_IMAGE_WRITE_COPTS = STB_COPTS + [
+    "-Wno-deprecated-declarations",
+]
+
 stb_library(
     name = "c_lexer",
     copts = STB_COPTS,
@@ -79,7 +83,7 @@ stb_library(
 
 stb_library(
     name = "image_write",
-    copts = STB_COPTS,
+    copts = STB_IMAGE_WRITE_COPTS,
     emit_definition_macro = "STB_IMAGE_WRITE_IMPLEMENTATION",
 )
 

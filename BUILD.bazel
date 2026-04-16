@@ -26,6 +26,7 @@ filegroup(
 
 exports_files(
     [
+        "donner_icon.svg",
         "donner_splash.svg",
         "MODULE.bazel",
     ],

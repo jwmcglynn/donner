@@ -759,7 +759,6 @@ void EncodeTextSpan(WireWriter& w, const svg::components::ComputedTextComponent:
   // Baseline shifts
   w.writeU32(static_cast<uint32_t>(s.ancestorBaselineShifts.size()));
   for (const auto& shift : s.ancestorBaselineShifts) {
-    using K = svg::components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
     w.writeU8(static_cast<uint8_t>(shift.keyword));
     EncodeLengthd(w, shift.shift);
     w.writeF64(shift.fontSizePx);

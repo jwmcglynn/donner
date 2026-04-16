@@ -11,9 +11,6 @@ namespace donner::geode {
 
 namespace {
 
-/// Minimum band height to avoid excessive band count on very tall paths.
-constexpr float kMinBandHeight = 4.0f;
-
 /// Maximum number of bands — prevents runaway memory for huge paths.
 constexpr uint16_t kMaxBands = 256;
 
@@ -124,8 +121,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     const auto p2x = static_cast<float>(subpathStart.x);
     const auto p2y = static_cast<float>(subpathStart.y);
 
-    allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
-                         computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
+    allCurves.push_back(
+        {{p0x, p0y, p1x, p1y, p2x, p2y}, computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
     currentPoint = subpathStart;
   };
 
@@ -151,8 +148,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         const auto p2x = static_cast<float>(end.x);
         const auto p2y = static_cast<float>(end.y);
 
-        allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
-                             computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
+        allCurves.push_back(
+            {{p0x, p0y, p1x, p1y, p2x, p2y}, computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         currentPoint = end;
         subpathHasSegments = true;
         break;
@@ -169,8 +166,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         const auto p2x = static_cast<float>(end.x);
         const auto p2y = static_cast<float>(end.y);
 
-        allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
-                             computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
+        allCurves.push_back(
+            {{p0x, p0y, p1x, p1y, p2x, p2y}, computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         currentPoint = end;
         subpathHasSegments = true;
         break;
@@ -188,8 +185,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         const auto p2x = static_cast<float>(end.x);
         const auto p2y = static_cast<float>(end.y);
 
-        allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
-                             computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
+        allCurves.push_back(
+            {{p0x, p0y, p1x, p1y, p2x, p2y}, computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         currentPoint = end;
         subpathHasSegments = true;
         break;
@@ -208,8 +205,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
           const auto p2x = static_cast<float>(end.x);
           const auto p2y = static_cast<float>(end.y);
 
-          allCurves.push_back({{p0x, p0y, p1x, p1y, p2x, p2y},
-                               computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
+          allCurves.push_back(
+              {{p0x, p0y, p1x, p1y, p2x, p2y}, computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
         }
         currentPoint = end;
         // The subpath is explicitly closed — don't let the final implicit
@@ -242,9 +239,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     // Determine which bands this curve overlaps.
     const int firstBand =
         std::max(0, static_cast<int>(std::floor((range.yMin - yBase) / bandHeight)));
-    const int lastBand =
-        std::min(static_cast<int>(bandCount) - 1,
-                 static_cast<int>(std::floor((range.yMax - yBase) / bandHeight)));
+    const int lastBand = std::min(static_cast<int>(bandCount) - 1,
+                                  static_cast<int>(std::floor((range.yMax - yBase) / bandHeight)));
 
     for (int b = firstBand; b <= lastBand; ++b) {
       bandCurveIndices[static_cast<size_t>(b)].push_back(ci);

@@ -18,10 +18,8 @@ bool IsPush(Opcode op) {
   switch (op) {
     case Opcode::kPushTransform:
     case Opcode::kPushClip:
-    case Opcode::kPushIsolatedLayer:
-      return true;
-    default:
-      return false;
+    case Opcode::kPushIsolatedLayer: return true;
+    default: return false;
   }
 }
 
@@ -30,18 +28,16 @@ bool IsPop(Opcode op) {
   switch (op) {
     case Opcode::kPopTransform:
     case Opcode::kPopClip:
-    case Opcode::kPopIsolatedLayer:
-      return true;
-    default:
-      return false;
+    case Opcode::kPopIsolatedLayer: return true;
+    default: return false;
   }
 }
 
 /// Peeks at the u32 opcode + u32 payload_length at the current cursor
 /// without advancing it. Used by the decode pass, which needs to record
 /// the absolute byte offset *before* reading the header.
-bool PeekMessageHeader(std::span<const uint8_t> bytes, std::size_t pos,
-                       Opcode& outOp, uint32_t& outLen) {
+bool PeekMessageHeader(std::span<const uint8_t> bytes, std::size_t pos, Opcode& outOp,
+                       uint32_t& outLen) {
   if (pos + 8 > bytes.size()) return false;
   uint32_t op = 0;
   uint32_t len = 0;
@@ -76,8 +72,7 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
       uint32_t version = 0;
       if (r.readU32(magic) && r.readU32(version)) {
         std::ostringstream os;
-        os << "streamHeader magic=0x" << std::hex << magic << std::dec
-           << " version=" << version;
+        os << "streamHeader magic=0x" << std::hex << magic << std::dec << " version=" << version;
         return os.str();
       }
       return "streamHeader";
@@ -87,22 +82,20 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
       svg::RenderViewport vp;
       if (DecodeRenderViewport(r, vp)) {
         std::ostringstream os;
-        os << "beginFrame viewport=" << formatDouble(vp.size.x) << "x"
-           << formatDouble(vp.size.y) << " dpr=" << formatDouble(vp.devicePixelRatio);
+        os << "beginFrame viewport=" << formatDouble(vp.size.x) << "x" << formatDouble(vp.size.y)
+           << " dpr=" << formatDouble(vp.devicePixelRatio);
         return os.str();
       }
       return "beginFrame";
     }
 
-    case Opcode::kEndFrame:
-      return "endFrame";
+    case Opcode::kEndFrame: return "endFrame";
 
     case Opcode::kSetTransform: {
       Transform2d t;
       if (DecodeTransform2d(r, t)) {
         std::ostringstream os;
-        os << "setTransform tx=" << formatDouble(t.data[4])
-           << " ty=" << formatDouble(t.data[5]);
+        os << "setTransform tx=" << formatDouble(t.data[4]) << " ty=" << formatDouble(t.data[5]);
         return os.str();
       }
       return "setTransform";
@@ -112,14 +105,12 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
       Transform2d t;
       if (DecodeTransform2d(r, t)) {
         std::ostringstream os;
-        os << "pushTransform tx=" << formatDouble(t.data[4])
-           << " ty=" << formatDouble(t.data[5]);
+        os << "pushTransform tx=" << formatDouble(t.data[4]) << " ty=" << formatDouble(t.data[5]);
         return os.str();
       }
       return "pushTransform";
     }
-    case Opcode::kPopTransform:
-      return "popTransform";
+    case Opcode::kPopTransform: return "popTransform";
 
     case Opcode::kPushClip: {
       svg::ResolvedClip clip;
@@ -132,8 +123,7 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
       }
       return "pushClip";
     }
-    case Opcode::kPopClip:
-      return "popClip";
+    case Opcode::kPopClip: return "popClip";
 
     case Opcode::kPushIsolatedLayer: {
       double opacity = 0;
@@ -146,8 +136,7 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
       }
       return "pushIsolatedLayer";
     }
-    case Opcode::kPopIsolatedLayer:
-      return "popIsolatedLayer";
+    case Opcode::kPopIsolatedLayer: return "popIsolatedLayer";
 
     case Opcode::kSetPaint: {
       svg::PaintParams paint;
@@ -159,9 +148,8 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
         // Fill summary — recognize solid + gradient variants.
         if (fillGradient) {
           os << " fill="
-             << (fillGradient->kind == WireGradient::Kind::kLinear
-                     ? "linearGradient"
-                     : "radialGradient")
+             << (fillGradient->kind == WireGradient::Kind::kLinear ? "linearGradient"
+                                                                   : "radialGradient")
              << "(" << fillGradient->stops.size() << " stops)";
         } else if (std::holds_alternative<svg::PaintServer::Solid>(paint.fill)) {
           const auto& solid = std::get<svg::PaintServer::Solid>(paint.fill);
@@ -205,29 +193,28 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
       return "drawEllipse";
     }
 
-    case Opcode::kPushMask:               return "pushMask";
+    case Opcode::kDrawText: return "drawText";
+    case Opcode::kPushMask: return "pushMask";
     case Opcode::kTransitionMaskToContent: return "transitionMaskToContent";
-    case Opcode::kPopMask:                return "popMask";
-    case Opcode::kBeginPatternTile:       return "beginPatternTile";
-    case Opcode::kEndPatternTile:         return "endPatternTile";
-    case Opcode::kPushFilterLayer:        return "pushFilterLayer";
-    case Opcode::kPopFilterLayer:         return "popFilterLayer";
-    case Opcode::kDrawImage:              return "drawImage";
+    case Opcode::kPopMask: return "popMask";
+    case Opcode::kBeginPatternTile: return "beginPatternTile";
+    case Opcode::kEndPatternTile: return "endPatternTile";
+    case Opcode::kPushFilterLayer: return "pushFilterLayer";
+    case Opcode::kPopFilterLayer: return "popFilterLayer";
+    case Opcode::kDrawImage: return "drawImage";
 
     case Opcode::kUnsupported: {
       uint32_t kindRaw = 0;
       if (r.readU32(kindRaw)) {
         std::ostringstream os;
         os << "unsupported ("
-           << FrameInspector::UnsupportedKindName(static_cast<UnsupportedKind>(kindRaw))
-           << ")";
+           << FrameInspector::UnsupportedKindName(static_cast<UnsupportedKind>(kindRaw)) << ")";
         return os.str();
       }
       return "unsupported";
     }
 
-    case Opcode::kInvalid:
-      return "<invalid>";
+    case Opcode::kInvalid: return "<invalid>";
   }
   return std::string(FrameInspector::OpcodeName(op));
 }
@@ -236,49 +223,51 @@ std::string SummarizeCommand(Opcode op, std::span<const uint8_t> payload) {
 
 std::string_view FrameInspector::OpcodeName(Opcode op) {
   switch (op) {
-    case Opcode::kInvalid:                return "invalid";
-    case Opcode::kStreamHeader:           return "streamHeader";
-    case Opcode::kBeginFrame:             return "beginFrame";
-    case Opcode::kEndFrame:               return "endFrame";
-    case Opcode::kSetTransform:           return "setTransform";
-    case Opcode::kPushTransform:          return "pushTransform";
-    case Opcode::kPopTransform:           return "popTransform";
-    case Opcode::kPushClip:               return "pushClip";
-    case Opcode::kPopClip:                return "popClip";
-    case Opcode::kPushIsolatedLayer:      return "pushIsolatedLayer";
-    case Opcode::kPopIsolatedLayer:       return "popIsolatedLayer";
-    case Opcode::kPushMask:               return "pushMask";
+    case Opcode::kInvalid: return "invalid";
+    case Opcode::kStreamHeader: return "streamHeader";
+    case Opcode::kBeginFrame: return "beginFrame";
+    case Opcode::kEndFrame: return "endFrame";
+    case Opcode::kSetTransform: return "setTransform";
+    case Opcode::kPushTransform: return "pushTransform";
+    case Opcode::kPopTransform: return "popTransform";
+    case Opcode::kPushClip: return "pushClip";
+    case Opcode::kPopClip: return "popClip";
+    case Opcode::kPushIsolatedLayer: return "pushIsolatedLayer";
+    case Opcode::kPopIsolatedLayer: return "popIsolatedLayer";
+    case Opcode::kPushMask: return "pushMask";
     case Opcode::kTransitionMaskToContent: return "transitionMaskToContent";
-    case Opcode::kPopMask:                return "popMask";
-    case Opcode::kBeginPatternTile:       return "beginPatternTile";
-    case Opcode::kEndPatternTile:         return "endPatternTile";
-    case Opcode::kSetPaint:               return "setPaint";
-    case Opcode::kDrawPath:               return "drawPath";
-    case Opcode::kDrawRect:               return "drawRect";
-    case Opcode::kDrawEllipse:            return "drawEllipse";
-    case Opcode::kDrawImage:              return "drawImage";
-    case Opcode::kUnsupported:            return "unsupported";
+    case Opcode::kPopMask: return "popMask";
+    case Opcode::kBeginPatternTile: return "beginPatternTile";
+    case Opcode::kEndPatternTile: return "endPatternTile";
+    case Opcode::kPushFilterLayer: return "pushFilterLayer";
+    case Opcode::kPopFilterLayer: return "popFilterLayer";
+    case Opcode::kSetPaint: return "setPaint";
+    case Opcode::kDrawPath: return "drawPath";
+    case Opcode::kDrawRect: return "drawRect";
+    case Opcode::kDrawEllipse: return "drawEllipse";
+    case Opcode::kDrawImage: return "drawImage";
+    case Opcode::kDrawText: return "drawText";
+    case Opcode::kUnsupported: return "unsupported";
   }
   return "unknown";
 }
 
 std::string_view FrameInspector::UnsupportedKindName(UnsupportedKind kind) {
   switch (kind) {
-    case UnsupportedKind::kPushFilterLayer:            return "pushFilterLayer";
-    case UnsupportedKind::kPopFilterLayer:             return "popFilterLayer";
-    case UnsupportedKind::kPushMask:                   return "pushMask";
-    case UnsupportedKind::kTransitionMaskToContent:    return "transitionMaskToContent";
-    case UnsupportedKind::kPopMask:                    return "popMask";
-    case UnsupportedKind::kBeginPatternTile:           return "beginPatternTile";
-    case UnsupportedKind::kEndPatternTile:             return "endPatternTile";
-    case UnsupportedKind::kDrawImage:                  return "drawImage";
-    case UnsupportedKind::kDrawText:                   return "drawText";
-    case UnsupportedKind::kPaintServerGradient:        return "paintServerGradient";
-    case UnsupportedKind::kPaintServerPattern:         return "paintServerPattern";
-    case UnsupportedKind::kPaintServerResolvedReference:
-      return "paintServerResolvedReference";
-    case UnsupportedKind::kClipMaskChain:              return "clipMaskChain";
-    case UnsupportedKind::kColorNonRgba:               return "colorNonRgba";
+    case UnsupportedKind::kPushFilterLayer: return "pushFilterLayer";
+    case UnsupportedKind::kPopFilterLayer: return "popFilterLayer";
+    case UnsupportedKind::kPushMask: return "pushMask";
+    case UnsupportedKind::kTransitionMaskToContent: return "transitionMaskToContent";
+    case UnsupportedKind::kPopMask: return "popMask";
+    case UnsupportedKind::kBeginPatternTile: return "beginPatternTile";
+    case UnsupportedKind::kEndPatternTile: return "endPatternTile";
+    case UnsupportedKind::kDrawImage: return "drawImage";
+    case UnsupportedKind::kDrawText: return "drawText";
+    case UnsupportedKind::kPaintServerGradient: return "paintServerGradient";
+    case UnsupportedKind::kPaintServerPattern: return "paintServerPattern";
+    case UnsupportedKind::kPaintServerResolvedReference: return "paintServerResolvedReference";
+    case UnsupportedKind::kClipMaskChain: return "clipMaskChain";
+    case UnsupportedKind::kColorNonRgba: return "colorNonRgba";
   }
   return "unknownUnsupportedKind";
 }
@@ -298,8 +287,8 @@ InspectionResult FrameInspector::Decode(std::span<const uint8_t> wire) {
       return out;
     }
     if (payloadLen > kMaxPayloadBytes || pos + 8 + payloadLen > wire.size()) {
-      out.error = "payload length " + std::to_string(payloadLen) +
-                  " overruns buffer at offset " + std::to_string(pos);
+      out.error = "payload length " + std::to_string(payloadLen) + " overruns buffer at offset " +
+                  std::to_string(pos);
       out.finalDepth = depth;
       return out;
     }
@@ -329,8 +318,7 @@ InspectionResult FrameInspector::Decode(std::span<const uint8_t> wire) {
   return out;
 }
 
-ReplayStatus FrameInspector::ReplayPrefix(std::span<const uint8_t> wire,
-                                          std::size_t commandCount,
+ReplayStatus FrameInspector::ReplayPrefix(std::span<const uint8_t> wire, std::size_t commandCount,
                                           svg::RendererInterface& target) {
   // Full-replay fast path: the caller asked for everything. Just forward.
   if (commandCount == std::numeric_limits<std::size_t>::max()) {
@@ -400,8 +388,7 @@ ReplayStatus FrameInspector::ReplayPrefix(std::span<const uint8_t> wire,
 std::string FrameInspector::Dump(std::span<const uint8_t> wire) {
   const auto result = Decode(wire);
   std::ostringstream os;
-  os << "# " << result.commands.size() << " command(s), finalDepth="
-     << result.finalDepth << "\n";
+  os << "# " << result.commands.size() << " command(s), finalDepth=" << result.finalDepth << "\n";
   for (const auto& cmd : result.commands) {
     os << "[" << cmd.index << "] ";
     for (int i = 0; i < cmd.depth; ++i) os << "  ";

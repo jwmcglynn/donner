@@ -15,7 +15,7 @@ Keep the variant lists below in sync with
 """
 
 load("@rules_license//rules:license.bzl", "license")
-load("//build_defs:licenses.bzl", "donner_notice_file")
+load("//build_defs:licenses.bzl", "donner_notice_file", "donner_notice_file_auto")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -137,6 +137,14 @@ license(
     license_text = "tracy.LICENSE.txt",
 )
 
+license(
+    name = "emscripten-glfw",
+    package_name = "emscripten-glfw",
+    package_url = "https://github.com/pongasoft/emscripten-glfw",
+    license_kinds = ["@rules_license//licenses/spdx:Apache-2.0"],
+    license_text = "//third_party/emscripten-glfw:LICENSE.txt",
+)
+
 # Roboto — UI font embedded in //donner/editor. Apache-2.0 per Google Fonts.
 license(
     name = "roboto",
@@ -187,14 +195,23 @@ SKIA_TEXT_FULL_LICENSES = [
     "@zlib//:license",
 ]
 
-# Editor variant adds imgui, glfw, tracy, and the embedded editor fonts
-# (Roboto + Fira Code) on top of the skia + text-full variant.
-EDITOR_LICENSES = SKIA_TEXT_FULL_LICENSES + [
+ALL_KNOWN_LICENSES = [
+    ":entt",
+    ":stb",
+    ":tiny-skia-cpp",
+    ":brotli",
+    ":freetype",
+    ":harfbuzz",
+    ":woff2",
     ":imgui",
     ":glfw",
     ":tracy",
+    ":emscripten-glfw",
     ":roboto",
     ":fira-code",
+    "@libpng//:license",
+    "@skia//:license",
+    "@zlib//:license",
 ]
 
 donner_notice_file(
@@ -215,8 +232,12 @@ donner_notice_file(
     licenses = SKIA_TEXT_FULL_LICENSES,
 )
 
-donner_notice_file(
+donner_notice_file_auto(
     name = "notice_editor",
-    variant = "editor (skia + text-full + imgui/glfw/tracy)",
-    licenses = EDITOR_LICENSES,
+    variant = "editor (auto-detected from current build)",
+    target = select({
+        "//donner/editor/wasm:wasm_enabled": "//donner/editor/wasm:notice_inputs",
+        "//conditions:default": "//donner/editor:editor_notice_inputs",
+    }),
+    available_licenses = ALL_KNOWN_LICENSES,
 )
