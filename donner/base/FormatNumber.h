@@ -18,8 +18,9 @@ namespace donner::detail {
 ///   defaults to 6-significant-digit precision, which drops accuracy for values like
 ///   `tan(π/6) = 0.57735026918962562`.
 ///
-/// Used by \ref toSVGTransformString (Transform.h), \ref toSVGPathData (Path.cc), and
-/// \ref Length::toRcString (Length.h).
+/// Used by \ref donner::toSVGTransformString "toSVGTransformString",
+/// \ref donner::Path::toSVGPathData "Path::toSVGPathData", and
+/// \ref donner::Length::toRcString "Length::toRcString()".
 inline std::string FormatNumberForSVG(double value) {
   if (value == std::trunc(value) && std::isfinite(value)) {
     return std::format("{}", static_cast<std::int64_t>(value));

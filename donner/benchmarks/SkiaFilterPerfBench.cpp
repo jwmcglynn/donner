@@ -78,32 +78,6 @@ void runFilterBenchmark(benchmark::State& state, sk_sp<SkImage> srcImage,
       static_cast<double>(size) * size, benchmark::Counter::kIsIterationInvariantRate);
 }
 
-/// Run a filter that takes two inputs (blend, composite, displacement).
-void runTwoInputFilterBenchmark(benchmark::State& state, sk_sp<SkImage> srcImage1,
-                                 sk_sp<SkImage> srcImage2, sk_sp<SkImageFilter> filter,
-                                 std::uint32_t size) {
-  const SkImageInfo info =
-      SkImageInfo::Make(size, size, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-  sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
-  SkCanvas* canvas = surface->getCanvas();
-
-  SkPaint paint;
-  paint.setImageFilter(std::move(filter));
-
-  for (auto _ : state) {
-    SkGraphics::PurgeResourceCache();
-    canvas->drawImage(srcImage1, 0, 0, SkSamplingOptions(), &paint);
-    SkPixmap readback;
-    surface->peekPixels(&readback);
-    benchmark::DoNotOptimize(readback.addr());
-    benchmark::ClobberMemory();
-  }
-
-  state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(size) * size);
-  state.counters["pixelsPerSecond"] = benchmark::Counter(
-      static_cast<double>(size) * size, benchmark::Counter::kIsIterationInvariantRate);
-}
-
 // ---------------------------------------------------------------------------
 // Gaussian Blur — Skia
 // ---------------------------------------------------------------------------

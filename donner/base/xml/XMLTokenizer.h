@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Standalone XML tokenizer for syntax highlighting and source-location-aware
-/// editing. Unlike \ref XMLParser::Parse, this tokenizer:
+/// editing. Unlike \ref donner::xml::XMLParser::Parse "XMLParser::Parse", this tokenizer:
 ///
 /// - Does **not** build an `XMLDocument` or `XMLNode` tree.
 /// - **Error-recovers** on malformed input by emitting `ErrorRecovery` tokens

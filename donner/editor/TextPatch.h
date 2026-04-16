@@ -42,7 +42,7 @@ struct ApplyPatchesResult {
 };
 
 /**
- * Apply a batch of \ref TextPatch values to a source string.
+ * Apply a batch of \ref donner::editor::TextPatch "TextPatch" values to a source string.
  *
  * Patches are sorted by **descending offset** before application so each splice
  * doesn't shift the byte offsets of subsequent patches. Patches that would read

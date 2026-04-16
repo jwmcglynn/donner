@@ -51,7 +51,8 @@ primitives, and a CLI tool — while maintaining the existing Skia backend.
 - **CMake support** — Full CMake build for both Skia and tiny-skia backends with feature toggles
   for text, WOFF2, and filters.
 - **Fuzzing** — Continuous fuzzing harness with Docker support; all parser surfaces fuzz-tested.
-- **74%+ code coverage** across production code (80%+ excluding vendored filter library).
+- **81.7% line coverage** across production code (84.0% function coverage, 73.4% branch
+  coverage).
 
 ### Fixes and Internals
 

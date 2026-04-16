@@ -99,6 +99,15 @@ WARNINGS = [
     "-Wno-unreachable-code-return",
     "-Wno-unused-macros",
     "-Wno-unused-member-function",
+    # Clang lifetime-safety diagnostics started firing in newer LLVM toolchains against
+    # upstream Skia headers. Keep Skia buildable without relaxing Donner's own warning bar.
+    "-Wno-lifetime-safety-cross-tu-suggestions",
+    "-Wno-lifetime-safety-intra-tu-suggestions",
+    # Newer Clang/Emscripten toolchains also flag Skia/skcms for NRVO and
+    # unused-but-set globals. Keep those third-party warnings from breaking
+    # Skia-backed Bazel builds.
+    "-Wno-nrvo",
+    "-Wno-unused-but-set-global",
     "-Wno-weak-template-vtables",  # This was deprecated in Clang 14 and removed in Clang 15.
     "-Wno-weak-vtables",
     # https://quuxplusone.github.io/blog/2020/08/26/wrange-loop-analysis/

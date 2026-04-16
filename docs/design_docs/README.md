@@ -29,7 +29,7 @@ conventions automated agents should follow when editing design docs.
 - [`design_template.md`](design_template.md) — in-flight designs
 - [`developer_template.md`](developer_template.md) — shipped features
 
-## Index
+## Document Index
 
 | #    | Doc                                                                                    | Status                                                                     | Summary |
 | ---- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------- |

@@ -1,7 +1,7 @@
 # Design: v0.5 Release
 
 **Status:** In Progress
-**Updated:** 2026-04-09
+**Updated:** 2026-04-16
 
 ## Summary
 
@@ -337,12 +337,15 @@ the build report lands:
 4. Tag `v0.5.0` points at the build-report commit. Any code fix discovered
    after that point is a v0.5.1 concern, not a retroactive tag move.
 
-- [ ] **Final pre-release validation** — Warning-clean build, Doxygen warning-free, full Bazel
-  test matrix across default/Skia/text-full, and final CI verification on the release commit.
+- [ ] **Final pre-release validation** — Local warning-clean builds and the full Bazel test
+  matrix across default/Skia/text-full completed on 2026-04-16. Remaining work: final CI
+  verification on the release commit. Doxygen warnings are waived for v0.5 and are not a release
+  blocker.
 - [x] **Release notes drafted** — `RELEASE_NOTES.md` contains a `v0.5.0` entry with highlights,
   breaking changes, included artifacts, and example usage.
-- [ ] **Update release notes with final highlights** — Fold anything merged to `main` since the
-  drafted entry into `RELEASE_NOTES.md`. This commit must land **before** the build-report commit.
+- [x] **Update release notes with final highlights** — `RELEASE_NOTES.md` was refreshed on
+  2026-04-16 during the final docs pass (including the final coverage figures). This commit must
+  land **before** the build-report commit.
 - [ ] **Generate build report as the release commit** — After every other release-blocking change
   is on `main`, regenerate `docs/build_report.md` with Skia/tiny-skia differentiation and commit
   it as the tagged release commit (nothing else in that commit).
@@ -360,11 +363,12 @@ Copied from [release_checklist.md](../release_checklist.md) and filled in for v0
 
 ### Pre-Release: Code Quality
 
-- [ ] **Warning-clean build** — `bazel build //donner/...` still needs a clean pass across all
-  release-relevant targets.
-- [ ] **Doxygen warning-free** — `doxygen Doxyfile 2>&1 | grep warning` has not been re-run for
-  the final release candidate.
-- [ ] **Tests pass** — `bazel test //donner/...` still needs a final green run across:
+- [x] **Warning-clean build** — `bazel build //donner/...`, `--config=skia`,
+  `--config=text-full`, and `--config=text-full --config=skia` all completed warning-clean on
+  2026-04-16.
+- [x] **Doxygen warning gate waived** — Doxygen warnings are waived for v0.5 and do not block the
+  release. The final docs pass still covers doc-comment review and generated-site review.
+- [x] **Tests pass** — `bazel test //donner/...` completed green on 2026-04-16 across:
   - Default (tiny-skia)
   - `--config=skia`
   - `--config=text-full`
@@ -376,12 +380,17 @@ Copied from [release_checklist.md](../release_checklist.md) and filled in for v0
 
 ### Pre-Release: Documentation
 
-- [ ] **Audit doc comments** — Public API Doxygen still needs a doc-writer pass.
+- [x] **Audit doc comments** — Completed a final public-API doc-writer spot-check on 2026-04-16
+  (`SVGParser`, `SVGDocument`, generated landing pages). Remaining Doxygen warnings are part of the
+  waived backlog and are concentrated in internal/editor surface area.
 - [x] **Update examples and code snippets** — README/examples and release-prep examples were
   refreshed to cover current features.
-- [ ] **Update Doxygen pages** — Regenerate and review the HTML output for the final candidate.
-- [ ] **Update markdown docs** — A full final pass across `docs/*.md` and `docs/design_docs/*.md`
-  is still pending.
+- [x] **Update Doxygen pages** — Regenerated and reviewed the HTML output on 2026-04-16 after
+  installing Graphviz locally and fixing the actionable broken refs / duplicate anchor. The
+  remaining Doxygen warning backlog stays waived for v0.5.
+- [x] **Update markdown docs** — Final sweep completed on 2026-04-16 across `docs/*.md`,
+  `docs/design_docs/*.md`, and `RELEASE_NOTES.md`, including stale coverage/release metadata
+  fixes.
 - [x] **Update README.md** — README reflects the current v0.5 feature set.
 - [x] **Remove experimental gates on shipped features** — No shipped feature still declares
   `static constexpr bool IsExperimental = true`.

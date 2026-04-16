@@ -1,5 +1,6 @@
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//build_defs:rules.bzl", "renderer_backend_compatible_with")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -19,6 +20,7 @@ cc_binary(
         "--no-entry",
     ],
     tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     deps = [
         "//donner/svg",
         "//donner/svg/parser",
@@ -34,6 +36,7 @@ wasm_cc_binary(
         "donner_wasm_bin.js",
         "donner_wasm_bin.wasm",
     ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
 )
 
 # Convenience filegroup for the test page and its assets.
@@ -43,4 +46,5 @@ filegroup(
         "test.html",
         ":donner_wasm",
     ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
 )
