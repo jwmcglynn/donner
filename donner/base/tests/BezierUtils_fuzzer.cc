@@ -36,11 +36,6 @@ bool isFiniteVec(const Vector2d& v) {
   return isFinite(v.x) && isFinite(v.y);
 }
 
-/// Returns true if a Box2d has finite components.
-bool isFiniteBox(const Box2d& box) {
-  return isFiniteVec(box.topLeft) && isFiniteVec(box.bottomRight);
-}
-
 /// Clamp t to [0, 1] for functions that expect parameter in that range.
 double clampT(double t) {
   if (std::isnan(t)) {
