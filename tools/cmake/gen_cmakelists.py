@@ -111,6 +111,7 @@ SKIPPED_PACKAGES = {
     "donner/editor/sandbox/tests",
     "donner/editor/tests",
     "donner/editor/wasm",
+    "third_party/emscripten-glfw",
     "third_party/stb",
     "pixelmatch-cpp17",
 }

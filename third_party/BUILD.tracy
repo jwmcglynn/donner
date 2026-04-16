@@ -90,7 +90,11 @@ cc_library(
         "public/libbacktrace/*.hpp",
         "public/libbacktrace/*.h",
     ]),
-    copts = ["-Ipublic"],
+    copts = [
+        "-Ipublic",
+        "-Wno-deprecated-declarations",
+        "-Wno-unused-function",
+    ],
     defines = [
         "TRACY_ENABLE",
     ],

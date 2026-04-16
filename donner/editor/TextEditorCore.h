@@ -468,7 +468,6 @@ private:
 
   enum class IndentMode { Spaces, Tabs, Auto };
   IndentMode indentMode_ = IndentMode::Auto;
-  int detectedTabSize_ = 4;
 
   // Syntax highlighting state.
   Palette paletteBase_{};

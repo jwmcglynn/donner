@@ -11,6 +11,7 @@ tracy, emsdk, pixelmatch-cpp17) are kept out of BCR consumer dependency
 graphs via `dev_dependency = True` in `MODULE.bazel`.
 """
 
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 
@@ -20,6 +21,11 @@ load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 # imgui/glfw/tracy are `dev_dependency = True` in MODULE.bazel and won't
 # resolve outside dev builds.
 package(default_visibility = ["//visibility:public"])
+
+exports_files(
+    ["main.cc"],
+    visibility = ["//donner/editor/wasm:__pkg__"],
+)
 
 donner_cc_library(
     name = "viewport_geometry",
@@ -243,6 +249,63 @@ embed_resources(
     },
 )
 
+embed_resources(
+    name = "editor_icon",
+    header_output = "donner/editor/EditorIcon.h",
+    resources = {
+        "kEditorIconSvg": "//:donner_icon.svg",
+    },
+)
+
+embed_resources(
+    name = "editor_splash",
+    header_output = "donner/editor/EditorSplash.h",
+    resources = {
+        "kEditorSplashSvg": "//:donner_splash.svg",
+    },
+)
+
+_EDITOR_RUNTIME_DEPS = [
+    ":async_renderer",
+    ":attribute_writeback",
+    ":change_classifier",
+    ":editor_app",
+    ":editor_icon",
+    ":editor_splash",
+    ":overlay_renderer",
+    ":pinch_event_monitor",
+    ":selection_aabb",
+    ":source_sync",
+] + select({
+    "@platforms//os:macos": [":pinch_event_monitor_macos"],
+    "//conditions:default": [],
+}) + [
+    ":render_pane_gesture",
+    ":select_tool",
+    ":text_editor",
+    ":text_patch",
+    ":tracy_wrapper",
+    ":viewport_state",
+    "//donner/base",
+    "//donner/svg",
+    "//donner/svg/renderer",
+    "//third_party/fira-code",
+    "//third_party/glad",
+    "//third_party/roboto",
+    "@glfw",
+    "@imgui",
+]
+
+donner_cc_library(
+    name = "editor_notice_inputs",
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = _EDITOR_RUNTIME_DEPS,
+)
+
 # The full Donner editor binary. Wires EditorApp + SelectTool +
 # OverlayRenderer + TextEditor into an ImGui shell with a live source
 # pane and a click-and-drag render pane. The minimal viewer demo lives
@@ -257,35 +320,7 @@ donner_cc_binary(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
-        ":async_renderer",
-        ":attribute_writeback",
-        ":change_classifier",
-        ":editor_app",
-        ":notice",
-        ":overlay_renderer",
-        ":pinch_event_monitor",
-        ":selection_aabb",
-        ":source_sync",
-    ] + select({
-        "@platforms//os:macos": [":pinch_event_monitor_macos"],
-        "//conditions:default": [],
-    }) + [
-        ":render_pane_gesture",
-        ":select_tool",
-        ":text_editor",
-        ":text_patch",
-        ":tracy_wrapper",
-        ":viewport_state",
-        "//donner/base",
-        "//donner/svg",
-        "//donner/svg/renderer",
-        "//third_party/fira-code",
-        "//third_party/glad",
-        "//third_party/roboto",
-        "@glfw",
-        "@imgui",
-    ],
+    deps = _EDITOR_RUNTIME_DEPS + [":notice"],
 )
 
 donner_cc_library(
@@ -328,10 +363,16 @@ donner_cc_library(
 donner_cc_library(
     name = "tracy_wrapper",
     hdrs = ["TracyWrapper.h"],
-    defines = ["ENABLE_TRACY"],
-    deps = [
-        "@tracy//:tracy_client",
-    ],
+    defines = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
+        "//conditions:default": ["ENABLE_TRACY"],
+    }),
+    deps = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
+        "//conditions:default": [
+            "@tracy//:tracy_client",
+        ],
+    }),
 )
 
 donner_cc_library(

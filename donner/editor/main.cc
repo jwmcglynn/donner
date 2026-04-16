@@ -38,6 +38,8 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/EditorIcon.h"
+#include "donner/editor/EditorSplash.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PinchEventMonitor.h"
@@ -56,7 +58,17 @@
 #include "donner/svg/renderer/Renderer.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+#define GLFW_INCLUDE_ES3
+#include <GLES3/gl3.h>
+
+#include "GLFW/emscripten_glfw3.h"
+#else
 #include "glad/glad.h"
+#endif
 
 extern "C" {
 #include "GLFW/glfw3.h"
@@ -65,14 +77,17 @@ extern "C" {
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_internal.h"
 
 namespace {
 
+#ifndef __EMSCRIPTEN__
 constexpr int kInitialWindowWidth = 1600;
 constexpr int kInitialWindowHeight = 900;
-constexpr float kSourcePaneWidth = 560.0f;
-constexpr float kInspectorPaneWidth = 320.0f;
-constexpr float kTreeViewHeightFraction = 0.4f;
+#endif
+constexpr float kInitialMainLeftDockFraction = 0.78f;
+constexpr float kInitialSourceDockFraction = 0.45f;
+constexpr float kInitialTreeDockFraction = 0.4f;
 // Zoom min/max live on `ViewportState`; the per-step factors stay
 // here because they're tied to user-input cadence rather than the
 // transform model.
@@ -92,6 +107,9 @@ constexpr float kSelectionChromeThickness = 1.5f;
 constexpr ImU32 kMarqueeFillColor = IM_COL32(0x00, 0xc8, 0xff, 0x33);
 constexpr ImU32 kMarqueeStrokeColor = IM_COL32(0xff, 0xff, 0xff, 0xff);
 constexpr float kMarqueeStrokeThickness = 1.5f;
+#ifdef __EMSCRIPTEN__
+constexpr int kMaxWasmUploadBytes = 32 * 1024 * 1024;
+#endif
 
 /// Fixed-size ring buffer of recent frame times (in milliseconds). Used by
 /// the diagnostic frame-time graph drawn in the Render pane header.
@@ -232,6 +250,115 @@ void RenderFrameGraph(const FrameHistory& history) {
 void GlfwErrorCallback(int error, const char* description) {
   std::cerr << "GLFW error " << error << ": " << description << "\n";
 }
+
+// clang-format off
+#ifdef __EMSCRIPTEN__
+std::optional<std::string> gPendingBrowserUploadPath;
+
+extern "C" void OnBrowserFileReadyPath(const char* path) {
+  if (path != nullptr && path[0] != '\0') {
+    gPendingBrowserUploadPath = std::string(path);
+  }
+}
+
+EM_JS(int, canvasPixelWidth, (), {
+  if (Module.canvas) {
+    return Module.canvas.width;
+  }
+  return Math.max(1, Math.floor(window.innerWidth * (window.devicePixelRatio || 1)));
+});
+
+EM_JS(int, canvasPixelHeight, (), {
+  if (Module.canvas) {
+    return Module.canvas.height;
+  }
+  return Math.max(1, Math.floor(window.innerHeight * (window.devicePixelRatio || 1)));
+});
+
+EM_JS(int, canvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
+
+EM_JS(int, canvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });
+
+EM_JS(double, browserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
+
+double CurrentDisplayScale() {
+  const int logicalWidth = canvasCssWidth();
+  const int framebufferWidth = canvasPixelWidth();
+  if (logicalWidth > 0 && framebufferWidth > 0) {
+    return std::max(1.0, static_cast<double>(framebufferWidth) / static_cast<double>(logicalWidth));
+  }
+  return std::max(1.0, browserDevicePixelRatio());
+}
+
+EM_JS(void, ShowBrowserOpenFileDialog, (int maxBytes), {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/svg+xml,.svg,text/plain,.txt";
+  input.onchange = () => {
+    if (!input.files || input.files.length === 0) {
+      input.remove();
+      return;
+    }
+
+    const file = input.files[0];
+    if (file.size > maxBytes) {
+      alert(`File is too large. Limit is ${Math.floor(maxBytes / (1024 * 1024))} MiB.`);
+      input.remove();
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      FS.writeFile("/tmp/upload.svg", reader.result);
+      ccall("OnBrowserFileReadyPath", null, ["string"], ["/tmp/upload.svg"]);
+      input.remove();
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+});
+
+EM_JS(void, InstallBrowserDropHandler, (int maxBytes), {
+  const canvas = Module.canvas || document.getElementById("canvas");
+  if (!canvas || canvas.__donnerDropInstalled) {
+    return;
+  }
+
+  const rejectOversizedFile = file => {
+    if (file.size > maxBytes) {
+      alert(`File is too large. Limit is ${Math.floor(maxBytes / (1024 * 1024))} MiB.`);
+      return true;
+    }
+    return false;
+  };
+
+  canvas.addEventListener("dragover", event => { event.preventDefault(); });
+
+  canvas.addEventListener(
+      "drop", event => {
+        event.preventDefault();
+        if (!event.dataTransfer || !event.dataTransfer.files ||
+                event.dataTransfer.files.length === 0) {
+          return;
+        }
+
+        const file = event.dataTransfer.files[0];
+        if (rejectOversizedFile(file)) {
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          FS.writeFile("/tmp/upload.svg", reader.result);
+          ccall("OnBrowserFileReadyPath", null, ["string"], ["/tmp/upload.svg"]);
+        };
+        reader.readAsText(file);
+      });
+
+  canvas.__donnerDropInstalled = true;
+});
+#endif
+// clang-format on
 
 bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
                       const donner::svg::SVGElement& node) {
@@ -438,6 +565,7 @@ void HighlightElementSource(donner::editor::TextEditor& textEditor,
                             FileOffsetToEditorCoordinates(range->end));
 }
 
+#ifndef __EMSCRIPTEN__
 std::string LoadFile(const std::string& filename) {
   std::ifstream file(filename, std::ios::binary);
   if (!file) {
@@ -448,6 +576,7 @@ std::string LoadFile(const std::string& filename) {
   out << file.rdbuf();
   return std::move(out).str();
 }
+#endif
 
 std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
   std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -464,6 +593,10 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(bwd);
   }
 
+#ifdef __EMSCRIPTEN__
+  const std::string initialSource = EmbeddedBytesToString(donner::embedded::kEditorIconSvg);
+  const std::optional<std::string> initialPath = std::string("donner_icon.svg");
+#else
   if (argc != 2) {
     std::cerr << "Usage: donner-editor <filename>\n";
     return 1;
@@ -474,6 +607,8 @@ int main(int argc, char** argv) {
   if (initialSource.empty()) {
     return 1;
   }
+  const std::optional<std::string> initialPath = svgPath;
+#endif
 
   // ---------------------------------------------------------------------------
   // GLFW + OpenGL
@@ -484,19 +619,44 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+#ifdef __EMSCRIPTEN__
+  glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_EMSCRIPTEN);
+  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
+#else
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
 
-  GLFWwindow* window = glfwCreateWindow(kInitialWindowWidth, kInitialWindowHeight, "Donner Editor",
-                                        nullptr, nullptr);
+#ifdef __EMSCRIPTEN__
+  emscripten_glfw_set_next_window_canvas_selector("#canvas");
+#endif
+  const int initialWindowWidth =
+#ifdef __EMSCRIPTEN__
+      canvasPixelWidth();
+#else
+      kInitialWindowWidth;
+#endif
+  const int initialWindowHeight =
+#ifdef __EMSCRIPTEN__
+      canvasPixelHeight();
+#else
+      kInitialWindowHeight;
+#endif
+  GLFWwindow* window =
+      glfwCreateWindow(initialWindowWidth, initialWindowHeight, "Donner Editor", nullptr, nullptr);
   if (!window) {
     std::cerr << "Failed to create GLFW window\n";
     glfwTerminate();
     return 1;
   }
   glfwMakeContextCurrent(window);
+#ifdef __EMSCRIPTEN__
+  emscripten_glfw_make_canvas_resizable(window, "window", nullptr);
+#endif
+#ifndef __EMSCRIPTEN__
   glfwSwapInterval(1);
 
   if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
@@ -505,6 +665,7 @@ int main(int argc, char** argv) {
     glfwTerminate();
     return 1;
   }
+#endif
 
   // ---------------------------------------------------------------------------
   // ImGui
@@ -512,6 +673,25 @@ int main(int argc, char** argv) {
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
+  double initialDisplayScale = 1.0;
+#ifdef __EMSCRIPTEN__
+  initialDisplayScale = CurrentDisplayScale();
+#else
+  {
+    int logicalWindowWidth = 0;
+    int logicalWindowHeight = 0;
+    glfwGetWindowSize(window, &logicalWindowWidth, &logicalWindowHeight);
+
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+    if (logicalWindowWidth > 0 && framebufferWidth > 0) {
+      initialDisplayScale =
+          static_cast<double>(framebufferWidth) / static_cast<double>(logicalWindowWidth);
+    }
+  }
+#endif
+  initialDisplayScale = std::max(1.0, initialDisplayScale);
   // Match the original jwmcglynn/donner-editor font combo: Roboto Regular
   // is the default UI font (menubar, pane labels, inspector, tree view);
   // Roboto Bold is available for emphasis; Fira Code is the monospace
@@ -524,23 +704,32 @@ int main(int argc, char** argv) {
   ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
       const_cast<unsigned char*>(donner::embedded::kRobotoRegularTtf.data()),
       static_cast<int>(donner::embedded::kRobotoRegularTtf.size()),
-      /*size_pixels=*/15.0f, &fontCfg);
+      /*size_pixels=*/static_cast<float>(15.0 * initialDisplayScale), &fontCfg);
   ImFont* uiFontBold = io.Fonts->AddFontFromMemoryTTF(
       const_cast<unsigned char*>(donner::embedded::kRobotoBoldTtf.data()),
       static_cast<int>(donner::embedded::kRobotoBoldTtf.size()),
-      /*size_pixels=*/15.0f, &fontCfg);
+      /*size_pixels=*/static_cast<float>(15.0 * initialDisplayScale), &fontCfg);
   ImFont* codeFont = io.Fonts->AddFontFromMemoryTTF(
       const_cast<unsigned char*>(donner::embedded::kFiraCodeRegularTtf.data()),
       static_cast<int>(donner::embedded::kFiraCodeRegularTtf.size()),
-      /*size_pixels=*/14.0f, &fontCfg);
+      /*size_pixels=*/static_cast<float>(14.0 * initialDisplayScale), &fontCfg);
   (void)uiFontRegular;
   (void)uiFontBold;
   // imgui.ini persistence is disabled per the editor security policy in
   // docs/design_docs/editor.md.
   io.IniFilename = nullptr;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  io.DisplayFramebufferScale =
+      ImVec2(static_cast<float>(initialDisplayScale), static_cast<float>(initialDisplayScale));
+  io.FontGlobalScale = static_cast<float>(1.0 / initialDisplayScale);
   ImGui::StyleColorsDark();
   ImGui_ImplGlfw_InitForOpenGL(window, true);
+#ifdef __EMSCRIPTEN__
+  ImGui_ImplOpenGL3_Init("#version 300 es");
+  ImGui_ImplGlfw_InstallEmscriptenCallbacks(window, "#canvas");
+#else
   ImGui_ImplOpenGL3_Init("#version 330");
+#endif
 
   // ImGui's GLFW backend already consumes scroll callbacks for
   // `io.MouseWheel`. Install a thin wrapper on top so we can retain
@@ -551,6 +740,9 @@ int main(int argc, char** argv) {
   pendingScrollEvents.previousCallback = glfwSetScrollCallback(window, EditorScrollCallback);
   (void)donner::editor::InstallPinchEventMonitor(window, &pendingScrollEvents.events,
                                                  kWheelZoomStep);
+#ifdef __EMSCRIPTEN__
+  InstallBrowserDropHandler(kMaxWasmUploadBytes);
+#endif
 
   // ---------------------------------------------------------------------------
   // Editor state
@@ -568,20 +760,28 @@ int main(int argc, char** argv) {
 
   donner::editor::EditorApp app;
   if (!app.loadFromString(initialSource)) {
-    std::cerr << "Failed to parse SVG file: " << svgPath << "\n";
+    std::cerr << "Failed to parse initial SVG";
+    if (initialPath.has_value()) {
+      std::cerr << ": " << *initialPath;
+    }
+    std::cerr << "\n";
     // Keep running with an empty document so the user can still fix it
     // in the source pane.
   }
   std::cerr << "[startup] +" << msSinceStart() << "ms loadFromString done\n";
   // Remember the startup path so the title bar can show the filename and
   // future save wiring can reuse it.
-  app.setCurrentFilePath(svgPath);
+  if (initialPath.has_value()) {
+    app.setCurrentFilePath(*initialPath);
+  }
 
   donner::editor::SelectTool selectTool;
 
   donner::editor::TextEditor textEditor;
   textEditor.setLanguageDefinition(donner::editor::TextEditor::LanguageDefinition::SVG());
   textEditor.setText(initialSource);
+  textEditor.resetTextChanged();
+  app.setCleanSourceText(initialSource);
   // Enable autocomplete. Once active, typing letters auto-triggers the
   // suggestion popup; matches are drawn from the language definition's
   // keyword set (SVG element names) + identifiers (SVG/CSS attribute
@@ -732,6 +932,7 @@ int main(int argc, char** argv) {
   // each, on the frames we care about. Cheap to leave in.
   bool loggedFirstRenderRequest = false;
   bool loggedFirstTextureLanded = false;
+  bool dockspaceInitialized = false;
   std::optional<donner::svg::SVGElement> lastTreeSelection;
   bool treeviewPendingScroll = false;
   bool treeSelectionOriginatedInTree = false;
@@ -845,6 +1046,7 @@ int main(int argc, char** argv) {
       textEditor.setText(source, /*preserveScroll=*/true);
       donner::editor::QueueSourceWritebackReparse(app, source, &previousSourceText,
                                                   &lastWritebackSourceText);
+      app.syncDirtyFromSource(source);
       return;
     }
     auto patch = donner::editor::buildAttributeWriteback(source, pendingTransformWriteback->target,
@@ -857,6 +1059,7 @@ int main(int argc, char** argv) {
     textEditor.setText(source, /*preserveScroll=*/true);
     donner::editor::QueueSourceWritebackReparse(app, source, &previousSourceText,
                                                 &lastWritebackSourceText);
+    app.syncDirtyFromSource(source);
     pendingTransformWriteback.reset();
   };
 
@@ -889,6 +1092,7 @@ int main(int argc, char** argv) {
     textEditor.setText(source, /*preserveScroll=*/true);
     donner::editor::QueueSourceWritebackReparse(app, source, &previousSourceText,
                                                 &lastWritebackSourceText);
+    app.syncDirtyFromSource(source);
   };
 
   // ---------------------------------------------------------------------------
@@ -907,15 +1111,16 @@ int main(int argc, char** argv) {
     // Diffed against the previous frame so glfwSetWindowTitle is only
     // called on transitions.
     {
-      std::string title = "Donner Editor — ";
+      std::string title = "";
+      if (app.isDirty()) {
+        title += "● ";
+      }
       if (app.currentFilePath().has_value()) {
         title += std::filesystem::path(*app.currentFilePath()).filename().string();
       } else {
         title += "untitled";
       }
-      if (app.isDirty()) {
-        title += " ●";
-      }
+      title += "— Donner SVG Editor";
       if (title != lastWindowTitle) {
         glfwSetWindowTitle(window, title.c_str());
         lastWindowTitle = std::move(title);
@@ -1006,33 +1211,25 @@ int main(int argc, char** argv) {
     applyPendingElementRemoveWritebacks();
     applyPendingTransformWriteback();
 
+    {
+      double currentDisplayScale = 1.0;
+#ifdef __EMSCRIPTEN__
+      currentDisplayScale = CurrentDisplayScale();
+#else
+      float xScale = 1.0f;
+      float yScale = 1.0f;
+      glfwGetWindowContentScale(window, &xScale, &yScale);
+      currentDisplayScale = static_cast<double>(xScale);
+#endif
+      currentDisplayScale = std::max(1.0, currentDisplayScale);
+      io.DisplayFramebufferScale =
+          ImVec2(static_cast<float>(currentDisplayScale), static_cast<float>(currentDisplayScale));
+    }
+
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    int windowWidth = 0;
-    int windowHeight = 0;
-    glfwGetWindowSize(window, &windowWidth, &windowHeight);
-
-    const float menuBarHeight = ImGui::GetFrameHeight();
-    const float paneOriginY = menuBarHeight;
-    const float paneHeight = std::max(0.0f, static_cast<float>(windowHeight) - menuBarHeight);
-    const float renderPaneWidth =
-        std::max(0.0f, static_cast<float>(windowWidth) - kSourcePaneWidth - kInspectorPaneWidth);
-    const float rightPaneX = static_cast<float>(windowWidth) - kInspectorPaneWidth;
-    const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
-    const float rightPaneContentHeight = std::max(0.0f, paneHeight - rightPaneGap);
-    const float treePaneHeight = rightPaneContentHeight * kTreeViewHeightFraction;
-    const float inspectorPaneY = paneOriginY + treePaneHeight + rightPaneGap;
-    const float inspectorPaneHeight = std::max(0.0f, paneHeight - treePaneHeight - rightPaneGap);
-    const donner::Vector2d renderPaneOrigin(kSourcePaneWidth, paneOriginY);
-    const donner::Vector2d renderPaneSize(renderPaneWidth, paneHeight);
-
-    // Keyboard shortcuts that target the render pane use the current
-    // frame's fixed pane layout even though the pane itself renders
-    // later in the frame.
-    viewport.paneOrigin = renderPaneOrigin;
-    viewport.paneSize = renderPaneSize;
     if (app.hasDocument()) {
       viewport.documentViewBox = ResolveDocumentViewBox(app.document().document());
     }
@@ -1041,7 +1238,52 @@ int main(int argc, char** argv) {
       viewport.zoomAround(viewport.zoom * factor, focalScreen);
     };
 
+    const auto tryOpenPath = [&](const std::string& rawPath) {
+      const std::filesystem::path path(rawPath);
+      std::ifstream file(path, std::ios::binary);
+      if (!file) {
+        openFileError = "Could not open file.";
+        return false;
+      }
+
+      std::ostringstream out;
+      out << file.rdbuf();
+      const std::string contents = std::move(out).str();
+      if (!app.loadFromString(contents)) {
+        openFileError = "Failed to parse SVG.";
+        return false;
+      }
+
+      textEditor.setText(contents);
+      textEditor.resetTextChanged();
+      previousSourceText = contents;
+      lastWritebackSourceText.reset();
+      app.setCurrentFilePath(path.string());
+      app.setCleanSourceText(contents);
+      pendingTransformWriteback.reset();
+      pendingElementRemoveWritebacks.clear();
+      pendingClick.reset();
+      textChangePending = false;
+      textDispatchThrottled = false;
+      textChangeIdleTimer = 0.0f;
+      lastHighlightedSelection.reset();
+      refreshPendingSelectionBoundsCache();
+      openFileError.clear();
+      return true;
+    };
+
+#ifdef __EMSCRIPTEN__
+    if (gPendingBrowserUploadPath.has_value() && !asyncRenderer.isBusy()) {
+      const std::string path = *gPendingBrowserUploadPath;
+      gPendingBrowserUploadPath.reset();
+      (void)tryOpenPath(path);
+    }
+#endif
+
     const auto triggerOpen = [&]() {
+#ifdef __EMSCRIPTEN__
+      ShowBrowserOpenFileDialog(kMaxWasmUploadBytes);
+#else
       std::fill(openFilePathBuffer.begin(), openFilePathBuffer.end(), '\0');
       if (app.currentFilePath().has_value()) {
         std::strncpy(openFilePathBuffer.data(), app.currentFilePath()->c_str(),
@@ -1049,6 +1291,7 @@ int main(int argc, char** argv) {
       }
       openFileError.clear();
       openFileModalRequested = true;
+#endif
     };
     const auto triggerUndo = [&]() {
       if (app.canUndo()) {
@@ -1139,14 +1382,20 @@ int main(int argc, char** argv) {
     }
 
     if (ImGui::BeginMainMenuBar()) {
-      if (ImGui::BeginMenu("Donner")) {
+      ImGui::PushFont(uiFontBold);
+      if (ImGui::BeginMenu("Donner SVG Editor")) {
+        ImGui::PopFont();
         if (ImGui::MenuItem("About...")) {
           openAboutPopup = true;
         }
+#ifndef __EMSCRIPTEN__
         if (ImGui::MenuItem("Quit Donner", "Cmd+Q")) {
           triggerQuit();
         }
+#endif
         ImGui::EndMenu();
+      } else {
+        ImGui::PopFont();
       }
 
       if (ImGui::BeginMenu("File")) {
@@ -1245,41 +1494,10 @@ int main(int argc, char** argv) {
           ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", openFileError.c_str());
         }
 
-        const auto tryOpenPath = [&]() {
-          const std::filesystem::path path(openFilePathBuffer.data());
-          std::ifstream file(path, std::ios::binary);
-          if (!file) {
-            openFileError = "Could not open file.";
-            return;
-          }
-
-          std::ostringstream out;
-          out << file.rdbuf();
-          const std::string contents = std::move(out).str();
-          if (!app.loadFromString(contents)) {
-            openFileError = "Failed to parse SVG.";
-            return;
-          }
-
-          textEditor.setText(contents);
-          textEditor.resetTextChanged();
-          previousSourceText = contents;
-          lastWritebackSourceText.reset();
-          app.setCurrentFilePath(path.string());
-          pendingTransformWriteback.reset();
-          pendingElementRemoveWritebacks.clear();
-          pendingClick.reset();
-          textChangePending = false;
-          textDispatchThrottled = false;
-          textChangeIdleTimer = 0.0f;
-          lastHighlightedSelection.reset();
-          refreshPendingSelectionBoundsCache();
-          openFileError.clear();
-          ImGui::CloseCurrentPopup();
-        };
-
         if (submitted || ImGui::Button("Open")) {
-          tryOpenPath();
+          if (tryOpenPath(openFilePathBuffer.data())) {
+            ImGui::CloseCurrentPopup();
+          }
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) {
@@ -1301,7 +1519,9 @@ int main(int argc, char** argv) {
         ImGui::Separator();
         ImGui::TextUnformatted("(c) 2024-2026 Jeff McGlynn");
         ImGui::Spacing();
-        ImGui::TextWrapped("A C++20 SVG rendering engine with a lightweight editor.");
+        ImGui::TextWrapped(
+            "An SVG editor powered by the Donner, a browser-grade SVG2 rendering engine written in "
+            "C++20.");
         ImGui::TextUnformatted("https://github.com/jwmcglynn/donner");
         ImGui::Separator();
         if (ImGui::Button("Show Licenses")) {
@@ -1337,19 +1557,62 @@ int main(int argc, char** argv) {
       }
     }
 
-    // Windows are locked in place: positions and sizes are re-asserted
-    // every frame with `ImGuiCond_Always`, and the NoMove / NoResize /
-    // NoCollapse flags prevent any in-frame attempts to drag them
-    // around (otherwise a click-and-drag on the image surface falls
-    // through to the parent window and the user ends up moving the
-    // pane instead of the editor target).
-    const ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(mainViewport->WorkPos);
+    ImGui::SetNextWindowSize(mainViewport->WorkSize);
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-    // Source pane.
-    ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, paneHeight), ImGuiCond_Always);
-    ImGui::Begin("Source", nullptr, kPaneFlags);
+    const ImGuiWindowFlags dockspaceHostFlags =
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    ImGui::Begin("##EditorDockspaceHost", nullptr, dockspaceHostFlags);
+    ImGui::PopStyleVar(3);
+
+    const ImGuiID dockspaceId = ImGui::GetID("EditorDockspace");
+    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+
+    if (!dockspaceInitialized) {
+      dockspaceInitialized = true;
+
+      ImGui::DockBuilderRemoveNode(dockspaceId);
+      ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+      ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport->WorkSize);
+
+      ImGuiID dockIdMainLeft = dockspaceId;
+      ImGuiID dockIdRight = 0;
+      ImGui::DockBuilderSplitNode(dockIdMainLeft, ImGuiDir_Left, kInitialMainLeftDockFraction,
+                                  &dockIdMainLeft, &dockIdRight);
+
+      ImGuiID dockIdSource = dockIdMainLeft;
+      ImGuiID dockIdRender = 0;
+      ImGui::DockBuilderSplitNode(dockIdSource, ImGuiDir_Left, kInitialSourceDockFraction,
+                                  &dockIdSource, &dockIdRender);
+
+      ImGuiID dockIdTree = dockIdRight;
+      ImGuiID dockIdInspector = 0;
+      ImGui::DockBuilderSplitNode(dockIdTree, ImGuiDir_Up, kInitialTreeDockFraction, &dockIdTree,
+                                  &dockIdInspector);
+
+      ImGui::DockBuilderDockWindow("Source", dockIdSource);
+      ImGui::DockBuilderDockWindow("Render", dockIdRender);
+      ImGui::DockBuilderDockWindow("Tree View", dockIdTree);
+      ImGui::DockBuilderDockWindow("Inspector", dockIdInspector);
+      ImGui::DockBuilderFinish(dockspaceId);
+    }
+
+    ImGui::End();
+
+    ImGuiWindowClass windowClassNoUndocking;
+    windowClassNoUndocking.DockNodeFlagsOverrideSet =
+        ImGuiDockNodeFlags_NoUndocking |
+        static_cast<ImGuiDockNodeFlags_>(ImGuiDockNodeFlags_NoTabBar);
+
+    ImGui::SetNextWindowClass(&windowClassNoUndocking);
+    ImGui::Begin("Source");
     ImGui::PushFont(codeFont);
     textEditor.render("##source");
     ImGui::PopFont();
@@ -1360,13 +1623,12 @@ int main(int argc, char** argv) {
       const std::string newSource = textEditor.getText();
       (void)donner::editor::DispatchSourceTextChange(app, newSource, &previousSourceText,
                                                      &lastWritebackSourceText);
+      app.syncDirtyFromSource(newSource);
     };
 
     if (textEditor.isTextChanged()) {
-      // Mark the document dirty immediately so the title-bar indicator
-      // shows up on the very next frame.
-      app.markDirty();
       textEditor.resetTextChanged();
+      app.syncDirtyFromSource(textEditor.getText());
 
       if (!textDispatchThrottled) {
         // Leading-edge fire: no dispatch in the last
@@ -1400,18 +1662,11 @@ int main(int argc, char** argv) {
     }
     ImGui::End();
 
-    // Render pane + SelectTool interaction.
-    // Sits between the source pane (left) and the inspector pane (right).
-    // This pane holds ONLY the rendered image and the frame graph — no
-    // headers, so `paneOrigin` (captured below) stays stable frame-to-
-    // frame and click math doesn't drift when the inspector changes size.
-    ImGui::SetNextWindowPos(
-        ImVec2(static_cast<float>(renderPaneOrigin.x), static_cast<float>(renderPaneOrigin.y)),
-        ImGuiCond_Always);
-    ImGui::SetNextWindowSize(
-        ImVec2(static_cast<float>(renderPaneSize.x), static_cast<float>(renderPaneSize.y)),
-        ImGuiCond_Always);
-    ImGui::Begin("Render", nullptr, kPaneFlags);
+    // Render pane + SelectTool interaction. The window is docked into the
+    // DockSpace above, so the user gets the same resizable text/render split
+    // that the original `jwmcglynn/donner-editor` used.
+    ImGui::SetNextWindowClass(&windowClassNoUndocking);
+    ImGui::Begin("Render");
 
     // Refresh the viewport's per-frame inputs from ImGui / GLFW. Pane
     // origin and size come from the current ImGui layout; viewBox
@@ -1423,20 +1678,25 @@ int main(int argc, char** argv) {
     viewport.paneOrigin = donner::Vector2d(paneOriginImGui.x, paneOriginImGui.y);
     viewport.paneSize = donner::Vector2d(contentRegion.x, contentRegion.y);
     {
+#ifdef __EMSCRIPTEN__
+      viewport.devicePixelRatio = CurrentDisplayScale();
+#else
       float xScale = 1.0f;
       float yScale = 1.0f;
       glfwGetWindowContentScale(window, &xScale, &yScale);
       viewport.devicePixelRatio = static_cast<double>(xScale);
+#endif
     }
     if (app.hasDocument()) {
       viewport.documentViewBox = ResolveDocumentViewBox(app.document().document());
     }
 
+    const bool renderPaneUsable = contentRegion.x > 0.0f && contentRegion.y > 0.0f;
+
     // First frame after the pane has a non-zero size: snap to 100%
     // with the viewBox center pinned to the pane center. Subsequent
     // frames preserve the user's zoom/pan state.
-    if (!viewportInitialized && viewport.paneSize.x > 0.0 && viewport.paneSize.y > 0.0 &&
-        app.hasDocument()) {
+    if (!viewportInitialized && renderPaneUsable && app.hasDocument()) {
       viewport.resetTo100Percent();
       viewportInitialized = true;
     }
@@ -1447,8 +1707,7 @@ int main(int argc, char** argv) {
     // the document to the worker (`requestRender`), nothing in this
     // frame may touch it again until the next frame's `pollResult`
     // / `flushFrame`.
-    if (!asyncRenderer.isBusy() && app.hasDocument() && viewport.paneSize.x > 0.0 &&
-        viewport.paneSize.y > 0.0) {
+    if (!asyncRenderer.isBusy() && app.hasDocument() && renderPaneUsable) {
       const donner::Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
       const donner::Vector2i currentSize = app.document().document().canvasSize();
       if (currentSize.x != desiredCanvasSize.x || currentSize.y != desiredCanvasSize.y) {
@@ -1510,11 +1769,17 @@ int main(int argc, char** argv) {
     // Reserve the full content area as an invisible button so ImGui
     // routes mouse events (wheel, drag, click) to this pane even when
     // the cursor is over empty space around the image.
-    ImGui::InvisibleButton("##render_canvas", contentRegion,
-                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
-    const bool paneHovered = ImGui::IsItemHovered();
-    const donner::Box2d paneRect = donner::Box2d::FromXYWH(
-        viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x, viewport.paneSize.y);
+    bool paneHovered = false;
+    donner::Box2d paneRect;
+    if (renderPaneUsable) {
+      ImGui::InvisibleButton("##render_canvas", contentRegion,
+                             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
+      paneHovered = ImGui::IsItemHovered();
+      paneRect = donner::Box2d::FromXYWH(viewport.paneOrigin.x, viewport.paneOrigin.y,
+                                         viewport.paneSize.x, viewport.paneSize.y);
+    } else {
+      ImGui::TextDisabled("(render pane is collapsed)");
+    }
 
     // Space+drag → pan. Middle-click+drag is a common alternative; both
     // work. `panning` is a one-frame edge-detected state so the first
@@ -1719,9 +1984,8 @@ int main(int argc, char** argv) {
     // Frame-time graph pinned to the bottom of the render pane. The
     // image's `InvisibleButton` consumes the entire content region so
     // the ImGui cursor sits at the bottom of the pane by this point;
-    // we rewind it to (left-margin, paneHeight - graphHeight) so the
-    // graph always lands at the same on-screen position regardless of
-    // how the content above grew.
+    // we rewind it relative to the current content region height so
+    // the graph stays pinned even when the dock splitter moves.
     {
       constexpr float kFramePadding = 8.0f;
       const float graphHeight = kFrameGraphHeight + ImGui::GetTextLineHeightWithSpacing();
@@ -1737,9 +2001,7 @@ int main(int argc, char** argv) {
     }
     treeSelectionOriginatedInTree = false;
 
-    ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, treePaneHeight), ImGuiCond_Always);
-    ImGui::Begin("Tree View", nullptr, kPaneFlags);
+    ImGui::Begin("Tree View");
 
     if (!asyncRenderer.isBusy()) {
       TreeViewState treeState{
@@ -1759,14 +2021,7 @@ int main(int argc, char** argv) {
     ImGui::End();
     lastTreeSelection = app.selectedElement();
 
-    // Inspector pane — right-side sidebar containing the selected-element
-    // summary, zoom/pan readout, and anything else that changes size at
-    // runtime. Lives in its own window so the Render pane's cursor
-    // position stays stable between frames (see the click-math test in
-    // ViewportGeometry_tests.cc).
-    ImGui::SetNextWindowPos(ImVec2(rightPaneX, inspectorPaneY), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
-    ImGui::Begin("Inspector", nullptr, kPaneFlags);
+    ImGui::Begin("Inspector");
 
     // Selection summary. Only safe to read when the async renderer is
     // idle — otherwise the worker holds exclusive access to the document.
@@ -1790,7 +2045,12 @@ int main(int argc, char** argv) {
     ImGui::Render();
     int displayWidth = 0;
     int displayHeight = 0;
+#ifdef __EMSCRIPTEN__
+    displayWidth = canvasPixelWidth();
+    displayHeight = canvasPixelHeight();
+#else
     glfwGetFramebufferSize(window, &displayWidth, &displayHeight);
+#endif
     glViewport(0, 0, displayWidth, displayHeight);
     glClearColor(0.10f, 0.10f, 0.10f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1798,6 +2058,9 @@ int main(int argc, char** argv) {
 
     glfwSwapBuffers(window);
     FrameMark;
+#ifdef __EMSCRIPTEN__
+    emscripten_sleep(0);
+#endif
   }
 
   // ---------------------------------------------------------------------------

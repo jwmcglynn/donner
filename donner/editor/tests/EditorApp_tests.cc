@@ -73,8 +73,8 @@ TEST(EditorAppTest, ApplyMutationFlowsThroughDocument) {
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
 
-  app.applyMutation(EditorCommand::SetTransformCommand(
-      *rect, Transform2d::Translate(Vector2d(99.0, 0.0))));
+  app.applyMutation(
+      EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(99.0, 0.0))));
 
   EXPECT_EQ(app.document().queue().size(), 1u);
   EXPECT_TRUE(app.flushFrame());
@@ -197,6 +197,21 @@ TEST(EditorAppTest, HitTestRectReturnsEmptyWithoutDocument) {
   EXPECT_TRUE(app.hitTestRect(Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0)).empty());
 }
 
+TEST(EditorAppTest, SyncDirtyFromSourceClearsWhenTextReturnsToCleanBaseline) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  app.setCleanSourceText(kTrivialSvg);
+  EXPECT_FALSE(app.isDirty());
+
+  const std::string edited = std::string(kTrivialSvg) + "\n<!-- edit -->\n";
+  app.syncDirtyFromSource(edited);
+  EXPECT_TRUE(app.isDirty());
+
+  app.syncDirtyFromSource(kTrivialSvg);
+  EXPECT_FALSE(app.isDirty());
+}
+
 // Regression for the "scale is wrong, clicks land on the background" bug in
 // the editor's main loop. Mirrors exactly the sequence main.cc runs each
 // frame:
@@ -253,8 +268,8 @@ TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
   // matches the rendered canvas (720x413), vertically centered in the
   // 720x800 pane by `ComputeDrawingViewportLayout`.
   const DrawingViewportLayout layout = ComputeDrawingViewportLayout(
-      Vector2d(0.0, 0.0), Vector2d(kPaneW, kPaneH),
-      Vector2d(renderedCanvas.x, renderedCanvas.y), Vector2d(0.0, 0.0), cachedDocViewBox);
+      Vector2d(0.0, 0.0), Vector2d(kPaneW, kPaneH), Vector2d(renderedCanvas.x, renderedCanvas.y),
+      Vector2d(0.0, 0.0), cachedDocViewBox);
 
   // Image should be vertically centered: origin y = (800-413)/2 = 193.5.
   EXPECT_DOUBLE_EQ(layout.imageOrigin.x, 0.0);

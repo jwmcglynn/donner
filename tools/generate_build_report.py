@@ -365,12 +365,12 @@ def load_license_manifest(
 
 
 def query_external_dependencies(
-    runner: CommandRunner, configs: typing.Sequence[str]
+    runner: CommandRunner, query_target: str, configs: typing.Sequence[str]
 ) -> tuple[typing.List[str], CommandResult]:
     args = [
         "bazel",
         "cquery",
-        "deps(//examples:svg_to_png)",
+        f"deps({query_target})",
         "--output=starlark",
         "--starlark:expr=target.label",
     ] + list(configs)
@@ -694,6 +694,7 @@ def make_public_targets_section(runner: CommandRunner) -> SectionResult:
 @dataclass(frozen=True)
 class DependencyVariant:
     category_name: str
+    query_target: str
     configs: tuple[str, ...]
     notice_target: str
 
@@ -701,22 +702,26 @@ class DependencyVariant:
 _DEPENDENCY_VARIANTS: tuple[DependencyVariant, ...] = (
     DependencyVariant(
         category_name="Default (tiny-skia)",
+        query_target="//examples:svg_to_png",
         configs=(),
         notice_target="//third_party/licenses:notice_default",
     ),
     DependencyVariant(
         category_name="tiny-skia + text-full",
+        query_target="//examples:svg_to_png",
         configs=("--config=text-full",),
         notice_target="//third_party/licenses:notice_text_full",
     ),
     DependencyVariant(
         category_name="skia + text-full",
+        query_target="//examples:svg_to_png",
         configs=("--config=skia", "--config=text-full"),
         notice_target="//third_party/licenses:notice_skia_text_full",
     ),
     DependencyVariant(
-        category_name="editor (skia + text-full + imgui/glfw/tracy)",
-        configs=("--config=skia", "--config=text-full"),
+        category_name="editor (tiny-skia + imgui/glfw/tracy + editor fonts)",
+        query_target="//donner/editor:editor",
+        configs=(),
         notice_target="//third_party/licenses:notice_editor",
     ),
 )
@@ -759,10 +764,12 @@ def make_external_dependencies_section(
         command = [
             "bazel",
             "cquery",
-            "deps(//examples:svg_to_png)",
+            f"deps({variant.query_target})",
         ] + list(variant.configs)
         command_display = format_command(command)
-        dependencies, result = query_external_dependencies(runner, variant.configs)
+        dependencies, result = query_external_dependencies(
+            runner, variant.query_target, variant.configs
+        )
         total_duration_sec += result.duration_sec
 
         license_lookup, license_result = load_license_manifest(

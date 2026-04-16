@@ -120,8 +120,7 @@ TEST(RnrFileTest, VersionMismatchRejected) {
 }
 
 TEST(RnrFileTest, SaveLoadDiskRoundTrips) {
-  const std::filesystem::path path =
-      std::filesystem::path(::testing::TempDir()) / "round_trip.rnr";
+  const std::filesystem::path path = std::filesystem::path(::testing::TempDir()) / "round_trip.rnr";
 
   RnrHeader header;
   header.width = 32;
@@ -169,9 +168,8 @@ TEST(FrameInspectorTest, DecodesKnownSerializedFrame) {
       ++drawCount;
     }
     EXPECT_GE(cmd.depth, 0);
-    EXPECT_FALSE(cmd.summary.empty()) << "opcode "
-                                       << static_cast<int>(cmd.opcode)
-                                       << " should have a summary";
+    EXPECT_FALSE(cmd.summary.empty())
+        << "opcode " << static_cast<int>(cmd.opcode) << " should have a summary";
   }
   EXPECT_TRUE(sawBegin);
   EXPECT_TRUE(sawEnd);
@@ -200,12 +198,13 @@ TEST(FrameInspectorTest, DecodeStopsAtTruncation) {
 
 TEST(FrameInspectorTest, OpcodeNamesAreStable) {
   // Every listed opcode should have a short name.
-  const std::array<Opcode, 14> opcodes = {
-      Opcode::kStreamHeader, Opcode::kBeginFrame, Opcode::kEndFrame,
-      Opcode::kSetTransform, Opcode::kPushTransform, Opcode::kPopTransform,
-      Opcode::kPushClip, Opcode::kPopClip, Opcode::kPushIsolatedLayer,
-      Opcode::kPopIsolatedLayer, Opcode::kSetPaint, Opcode::kDrawPath,
-      Opcode::kDrawRect, Opcode::kDrawEllipse};
+  const std::array<Opcode, 17> opcodes = {
+      Opcode::kStreamHeader,     Opcode::kBeginFrame,      Opcode::kEndFrame,
+      Opcode::kSetTransform,     Opcode::kPushTransform,   Opcode::kPopTransform,
+      Opcode::kPushClip,         Opcode::kPopClip,         Opcode::kPushIsolatedLayer,
+      Opcode::kPopIsolatedLayer, Opcode::kPushFilterLayer, Opcode::kPopFilterLayer,
+      Opcode::kSetPaint,         Opcode::kDrawPath,        Opcode::kDrawRect,
+      Opcode::kDrawEllipse,      Opcode::kDrawText};
   for (Opcode op : opcodes) {
     const auto name = FrameInspector::OpcodeName(op);
     EXPECT_FALSE(name.empty()) << "opcode " << static_cast<int>(op);
@@ -221,8 +220,8 @@ TEST(FrameInspectorTest, ReplayPrefixFullStreamMatchesDirect) {
   const auto wire = SerializeSimpleFrame(kSvg, 64, 64);
 
   svg::RendererTinySkia target;
-  const auto status = FrameInspector::ReplayPrefix(
-      wire, std::numeric_limits<std::size_t>::max(), target);
+  const auto status =
+      FrameInspector::ReplayPrefix(wire, std::numeric_limits<std::size_t>::max(), target);
   ASSERT_EQ(status, ReplayStatus::kOk);
 
   const auto direct = RenderInProcess(kSvg, 64, 64);
@@ -285,8 +284,8 @@ TEST(RecordReplayEndToEndTest, RoundTripPreservesPixels) {
   EXPECT_EQ(loadedWire, wire);
 
   svg::RendererTinySkia target;
-  const auto status = FrameInspector::ReplayPrefix(
-      loadedWire, std::numeric_limits<std::size_t>::max(), target);
+  const auto status =
+      FrameInspector::ReplayPrefix(loadedWire, std::numeric_limits<std::size_t>::max(), target);
   ASSERT_EQ(status, ReplayStatus::kOk);
 
   const auto direct = RenderInProcess(kSvg, 100, 100);
