@@ -193,6 +193,15 @@ private:
   /// Refresh cached render ranges and fallback metadata after render-tree preparation.
   void refreshLayerMetadata();
 
+  /// Diff `layers_` against the resolver's `ComputedLayerAssignmentComponent` output:
+  /// create layers for newly-assigned entities, preserve existing layers' bitmap /
+  /// dirty / transform when the assignment is unchanged, reassign ids when the
+  /// resolver shifted them, and remove layers whose entity no longer has a
+  /// non-zero assignment. This is the single bottleneck every hint source flows
+  /// through; `promoteEntity` / `demoteEntity` / `renderFrame` / `resetAllLayers`
+  /// all defer to it after running the resolver.
+  void reconcileLayers(Registry& registry);
+
   /// Returns true if the entity is currently within the layer's cached render range.
   bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
 

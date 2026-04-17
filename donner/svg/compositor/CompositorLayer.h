@@ -142,6 +142,12 @@ public:
     lastEntity_ = lastEntity;
   }
 
+  /// Reassign the layer's numeric id. Used by `CompositorController::reconcileLayers()`
+  /// when the resolver reassigns an id for a still-promoted entity (e.g. after a
+  /// higher-weight neighbor demotes and this entity shifts up). The cached bitmap,
+  /// dirty flag, and composition transform are preserved across an id change.
+  void setLayerId(uint32_t id) { id_ = id; }
+
   /// @}
 
 private:

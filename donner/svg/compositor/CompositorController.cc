@@ -122,7 +122,10 @@ bool CompositorController::promoteEntity(Entity entity) {
     return false;
   }
 
-  // Already promoted.
+  // Already promoted. (The explicit-hint ledger is the source of truth for the
+  // explicit API; a future Mandatory/Interaction hint on the same entity would
+  // also produce a ComputedLayerAssignmentComponent but wouldn't count as
+  // "explicitly promoted" here.)
   if (explicitHints_.contains(entity)) {
     return true;
   }
@@ -141,22 +144,14 @@ bool CompositorController::promoteEntity(Entity entity) {
   static_cast<void>(it);
 
   resolver_.resolve(registry, kMaxCompositorLayers);
+  reconcileLayers(registry);
 
   const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
   if (assignment == nullptr || assignment->layerId == 0) {
     explicitHints_.erase(entity);
     resolver_.resolve(registry, kMaxCompositorLayers);
+    reconcileLayers(registry);
     return false;
-  }
-
-  auto [firstEntity, lastEntity] = computeEntityRange(registry, entity);
-
-  layers_.emplace_back(assignment->layerId, entity, firstEntity, lastEntity);
-
-  // Detect compositing features that require conservative fallback.
-  if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
-    const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-    layers_.back().setFallbackReasons(detectFallbackReasons(instance));
   }
 
   rootDirty_ = true;
@@ -172,14 +167,11 @@ void CompositorController::demoteEntity(Entity entity) {
   }
 
   resolver_.resolve(registry, kMaxCompositorLayers);
+  reconcileLayers(registry);
 
-  auto it = std::find_if(layers_.begin(), layers_.end(), [entity](const CompositorLayer& layer) {
-    return layer.entity() == entity;
-  });
-  if (it != layers_.end()) {
-    layers_.erase(it);
-  }
-
+  // `reconcileLayers` marks `rootDirty_` when it removes a layer, but a demote
+  // on an entity that was never promoted should still clear the split-bitmap
+  // caches to match prior semantics.
   backgroundBitmap_ = RendererBitmap();
   foregroundBitmap_ = RendererBitmap();
   rootDirty_ = true;
@@ -228,8 +220,8 @@ void CompositorController::resetAllLayers() {
   Registry& registry = document_->registry();
   explicitHints_.clear();
   resolver_.resolve(registry, kMaxCompositorLayers);
+  reconcileLayers(registry);
 
-  layers_.clear();
   rootBitmap_ = RendererBitmap();
   backgroundBitmap_ = RendererBitmap();
   foregroundBitmap_ = RendererBitmap();
@@ -243,6 +235,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
 
   Registry& registry = document_->registry();
   resolver_.resolve(registry, kMaxCompositorLayers);
+  reconcileLayers(registry);
   if (registry.view<components::DirtyFlagsComponent>().begin() !=
       registry.view<components::DirtyFlagsComponent>().end()) {
     rootDirty_ = true;
@@ -549,6 +542,57 @@ void CompositorController::refreshLayerMetadata() {
     } else {
       layer.setFallbackReasons(FallbackReason::None);
     }
+  }
+}
+
+void CompositorController::reconcileLayers(Registry& registry) {
+  // Step 1: drop layers whose entity no longer has a non-zero assignment.
+  const auto removeIt = std::remove_if(
+      layers_.begin(), layers_.end(),
+      [&registry, this](const CompositorLayer& layer) {
+        if (!registry.valid(layer.entity())) {
+          rootDirty_ = true;
+          return true;
+        }
+        const auto* assignment =
+            registry.try_get<ComputedLayerAssignmentComponent>(layer.entity());
+        if (assignment == nullptr || assignment->layerId == 0) {
+          rootDirty_ = true;
+          return true;
+        }
+        return false;
+      });
+  if (removeIt != layers_.end()) {
+    layers_.erase(removeIt, layers_.end());
+  }
+
+  // Step 2: add or refresh layers for entities whose assignment is non-zero.
+  auto view = registry.view<ComputedLayerAssignmentComponent>();
+  for (const Entity entity : view) {
+    const auto& assignment = view.get<ComputedLayerAssignmentComponent>(entity);
+    if (assignment.layerId == 0) {
+      continue;
+    }
+
+    CompositorLayer* existing = findLayer(entity);
+    if (existing != nullptr) {
+      // Preserve bitmap / dirty / composition transform; update id if the
+      // resolver reassigned it (e.g. a higher-weight neighbor demoted).
+      if (existing->id() != assignment.layerId) {
+        existing->setLayerId(assignment.layerId);
+      }
+      continue;
+    }
+
+    const auto [firstEntity, lastEntity] = computeEntityRange(registry, entity);
+    layers_.emplace_back(assignment.layerId, entity, firstEntity, lastEntity);
+
+    if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
+      const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+      layers_.back().setFallbackReasons(detectFallbackReasons(instance));
+    }
+
+    rootDirty_ = true;
   }
 }
 
