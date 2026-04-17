@@ -15,7 +15,6 @@ donner_cc_library(
         "CompositorLayer.h",
         "ComputedLayerAssignmentComponent.h",
         "DragSession.h",
-        "LayerMembershipComponent.h",
         "LayerResolver.h",
         "ScopedCompositorHint.h",
     ],

@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -10,6 +11,8 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorLayer.h"
+#include "donner/svg/compositor/LayerResolver.h"
+#include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::svg::compositor {
@@ -77,8 +80,9 @@ public:
   /**
    * Demote a previously promoted entity back to the root layer.
    *
-   * The entity's `LayerMembershipComponent` is removed and the layer is destroyed. The root
-   * layer is marked dirty to include the demoted entity on the next render.
+   * The entity's explicit compositor hint is removed, its computed layer assignment is updated,
+   * and the layer is destroyed. The root layer is marked dirty to include the demoted entity on
+   * the next render.
    *
    * @param entity The entity to demote. No-op if not currently promoted.
    */
@@ -199,11 +203,10 @@ private:
   static FallbackReason detectFallbackReasons(
       const components::RenderingInstanceComponent& instance);
 
-  /// Next layer ID to assign.
-  uint32_t nextLayerId_ = 1;
-
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;
+  LayerResolver resolver_;
+  std::unordered_map<Entity, ScopedCompositorHint> explicitHints_;
   std::vector<CompositorLayer> layers_;
 
   /// Cached root layer bitmap (everything not in a promoted layer).

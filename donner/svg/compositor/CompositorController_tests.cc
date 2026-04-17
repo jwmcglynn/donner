@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/compositor/LayerMembershipComponent.h"
+#include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -170,7 +170,7 @@ TEST_F(CompositorControllerTest, DemoteNonPromotedEntityIsNoOp) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-TEST_F(CompositorControllerTest, LayerMembershipComponentAttachedOnPromote) {
+TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />
   )svg");
@@ -181,22 +181,23 @@ TEST_F(CompositorControllerTest, LayerMembershipComponentAttachedOnPromote) {
   Registry& registry = document.registry();
 
   CompositorController compositor(document, renderer_);
-  EXPECT_FALSE(registry.all_of<LayerMembershipComponent>(entity));
+  EXPECT_FALSE(registry.all_of<ComputedLayerAssignmentComponent>(entity));
 
   compositor.promoteEntity(entity);
-  EXPECT_TRUE(registry.all_of<LayerMembershipComponent>(entity));
+  EXPECT_TRUE(registry.all_of<ComputedLayerAssignmentComponent>(entity));
+  EXPECT_NE(registry.get<ComputedLayerAssignmentComponent>(entity).layerId, 0u);
 
   compositor.demoteEntity(entity);
-  EXPECT_FALSE(registry.all_of<LayerMembershipComponent>(entity));
+  EXPECT_FALSE(registry.all_of<ComputedLayerAssignmentComponent>(entity));
 }
 
 TEST_F(CompositorControllerTest, LayerLimitEnforced) {
   // Create a document with many elements.
   std::string svgContent;
   for (int i = 0; i < kMaxCompositorLayers + 5; ++i) {
-    svgContent +=
-        "<rect id=\"r" + std::to_string(i) + "\" x=\"" + std::to_string(i) + "\" width=\"1\" "
-        "height=\"1\" fill=\"red\" />\n";
+    svgContent += "<rect id=\"r" + std::to_string(i) + "\" x=\"" + std::to_string(i) +
+                  "\" width=\"1\" "
+                  "height=\"1\" fill=\"red\" />\n";
   }
 
   SVGDocument document = makeDocument(svgContent, Vector2i(200, 200));
@@ -522,7 +523,7 @@ TEST_F(CompositorControllerTest, ResetAllLayersClearsPromotedEntities) {
   EXPECT_EQ(compositor.totalBitmapMemory(), 0u);
 }
 
-TEST_F(CompositorControllerTest, ResetAllLayersRemovesLayerMembershipComponent) {
+TEST_F(CompositorControllerTest, ResetAllLayersClearsComputedLayerAssignment) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />
   )svg");
@@ -535,12 +536,13 @@ TEST_F(CompositorControllerTest, ResetAllLayersRemovesLayerMembershipComponent) 
   EXPECT_TRUE(compositor.promoteEntity(entity));
 
   // Verify component was added.
-  EXPECT_TRUE(document.registry().all_of<LayerMembershipComponent>(entity));
+  EXPECT_TRUE(document.registry().all_of<ComputedLayerAssignmentComponent>(entity));
+  EXPECT_NE(document.registry().get<ComputedLayerAssignmentComponent>(entity).layerId, 0u);
 
   compositor.resetAllLayers();
 
   // Verify component was removed.
-  EXPECT_FALSE(document.registry().all_of<LayerMembershipComponent>(entity));
+  EXPECT_FALSE(document.registry().all_of<ComputedLayerAssignmentComponent>(entity));
 }
 
 TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {

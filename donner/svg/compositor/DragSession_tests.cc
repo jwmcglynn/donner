@@ -5,7 +5,6 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorController.h"
-#include "donner/svg/compositor/LayerMembershipComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 

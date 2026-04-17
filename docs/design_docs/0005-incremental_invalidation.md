@@ -435,7 +435,7 @@ system feeds into it naturally:
 DOM mutation
   └─→ markDirty(flags) on affected entities
         └─→ CompositedRenderer::markEntityDirty(entity)
-              └─→ LayerMembershipComponent → layer ID
+              └─→ ComputedLayerAssignmentComponent → layer ID
                     └─→ layer.dirty = true
 
 Next render:

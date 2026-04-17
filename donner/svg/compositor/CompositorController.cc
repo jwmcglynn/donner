@@ -5,12 +5,12 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
-#include "donner/svg/compositor/LayerMembershipComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/renderer/common/RenderingInstanceView.h"
+#include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg::compositor {
@@ -37,11 +37,12 @@ void HideLayerRange(Registry& registry, const CompositorLayer& layer,
     const Entity entity = view.currentEntity();
     auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
 
-    const auto alreadyHidden =
-        std::find_if(hiddenEntities->begin(), hiddenEntities->end(),
-                     [entity](const HiddenVisibilityState& state) { return state.entity == entity; });
+    const auto alreadyHidden = std::find_if(
+        hiddenEntities->begin(), hiddenEntities->end(),
+        [entity](const HiddenVisibilityState& state) { return state.entity == entity; });
     if (alreadyHidden == hiddenEntities->end()) {
-      hiddenEntities->push_back(HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+      hiddenEntities->push_back(
+          HiddenVisibilityState{.entity = entity, .visible = instance.visible});
     }
 
     instance.visible = false;
@@ -122,11 +123,11 @@ bool CompositorController::promoteEntity(Entity entity) {
   }
 
   // Already promoted.
-  if (registry.all_of<LayerMembershipComponent>(entity)) {
+  if (explicitHints_.contains(entity)) {
     return true;
   }
 
-  if (static_cast<int>(layers_.size()) >= kMaxCompositorLayers) {
+  if (explicitHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
     return false;
   }
 
@@ -134,18 +135,29 @@ bool CompositorController::promoteEntity(Entity entity) {
     return false;
   }
 
+  const auto [it, inserted] =
+      explicitHints_.try_emplace(entity, ScopedCompositorHint::Explicit(registry, entity));
+  UTILS_RELEASE_ASSERT(inserted);
+  static_cast<void>(it);
+
+  resolver_.resolve(registry, kMaxCompositorLayers);
+
+  const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
+  if (assignment == nullptr || assignment->layerId == 0) {
+    explicitHints_.erase(entity);
+    resolver_.resolve(registry, kMaxCompositorLayers);
+    return false;
+  }
+
   auto [firstEntity, lastEntity] = computeEntityRange(registry, entity);
 
-  const uint32_t layerId = nextLayerId_++;
-  layers_.emplace_back(layerId, entity, firstEntity, lastEntity);
+  layers_.emplace_back(assignment->layerId, entity, firstEntity, lastEntity);
 
   // Detect compositing features that require conservative fallback.
   if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
     const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
     layers_.back().setFallbackReasons(detectFallbackReasons(instance));
   }
-
-  registry.emplace<LayerMembershipComponent>(entity, LayerMembershipComponent{layerId});
 
   rootDirty_ = true;
   return true;
@@ -154,9 +166,12 @@ bool CompositorController::promoteEntity(Entity entity) {
 void CompositorController::demoteEntity(Entity entity) {
   Registry& registry = document_->registry();
 
-  if (registry.valid(entity) && registry.all_of<LayerMembershipComponent>(entity)) {
-    registry.remove<LayerMembershipComponent>(entity);
+  const auto hintIt = explicitHints_.find(entity);
+  if (hintIt != explicitHints_.end()) {
+    explicitHints_.erase(hintIt);
   }
+
+  resolver_.resolve(registry, kMaxCompositorLayers);
 
   auto it = std::find_if(layers_.begin(), layers_.end(), [entity](const CompositorLayer& layer) {
     return layer.entity() == entity;
@@ -171,7 +186,7 @@ void CompositorController::demoteEntity(Entity entity) {
 }
 
 bool CompositorController::isPromoted(Entity entity) const {
-  return findLayer(entity) != nullptr;
+  return explicitHints_.contains(entity);
 }
 
 void CompositorController::setLayerCompositionTransform(Entity entity,
@@ -211,12 +226,8 @@ const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
 
 void CompositorController::resetAllLayers() {
   Registry& registry = document_->registry();
-  for (const auto& layer : layers_) {
-    if (registry.valid(layer.entity()) &&
-        registry.all_of<LayerMembershipComponent>(layer.entity())) {
-      registry.remove<LayerMembershipComponent>(layer.entity());
-    }
-  }
+  explicitHints_.clear();
+  resolver_.resolve(registry, kMaxCompositorLayers);
 
   layers_.clear();
   rootBitmap_ = RendererBitmap();
@@ -231,6 +242,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
   Registry& registry = document_->registry();
+  resolver_.resolve(registry, kMaxCompositorLayers);
   if (registry.view<components::DirtyFlagsComponent>().begin() !=
       registry.view<components::DirtyFlagsComponent>().end()) {
     rootDirty_ = true;
@@ -310,8 +322,8 @@ size_t CompositorController::layerCount() const {
 }
 
 size_t CompositorController::totalBitmapMemory() const {
-  size_t total = rootBitmap_.pixels.size() + backgroundBitmap_.pixels.size() +
-                 foregroundBitmap_.pixels.size();
+  size_t total =
+      rootBitmap_.pixels.size() + backgroundBitmap_.pixels.size() + foregroundBitmap_.pixels.size();
   for (const auto& layer : layers_) {
     total += layer.bitmap().pixels.size();
   }
