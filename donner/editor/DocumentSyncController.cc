@@ -49,17 +49,17 @@ void DocumentSyncController::syncParseErrorMarkers(EditorApp& app, TextEditor& t
 
 void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEditor,
                                              float deltaSeconds) {
-  const auto dispatchTextChange = [&]() {
-    const std::string newSource = textEditor.getText();
+  const auto dispatchTextChange = [&](std::string_view newSource) {
     (void)DispatchSourceTextChange(app, newSource, &previousSourceText_, &lastWritebackSourceText_);
   };
 
   if (textEditor.isTextChanged()) {
-    app.markDirty();
+    const std::string newSource = textEditor.getText();
+    app.syncDirtyFromSource(newSource);
     textEditor.resetTextChanged();
 
     if (!textDispatchThrottled_) {
-      dispatchTextChange();
+      dispatchTextChange(newSource);
       textDispatchThrottled_ = true;
       textChangePending_ = false;
     } else {
@@ -70,7 +70,9 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
     textChangeIdleTimer_ += deltaSeconds;
     if (textChangeIdleTimer_ >= kTextChangeDebounceSeconds) {
       if (textChangePending_) {
-        dispatchTextChange();
+        const std::string newSource = textEditor.getText();
+        app.syncDirtyFromSource(newSource);
+        dispatchTextChange(newSource);
         textChangePending_ = false;
       }
       textDispatchThrottled_ = false;
@@ -121,23 +123,27 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   std::string source = textEditor.getText();
-  const RcString serialized = toSVGTransformString(pendingTransformWriteback_->transform);
-  if (std::string_view(serialized).empty()) {
-    auto patch =
-        buildAttributeRemoveWriteback(source, pendingTransformWriteback_->target, "transform");
-    pendingTransformWriteback_.reset();
-    if (!patch.has_value()) {
-      return;
+  std::optional<TextPatch> patch;
+  if (pendingTransformWriteback_->restoreSourceTransformAttributeValue) {
+    if (pendingTransformWriteback_->sourceTransformAttributeValue.has_value()) {
+      patch = buildAttributeWriteback(
+          source, pendingTransformWriteback_->target, "transform",
+          std::string_view(*pendingTransformWriteback_->sourceTransformAttributeValue));
+    } else {
+      patch =
+          buildAttributeRemoveWriteback(source, pendingTransformWriteback_->target, "transform");
     }
-
-    applyPatches(source, {{*patch}});
-    textEditor.setText(source, /*preserveScroll=*/true);
-    QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
-    return;
+  } else {
+    const RcString serialized = toSVGTransformString(pendingTransformWriteback_->transform);
+    if (std::string_view(serialized).empty()) {
+      patch =
+          buildAttributeRemoveWriteback(source, pendingTransformWriteback_->target, "transform");
+    } else {
+      patch = buildAttributeWriteback(source, pendingTransformWriteback_->target, "transform",
+                                      std::string_view(serialized));
+    }
   }
-
-  auto patch = buildAttributeWriteback(source, pendingTransformWriteback_->target, "transform",
-                                       std::string_view(serialized));
+  pendingTransformWriteback_.reset();
   if (!patch.has_value()) {
     return;
   }
@@ -145,7 +151,6 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   applyPatches(source, {{*patch}});
   textEditor.setText(source, /*preserveScroll=*/true);
   QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
-  pendingTransformWriteback_.reset();
 }
 
 TextEditor::ErrorMarkers DocumentSyncController::ParseErrorToMarkers(const ParseDiagnostic& diag) {

@@ -4,10 +4,10 @@
 #include <array>
 #include <optional>
 
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/RenderPaneGesture.h"
 #include "donner/editor/Tool.h"
 #include "donner/editor/ViewportState.h"
-#include "imgui.h"
 
 namespace donner::editor {
 

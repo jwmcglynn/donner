@@ -10,8 +10,16 @@ donner_cc_library(
     hdrs = ["EditorWindow.h"],
     deps = [
         "//donner/base",
+        "//donner/editor:imgui_headers",
         "//donner/svg/renderer:renderer_interface",
-        "//third_party/glad",
         "@imgui",
-    ],
+    ] + select({
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "//third_party/glad",
+            "@glfw",
+        ],
+    }),
 )

@@ -12,7 +12,7 @@
 #include "GLFW/glfw3.h"
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
-#include "donner/editor/Notice.h"
+#include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SourceSync.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
@@ -36,14 +36,6 @@ std::optional<std::string> LoadFile(const std::string& filename) {
   std::ostringstream out;
   out << file.rdbuf();
   return std::move(out).str();
-}
-
-std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
-  std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  if (!text.empty() && text.back() == '\0') {
-    text.pop_back();
-  }
-  return text;
 }
 
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
@@ -92,8 +84,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       documentSyncController_(LoadFile(options_.svgPath).value_or("")),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
-      dialogPresenter_(EmbeddedBytesToString(embedded::kEditorNoticeText)) {
-  auto initialSource = LoadFile(options_.svgPath);
+      dialogPresenter_(options_.editorNoticeText) {
+  std::optional<std::string> initialSource = options_.initialSource;
+  if (!initialSource.has_value() && !options_.svgPath.empty()) {
+    initialSource = LoadFile(options_.svgPath);
+  }
   if (!initialSource.has_value()) {
     return;
   }
@@ -102,26 +97,40 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
 
   textEditor_.setLanguageDefinition(TextEditor::LanguageDefinition::SVG());
   textEditor_.setText(*initialSource);
+  textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
 
   ImGuiIO& io = ImGui::GetIO();
   ImFontConfig fontCfg;
   fontCfg.FontDataOwnedByAtlas = false;
-  std::ignore = io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-      static_cast<int>(embedded::kRobotoRegularTtf.size()), 15.0f, &fontCfg);
-  uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-      const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-      static_cast<int>(embedded::kRobotoBoldTtf.size()), 15.0f, &fontCfg);
+  const double displayScale = window_.displayScale();
+  std::ignore =
+      io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+                                     static_cast<int>(embedded::kRobotoRegularTtf.size()),
+                                     static_cast<float>(15.0 * displayScale), &fontCfg);
+  uiFontBold_ =
+      io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
+                                     static_cast<int>(embedded::kRobotoBoldTtf.size()),
+                                     static_cast<float>(15.0 * displayScale), &fontCfg);
   codeFont_ = io.Fonts->AddFontFromMemoryTTF(
       const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-      static_cast<int>(embedded::kFiraCodeRegularTtf.size()), 14.0f, &fontCfg);
+      static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+      static_cast<float>(14.0 * displayScale), &fontCfg);
 
   app_.setStructuredEditingEnabled(true);
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
-  app_.setCurrentFilePath(options_.svgPath);
+  if (options_.initialPath.has_value()) {
+    app_.setCurrentFilePath(*options_.initialPath);
+  } else if (!options_.svgPath.empty()) {
+    app_.setCurrentFilePath(options_.svgPath);
+  }
+  // Route the clean baseline through `textEditor_.getText()` so it matches
+  // what `syncDirtyFromSource` will later compare against. `TextBuffer`
+  // canonicalizes line endings (e.g. drops a trailing `\n`), so comparing
+  // against the raw file bytes would leave the dirty flag latched on.
+  app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   textures_.initialize();
   valid_ = true;
@@ -140,8 +149,10 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
 
   textEditor_.setText(*contents);
   textEditor_.resetTextChanged();
-  documentSyncController_.resetForLoadedDocument(*contents);
+  const std::string canonicalSource = textEditor_.getText();
+  documentSyncController_.resetForLoadedDocument(canonicalSource);
   app_.setCurrentFilePath(std::string(path));
+  app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.reset();
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
@@ -159,15 +170,16 @@ void EditorShell::applyExperimentalModeChange(bool enabled) {
 }
 
 void EditorShell::updateWindowTitle() {
-  std::string title = "Donner Editor — ";
+  std::string title;
+  if (app_.isDirty()) {
+    title += "● ";
+  }
   if (app_.currentFilePath().has_value()) {
     title += std::filesystem::path(*app_.currentFilePath()).filename().string();
   } else {
     title += "untitled";
   }
-  if (app_.isDirty()) {
-    title += " ●";
-  }
+  title += " - Donner SVG Editor";
   if (title != lastWindowTitle_) {
     window_.setTitle(title);
     lastWindowTitle_ = std::move(title);
@@ -222,7 +234,8 @@ void EditorShell::handleGlobalShortcuts() {
 
   const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
                          ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
-  if (deleteKey && app_.hasSelection() && !anyPopupOpen && !ImGui::GetIO().WantCaptureKeyboard) {
+  if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
+                                            sourcePaneFocused)) {
     const std::vector<svg::SVGElement> selected = app_.selectedElements();
     app_.setSelection(std::nullopt);
     for (const auto& element : selected) {

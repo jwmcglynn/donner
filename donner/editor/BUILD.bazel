@@ -163,8 +163,14 @@ donner_cc_library(
         ":async_renderer",
         "//donner/base",
         "//donner/svg",
-        "//third_party/glad",
-    ],
+    ] + select({
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "//third_party/glad",
+        ],
+    }),
 )
 
 donner_cc_library(
@@ -175,9 +181,17 @@ donner_cc_library(
         ":pinch_event_monitor",
         ":render_pane_gesture",
         "//donner/editor/gui:editor_window",
-        "@glfw",
     ] + select({
-        "@platforms//os:macos": [":pinch_event_monitor_macos"],
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "@platforms//os:macos": [
+            ":pinch_event_monitor_macos",
+            "@glfw",
+        ],
+        "@platforms//os:linux": [
+            "@glfw",
+        ],
         "//conditions:default": [],
     }),
 )
@@ -195,12 +209,31 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "imgui_headers",
+    hdrs = [
+        "ImGuiBackendIncludes.h",
+        "ImGuiIncludes.h",
+        "ImGuiInternalIncludes.h",
+    ],
+    deps = [
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "keyboard_shortcut_policy",
+    hdrs = ["KeyboardShortcutPolicy.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "document_sync_controller",
     srcs = ["DocumentSyncController.cc"],
     hdrs = ["DocumentSyncController.h"],
     deps = [
         ":attribute_writeback",
         ":editor_app",
+        ":imgui_headers",
         ":select_tool",
         ":source_sync",
         ":text_editor",
@@ -214,6 +247,7 @@ donner_cc_library(
     srcs = ["ViewportInteractionController.cc"],
     hdrs = ["ViewportInteractionController.h"],
     deps = [
+        ":imgui_headers",
         ":render_pane_gesture",
         ":viewport_state",
         ":tool",
@@ -227,6 +261,7 @@ donner_cc_library(
     srcs = ["MenuBarPresenter.cc"],
     hdrs = ["MenuBarPresenter.h"],
     deps = [
+        ":imgui_headers",
         "@imgui",
     ],
 )
@@ -237,6 +272,7 @@ donner_cc_library(
     hdrs = ["SidebarPresenter.h"],
     deps = [
         ":editor_app",
+        ":imgui_headers",
         ":viewport_state",
         "//donner/base",
         "//donner/svg",
@@ -249,6 +285,7 @@ donner_cc_library(
     srcs = ["DialogPresenter.cc"],
     hdrs = ["DialogPresenter.h"],
     deps = [
+        ":imgui_headers",
         "@imgui",
     ],
 )
@@ -260,6 +297,7 @@ donner_cc_library(
     deps = [
         ":experimental_drag_presentation",
         ":gl_texture_cache",
+        ":imgui_headers",
         ":selection_aabb",
         ":viewport_interaction_controller",
         "//donner/base",
@@ -294,8 +332,9 @@ donner_cc_library(
         ":editor_app",
         ":editor_input_bridge",
         ":gl_texture_cache",
+        ":keyboard_shortcut_policy",
+        ":imgui_headers",
         ":menu_bar_presenter",
-        ":notice",
         ":render_coordinator",
         ":render_pane_presenter",
         ":select_tool",
@@ -309,9 +348,15 @@ donner_cc_library(
         "//donner/svg",
         "//third_party/fira-code",
         "//third_party/roboto",
-        "@glfw",
         "@imgui",
-    ],
+    ] + select({
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "@glfw",
+        ],
+    }),
 )
 
 donner_cc_library(
@@ -365,6 +410,7 @@ donner_cc_library(
         ":attribute_writeback",
         ":command_queue",
         ":editor_app",
+        ":imgui_headers",
         ":tool",
         ":undo_timeline",
         "//donner/base",
@@ -422,38 +468,6 @@ embed_resources(
     },
 )
 
-_EDITOR_RUNTIME_DEPS = [
-    ":async_renderer",
-    ":attribute_writeback",
-    ":change_classifier",
-    ":editor_app",
-    ":experimental_drag_presentation",
-    ":editor_icon",
-    ":editor_splash",
-    ":overlay_renderer",
-    ":pinch_event_monitor",
-    ":selection_aabb",
-    ":source_sync",
-] + select({
-    "@platforms//os:macos": [":pinch_event_monitor_macos"],
-    "//conditions:default": [],
-}) + [
-    ":render_pane_gesture",
-    ":select_tool",
-    ":text_editor",
-    ":text_patch",
-    ":tracy_wrapper",
-    ":viewport_state",
-    "//donner/base",
-    "//donner/svg",
-    "//donner/svg/renderer",
-    "//third_party/fira-code",
-    "//third_party/glad",
-    "//third_party/roboto",
-    "@glfw",
-    "@imgui",
-]
-
 donner_cc_library(
     name = "editor_notice_inputs",
     target_compatible_with = select({
@@ -461,7 +475,10 @@ donner_cc_library(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = _EDITOR_RUNTIME_DEPS,
+    deps = [
+        ":editor_icon",
+        ":editor_shell",
+    ],
 )
 
 # The full Donner editor binary. Wires EditorApp + SelectTool +
@@ -479,6 +496,8 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":editor_icon",
+        ":notice",
         ":editor_shell",
         "//donner/editor/gui:editor_window",
         "//donner/base",
@@ -552,6 +571,7 @@ donner_cc_library(
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
+        ":imgui_headers",
         ":text_buffer",
         ":text_editor_core",
         "//donner/base",

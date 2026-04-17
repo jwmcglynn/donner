@@ -160,9 +160,12 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
           EditorCommand::SetTransformCommand(dragState_->element, dragState_->currentTransform));
     }
 
-    UndoSnapshot before{.element = dragState_->element,
-                        .transform = dragState_->startTransform,
-                        .writebackTarget = dragState_->writebackTarget};
+    UndoSnapshot before{
+        .element = dragState_->element,
+        .transform = dragState_->startTransform,
+        .writebackTarget = dragState_->writebackTarget,
+        .sourceTransformAttributeValue = dragState_->element.getAttribute("transform"),
+        .restoreSourceTransformAttributeValue = true};
     UndoSnapshot after{.element = dragState_->element,
                        .transform = dragState_->currentTransform,
                        .writebackTarget = dragState_->writebackTarget};

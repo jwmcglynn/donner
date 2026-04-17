@@ -10,6 +10,36 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_window_tests",
+    srcs = ["EditorWindow_tests.cc"],
+    deps = [
+        "//donner/editor/gui:editor_window",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "keyboard_shortcut_policy_tests",
+    srcs = ["KeyboardShortcutPolicy_tests.cc"],
+    deps = [
+        "//donner/editor:keyboard_shortcut_policy",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "document_sync_controller_tests",
+    srcs = ["DocumentSyncController_tests.cc"],
+    deps = [
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:text_editor",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "viewport_interaction_controller_tests",
     srcs = ["ViewportInteractionController_tests.cc"],
     deps = [

@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-#include "imgui.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 
@@ -40,8 +40,7 @@ protected:
 
 TEST_F(TextEditorTests, CursorStartsAtOrigin) {
   editor.setText("Hello");
-  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0))
-      << "Cursor should start at (0, 0)";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0)) << "Cursor should start at (0, 0)";
 }
 
 TEST_F(TextEditorTests, MoveRightAdvancesCursor) {
@@ -157,8 +156,7 @@ TEST_F(TextEditorTests, ShiftRightExpandsSelection) {
   editor.setCursorPosition(Coordinates(0, 0));
   editor.moveRight(1, true, false);  // select=true
   EXPECT_TRUE(editor.hasSelection()) << "Should have selection after Shift+Right";
-  EXPECT_EQ(editor.getSelectedText(), "H")
-      << "Selection should contain single character 'H'";
+  EXPECT_EQ(editor.getSelectedText(), "H") << "Selection should contain single character 'H'";
 }
 
 TEST_F(TextEditorTests, ShiftLeftContractsSelection) {
@@ -171,15 +169,13 @@ TEST_F(TextEditorTests, ShiftLeftContractsSelection) {
   editor.setCursorPosition(Coordinates(0, 3));
   editor.moveLeft(1, true, false);
   // After contracting left, selection should be from (0,0) to (0,2)
-  EXPECT_EQ(editor.getSelectedText(), "He")
-      << "Selection should be contracted to 'He'";
+  EXPECT_EQ(editor.getSelectedText(), "He") << "Selection should be contracted to 'He'";
 }
 
 TEST_F(TextEditorTests, SelectionStartAndEnd) {
   editor.setText("Hello world");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
-  EXPECT_EQ(editor.getSelectedText(), "Hello")
-      << "setSelection should select specified range";
+  EXPECT_EQ(editor.getSelectedText(), "Hello") << "setSelection should select specified range";
 }
 
 TEST_F(TextEditorTests, HasSelectionReturnsFalseWhenNoSelection) {
@@ -214,40 +210,35 @@ TEST_F(TextEditorTests, SetSelectionEndPreservesStart) {
 TEST_F(TextEditorTests, InsertTextAddsCharacters) {
   editor.setText("");
   editor.insertText("Hello");
-  EXPECT_EQ(editor.getText(), "Hello")
-      << "insertText should add text to buffer";
+  EXPECT_EQ(editor.getText(), "Hello") << "insertText should add text to buffer";
 }
 
 TEST_F(TextEditorTests, DeleteDeletesCharacterAtCursor) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 1));
   editor.delete_();
-  EXPECT_EQ(editor.getText(), "Hllo")
-      << "delete should remove character at cursor";
+  EXPECT_EQ(editor.getText(), "Hllo") << "delete should remove character at cursor";
 }
 
 TEST_F(TextEditorTests, DeleteAtLineEndMergesWithNextLine) {
   editor.setText("Hello\nWorld");
   editor.setCursorPosition(Coordinates(0, 5));
   editor.delete_();
-  EXPECT_EQ(editor.getText(), "HelloWorld")
-      << "delete at line end should merge with next line";
+  EXPECT_EQ(editor.getText(), "HelloWorld") << "delete at line end should merge with next line";
 }
 
 TEST_F(TextEditorTests, DeleteOnLastCharacterOfLastLineDoesNothing) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 5));
   editor.delete_();
-  EXPECT_EQ(editor.getText(), "Hello")
-      << "delete on last character should not delete";
+  EXPECT_EQ(editor.getText(), "Hello") << "delete on last character should not delete";
 }
 
 TEST_F(TextEditorTests, InsertTextWithSelection) {
   editor.setText("Hello world");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
   editor.insertText("Hi");
-  EXPECT_EQ(editor.getText(), "Hi world")
-      << "insertText with selection should replace selection";
+  EXPECT_EQ(editor.getText(), "Hi world") << "insertText with selection should replace selection";
 }
 
 // ============================================================================
@@ -267,8 +258,7 @@ TEST_F(TextEditorTests, UndoReversesInsertion) {
   editor.enterCharacter('!', /*shift=*/false);
   EXPECT_EQ(editor.getText(), "Hello!");
   editor.undo();
-  EXPECT_EQ(editor.getText(), "Hello")
-      << "undo should revert insertion";
+  EXPECT_EQ(editor.getText(), "Hello") << "undo should revert insertion";
 }
 
 TEST_F(TextEditorTests, UndoReversesDeletion) {
@@ -280,8 +270,7 @@ TEST_F(TextEditorTests, UndoReversesDeletion) {
   editor.delete_();
   EXPECT_EQ(editor.getText(), "Helo");
   editor.undo();
-  EXPECT_EQ(editor.getText(), "Hello")
-      << "undo should revert deletion";
+  EXPECT_EQ(editor.getText(), "Hello") << "undo should revert deletion";
 }
 
 TEST_F(TextEditorTests, RedoRestoresAfterUndo) {
@@ -290,8 +279,7 @@ TEST_F(TextEditorTests, RedoRestoresAfterUndo) {
   editor.enterCharacter('!', /*shift=*/false);
   editor.undo();
   editor.redo();
-  EXPECT_EQ(editor.getText(), "Hello!")
-      << "redo should restore undone change";
+  EXPECT_EQ(editor.getText(), "Hello!") << "redo should restore undone change";
 }
 
 TEST_F(TextEditorTests, MultipleUndoStepsBackthrough) {
@@ -303,8 +291,7 @@ TEST_F(TextEditorTests, MultipleUndoStepsBackthrough) {
   editor.enterCharacter('o', /*shift=*/false);
   EXPECT_EQ(editor.getText(), "Hello");
   editor.undo(3);
-  EXPECT_EQ(editor.getText(), "He")
-      << "undo(3) should step back 3 operations";
+  EXPECT_EQ(editor.getText(), "He") << "undo(3) should step back 3 operations";
 }
 
 TEST_F(TextEditorTests, RedoIsClearedAfterNewEdit) {
@@ -314,22 +301,19 @@ TEST_F(TextEditorTests, RedoIsClearedAfterNewEdit) {
   editor.undo();
   EXPECT_TRUE(editor.canRedo()) << "Should be able to redo after undo";
   editor.enterCharacter('?', /*shift=*/false);
-  EXPECT_FALSE(editor.canRedo())
-      << "redo should be cleared after new edit";
+  EXPECT_FALSE(editor.canRedo()) << "redo should be cleared after new edit";
 }
 
 TEST_F(TextEditorTests, CanUndoReturnsFalseAtStart) {
   editor.setText("Hello");
-  EXPECT_FALSE(editor.canUndo())
-      << "canUndo should return false with no undo history";
+  EXPECT_FALSE(editor.canUndo()) << "canUndo should return false with no undo history";
 }
 
 TEST_F(TextEditorTests, CanUndoReturnsTrueAfterEdit) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 5));
   editor.enterCharacter('!', /*shift=*/false);
-  EXPECT_TRUE(editor.canUndo())
-      << "canUndo should return true after edit";
+  EXPECT_TRUE(editor.canUndo()) << "canUndo should return true after edit";
 }
 
 // ============================================================================
@@ -340,8 +324,7 @@ TEST_F(TextEditorTests, SelectWordUnderCursorSelectsWord) {
   editor.setText("Hello world");
   editor.setCursorPosition(Coordinates(0, 2));  // Inside "Hello"
   editor.selectWordUnderCursor();
-  EXPECT_EQ(editor.getSelectedText(), "Hello")
-      << "selectWordUnderCursor should select entire word";
+  EXPECT_EQ(editor.getSelectedText(), "Hello") << "selectWordUnderCursor should select entire word";
 }
 
 TEST_F(TextEditorTests, SelectWordAtPunctuation) {
@@ -370,8 +353,7 @@ TEST_F(TextEditorTests, PasteMultiLineText) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 5));
   editor.insertText("!\nWorld");
-  EXPECT_EQ(editor.getText(), "Hello!\nWorld")
-      << "insertText should handle multi-line text";
+  EXPECT_EQ(editor.getText(), "Hello!\nWorld") << "insertText should handle multi-line text";
 }
 
 TEST_F(TextEditorTests, SelectionSpanningMultipleLines) {
@@ -385,8 +367,7 @@ TEST_F(TextEditorTests, InsertNewlineAtLineStart) {
   editor.setText("Hello\nWorld");
   editor.setCursorPosition(Coordinates(1, 0));
   editor.insertText("\n");
-  EXPECT_EQ(editor.getText(), "Hello\n\nWorld")
-      << "insertText newline should split line";
+  EXPECT_EQ(editor.getText(), "Hello\n\nWorld") << "insertText newline should split line";
 }
 
 // ============================================================================
@@ -398,8 +379,7 @@ TEST_F(TextEditorTests, CopyWithSelection) {
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
   editor.copy();
   const char* clipboard = ImGui::GetClipboardText();
-  EXPECT_STREQ(clipboard, "Hello")
-      << "copy with selection should copy selected text";
+  EXPECT_STREQ(clipboard, "Hello") << "copy with selection should copy selected text";
 }
 
 TEST_F(TextEditorTests, CopyWithoutSelectionCopiesLine) {
@@ -407,16 +387,14 @@ TEST_F(TextEditorTests, CopyWithoutSelectionCopiesLine) {
   editor.setCursorPosition(Coordinates(0, 2));
   editor.copy();
   const char* clipboard = ImGui::GetClipboardText();
-  EXPECT_STREQ(clipboard, "Hello")
-      << "copy without selection should copy entire line";
+  EXPECT_STREQ(clipboard, "Hello") << "copy without selection should copy entire line";
 }
 
 TEST_F(TextEditorTests, CutWithSelection) {
   editor.setText("Hello world");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
   editor.cut();
-  EXPECT_EQ(editor.getText(), " world")
-      << "cut should remove selected text and copy to clipboard";
+  EXPECT_EQ(editor.getText(), " world") << "cut should remove selected text and copy to clipboard";
   const char* clipboard = ImGui::GetClipboardText();
   EXPECT_STREQ(clipboard, "Hello");
 }
@@ -425,8 +403,7 @@ TEST_F(TextEditorTests, CutWithoutSelectionDoesNothing) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 2));
   editor.cut();
-  EXPECT_EQ(editor.getText(), "Hello")
-      << "cut without selection should not delete";
+  EXPECT_EQ(editor.getText(), "Hello") << "cut without selection should not delete";
 }
 
 TEST_F(TextEditorTests, PasteInsertsClipboardText) {
@@ -434,8 +411,7 @@ TEST_F(TextEditorTests, PasteInsertsClipboardText) {
   ImGui::SetClipboardText(" world");
   editor.setCursorPosition(Coordinates(0, 5));
   editor.paste();
-  EXPECT_EQ(editor.getText(), "Hello world")
-      << "paste should insert clipboard text at cursor";
+  EXPECT_EQ(editor.getText(), "Hello world") << "paste should insert clipboard text at cursor";
 }
 
 TEST_F(TextEditorTests, PasteWithSelectionReplacesSelection) {
@@ -443,8 +419,7 @@ TEST_F(TextEditorTests, PasteWithSelectionReplacesSelection) {
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
   ImGui::SetClipboardText("Hi");
   editor.paste();
-  EXPECT_EQ(editor.getText(), "Hi world")
-      << "paste with selection should replace selection";
+  EXPECT_EQ(editor.getText(), "Hi world") << "paste with selection should replace selection";
 }
 
 // ============================================================================
@@ -454,21 +429,18 @@ TEST_F(TextEditorTests, PasteWithSelectionReplacesSelection) {
 TEST_F(TextEditorTests, SetTextClearsBuffer) {
   editor.setText("Hello");
   editor.setText("World");
-  EXPECT_EQ(editor.getText(), "World")
-      << "setText should replace entire buffer";
+  EXPECT_EQ(editor.getText(), "World") << "setText should replace entire buffer";
 }
 
 TEST_F(TextEditorTests, EmptyBufferHasSingleLine) {
   TextEditor emptyEditor;
-  EXPECT_EQ(emptyEditor.getText(), "")
-      << "Empty editor should have no text";
+  EXPECT_EQ(emptyEditor.getText(), "") << "Empty editor should have no text";
 }
 
 TEST_F(TextEditorTests, GetTextReturnsExactBuffer) {
   std::string content = "Hello\nWorld\nTest";
   editor.setText(content);
-  EXPECT_EQ(editor.getText(), content)
-      << "getText should return exact buffer content";
+  EXPECT_EQ(editor.getText(), content) << "getText should return exact buffer content";
 }
 
 TEST_F(TextEditorTests, SelectionNormalizedIfStartAfterEnd) {
@@ -478,8 +450,7 @@ TEST_F(TextEditorTests, SelectionNormalizedIfStartAfterEnd) {
   // covers the same character range as if they'd been in order.
   editor.setSelection(Coordinates(0, 8), Coordinates(0, 2));
   // Half-open range [2, 8) over "Hello world" = "llo wo".
-  EXPECT_EQ(editor.getSelectedText(), "llo wo")
-      << "setSelection should normalize reversed ranges";
+  EXPECT_EQ(editor.getSelectedText(), "llo wo") << "setSelection should normalize reversed ranges";
 }
 
 TEST_F(TextEditorTests, MultipleDeletesRemoveChars) {
@@ -488,8 +459,7 @@ TEST_F(TextEditorTests, MultipleDeletesRemoveChars) {
   editor.delete_();
   editor.delete_();
   editor.delete_();
-  EXPECT_EQ(editor.getText(), "He")
-      << "Multiple deletes should remove multiple characters";
+  EXPECT_EQ(editor.getText(), "He") << "Multiple deletes should remove multiple characters";
 }
 
 TEST_F(TextEditorTests, InsertAfterUndoDoesNotClearRedo) {
@@ -504,12 +474,10 @@ TEST_F(TextEditorTests, InsertAfterUndoDoesNotClearRedo) {
   editor.undo();
   editor.undo();
   EXPECT_EQ(editor.getText(), "A");
-  EXPECT_TRUE(editor.canRedo())
-      << "Should be able to redo after undo";
+  EXPECT_TRUE(editor.canRedo()) << "Should be able to redo after undo";
   // Now insert new text - this should clear redo
   editor.insertText("X");
-  EXPECT_FALSE(editor.canRedo())
-      << "New edit should clear redo history";
+  EXPECT_FALSE(editor.canRedo()) << "New edit should clear redo history";
 }
 
 // ============================================================================
@@ -548,40 +516,35 @@ TEST_F(TextEditorTests, ShiftEndSelectsToLineEnd) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 2));
   editor.moveEnd(true);  // select=true
-  EXPECT_EQ(editor.getSelectedText(), "llo")
-      << "Shift+End should select from cursor to line end";
+  EXPECT_EQ(editor.getSelectedText(), "llo") << "Shift+End should select from cursor to line end";
 }
 
 TEST_F(TextEditorTests, ShiftUpSelectsMultipleLinesUp) {
   editor.setText("Line1\nLine2\nLine3");
   editor.setCursorPosition(Coordinates(2, 1));
   editor.moveUp(1, true);  // select=true
-  EXPECT_TRUE(editor.hasSelection())
-      << "Shift+Up should create selection";
+  EXPECT_TRUE(editor.hasSelection()) << "Shift+Up should create selection";
 }
 
 TEST_F(TextEditorTests, ShiftDownSelectsMultipleLinesDown) {
   editor.setText("Line1\nLine2\nLine3");
   editor.setCursorPosition(Coordinates(0, 1));
   editor.moveDown(1, true);  // select=true
-  EXPECT_TRUE(editor.hasSelection())
-      << "Shift+Down should create selection";
+  EXPECT_TRUE(editor.hasSelection()) << "Shift+Down should create selection";
 }
 
 TEST_F(TextEditorTests, ShiftCtrlEndSelectsToDocumentEnd) {
   editor.setText("Line1\nLine2\nLine3");
   editor.setCursorPosition(Coordinates(0, 2));
   editor.moveBottom(true);  // select=true to document end
-  EXPECT_TRUE(editor.hasSelection())
-      << "Shift+Ctrl+End should create selection to document end";
+  EXPECT_TRUE(editor.hasSelection()) << "Shift+Ctrl+End should create selection to document end";
 }
 
 TEST_F(TextEditorTests, ShiftCtrlHomeSelectsToDocumentStart) {
   editor.setText("Line1\nLine2\nLine3");
   editor.setCursorPosition(Coordinates(2, 2));
   editor.moveTop(true);  // select=true to document start
-  EXPECT_TRUE(editor.hasSelection())
-      << "Shift+Ctrl+Home should create selection to document start";
+  EXPECT_TRUE(editor.hasSelection()) << "Shift+Ctrl+Home should create selection to document start";
 }
 
 TEST_F(TextEditorTests, MultiLineDeleteAcrossLines) {
@@ -592,8 +555,7 @@ TEST_F(TextEditorTests, MultiLineDeleteAcrossLines) {
   // empty text should leave "Li" + "3" = "Li3".
   editor.setSelection(Coordinates(0, 2), Coordinates(2, 4));
   editor.insertText("");
-  EXPECT_EQ(editor.getText(), "Li3")
-      << "Replacing multi-line selection should join remaining text";
+  EXPECT_EQ(editor.getText(), "Li3") << "Replacing multi-line selection should join remaining text";
 }
 
 TEST_F(TextEditorTests, CopyMultipleLines) {
@@ -601,8 +563,7 @@ TEST_F(TextEditorTests, CopyMultipleLines) {
   editor.setSelection(Coordinates(0, 0), Coordinates(2, 5));
   editor.copy();
   const char* clipboard = ImGui::GetClipboardText();
-  EXPECT_STREQ(clipboard, "Line1\nLine2\nLine3")
-      << "copy should handle multi-line selections";
+  EXPECT_STREQ(clipboard, "Line1\nLine2\nLine3") << "copy should handle multi-line selections";
 }
 
 TEST_F(TextEditorTests, InsertMultipleCharactersInSequence) {
@@ -612,16 +573,14 @@ TEST_F(TextEditorTests, InsertMultipleCharactersInSequence) {
   editor.insertText("l");
   editor.insertText("l");
   editor.insertText("o");
-  EXPECT_EQ(editor.getText(), "Hello")
-      << "Sequential character insertions should build word";
+  EXPECT_EQ(editor.getText(), "Hello") << "Sequential character insertions should build word";
 }
 
 TEST_F(TextEditorTests, GetSelectedTextWithoutSelection) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 2));
   std::string selected = editor.getSelectedText();
-  EXPECT_EQ(selected, "")
-      << "getSelectedText without selection should return empty string";
+  EXPECT_EQ(selected, "") << "getSelectedText without selection should return empty string";
 }
 
 TEST_F(TextEditorTests, MoveRightMultipleTimes) {
@@ -657,8 +616,7 @@ TEST_F(TextEditorTests, DeleteMultipleSelectionsSuccessively) {
   EXPECT_EQ(editor.getText(), "CDEFGH");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 2));
   editor.insertText("");  // Delete "CD"
-  EXPECT_EQ(editor.getText(), "EFGH")
-      << "Successive deletions should work correctly";
+  EXPECT_EQ(editor.getText(), "EFGH") << "Successive deletions should work correctly";
 }
 
 TEST_F(TextEditorTests, UndoMultipleOperations) {
@@ -674,8 +632,7 @@ TEST_F(TextEditorTests, UndoMultipleOperations) {
   // Three insertText calls → three undo entries; `undo(4)` walks
   // them all and stops at the start of the undo buffer.
   editor.undo(4);
-  EXPECT_EQ(editor.getText(), "A")
-      << "undo(4) should revert to 'A'";
+  EXPECT_EQ(editor.getText(), "A") << "undo(4) should revert to 'A'";
 }
 
 TEST_F(TextEditorTests, RedoAfterMultipleUndos) {
@@ -686,16 +643,14 @@ TEST_F(TextEditorTests, RedoAfterMultipleUndos) {
   editor.undo(2);
   EXPECT_EQ(editor.getText(), "X");
   editor.redo(1);
-  EXPECT_EQ(editor.getText(), "XY")
-      << "redo(1) should restore one operation";
+  EXPECT_EQ(editor.getText(), "XY") << "redo(1) should restore one operation";
 }
 
 TEST_F(TextEditorTests, SetSelectionOnMultipleLines) {
   editor.setText("AAA\nBBB\nCCC");
   editor.setSelection(Coordinates(0, 1), Coordinates(2, 2));
   std::string selected = editor.getSelectedText();
-  EXPECT_EQ(selected, "AA\nBBB\nCC")
-      << "setSelection should correctly span multiple lines";
+  EXPECT_EQ(selected, "AA\nBBB\nCC") << "setSelection should correctly span multiple lines";
 }
 
 TEST_F(TextEditorTests, CursorStaysInBoundsAfterDelete) {
@@ -704,8 +659,7 @@ TEST_F(TextEditorTests, CursorStaysInBoundsAfterDelete) {
   editor.delete_();
   // Cursor should remain at valid position (column 2 is at end of "AB")
   Coordinates pos = editor.getCursorPosition();
-  EXPECT_LE(pos.column, 2)
-      << "Cursor should stay in valid bounds after delete";
+  EXPECT_LE(pos.column, 2) << "Cursor should stay in valid bounds after delete";
 }
 
 TEST_F(TextEditorTests, EmptyLineHandling) {
@@ -713,8 +667,7 @@ TEST_F(TextEditorTests, EmptyLineHandling) {
   EXPECT_EQ(editor.getText(), "A\n\nC");
   editor.setCursorPosition(Coordinates(1, 0));
   editor.insertText("B");
-  EXPECT_EQ(editor.getText(), "A\nB\nC")
-      << "insertText on empty line should add character";
+  EXPECT_EQ(editor.getText(), "A\nB\nC") << "insertText on empty line should add character";
 }
 
 TEST_F(TextEditorTests, SelectWordAtLineEnd) {

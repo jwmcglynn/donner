@@ -165,11 +165,17 @@ void EditorApp::undo() {
   // source keeps the post-drag text, and the next edit lands on the
   // wrong baseline.
   if (snapshot->writebackTarget.has_value()) {
-    enqueueTransformWriteback(CompletedTransformWriteback{.target = *snapshot->writebackTarget,
-                                                          .transform = snapshot->transform});
+    enqueueTransformWriteback(CompletedTransformWriteback{
+        .target = *snapshot->writebackTarget,
+        .transform = snapshot->transform,
+        .sourceTransformAttributeValue = snapshot->sourceTransformAttributeValue,
+        .restoreSourceTransformAttributeValue = snapshot->restoreSourceTransformAttributeValue});
   } else if (auto target = captureAttributeWritebackTarget(liveElement); target.has_value()) {
-    enqueueTransformWriteback(CompletedTransformWriteback{.target = std::move(*target),
-                                                          .transform = snapshot->transform});
+    enqueueTransformWriteback(CompletedTransformWriteback{
+        .target = std::move(*target),
+        .transform = snapshot->transform,
+        .sourceTransformAttributeValue = snapshot->sourceTransformAttributeValue,
+        .restoreSourceTransformAttributeValue = snapshot->restoreSourceTransformAttributeValue});
   }
 }
 

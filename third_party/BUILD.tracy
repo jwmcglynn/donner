@@ -93,6 +93,7 @@ cc_library(
     copts = [
         "-Ipublic",
         "-Wno-deprecated-declarations",
+        "-Wno-thread-safety-analysis",
         "-Wno-unused-function",
     ],
     defines = [

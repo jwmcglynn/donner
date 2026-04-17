@@ -2,7 +2,7 @@
 
 #include <utility>
 
-#include "imgui.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 
@@ -17,7 +17,7 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
   if (pushedBoldDonnerMenuFont) {
     ImGui::PushFont(boldMenuFont);
   }
-  const bool donnerMenuOpen = ImGui::BeginMenu("Donner");
+  const bool donnerMenuOpen = ImGui::BeginMenu("Donner SVG Editor");
   if (pushedBoldDonnerMenuFont) {
     ImGui::PopFont();
   }

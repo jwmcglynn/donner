@@ -3,7 +3,7 @@
 #include <cfloat>
 #include <cstring>
 
-#include "imgui.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 
@@ -78,7 +78,9 @@ void DialogPresenter::render(
       ImGui::Separator();
       ImGui::TextUnformatted("(c) 2024-2026 Jeff McGlynn");
       ImGui::Spacing();
-      ImGui::TextWrapped("A C++20 SVG rendering engine with a lightweight editor.");
+      ImGui::TextWrapped(
+          "An SVG editor powered by the Donner, a browser-grade SVG2 rendering engine written in "
+          "C++20.");
       ImGui::TextUnformatted("https://github.com/jwmcglynn/donner");
       ImGui::Separator();
       if (ImGui::Button("Show Licenses")) {

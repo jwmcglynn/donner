@@ -10,7 +10,7 @@
 
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
-#include "imgui_internal.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "misc/cpp/imgui_stdlib.h"
 
 namespace donner::editor {

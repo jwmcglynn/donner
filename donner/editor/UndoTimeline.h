@@ -29,6 +29,17 @@ struct UndoSnapshot {
   /// Stable locator for the element, used to resolve a live handle after a
   /// self-initiated ReplaceDocument swaps the document identity.
   std::optional<AttributeWritebackTarget> writebackTarget;
+
+  /// Exact `transform=` attribute bytes from the source pane, when undo
+  /// should restore the user's original text verbatim instead of the
+  /// canonical serializer output. `std::nullopt` means the attribute was
+  /// absent in the captured source.
+  std::optional<RcString> sourceTransformAttributeValue;
+
+  /// Whether `sourceTransformAttributeValue` should be restored verbatim.
+  /// When false, source writeback falls back to canonical serialization of
+  /// `transform`.
+  bool restoreSourceTransformAttributeValue = false;
 };
 
 /// Capture the current transform of an SVGElement as an undo snapshot.

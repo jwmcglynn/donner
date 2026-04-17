@@ -3,8 +3,14 @@
 
 #include <cstdint>
 
-#include "donner/editor/AsyncRenderer.h"
+#ifdef __EMSCRIPTEN__
+#define GLFW_INCLUDE_ES3
+#include <GLES3/gl3.h>
+#else
 #include "glad/glad.h"
+#endif
+
+#include "donner/editor/AsyncRenderer.h"
 
 namespace donner::editor {
 

@@ -32,8 +32,24 @@ using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
 
 namespace donner::editor::gui {
 
+/// HiDPI settings derived from the native window/display scale.
+struct UiScaleConfig {
+  double displayScale = 1.0;
+
+  [[nodiscard]] float scaledPixels(double basePixels) const {
+    return static_cast<float>(basePixels * displayScale);
+  }
+
+  [[nodiscard]] float fontGlobalScale() const { return static_cast<float>(1.0 / displayScale); }
+};
+
+/// Derive the editor's UI scaling from logical window size, framebuffer size, and the platform's
+/// content scale hint. Prefers the framebuffer/logical ratio when available.
+[[nodiscard]] UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
+                                                 double contentScaleX);
+
 struct EditorWindowOptions {
-  std::string title = "Donner Editor";
+  std::string title = "Donner SVG Editor";
   int initialWidth = 1280;
   int initialHeight = 720;
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
@@ -95,6 +111,9 @@ public:
   /// Backing display content scale (for example 2.0 on a Retina display).
   [[nodiscard]] Vector2d contentScale() const;
 
+  /// Effective UI display scale used for ImGui fonts and framebuffer coordinates.
+  [[nodiscard]] double displayScale() const { return uiScaleConfig_.displayScale; }
+
   /// Install a GLFW user pointer on the wrapped window.
   void setUserPointer(void* pointer);
 
@@ -111,6 +130,7 @@ private:
   uint32_t textureId_ = 0;
   int textureWidth_ = 0;
   int textureHeight_ = 0;
+  UiScaleConfig uiScaleConfig_;
   bool valid_ = false;
   bool imguiInitialized_ = false;
 };

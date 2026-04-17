@@ -9,6 +9,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
 #include "donner/editor/GlTextureCache.h"
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
@@ -16,7 +17,6 @@
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/ViewportInteractionController.h"
-#include "imgui.h"
 
 namespace donner::editor::gui {
 class EditorWindow;
@@ -26,6 +26,9 @@ namespace donner::editor {
 
 struct EditorShellOptions {
   std::string svgPath;
+  std::optional<std::string> initialSource;
+  std::optional<std::string> initialPath;
+  std::string editorNoticeText;
   bool experimentalMode = false;
 };
 

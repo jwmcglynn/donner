@@ -16,7 +16,7 @@
 #include "donner/editor/TextEditorCore.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "imgui.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 
@@ -858,15 +858,15 @@ private:
   // Code folding — begin/end positions and sorted flag live in `core_`
   // (mutated by insertion/deletion bookkeeping); the render-side state
   // (fold_, foldConnection_, foldedLines_, foldLastIteration_) stays here.
-  bool foldEnabled_ = true;                    //!< Enable code folding
-  std::vector<Coordinates>& foldBegin_;        //!< Start positions (core_-owned)
-  std::vector<Coordinates>& foldEnd_;          //!< End positions (core_-owned)
-  bool& foldSorted_;                           //!< Whether folds are sorted (core_)
-  std::vector<int> foldConnection_;            //!< Fold hierarchy connections
-  std::vector<bool> fold_;                     //!< Fold states (open/closed)
-  int foldedLines_ = 0;                        //!< Number of folded lines.
-  uint64_t foldLastIteration_ = 0;             //!< Last fold update iteration
-  float lastScroll_ = 0.0f;                    //!< Last scroll position
+  bool foldEnabled_ = true;              //!< Enable code folding
+  std::vector<Coordinates>& foldBegin_;  //!< Start positions (core_-owned)
+  std::vector<Coordinates>& foldEnd_;    //!< End positions (core_-owned)
+  bool& foldSorted_;                     //!< Whether folds are sorted (core_)
+  std::vector<int> foldConnection_;      //!< Fold hierarchy connections
+  std::vector<bool> fold_;               //!< Fold states (open/closed)
+  int foldedLines_ = 0;                  //!< Number of folded lines.
+  uint64_t foldLastIteration_ = 0;       //!< Last fold update iteration
+  float lastScroll_ = 0.0f;              //!< Last scroll position
 
   // Autocomplete
   std::vector<RcString> autocompleteSearchTerms_;  //!< Terms to match against
@@ -911,18 +911,18 @@ private:
   // `scrollbarMarkers_`, and `changedLines_` all moved into
   // `TextEditorCore`. The reference aliases below preserve the short
   // names used by the render / input-handling code.
-  bool horizontalScroll_ = true;        //!< Enable horizontal scrolling
-  bool showLineNumbers_ = true;         //!< Show line numbers
-  bool highlightLine_ = true;           //!< Highlight current line
-  bool highlightBrackets_ = false;      //!< Highlight matching brackets
-  bool focused_ = false;                //!< Editor has keyboard focus
-  bool withinRender_ = false;           //!< Currently rendering
-  float textStart_ = 20.0f;             //!< X offset where text begins
-  int leftMargin_ = kLineNumberSpace;   //!< Left margin width
-  bool handleKeyboardInputs_ = true;    //!< Process keyboard input
-  bool handleMouseInputs_ = true;       //!< Process mouse input
-  bool ignoreImGuiChild_ = false;       //!< Ignore ImGui child windows
-  bool showWhitespaces_ = false;        //!< Show whitespace characters
+  bool horizontalScroll_ = true;       //!< Enable horizontal scrolling
+  bool showLineNumbers_ = true;        //!< Show line numbers
+  bool highlightLine_ = true;          //!< Highlight current line
+  bool highlightBrackets_ = false;     //!< Highlight matching brackets
+  bool focused_ = false;               //!< Editor has keyboard focus
+  bool withinRender_ = false;          //!< Currently rendering
+  float textStart_ = 20.0f;            //!< X offset where text begins
+  int leftMargin_ = kLineNumberSpace;  //!< Left margin width
+  bool handleKeyboardInputs_ = true;   //!< Process keyboard input
+  bool handleMouseInputs_ = true;      //!< Process mouse input
+  bool ignoreImGuiChild_ = false;      //!< Ignore ImGui child windows
+  bool showWhitespaces_ = false;       //!< Show whitespace characters
 
   // Reference aliases into `core_` for fields accessed by the shell's
   // render / input-capture code. These are initialized in the ctor
@@ -936,21 +936,21 @@ private:
   SelectionMode& selectionMode_;
 
   // Colors and syntax highlighting — canonical storage in `core_`.
-  Palette& paletteBase_;                     //!< Base color palette (core_)
-  Palette& palette_;                         //!< Current (alpha-blended) palette (core_)
+  Palette& paletteBase_;                          //!< Base color palette (core_)
+  Palette& palette_;                              //!< Current (alpha-blended) palette (core_)
   const LanguageDefinition& languageDefinition_;  //!< Language syntax (core_)
 
   // Layout and rendering. Interactive-selection trackers moved to core_.
-  ImVec2 uiCursorPos_;                 //!< Current UI cursor position
-  ImVec2 findOrigin_;                  //!< Search dialog origin
-  float windowWidth_;                  //!< Current window width
-  ImVec2 rightClickPos_;               //!< Position of right click
-  ErrorMarkers& errorMarkers_;         //!< Line error markers (core_)
-  ImVec2 charAdvance_;                 //!< Character size
-  Coordinates& interactiveStart_;      //!< Start of interactive selection (core_)
-  Coordinates& interactiveEnd_;        //!< End of interactive selection (core_)
-  std::string lineBuffer_;             //!< Buffer for current line
-  uint64_t startTime_ = 0;             //!< Editor start time
+  ImVec2 uiCursorPos_;             //!< Current UI cursor position
+  ImVec2 findOrigin_;              //!< Search dialog origin
+  float windowWidth_;              //!< Current window width
+  ImVec2 rightClickPos_;           //!< Position of right click
+  ErrorMarkers& errorMarkers_;     //!< Line error markers (core_)
+  ImVec2 charAdvance_;             //!< Character size
+  Coordinates& interactiveStart_;  //!< Start of interactive selection (core_)
+  Coordinates& interactiveEnd_;    //!< End of interactive selection (core_)
+  std::string lineBuffer_;         //!< Buffer for current line
+  uint64_t startTime_ = 0;         //!< Editor start time
 
   // Hover state
   Coordinates lastHoverPosition_;                        //!< Last mouse hover position
