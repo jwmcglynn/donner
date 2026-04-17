@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/base/xml/components/AttributesComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
@@ -24,6 +26,56 @@ namespace {
 struct HiddenVisibilityState {
   Entity entity;
 };
+
+/// Returns true if any ancestor of @p entity carries a clip-path, mask, or
+/// filter. When the editor drags a descendant of `<g filter=...>`, promoting
+/// the descendant into its own cached layer loses the ancestor's filter
+/// context. The compositor's cache path has no way to replay that ancestor
+/// filter during composition, so we refuse the promotion and fall back to the
+/// non-composited path.
+///
+/// Checks three signals so the check works both before and after
+/// `prepareDocumentForRendering`:
+///   1. Raw XML attributes (`filter`, `mask`, `clip-path`) on
+///      `AttributesComponent`. Present immediately after parse.
+///   2. Resolved fields on `RenderingInstanceComponent` (post-prepare).
+///   3. `isolatedLayer` on `RenderingInstanceComponent` (opacity<1,
+///      blend-mode, isolation:isolate — any of which make the ancestor a
+///      compositing group that can't be extracted from).
+bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+  if (tree == nullptr) {
+    return false;
+  }
+  Entity cursor = tree->parent();
+  while (cursor != entt::null && registry.valid(cursor)) {
+    // Raw-attribute check. The parser attaches `AttributesComponent` to every
+    // XML element; `<g filter="..." mask="..." clip-path="...">` shows up here
+    // before any resolver has run.
+    if (const auto* attrs = registry.try_get<donner::components::AttributesComponent>(cursor)) {
+      if (attrs->hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
+          attrs->hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
+          attrs->hasAttribute(xml::XMLQualifiedNameRef("clip-path"))) {
+        return true;
+      }
+    }
+    // Resolved-field check. Covers post-prepare state and also covers cases
+    // where the filter/mask/clip came from CSS rather than an attribute.
+    if (const auto* ancestorInstance =
+            registry.try_get<components::RenderingInstanceComponent>(cursor)) {
+      if (ancestorInstance->clipPath.has_value() || ancestorInstance->mask.has_value() ||
+          ancestorInstance->resolvedFilter.has_value() || ancestorInstance->isolatedLayer) {
+        return true;
+      }
+    }
+    const auto* ancestorTree = registry.try_get<donner::components::TreeComponent>(cursor);
+    if (ancestorTree == nullptr) {
+      break;
+    }
+    cursor = ancestorTree->parent();
+  }
+  return false;
+}
 
 void HideLayerRange(Registry& registry, const CompositorLayer& layer,
                     std::vector<HiddenVisibilityState>* hiddenEntities) {
@@ -140,6 +192,16 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
   Registry& registry = document_->registry();
 
   if (!registry.valid(entity)) {
+    return false;
+  }
+
+  // Refuse promotion if an ancestor has a filter / mask / clip-path. Extracting
+  // the descendant into its own cached layer would lose the ancestor's
+  // compositing context — the user would see, e.g., the blur disappear while
+  // dragging a path that lives inside `<g filter="url(#blur)">`. The caller
+  // (editor) falls back to the non-composited drag path which renders
+  // correctly via the full tree walk.
+  if (HasCompositingBreakingAncestor(registry, entity)) {
     return false;
   }
 

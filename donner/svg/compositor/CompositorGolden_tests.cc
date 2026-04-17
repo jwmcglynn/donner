@@ -368,6 +368,245 @@ TEST_F(CompositorGoldenTest, VerifyPixelIdentityGateCatchesNoDriftOnValidScene) 
   SUCCEED() << "Dual-path verification passed across all rendered frames";
 }
 
+// Regression: dragging a Gaussian-blurred shape in the editor caused the blur
+// to disappear during drag. The blurred element is auto-promoted (filter →
+// mandatory hint), its layer is cached, and the cached bitmap SHOULD contain
+// the blurred result. If the cache produces a non-blurred (or empty) bitmap,
+// the drag preview silently loses the effect.
+TEST_F(CompositorGoldenTest, GaussianBlurredShapeMatchesFullRenderAfterPromotion) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="4"/>
+        </filter>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="60" y="20" width="60" height="60" fill="red" filter="url(#blur)"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+
+  // Blur produces semi-transparent edge pixels over a wide radius; the tolerance
+  // here is looser than the identity-composition cases because the blur kernel
+  // itself has sub-pixel variation and the unpremul round-trip may amplify it.
+  EXPECT_LE(result.maxChannelDiff, 3) << result;
+  EXPECT_LE(result.mismatchCount, result.totalPixels / 50u)  // 2%
+      << "blurred shape should match full-render within AA tolerance: " << result;
+}
+
+// Regression variant: the blurred shape is dragged (composition transform set
+// to a non-zero translation). The cached bitmap carries the blurred result;
+// composition just translates the bitmap. Blur must remain visible.
+TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="4"/>
+        </filter>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="60" y="20" width="60" height="60" fill="red" filter="url(#blur)"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // Initial render caches the blurred bitmap.
+  compositor.setLayerCompositionTransform(entity, Transform2d());
+  compositor.renderFrame(viewport_);
+
+  // Now simulate a drag: translate the layer. The cached bitmap should still
+  // carry the blur; composition just repositions it.
+  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(Vector2d(30.0, 0.0)));
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+
+  // Original rect x=60,y=20,w=60,h=60. After translate +30, rect is at
+  // [90, 150] × [20, 80]. The Gaussian blur (stdDeviation=4) produces a
+  // halo extending ~8–12 px beyond the edges — red bleeds into the
+  // surrounding white.
+  //
+  // Sample the halo at (155, 50): 5 px outside the right edge. If the blur
+  // is preserved in the cached bitmap and blitted at the new position, this
+  // pixel should show semi-transparent red against white (pink-ish). If the
+  // blur is lost during drag (bug), this pixel stays pure white.
+  const Pixel halo = getPixel(flat, 155, 50);
+  const Pixel farAway = getPixel(flat, 5, 5);
+
+  EXPECT_LT(halo.g, 240) << "halo pixel should be tinted red by the blur (not white). got: "
+                        << halo;
+  EXPECT_LT(halo.b, 240) << "halo pixel should be tinted red by the blur. got: " << halo;
+  EXPECT_GT(halo.r, halo.g) << "red channel dominant in halo. got: " << halo;
+  EXPECT_THAT(farAway, IsWhite()) << "far from drag, background stays white";
+}
+
+// Regression for donner_splash.svg bug: the user drags a letter/path that's
+// a CHILD of a `<g filter="url(#blur)">` group. Under the current compositor
+// behavior, the child path gets auto-promoted (or interaction-promoted via
+// drag) and rasterized standalone — outside of its parent's filter context.
+// The blur visually disappears because the child's layer bitmap has no blur
+// applied (the filter is on the group, not the child).
+//
+// This test reproduces the scenario explicitly: we promote a CHILD of a
+// filtered group and compare the composited output against the full-render
+// reference. If the filter context is lost, the two paths diverge.
+TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRefusesPromotion) {
+  // Regression for the splash-SVG drag bug reported in manual testing:
+  // dragging a blurred shape (path inside `<g filter="url(#blur)">`) caused
+  // the blur to disappear. Root cause: the editor's drag promotion path
+  // extracted the descendant into its own cached layer, losing the
+  // ancestor's filter context. The cached layer bitmap had un-blurred
+  // content; the composed output showed pure red where the blurred halo
+  // should have been.
+  //
+  // Fix: `promoteEntity` now walks ancestors and refuses promotion when
+  // any ancestor has a filter/mask/clip-path. The editor's drag path,
+  // when promoteEntity returns false, falls back to the full-render
+  // mutation path which handles the ancestor filter correctly.
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="4"/>
+        </filter>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <g filter="url(#blur)">
+        <rect id="target" x="60" y="20" width="60" height="60" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // Simulate the editor's drag promotion: the user clicked on the child
+  // rect inside the filtered group. The controller must refuse to promote.
+  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
+      << "promotion of a descendant of `<g filter=...>` must be refused so "
+         "the ancestor's filter context isn't lost during composited drag";
+
+  // With promotion refused, `isPromoted` is false and `layerCount` is 0.
+  EXPECT_FALSE(compositor.isPromoted(target->entityHandle().entity()));
+  EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+// Parallel regression: ancestor with clip-path also refuses promotion.
+TEST_F(CompositorGoldenTest, ChildOfClippedGroupRefusesPromotion) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <clipPath id="half">
+          <rect x="0" y="0" width="100" height="100"/>
+        </clipPath>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <g clip-path="url(#half)">
+        <rect id="target" x="60" y="20" width="60" height="60" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
+      << "clip-path ancestor context must not be extracted";
+}
+
+// Parallel regression: ancestor with mask also refuses promotion.
+TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRefusesPromotion) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <mask id="m">
+          <rect x="0" y="0" width="100" height="100" fill="white"/>
+        </mask>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <g mask="url(#m)">
+        <rect id="target" x="60" y="20" width="60" height="60" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
+      << "mask ancestor context must not be extracted";
+}
+
+// Positive: a plain descendant (no compositing ancestor) still promotes.
+// Guards against over-refusing promotion.
+TEST_F(CompositorGoldenTest, PlainDescendantStillPromotes) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g>
+        <rect id="target" x="60" y="20" width="60" height="60" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_TRUE(compositor.promoteEntity(target->entityHandle().entity()))
+      << "plain `<g>` ancestor without compositing features doesn't block promotion";
+  EXPECT_TRUE(compositor.isPromoted(target->entityHandle().entity()));
+}
+
+// Regression: a radially-gradient-filled shape, auto-promoted, renders
+// correctly. Pairs with the Gaussian-blur test to cover two of the key
+// features in the editor's splash SVG.
+TEST_F(CompositorGoldenTest, RadialGradientShapeMatchesFullRenderAfterPromotion) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <radialGradient id="g" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="yellow"/>
+          <stop offset="100%" stop-color="red"/>
+        </radialGradient>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <circle id="target" cx="100" cy="50" r="30" fill="url(#g)"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+
+  EXPECT_LE(result.maxChannelDiff, 3) << result;
+  EXPECT_LE(result.mismatchCount, result.totalPixels / 50u) << result;
+}
+
 // The ancestor-clip safety check (committed earlier) should prevent
 // auto-promotion here, so the output exactly matches the full render — no
 // layer extraction, no lost clip context.
