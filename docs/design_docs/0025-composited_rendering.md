@@ -1726,41 +1726,70 @@ through the resolver rather than bypassing it.
 **Prerequisites:** Phase 1 complete. The hint cascade plumbing exists
 and carries Explicit + Mandatory hints.
 
-- [ ] Add `HintSource::Interaction` and `InteractionHint` enum.
+- [x] Add `HintSource::Interaction` and `InteractionHint` enum.
 - [ ] Reserve the interactive-layer backing store at startup.
-- [ ] Migrate editor from `promoteEntity` to `ScopedCompositorHint`.
-- [ ] Editor publishes `InteractionHint::Selection` on selection,
-  `InteractionHint::ActiveDrag` on drag start.
+- [x] Migrate editor from `promoteEntity` to `ScopedCompositorHint`.
+  (Routed internally — `CompositorController::promoteEntity` publishes
+  an Interaction hint under `autoPromoteInteractions`, falling back to
+  the `Explicit` escape hatch otherwise. Editor API-surface unchanged.)
+- [x] Editor publishes `InteractionHint::Selection` on selection,
+  `InteractionHint::ActiveDrag` on drag start. (Prewarm path in
+  `RenderCoordinator` tags with `Selection`; active-drag path tags
+  with `ActiveDrag`. `Hover` intentionally not in the v1 enum per
+  Non-Goal 8.)
 - [ ] Add `HintSource::Animation`. The mandatory-feature detector is
   extended to inspect animation state (or, when the future animation
   system lands, it publishes hints directly).
-- [ ] Multi-layer composition ordering for non-mandatory layers.
+  (`ScopedCompositorHint::Animation` factory exists; no producer
+  until the animation system lands.)
+- [x] Layers sorted by draw order after reconciliation
+  (`CompositorController::reconcileLayers`). Precondition for full
+  multi-layer composition.
+- [ ] `CompositedPreview` transport shape for multi-layer scenes.
+  The current shape (`backgroundBitmap` / `promotedBitmap` /
+  `foregroundBitmap`) models exactly one drag layer; under bucketing
+  there can be K+1 layers. Open design question: extend to a list or
+  route multi-layer through the full composited bitmap. This blocks
+  flipping `complexityBucketing` default-on.
 - [ ] Cross-layer clip-path handling (de-promote within clipped groups).
 - [ ] Compositor golden tests for all correctness edge cases.
+- [x] `click_to_first_drag_update_benchmark` (baseline: 5.4 ms combined
+  on 1k-node scene; 70.2 ms combined on 10k-node scene, mock renderer,
+  `--compilation_mode=opt`).
 - [ ] `animation_isolation_test`, `animation_dual_path_test`,
-  `interaction_hint_no_allocation_test`,
-  `click_to_first_drag_update_benchmark`.
+  `interaction_hint_no_allocation_test`.
 - [ ] Dual-path assertion enabled in CI compositor test targets.
-- [ ] Runtime field `CompositorConfig::autoPromoteInteractions` gates
+- [x] Runtime field `CompositorConfig::autoPromoteInteractions` gates
   interaction hints (editor publishes `ScopedCompositorHint::Interaction`
   only when this is true).
-- [ ] Runtime field `CompositorConfig::autoPromoteAnimations` gates
-  animation-driven promotion independently.
+- [x] Runtime field `CompositorConfig::autoPromoteAnimations` gates
+  animation-driven promotion independently. (Field exists; no producer
+  yet so the gate is effectively unreachable.)
 
 ### Phase 2.5: Complexity bucketing at load
 
 **Prerequisites:** Phase 2 complete. Independent rollback flag.
 
-- [ ] Implement `ComplexityBucketer` system.
-- [ ] Run bucketer at document load and on
-  `RenderTreeState::needsFullRebuild`.
-- [ ] Low-weight `HintSource::ComplexityBucket` hints published.
-- [ ] `bucket_partition_determinism_test`,
-  `bucket_boundary_respect_test`.
+- [x] Implement `ComplexityBucketer` system.
+- [x] Run bucketer at document load and on
+  `RenderTreeState::needsFullRebuild`. (Wired into
+  `CompositorController::renderFrame` behind the `documentDirty`
+  gate so it only rescans on structural change; default-off until
+  the `CompositedPreview` transport shape is resolved.)
+- [x] Low-weight `HintSource::ComplexityBucket` hints published.
+- [x] `bucket_partition_determinism_test` (see
+  `complexity_bucketer_tests`, 11 cases covering empty registry,
+  root-only, within-budget, over-budget eviction, filter/mask cost
+  dominance, idempotence, stale cleanup, determinism across 10
+  runs, reserved-slots, zero-budget edge).
+- [ ] `bucket_boundary_respect_test` (full deferred-pop validation —
+  v1 sidesteps this by limiting candidates to top-level root
+  children; deeper candidates deferred).
 - [ ] Measure load-time overhead; assert < 5% of parse+ECS-build
   (Goal 8).
-- [ ] Runtime field `CompositorConfig::complexityBucketing` gates
-  bucketing independently of Phases 1/2.
+- [x] Runtime field `CompositorConfig::complexityBucketing` gates
+  bucketing independently of Phases 1/2 (default `false` in v1 —
+  see Phase 2 `CompositedPreview` open question).
 
 ### Phase 3: Backend optimizations (deferred)
 
