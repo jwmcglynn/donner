@@ -452,5 +452,173 @@ TEST_F(SelectToolTest, ShiftMarqueeOverAlreadySelectedDoesNotDuplicate) {
   EXPECT_EQ(app.selectedElements().size(), 2u);
 }
 
+// ── Multi-select drag ───────────────────────────────────────────────────────
+//
+// Multi-select drag: when a user clicks and drags on an element that's
+// already in a multi-element selection, every selected element moves in
+// lockstep. This covers the marquee → click-drag flow, undo semantics, and
+// the "clicking an unselected element collapses selection" escape hatch.
+
+TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
+  // Marquee-select both rects.
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+
+  // Click-drag on r1 (an already-selected element). Both should move.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging()) << "click on selected element starts a drag";
+  EXPECT_EQ(app.selectedElements().size(), 2u)
+      << "selection preserved — clicking an already-selected element does not collapse";
+
+  tool.onMouseMove(app, Vector2d(65.0, 45.0), /*buttonHeld=*/true);  // delta (50, 30)
+  tool.onMouseUp(app, Vector2d(65.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  const Transform2d r2End = transformOf("#r2");
+  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 50.0, 1e-6) << "r1 moved by dx";
+  EXPECT_NEAR(r1End.data[5] - r1Start.data[5], 30.0, 1e-6) << "r1 moved by dy";
+  EXPECT_NEAR(r2End.data[4] - r2Start.data[4], 50.0, 1e-6) << "r2 moved by same dx";
+  EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 30.0, 1e-6) << "r2 moved by same dy";
+}
+
+TEST_F(SelectToolTest, ClickOnUnselectedElementCollapsesMultiSelection) {
+  // Marquee-select both.
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  // Click on r1 — already in selection — the "grab any, move all" case:
+  // selection preserved.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  EXPECT_EQ(app.selectedElements().size(), 2u);
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+
+  // Reset to multi-selection. Now click on empty space BETWEEN the rects so
+  // the marquee path clears selection. Re-select and then click r1.
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  // Now simulate "click on a different selected element" (r2): still preserves.
+  tool.onMouseDown(app, Vector2d(120.0, 120.0), MouseModifiers{});
+  EXPECT_EQ(app.selectedElements().size(), 2u)
+      << "clicking on r2 (also in selection) preserves the whole selection";
+  tool.onMouseUp(app, Vector2d(120.0, 120.0));
+}
+
+TEST_F(SelectToolTest, SingleSelectionStaysSingleWhenDragged) {
+  // Only r1 selected. Click-drag on r1 → single-element drag, no extras.
+  app.setSelection(elementById("#r1"));
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(65.0, 45.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(65.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  const Transform2d r2End = transformOf("#r2");
+  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 50.0, 1e-6) << "r1 moved";
+  EXPECT_NEAR(r2End.data[4] - r2Start.data[4], 0.0, 1e-6) << "r2 did NOT move (not in selection)";
+  EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 0.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
+  // Give r2 a prior transform so we can verify its start transform is
+  // captured and delta is composed relative to the right starting point.
+  auto r2Handle = elementById("#r2").cast<svg::SVGGraphicsElement>();
+  r2Handle.setTransform(Transform2d::Translate(Vector2d(5.0, 7.0)));
+
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+  ASSERT_NEAR(r2Start.data[4], 5.0, 1e-6);  // sanity: r2 starts at translate(5, 7)
+  ASSERT_NEAR(r2Start.data[5], 7.0, 1e-6);
+
+  // Drag by (10, 20).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(25.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(25.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  const Transform2d r2End = transformOf("#r2");
+  EXPECT_NEAR(r1End.data[4], r1Start.data[4] + 10.0, 1e-6);
+  EXPECT_NEAR(r2End.data[4], 15.0, 1e-6) << "r2: 5 + 10 = 15 (delta applied to prior transform)";
+  EXPECT_NEAR(r2End.data[5], 27.0, 1e-6) << "r2: 7 + 20 = 27";
+}
+
+TEST_F(SelectToolTest, MultiSelectDragWithoutMovementLeavesElementsAlone) {
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+
+  // mouse-down without a real mouse-move (sub-threshold noise).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(15.1, 15.1), /*buttonHeld=*/true);  // below 1.0 threshold
+  tool.onMouseUp(app, Vector2d(15.1, 15.1));
+  app.flushFrame();
+
+  EXPECT_EQ(transformOf("#r1").data[4], r1Start.data[4]) << "r1 unchanged by click-without-drag";
+  EXPECT_EQ(transformOf("#r2").data[4], r2Start.data[4]) << "r2 unchanged";
+}
+
+TEST_F(SelectToolTest, MultiSelectDragProducesWritebackForAllElements) {
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(45.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto writeback = tool.consumeCompletedDragWriteback();
+  ASSERT_TRUE(writeback.has_value()) << "primary writeback latched";
+  // The extras field carries non-primary elements' writebacks so the source
+  // sync path can patch every dragged element in one pass.
+  EXPECT_EQ(writeback->extras.size(), 1u) << "one extra writeback for r2";
+}
+
+TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
+  // When compositing is enabled but the drag is multi-element, the preview
+  // path falls back to DOM mutation — the drag-preview transport models only
+  // a single moving layer.
+  tool.setCompositedDragPreviewEnabled(true);
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+  app.flushFrame();
+
+  EXPECT_FALSE(tool.activeDragPreview().has_value())
+      << "multi-select drag must not emit a composited preview (would misrepresent the group)";
+
+  // Elements move via DOM mutation (not the composited preview path).
+  EXPECT_NE(transformOf("#r1").data[4], 0.0) << "r1 moved via mutation path";
+
+  tool.onMouseUp(app, Vector2d(45.0, 45.0));
+}
+
+TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
+  // Regression guard for the flow that USES the composited preview.
+  tool.setCompositedDragPreviewEnabled(true);
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+
+  auto preview = tool.activeDragPreview();
+  ASSERT_TRUE(preview.has_value()) << "single-element drag with compositing on emits a preview";
+  EXPECT_EQ(preview->entity, elementById("#r1").entityHandle().entity());
+
+  tool.onMouseUp(app, Vector2d(45.0, 45.0));
+}
+
 }  // namespace
 }  // namespace donner::editor

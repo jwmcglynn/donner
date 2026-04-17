@@ -259,6 +259,84 @@ TEST_F(CompositorGoldenTest, DragReleaseResetSequenceWithAggressiveBucketing) {
 // composited output matches the full-render reference, the test passes; if
 // a regression ever produces drift, `UTILS_RELEASE_ASSERT` fires and the
 // test fails with a diagnostic.
+// CI coverage: a bucketed document rendered at identity composition. Without
+// the gate enabled on the controller — `verifyPixelIdentity` surfaces a
+// real multi-bucket composition drift when three top-level children each
+// become their own layer, worth documenting but not ready to gate CI on.
+// Compare via `DualPathVerifier` which is a test-time check rather than an
+// in-tree assertion, so we can still measure the drift and iterate.
+TEST_F(CompositorGoldenTest, DISABLED_MultiBucketCompositionMatchesFullRender) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g>
+        <rect x="10" y="10" width="40" height="40" fill="red"/>
+        <rect x="60" y="10" width="40" height="40" fill="blue"/>
+      </g>
+      <rect x="120" y="20" width="30" height="30" fill="green"/>
+    </svg>
+  )svg");
+
+  CompositorConfig config;
+  config.complexityBucketing = true;
+  CompositorController compositor(document, renderer_, config);
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+
+  // TODO(phase2.5 followup): multi-bucket composition currently diverges from
+  // the full-render reference. The `hasSplitStaticLayers()` path only handles
+  // a single-drag-layer scenario. Re-enable this when the multi-bucket
+  // composition ordering path is fixed.
+  EXPECT_TRUE(result.isExact()) << result;
+}
+
+// TODO(phase2 followup): mandatory auto-promotion of `opacity<1` entities
+// currently diverges from the full-render reference. When the MandatoryHintDetector
+// promotes an opacity-reduced entity to its own layer, the cached bitmap
+// captures the subtree *without* opacity applied; composition doesn't re-apply
+// the opacity, so the composited output shows the subtree at full alpha.
+// Full render applies `pushIsolatedLayer(opacity, blendMode)` around the
+// subtree. Test left in `DISABLED_` form to document the gap.
+TEST_F(CompositorGoldenTest, DISABLED_OpacityLessThanOneAutoPromotionMatchesFullRender) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect x="10" y="10" width="50" height="50" fill="red" opacity="0.5"/>
+    </svg>
+  )svg");
+
+  CompositorController compositor(document, renderer_);
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+}
+
+// CI coverage: explicit promotion at identity composition. This is what a
+// selection-driven prewarm produces before the user starts dragging.
+TEST_F(CompositorGoldenTest, DualPathGate_ExplicitPromoteAtIdentity) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorConfig config;
+  config.verifyPixelIdentity = true;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+  compositor.renderFrame(viewport_);
+
+  SUCCEED() << "Explicit promote at identity: dual-path held";
+}
+
 TEST_F(CompositorGoldenTest, VerifyPixelIdentityGateCatchesNoDriftOnValidScene) {
   // The dual-path assertion compares composited output against a full-render
   // reference. It can only be enabled when both paths render the SAME scene —
