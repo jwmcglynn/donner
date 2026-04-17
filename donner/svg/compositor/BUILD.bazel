@@ -131,6 +131,20 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "compositor_golden_tests",
+    srcs = [
+        "CompositorGolden_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        ":dual_path_verifier",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "dual_path_verifier_tests",
     srcs = [
         "DualPathVerifier_tests.cc",
