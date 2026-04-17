@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 892 512">
+  <defs>
+    <style>
+      * { stroke-width: 0px; }
+      .bg { fill: #0d0f1d; }
+      .letter-a { fill: url(#letter-gradient-a); }
+      .letter-b { fill: url(#letter-gradient-b); }
+      .glow-path { fill: url(#glow-gradient); }
+    </style>
+    <filter id="glow-blur">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" />
+    </filter>
+    <radialGradient id="letter-gradient-a" cx="300" cy="390" fx="300" fy="390" r="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fae100"/>
+      <stop offset="1" stop-color="#f39200"/>
+    </radialGradient>
+    <radialGradient id="letter-gradient-b" cx="370" cy="390" fx="370" fy="390" r="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fae100"/>
+      <stop offset="1" stop-color="#f39200"/>
+    </radialGradient>
+    <radialGradient id="glow-gradient" cx="465" cy="410" fx="465" fy="410" r="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe54a" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#ffe54a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g class="wrapper">
+    <g id="Background">
+      <rect class="bg" width="892" height="512"/>
+    </g>
+    <g id="Donner">
+      <path class="letter-a" d="M302.82,346.89c-12.62,3.25-31.41,8.1-31.41,8.1v78.51s21.1-4.66,30.67-6.87c9.57-2.21,29.93-11.53,29.69-35.33l-.25-23.8c0-16.44-16.09-23.86-28.71-20.61ZM312.81,396.98c.09,8.65-7.31,12.04-10.79,12.84-3.48.8-11.14,2.5-11.14,2.5v-44.9s6.83-1.76,11.41-2.94c4.58-1.18,10.43,1.52,10.43,7.49l.09,8.65c.02,1.71-.09,6.53-.09,7.73,0,5.97.09-6.86.09,8.65Z"/>
+      <path class="letter-b" d="M369.92,328.61c-16.49,1.56-32.05,17.64-32.05,35.58v24.06c0,10.99,8.4,21.88,20.22,21.88s38.27-5.6,38.27-31.43v-29.25c0-13.38-9.96-22.4-26.45-20.85ZM377.7,380.26c0,10.27-9.02,12.45-13.38,12.45s-6.53-.62-6.53-8.09v-27.07c0-8.09,6.53-12.13,9.96-12.13s9.96-.62,9.96,8.4v26.45Z"/>
+    </g>
+    <g id="Lightning_glow_dark" filter="url(#glow-blur)">
+      <path class="glow-path" d="M499.7,412.62c-2.06-13.92-10.95-25.51-21.46-34.45-6.22-5.29-13.09-4.9-19.56-2.15-2.47.75-4.57,2.08-6.63,3.64-2.96,1.96-5.73,4.2-8.2,6.35-.05.04-.09.09-.14.14-5.15,2.79-8.46,7.21-9.93,13.01-1.75,6.94-2.24,13.81-4.75,20.64-1.23,3.36-2.41,7.23-4.28,10.28-1.81,2.96-4.52,4.88-5.95,8.11-1.09,2.47-.8,4.85.24,6.77.34,1.13.91,2.15,1.76,2.86,2.08,1.74,3.88,3.06,6.56,3.74,2.7.69,5.76.18,8.3,1.51,6.34,3.3,1.78,8.86,3.61,14.06,1.19,3.39,3.61,4.93,7.04,5.36,1.72.21,5.41-1.56,6.04-.41,3.32,6.13,14.22,3.63,13.6-3.68-.08-.93-.19-1.8-.34-2.64,2.89-2.48,5.39-5.34,8.63-7.53,5.15-3.48,11.15-3.92,15.82-8.5,9.14-8.97,11.42-24.99,9.63-37.13Z"/>
+    </g>
+  </g>
+</svg>

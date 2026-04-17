@@ -480,6 +480,114 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
 // fill (not a plain color). Paint servers are resolved per entity. A repeated
 // rasterization across drag frames may interact badly with resolved gradient
 // references.
+// Reduced donner_splash repro. Structure mirrors the full splash:
+// - Wrapping `<g class="wrapper">` (analogous to `cls-94`)
+// - `<g id="Donner">` with letter paths that use style-class gradient fills
+// - Sibling `<g id="Lightning_glow_dark" filter="url(#glow-blur)">` with a
+//   gradient-filled path
+// - Gradients defined in `<defs>` via `<radialGradient>`
+// - Style rules applied via CSS classes (not inline `fill="..."`)
+//
+// User drags a letter; the glow should stay visible. This matches the exact
+// manual-test scenario the user reports as broken.
+TEST_F(CompositorGoldenTest, DISABLED_ReducedSplashDraggingLetterPreservesGlow) {
+  SVGDocument document = parseDocument(R"svg(
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">
+  <defs>
+    <style>
+      * { stroke-width: 0px; }
+      .bg { fill: #0d0f1d; }
+      .letter-a { fill: url(#letter-gradient-a); }
+      .letter-b { fill: url(#letter-gradient-b); }
+      .glow-path { fill: url(#glow-gradient); }
+    </style>
+    <filter id="glow-blur">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4.5" />
+    </filter>
+    <radialGradient id="letter-gradient-a" cx="300" cy="390" r="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fae100"/>
+      <stop offset="1" stop-color="#f39200"/>
+    </radialGradient>
+    <radialGradient id="letter-gradient-b" cx="370" cy="390" r="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fae100"/>
+      <stop offset="1" stop-color="#f39200"/>
+    </radialGradient>
+    <radialGradient id="glow-gradient" cx="465" cy="410" r="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe54a" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#ffe54a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g class="wrapper">
+    <g id="Background">
+      <rect class="bg" width="892" height="512"/>
+    </g>
+    <g id="Donner">
+      <rect id="letter_a" class="letter-a" x="270" y="345" width="70" height="90"/>
+      <rect id="letter_b" class="letter-b" x="340" y="345" width="70" height="90"/>
+    </g>
+    <g id="Lightning_glow_dark" filter="url(#glow-blur)">
+      <rect class="glow-path" x="430" y="380" width="80" height="80"/>
+    </g>
+  </g>
+</svg>
+  )svg");
+
+  auto letterA = document.querySelector("#letter_a");
+  ASSERT_TRUE(letterA.has_value()) << "reduced splash should parse and expose #letter_a";
+
+  RenderViewport fullViewport;
+  fullViewport.size = Vector2d(892, 512);
+  fullViewport.devicePixelRatio = 1.0;
+
+  // Bucketing off so MandatoryHintDetector is the only promoter.
+  // Rules out double-composition (content in wrapper bucket AND its own
+  // layer). If the drift persists with bucketing off, it's an issue in the
+  // mandatory-layer path itself, not a bucketing interaction.
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  CompositorController compositor(document, renderer_, config);
+
+  // Sample INSIDE the glow rect where the gradient is visible (blurred).
+  // Glow rect: x=[430,510], y=[380,460]. (465, 420) is near the gradient
+  // center and shows significant gradient + blur contribution.
+  constexpr int kSampleX = 465;
+  constexpr int kSampleY = 420;
+
+  // Frame 0: full render BEFORE any drag — baseline.
+  compositor.renderFrame(fullViewport);
+  const RendererBitmap baseline = renderer_.takeSnapshot();
+  const Pixel glowBaseline = getPixel(baseline, kSampleX, kSampleY);
+  std::cerr << "[DIAG] baseline glow (" << kSampleX << "," << kSampleY
+            << "): " << glowBaseline << "\n";
+
+  // User clicks on letter A to start the drag.
+  ASSERT_TRUE(compositor.promoteEntity(letterA->entityHandle().entity()))
+      << "letter A has no compositing ancestor, should promote";
+
+  // Series of drag frames (editor drags at ~60fps).
+  Pixel glowDuringDrag{};
+  for (int i = 1; i <= 10; ++i) {
+    compositor.setLayerCompositionTransform(letterA->entityHandle().entity(),
+                                             Transform2d::Translate(Vector2d(i * 4.0, 0.0)));
+    compositor.renderFrame(fullViewport);
+
+    const RendererBitmap frame = renderer_.takeSnapshot();
+    glowDuringDrag = getPixel(frame, kSampleX, kSampleY);
+    if (i == 1 || i == 5 || i == 10) {
+      std::cerr << "[DIAG] frame " << i << " glow: " << glowDuringDrag << "\n";
+    }
+  }
+
+  // During drag the glow must still be present. Any significant drift from
+  // the baseline at this sample point means the glow disappeared.
+  const int baselineTotal = glowBaseline.r + glowBaseline.g + glowBaseline.b;
+  const int dragTotal = glowDuringDrag.r + glowDuringDrag.g + glowDuringDrag.b;
+  EXPECT_LE(std::abs(baselineTotal - dragTotal), 30)
+      << "glow during drag must match baseline. baseline=" << glowBaseline
+      << " drag=" << glowDuringDrag;
+}
+
 // Isolates the gradient + filter interaction. Single frame, no drag — does
 // it render correctly at all?
 TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {
