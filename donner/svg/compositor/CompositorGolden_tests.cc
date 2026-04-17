@@ -456,6 +456,272 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
   EXPECT_THAT(farAway, IsWhite()) << "far from drag, background stays white";
 }
 
+// Regression: the splash SVG had a subtle bug where dragging a letter caused
+// OTHER top-level filtered groups (background glows) to disappear. The
+// filtered groups are top-level children (bucketed by ComplexityBucketer)
+// and their layer rasterization goes through `drawEntityRange(g, g.lastRenderedEntity)`.
+// If that range iteration doesn't process the group's children, the bucket
+// bitmap is empty — the glow vanishes.
+//
+// This test explicitly rasterizes such a group to confirm the path works.
+// Reproduces the donner_splash.svg scenario: a "letters" group (the draggable
+// yellow foreground) alongside a "glow" group with a blur filter (the
+// background glow that shouldn't disappear when the letters are dragged).
+// Both are top-level children of the SVG root — with aggressive bucketing
+// (minCostToBucket=1), they become separate bucket layers. When the user
+// drags a LETTER (descendant of the letters group), the glow layer should
+// STILL render correctly.
+// Mirrors the splash SVG structure more closely: a wrapping `<g>` at the top
+// level contains BOTH the draggable letters group AND the filtered glow
+// groups. With aggressive bucketing, the wrapping group becomes the bucket.
+// When a letter (descendant of the wrapper) is dragged, the wrapper's layer
+// must still contain the rendered glows.
+// Closer to the splash: the filtered glow contains a path with a GRADIENT
+// fill (not a plain color). Paint servers are resolved per entity. A repeated
+// rasterization across drag frames may interact badly with resolved gradient
+// references.
+// Isolates the gradient + filter interaction. Single frame, no drag — does
+// it render correctly at all?
+TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter>
+        <radialGradient id="gradient" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="red"/>
+          <stop offset="100%" stop-color="yellow"/>
+        </radialGradient>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <g id="glow" filter="url(#blur)">
+        <circle cx="100" cy="50" r="25" fill="url(#gradient)"/>
+      </g>
+    </svg>
+  )svg");
+  auto glow = document.querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(glow->entityHandle().entity()));
+  compositor.renderFrame(viewport_);
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  const Pixel halo = getPixel(flat, 70, 50);
+  // The circle's edge has red-to-yellow gradient. Blur spreads those colors
+  // outward. Pure white at (70, 50) means the halo (and thus the whole
+  // filtered glow) disappeared.
+  const bool isPureWhite = halo.r >= 253 && halo.g >= 253 && halo.b >= 253;
+  EXPECT_FALSE(isPureWhite)
+      << "single frame: gradient+filter halo should be tinted by the blur (not pure white). got: "
+      << halo;
+}
+
+// Isolates repeated rasterization. Flat-color filled child, filtered group,
+// repeated frames. If this passes but the gradient variant fails, the bug is
+// in paint-server resolution across repeated rasterizations.
+TEST_F(CompositorGoldenTest, FlatColorInsideFilteredGroup_RepeatedFrames) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter>
+      </defs>
+      <g id="wrapper">
+        <rect width="200" height="100" fill="white"/>
+        <g id="glow" filter="url(#blur)">
+          <circle cx="100" cy="50" r="25" fill="red"/>
+        </g>
+        <rect id="letter" x="40" y="30" width="10" height="40" fill="yellow"/>
+      </g>
+    </svg>
+  )svg");
+  auto letter = document.querySelector("#letter");
+  ASSERT_TRUE(letter.has_value());
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(letter->entityHandle().entity()));
+  for (int i = 0; i < 5; ++i) {
+    compositor.setLayerCompositionTransform(letter->entityHandle().entity(),
+                                             Transform2d::Translate(Vector2d(i * 5.0, 0.0)));
+    compositor.renderFrame(viewport_);
+  }
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  const Pixel halo = getPixel(flat, 70, 50);
+  const bool isPureWhite = halo.r >= 253 && halo.g >= 253 && halo.b >= 253;
+  EXPECT_FALSE(isPureWhite)
+      << "flat color + filter across repeated frames: halo must remain. got: " << halo;
+}
+
+TEST_F(CompositorGoldenTest, DraggingLetterPreservesGradientFilteredGlowAcrossFrames) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="4"/>
+        </filter>
+        <radialGradient id="gradient" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="red"/>
+          <stop offset="100%" stop-color="yellow"/>
+        </radialGradient>
+      </defs>
+      <g id="wrapper">
+        <rect width="200" height="100" fill="white"/>
+        <g id="glow" filter="url(#blur)">
+          <circle cx="100" cy="50" r="25" fill="url(#gradient)"/>
+        </g>
+        <rect id="letter_D" x="40" y="30" width="10" height="40" fill="yellow"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto letterD = document.querySelector("#letter_D");
+  ASSERT_TRUE(letterD.has_value());
+  const Entity entity = letterD->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // Sequence of drag frames to exercise the bucket-layer re-rasterization
+  // path across repeated renders (the glow has a filter → conservativeFallback
+  // → re-rasterized every frame).
+  for (int i = 0; i < 5; ++i) {
+    compositor.setLayerCompositionTransform(entity,
+                                             Transform2d::Translate(Vector2d(i * 5.0, 0.0)));
+    compositor.renderFrame(viewport_);
+  }
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+
+  // Glow halo sampling — left of circle, in the blur halo.
+  const Pixel halo = getPixel(flat, 70, 50);
+  const bool isPureWhite = halo.r >= 253 && halo.g >= 253 && halo.b >= 253;
+  EXPECT_FALSE(isPureWhite)
+      << "after repeated drag frames, gradient-filled glow halo must remain. got: " << halo;
+}
+
+TEST_F(CompositorGoldenTest, DraggingLetterInsideWrapperPreservesNestedGlow) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="4"/>
+        </filter>
+      </defs>
+      <g id="wrapper">
+        <rect width="200" height="100" fill="white"/>
+        <g id="glow" filter="url(#blur)">
+          <circle cx="100" cy="50" r="25" fill="red"/>
+        </g>
+        <g id="letters">
+          <rect id="letter_D" x="40" y="30" width="10" height="40" fill="yellow"/>
+        </g>
+      </g>
+    </svg>
+  )svg");
+
+  auto letterD = document.querySelector("#letter_D");
+  ASSERT_TRUE(letterD.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(letterD->entityHandle().entity()));
+
+  compositor.setLayerCompositionTransform(letterD->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+
+  compositor.setLayerCompositionTransform(letterD->entityHandle().entity(),
+                                          Transform2d::Translate(Vector2d(20.0, 10.0)));
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+
+  // Glow halo sampling — blur extends ~8-12px beyond circle edge.
+  const Pixel glowHaloLeft = getPixel(flat, 70, 50);
+  EXPECT_LT(glowHaloLeft.g, 240)
+      << "glow halo should be tinted red. If white, the nested glow disappeared during drag. "
+      << "got: " << glowHaloLeft;
+}
+
+TEST_F(CompositorGoldenTest, DraggingLetterPreservesBackgroundGlow) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="4"/>
+        </filter>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <g id="glow" filter="url(#blur)">
+        <circle cx="100" cy="50" r="25" fill="red"/>
+      </g>
+      <g id="letters">
+        <rect id="letter_D" x="40" y="30" width="10" height="40" fill="yellow"/>
+        <rect id="letter_o" x="55" y="30" width="10" height="40" fill="yellow"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto letterD = document.querySelector("#letter_D");
+  ASSERT_TRUE(letterD.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // User clicks on letter D to start a drag.
+  ASSERT_TRUE(compositor.promoteEntity(letterD->entityHandle().entity()))
+      << "letter is not a descendant of any filtered/masked/clipped group, should promote";
+
+  // Frame 1: initial render.
+  compositor.setLayerCompositionTransform(letterD->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+
+  // Frame 2: user starts dragging letter D.
+  compositor.setLayerCompositionTransform(letterD->entityHandle().entity(),
+                                          Transform2d::Translate(Vector2d(20.0, 10.0)));
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+
+  // The glow's halo extends beyond the circle. Sample outside the
+  // circle but within the blur radius. Circle is at cx=100 cy=50 r=25.
+  // Point (70, 50) is 5 px outside the left edge — in the halo.
+  const Pixel glowHaloLeft = getPixel(flat, 70, 50);
+  const Pixel glowHaloRight = getPixel(flat, 130, 50);
+
+  // If the glow disappears during drag, these pixels would be pure white.
+  // With the glow preserved, they should be tinted red.
+  EXPECT_LT(glowHaloLeft.g, 240)
+      << "glow halo left: tinted red by blur, not pure white. got: " << glowHaloLeft;
+  EXPECT_LT(glowHaloRight.g, 240)
+      << "glow halo right: tinted red by blur, not pure white. got: " << glowHaloRight;
+}
+
+TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildren) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs>
+        <filter id="blur" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="4"/>
+        </filter>
+      </defs>
+      <rect width="200" height="100" fill="white"/>
+      <g id="glow" filter="url(#blur)">
+        <circle cx="100" cy="50" r="25" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto glow = document.querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+
+  // Promote the filtered group itself. Its layer rasterization via
+  // drawEntityRange(glow, glow.lastRenderedEntity) should render the circle
+  // inside the filter context.
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(glow->entityHandle().entity()))
+      << "the filter-bearing group itself should promote (it IS the compositing root)";
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+
+  EXPECT_LE(result.maxChannelDiff, 10) << "filtered group with children must render its children: "
+                                       << result;
+  EXPECT_LE(result.mismatchCount, result.totalPixels / 20u) << result;  // 5% AA tolerance
+}
+
 // Regression for donner_splash.svg bug: the user drags a letter/path that's
 // a CHILD of a `<g filter="url(#blur)">` group. Under the current compositor
 // behavior, the child path gets auto-promoted (or interaction-promoted via
