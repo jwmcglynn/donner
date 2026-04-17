@@ -490,7 +490,7 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
 //
 // User drags a letter; the glow should stay visible. This matches the exact
 // manual-test scenario the user reports as broken.
-TEST_F(CompositorGoldenTest, DISABLED_ReducedSplashDraggingLetterPreservesGlow) {
+TEST_F(CompositorGoldenTest, ReducedSplashDraggingLetterPreservesGlow) {
   SVGDocument document = parseDocument(R"svg(
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">
@@ -558,8 +558,6 @@ TEST_F(CompositorGoldenTest, DISABLED_ReducedSplashDraggingLetterPreservesGlow) 
   compositor.renderFrame(fullViewport);
   const RendererBitmap baseline = renderer_.takeSnapshot();
   const Pixel glowBaseline = getPixel(baseline, kSampleX, kSampleY);
-  std::cerr << "[DIAG] baseline glow (" << kSampleX << "," << kSampleY
-            << "): " << glowBaseline << "\n";
 
   // User clicks on letter A to start the drag.
   ASSERT_TRUE(compositor.promoteEntity(letterA->entityHandle().entity()))
@@ -574,9 +572,6 @@ TEST_F(CompositorGoldenTest, DISABLED_ReducedSplashDraggingLetterPreservesGlow) 
 
     const RendererBitmap frame = renderer_.takeSnapshot();
     glowDuringDrag = getPixel(frame, kSampleX, kSampleY);
-    if (i == 1 || i == 5 || i == 10) {
-      std::cerr << "[DIAG] frame " << i << " glow: " << glowDuringDrag << "\n";
-    }
   }
 
   // During drag the glow must still be present. Any significant drift from

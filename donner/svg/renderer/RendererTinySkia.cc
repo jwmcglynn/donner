@@ -1933,6 +1933,14 @@ RendererBitmap RendererTinySkia::takeSnapshot() const {
   RendererBitmap snapshot;
   snapshot.dimensions = Vector2i(width(), height());
   snapshot.rowBytes = static_cast<std::size_t>(width()) * 4u;
+  // Tiny-skia's compose paths to the top-level frame buffer use
+  // `unpremulStore = surfaceStack_.empty()` — every semi-transparent pixel that
+  // lands in `frame_` is stored unpremultiplied in float space, preserving
+  // precision at low alpha values. The frame buffer is therefore consistently
+  // unpremultiplied (alpha=255 pixels are identical under either convention).
+  // Report that truthfully so downstream callers (e.g.
+  // `compositor::BuildImageResource`) don't re-unpremultiply.
+  snapshot.alphaType = AlphaType::Unpremultiplied;
   if (frame_.width() == 0 || frame_.height() == 0) {
     return snapshot;
   }
