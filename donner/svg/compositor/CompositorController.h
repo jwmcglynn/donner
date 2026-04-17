@@ -256,7 +256,7 @@ private:
   CompositorConfig config_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;
-  std::unordered_map<Entity, ScopedCompositorHint> explicitHints_;
+  std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
   std::vector<CompositorLayer> layers_;
 
   /// Cached root layer bitmap (everything not in a promoted layer).

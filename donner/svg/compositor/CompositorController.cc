@@ -123,15 +123,17 @@ bool CompositorController::promoteEntity(Entity entity) {
     return false;
   }
 
-  // Already promoted. (The explicit-hint ledger is the source of truth for the
-  // explicit API; a future Mandatory/Interaction hint on the same entity would
-  // also produce a ComputedLayerAssignmentComponent but wouldn't count as
-  // "explicitly promoted" here.)
-  if (explicitHints_.contains(entity)) {
+  // Already promoted via the controller's `promoteEntity` path. `activeHints_`
+  // is the controller-owned hint ledger (Interaction under
+  // `autoPromoteInteractions`, Explicit otherwise). A future Mandatory or
+  // Animation hint from another source would also produce a
+  // `ComputedLayerAssignmentComponent` but doesn't count as "promoted by the
+  // controller" here.
+  if (activeHints_.contains(entity)) {
     return true;
   }
 
-  if (explicitHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
+  if (activeHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
     return false;
   }
 
@@ -139,8 +141,17 @@ bool CompositorController::promoteEntity(Entity entity) {
     return false;
   }
 
-  const auto [it, inserted] =
-      explicitHints_.try_emplace(entity, ScopedCompositorHint::Explicit(registry, entity));
+  // Phase 2: under `autoPromoteInteractions`, the editor-driven
+  // `promoteEntity` call publishes an `Interaction::ActiveDrag` hint (semantically
+  // "user is dragging this"). When the gate is off, we fall back to the
+  // `Explicit` escape hatch so consumers disabling auto-promotion still get
+  // promotion. Either way the hint is tracked in `activeHints_` and `isPromoted`
+  // returns true.
+  ScopedCompositorHint hint = config_.autoPromoteInteractions
+                                  ? ScopedCompositorHint::Interaction(
+                                        registry, entity, InteractionHint::ActiveDrag)
+                                  : ScopedCompositorHint::Explicit(registry, entity);
+  const auto [it, inserted] = activeHints_.try_emplace(entity, std::move(hint));
   UTILS_RELEASE_ASSERT(inserted);
   static_cast<void>(it);
 
@@ -149,7 +160,7 @@ bool CompositorController::promoteEntity(Entity entity) {
 
   const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
   if (assignment == nullptr || assignment->layerId == 0) {
-    explicitHints_.erase(entity);
+    activeHints_.erase(entity);
     resolver_.resolve(registry, kMaxCompositorLayers);
     reconcileLayers(registry);
     return false;
@@ -162,9 +173,9 @@ bool CompositorController::promoteEntity(Entity entity) {
 void CompositorController::demoteEntity(Entity entity) {
   Registry& registry = document_->registry();
 
-  const auto hintIt = explicitHints_.find(entity);
-  if (hintIt != explicitHints_.end()) {
-    explicitHints_.erase(hintIt);
+  const auto hintIt = activeHints_.find(entity);
+  if (hintIt != activeHints_.end()) {
+    activeHints_.erase(hintIt);
   }
 
   resolver_.resolve(registry, kMaxCompositorLayers);
@@ -179,7 +190,7 @@ void CompositorController::demoteEntity(Entity entity) {
 }
 
 bool CompositorController::isPromoted(Entity entity) const {
-  return explicitHints_.contains(entity);
+  return activeHints_.contains(entity);
 }
 
 void CompositorController::setLayerCompositionTransform(Entity entity,
@@ -219,7 +230,7 @@ const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
 
 void CompositorController::resetAllLayers() {
   Registry& registry = document_->registry();
-  explicitHints_.clear();
+  activeHints_.clear();
   resolver_.resolve(registry, kMaxCompositorLayers);
   reconcileLayers(registry);
 
