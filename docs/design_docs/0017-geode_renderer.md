@@ -1,9 +1,9 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phase 0 complete (#481 merged); Phase 1 MVP complete (#484 + #492); Phase 2 complete (#497 merged); Phase 5b resvg suite green on top of MSAA (#504 in review)
+**Status:** Phases 0–3 + Phase 5b landed on main (Phase 0 #481; Phase 1 #484 + #492; Phase 2 #497; Phase 5b MSAA + resvg parity — 596 passing, 0 failing — #504; Phase 3 clip/mask #506); vendor story swapped from Dawn-from-source to prebuilt wgpu-native in #510; first real-GPU verification on 2026-04-17 (Intel Arc A380 / Mesa Xe-KMD Vulkan — smoke + 1-band path-fill green; multi-band paths hung on Xe-KMD sample_mask output; vendor-gated alpha-coverage shader fallback shipped in #536). Phase 3d (blend modes + miter + markers) and Phase 4 (text) remain unshipped; `RendererGeode::drawText` and `pushFilterLayer` are still stubs.
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
-**Last updated:** 2026-04-10
+**Last updated:** 2026-04-17
 
 ## Implementation status
 
@@ -63,6 +63,39 @@
     in target-pixel / UV space. Phase 2H will render the pattern tile to
     an offscreen texture (via `GeoSurface`), then call `drawTexturedQuad`
     with the repeating `srcRect` to stamp the tile across the fill region.
+- **Phase 3** (Compositing and clipping): ✅ complete, merged in #506.
+  Polygon clipping, path-based clipping via resolved R8 coverage masks, and
+  `<mask>` element compositing via luminance blit. Nested `<g>` clips and
+  `maskUnits=userSpaceOnUse` / percent-sized bounds handled. Unlocked the
+  full `masking/clipPath`, `masking/clip`, `masking/clip-rule`, and
+  `masking/mask` categories on the resvg test suite.
+- **wgpu-native vendor swap**: ✅ merged in #510. Replaced the Dawn
+  `rules_foreign_cc` + CMake-from-source build with prebuilt
+  `wgpu-native` v24.0.3.1 archives consumed via `http_archive`. Cuts a
+  cold CI build from ~1 h 45 m to seconds. See the "Bazel vendoring
+  strategy (wgpu-native)" section under Background for the current
+  authoritative vendoring design; the "Historical: Dawn embedding
+  strategy" section is retained for context only. The user-visible
+  `--config=geode` / `enable_dawn=true` flags are unchanged.
+- **Real-GPU verification (2026-04-17)**: 🚧 first run on real hardware,
+  plus a targeted fallback shader path for Intel+Vulkan. Added
+  adapter-info logging to `GeodeDevice::CreateHeadless` (commit
+  `5f6ac7d4`). On Intel Arc A380 (DG2) with Mesa 25.2.8 Xe-KMD Vulkan
+  the smoke test (`GeodeDevice.CanExecuteClearAndReadback`) and
+  `DrawPathWithSolidFill` pass, but any path with `bandCount >= 2`
+  hung indefinitely due to a Mesa ANV driver bug in
+  `@builtin(sample_mask)` output when two fragment invocations at the
+  same pixel both write it (exactly the Slug half-pixel band overlap).
+  Experimentally confirmed: the same tests pass under Mesa llvmpipe,
+  proving Geode's pipeline is correct. #536 ships three alpha-coverage
+  WGSL shader variants (`slug_fill_alpha_coverage.wgsl`,
+  `slug_gradient_alpha_coverage.wgsl`, `slug_mask_alpha_coverage.wgsl`)
+  vendor-gated on `vendorID == 0x8086 && backendType == Vulkan`. Mesa
+  25.3 upstream fix exists; once CI Mesa crosses that version, the
+  fallback can be deleted. Known follow-up (issue #537): band-boundary
+  pixels in the alpha-coverage fallback lose coverage — cosmetic AA
+  artifact on the Intel-Vulkan path only, does not affect default
+  MSAA + sample_mask rendering.
 
 
 ## Summary
@@ -1103,6 +1136,14 @@ cleanup.
 - [x] Migrate remaining callers, remove `PathSpline`.
 
 ### Phase 1: Foundation and Path Rendering
+
+> **Note (2026-04-17):** The Dawn `rules_foreign_cc` + CMake vendoring
+> described in this checklist was the original Phase 1 plan and is what
+> actually shipped in #484. It was later superseded by #510, which swapped
+> Dawn-from-source for prebuilt `wgpu-native` archives. See the "Bazel
+> vendoring strategy (wgpu-native)" section under Background for the
+> current authoritative vendoring design. The historical Dawn content
+> below is retained unchanged for context.
 
 - [x] Vendor Dawn (WebGPU) as a third-party dependency with Bazel build. **(#484)**
   - Uses `rules_foreign_cc`'s `cmake()` rule to drive Dawn's upstream CMake
