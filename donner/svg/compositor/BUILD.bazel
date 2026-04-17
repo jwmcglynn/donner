@@ -120,6 +120,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "animation_isolation_tests",
+    srcs = [
+        "AnimationIsolation_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "dual_path_verifier_tests",
     srcs = [
         "DualPathVerifier_tests.cc",

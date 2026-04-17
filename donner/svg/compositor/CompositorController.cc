@@ -279,7 +279,12 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       complexityBucketer_.reconcile(registry);
     }
   }
-  resolver_.resolve(registry, kMaxCompositorLayers);
+  const ResolveOptions resolveOptions{
+      .enableInteractionHints = config_.autoPromoteInteractions,
+      .enableAnimationHints = config_.autoPromoteAnimations,
+      .enableComplexityBucketHints = config_.complexityBucketing,
+  };
+  resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
   reconcileLayers(registry);
   if (documentDirty) {
     rootDirty_ = true;

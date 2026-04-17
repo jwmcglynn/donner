@@ -7,6 +7,21 @@
 
 namespace donner::svg::compositor {
 
+/**
+ * Per-call policy for `LayerResolver::resolve()`. Lets the caller disable
+ * specific hint sources without mutating the registry. Disabled-source hints
+ * are still collected into the candidate list (for stats) but their
+ * contribution to the weight sum is zeroed — so an entity whose only hint
+ * is from a disabled source ends up at layer 0 (root).
+ */
+struct ResolveOptions {
+  bool enableInteractionHints = true;
+  bool enableAnimationHints = true;
+  bool enableComplexityBucketHints = true;
+  // Mandatory and Explicit are always honored — they represent SVG semantics
+  // and the explicit escape-hatch API, not optional optimizations.
+};
+
 /// Stats produced by `LayerResolver::resolve()`. Tests inspect these.
 struct LayerResolverStats {
   /// Total number of entities with a non-empty `CompositorHintComponent` seen this pass.
@@ -48,8 +63,9 @@ public:
    *                  `kMaxCompositorLayers` (see `CompositorController.h`). The
    *                  parameter is a bare integer here to keep `LayerResolver.h`
    *                  independent of the controller.
+   * @param options   Per-source enable/disable flags (default: all sources on).
    */
-  void resolve(Registry& registry, uint32_t maxLayers);
+  void resolve(Registry& registry, uint32_t maxLayers, const ResolveOptions& options = {});
 
   /// Stats from the most recent `resolve()` call. Zeroed before each run.
   [[nodiscard]] const LayerResolverStats& stats() const { return stats_; }

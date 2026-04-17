@@ -21,7 +21,8 @@ struct Candidate {
 
 }  // namespace
 
-void LayerResolver::resolve(Registry& registry, uint32_t maxLayers) {
+void LayerResolver::resolve(Registry& registry, uint32_t maxLayers,
+                            const ResolveOptions& options) {
   stats_ = {};
 
   // Clean up stale ComputedLayerAssignmentComponents on entities that no longer have any hints.
@@ -51,9 +52,43 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers) {
     }
     ++stats_.candidatesEvaluated;
 
+    // Compute the effective total weight, honoring per-source gates. A hint
+    // from a disabled source contributes 0; an entity whose only hints are
+    // from disabled sources thus totals 0 and never gets a layer. Mandatory
+    // and Explicit are always honored — SVG semantics and the escape hatch.
+    uint32_t effectiveWeight = 0;
+    bool hasMandatory = false;
+    for (const HintEntry& entry : hint.entries) {
+      if (entry.source == HintSource::Mandatory) {
+        hasMandatory = true;
+        continue;  // Mandatory short-circuits below.
+      }
+      const bool enabled = (entry.source == HintSource::Explicit) ||
+                           (entry.source == HintSource::Interaction &&
+                            options.enableInteractionHints) ||
+                           (entry.source == HintSource::Animation &&
+                            options.enableAnimationHints) ||
+                           (entry.source == HintSource::ComplexityBucket &&
+                            options.enableComplexityBucketHints);
+      if (!enabled) {
+        continue;
+      }
+      const uint32_t next = effectiveWeight + static_cast<uint32_t>(entry.weight);
+      effectiveWeight = (next < effectiveWeight) ? std::numeric_limits<uint32_t>::max() - 1 : next;
+    }
+
+    if (hasMandatory) {
+      effectiveWeight = std::numeric_limits<uint32_t>::max();
+    } else if (effectiveWeight == 0) {
+      // All hints on this entity are from disabled sources; skip. Ensure no
+      // stale assignment lingers.
+      registry.remove<ComputedLayerAssignmentComponent>(entity);
+      continue;
+    }
+
     Candidate candidate;
     candidate.entity = entity;
-    candidate.totalWeight = hint.totalWeight();
+    candidate.totalWeight = effectiveWeight;
     candidate.mandatory = (candidate.totalWeight == std::numeric_limits<uint32_t>::max());
     if (candidate.mandatory) {
       mandatoryCandidates.push_back(candidate);
