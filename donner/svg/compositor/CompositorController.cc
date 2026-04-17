@@ -619,6 +619,24 @@ void CompositorController::reconcileLayers(Registry& registry) {
 
     rootDirty_ = true;
   }
+
+  // Sort layers by the draw order of their root entity. `composeLayers()`
+  // iterates `layers_` in order when blitting, so this is what guarantees a
+  // multi-layer scene composes in SVG paint order (earlier draw-order below,
+  // later above). Single-layer scenes are a no-op. Stable sort preserves
+  // insertion order for entities with identical `drawOrder` (shouldn't happen
+  // in well-instantiated documents, but we don't want to introduce
+  // nondeterminism if it does).
+  std::stable_sort(layers_.begin(), layers_.end(),
+                   [&registry](const CompositorLayer& a, const CompositorLayer& b) {
+                     const auto* aInstance =
+                         registry.try_get<components::RenderingInstanceComponent>(a.entity());
+                     const auto* bInstance =
+                         registry.try_get<components::RenderingInstanceComponent>(b.entity());
+                     const int aDrawOrder = aInstance != nullptr ? aInstance->drawOrder : 0;
+                     const int bDrawOrder = bInstance != nullptr ? bInstance->drawOrder : 0;
+                     return aDrawOrder < bDrawOrder;
+                   });
 }
 
 bool CompositorController::layerContainsEntity(const CompositorLayer& layer, Entity entity) const {
