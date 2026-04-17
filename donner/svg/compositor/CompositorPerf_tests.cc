@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/compositor/ComplexityBucketer.h"
 #include "donner/svg/compositor/DragSession.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -348,6 +349,44 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_1kNodes) {
 
   EXPECT_LT(dragMs, 50.0) << "First drag frame absurdly slow (mock renderer, 1k nodes)";
   EXPECT_LT(combinedMs, 100.0) << "Click-to-first-drag-update absurdly slow (1k nodes)";
+}
+
+// Goal 8 baseline: bucketer reconcile on a 10k-node scene should run in under
+// 5% of the parse + ECS-build wall clock. We approximate: parse/prep takes
+// ~tens-of-ms on 10k nodes; the bucketer should be well under that.
+//
+// Reports the reconcile time so future regressions are visible. Loose assertion
+// (<100 ms) is a sanity floor — this is a measurement, not a gate.
+TEST_F(CompositorPerfTest, ComplexityBucketerReconcile_10kNodes) {
+  const std::string svg = generateGridSvg(10000, 100);
+  SVGDocument document = makeDocument(svg);
+
+  // Prepare the document so `RenderingInstanceComponent` is populated (the
+  // bucketer walks this view).
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  ComplexityBucketer bucketer;
+
+  // Warm-up run.
+  bucketer.reconcile(document.registry());
+
+  // Measure.
+  constexpr int kIterations = 10;
+  auto start = Clock::now();
+  for (int i = 0; i < kIterations; ++i) {
+    bucketer.reconcile(document.registry());
+  }
+  auto end = Clock::now();
+
+  const auto totalUs = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  const double avgMs = static_cast<double>(totalUs) / kIterations / 1000.0;
+
+  std::cerr << "[PERF] ComplexityBucketerReconcile_10kNodes: " << avgMs
+            << " ms/pass (avg over " << kIterations << " warm reconciles, "
+            << bucketer.stats().candidatesConsidered << " candidates)\n";
+
+  EXPECT_LT(avgMs, 100.0) << "Bucketer reconcile absurdly slow on 10k-node scene";
 }
 
 }  // namespace donner::svg::compositor
