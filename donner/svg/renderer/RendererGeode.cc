@@ -878,9 +878,10 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     }
     return;
   }
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat);
-  impl_->gradientPipeline =
-      std::make_unique<geode::GeodeGradientPipeline>(impl_->device->device(), kFormat);
+  impl_->pipeline = std::make_unique<geode::GeodePipeline>(
+      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA());
+  impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
+      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA());
   impl_->imagePipeline =
       std::make_unique<geode::GeodeImagePipeline>(impl_->device->device(), kFormat);
 }

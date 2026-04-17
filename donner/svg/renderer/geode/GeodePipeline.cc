@@ -5,7 +5,8 @@
 
 namespace donner::geode {
 
-GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat)
+GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
+                             bool useAlphaCoverageShader)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Seven bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
@@ -67,7 +68,9 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   // ----- Shader module -----
-  wgpu::ShaderModule shader = createSlugFillShader(device);
+  wgpu::ShaderModule shader =
+      useAlphaCoverageShader ? createSlugFillAlphaCoverageShader(device)
+                             : createSlugFillShader(device);
 
   // ----- Vertex buffer layout -----
   // Matches EncodedPath::Vertex: pos (vec2f) + normal (vec2f) + bandIndex (u32)
@@ -143,7 +146,8 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 // ============================================================================
 
 GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
-                                             wgpu::TextureFormat colorFormat)
+                                             wgpu::TextureFormat colorFormat,
+                                             bool useAlphaCoverageShader)
     : colorFormat_(colorFormat) {
   // Five bindings — uniforms, bands SSBO, curves SSBO, clip-mask texture,
   // clip-mask sampler. The clip-mask bindings always carry something
@@ -190,7 +194,9 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   plDesc.bindGroupLayouts = layouts;
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
-  wgpu::ShaderModule shader = createSlugGradientShader(device);
+  wgpu::ShaderModule shader =
+      useAlphaCoverageShader ? createSlugGradientAlphaCoverageShader(device)
+                             : createSlugGradientShader(device);
 
   // Same vertex buffer layout as the solid-fill pipeline.
   wgpu::VertexAttribute vertexAttribs[3] = {};
@@ -244,7 +250,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // 4× MSAA to match the solid-fill pipeline — see its multisample comment.
+  // Match the solid-fill pipeline's sample count.
   rpDesc.multisample.count = 4;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
@@ -255,7 +261,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 // GeodeMaskPipeline
 // ============================================================================
 
-GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
+GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader) {
   // Five bindings — uniforms, bands SSBO, curves SSBO, nested clip
   // mask texture, nested clip mask sampler. The clip-mask slot is
   // always bound; a 1x1 dummy is used when `uniforms.hasClipMask ==
@@ -300,7 +306,9 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
   plDesc.bindGroupLayouts = layouts;
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
-  wgpu::ShaderModule shader = createSlugMaskShader(device);
+  wgpu::ShaderModule shader =
+      useAlphaCoverageShader ? createSlugMaskAlphaCoverageShader(device)
+                             : createSlugMaskShader(device);
 
   // Same vertex buffer layout as the fill pipelines: pos (vec2f) +
   // normal (vec2f) + bandIndex (u32) = 20 bytes per vertex.

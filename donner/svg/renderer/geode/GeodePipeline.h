@@ -37,8 +37,13 @@ public:
    * @param device The WebGPU device.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
+   * @param useAlphaCoverageShader When true, selects the alpha-coverage
+   *   variant of the fill shader (no `@builtin(sample_mask)` output).
+   *   The pipeline still uses 4× MSAA; coverage is folded into the
+   *   fragment color instead of relying on the hardware sample mask.
    */
-  GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
+                bool useAlphaCoverageShader = false);
 
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
@@ -80,7 +85,9 @@ private:
 class GeodeGradientPipeline {
 public:
   /// Construct a gradient pipeline for the given device and color target format.
-  GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  /// @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
+  GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
+                        bool useAlphaCoverageShader = false);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
@@ -127,9 +134,11 @@ class GeodeMaskPipeline {
 public:
   /**
    * Create a Slug mask pipeline for the given device. Renders into an
-   * R8Unorm MSAA texture (the mask target is allocated by the caller).
+   * R8Unorm texture with 4× MSAA.
+   *
+   * @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
    */
-  explicit GeodeMaskPipeline(const wgpu::Device& device);
+  explicit GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader = false);
 
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;

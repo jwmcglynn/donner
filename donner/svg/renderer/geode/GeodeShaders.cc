@@ -3,8 +3,11 @@
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/ImageBlitWgsl.h"
 #include "embed_resources/SlugFillWgsl.h"
+#include "embed_resources/SlugFillAlphaCoverageWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
+#include "embed_resources/SlugGradientAlphaCoverageWgsl.h"
 #include "embed_resources/SlugMaskWgsl.h"
+#include "embed_resources/SlugMaskAlphaCoverageWgsl.h"
 
 namespace donner::geode {
 
@@ -60,6 +63,24 @@ wgpu::ShaderModule createImageBlitShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "ImageBlit",
                               donner::embedded::kImageBlitWgsl.data(),
                               donner::embedded::kImageBlitWgsl.size());
+}
+
+wgpu::ShaderModule createSlugFillAlphaCoverageShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "SlugFillAlphaCoverage",
+                              donner::embedded::kSlugFillAlphaCoverageWgsl.data(),
+                              donner::embedded::kSlugFillAlphaCoverageWgsl.size());
+}
+
+wgpu::ShaderModule createSlugGradientAlphaCoverageShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "SlugGradientAlphaCoverage",
+                              donner::embedded::kSlugGradientAlphaCoverageWgsl.data(),
+                              donner::embedded::kSlugGradientAlphaCoverageWgsl.size());
+}
+
+wgpu::ShaderModule createSlugMaskAlphaCoverageShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "SlugMaskAlphaCoverage",
+                              donner::embedded::kSlugMaskAlphaCoverageWgsl.data(),
+                              donner::embedded::kSlugMaskAlphaCoverageWgsl.size());
 }
 
 }  // namespace donner::geode

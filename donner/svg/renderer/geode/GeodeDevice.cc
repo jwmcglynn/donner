@@ -107,6 +107,19 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
                    static_cast<int>(device.size()), device.data(),
                    static_cast<int>(arch.size()), arch.data(), backend, type,
                    info.vendorID, info.deviceID);
+
+      // Intel + Vulkan: writing @builtin(sample_mask) from overlapping band
+      // quads hangs Mesa ANV / Xe KMD when bandCount >= 2 (observed on Arc
+      // A380, Mesa 25.2.8). Fall back to alpha-coverage AA which folds the
+      // 4-sample mask into the fragment color on a 1-sample render target.
+      if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
+        result->useAlphaCoverageAA_ = true;
+        std::fprintf(stderr,
+                     "[Geode] Intel Arc + Vulkan detected; using alpha-coverage AA "
+                     "(sample_mask output hangs on Mesa 25.2.8 Xe-KMD; "
+                     "upstream fix in Mesa 25.3)\n");
+      }
+
       wgpuAdapterInfoFreeMembers(info);
     }
   }
