@@ -287,6 +287,12 @@ private:
   /// drag target changes, the split must be re-rasterized even if the
   /// document otherwise appears clean.
   Entity splitStaticLayersEntity_ = entt::null;
+  /// Viewport dimensions the cached bg/fg bitmaps were rasterized at. The
+  /// cache must invalidate when the viewport resizes (e.g. zoom or window
+  /// resize), otherwise stale bitmaps get composed at their old size into
+  /// a larger canvas — the content fills only the top-left region and the
+  /// rest is transparent.
+  Vector2i splitStaticLayersViewport_ = Vector2i::Zero();
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
   /// True once `MandatoryHintDetector` and `ComplexityBucketer` have run

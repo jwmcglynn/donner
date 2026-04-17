@@ -277,6 +277,7 @@ void CompositorController::demoteEntity(Entity entity) {
   backgroundBitmap_ = RendererBitmap();
   foregroundBitmap_ = RendererBitmap();
   splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
   rootDirty_ = true;
 }
 
@@ -339,6 +340,7 @@ void CompositorController::resetAllLayers() {
   backgroundBitmap_ = RendererBitmap();
   foregroundBitmap_ = RendererBitmap();
   splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
   rootDirty_ = true;
   documentPrepared_ = false;
   hintsScanned_ = false;
@@ -398,6 +400,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     backgroundBitmap_ = RendererBitmap();
     foregroundBitmap_ = RendererBitmap();
     splitStaticLayersEntity_ = entt::null;
+    splitStaticLayersViewport_ = Vector2i::Zero();
     rootDirty_ = false;
     documentPrepared_ = true;
 
@@ -480,12 +483,16 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // `rootBitmap_` stays empty by design and the validity of the cache is
   // tracked separately inside `rasterizeRootLayer` — so don't use
   // `rootBitmap_.empty()` alone as a trigger, or we'd re-rasterize bg/fg
-  // on every drag frame.
+  // on every drag frame. The cache is also invalidated when the canvas
+  // size changes (zoom / window resize).
   const bool splitPathActive = activeHints_.size() == 1 && findLayer(activeHints_.begin()->first);
+  const Vector2i currentCanvasSize = document_->canvasSize();
   const bool needsRootRasterize =
       rootDirty_ || (!splitPathActive && rootBitmap_.empty()) ||
-      (splitPathActive && (backgroundBitmap_.empty() || foregroundBitmap_.empty() ||
-                           splitStaticLayersEntity_ != activeHints_.begin()->first));
+      (splitPathActive &&
+       (backgroundBitmap_.empty() || foregroundBitmap_.empty() ||
+        splitStaticLayersEntity_ != activeHints_.begin()->first ||
+        splitStaticLayersViewport_ != currentCanvasSize));
   if (needsRootRasterize) {
     rasterizeRootLayer(viewport);
   }
@@ -579,15 +586,28 @@ void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
     const CompositorLayer* dragLayer = findLayer(dragEntity);
     if (dragLayer != nullptr) {
       // Cache bg/fg across drag frames: re-rasterize only when the drag
-      // target changes or the document becomes dirty (`rootDirty_`).
-      // Translation-only drag updates just the drag layer's compose
-      // transform and must not invalidate these bitmaps.
-      const bool splitCacheValid = !rootDirty_ && !backgroundBitmap_.empty() &&
-                                   !foregroundBitmap_.empty() &&
-                                   splitStaticLayersEntity_ == dragEntity;
+      // target changes, the document becomes dirty (`rootDirty_`), or the
+      // document's canvas size changes (zoom / window resize). A canvas
+      // change means the renderer rasterizes at a new resolution, so stale
+      // bg/fg bitmaps at the old size would draw into only the top-left
+      // region of the new canvas — the rest would show through with
+      // transparency, and the editor's ImGui layer would then linearly
+      // stretch whatever did draw, which shows as a blurry image on zoom.
+      //
+      // We key on `document.canvasSize()` (not the `RenderViewport` param)
+      // because `rasterizeSplitRootLayers` internally calls
+      // `RendererDriver::draw(document)`, which uses `document.canvasSize()`
+      // for the offscreen frame buffer size — that's what the bitmap
+      // dimensions actually reflect.
+      const Vector2i currentCanvas = document_->canvasSize();
+      const bool splitCacheValid =
+          !rootDirty_ && !backgroundBitmap_.empty() && !foregroundBitmap_.empty() &&
+          splitStaticLayersEntity_ == dragEntity &&
+          splitStaticLayersViewport_ == currentCanvas;
       if (!splitCacheValid) {
         rasterizeSplitRootLayers(*dragLayer, viewport);
         splitStaticLayersEntity_ = dragEntity;
+        splitStaticLayersViewport_ = currentCanvas;
       }
       rootBitmap_ = RendererBitmap();
       rootDirty_ = false;
@@ -599,6 +619,7 @@ void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
   // split path with the same drag entity (or a different one) rebuilds bg/fg
   // against the current document state.
   splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
 
   // Render the root layer with promoted subtrees temporarily hidden so compositor translation
   // doesn't leave a stale copy at the original position.

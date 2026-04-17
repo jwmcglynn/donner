@@ -766,6 +766,50 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
 }
 
+// Zooming changes the viewport size the renderer rasterizes at, so the
+// cached bg/fg bitmaps from the previous zoom level must NOT be reused —
+// they're sized to the old canvas. Reusing them would stamp their pixels
+// into the top-left region of the new (larger) canvas, leaving the rest
+// transparent, which the editor's GL layer would then linearly-stretch
+// back to fill the pane and show as a blurry image.
+TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect width="200" height="100" fill="white"/>
+  <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+</svg>
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(),
+                                           Transform2d::Translate(Vector2d(1.0, 0.0)));
+
+  document.setCanvasSize(200, 100);
+  RenderViewport smallViewport;
+  smallViewport.size = Vector2d(200, 100);
+  smallViewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(smallViewport);
+  ASSERT_FALSE(compositor.backgroundBitmap().empty());
+  EXPECT_EQ(compositor.backgroundBitmap().dimensions, Vector2i(200, 100));
+
+  // Simulate a zoom-in: the editor's RenderCoordinator calls setCanvasSize
+  // before requestRender when the viewport's desiredCanvasSize changes, so
+  // mimic that ordering here.
+  document.setCanvasSize(400, 200);
+  RenderViewport largeViewport;
+  largeViewport.size = Vector2d(400, 200);
+  largeViewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(largeViewport);
+
+  EXPECT_EQ(compositor.backgroundBitmap().dimensions, Vector2i(400, 200))
+      << "bg bitmap should re-rasterize to match new canvas after zoom";
+  EXPECT_EQ(compositor.foregroundBitmap().dimensions, Vector2i(400, 200));
+}
+
 // Isolates the gradient + filter interaction. Single frame, no drag — does
 // it render correctly at all?
 TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {
