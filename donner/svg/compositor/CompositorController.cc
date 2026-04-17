@@ -181,7 +181,15 @@ CompositorController::CompositorController(SVGDocument& document, RendererInterf
     : document_(&document),
       renderer_(&renderer),
       config_(config),
-      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 1}) {}
+      // Only carve subtrees into bucket layers when they're actually
+      // expensive to re-rasterize. `filterPenalty = 16` (default) plus the
+      // subtree's own entity cost puts any filter group well above this
+      // threshold, so filter-heavy subtrees still auto-bucket, while a lone
+      // `<rect>` or two-element `<g>` stays in the root where it belongs.
+      // `ComplexityBucketerConfig`'s docstring calls out the drawEntityRange
+      // edge case that the `minCostToBucket = 1` default can expose; this
+      // production value sidesteps it.
+      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 5}) {}
 
 CompositorController::~CompositorController() = default;
 
@@ -320,6 +328,10 @@ const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
 void CompositorController::resetAllLayers() {
   Registry& registry = document_->registry();
   activeHints_.clear();
+  // Drop auto-promoted hints too — they index the old entity space and must
+  // be rebuilt against the new document on the next `renderFrame`.
+  mandatoryDetector_.clear();
+  complexityBucketer_.clear();
   resolver_.resolve(registry, kMaxCompositorLayers);
   reconcileLayers(registry);
 
@@ -329,6 +341,7 @@ void CompositorController::resetAllLayers() {
   splitStaticLayersEntity_ = entt::null;
   rootDirty_ = true;
   documentPrepared_ = false;
+  hintsScanned_ = false;
 }
 
 void CompositorController::renderFrame(const RenderViewport& viewport) {
@@ -348,11 +361,21 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
        registry.view<components::DirtyFlagsComponent>().end()) ||
       (registry.ctx().contains<components::RenderTreeState>() &&
        registry.ctx().get<components::RenderTreeState>().needsFullRebuild);
-  if (!documentPrepared_ || documentDirty) {
+  // On first renderFrame the `RenderingInstanceComponent` view is empty (it
+  // gets built by `prepareDocumentForRendering` below), so the mandatory /
+  // bucket detectors can't score anything useful. Defer them to the first
+  // post-prepare frame by also rescanning whenever `hintsScanned_` is false.
+  const bool needsHintRescan = !hintsScanned_ || documentDirty;
+  if ((!documentPrepared_ || documentDirty) && documentPrepared_) {
+    // Document is already prepared and became dirty — rescan now.
     mandatoryDetector_.reconcile(registry);
     if (config_.complexityBucketing) {
       complexityBucketer_.reconcile(registry);
     }
+    hintsScanned_ = true;
+  } else if (!documentPrepared_ && needsHintRescan) {
+    // First frame, RICs don't exist yet. Skip the detectors — we'll run them
+    // immediately after the first prepare below.
   }
   const ResolveOptions resolveOptions{
       .enableInteractionHints = config_.autoPromoteInteractions,
@@ -365,7 +388,10 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     rootDirty_ = true;
   }
 
-  // If no promoted layers, take the simple full-render path.
+  // If no promoted layers, take the simple full-render path. This also runs
+  // `prepareDocumentForRendering` implicitly via `driver.draw()`, so by the
+  // time the next `renderFrame` sees the document the detectors can actually
+  // observe RICs.
   if (layers_.empty()) {
     RendererDriver driver(*renderer_);
     driver.draw(*document_);
@@ -374,6 +400,23 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     splitStaticLayersEntity_ = entt::null;
     rootDirty_ = false;
     documentPrepared_ = true;
+
+    // Populated RICs now exist. If the detectors haven't scanned yet, run
+    // them once against the populated view and rebuild `layers_`. A newly
+    // discovered mandatory filter/mask/isolated-layer promotes the affected
+    // subtree immediately so the NEXT render sees a populated `layers_` and
+    // uses the compositor path. We don't re-render this frame — the simple
+    // full render we just produced is correct, it just doesn't benefit from
+    // caching until the next call.
+    if (!hintsScanned_) {
+      mandatoryDetector_.reconcile(registry);
+      if (config_.complexityBucketing) {
+        complexityBucketer_.reconcile(registry);
+      }
+      hintsScanned_ = true;
+      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+      reconcileLayers(registry);
+    }
     return;
   }
 
@@ -391,8 +434,19 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     // re-trigger a full rebuild on the next frame. The render tree instantiation process
     // leaves needsFullRebuild=true as a side effect of invalidateRenderTree(); we consume
     // that signal here.
-    if (document_->registry().ctx().contains<components::RenderTreeState>()) {
-      document_->registry().ctx().get<components::RenderTreeState>().needsFullRebuild = false;
+    if (registry.ctx().contains<components::RenderTreeState>()) {
+      registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
+    }
+
+    // First prepare completed — run detectors now if they haven't yet.
+    if (!hintsScanned_) {
+      mandatoryDetector_.reconcile(registry);
+      if (config_.complexityBucketing) {
+        complexityBucketer_.reconcile(registry);
+      }
+      hintsScanned_ = true;
+      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+      reconcileLayers(registry);
     }
   }
 

@@ -289,6 +289,11 @@ private:
   Entity splitStaticLayersEntity_ = entt::null;
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
+  /// True once `MandatoryHintDetector` and `ComplexityBucketer` have run
+  /// against a populated `RenderingInstanceComponent` view. The first
+  /// `renderFrame` call can't scan (RICs don't exist yet), so we defer the
+  /// first scan until just after the initial `prepareDocumentForRendering`.
+  bool hintsScanned_ = false;
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
 };

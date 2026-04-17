@@ -123,6 +123,11 @@ public:
    */
   void reconcile(Registry& registry);
 
+  /// Drop all held bucket hints. Callers use this when the registry is being
+  /// reset (e.g. `CompositorController::resetAllLayers`) so stale bucket
+  /// assignments don't linger into the rebuilt document.
+  void clear() { bucketHints_.clear(); }
+
   [[nodiscard]] const ComplexityBucketerStats& stats() const { return stats_; }
 
   [[nodiscard]] const ComplexityBucketerConfig& config() const { return config_; }

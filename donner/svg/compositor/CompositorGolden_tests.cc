@@ -291,6 +291,42 @@ TEST_F(CompositorGoldenTest, MultiBucketCompositionMatchesFullRender) {
 // output to full-render. The auto-promoted layer's cached bitmap is
 // premultiplied-alpha; `composeLayers` unpremultiplies before passing to
 // `drawImage` so the compose math matches the direct-render path.
+// Filter groups should auto-promote after the first `renderFrame` completes —
+// i.e. the moment `RenderingInstanceComponent`s exist, the
+// `MandatoryHintDetector` should have noticed and published a Mandatory hint
+// for any `<g filter="…">` in the document. This guards against the earlier
+// regression where the detector ran before `prepareDocumentForRendering`,
+// saw an empty component view, and never got a second chance.
+TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+      <rect width="200" height="100" fill="white"/>
+      <g id="glow" filter="url(#blur)"><circle cx="100" cy="50" r="30" fill="red"/></g>
+    </svg>
+  )svg");
+
+  auto glow = document.querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+  const Entity glowEntity = glow->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_EQ(compositor.layerCount(), 0u) << "no render yet — detectors haven't run";
+
+  compositor.renderFrame(viewport_);
+  EXPECT_EQ(compositor.layerCount(), 1u)
+      << "after the first render, the filter group should be mandatory-promoted";
+
+  // The next render should produce a composited output whose content for the
+  // filter group lives in a cached layer bitmap. Even though no entity was
+  // explicitly promoted, mandatory promotion means re-drawing the glow after
+  // e.g. a viewport change stays cheap.
+  compositor.renderFrame(viewport_);
+  EXPECT_GT(compositor.layerCount(), 0u) << "filter layer persists across frames";
+  EXPECT_EQ(compositor.layerBitmapOf(glowEntity).dimensions.x, 200);
+  EXPECT_EQ(compositor.layerBitmapOf(glowEntity).dimensions.y, 100);
+}
+
 TEST_F(CompositorGoldenTest, OpacityLessThanOneAutoPromotionMatchesFullRender) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">

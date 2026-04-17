@@ -80,6 +80,11 @@ public:
    */
   void reconcile(Registry& registry);
 
+  /// Drop all held hints. Callers use this when the registry is being reset
+  /// (e.g. `CompositorController::resetAllLayers`) so stale hints don't
+  /// linger into the rebuilt document.
+  void clear() { hints_.clear(); }
+
   /// Stats from the most recent `reconcile()` call. Zeroed on entry.
   [[nodiscard]] const MandatoryHintDetectorStats& stats() const { return stats_; }
 
