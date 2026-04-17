@@ -107,8 +107,9 @@ void RestoreLayerVisibility(Registry& registry,
 
 }  // namespace
 
-CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer)
-    : document_(&document), renderer_(&renderer) {}
+CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
+                                           CompositorConfig config)
+    : document_(&document), renderer_(&renderer), config_(config) {}
 
 CompositorController::~CompositorController() = default;
 

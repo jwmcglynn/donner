@@ -25,6 +25,39 @@ inline constexpr int kMaxCompositorLayers = 32;
 inline constexpr size_t kMaxCompositorMemoryBytes = 256 * 1024 * 1024;
 
 /**
+ * Runtime feature gates for `CompositorController`.
+ *
+ * Each field toggles an independent auto-promotion source. The primary
+ * kill-switch — "don't use the compositor at all" — is a linkage / construction
+ * decision: a consumer that doesn't want compositing simply doesn't instantiate
+ * a `CompositorController`. These gates only affect what *hint sources* run
+ * inside a live compositor.
+ *
+ * Default-constructed config has all features enabled. Mandatory hints
+ * (opacity < 1, filter, mask, blend-mode, isolation) are always active — they
+ * implement SVG semantics, not an optional optimization, and cannot be
+ * disabled through config.
+ *
+ * See 0025-composited_rendering.md § Reversibility.
+ */
+struct CompositorConfig {
+  /// Editor-published `InteractionHint` hints promote the selected / dragged
+  /// entity to its own layer. When false, the editor falls back to the
+  /// explicit `promoteEntity` escape hatch.
+  bool autoPromoteInteractions = true;
+
+  /// Animation-system-published hints promote animated subtrees so per-tick
+  /// cost stays O(animated subtree). When false, animations re-render the
+  /// whole document per tick; selection / drag compositing is unaffected.
+  bool autoPromoteAnimations = true;
+
+  /// `ComplexityBucketer` pre-splits the document into a small number of
+  /// layers at load / structural rebuild to reduce click-to-first-drag-update
+  /// latency. When false, the root layer stays monolithic.
+  bool complexityBucketing = true;
+};
+
+/**
  * Controls compositor layer promotion/demotion and orchestrates composited rendering.
  *
  * The compositor splits the document into layers: one root layer (everything not promoted) and
@@ -54,8 +87,13 @@ public:
    *
    * @param document The SVG document to composite.
    * @param renderer The renderer backend to use for rasterization and composition.
+   * @param config Runtime feature gates. Default-constructed enables everything.
    */
-  CompositorController(SVGDocument& document, RendererInterface& renderer);
+  CompositorController(SVGDocument& document, RendererInterface& renderer,
+                       CompositorConfig config = {});
+
+  /// Returns the runtime config this controller was constructed with.
+  [[nodiscard]] const CompositorConfig& config() const { return config_; }
 
   /// Destructor.
   ~CompositorController();
@@ -215,6 +253,7 @@ private:
 
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;
+  CompositorConfig config_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;
   std::unordered_map<Entity, ScopedCompositorHint> explicitHints_;
