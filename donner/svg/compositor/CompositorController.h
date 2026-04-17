@@ -56,15 +56,11 @@ struct CompositorConfig {
   /// layers at load / structural rebuild to reduce click-to-first-drag-update
   /// latency. When false, the root layer stays monolithic.
   ///
-  /// Defaults to `false` in v1. The `hasSplitStaticLayers` path now handles
-  /// bucket layers coexisting with a drag layer, but
-  /// `CompositorLayer::rasterizeLayer` (via `RendererDriver::drawEntityRange`)
-  /// doesn't correctly restore the SVG viewport context for standalone
-  /// promoted top-level elements — a background `<rect>` bucketed on its own
-  /// rasterizes into a transparent bitmap instead of its fill color. Fix
-  /// pending before flipping default-on; the subsystem is covered by
-  /// `complexity_bucketer_tests` and can be turned on explicitly.
-  bool complexityBucketing = false;
+  /// The controller's bucketer uses a production `minCostToBucket` threshold
+  /// (currently 8) so lone leaf elements don't get bucketed — only subtrees
+  /// with substantial rasterization cost (filters, masks, many descendants)
+  /// are carved out.
+  bool complexityBucketing = true;
 };
 
 /**

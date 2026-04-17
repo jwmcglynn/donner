@@ -109,7 +109,16 @@ void RestoreLayerVisibility(Registry& registry,
 
 CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
                                            CompositorConfig config)
-    : document_(&document), renderer_(&renderer), config_(config) {}
+    : document_(&document),
+      renderer_(&renderer),
+      config_(config),
+      // Production bucketer threshold: only bucket subtrees with non-trivial cost.
+      // Lone leaf elements (cost 1) aren't worth their own layer and exercise a
+      // `RendererDriver::drawEntityRange` edge case (standalone top-level elements
+      // lose SVG viewport context, rasterize to transparent). The unit tests for
+      // the bucketer itself construct it with default threshold 1 to exercise the
+      // algorithm; only the controller's in-tree bucketer uses the production value.
+      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 8}) {}
 
 CompositorController::~CompositorController() = default;
 
