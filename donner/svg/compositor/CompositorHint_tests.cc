@@ -46,6 +46,60 @@ TEST_F(CompositorHintTest, MandatoryFactoryUsesInfiniteSentinelWeight) {
       << "Mandatory hint must short-circuit totalWeight to UINT32_MAX";
 }
 
+TEST_F(CompositorHintTest, InteractionFactoryDefaultsToMediumWeight) {
+  const Entity entity = registry_.create();
+  ScopedCompositorHint hint =
+      ScopedCompositorHint::Interaction(registry_, entity, InteractionHint::Selection);
+  const auto& component = registry_.get<CompositorHintComponent>(entity);
+  ASSERT_EQ(component.entries.size(), 1u);
+  EXPECT_EQ(component.entries[0].source, HintSource::Interaction);
+  EXPECT_EQ(component.entries[0].weight, 0x8000)
+      << "Interaction default weight matches the design-doc Medium slot";
+  ASSERT_TRUE(hint.interactionKind().has_value());
+  EXPECT_EQ(*hint.interactionKind(), InteractionHint::Selection);
+}
+
+TEST_F(CompositorHintTest, InteractionFactoryPreservesActiveDragKind) {
+  const Entity entity = registry_.create();
+  ScopedCompositorHint hint =
+      ScopedCompositorHint::Interaction(registry_, entity, InteractionHint::ActiveDrag);
+  ASSERT_TRUE(hint.interactionKind().has_value());
+  EXPECT_EQ(*hint.interactionKind(), InteractionHint::ActiveDrag);
+}
+
+TEST_F(CompositorHintTest, NonInteractionHintsReportNoInteractionKind) {
+  const Entity entity = registry_.create();
+  ScopedCompositorHint mandatory = ScopedCompositorHint::Mandatory(registry_, entity);
+  EXPECT_FALSE(mandatory.interactionKind().has_value())
+      << "Mandatory hint must not report an InteractionHint kind";
+
+  const Entity entity2 = registry_.create();
+  ScopedCompositorHint animation = ScopedCompositorHint::Animation(registry_, entity2);
+  EXPECT_FALSE(animation.interactionKind().has_value())
+      << "Animation hint must not report an InteractionHint kind";
+}
+
+TEST_F(CompositorHintTest, AnimationFactoryDefaultsToHighWeight) {
+  const Entity entity = registry_.create();
+  ScopedCompositorHint hint = ScopedCompositorHint::Animation(registry_, entity);
+  const auto& component = registry_.get<CompositorHintComponent>(entity);
+  ASSERT_EQ(component.entries.size(), 1u);
+  EXPECT_EQ(component.entries[0].source, HintSource::Animation);
+  EXPECT_EQ(component.entries[0].weight, 0xC000)
+      << "Animation default weight matches the design-doc High slot (above Interaction)";
+}
+
+TEST_F(CompositorHintTest, InteractionKindSurvivesMove) {
+  const Entity entity = registry_.create();
+  ScopedCompositorHint original =
+      ScopedCompositorHint::Interaction(registry_, entity, InteractionHint::ActiveDrag);
+  ScopedCompositorHint moved = std::move(original);
+  ASSERT_TRUE(moved.interactionKind().has_value());
+  EXPECT_EQ(*moved.interactionKind(), InteractionHint::ActiveDrag)
+      << "move must preserve the InteractionHint kind on the destination handle";
+  EXPECT_FALSE(original.active()) << "moved-from handle should be inert";
+}
+
 TEST_F(CompositorHintTest, MultipleScopedHintsAccumulate) {
   const Entity entity = registry_.create();
   ScopedCompositorHint a = ScopedCompositorHint::Explicit(registry_, entity, 0x1000);
