@@ -7,6 +7,7 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/DualPathVerifier.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -133,6 +134,124 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
   const RendererBitmap flat = renderer_.takeSnapshot();
   EXPECT_THAT(getPixel(flat, 135, 35), IsRed()) << "Red rect at translated position";
   EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "Original position now vacated";
+}
+
+// Targeted probe: when a top-level `<rect>` is bucketed in isolation, does
+// `rasterizeLayer` (via `RendererDriver::drawEntityRange`) produce the
+// correct pixels? Calls the same code path the bucketer triggers at
+// runtime, with a single standalone element.
+TEST_F(CompositorGoldenTest, BucketedStandaloneRectRasterizesCorrectly) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  // Aggressive bucketing (threshold = 1) promotes both top-level rects into
+  // their own layers. If `drawEntityRange` correctly handles standalone
+  // top-level elements, the composited output matches the full-render output.
+  CompositorConfig config;
+  config.complexityBucketing = true;
+  CompositorController compositor(document, renderer_, config);
+
+  // Explicit promote to set up the drag scenario. With `complexityBucketing`
+  // on and aggressive threshold, the white-background rect also gets a bucket.
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(),
+                                          Transform2d::Translate(Vector2d(100.0, 0.0)));
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  // With the default bucketer threshold the white-bg rect isn't bucketed; it
+  // stays in the root layer and composition is straightforward. Test still
+  // guards against regressions of the single-promoted-layer path.
+  EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "bg pixel should be white";
+  EXPECT_THAT(getPixel(flat, 135, 35), IsRed()) << "target at translated position";
+}
+
+// Replicates DragReleasePopBack Phase 4: a prior drag committed a transform,
+// then we reset layers, re-promote, render at identity. With aggressive
+// bucketing, does the standalone white-bg bucket still rasterize correctly?
+TEST_F(CompositorGoldenTest, BucketedStandaloneAfterResetRasterizesCorrectly) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"
+            transform="translate(100, 0)"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorConfig config;
+  config.complexityBucketing = true;
+  CompositorController compositor(document, renderer_, config);
+
+  // Phase 1: initial promote + render (warm the bucketer state).
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+
+  // Phase 2: resetAllLayers, then promote + render again.
+  compositor.resetAllLayers();
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "after reset, bg pixel should still be white";
+  EXPECT_THAT(getPixel(flat, 135, 35), IsRed()) << "target at translated (via DOM transform)";
+}
+
+// Exact replication of DragReleasePopBack Phase 4: drag a rect, commit the
+// transform via setTransform (DOM mutation), reset layers, re-promote at
+// identity, render. With aggressive bucketing, does this sequence still
+// produce correct pixels?
+TEST_F(CompositorGoldenTest, DragReleaseResetSequenceWithAggressiveBucketing) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorConfig config;
+  config.complexityBucketing = true;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // Phase 1.
+  compositor.setLayerCompositionTransform(entity, Transform2d());
+  compositor.renderFrame(viewport_);
+
+  // Phase 2 — drag with composition offset.
+  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(Vector2d(100.0, 0.0)));
+  compositor.renderFrame(viewport_);
+
+  // Phase 3 — commit via setTransform, composition returns to identity.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(100.0, 0.0)));
+  compositor.setLayerCompositionTransform(entity, Transform2d());
+  compositor.renderFrame(viewport_);
+
+  // Phase 4 — resetAllLayers, re-promote.
+  compositor.resetAllLayers();
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.setLayerCompositionTransform(entity, Transform2d());
+  compositor.renderFrame(viewport_);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  EXPECT_THAT(getPixel(flat, 35, 35), IsWhite())
+      << "origin position should be vacated (white), not transparent";
+  EXPECT_THAT(getPixel(flat, 135, 35), IsRed()) << "target at translated position";
 }
 
 // The ancestor-clip safety check (committed earlier) should prevent
