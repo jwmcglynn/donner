@@ -6,12 +6,18 @@ donner_cc_library(
         "CompositorController.cc",
         "CompositorLayer.cc",
         "DragSession.cc",
+        "LayerResolver.cc",
+        "ScopedCompositorHint.cc",
     ],
     hdrs = [
         "CompositorController.h",
+        "CompositorHintComponent.h",
         "CompositorLayer.h",
+        "ComputedLayerAssignmentComponent.h",
         "DragSession.h",
         "LayerMembershipComponent.h",
+        "LayerResolver.h",
+        "ScopedCompositorHint.h",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -62,6 +68,28 @@ donner_cc_test(
         ":compositor",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "compositor_hint_tests",
+    srcs = [
+        "CompositorHint_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "layer_resolver_tests",
+    srcs = [
+        "LayerResolver_tests.cc",
+    ],
+    deps = [
+        ":compositor",
         "@com_google_gtest//:gtest_main",
     ],
 )
