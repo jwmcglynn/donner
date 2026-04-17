@@ -583,6 +583,98 @@ TEST_F(CompositorGoldenTest, ReducedSplashDraggingLetterPreservesGlow) {
       << " drag=" << glowDuringDrag;
 }
 
+// Mirrors the editor's default config (bucketing enabled, multiple filter
+// groups above and below the drag target) to catch interactions the
+// bucketing-off reduced-splash test misses.
+TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
+  SVGDocument document = parseDocument(R"svg(
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">
+  <defs>
+    <filter id="blur-a"><feGaussianBlur in="SourceGraphic" stdDeviation="4.5"/></filter>
+    <filter id="blur-b"><feGaussianBlur in="SourceGraphic" stdDeviation="6"/></filter>
+    <filter id="blur-c"><feGaussianBlur in="SourceGraphic" stdDeviation="8"/></filter>
+    <radialGradient id="g-letter" cx="300" cy="390" r="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fae100"/>
+      <stop offset="1" stop-color="#f39200"/>
+    </radialGradient>
+    <radialGradient id="g-glow-a" cx="200" cy="420" r="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe54a" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#ffe54a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="g-glow-b" cx="465" cy="410" r="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe54a" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#ffe54a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="g-glow-c" cx="700" cy="400" r="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe54a" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#ffe54a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g class="wrapper">
+    <rect width="892" height="512" fill="#0d0f1d"/>
+    <g id="glow_behind" filter="url(#blur-a)">
+      <rect x="170" y="390" width="80" height="80" fill="url(#g-glow-a)"/>
+    </g>
+    <g id="Donner">
+      <rect id="letter_1" class="letter" x="270" y="345" width="70" height="90" fill="url(#g-letter)"/>
+      <rect id="letter_2" class="letter" x="350" y="345" width="70" height="90" fill="url(#g-letter)"/>
+      <rect id="letter_3" class="letter" x="430" y="345" width="70" height="90" fill="url(#g-letter)"/>
+      <rect id="letter_4" class="letter" x="510" y="345" width="70" height="90" fill="url(#g-letter)"/>
+    </g>
+    <g id="glow_middle" filter="url(#blur-b)">
+      <rect x="435" y="380" width="80" height="80" fill="url(#g-glow-b)"/>
+    </g>
+    <g id="glow_foreground" filter="url(#blur-c)">
+      <rect x="670" y="370" width="80" height="80" fill="url(#g-glow-c)"/>
+    </g>
+  </g>
+</svg>
+  )svg");
+
+  RenderViewport fullViewport;
+  fullViewport.size = Vector2d(892, 512);
+  fullViewport.devicePixelRatio = 1.0;
+
+  // Editor default config: all auto-promotion features on.
+  CompositorConfig config;
+  CompositorController compositor(document, renderer_, config);
+
+  // Baseline render.
+  compositor.renderFrame(fullViewport);
+  const RendererBitmap baseline = renderer_.takeSnapshot();
+  const Pixel baselineGlowA = getPixel(baseline, 200, 420);
+  const Pixel baselineGlowB = getPixel(baseline, 465, 420);
+  const Pixel baselineGlowC = getPixel(baseline, 700, 400);
+
+  auto letter2 = document.querySelector("#letter_2");
+  ASSERT_TRUE(letter2.has_value());
+
+  ASSERT_TRUE(compositor.promoteEntity(letter2->entityHandle().entity()))
+      << "letter_2 has no compositing ancestor, should promote";
+
+  Pixel dragGlowA{}, dragGlowB{}, dragGlowC{};
+  for (int i = 1; i <= 10; ++i) {
+    compositor.setLayerCompositionTransform(letter2->entityHandle().entity(),
+                                             Transform2d::Translate(Vector2d(i * 4.0, 0.0)));
+    compositor.renderFrame(fullViewport);
+    const RendererBitmap frame = renderer_.takeSnapshot();
+    dragGlowA = getPixel(frame, 200, 420);
+    dragGlowB = getPixel(frame, 465, 420);
+    dragGlowC = getPixel(frame, 700, 400);
+  }
+
+  auto checkClose = [](const Pixel& baseline, const Pixel& drag, const char* label) {
+    const int baselineTotal = baseline.r + baseline.g + baseline.b;
+    const int dragTotal = drag.r + drag.g + drag.b;
+    EXPECT_LE(std::abs(baselineTotal - dragTotal), 30)
+        << label << ": baseline=" << baseline << " drag=" << drag;
+  };
+  checkClose(baselineGlowA, dragGlowA, "glow_behind (before drag target in paint order)");
+  checkClose(baselineGlowB, dragGlowB, "glow_middle (after drag target in paint order)");
+  checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
+}
+
 // Isolates the gradient + filter interaction. Single frame, no drag — does
 // it render correctly at all?
 TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {

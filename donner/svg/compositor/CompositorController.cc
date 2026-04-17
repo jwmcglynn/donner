@@ -558,23 +558,24 @@ void CompositorController::rasterizeSplitRootLayers(const CompositorLayer& layer
     return offscreen->takeSnapshot();
   };
 
-  // Hide the drag layer, plus any bucket/mandatory layers, so the bg / fg bitmaps only contain
-  // the non-promoted document content. Bucket layers draw via `composeLayers` at their own
-  // cached positions; double-drawing them here would over-paint with transparency.
-  const auto hideAllPromotedLayers =
-      [&](std::vector<HiddenVisibilityState>* hiddenEntities) {
-        for (const auto& other : layers_) {
-          HideLayerRange(registry, other, hiddenEntities);
-        }
-      };
+  // Hide *only* the drag layer in bg/fg — mandatory filter / bucket layers
+  // must render inline so they paint in correct paint order relative to
+  // surrounding regular content. Extracting them and drawing all "other
+  // promoted layers" between bg and fg in `composeLayers` would stack a
+  // filter that paints *after* the drag target beneath whatever fg draws on
+  // top of it, inverting paint order for overlapping sibling content (e.g. a
+  // glow that should cover the letter alongside it).
+  const auto hideDragLayer = [&](std::vector<HiddenVisibilityState>* hiddenEntities) {
+    HideLayerRange(registry, layer, hiddenEntities);
+  };
 
   backgroundBitmap_ = renderMaskedDocument([&](std::vector<HiddenVisibilityState>* hiddenEntities) {
-    hideAllPromotedLayers(hiddenEntities);
+    hideDragLayer(hiddenEntities);
     HideEntitiesAfter(registry, layer.lastEntity(), hiddenEntities);
   });
 
   foregroundBitmap_ = renderMaskedDocument([&](std::vector<HiddenVisibilityState>* hiddenEntities) {
-    hideAllPromotedLayers(hiddenEntities);
+    hideDragLayer(hiddenEntities);
     HideEntitiesBefore(registry, layer.firstEntity(), hiddenEntities);
   });
 }
@@ -638,67 +639,52 @@ ImageResource BuildImageResource(const RendererBitmap& bitmap) {
 void CompositorController::composeLayers(const RenderViewport& viewport) {
   renderer_->beginFrame(viewport);
 
-  if (hasSplitStaticLayers()) {
-    if (!backgroundBitmap_.empty()) {
-      ImageResource backgroundImage = BuildImageResource(backgroundBitmap_);
-
-      ImageParams params;
-      params.targetRect =
-          Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(backgroundBitmap_.dimensions.x),
-                                           static_cast<double>(backgroundBitmap_.dimensions.y)));
-
-      renderer_->setTransform(Transform2d());
-      renderer_->drawImage(backgroundImage, params);
+  const auto drawBitmap = [this](const RendererBitmap& bitmap, const Transform2d& transform) {
+    if (bitmap.empty()) {
+      return;
     }
-  } else if (!rootBitmap_.empty()) {
-    ImageResource rootImage = BuildImageResource(rootBitmap_);
-
+    ImageResource image = BuildImageResource(bitmap);
     ImageParams params;
     params.targetRect =
-        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(rootBitmap_.dimensions.x),
-                                         static_cast<double>(rootBitmap_.dimensions.y)));
+        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
+                                         static_cast<double>(bitmap.dimensions.y)));
+    renderer_->setTransform(transform);
+    renderer_->drawImage(image, params);
+  };
 
-    renderer_->setTransform(Transform2d());
-    renderer_->drawImage(rootImage, params);
-  }
-
-  // Blit each promoted layer with its composition transform.
-  for (const auto& layer : layers_) {
+  const auto drawLayer = [&](const CompositorLayer& layer) {
     if (!layer.hasValidBitmap()) {
-      continue;
+      return;
     }
-
-    const RendererBitmap& bitmap = layer.bitmap();
-    ImageResource layerImage = BuildImageResource(bitmap);
-
-    ImageParams params;
-    params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
-                                                         static_cast<double>(bitmap.dimensions.y)));
-
     // Apply composition transform with integer-pixel snap for translations.
     Transform2d compositionTransform = layer.compositionTransform();
     if (compositionTransform.isTranslation()) {
       Vector2d t = compositionTransform.translation();
       compositionTransform = Transform2d::Translate(std::round(t.x), std::round(t.y));
     }
+    drawBitmap(layer.bitmap(), compositionTransform);
+  };
 
-    renderer_->setTransform(compositionTransform);
-    renderer_->drawImage(layerImage, params);
-  }
-
-  if (hasSplitStaticLayers() && !foregroundBitmap_.empty()) {
-    ImageResource foregroundImage;
-    foregroundImage.data = foregroundBitmap_.pixels;
-    foregroundImage.width = foregroundBitmap_.dimensions.x;
-    foregroundImage.height = foregroundBitmap_.dimensions.y;
-
-    ImageParams params;
-    params.targetRect =
-        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(foregroundBitmap_.dimensions.x),
-                                         static_cast<double>(foregroundBitmap_.dimensions.y)));
-
-    renderer_->setTransform(Transform2d());
-    renderer_->drawImage(foregroundImage, params);
+  if (hasSplitStaticLayers()) {
+    // Split-static-layers path: bg and fg include all non-drag-target content
+    // rendered inline (including any mandatory filter / bucket layers, so
+    // their draw order relative to surrounding regular content is preserved).
+    // Only the drag target is composed as a separate cached layer.
+    const Entity dragEntity = activeHints_.begin()->first;
+    drawBitmap(backgroundBitmap_, Transform2d());
+    if (const CompositorLayer* dragLayer = findLayer(dragEntity)) {
+      drawLayer(*dragLayer);
+    }
+    drawBitmap(foregroundBitmap_, Transform2d());
+  } else {
+    // No drag — single root bitmap plus any promoted (mandatory / bucket)
+    // layers composed in paint-order order. `rasterizeRootLayer` hid the
+    // promoted layers' content from `rootBitmap_`, so drawing them here
+    // doesn't double-paint.
+    drawBitmap(rootBitmap_, Transform2d());
+    for (const auto& layer : layers_) {
+      drawLayer(layer);
+    }
   }
 
   renderer_->endFrame();
