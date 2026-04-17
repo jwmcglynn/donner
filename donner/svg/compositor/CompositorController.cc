@@ -219,7 +219,13 @@ FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
 }
 
 bool CompositorController::hasSplitStaticLayers() const {
-  return layers_.size() == 1 && (!backgroundBitmap_.empty() || !foregroundBitmap_.empty());
+  // The split-static-layers optimization (background / promoted-drag / foreground) depends on
+  // having exactly ONE moving layer — the drag target. Bucket layers (from
+  // `ComplexityBucketer`) stay static during a drag, so they don't invalidate the split as long
+  // as there's exactly one active-hint (drag/explicit) entry. Check `activeHints_`, not
+  // `layers_.size()`, so bucketing and drag coexist cleanly.
+  return activeHints_.size() == 1 &&
+         (!backgroundBitmap_.empty() || !foregroundBitmap_.empty());
 }
 
 const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
@@ -376,11 +382,18 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
 }
 
 void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
-  if (layers_.size() == 1) {
-    rasterizeSplitRootLayers(layers_.front(), viewport);
-    rootBitmap_ = RendererBitmap();
-    rootDirty_ = false;
-    return;
+  // If there's exactly one drag layer (single entity in `activeHints_`), use the split-static-
+  // layers optimization regardless of how many bucket layers exist. The split is around the drag
+  // layer's draw order; bucket layers stay static and are drawn separately via `composeLayers`.
+  if (activeHints_.size() == 1) {
+    const Entity dragEntity = activeHints_.begin()->first;
+    const CompositorLayer* dragLayer = findLayer(dragEntity);
+    if (dragLayer != nullptr) {
+      rasterizeSplitRootLayers(*dragLayer, viewport);
+      rootBitmap_ = RendererBitmap();
+      rootDirty_ = false;
+      return;
+    }
   }
 
   // Render the root layer with promoted subtrees temporarily hidden so compositor translation
@@ -422,13 +435,23 @@ void CompositorController::rasterizeSplitRootLayers(const CompositorLayer& layer
     return offscreen->takeSnapshot();
   };
 
+  // Hide the drag layer, plus any bucket/mandatory layers, so the bg / fg bitmaps only contain
+  // the non-promoted document content. Bucket layers draw via `composeLayers` at their own
+  // cached positions; double-drawing them here would over-paint with transparency.
+  const auto hideAllPromotedLayers =
+      [&](std::vector<HiddenVisibilityState>* hiddenEntities) {
+        for (const auto& other : layers_) {
+          HideLayerRange(registry, other, hiddenEntities);
+        }
+      };
+
   backgroundBitmap_ = renderMaskedDocument([&](std::vector<HiddenVisibilityState>* hiddenEntities) {
-    HideLayerRange(registry, layer, hiddenEntities);
+    hideAllPromotedLayers(hiddenEntities);
     HideEntitiesAfter(registry, layer.lastEntity(), hiddenEntities);
   });
 
   foregroundBitmap_ = renderMaskedDocument([&](std::vector<HiddenVisibilityState>* hiddenEntities) {
-    HideLayerRange(registry, layer, hiddenEntities);
+    hideAllPromotedLayers(hiddenEntities);
     HideEntitiesBefore(registry, layer.firstEntity(), hiddenEntities);
   });
 }

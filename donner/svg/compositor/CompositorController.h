@@ -56,11 +56,14 @@ struct CompositorConfig {
   /// layers at load / structural rebuild to reduce click-to-first-drag-update
   /// latency. When false, the root layer stays monolithic.
   ///
-  /// Defaults to `false` in v1 — the bucketer produces additional layers
-  /// that the current drag path (`hasSplitStaticLayers()` + the editor's
-  /// single-promoted-layer preview) doesn't yet compose correctly. Flip to
-  /// `true` once multi-layer composition ordering lands (Phase 2 checklist
-  /// item). The subsystem itself is covered by `complexity_bucketer_tests`.
+  /// Defaults to `false` in v1. The `hasSplitStaticLayers` path now handles
+  /// bucket layers coexisting with a drag layer, but
+  /// `CompositorLayer::rasterizeLayer` (via `RendererDriver::drawEntityRange`)
+  /// doesn't correctly restore the SVG viewport context for standalone
+  /// promoted top-level elements — a background `<rect>` bucketed on its own
+  /// rasterizes into a transparent bitmap instead of its fill color. Fix
+  /// pending before flipping default-on; the subsystem is covered by
+  /// `complexity_bucketer_tests` and can be turned on explicitly.
   bool complexityBucketing = false;
 };
 
