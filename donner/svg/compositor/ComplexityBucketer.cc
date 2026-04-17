@@ -75,6 +75,14 @@ void ComplexityBucketer::reconcile(Registry& registry) {
       }
     }
 
+    // Skip candidates whose subtree cost is below the bucketing threshold.
+    // Cheap subtrees (a lone `<rect>` fill background) aren't worth their own
+    // layer; carving them out also exposes correctness gaps in
+    // `RendererDriver::drawEntityRange` for standalone top-level elements.
+    if (cost < config_.minCostToBucket) {
+      continue;
+    }
+
     candidates.push_back(Candidate{childRoot, cost});
     ++stats_.candidatesConsidered;
   }

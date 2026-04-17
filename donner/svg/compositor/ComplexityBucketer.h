@@ -34,6 +34,14 @@ struct ComplexityBucketerConfig {
   /// Per-subtree cost adder when any entity in the subtree has a mask
   /// (`RenderingInstanceComponent::mask.has_value()`).
   uint32_t maskPenalty = 8;
+
+  /// Minimum subtree cost to be worth bucketing. Subtrees with cost below this
+  /// threshold stay in the root. Default `1` (bucket every top-level child)
+  /// for parity with the initial unit-test behavior; production callers should
+  /// raise this to avoid carving cheap leaf elements into their own layers,
+  /// which costs more than it saves and exposes correctness edge cases in
+  /// `RendererDriver::drawEntityRange` for standalone top-level elements.
+  uint32_t minCostToBucket = 1;
 };
 
 /**
