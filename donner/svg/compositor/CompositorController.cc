@@ -246,15 +246,24 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
   Registry& registry = document_->registry();
-  mandatoryDetector_.reconcile(registry);
+
+  // `mandatoryDetector_.reconcile()` is O(N) over all `RenderingInstanceComponent`
+  // entities. For steady-state drag (translation-only, no style mutations) it
+  // produces the same hints frame after frame, so skip the walk unless the
+  // document actually changed. First frame always runs (documentPrepared_ is
+  // false); subsequent frames only run when something is dirty or a full
+  // rebuild is pending. This keeps the per-frame drag cost O(hints), not O(N).
+  const bool documentDirty =
+      (registry.view<components::DirtyFlagsComponent>().begin() !=
+       registry.view<components::DirtyFlagsComponent>().end()) ||
+      (registry.ctx().contains<components::RenderTreeState>() &&
+       registry.ctx().get<components::RenderTreeState>().needsFullRebuild);
+  if (!documentPrepared_ || documentDirty) {
+    mandatoryDetector_.reconcile(registry);
+  }
   resolver_.resolve(registry, kMaxCompositorLayers);
   reconcileLayers(registry);
-  if (registry.view<components::DirtyFlagsComponent>().begin() !=
-      registry.view<components::DirtyFlagsComponent>().end()) {
-    rootDirty_ = true;
-  }
-  if (registry.ctx().contains<components::RenderTreeState>() &&
-      registry.ctx().get<components::RenderTreeState>().needsFullRebuild) {
+  if (documentDirty) {
     rootDirty_ = true;
   }
 
