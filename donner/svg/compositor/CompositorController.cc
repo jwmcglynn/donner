@@ -98,10 +98,25 @@ void HideEntitiesAfter(Registry& registry, Entity boundaryInclusive,
 
 void RestoreLayerVisibility(Registry& registry,
                             const std::vector<HiddenVisibilityState>& hiddenEntities) {
+  // Always restore to `visible = true` for entities we hid. Reasoning:
+  //
+  // `driver.draw()` inside a compositor render pass calls
+  // `prepareDocumentForRendering`, which rebuilds
+  // `RenderingInstanceComponent`s with fresh defaults (`visible = true`).
+  // If we restore using a *stale* saved value instead, we can stomp the
+  // freshly-rebuilt true with a leaked false from a prior pass — leaving
+  // entities permanently hidden across subsequent frames. We only ever hide
+  // user-visible promoted content, so unconditional `true` is correct for the
+  // compositor's use case.
   for (const auto& hidden : hiddenEntities) {
-    if (registry.valid(hidden.entity)) {
-      registry.get<components::RenderingInstanceComponent>(hidden.entity).visible = hidden.visible;
+    if (!registry.valid(hidden.entity)) {
+      continue;
     }
+    auto* inst = registry.try_get<components::RenderingInstanceComponent>(hidden.entity);
+    if (inst == nullptr) {
+      continue;
+    }
+    inst->visible = true;
   }
 }
 
@@ -112,13 +127,7 @@ CompositorController::CompositorController(SVGDocument& document, RendererInterf
     : document_(&document),
       renderer_(&renderer),
       config_(config),
-      // Production bucketer threshold: only bucket subtrees with non-trivial cost.
-      // Lone leaf elements (cost 1) aren't worth their own layer and exercise a
-      // `RendererDriver::drawEntityRange` edge case (standalone top-level elements
-      // lose SVG viewport context, rasterize to transparent). The unit tests for
-      // the bucketer itself construct it with default threshold 1 to exercise the
-      // algorithm; only the controller's in-tree bucketer uses the production value.
-      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 8}) {}
+      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 1}) {}
 
 CompositorController::~CompositorController() = default;
 
