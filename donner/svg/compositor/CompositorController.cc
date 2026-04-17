@@ -129,14 +129,7 @@ CompositorController::CompositorController(SVGDocument& document, RendererInterf
     : document_(&document),
       renderer_(&renderer),
       config_(config),
-      // Production threshold conservatively set to 8 so only subtrees with
-      // substantial rasterization cost (filter, mask, or several descendants)
-      // become their own buckets. Aggressive threshold = 1 is correct when the
-      // multi-bucket composition path matches full-render — but two gaps are
-      // currently documented (see `DISABLED_MultiBucketCompositionMatchesFullRender`
-      // and `DISABLED_OpacityLessThanOneAutoPromotionMatchesFullRender` in
-      // compositor_golden_tests). Once those are fixed, drop the threshold.
-      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 8}) {}
+      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 1}) {}
 
 CompositorController::~CompositorController() = default;
 
@@ -524,15 +517,68 @@ void CompositorController::rasterizeSplitRootLayers(const CompositorLayer& layer
   });
 }
 
+namespace {
+
+/// Convert premultiplied-alpha pixels to unpremultiplied-alpha pixels in
+/// place. Required before passing a `RendererBitmap` snapshot (which is
+/// premultiplied by convention) into `RendererInterface::drawImage` via
+/// `ImageResource` (which has no alpha-type field and is implicitly
+/// unpremultiplied). Without this conversion, semi-transparent pixels compose
+/// as though their RGB were already multiplied by alpha a *second* time —
+/// showing up as too-dark colors for opacity<1 content.
+///
+/// Fully-opaque pixels (alpha = 255) are unchanged; this step is only
+/// meaningful for semi-transparent content, which is why single-element
+/// drag of fully-opaque elements worked without the fix.
+std::vector<uint8_t> UnpremultiplyPixels(const std::vector<uint8_t>& src) {
+  std::vector<uint8_t> dst(src.size());
+  for (size_t i = 0; i + 3 < src.size(); i += 4) {
+    const uint8_t a = src[i + 3];
+    if (a == 0) {
+      dst[i] = 0;
+      dst[i + 1] = 0;
+      dst[i + 2] = 0;
+      dst[i + 3] = 0;
+    } else if (a == 255) {
+      dst[i] = src[i];
+      dst[i + 1] = src[i + 1];
+      dst[i + 2] = src[i + 2];
+      dst[i + 3] = 255;
+    } else {
+      // Divide RGB by alpha normalized to [0, 1]. Integer math: round half up.
+      const uint32_t scale = 255 * 256 / a;  // inverse alpha * 256
+      dst[i] = static_cast<uint8_t>(std::min<uint32_t>(255, (src[i] * scale + 128) >> 8));
+      dst[i + 1] = static_cast<uint8_t>(std::min<uint32_t>(255, (src[i + 1] * scale + 128) >> 8));
+      dst[i + 2] = static_cast<uint8_t>(std::min<uint32_t>(255, (src[i + 2] * scale + 128) >> 8));
+      dst[i + 3] = a;
+    }
+  }
+  return dst;
+}
+
+/// Build an `ImageResource` from a `RendererBitmap`, converting from
+/// premultiplied to unpremultiplied alpha when necessary. See
+/// `UnpremultiplyPixels` for the why.
+ImageResource BuildImageResource(const RendererBitmap& bitmap) {
+  ImageResource img;
+  img.width = bitmap.dimensions.x;
+  img.height = bitmap.dimensions.y;
+  if (bitmap.alphaType == AlphaType::Premultiplied) {
+    img.data = UnpremultiplyPixels(bitmap.pixels);
+  } else {
+    img.data = bitmap.pixels;
+  }
+  return img;
+}
+
+}  // namespace
+
 void CompositorController::composeLayers(const RenderViewport& viewport) {
   renderer_->beginFrame(viewport);
 
   if (hasSplitStaticLayers()) {
     if (!backgroundBitmap_.empty()) {
-      ImageResource backgroundImage;
-      backgroundImage.data = backgroundBitmap_.pixels;
-      backgroundImage.width = backgroundBitmap_.dimensions.x;
-      backgroundImage.height = backgroundBitmap_.dimensions.y;
+      ImageResource backgroundImage = BuildImageResource(backgroundBitmap_);
 
       ImageParams params;
       params.targetRect =
@@ -543,10 +589,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
       renderer_->drawImage(backgroundImage, params);
     }
   } else if (!rootBitmap_.empty()) {
-    ImageResource rootImage;
-    rootImage.data = rootBitmap_.pixels;
-    rootImage.width = rootBitmap_.dimensions.x;
-    rootImage.height = rootBitmap_.dimensions.y;
+    ImageResource rootImage = BuildImageResource(rootBitmap_);
 
     ImageParams params;
     params.targetRect =
@@ -564,10 +607,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     }
 
     const RendererBitmap& bitmap = layer.bitmap();
-    ImageResource layerImage;
-    layerImage.data = bitmap.pixels;
-    layerImage.width = bitmap.dimensions.x;
-    layerImage.height = bitmap.dimensions.y;
+    ImageResource layerImage = BuildImageResource(bitmap);
 
     ImageParams params;
     params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
