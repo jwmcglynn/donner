@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
 
@@ -33,6 +35,22 @@ const HintEntry* getSingleMandatoryEntry(const Registry& registry, Entity entity
 
 }  // namespace
 
+namespace {
+
+/// Create an entity with `TreeComponent` parent @p parent. Uses the public
+/// TreeComponent constructor with a dummy tag name — tests don't care about
+/// names, just the tree structure.
+Entity makeTreeEntity(Registry& registry, Entity parent) {
+  const Entity e = registry.create();
+  registry.emplace<donner::components::TreeComponent>(e, xml::XMLQualifiedNameRef("test"));
+  if (parent != entt::null) {
+    registry.get<donner::components::TreeComponent>(parent).appendChild(registry, e);
+  }
+  return e;
+}
+
+}  // namespace
+
 TEST(MandatoryHintDetectorTest, EmptyRegistryProducesNoHints) {
   Registry registry;
   MandatoryHintDetector detector;
@@ -43,6 +61,51 @@ TEST(MandatoryHintDetectorTest, EmptyRegistryProducesNoHints) {
   EXPECT_EQ(detector.stats().hintsPublished, 0u);
   EXPECT_EQ(detector.stats().hintsDropped, 0u);
   EXPECT_EQ(detector.stats().hintsActive, 0u);
+}
+
+TEST(MandatoryHintDetectorTest, EntityWithClipPathAncestorSkippedForSafety) {
+  // `<g clip-path="..."> <rect opacity="0.5"/> </g>`
+  // The rect qualifies (opacity < 1 → isolatedLayer) but extracting it into
+  // its own cached layer would lose the ancestor clip context. Skip
+  // auto-promotion; the inline `pushClip` path renders correctly.
+  Registry registry;
+  MandatoryHintDetector detector;
+
+  const Entity parent = makeTreeEntity(registry, entt::null);
+  auto& parentInstance = registry.emplace<RenderingInstanceComponent>(parent);
+  parentInstance.clipPath = components::ResolvedClipPath{};
+
+  const Entity child = makeTreeEntity(registry, parent);
+  auto& childInstance = registry.emplace<RenderingInstanceComponent>(child);
+  childInstance.isolatedLayer = true;  // opacity < 1 signal
+
+  detector.reconcile(registry);
+
+  EXPECT_EQ(detector.stats().candidatesEvaluated, 2u);
+  EXPECT_EQ(detector.stats().hintsPublished, 0u)
+      << "child with qualifying signal must NOT be auto-promoted because its ancestor clip-path "
+         "would be lost";
+  EXPECT_EQ(detector.stats().hintsActive, 0u);
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(child));
+}
+
+TEST(MandatoryHintDetectorTest, QualifyingEntityWithoutAncestorCompositingStillPromotes) {
+  // Same shape as above but the parent has no clip-path — the child should
+  // still auto-promote. Verifies the ancestor check doesn't over-suppress.
+  Registry registry;
+  MandatoryHintDetector detector;
+
+  const Entity parent = makeTreeEntity(registry, entt::null);
+  registry.emplace<RenderingInstanceComponent>(parent);  // plain parent
+
+  const Entity child = makeTreeEntity(registry, parent);
+  auto& childInstance = registry.emplace<RenderingInstanceComponent>(child);
+  childInstance.isolatedLayer = true;
+
+  detector.reconcile(registry);
+
+  EXPECT_EQ(detector.stats().hintsPublished, 1u) << "child should promote when ancestor is clean";
+  EXPECT_TRUE(registry.all_of<CompositorHintComponent>(child));
 }
 
 TEST(MandatoryHintDetectorTest, NonQualifyingEntityGetsNoHint) {
