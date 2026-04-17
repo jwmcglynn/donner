@@ -675,6 +675,61 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
 }
 
+// Translation-only drag must not re-rasterize bg/fg between frames. The
+// promise of the split-static-layers optimization is: bg and fg are
+// rasterized once per drag session and reused via GL texture blit. If they
+// got re-rendered every frame, the compositor would be doing full-document
+// work per pointer move.
+TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect width="200" height="100" fill="white"/>
+  <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+  <g filter="url(#blur)"><rect x="100" y="10" width="50" height="50" fill="yellow"/></g>
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+</svg>
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(viewport_);
+
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(),
+                                           Transform2d::Translate(Vector2d(1.0, 0.0)));
+  compositor.renderFrame(viewport_);
+
+  // Snapshot the bitmaps after the first drag frame. The `.data()` address
+  // only changes when the vector is reassigned — so comparing it across
+  // renderFrame calls is a cheap, direct probe of whether the bitmap was
+  // re-rasterized.
+  const RendererBitmap& bgFrame1 = compositor.backgroundBitmap();
+  const RendererBitmap& fgFrame1 = compositor.foregroundBitmap();
+  ASSERT_FALSE(bgFrame1.empty());
+  ASSERT_FALSE(fgFrame1.empty());
+  const std::vector<uint8_t> bgPixelsFrame1 = bgFrame1.pixels;
+  const std::vector<uint8_t> fgPixelsFrame1 = fgFrame1.pixels;
+  const uint8_t* bgDataPtrFrame1 = bgFrame1.pixels.data();
+  const uint8_t* fgDataPtrFrame1 = fgFrame1.pixels.data();
+
+  // Simulate 10 more drag frames with only translation changes.
+  for (int i = 2; i <= 11; ++i) {
+    compositor.setLayerCompositionTransform(
+        target->entityHandle().entity(), Transform2d::Translate(Vector2d(i * 1.0, 0.0)));
+    compositor.renderFrame(viewport_);
+  }
+
+  const RendererBitmap& bgFinal = compositor.backgroundBitmap();
+  const RendererBitmap& fgFinal = compositor.foregroundBitmap();
+  EXPECT_EQ(bgFinal.pixels.data(), bgDataPtrFrame1)
+      << "bg bitmap re-allocated between drag frames — cache invalidated incorrectly";
+  EXPECT_EQ(fgFinal.pixels.data(), fgDataPtrFrame1)
+      << "fg bitmap re-allocated between drag frames — cache invalidated incorrectly";
+  EXPECT_EQ(bgFinal.pixels, bgPixelsFrame1);
+  EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
+}
+
 // Isolates the gradient + filter interaction. Single frame, no drag — does
 // it render correctly at all?
 TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {

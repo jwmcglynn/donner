@@ -268,6 +268,7 @@ void CompositorController::demoteEntity(Entity entity) {
   // caches to match prior semantics.
   backgroundBitmap_ = RendererBitmap();
   foregroundBitmap_ = RendererBitmap();
+  splitStaticLayersEntity_ = entt::null;
   rootDirty_ = true;
 }
 
@@ -325,6 +326,7 @@ void CompositorController::resetAllLayers() {
   rootBitmap_ = RendererBitmap();
   backgroundBitmap_ = RendererBitmap();
   foregroundBitmap_ = RendererBitmap();
+  splitStaticLayersEntity_ = entt::null;
   rootDirty_ = true;
   documentPrepared_ = false;
 }
@@ -369,6 +371,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     driver.draw(*document_);
     backgroundBitmap_ = RendererBitmap();
     foregroundBitmap_ = RendererBitmap();
+    splitStaticLayersEntity_ = entt::null;
     rootDirty_ = false;
     documentPrepared_ = true;
     return;
@@ -419,8 +422,17 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
   }
 
-  // Re-rasterize root layer if dirty.
-  if (rootDirty_ || rootBitmap_.empty()) {
+  // Re-rasterize root (or split bg/fg) when dirty. In the split path the
+  // `rootBitmap_` stays empty by design and the validity of the cache is
+  // tracked separately inside `rasterizeRootLayer` — so don't use
+  // `rootBitmap_.empty()` alone as a trigger, or we'd re-rasterize bg/fg
+  // on every drag frame.
+  const bool splitPathActive = activeHints_.size() == 1 && findLayer(activeHints_.begin()->first);
+  const bool needsRootRasterize =
+      rootDirty_ || (!splitPathActive && rootBitmap_.empty()) ||
+      (splitPathActive && (backgroundBitmap_.empty() || foregroundBitmap_.empty() ||
+                           splitStaticLayersEntity_ != activeHints_.begin()->first));
+  if (needsRootRasterize) {
     rasterizeRootLayer(viewport);
   }
 
@@ -512,12 +524,27 @@ void CompositorController::rasterizeRootLayer(const RenderViewport& viewport) {
     const Entity dragEntity = activeHints_.begin()->first;
     const CompositorLayer* dragLayer = findLayer(dragEntity);
     if (dragLayer != nullptr) {
-      rasterizeSplitRootLayers(*dragLayer, viewport);
+      // Cache bg/fg across drag frames: re-rasterize only when the drag
+      // target changes or the document becomes dirty (`rootDirty_`).
+      // Translation-only drag updates just the drag layer's compose
+      // transform and must not invalidate these bitmaps.
+      const bool splitCacheValid = !rootDirty_ && !backgroundBitmap_.empty() &&
+                                   !foregroundBitmap_.empty() &&
+                                   splitStaticLayersEntity_ == dragEntity;
+      if (!splitCacheValid) {
+        rasterizeSplitRootLayers(*dragLayer, viewport);
+        splitStaticLayersEntity_ = dragEntity;
+      }
       rootBitmap_ = RendererBitmap();
       rootDirty_ = false;
       return;
     }
   }
+
+  // Leaving the split path — drop the cache identity so re-entering the
+  // split path with the same drag entity (or a different one) rebuilds bg/fg
+  // against the current document state.
+  splitStaticLayersEntity_ = entt::null;
 
   // Render the root layer with promoted subtrees temporarily hidden so compositor translation
   // doesn't leave a stale copy at the original position.

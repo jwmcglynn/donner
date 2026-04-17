@@ -283,6 +283,10 @@ private:
   RendererBitmap rootBitmap_;
   RendererBitmap backgroundBitmap_;
   RendererBitmap foregroundBitmap_;
+  /// Entity whose drag layer the cached bg/fg split is keyed on. When the
+  /// drag target changes, the split must be re-rasterized even if the
+  /// document otherwise appears clean.
+  Entity splitStaticLayersEntity_ = entt::null;
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
   bool offscreenSupportKnown_ = false;
