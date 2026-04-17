@@ -12,6 +12,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorLayer.h"
 #include "donner/svg/compositor/LayerResolver.h"
+#include "donner/svg/compositor/MandatoryHintDetector.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -215,6 +216,7 @@ private:
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;
   LayerResolver resolver_;
+  MandatoryHintDetector mandatoryDetector_;
   std::unordered_map<Entity, ScopedCompositorHint> explicitHints_;
   std::vector<CompositorLayer> layers_;
 

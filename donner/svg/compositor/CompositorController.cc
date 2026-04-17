@@ -234,6 +234,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
   Registry& registry = document_->registry();
+  mandatoryDetector_.reconcile(registry);
   resolver_.resolve(registry, kMaxCompositorLayers);
   reconcileLayers(registry);
   if (registry.view<components::DirtyFlagsComponent>().begin() !=
