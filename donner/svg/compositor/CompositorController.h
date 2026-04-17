@@ -111,10 +111,18 @@ public:
    * the layer bitmap is blitted with its composition transform, avoiding re-rasterization of
    * the rest of the scene.
    *
+   * Under `CompositorConfig::autoPromoteInteractions` (default on), this publishes an
+   * `Interaction` hint tagged with @p interactionKind. When the gate is off it falls back
+   * to an `Explicit` hint, ignoring @p interactionKind.
+   *
    * @param entity The entity to promote.
+   * @param interactionKind Semantic kind for the Interaction hint. Use `Selection` for
+   *   selection-driven pre-warm (no drag in progress) and `ActiveDrag` for an active
+   *   user drag. Defaults to `ActiveDrag` for callers that only use this API during drag.
    * @return true if promotion succeeded, false if the layer limit or memory budget was reached.
    */
-  bool promoteEntity(Entity entity);
+  bool promoteEntity(Entity entity,
+                     InteractionHint interactionKind = InteractionHint::ActiveDrag);
 
   /**
    * Demote a previously promoted entity back to the root layer.

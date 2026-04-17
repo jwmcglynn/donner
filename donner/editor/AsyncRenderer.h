@@ -45,6 +45,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -63,6 +64,14 @@ struct RenderRequest {
   struct DragPreview {
     Entity entity = entt::null;
     Vector2d translation = Vector2d::Zero();
+    /// Which interaction phase drove this preview. `Selection` means the
+    /// editor is pre-warming a layer for the selected entity before any
+    /// drag begins (translation is zero). `ActiveDrag` means the user is
+    /// actively dragging (translation reflects the cursor delta). The
+    /// compositor stamps the correct `InteractionHint` on the entity
+    /// based on this field so downstream introspection stays accurate.
+    svg::compositor::InteractionHint interactionKind =
+        svg::compositor::InteractionHint::ActiveDrag;
   };
 
   svg::Renderer* renderer = nullptr;

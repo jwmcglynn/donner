@@ -116,7 +116,7 @@ CompositorController::~CompositorController() = default;
 CompositorController::CompositorController(CompositorController&&) noexcept = default;
 CompositorController& CompositorController::operator=(CompositorController&&) noexcept = default;
 
-bool CompositorController::promoteEntity(Entity entity) {
+bool CompositorController::promoteEntity(Entity entity, InteractionHint interactionKind) {
   Registry& registry = document_->registry();
 
   if (!registry.valid(entity)) {
@@ -142,15 +142,15 @@ bool CompositorController::promoteEntity(Entity entity) {
   }
 
   // Phase 2: under `autoPromoteInteractions`, the editor-driven
-  // `promoteEntity` call publishes an `Interaction::ActiveDrag` hint (semantically
-  // "user is dragging this"). When the gate is off, we fall back to the
-  // `Explicit` escape hatch so consumers disabling auto-promotion still get
-  // promotion. Either way the hint is tracked in `activeHints_` and `isPromoted`
-  // returns true.
-  ScopedCompositorHint hint = config_.autoPromoteInteractions
-                                  ? ScopedCompositorHint::Interaction(
-                                        registry, entity, InteractionHint::ActiveDrag)
-                                  : ScopedCompositorHint::Explicit(registry, entity);
+  // `promoteEntity` call publishes an `Interaction` hint tagged with the
+  // caller-supplied kind (`Selection` for pre-warm on selection,
+  // `ActiveDrag` for an in-flight drag). When the gate is off, we fall back
+  // to the `Explicit` escape hatch. Either way the hint is tracked in
+  // `activeHints_` and `isPromoted` returns true.
+  ScopedCompositorHint hint =
+      config_.autoPromoteInteractions
+          ? ScopedCompositorHint::Interaction(registry, entity, interactionKind)
+          : ScopedCompositorHint::Explicit(registry, entity);
   const auto [it, inserted] = activeHints_.try_emplace(entity, std::move(hint));
   UTILS_RELEASE_ASSERT(inserted);
   static_cast<void>(it);

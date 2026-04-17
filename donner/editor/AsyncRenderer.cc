@@ -97,7 +97,8 @@ void AsyncRenderer::workerLoop() {
           }
 
           compositorEntity_ = entt::null;
-          if (compositor_->promoteEntity(request.dragPreview->entity)) {
+          if (compositor_->promoteEntity(request.dragPreview->entity,
+                                         request.dragPreview->interactionKind)) {
             compositorEntity_ = request.dragPreview->entity;
           }
         }

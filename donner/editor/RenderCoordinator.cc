@@ -188,11 +188,13 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     req.dragPreview = RenderRequest::DragPreview{
         .entity = dragPreview->entity,
         .translation = dragPreview->translation,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
     };
   } else if (needsExperimentalPrewarm) {
     req.dragPreview = RenderRequest::DragPreview{
         .entity = prewarmEntity,
         .translation = Vector2d::Zero(),
+        .interactionKind = svg::compositor::InteractionHint::Selection,
     };
   }
   asyncRenderer_.requestRender(req);
