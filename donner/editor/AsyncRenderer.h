@@ -83,6 +83,13 @@ struct RenderRequest {
   /// The worker holds this optional by value, so if the UI thread clears
   /// the selection mid-render the worker still draws the pre-render chrome.
   std::optional<svg::SVGElement> selection;
+  /// Currently-selected entity (if any) that the compositor should keep
+  /// promoted across renders. The compositor demotes the previous entity and
+  /// promotes this one when it changes. Allows pre-warming on selection so
+  /// the subsequent drag frame has cached bg/fg/layer bitmaps ready. The
+  /// compositor stays alive across drag → idle transitions for as long as
+  /// this stays non-null and pointing at the same entity.
+  Entity selectedEntity = entt::null;
   /// Optional in-progress drag preview rendered through the compositor fast path.
   std::optional<DragPreview> dragPreview;
 };

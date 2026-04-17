@@ -184,6 +184,18 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   req.document = &app.document().document();
   req.version = currentVersion;
   req.selection = std::nullopt;
+  // Carry the current selection on every render so the compositor can keep
+  // the selected entity promoted across drag → idle → drag transitions.
+  // Deliberately not gated on experimental mode: the compositor stays
+  // warmed against the selection, but only promotes when the entity is
+  // actually drag-capable. The pre-warm render that first triggers
+  // promotion is still gated separately below.
+  if (app.selectedElement().has_value()) {
+    const auto& selected = *app.selectedElement();
+    if (selected.isa<svg::SVGGraphicsElement>()) {
+      req.selectedEntity = selected.entityHandle().entity();
+    }
+  }
   if (dragPreview.has_value()) {
     req.dragPreview = RenderRequest::DragPreview{
         .entity = dragPreview->entity,

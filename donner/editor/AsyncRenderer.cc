@@ -71,66 +71,81 @@ void AsyncRenderer::workerLoop() {
     // `isBusy()` / `pollResult()` while we work.
     if (request.renderer != nullptr && request.document != nullptr) {
       std::optional<RenderResult::CompositedPreview> compositedPreview;
-      if (request.dragPreview.has_value()) {
-        if (!compositor_ || compositorDocument_ != request.document ||
-            compositorRenderer_ != request.renderer) {
-          compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
-                                                                                *request.renderer);
-          compositorDocument_ = request.document;
-          compositorRenderer_ = request.renderer;
-          compositorEntity_ = entt::null;
-          compositorDocumentVersion_ = request.version;
-        }
 
-        // Detect document rebuild (ReplaceDocumentCommand).  When the document version jumps,
-        // all entity handles from the previous document are invalid.  Reset the compositor's
-        // layers so it doesn't try to demote/iterate stale entities.
-        if (request.version != compositorDocumentVersion_) {
-          compositor_->resetAllLayers();
-          compositorEntity_ = entt::null;
-          compositorDocumentVersion_ = request.version;
-        }
-
-        if (compositorEntity_ != request.dragPreview->entity) {
-          if (compositorEntity_ != entt::null) {
-            compositor_->demoteEntity(compositorEntity_);
-          }
-
-          compositorEntity_ = entt::null;
-          if (compositor_->promoteEntity(request.dragPreview->entity,
-                                         request.dragPreview->interactionKind)) {
-            compositorEntity_ = request.dragPreview->entity;
-          }
-        }
-
-        if (compositorEntity_ != entt::null) {
-          compositor_->setLayerCompositionTransform(
-              compositorEntity_, Transform2d::Translate(request.dragPreview->translation));
-
-          svg::RenderViewport viewport;
-          const Vector2i canvasSize = request.document->canvasSize();
-          viewport.size = Vector2d(canvasSize.x, canvasSize.y);
-          viewport.devicePixelRatio = 1.0;
-          compositor_->renderFrame(viewport);
-
-          if (compositor_->hasSplitStaticLayers()) {
-            compositedPreview = RenderResult::CompositedPreview{
-                .backgroundBitmap = compositor_->backgroundBitmap(),
-                .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
-                .foregroundBitmap = compositor_->foregroundBitmap(),
-                .entity = compositorEntity_,
-            };
-          }
-        } else {
-          request.renderer->draw(*request.document);
-        }
-      } else {
-        compositor_.reset();
-        compositorDocument_ = nullptr;
-        compositorRenderer_ = nullptr;
+      // Keep the compositor alive across drag → idle transitions. Recreate
+      // only when the underlying document or renderer changes (different
+      // editor session / backend). This preserves mandatory-filter / bucket
+      // layer bitmap caches and the pre-warmed bg/fg pair between the
+      // selection pre-warm and the first drag frame that follows.
+      if (!compositor_ || compositorDocument_ != request.document ||
+          compositorRenderer_ != request.renderer) {
+        compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
+                                                                              *request.renderer);
+        compositorDocument_ = request.document;
+        compositorRenderer_ = request.renderer;
         compositorEntity_ = entt::null;
-        compositorDocumentVersion_ = 0;
-        request.renderer->draw(*request.document);
+        compositorDocumentVersion_ = request.version;
+      }
+
+      // Detect document rebuild (ReplaceDocumentCommand). When the document version jumps,
+      // all entity handles from the previous document are invalid. Reset the compositor's
+      // layers so it doesn't try to demote/iterate stale entities.
+      if (request.version != compositorDocumentVersion_) {
+        compositor_->resetAllLayers();
+        compositorEntity_ = entt::null;
+        compositorDocumentVersion_ = request.version;
+      }
+
+      // Resolve what the compositor should be promoted on this render.
+      // Priority: an explicit drag wins over the persistent selection hint;
+      // otherwise we keep the selected entity promoted so the next drag
+      // arrives with everything pre-warmed.
+      const Entity desiredEntity =
+          request.dragPreview.has_value() ? request.dragPreview->entity : request.selectedEntity;
+      const svg::compositor::InteractionHint desiredKind =
+          request.dragPreview.has_value() ? request.dragPreview->interactionKind
+                                          : svg::compositor::InteractionHint::Selection;
+
+      if (compositorEntity_ != desiredEntity) {
+        if (compositorEntity_ != entt::null) {
+          compositor_->demoteEntity(compositorEntity_);
+        }
+        compositorEntity_ = entt::null;
+        if (desiredEntity != entt::null &&
+            compositor_->promoteEntity(desiredEntity, desiredKind)) {
+          compositorEntity_ = desiredEntity;
+        }
+      }
+
+      // Apply the drag translation (zero when we're just holding a selection
+      // pre-warmed). When nothing is promoted, this is a no-op.
+      if (compositorEntity_ != entt::null) {
+        const Vector2d translation = request.dragPreview.has_value()
+                                         ? request.dragPreview->translation
+                                         : Vector2d::Zero();
+        compositor_->setLayerCompositionTransform(compositorEntity_,
+                                                  Transform2d::Translate(translation));
+      }
+
+      svg::RenderViewport viewport;
+      const Vector2i canvasSize = request.document->canvasSize();
+      viewport.size = Vector2d(canvasSize.x, canvasSize.y);
+      viewport.devicePixelRatio = 1.0;
+      compositor_->renderFrame(viewport);
+
+      // Expose the split bg/drag/fg trio to the editor only when it was
+      // actually produced (single-layer drag path). Pre-warmed state with
+      // identity translation still goes through this path, which means the
+      // editor can upload the GL textures as soon as selection happens and
+      // the first real drag frame is zero-cost.
+      if (request.dragPreview.has_value() && compositorEntity_ != entt::null &&
+          compositor_->hasSplitStaticLayers()) {
+        compositedPreview = RenderResult::CompositedPreview{
+            .backgroundBitmap = compositor_->backgroundBitmap(),
+            .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
+            .foregroundBitmap = compositor_->foregroundBitmap(),
+            .entity = compositorEntity_,
+        };
       }
 
       // Selection chrome is no longer baked into the bitmap — main.cc
