@@ -248,4 +248,106 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
   EXPECT_LT(avgMs, 5.0) << "Compositor overhead per frame exceeds 5ms (mock renderer, 10k nodes)";
 }
 
+// Measure click-to-first-drag-update latency — the cold path from "user selects
+// an entity" through "pre-warm the layer" to "first composited frame with the
+// drag delta applied." This is the user-visible latency the design doc calls
+// out in Goal 6 (p50 < 16 ms, p99 < 33 ms on 10k-node scene).
+//
+// Reports three numbers:
+//   1. Prewarm cost — time to rasterize the selected entity's layer for the
+//      first time (from Selection hint publish through one renderFrame).
+//   2. First drag frame cost — time from drag start (ActiveDrag hint publish
+//      + first transform applied) through one renderFrame.
+//   3. Combined click-to-first-drag — end-to-end cold path.
+//
+// Budgets are loose: this is a measurement benchmark, not a regression gate.
+// The tight steady-state assertions live in `DragFrameOverhead_*`.
+TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_10kNodes) {
+  const std::string svg = generateGridSvg(10000, 100);
+  SVGDocument document = makeDocument(svg);
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(1000, 1000);
+  viewport.devicePixelRatio = 1.0;
+
+  // Phase 1: selection published, layer pre-warmed.
+  auto prewarmStart = Clock::now();
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  compositor.renderFrame(viewport);
+  auto prewarmEnd = Clock::now();
+
+  // Phase 2: drag begins. Transform applied, first drag frame rendered.
+  auto dragStart = Clock::now();
+  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(Vector2d(5.0, 5.0)));
+  compositor.renderFrame(viewport);
+  auto dragEnd = Clock::now();
+
+  const auto prewarmUs =
+      std::chrono::duration_cast<std::chrono::microseconds>(prewarmEnd - prewarmStart).count();
+  const auto dragUs =
+      std::chrono::duration_cast<std::chrono::microseconds>(dragEnd - dragStart).count();
+  const double prewarmMs = static_cast<double>(prewarmUs) / 1000.0;
+  const double dragMs = static_cast<double>(dragUs) / 1000.0;
+  const double combinedMs = prewarmMs + dragMs;
+
+  std::cerr << "[PERF] ClickToFirstDragUpdate_10kNodes: prewarm=" << prewarmMs
+            << " ms, first-drag-frame=" << dragMs << " ms, combined=" << combinedMs
+            << " ms (mock renderer)\n";
+
+  // Loose budgets — these are baselines, not tight gates. Real rasterization
+  // time lands on top of these numbers; the design-doc 16/33 ms budgets assume
+  // the compositor overhead is a small fraction of the full-frame cost.
+  EXPECT_LT(dragMs, 100.0) << "First drag frame absurdly slow (mock renderer, 10k nodes)";
+  EXPECT_LT(combinedMs, 200.0) << "Click-to-first-drag-update absurdly slow";
+}
+
+// Click-to-first-drag on a smaller scene — the common editor case.
+TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_1kNodes) {
+  const std::string svg = generateGridSvg(1000, 32);
+  SVGDocument document = makeDocument(svg);
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(1000, 1000);
+  viewport.devicePixelRatio = 1.0;
+
+  auto prewarmStart = Clock::now();
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  compositor.renderFrame(viewport);
+  auto prewarmEnd = Clock::now();
+
+  auto dragStart = Clock::now();
+  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(Vector2d(5.0, 5.0)));
+  compositor.renderFrame(viewport);
+  auto dragEnd = Clock::now();
+
+  const auto prewarmUs =
+      std::chrono::duration_cast<std::chrono::microseconds>(prewarmEnd - prewarmStart).count();
+  const auto dragUs =
+      std::chrono::duration_cast<std::chrono::microseconds>(dragEnd - dragStart).count();
+  const double prewarmMs = static_cast<double>(prewarmUs) / 1000.0;
+  const double dragMs = static_cast<double>(dragUs) / 1000.0;
+  const double combinedMs = prewarmMs + dragMs;
+
+  std::cerr << "[PERF] ClickToFirstDragUpdate_1kNodes: prewarm=" << prewarmMs
+            << " ms, first-drag-frame=" << dragMs << " ms, combined=" << combinedMs
+            << " ms (mock renderer)\n";
+
+  EXPECT_LT(dragMs, 50.0) << "First drag frame absurdly slow (mock renderer, 1k nodes)";
+  EXPECT_LT(combinedMs, 100.0) << "Click-to-first-drag-update absurdly slow (1k nodes)";
+}
+
 }  // namespace donner::svg::compositor
