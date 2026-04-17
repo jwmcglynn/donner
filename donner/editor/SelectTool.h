@@ -17,6 +17,7 @@
 /// `EditorCommand::SetTransform` — never directly.
 
 #include <optional>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
@@ -37,9 +38,16 @@ public:
   };
 
   /// Payload needed to write a completed drag back into the source pane.
+  /// For multi-element drags this is the primary; additional writeback
+  /// entries are latched in `extras`.
   struct CompletedDragWriteback {
     AttributeWritebackTarget target;
     Transform2d transform;
+
+    /// Additional writeback entries for extra elements in a multi-element
+    /// drag. One per non-primary element that had a capturable writeback
+    /// target. Empty for single-element drags.
+    std::vector<CompletedDragWriteback> extras;
   };
 
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -77,18 +85,33 @@ public:
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
 private:
-  struct DragState {
+  /// Per-element bookkeeping for one participant in a drag. Carries the
+  /// start transform (for computing `startTransform * translate(delta)`
+  /// on each mouse move), the current preview transform, and the stable
+  /// locator for later canvas→text writeback.
+  struct PerElementDrag {
     svg::SVGElement element;
-    Vector2d startDocumentPoint;
     Transform2d startTransform;
-    /// The most recent preview transform for this drag. Tracked so
-    /// `onMouseUp` can queue one final commit and record the undo
-    /// entry without reading the element back from the document.
     Transform2d currentTransform;
+    std::optional<AttributeWritebackTarget> writebackTarget;
+  };
+
+  struct DragState {
+    /// Primary drag participant — the element that was under the cursor on
+    /// mouse-down. Always populated. The compositor-preview fast path
+    /// (when a single-element drag is composited) runs against this one.
+    PerElementDrag primary;
+
+    /// Additional elements that move in lockstep with the primary. Empty
+    /// for a single-element drag. Populated when mouse-down hits an
+    /// already-selected element and the current selection has more than
+    /// one entry — classic "grab an item in the current selection, move
+    /// them all" design-tool behavior.
+    std::vector<PerElementDrag> extras;
+
+    Vector2d startDocumentPoint;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
-    /// Stable locator used for the later canvas→text writeback.
-    std::optional<AttributeWritebackTarget> writebackTarget;
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;

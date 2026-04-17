@@ -30,7 +30,11 @@ private:
 
   std::string previousSourceText_;
   std::optional<std::string> lastWritebackSourceText_;
-  std::optional<EditorApp::CompletedTransformWriteback> pendingTransformWriteback_;
+  /// Pending transform writebacks that haven't been reflected in the source
+  /// pane yet. Was a single `optional`; became a vector to support multi-
+  /// element drag (each dragged element produces its own writeback, and
+  /// they're all applied in the same source patch pass to avoid flashing).
+  std::vector<EditorApp::CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<EditorApp::CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
 
   int lastShownErrorLine_ = -1;

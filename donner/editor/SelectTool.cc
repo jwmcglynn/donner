@@ -50,18 +50,49 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return;
   }
 
-  // Plain click on an element → replace selection and start a drag.
-  // Capture the element's current parent-from-element transform so we
-  // can compose deltas relative to it during the drag.
-  const Transform2d startTransform = element.cast<svg::SVGGraphicsElement>().transform();
-  const auto writebackTarget = captureAttributeWritebackTarget(element);
-  editor.setSelection(element);
+  // Plain click on an element. If the element is already in the current
+  // multi-selection, preserve the selection and drag ALL selected
+  // elements in lockstep — classic design-tool behavior (grab any item
+  // in the group, the group moves). Otherwise replace the selection
+  // with just this element and drag it alone.
+  const auto& currentSelection = editor.selectedElements();
+  const bool elementAlreadySelected =
+      std::any_of(currentSelection.begin(), currentSelection.end(),
+                  [&element](const svg::SVGElement& selected) { return selected == element; });
+  const bool isMultiDrag = elementAlreadySelected && currentSelection.size() > 1;
+
+  const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
+  const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
+
+  std::vector<PerElementDrag> extras;
+  if (isMultiDrag) {
+    extras.reserve(currentSelection.size() - 1);
+    for (const svg::SVGElement& selected : currentSelection) {
+      if (selected == element) {
+        continue;  // primary handled separately
+      }
+      const Transform2d extraStart = selected.cast<svg::SVGGraphicsElement>().transform();
+      extras.push_back(PerElementDrag{
+          .element = selected,
+          .startTransform = extraStart,
+          .currentTransform = extraStart,
+          .writebackTarget = captureAttributeWritebackTarget(selected),
+      });
+    }
+  } else {
+    editor.setSelection(element);
+  }
+
   dragState_ = DragState{
-      .element = element,
+      .primary =
+          PerElementDrag{
+              .element = element,
+              .startTransform = primaryStartTransform,
+              .currentTransform = primaryStartTransform,
+              .writebackTarget = primaryWritebackTarget,
+          },
+      .extras = std::move(extras),
       .startDocumentPoint = documentPoint,
-      .startTransform = startTransform,
-      .currentTransform = startTransform,
-      .writebackTarget = writebackTarget,
   };
 }
 
@@ -102,15 +133,30 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // followed by a parent-space translation:
   //
   //   new_local = Translate(delta) * old_local
-  const Transform2d newTransform = Transform2d::Translate(deltaDoc) * dragState_->startTransform;
+  const Transform2d primaryNewTransform =
+      Transform2d::Translate(deltaDoc) * dragState_->primary.startTransform;
 
   dragState_->currentDocumentDelta = deltaDoc;
-  dragState_->currentTransform = newTransform;
+  dragState_->primary.currentTransform = primaryNewTransform;
   dragState_->hasMoved = true;
 
-  if (!compositedDragPreviewEnabled_) {
-    // Default path: update the live document on every drag step.
-    editor.applyMutation(EditorCommand::SetTransformCommand(dragState_->element, newTransform));
+  // Extras always move through the mutation path — compositing only tracks
+  // the primary drag target. For the multi-element case we accept slightly
+  // less smooth drag (DOM mutation + re-render each frame) in exchange for
+  // shipping the feature without redesigning the drag-preview transport.
+  for (auto& extra : dragState_->extras) {
+    extra.currentTransform = Transform2d::Translate(deltaDoc) * extra.startTransform;
+    editor.applyMutation(EditorCommand::SetTransformCommand(extra.element, extra.currentTransform));
+  }
+
+  // Composited drag preview only applies when there are no extras. With
+  // extras, the primary must also flow through applyMutation so every
+  // element updates in the same frame (otherwise the primary would be
+  // frozen at its start position while extras move, which looks broken).
+  const bool useCompositedPath = compositedDragPreviewEnabled_ && dragState_->extras.empty();
+  if (!useCompositedPath) {
+    editor.applyMutation(
+        EditorCommand::SetTransformCommand(dragState_->primary.element, primaryNewTransform));
   }
 }
 
@@ -155,26 +201,59 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   // element actually moved — a click that never saw a mouse-move event
   // is a no-op for undo purposes.
   if (dragState_->hasMoved) {
-    if (compositedDragPreviewEnabled_) {
-      editor.applyMutation(
-          EditorCommand::SetTransformCommand(dragState_->element, dragState_->currentTransform));
+    const bool useCompositedPath =
+        compositedDragPreviewEnabled_ && dragState_->extras.empty();
+    if (useCompositedPath) {
+      editor.applyMutation(EditorCommand::SetTransformCommand(
+          dragState_->primary.element, dragState_->primary.currentTransform));
     }
 
     UndoSnapshot before{
-        .element = dragState_->element,
-        .transform = dragState_->startTransform,
-        .writebackTarget = dragState_->writebackTarget,
-        .sourceTransformAttributeValue = dragState_->element.getAttribute("transform"),
+        .element = dragState_->primary.element,
+        .transform = dragState_->primary.startTransform,
+        .writebackTarget = dragState_->primary.writebackTarget,
+        .sourceTransformAttributeValue = dragState_->primary.element.getAttribute("transform"),
         .restoreSourceTransformAttributeValue = true};
-    UndoSnapshot after{.element = dragState_->element,
-                       .transform = dragState_->currentTransform,
-                       .writebackTarget = dragState_->writebackTarget};
-    editor.undoTimeline().record("Move element", std::move(before), std::move(after));
+    UndoSnapshot after{.element = dragState_->primary.element,
+                       .transform = dragState_->primary.currentTransform,
+                       .writebackTarget = dragState_->primary.writebackTarget};
+    editor.undoTimeline().record(
+        dragState_->extras.empty() ? "Move element" : "Move elements",
+        std::move(before), std::move(after));
 
-    if (dragState_->writebackTarget.has_value()) {
+    // Record undo for each extra element so a single Ctrl+Z reverts the
+    // whole multi-element drag — one timeline entry per element keeps the
+    // existing timeline plumbing intact; the user sees them collapsed by
+    // the shared "Move elements" label if the timeline groups by label.
+    for (const auto& extra : dragState_->extras) {
+      UndoSnapshot extraBefore{
+          .element = extra.element,
+          .transform = extra.startTransform,
+          .writebackTarget = extra.writebackTarget,
+          .sourceTransformAttributeValue = extra.element.getAttribute("transform"),
+          .restoreSourceTransformAttributeValue = true};
+      UndoSnapshot extraAfter{.element = extra.element,
+                              .transform = extra.currentTransform,
+                              .writebackTarget = extra.writebackTarget};
+      editor.undoTimeline().record("Move elements", std::move(extraBefore),
+                                   std::move(extraAfter));
+    }
+
+    if (dragState_->primary.writebackTarget.has_value()) {
+      std::vector<CompletedDragWriteback> extraWritebacks;
+      extraWritebacks.reserve(dragState_->extras.size());
+      for (const auto& extra : dragState_->extras) {
+        if (extra.writebackTarget.has_value()) {
+          extraWritebacks.push_back(CompletedDragWriteback{
+              .target = *extra.writebackTarget,
+              .transform = extra.currentTransform,
+          });
+        }
+      }
       completedDragWriteback_ = CompletedDragWriteback{
-          .target = *dragState_->writebackTarget,
-          .transform = dragState_->currentTransform,
+          .target = *dragState_->primary.writebackTarget,
+          .transform = dragState_->primary.currentTransform,
+          .extras = std::move(extraWritebacks),
       };
     }
   }
@@ -186,8 +265,14 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
   if (!compositedDragPreviewEnabled_ || !dragState_.has_value()) {
     return std::nullopt;
   }
+  // Multi-element drags run through the mutation path (not compositor)
+  // because the drag-preview transport only models a single moving layer.
+  // When we have extras, there's no composited preview to report.
+  if (!dragState_->extras.empty()) {
+    return std::nullopt;
+  }
 
-  return ActiveDragPreview{.entity = dragState_->element.entityHandle().entity(),
+  return ActiveDragPreview{.entity = dragState_->primary.element.entityHandle().entity(),
                            .translation = dragState_->currentDocumentDelta};
 }
 

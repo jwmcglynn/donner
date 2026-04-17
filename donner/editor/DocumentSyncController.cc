@@ -19,7 +19,7 @@ DocumentSyncController::DocumentSyncController(std::string initialSource)
 void DocumentSyncController::resetForLoadedDocument(const std::string& source) {
   previousSourceText_ = source;
   lastWritebackSourceText_.reset();
-  pendingTransformWriteback_.reset();
+  pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
   lastShownErrorLine_ = kNoErrorLine;
   lastShownErrorReason_.clear();
@@ -84,13 +84,19 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
 void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& selectTool,
                                                     TextEditor& textEditor) {
   if (auto completed = selectTool.consumeCompletedDragWriteback(); completed.has_value()) {
-    pendingTransformWriteback_ = EditorApp::CompletedTransformWriteback{
+    pendingTransformWritebacks_.push_back(EditorApp::CompletedTransformWriteback{
         .target = std::move(completed->target),
         .transform = completed->transform,
-    };
+    });
+    for (auto& extra : completed->extras) {
+      pendingTransformWritebacks_.push_back(EditorApp::CompletedTransformWriteback{
+          .target = std::move(extra.target),
+          .transform = extra.transform,
+      });
+    }
   }
   if (auto completed = app.consumeTransformWriteback(); completed.has_value()) {
-    pendingTransformWriteback_ = std::move(*completed);
+    pendingTransformWritebacks_.push_back(std::move(*completed));
   }
 
   auto completedRemovals = app.consumeElementRemoveWritebacks();
@@ -118,37 +124,42 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     }
   }
 
-  if (!pendingTransformWriteback_.has_value()) {
+  if (pendingTransformWritebacks_.empty()) {
     return;
   }
 
   std::string source = textEditor.getText();
-  std::optional<TextPatch> patch;
-  if (pendingTransformWriteback_->restoreSourceTransformAttributeValue) {
-    if (pendingTransformWriteback_->sourceTransformAttributeValue.has_value()) {
-      patch = buildAttributeWriteback(
-          source, pendingTransformWriteback_->target, "transform",
-          std::string_view(*pendingTransformWriteback_->sourceTransformAttributeValue));
+  std::vector<TextPatch> patches;
+  patches.reserve(pendingTransformWritebacks_.size());
+  for (const auto& writeback : pendingTransformWritebacks_) {
+    std::optional<TextPatch> patch;
+    if (writeback.restoreSourceTransformAttributeValue) {
+      if (writeback.sourceTransformAttributeValue.has_value()) {
+        patch = buildAttributeWriteback(
+            source, writeback.target, "transform",
+            std::string_view(*writeback.sourceTransformAttributeValue));
+      } else {
+        patch = buildAttributeRemoveWriteback(source, writeback.target, "transform");
+      }
     } else {
-      patch =
-          buildAttributeRemoveWriteback(source, pendingTransformWriteback_->target, "transform");
+      const RcString serialized = toSVGTransformString(writeback.transform);
+      if (std::string_view(serialized).empty()) {
+        patch = buildAttributeRemoveWriteback(source, writeback.target, "transform");
+      } else {
+        patch = buildAttributeWriteback(source, writeback.target, "transform",
+                                        std::string_view(serialized));
+      }
     }
-  } else {
-    const RcString serialized = toSVGTransformString(pendingTransformWriteback_->transform);
-    if (std::string_view(serialized).empty()) {
-      patch =
-          buildAttributeRemoveWriteback(source, pendingTransformWriteback_->target, "transform");
-    } else {
-      patch = buildAttributeWriteback(source, pendingTransformWriteback_->target, "transform",
-                                      std::string_view(serialized));
+    if (patch.has_value()) {
+      patches.push_back(*std::move(patch));
     }
   }
-  pendingTransformWriteback_.reset();
-  if (!patch.has_value()) {
+  pendingTransformWritebacks_.clear();
+  if (patches.empty()) {
     return;
   }
 
-  applyPatches(source, {{*patch}});
+  applyPatches(source, patches);
   textEditor.setText(source, /*preserveScroll=*/true);
   QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
 }
