@@ -1,19 +1,20 @@
 # Design: v0.5 Release
 
-**Status:** In Progress
-**Updated:** 2026-04-16
+**Status:** Shipped (2026-04-16)
+**Updated:** 2026-04-17
 
 ## Summary
 
-Release checklist and implementation plan for shipping Donner v0.5. This release bundles all work
-since v0.1: renderer abstraction, tiny-skia software backend, text rendering (6 phases), and all 17
-SVG filter primitives with SIMD performance.
+Release checklist and implementation plan for Donner v0.5, tagged `v0.5.0` on 2026-04-16. This
+release bundled all work since v0.1: renderer abstraction, tiny-skia software backend, text
+rendering (6 phases), all 17 SVG filter primitives with SIMD performance, the in-tree editor, WASM
+editor, and `.svgz` support.
 
 Animation (9 phases), composited rendering, and interactivity (6 phases) are scoped out of v0.5 and
 deferred to v1.0.
 
-The release requires fixing test failures, verifying builds across configurations, updating
-documentation, creating examples for new features, running fuzzers, and ensuring CI is green.
+See the [v0.5 Retrospective](#v05-retrospective) below for follow-up work to carry into the next
+release.
 
 ## Goals
 
@@ -39,12 +40,11 @@ documentation, creating examples for new features, running fuzzers, and ensuring
 
 ## Next Steps
 
-Most release-hardening work is complete. Remaining work:
+v0.5.0 was tagged and published on 2026-04-16. Remaining post-release work is tracked in the
+[v0.5 Retrospective](#v05-retrospective) below and carried forward into v1.0.
 
-- **Phase 14: Release** — Final validation, build report, tag, release notes, and release
-  publication.
-- **Deferred:** Full per-entity recomputation beyond the current style-only dirty path, CSS
-  differential restyling, float feImage fragments (Phase 10), SubregionCropRect architecture,
+- **Deferred to v1.0:** Full per-entity recomputation beyond the current style-only dirty path,
+  CSS differential restyling, float feImage fragments (Phase 10), SubregionCropRect architecture,
   `ch` unit glyph measurement, bidirectional text, and all composited-rendering / spatial-index
   work.
 
@@ -346,14 +346,15 @@ the build report lands:
 - [x] **Update release notes with final highlights** — `RELEASE_NOTES.md` was refreshed on
   2026-04-16 during the final docs pass (including the final coverage figures). This commit must
   land **before** the build-report commit.
-- [ ] **Generate build report as the release commit** — After every other release-blocking change
-  is on `main`, regenerate `docs/build_report.md` with Skia/tiny-skia differentiation and commit
-  it as the tagged release commit (nothing else in that commit).
-- [ ] **Create release tag and publish** — Tag `v0.5.0` on the build-report commit and create the
-  GitHub release using the `RELEASE_NOTES.md` entry as the body.
-- [ ] **Verify release artifacts** — Confirm the GitHub release shows the correct tag, release
-  notes, and attached linux/macos binaries from `release.yml`.
-- [ ] **Post-release follow-up** — Update `ProjectRoadmap.md` and announce the release.
+- [x] **Generate build report as the release commit** — `b8bb66bf Release v0.5.0: regenerate build
+  report` regenerated `docs/build_report.md` on a clean tree with Skia/tiny-skia differentiation
+  and was the sole content of the tagged commit.
+- [x] **Create release tag and publish** — `v0.5.0` tagged on the build-report commit; GitHub
+  release published 2026-04-16T20:05:42Z using the `RELEASE_NOTES.md` entry as the body.
+- [x] **Verify release artifacts** — GitHub release shows `v0.5.0` with
+  `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`, and SLSA attestations attached.
+- [ ] **Post-release follow-up** — Update `ProjectRoadmap.md` to mark v0.5 as shipped and announce
+  the release. Retrospective items captured below.
 
 ---
 
@@ -413,23 +414,23 @@ commit, nothing else.
 - [x] **Generate build report** — Regenerate `docs/build_report.md` against a clean tree with
   Skia/tiny-skia backend differentiation. Commit it on `main` as the dedicated release commit
   (e.g. `Release v0.5.0: regenerate build report`). Nothing else goes in this commit.
-- [ ] **CI green on the build-report commit** — Final release-commit CI verification on the
-  commit that will be tagged.
+- [x] **CI green on the build-report commit** — Release-commit CI went green before tagging.
 
 ### Release
 
-- [ ] **Create release tag** — `git tag -a v0.5.0 -m "Donner SVG v0.5.0"` on the build-report
-  commit.
-- [ ] **Push tag** — `git push origin v0.5.0`.
-- [ ] **Create GitHub Release** — Use `gh release create` with the `RELEASE_NOTES.md` entry as the
-  body.
-- [ ] **Verify release artifacts** — Check the GitHub release page, rendered notes, and attached
-  binaries.
+- [x] **Create release tag** — `v0.5.0` tagged on the build-report commit (`b8bb66bf`).
+- [x] **Push tag** — Tag pushed to `origin`.
+- [x] **Create GitHub Release** — Published via `gh release create`
+  (<https://github.com/jwmcglynn/donner/releases/tag/v0.5.0>), body sourced from `RELEASE_NOTES.md`.
+- [x] **Verify release artifacts** — Release page renders, linux/macos binaries and SLSA
+  attestations are attached.
 
 ### Post-Release
 
 - [ ] **Update ProjectRoadmap.md** — Mark v0.5 as shipped and update the design-doc table.
 - [ ] **Announce** — Post the release to the relevant channels.
+- [ ] **BCR publish** — Publishing to the Bazel Central Registry failed on the v0.5.0 tag. See
+  [Retrospective → Release-process bugs](#release-process-bugs-carry-to-v06).
 
 ---
 
@@ -441,3 +442,64 @@ commit, nothing else.
 - **Build matrix**: Bazel (Linux/macOS) × CMake (Linux/macOS) × {Skia, tiny-skia}.
 - **CI**: All GitHub Actions workflows green on the release commit.
 - **Manual verification**: Animated splash SVG renders in browser and via `svg_to_png`.
+
+---
+
+## v0.5 Retrospective {#v05-retrospective}
+
+Captured on 2026-04-17 after the v0.5.0 release. These are the issues that surfaced during
+the cut that should be fixed before the next release.
+
+### Release-process bugs (carry to v0.6)
+
+1. **BCR publish failed.** Publishing Donner to the Bazel Central Registry on the `v0.5.0` tag
+   did not succeed. Needs debugging against the process captured in
+   [0018-bcr_release.md](0018-bcr_release.md) — identify the failure mode, fix the tooling, and
+   re-run on v0.5.x or v0.6.
+2. **Binary-size report in Doxygen is broken.** The Doxygen-rendered build report (binary-size
+   tables, feature matrix) is not displaying correctly — the treeview appears empty. Root-cause
+   the generation/integration step and ensure the report renders in the hosted Doxygen site
+   before the next tag.
+3. **Design docs pollute the Doxygen sidebar.** All 25+ design docs currently appear as
+   top-level sidebar entries. They should be grouped under a single "Design Docs" section so
+   the developer-facing sidebar stays navigable.
+4. **Doxygen lazy-lists filter/element pages.** The generated site enumerates every filter
+   primitive (and other element categories) as individual sidebar entries. Condense these into
+   a single "All Elements" / "Filter Primitives" index page so the sidebar isn't dominated by
+   element enumeration.
+5. **Too many public Bazel targets.** The public-target surface grew significantly in v0.5 —
+   especially inside `//donner/editor/...` — with many internal helpers visible to external
+   consumers. Audit `visibility` across the tree and tighten to `//donner/...`-private wherever
+   the target isn't a deliberate public API. The editor subtree is the priority; it leaked the
+   most targets.
+
+### vNext features to finish (not shipped in v0.5)
+
+These workstreams were **never part of v0.5's feature surface** — they were in-progress vNext
+work that sat alongside the v0.5 effort, with code landing on `main` but not enabled or
+exposed in the release. They should be the first feature work to finish before new v1.0
+scope is picked up:
+
+1. **Sandboxing** — Scaffolding landed on `main` during v0.5 development (wire-format fuzzer,
+   `sandbox_diff` CLI, hardened-child test fixes), but the broader editor sandbox story from
+   [0023-editor_sandbox.md](0023-editor_sandbox.md) was not enabled for v0.5 users. Finish the
+   remaining milestones.
+2. **Composited rendering** — [0025-composited_rendering.md](0025-composited_rendering.md) is
+   in draft and was not part of v0.5. Prerequisite for fluid editor dragging and the v1.0
+   interactivity story; needs to graduate from draft to shipped.
+3. **Geode renderer on a real GPU** — [0017-geode_renderer.md](0017-geode_renderer.md) has
+   Phase 0–2 complete and the resvg suite green on MSAA, but Geode is not enabled as a
+   user-facing backend in v0.5 and has not been validated on physical GPU hardware (only
+   CI / software adapters). Finish the real-GPU path before moving to new renderer work.
+
+### Next-release features (after the items above)
+
+Once the retrospective bugs and open-feature close-outs are done, the next tranche of feature
+work to pick up:
+
+1. **`<a>` element support** — Treat `<a>` as a grouping element for rendering (Issue S18 in
+   [0024-proposed_issues_2026q2.md](0024-proposed_issues_2026q2.md)). Small scope, 3 resvg
+   tests unblocked.
+2. **`<switch>` element + `systemLanguage`** — Conditional processing per
+   [SVG2 §5.9](https://www.w3.org/TR/SVG2/struct.html#ConditionalProcessing) (Issue S4 in
+   0024). Medium scope, ~15 resvg tests unblocked.

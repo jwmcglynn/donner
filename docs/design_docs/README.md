@@ -43,7 +43,7 @@ conventions automated agents should follow when editing design docs.
 | 0008 | [css_fonts](0008-css_fonts.md)                                                         | Partial                                                                    | CSS `@font-face` loading pipeline (TTF/OTF/WOFF/WOFF2). |
 | 0009 | [resvg_test_suite_bugs](0009-resvg_test_suite_bugs.md)                                 | Living catalog                                                             | Cases where resvg's golden images disagree with the SVG/CSS spec. |
 | 0010 | [text_rendering](0010-text_rendering.md)                                               | Implemented (Phases 1–6); backend refactor complete                        | `<text>`, `<tspan>`, `<textPath>`, the stb / FreeType / HarfBuzz backend tiers. |
-| 0011 | [v0_5_release](0011-v0_5_release.md)                                                   | In Progress                                                                | Release checklist and implementation plan for shipping v0.5. |
+| 0011 | [v0_5_release](0011-v0_5_release.md)                                                   | Shipped (v0.5.0, 2026-04-16)                                               | Release checklist and implementation plan for shipping v0.5, plus retrospective for the next release. |
 | 0012 | [continuous_fuzzing](0012-continuous_fuzzing.md)                                       | Design                                                                     | Dockerized always-on fuzzing harness for every parser surface. |
 | 0013 | [coverage_improvement](0013-coverage_improvement.md)                                   | In Progress (Round 1 complete, Round 2 in progress)                        | Ongoing per-round coverage work: what's still uncovered and why. |
 | 0014 | [filter_performance](0014-filter_performance.md)                                       | Complete (all filters within 1.5× of Skia)                                 | How the tiny-skia filter pipeline caught up with Skia on every primitive. |
@@ -58,6 +58,9 @@ conventions automated agents should follow when editing design docs.
 | 0023 | [editor_sandbox](0023-editor_sandbox.md)                                               | Design                                                                    | Browser-style process isolation for the editor's parser / renderer. |
 | 0024 | [proposed_issues_2026q2](0024-proposed_issues_2026q2.md)                               | Draft                                                                      | Q2 2026 wishlist: feature gaps and CI improvements. |
 | 0025 | [composited_rendering](0025-composited_rendering.md)                                   | Draft                                                                      | Layer-based compositor for fluid editor dragging without full re-render. |
+| 0026 | [svg_conformance_testing](0026-svg_conformance_testing.md)                             | Draft                                                                      | Manifest-driven SVG 1.1 filter + WPT + scripted conformance program. |
+| 0027 | [scripting](0027-scripting.md)                                                         | Draft                                                                      | `donner::script`: QuickJS-NG + IDL codegen that projects the ECS as the DOM. |
+| 0028 | [v1_0_release](0028-v1_0_release.md)                                                   | Draft                                                                      | Release checklist and implementation plan for shipping v1.0 (full ProjectRoadmap scope). |
 
 ## Cross-reference: developer docs
 
