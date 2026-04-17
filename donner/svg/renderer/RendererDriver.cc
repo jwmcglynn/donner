@@ -46,6 +46,96 @@ namespace donner::svg {
 
 namespace {
 
+/// Device-pixel threshold below which a draw call is skipped as "too small to
+/// meaningfully influence the render". At 0.25 px per axis, the entire shape
+/// fits inside a quarter of a pixel — even with rasterizer AA, fill contribution
+/// rounds to < 1 subpixel. Strokes and markers are accounted for by inflating
+/// the bounds before this check.
+inline constexpr double kMinCullableExtentDevicePx = 0.25;
+
+/// Slack margin (in device pixels) applied when intersecting the viewport for
+/// culling. Keeps fractional-pixel strokes at the viewport edge safely on-screen
+/// — we'd rather do a little extra work than cull content the user should see.
+inline constexpr double kViewportCullSlackDevicePx = 1.0;
+
+/// Compute the draw call's local-space AABB (inclusive of stroke width) for
+/// the given entity, or `std::nullopt` if the entity has no drawable content
+/// that this pass can cheaply bound (i.e., it's a group, or it's text/<image>
+/// whose bounds live in a different component than `ComputedPathComponent`).
+///
+/// Stroke-width expansion uses a uniform half-stroke inflate — it over-counts
+/// at miter joins but never under-counts, which is the only direction that
+/// matters for a culling decision.
+std::optional<Box2d> LocalDrawableBoundsWithStroke(
+    const EntityHandle& dataHandle, const components::ComputedStyleComponent& style) {
+  const auto* path = dataHandle.try_get<components::ComputedPathComponent>();
+  if (!path) {
+    // Text and <image> draws are not culled by this path for now: text
+    // measurement would require asking the text engine, and `<image>`
+    // bounds live on `ComputedSizedElementComponent`. Both are far rarer
+    // than paths in complex documents (where culling pays off), so they're
+    // deferred to a follow-up.
+    return std::nullopt;
+  }
+
+  Box2d box = path->localBounds();
+  if (box.isEmpty()) {
+    return std::nullopt;
+  }
+  if (!style.properties.has_value()) {
+    return box;
+  }
+
+  const auto& props = style.properties.value();
+  const PaintServer& strokeServer = props.stroke.getRequired();
+  if (strokeServer.is<PaintServer::None>()) {
+    return box;
+  }
+
+  const double strokeWidth = props.strokeWidth.getRequired().value;
+  if (strokeWidth <= 0.0) {
+    return box;
+  }
+
+  const double halfStroke = strokeWidth * 0.5;
+  return Box2d(box.topLeft - Vector2d(halfStroke, halfStroke),
+               box.bottomRight + Vector2d(halfStroke, halfStroke));
+}
+
+/// Returns true if the transformed AABB should be skipped because it falls
+/// outside the render target or because it's below the sub-pixel visible
+/// threshold. Device-pixel coordinates assumed.
+bool ShouldCullDeviceBox(const Box2d& deviceBox, const Vector2i& renderingSize) {
+  const double minX = deviceBox.topLeft.x;
+  const double minY = deviceBox.topLeft.y;
+  const double maxX = deviceBox.bottomRight.x;
+  const double maxY = deviceBox.bottomRight.y;
+
+  // Viewport culling: entire box is beyond one of the four edges, with a
+  // one-device-pixel slack to tolerate floating-point drift at the boundary.
+  if (maxX < -kViewportCullSlackDevicePx ||
+      maxY < -kViewportCullSlackDevicePx ||
+      minX > renderingSize.x + kViewportCullSlackDevicePx ||
+      minY > renderingSize.y + kViewportCullSlackDevicePx) {
+    return true;
+  }
+
+  // Too-small culling: both axes below the quarter-pixel threshold. One-axis
+  // line segments (extent == 0 along one axis) aren't culled here — strokes
+  // of thin lines must still render.
+  const double extentX = maxX - minX;
+  const double extentY = maxY - minY;
+  if (extentX < kMinCullableExtentDevicePx && extentY < kMinCullableExtentDevicePx) {
+    return true;
+  }
+
+  return false;
+}
+
+}  // namespace
+
+namespace {
+
 components::ResolvedPaintServer resolvePaintServer(Registry& registry, const PaintServer& paint) {
   if (paint.is<PaintServer::Solid>()) {
     return paint.get<PaintServer::Solid>();
@@ -1048,7 +1138,31 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
+    // Viewport + too-small culling. Safe to skip the draw when (a) we're not
+    // inside a filter layer (a filter can pull pixels from outside the
+    // original geometry back into view via blur / displacement, so culling
+    // filter inputs is unsafe) and (b) we can compute a tight local AABB for
+    // the drawable. Groups have no drawable content of their own, so the
+    // culling block is a no-op for them; they still push/pop their own
+    // clip/filter/isolation layers above.
+    bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
+      const bool insideFilterLayer =
+          std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
+                      [](const DeferredPop& m) { return m.hasFilterLayer; });
+      if (!insideFilterLayer) {
+        if (const auto localBounds =
+                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
+            localBounds.has_value()) {
+          const Transform2d deviceFromLocal =
+              layerBaseTransform_ * instance.entityFromWorldTransform;
+          const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
+          cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
+        }
+      }
+    }
+
+    if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
@@ -1318,7 +1432,31 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     const PaintParams paint = toPaintParams(registry, instance, style);
     renderer_.setPaint(paint);
 
+    // Viewport + too-small culling. Safe to skip the draw when (a) we're not
+    // inside a filter layer (a filter can pull pixels from outside the
+    // original geometry back into view via blur / displacement, so culling
+    // filter inputs is unsafe) and (b) we can compute a tight local AABB for
+    // the drawable. Groups have no drawable content of their own, so the
+    // culling block is a no-op for them; they still push/pop their own
+    // clip/filter/isolation layers above.
+    bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
+      const bool insideFilterLayer =
+          std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
+                      [](const DeferredPop& m) { return m.hasFilterLayer; });
+      if (!insideFilterLayer) {
+        if (const auto localBounds =
+                LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
+            localBounds.has_value()) {
+          const Transform2d deviceFromLocal =
+              layerBaseTransform_ * instance.entityFromWorldTransform;
+          const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
+          cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
+        }
+      }
+    }
+
+    if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
         renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);

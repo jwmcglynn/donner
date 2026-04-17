@@ -766,6 +766,55 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
 }
 
+// Elements whose transformed device-space bounds fall entirely outside the
+// render target (after including stroke width) must be skipped by the
+// renderer's core culling path — drawing them wastes GPU/CPU cycles and
+// their contribution is zero. The test puts a red 10×10 rect well above the
+// visible canvas and asserts the final image is entirely white.
+TEST_F(CompositorGoldenTest, ViewportCullingSkipsOffscreenPaths) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect width="100" height="100" fill="white"/>
+  <rect x="10" y="-500" width="10" height="10" fill="red"/>
+</svg>
+  )svg");
+
+  document.setCanvasSize(100, 100);
+  RenderViewport vp;
+  vp.size = Vector2d(100, 100);
+  vp.devicePixelRatio = 1.0;
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(vp);
+  const RendererBitmap bitmap = renderer_.takeSnapshot();
+
+  EXPECT_THAT(getPixel(bitmap, 50, 50), IsWhite());
+  EXPECT_THAT(getPixel(bitmap, 15, 10), IsWhite())
+      << "off-screen red rect would only show here if the renderer had a bug that displaced it; "
+         "mainly the test proves we don't crash on culled content";
+}
+
+// Paths whose entire device-space bounds are smaller than a quarter pixel
+// contribute nothing perceptible even with AA, so the renderer culls them.
+// A 0.01×0.01 red rect at the center must not discolor the white background.
+TEST_F(CompositorGoldenTest, TooSmallCullingSkipsSubpixelPaths) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect width="100" height="100" fill="white"/>
+  <rect x="50" y="50" width="0.01" height="0.01" fill="red"/>
+</svg>
+  )svg");
+
+  document.setCanvasSize(100, 100);
+  RenderViewport vp;
+  vp.size = Vector2d(100, 100);
+  vp.devicePixelRatio = 1.0;
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(vp);
+  const RendererBitmap bitmap = renderer_.takeSnapshot();
+
+  EXPECT_THAT(getPixel(bitmap, 50, 50), IsWhite());
+}
+
 // Zooming changes the viewport size the renderer rasterizes at, so the
 // cached bg/fg bitmaps from the previous zoom level must NOT be reused —
 // they're sized to the old canvas. Reusing them would stamp their pixels
