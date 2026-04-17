@@ -129,7 +129,14 @@ CompositorController::CompositorController(SVGDocument& document, RendererInterf
     : document_(&document),
       renderer_(&renderer),
       config_(config),
-      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 1}) {}
+      // Production threshold conservatively set to 8 so only subtrees with
+      // substantial rasterization cost (filter, mask, or several descendants)
+      // become their own buckets. Aggressive threshold = 1 is correct when the
+      // multi-bucket composition path matches full-render — but two gaps are
+      // currently documented (see `DISABLED_MultiBucketCompositionMatchesFullRender`
+      // and `DISABLED_OpacityLessThanOneAutoPromotionMatchesFullRender` in
+      // compositor_golden_tests). Once those are fixed, drop the threshold.
+      complexityBucketer_(ComplexityBucketerConfig{.minCostToBucket = 8}) {}
 
 CompositorController::~CompositorController() = default;
 
