@@ -3,6 +3,7 @@ load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 donner_cc_library(
     name = "compositor",
     srcs = [
+        "ComplexityBucketer.cc",
         "CompositorController.cc",
         "CompositorLayer.cc",
         "DragSession.cc",
@@ -11,6 +12,7 @@ donner_cc_library(
         "ScopedCompositorHint.cc",
     ],
     hdrs = [
+        "ComplexityBucketer.h",
         "CompositorController.h",
         "CompositorHintComponent.h",
         "CompositorLayer.h",
@@ -99,6 +101,17 @@ donner_cc_test(
     name = "mandatory_hint_detector_tests",
     srcs = [
         "MandatoryHintDetector_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "complexity_bucketer_tests",
+    srcs = [
+        "ComplexityBucketer_tests.cc",
     ],
     deps = [
         ":compositor",
