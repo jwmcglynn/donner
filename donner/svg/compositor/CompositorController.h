@@ -10,6 +10,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/compositor/ComplexityBucketer.h"
 #include "donner/svg/compositor/CompositorLayer.h"
 #include "donner/svg/compositor/LayerResolver.h"
 #include "donner/svg/compositor/MandatoryHintDetector.h"
@@ -54,7 +55,13 @@ struct CompositorConfig {
   /// `ComplexityBucketer` pre-splits the document into a small number of
   /// layers at load / structural rebuild to reduce click-to-first-drag-update
   /// latency. When false, the root layer stays monolithic.
-  bool complexityBucketing = true;
+  ///
+  /// Defaults to `false` in v1 — the bucketer produces additional layers
+  /// that the current drag path (`hasSplitStaticLayers()` + the editor's
+  /// single-promoted-layer preview) doesn't yet compose correctly. Flip to
+  /// `true` once multi-layer composition ordering lands (Phase 2 checklist
+  /// item). The subsystem itself is covered by `complexity_bucketer_tests`.
+  bool complexityBucketing = false;
 };
 
 /**
@@ -264,6 +271,7 @@ private:
   CompositorConfig config_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;
+  ComplexityBucketer complexityBucketer_;
   std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
   std::vector<CompositorLayer> layers_;
 

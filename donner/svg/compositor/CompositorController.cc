@@ -260,6 +260,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
        registry.ctx().get<components::RenderTreeState>().needsFullRebuild);
   if (!documentPrepared_ || documentDirty) {
     mandatoryDetector_.reconcile(registry);
+    if (config_.complexityBucketing) {
+      complexityBucketer_.reconcile(registry);
+    }
   }
   resolver_.resolve(registry, kMaxCompositorLayers);
   reconcileLayers(registry);
