@@ -1741,10 +1741,11 @@ and carries Explicit + Mandatory hints.
   `interaction_hint_no_allocation_test`,
   `click_to_first_drag_update_benchmark`.
 - [ ] Dual-path assertion enabled in CI compositor test targets.
-- [ ] Bazel flag `DONNER_COMPOSITOR_AUTO_PROMOTE` gates
-  interaction/animation auto-promotion independently of mandatory.
-- [ ] Bazel flag `DONNER_COMPOSITOR_ANIMATION_PROMOTE` gates
-  animation-driven promotion independently of interaction.
+- [ ] Runtime field `CompositorConfig::autoPromoteInteractions` gates
+  interaction hints (editor publishes `ScopedCompositorHint::Interaction`
+  only when this is true).
+- [ ] Runtime field `CompositorConfig::autoPromoteAnimations` gates
+  animation-driven promotion independently.
 
 ### Phase 2.5: Complexity bucketing at load
 
@@ -1758,8 +1759,8 @@ and carries Explicit + Mandatory hints.
   `bucket_boundary_respect_test`.
 - [ ] Measure load-time overhead; assert < 5% of parse+ECS-build
   (Goal 8).
-- [ ] Bazel flag `DONNER_COMPOSITOR_BUCKETING` gates bucketing
-  independently of Phases 1/2.
+- [ ] Runtime field `CompositorConfig::complexityBucketing` gates
+  bucketing independently of Phases 1/2.
 
 ### Phase 3: Backend optimizations (deferred)
 
@@ -1963,23 +1964,41 @@ approach proves too complex, but it leaves performance on the table.
 
 The compositor is designed to be fully removable without changing the
 core rendering pipeline or ECS component model. Rollback is layered
-— each phase has its own independent Bazel define so a regression in
-(say) complexity bucketing can be reverted without losing mandatory
-or interaction promotion.
+— each phase's feature gate is an independent runtime field on
+`CompositorConfig`, so a regression in (say) complexity bucketing
+can be disabled per-session without rebuilding, and without losing
+mandatory or interaction promotion.
 
-**Layered Bazel defines:**
+**Runtime feature gates** (fields on `CompositorConfig`, passed to
+`CompositorController`'s constructor; default-constructed config
+enables everything):
 
-| Define | Gates | Rollback effect |
-|--------|-------|-----------------|
-| `DONNER_DISABLE_COMPOSITOR` | Entire compositor | All frames route through full-render `RendererDriver::render()`. Primary kill-switch. |
-| `DONNER_COMPOSITOR_AUTO_PROMOTE` | Interaction + animation hints (Phase 2) | Editor falls back to explicit `promoteEntity` via the escape hatch. Mandatory hints still active. |
-| `DONNER_COMPOSITOR_ANIMATION_PROMOTE` | Animation hints only (subset of Phase 2) | Animations re-render the whole document per tick; selection/drag compositing unaffected. |
-| `DONNER_COMPOSITOR_BUCKETING` | Complexity bucketer (Phase 2.5) | Skip the load-time partition; compositor behaves as in Phase 2. Click-to-first-drag latency returns to worst case, but correctness unaffected. |
+| Field | Gates | Rollback effect |
+|-------|-------|-----------------|
+| `autoPromoteInteractions` | Interaction hints (Phase 2) | Editor falls back to the explicit `promoteEntity` escape hatch. Mandatory hints still active. |
+| `autoPromoteAnimations` | Animation hints (subset of Phase 2) | Animations re-render the whole document per tick; selection/drag compositing unaffected. |
+| `complexityBucketing` | Complexity bucketer (Phase 2.5) | Skip the load-time partition; compositor behaves as in Phase 2. Click-to-first-drag latency returns to worst case, but correctness unaffected. |
 
-Each define defaults to ON in release builds; each can be set to OFF
-in a hotfix without touching the others. Tests run with all four ON
-by default and with each individually toggled OFF in a nightly
-matrix.
+Why runtime, not compile-time:
+
+- **Zero ABI fragmentation** — library consumers link one compositor
+  and toggle features per-instance. No `#define` matrix to manage.
+- **Per-session rollback** — a hotfix flips a config field from a
+  user preference or environment variable without a rebuild.
+- **Testability** — the CI matrix instantiates controllers with
+  different configs in a single binary rather than recompiling for
+  each combination.
+
+The primary kill-switch ("don't use the compositor at all") is not
+a feature gate — it's a linkage decision: a consumer that doesn't
+want compositing simply doesn't depend on `//donner/svg/compositor`.
+The editor's `--experimental` flag controls whether the compositor
+is constructed; when the flag is off, no `CompositorController`
+exists and all frames route through `RendererDriver::render()`.
+
+Tests exercise each gate individually (controller constructed with
+that field flipped) and in combination. Dual-path pixel-identity
+holds regardless of which gates are on.
 
 **Lazy ECS attachment:** The compositor adds
 `CompositorHintComponent` and `ComputedLayerAssignmentComponent` to
@@ -2000,8 +2019,8 @@ backend.
 output == full-render output, extended in Phase 2 to cover
 animation-driven promotion) means the compositor can never silently
 produce wrong pixels — any regression is caught immediately and the
-fix is always "disable the relevant Bazel define" until the root
-cause is found.
+fix is always "flip the relevant `CompositorConfig` field off" until
+the root cause is found — no rebuild required.
 
 ## References
 
@@ -2032,7 +2051,8 @@ cause is found.
    `click_to_first_drag_update_benchmark`,
    `interaction_hint_no_allocation_test`).
 4. **Implement Phase 2.5** — `ComplexityBucketer` at load. Independent
-   Bazel flag. Measure load-time overhead against Goal 8.
+   `CompositorConfig::complexityBucketing` runtime gate. Measure
+   load-time overhead against Goal 8.
 5. **Implement Geode `createOffscreenInstance()`** — prerequisite for
    Geode participation in compositor tests. Can be done in parallel
    with v1 (separate PR).
