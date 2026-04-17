@@ -259,6 +259,99 @@ TEST_F(ComplexityBucketerTest, ReservedSlotsReduceBudget) {
   EXPECT_EQ(countHints(c3, HintSource::ComplexityBucket), 0u);
 }
 
+// === Bucket boundary respect ================================================
+// These tests document the v1 invariant: the bucketer never splits a
+// clip-path / mask / filter / isolation group across buckets. v1 sidesteps
+// the problem by limiting candidates to top-level root children (whose
+// subtrees are atomic by construction). The tests below verify this holds
+// even when the subtree *internally* contains compositing features — the
+// whole subtree still goes in one bucket.
+// ============================================================================
+
+TEST_F(ComplexityBucketerTest, SubtreeWithInternalFilterStaysIntactInOneBucket) {
+  // root with a child that has an internal filter. Since v1 only considers
+  // top-level root children as candidates, the child with a filter is the
+  // subtree root — it becomes one bucket, filter and all. The filter
+  // doesn't split the subtree.
+  const Entity root = makeInstance();
+  const Entity child = makeInstance();
+  setSubtreeEnd(root, child);
+
+  // Attach a filter to the child (which IS the subtree root in this case).
+  auto& childInstance = registry_.get<RenderingInstanceComponent>(child);
+  childInstance.resolvedFilter = components::ResolvedFilterEffect{std::vector<FilterEffect>{}};
+
+  ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 2});
+  bucketer.reconcile(registry_);
+
+  EXPECT_EQ(bucketer.stats().bucketsPublished, 1u);
+  EXPECT_EQ(countHints(child, HintSource::ComplexityBucket), 1u)
+      << "subtree with internal filter is bucketed atomically — filter stays with its subtree";
+}
+
+TEST_F(ComplexityBucketerTest, SubtreeWithInternalMaskStaysIntactInOneBucket) {
+  const Entity root = makeInstance();
+  const Entity child = makeInstance();
+  setSubtreeEnd(root, child);
+
+  auto& childInstance = registry_.get<RenderingInstanceComponent>(child);
+  childInstance.mask = components::ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
+                                                  MaskContentUnits::Default};
+
+  ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 2});
+  bucketer.reconcile(registry_);
+
+  EXPECT_EQ(bucketer.stats().bucketsPublished, 1u);
+  EXPECT_EQ(countHints(child, HintSource::ComplexityBucket), 1u)
+      << "subtree with internal mask is bucketed atomically";
+}
+
+TEST_F(ComplexityBucketerTest, SubtreeWithInternalIsolatedLayerStaysIntactInOneBucket) {
+  // A child with `isolatedLayer = true` (opacity<1 / blend-mode / isolation)
+  // is still a valid bucket candidate. The isolation boundary is the subtree
+  // root, so the whole subtree ends up in one bucket. No splitting.
+  const Entity root = makeInstance();
+  const Entity child = makeInstance();
+  setSubtreeEnd(root, child);
+
+  auto& childInstance = registry_.get<RenderingInstanceComponent>(child);
+  childInstance.isolatedLayer = true;
+
+  ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 2});
+  bucketer.reconcile(registry_);
+
+  EXPECT_EQ(bucketer.stats().bucketsPublished, 1u);
+  EXPECT_EQ(countHints(child, HintSource::ComplexityBucket), 1u);
+}
+
+TEST_F(ComplexityBucketerTest, MultipleTopLevelChildrenEachBucketedAtomically) {
+  // Three top-level children, each with different compositing features.
+  // They all become separate buckets; none is split.
+  const Entity root = makeInstance();
+  const Entity filtered = makeInstance();
+  const Entity masked = makeInstance();
+  const Entity isolated = makeInstance();
+  setSubtreeEnd(root, isolated);
+
+  auto& filteredInstance = registry_.get<RenderingInstanceComponent>(filtered);
+  filteredInstance.resolvedFilter = components::ResolvedFilterEffect{std::vector<FilterEffect>{}};
+
+  auto& maskedInstance = registry_.get<RenderingInstanceComponent>(masked);
+  maskedInstance.mask = components::ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
+                                                   MaskContentUnits::Default};
+
+  auto& isolatedInstance = registry_.get<RenderingInstanceComponent>(isolated);
+  isolatedInstance.isolatedLayer = true;
+
+  ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 4});
+  bucketer.reconcile(registry_);
+
+  EXPECT_EQ(bucketer.stats().bucketsPublished, 3u);
+  EXPECT_EQ(countHints(filtered, HintSource::ComplexityBucket), 1u);
+  EXPECT_EQ(countHints(masked, HintSource::ComplexityBucket), 1u);
+  EXPECT_EQ(countHints(isolated, HintSource::ComplexityBucket), 1u);
+}
+
 TEST_F(ComplexityBucketerTest, BudgetZeroProducesNothing) {
   // K=1, reserved=1 → budget=0. No buckets published even with candidates.
   const Entity root = makeInstance();

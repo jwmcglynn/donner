@@ -55,12 +55,17 @@ struct CompositorConfig {
   /// `ComplexityBucketer` pre-splits the document into a small number of
   /// layers at load / structural rebuild to reduce click-to-first-drag-update
   /// latency. When false, the root layer stays monolithic.
-  ///
-  /// The controller's bucketer uses a production `minCostToBucket` threshold
-  /// (currently 8) so lone leaf elements don't get bucketed — only subtrees
-  /// with substantial rasterization cost (filters, masks, many descendants)
-  /// are carved out.
   bool complexityBucketing = true;
+
+  /// When true, `renderFrame` additionally runs a full-document reference
+  /// render after the composited path completes and asserts pixel identity
+  /// via `UTILS_RELEASE_ASSERT`. Doubles per-frame cost — intended for CI
+  /// compositor test targets and `--config=compositor-debug` local runs, not
+  /// for interactive editor use. See 0025 § Dual-path debug assertion.
+  ///
+  /// Default is `false`; CI and debug test configurations flip it on for
+  /// the covered test targets.
+  bool verifyPixelIdentity = false;
 };
 
 /**

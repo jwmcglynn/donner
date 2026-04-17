@@ -254,6 +254,44 @@ TEST_F(CompositorGoldenTest, DragReleaseResetSequenceWithAggressiveBucketing) {
   EXPECT_THAT(getPixel(flat, 135, 35), IsRed()) << "target at translated position";
 }
 
+// Exercises the `CompositorConfig::verifyPixelIdentity` runtime gate. With
+// the gate on, `renderFrame` internally dual-paths and asserts — if
+// composited output matches the full-render reference, the test passes; if
+// a regression ever produces drift, `UTILS_RELEASE_ASSERT` fires and the
+// test fails with a diagnostic.
+TEST_F(CompositorGoldenTest, VerifyPixelIdentityGateCatchesNoDriftOnValidScene) {
+  // The dual-path assertion compares composited output against a full-render
+  // reference. It can only be enabled when both paths render the SAME scene —
+  // i.e., composition transform must match the DOM. During an active drag
+  // (composition transform differs from DOM), enabling the gate would always
+  // fire (correctly!) because the paths render visually different content.
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorConfig config;
+  config.verifyPixelIdentity = true;  // Enable the in-tree dual-path assertion.
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // Composition transform stays at identity — the compositor and reference
+  // paths render the same pixels. Each renderFrame internally dual-paths and
+  // asserts. Survival to the end = no drift detected.
+  compositor.setLayerCompositionTransform(entity, Transform2d());
+  compositor.renderFrame(viewport_);
+  compositor.renderFrame(viewport_);
+  compositor.renderFrame(viewport_);
+
+  SUCCEED() << "Dual-path verification passed across all rendered frames";
+}
+
 // The ancestor-clip safety check (committed earlier) should prevent
 // auto-promotion here, so the output exactly matches the full render — no
 // layer extraction, no lost clip context.

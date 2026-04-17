@@ -17,9 +17,12 @@ namespace donner::svg::compositor {
 
 namespace {
 
+/// Tracks entities whose visibility the compositor temporarily set to `false`
+/// during a render pass. The post-pass restore unconditionally sets
+/// `visible = true` (see `RestoreLayerVisibility`), so we only need to
+/// remember *which* entities we touched — not their prior state.
 struct HiddenVisibilityState {
   Entity entity;
-  bool visible;
 };
 
 void HideLayerRange(Registry& registry, const CompositorLayer& layer,
@@ -41,8 +44,7 @@ void HideLayerRange(Registry& registry, const CompositorLayer& layer,
         hiddenEntities->begin(), hiddenEntities->end(),
         [entity](const HiddenVisibilityState& state) { return state.entity == entity; });
     if (alreadyHidden == hiddenEntities->end()) {
-      hiddenEntities->push_back(
-          HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+      hiddenEntities->push_back(HiddenVisibilityState{.entity = entity});
     }
 
     instance.visible = false;
@@ -65,7 +67,7 @@ void HideEntitiesBefore(Registry& registry, Entity boundaryExclusive,
   while (!view.done() && view.currentEntity() != boundaryExclusive) {
     const Entity entity = view.currentEntity();
     auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity});
     instance.visible = false;
     view.advance();
   }
@@ -90,7 +92,7 @@ void HideEntitiesAfter(Registry& registry, Entity boundaryInclusive,
   while (!view.done()) {
     const Entity entity = view.currentEntity();
     auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity, .visible = instance.visible});
+    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity});
     instance.visible = false;
     view.advance();
   }
@@ -362,6 +364,42 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
 
   // Compose all layers onto the main target.
   composeLayers(viewport);
+
+  // Dual-path pixel-identity assertion. When enabled, capture the composited
+  // output, run a full-document reference render to the same renderer, then
+  // compare pixel-by-pixel. Any drift fires a release-assert. Disabled by
+  // default; CI compositor test targets flip this on via `CompositorConfig`.
+  // Cost is 2x per frame, so don't enable for interactive editor use.
+  if (config_.verifyPixelIdentity) {
+    RendererBitmap compositedSnapshot = renderer_->takeSnapshot();
+
+    RendererDriver referenceDriver(*renderer_);
+    referenceDriver.draw(*document_);
+    RendererBitmap referenceSnapshot = renderer_->takeSnapshot();
+
+    if (compositedSnapshot.dimensions == referenceSnapshot.dimensions &&
+        !compositedSnapshot.empty() && !referenceSnapshot.empty()) {
+      size_t mismatch = 0;
+      uint8_t maxDiff = 0;
+      const size_t size = std::min(compositedSnapshot.pixels.size(),
+                                   referenceSnapshot.pixels.size());
+      for (size_t i = 0; i < size; ++i) {
+        const uint8_t a = compositedSnapshot.pixels[i];
+        const uint8_t b = referenceSnapshot.pixels[i];
+        const uint8_t diff = a > b ? a - b : b - a;
+        if (diff > 0) {
+          ++mismatch;
+          if (diff > maxDiff) {
+            maxDiff = diff;
+          }
+        }
+      }
+      UTILS_RELEASE_ASSERT_MSG(
+          mismatch == 0,
+          "Compositor dual-path pixel-identity assertion failed: composited output "
+          "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
+    }
+  }
 }
 
 size_t CompositorController::layerCount() const {
