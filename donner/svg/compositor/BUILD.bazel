@@ -7,6 +7,7 @@ donner_cc_library(
         "CompositorLayer.cc",
         "DragSession.cc",
         "LayerResolver.cc",
+        "MandatoryHintDetector.cc",
         "ScopedCompositorHint.cc",
     ],
     hdrs = [
@@ -16,6 +17,7 @@ donner_cc_library(
         "ComputedLayerAssignmentComponent.h",
         "DragSession.h",
         "LayerResolver.h",
+        "MandatoryHintDetector.h",
         "ScopedCompositorHint.h",
     ],
     visibility = ["//visibility:public"],
@@ -86,6 +88,17 @@ donner_cc_test(
     name = "layer_resolver_tests",
     srcs = [
         "LayerResolver_tests.cc",
+    ],
+    deps = [
+        ":compositor",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "mandatory_hint_detector_tests",
+    srcs = [
+        "MandatoryHintDetector_tests.cc",
     ],
     deps = [
         ":compositor",
