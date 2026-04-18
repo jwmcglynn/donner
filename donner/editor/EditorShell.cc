@@ -358,21 +358,39 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       if (options_.experimentalMode && previewBeforeRelease.has_value()) {
-        bool flushedReleaseMutation = false;
+        // Zero re-renders on drag release.
+        //
+        // Apply the `SetTransformCommand` mutation so the DOM reflects the
+        // new position, but do NOT kick off a "settle" render and do NOT
+        // call `maybeRequestRender`. The compositor's last-drag-frame
+        // composited preview (drag layer bitmap at pre-drag position
+        // composed with the final drag translate) is already visually
+        // identical to the post-mutation DOM state (entity at old + drag
+        // = entity at new). Firing a render here would only re-rasterize
+        // the drag layer to achieve the same pixel output, costing a
+        // visible "(rendering…)" flash for no user-visible benefit.
+        //
+        // The re-rasterization cost is deferred to the next interaction
+        // that genuinely needs fresh state: a new drag on this entity
+        // takes the fast path and re-rasterizes the drag layer with the
+        // baked-in transform; a selection change pays the prepare cost;
+        // a pan/zoom triggers a regular render. Whichever fires first
+        // absorbs the work naturally under the banner of an action the
+        // user initiated.
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
-          flushedReleaseMutation = true;
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
         }
 
-        const auto settledVersion =
-            app_.document().currentFrameVersion() + (flushedReleaseMutation ? 0u : 1u);
-        renderCoordinator_.experimentalDragPresentation().beginSettling(previewBeforeRelease,
-                                                                        settledVersion);
-
-        if (!renderCoordinator_.asyncRenderer().isBusy()) {
-          renderCoordinator_.maybeRequestRender(app_, selectTool_,
-                                                interactionController_.viewport(),
-                                                options_.experimentalMode, textures_);
-        }
+        // Preserve the drag translation visually so the display keeps
+        // showing the element at its drop position (cached-bitmap +
+        // drag-translate offset). Also tells `shouldPrewarm()` that we
+        // consider the cache fresh for the new document version — without
+        // this, the next main-loop tick would see `cachedVersion !=
+        // currentVersion` and fire a prewarm render.
+        const auto currentVersion = app_.document().currentFrameVersion();
+        const Vector2i canvasSize = app_.document().document().canvasSize();
+        renderCoordinator_.experimentalDragPresentation().recordPostDragSettledWithoutRender(
+            *previewBeforeRelease, currentVersion, canvasSize);
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
@@ -400,22 +418,29 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
   }
   treeSelectionOriginatedInTree_ = false;
 
+  // Refresh the sidebar snapshot only when the async renderer is idle —
+  // during render the worker thread may be mutating registry state the
+  // snapshot walk would read. The snapshot persists across the busy window
+  // so the panes keep showing their last-known content instead of flashing
+  // to "(rendering…)" placeholders.
+  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  if (!rendererBusy) {
+    sidebarPresenter_.refreshSnapshot(app_);
+  }
+  EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
+
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, treePaneHeight), ImGuiCond_Always);
   ImGui::Begin("Tree View", nullptr, paneFlags);
-  if (!renderCoordinator_.asyncRenderer().isBusy()) {
-    TreeViewState treeState{
-        .scrollTarget = selectionBeforeTree,
-        .pendingScroll = treeviewPendingScroll_,
-    };
-    sidebarPresenter_.renderTreeView(app_, treeState);
-    treeviewPendingScroll_ = treeState.pendingScroll;
-    if (treeState.selectionChangedInTree) {
-      treeSelectionOriginatedInTree_ = true;
-      treeviewPendingScroll_ = false;
-    }
-  } else {
-    ImGui::TextDisabled("(rendering...)");
+  TreeViewState treeState{
+      .scrollTarget = selectionBeforeTree,
+      .pendingScroll = treeviewPendingScroll_,
+  };
+  sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
+  treeviewPendingScroll_ = treeState.pendingScroll;
+  if (treeState.selectionChangedInTree) {
+    treeSelectionOriginatedInTree_ = true;
+    treeviewPendingScroll_ = false;
   }
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
@@ -423,11 +448,7 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, inspectorPaneY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
   ImGui::Begin("Inspector", nullptr, paneFlags);
-  if (!renderCoordinator_.asyncRenderer().isBusy()) {
-    sidebarPresenter_.renderInspector(app_, interactionController_.viewport());
-  } else {
-    ImGui::TextDisabled("(rendering…)");
-  }
+  sidebarPresenter_.renderInspector(interactionController_.viewport());
   ImGui::End();
 }
 

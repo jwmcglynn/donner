@@ -76,6 +76,35 @@ struct ExperimentalDragPresentation {
     chromeRefreshTargetVersion = 0;
   }
 
+  /// Record the drag-final state without firing any settle render.
+  ///
+  /// Unlike `beginSettling`, this does NOT set `waitingForFullRender` — we
+  /// deliberately don't plan to run a settle render. The caller has already
+  /// applied the `SetTransformCommand` mutation to the DOM, and the cached
+  /// composited textures (with the drag translation still applied via
+  /// `settlingPreview.translation`) are visually identical to what a fresh
+  /// render of the mutated DOM would produce at identity composition.
+  /// Deferring re-rasterization until the user's next interaction (new
+  /// drag, selection change, viewport change) lets the compositor absorb
+  /// the cost naturally rather than stalling on mouse release.
+  ///
+  /// The paired `noteCachedTextures(entity, version, canvasSize)` tells
+  /// `shouldPrewarm()` that we consider the cache fresh for this version
+  /// so the next main-loop tick doesn't mistakenly fire a prewarm render.
+  void recordPostDragSettledWithoutRender(const SelectTool::ActiveDragPreview& preview,
+                                           std::uint64_t version,
+                                           const Vector2i& canvasSize) {
+    settlingPreview = preview;
+    waitingForFullRender = false;
+    settlingTargetVersion = 0;
+    waitingForChromeRefresh = false;
+    chromeRefreshTargetVersion = 0;
+    hasCachedTextures = true;
+    cachedEntity = preview.entity;
+    cachedVersion = version;
+    cachedCanvasSize = canvasSize;
+  }
+
   /// End settling once a fresh full render has landed.  Also clears cached texture state so the
   /// display falls back to the just-uploaded flat texture instead of showing stale composited
   /// layers.
