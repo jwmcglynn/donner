@@ -342,6 +342,14 @@ donner_variant_cc_test(
     named_variants = [
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
         {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
+        # Geode variant: runs the same suite on the WebGPU backend,
+        # auto-transitioned into `--config=geode` + `enable_dawn`. Text
+        # and filters are still stubbed, so the fixture's
+        # `geodeCategoryGate` / `geodeFilenameGate` logic in
+        # `resvg_test_suite.cc` skips those categories automatically;
+        # everything else (fills, strokes, gradients, patterns, images,
+        # shapes, clipping, masking, markers, isolation) runs live.
+        {"name": "geode", "backend": "geode", "text": "true", "text_full": "false"},
     ],
 )
 

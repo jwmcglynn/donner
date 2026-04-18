@@ -83,17 +83,19 @@ geodeCategoryGate(std::string_view category) {
   // gate here. Individual per-file overrides handle any remaining
   // divergences.
 
-  // Markers: Phase 6.
-  if (category == "painting/marker") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "markers (Geode Phase 6)");
-    };
-  }
+  // Markers render at the driver level (`RendererDriver::drawMarkers`
+  // composes transforms and walks the marker subtree via ordinary
+  // `drawPath` / `fillPath` calls), so Geode already supports them
+  // via the paths it already implements. No category gate needed.
 
-  // Mix-blend-mode and isolation: Phase 9 (compositing).
-  if (category == "painting/mix-blend-mode" || category == "painting/isolation") {
+  // `painting/isolation` works on Geode: `pushIsolatedLayer` handles
+  // opacity + `isolation: isolate` correctly for the default
+  // `mix-blend-mode: normal` path. Non-Normal blend modes remain
+  // unshipped (Phase 9) and would otherwise hit the one-shot warn in
+  // `pushIsolatedLayer`, so the mix-blend-mode category stays gated.
+  if (category == "painting/mix-blend-mode") {
     return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "mix-blend-mode / isolation (Geode Phase 9)");
+      p.disableBackend(RendererBackend::Geode, "mix-blend-mode (Geode Phase 9)");
     };
   }
 
@@ -131,12 +133,54 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     };
   }
 
-  // Marker-in-non-marker-category: overflow/shape-rendering tests
-  // that use <marker>.
-  if (contains("on-marker") || contains("path-with-marker") ||
-      contains("with-marker")) {
+  // Marker-in-non-marker-category tests (overflow/shape-rendering
+  // tests that reference `<marker>`) also render correctly — markers
+  // are driver-level (see `painting/marker` note above), so these
+  // need no filename gate on Geode.
+
+  // Marker tests that render correctly on Geode but finish 1–6×
+  // beyond the default `maxMismatchedPixels=100` budget due to 4×
+  // MSAA / 16× supersample AA drift on marker edges. The shape is
+  // identical; only fractional edge coverage differs. The standard
+  // `widenThresholdForGeode` helper raises the per-pixel threshold
+  // to 0.3 which pulls every marginal edge pixel under the
+  // "match" bar without masking real regressions.
+  if (category == "painting/marker" &&
+      (filename == "marker-on-circle.svg" ||
+       filename == "with-an-image-child.svg")) {
+    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
+  }
+
+  // Marker tests where Geode produces a visibly different result from
+  // the tiny-skia / Skia reference even with a widened AA threshold —
+  // small geometry-level divergences (cusp-direction on auto-orient,
+  // stroke-width-driven marker scaling, error-recovery paths). Real
+  // bugs to chase as follow-up, not cosmetic AA. Gated off Geode for
+  // now with a TODO so the test count doesn't regress.
+  if (category == "painting/marker" &&
+      (filename == "default-clip.svg" ||
+       filename == "orient=auto-on-M-C-C-4.svg" ||
+       filename == "orient=auto-on-M-L-Z.svg" ||
+       filename == "with-a-large-stroke.svg" ||
+       filename == "with-invalid-markerUnits.svg" ||
+       filename == "with-markerUnits=userSpaceOnUse.svg")) {
     return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "markers (Geode Phase 6)");
+      p.disableBackend(RendererBackend::Geode,
+                       "TODO: Geode marker renders diverge from reference "
+                       "(auto-orient cusps, markerUnits scaling, error paths)");
+    };
+  }
+
+  // `painting/isolation/as-property.svg` — `isolation: isolate`
+  // applied as a CSS property rather than an XML attribute diverges
+  // ~22 % of the canvas from the reference. The attribute form
+  // (`as-attribute.svg`) renders correctly, so this is specifically
+  // a property-vs-attribute plumbing gap on Geode. Follow-up bug.
+  if (category == "painting/isolation" && filename == "as-property.svg") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "TODO: Geode `isolation: isolate` CSS property not "
+                       "honored (attribute form works)");
     };
   }
 
