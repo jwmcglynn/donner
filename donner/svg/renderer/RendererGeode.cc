@@ -422,7 +422,10 @@ struct RendererGeode::Impl {
 
   // GPU resources. Created in the constructor; if device creation fails,
   // `device` is null and the renderer enters a no-op state.
-  std::unique_ptr<geode::GeodeDevice> device;
+  //
+  // Held via shared_ptr so that test fixtures can share a single GeodeDevice
+  // across many short-lived renderer instances (see RendererTestBackendGeode).
+  std::shared_ptr<geode::GeodeDevice> device;
   std::unique_ptr<geode::GeodePipeline> pipeline;
   std::unique_ptr<geode::GeodeGradientPipeline> gradientPipeline;
   std::unique_ptr<geode::GeodeImagePipeline> imagePipeline;
@@ -882,6 +885,23 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
       impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA());
   impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
       impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA());
+  impl_->imagePipeline =
+      std::make_unique<geode::GeodeImagePipeline>(impl_->device->device(), kFormat);
+}
+
+RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->verbose = verbose;
+  impl_->device = std::move(device);
+  if (!impl_->device) {
+    if (verbose) {
+      std::cerr << "RendererGeode: null GeodeDevice passed — entering no-op mode\n";
+    }
+    return;
+  }
+  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat);
+  impl_->gradientPipeline =
+      std::make_unique<geode::GeodeGradientPipeline>(impl_->device->device(), kFormat);
   impl_->imagePipeline =
       std::make_unique<geode::GeodeImagePipeline>(impl_->device->device(), kFormat);
 }

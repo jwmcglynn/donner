@@ -23,6 +23,9 @@ class GeodePipeline;
 class GeoEncoder;
 }  // namespace donner::geode
 
+// Forward-declare std::shared_ptr specialization to avoid pulling <memory>
+// into every includer — <memory> is already included above.
+
 namespace donner::svg {
 
 /**
@@ -57,6 +60,21 @@ public:
    *   the first time they are encountered.
    */
   explicit RendererGeode(bool verbose = false);
+
+  /**
+   * Construct the renderer with an externally-owned `GeodeDevice`.
+   *
+   * The caller retains shared ownership of the device; it must outlive every
+   * frame rendered through this renderer. This overload avoids creating a new
+   * WebGPU instance/adapter/device per renderer, which is important in test
+   * fixtures that construct thousands of short-lived renderers — Mesa llvmpipe
+   * (and some Intel ANV configurations) accumulate driver state across device
+   * creations and eventually deadlock.
+   *
+   * @param device Shared device. Must not be null.
+   * @param verbose If true, emit warnings for unsupported features.
+   */
+  explicit RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose = false);
 
   ~RendererGeode() override;
 

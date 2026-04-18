@@ -14,6 +14,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg {
@@ -60,6 +61,17 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
 
 class RendererGeodeTest : public ::testing::Test {
  protected:
+  /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
+  static std::shared_ptr<geode::GeodeDevice> sharedDevice() {
+    static auto device = [] {
+      return std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+    }();
+    return device;
+  }
+
+  /// Convenience: construct a RendererGeode that shares the test device.
+  RendererGeode createRenderer() { return RendererGeode(sharedDevice()); }
+
   void beginFrame(RendererGeode& renderer) {
     RenderViewport viewport;
     viewport.size = Vector2d(kViewportSize, kViewportSize);
@@ -72,7 +84,7 @@ class RendererGeodeTest : public ::testing::Test {
 
 /// Smoke test: empty frame should snap to a fully transparent bitmap.
 TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.endFrame();
 
@@ -88,7 +100,7 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
 /// Width/height should reflect the viewport's device-pixel size after
 /// `beginFrame`.
 TEST_F(RendererGeodeTest, WidthHeightReflectViewport) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   RenderViewport viewport;
   viewport.size = Vector2d(48, 32);
   viewport.devicePixelRatio = 2.0;
@@ -101,7 +113,7 @@ TEST_F(RendererGeodeTest, WidthHeightReflectViewport) {
 /// Filling a path with a solid red paint should produce red pixels at the
 /// path's interior.
 TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
@@ -131,7 +143,7 @@ TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {
 /// `drawRect` is a convenience over `drawPath`. Verify it produces the same
 /// pixels.
 TEST_F(RendererGeodeTest, DrawRectGreenFill) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
@@ -148,7 +160,7 @@ TEST_F(RendererGeodeTest, DrawRectGreenFill) {
 /// `drawEllipse` should fill an elliptical area. Center inside, far corners
 /// outside.
 TEST_F(RendererGeodeTest, DrawEllipseBlueFill) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
@@ -169,7 +181,7 @@ TEST_F(RendererGeodeTest, DrawEllipseBlueFill) {
 /// Transform stack should compose like the other backends. Apply a translate
 /// via push, draw, pop, draw — verify both shapes land where expected.
 TEST_F(RendererGeodeTest, PushPopTransform) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
@@ -196,7 +208,7 @@ TEST_F(RendererGeodeTest, PushPopTransform) {
 /// Stroke a rectangle outline with no fill: the stroke band should be the
 /// stroke color and the interior / exterior should be transparent.
 TEST_F(RendererGeodeTest, StrokeRectOutline) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
@@ -234,7 +246,7 @@ TEST_F(RendererGeodeTest, StrokeRectOutline) {
 /// Fill and stroke together: interior should be the fill color, the stroke
 /// ring around the edge should be the stroke color.
 TEST_F(RendererGeodeTest, FillAndStrokeRect) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(
@@ -275,7 +287,7 @@ TEST_F(RendererGeodeTest, FillAndStrokeRect) {
 /// building the straight-alpha `RendererBitmap` — otherwise semi-transparent
 /// content comes out darkened and cross-backend parity breaks.
 TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   // 50% red: R=255, A=128. A straight-alpha round-trip should preserve
@@ -300,7 +312,7 @@ TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
 /// encoder hadn't been created yet. Before the fix, this test would
 /// segfault; after the fix, it returns cleanly.
 TEST_F(RendererGeodeTest, StrokeBeforeBeginFrameIsNoOp) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   // Intentionally skip beginFrame — encoder remains null.
   renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
   StrokeParams stroke;
@@ -316,7 +328,7 @@ TEST_F(RendererGeodeTest, StrokeBeforeBeginFrameIsNoOp) {
 
 /// Stroke with stroke-width 0 should no-op (neither stroke nor warning).
 TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
@@ -341,7 +353,7 @@ TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
 /// most of the canvas and sanity-check the four expected corner colors
 /// (nearest-neighbor sampling so quadrant boundaries are crisp).
 TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   renderer.setPaint(PaintParams{});
@@ -398,7 +410,7 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
 /// the image at the *unshifted* targetRect, pop, and verify the image
 /// lands at the translated position.
 TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   ImageResource image;
@@ -436,7 +448,7 @@ TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
 ///    (because it only takes effect at layer composite time)
 ///  * `params.opacity = 0.5` on its own halves the output alpha
 TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   // paint.opacity is intentionally set but should NOT affect the raster:
@@ -469,7 +481,7 @@ TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
 /// Empty image data (width/height = 0) and a zero-size target rect both
 /// must be safe no-ops.
 TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   ImageResource empty;
@@ -497,7 +509,7 @@ TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
 /// safe no-ops that don't crash, and balanced push/pop pairs should keep
 /// drawing functional.
 TEST_F(RendererGeodeTest, StubbedMethodsAreNoOps) {
-  RendererGeode renderer;
+  RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
   // Drive every stub once.
