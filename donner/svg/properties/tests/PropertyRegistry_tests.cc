@@ -751,6 +751,30 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
   }
 
   {
+    // image-rendering accepts the CSS Images 3 keywords plus the SVG 1.1
+    // legacy aliases. CSS keyword matching is case-insensitive, so the
+    // camelCase SVG 1.1 spellings AND their minifier-lowercased forms
+    // both resolve to the same enum.
+    const std::pair<const char*, ImageRendering> cases[] = {
+        {"auto", ImageRendering::Auto},
+        {"smooth", ImageRendering::Smooth},
+        {"crisp-edges", ImageRendering::CrispEdges},
+        {"pixelated", ImageRendering::Pixelated},
+        {"optimizeSpeed", ImageRendering::OptimizeSpeed},
+        {"optimizespeed", ImageRendering::OptimizeSpeed},
+        {"OPTIMIZESPEED", ImageRendering::OptimizeSpeed},
+        {"optimizeQuality", ImageRendering::OptimizeQuality},
+        {"optimizequality", ImageRendering::OptimizeQuality},
+    };
+
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("image-rendering: ") + value);
+      EXPECT_THAT(registry.imageRendering.get(), Optional(expected));
+    }
+  }
+
+  {
     const std::pair<const char*, FillRule> cases[] = {
         {"nonzero", FillRule::NonZero},
         {"evenodd", FillRule::EvenOdd},

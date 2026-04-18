@@ -1015,12 +1015,27 @@ std::vector<Path::Vertex> Path::vertices() const {
       assert(i > 0);
 
       const Vector2d startPoint = startPointOfCommand(commands_, points_, i);
-      const Vector2d startOrientation = tangentAtStart(commands_, points_, i).normalize();
+      Vector2d startOrientation = tangentAtStart(commands_, points_, i).normalize();
 
       if (justMoved) {
         // First drawing command after a MoveTo: use outgoing tangent only.
         // For closed subpaths, SVG 2 §11.6.2 says the start marker uses the outgoing tangent
         // direction (not the bisector with the closing segment's tangent).
+        //
+        // If the first segment is degenerate (zero-length, e.g. duplicated initial point), a
+        // zero tangent would resolve to a 0° marker angle. Walk forward to the first segment
+        // whose tangent is non-zero so we follow the actual path direction instead.
+        if (NearZero(startOrientation.lengthSquared())) {
+          for (size_t j = i + 1; j < commands_.size(); ++j) {
+            const Verb verb = commands_[j].verb;
+            if (verb == Verb::MoveTo || verb == Verb::ClosePath) break;
+            const Vector2d t = tangentAtStart(commands_, points_, j).normalize();
+            if (!NearZero(t.lengthSquared())) {
+              startOrientation = t;
+              break;
+            }
+          }
+        }
         result.push_back(Vertex{startPoint, startOrientation});
       } else {
         // Interior vertex: orientation is interpolated between end of previous and start of this.

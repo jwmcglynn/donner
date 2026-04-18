@@ -144,7 +144,10 @@ ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> compo
 /// Parse CSS image-rendering property: auto | smooth | crisp-edges | pixelated |
 /// optimizeSpeed | optimizeQuality. SVG 1.1 `optimizeSpeed` is treated as a
 /// hint for nearest-neighbor (pixelated); `optimizeQuality` is a hint for the
-/// default (auto). See https://drafts.csswg.org/css-images/#the-image-rendering.
+/// default (auto). CSS keyword matching is case-insensitive per
+/// https://www.w3.org/TR/css-values-4/#keywords (though the SVG 1.1 spec spelling is
+/// camelCase); minifiers routinely lowercase the ident. See
+/// https://drafts.csswg.org/css-images/#the-image-rendering.
 ParseResult<ImageRendering> ParseImageRendering(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
@@ -152,9 +155,8 @@ ParseResult<ImageRendering> ParseImageRendering(std::span<const css::ComponentVa
       if (ident->value.equalsLowercase("smooth")) return ImageRendering::Smooth;
       if (ident->value.equalsLowercase("crisp-edges")) return ImageRendering::CrispEdges;
       if (ident->value.equalsLowercase("pixelated")) return ImageRendering::Pixelated;
-      // Case-sensitive for SVG 1.1 legacy values.
-      if (ident->value == "optimizeSpeed") return ImageRendering::OptimizeSpeed;
-      if (ident->value == "optimizeQuality") return ImageRendering::OptimizeQuality;
+      if (ident->value.equalsLowercase("optimizespeed")) return ImageRendering::OptimizeSpeed;
+      if (ident->value.equalsLowercase("optimizequality")) return ImageRendering::OptimizeQuality;
     }
   }
   ParseDiagnostic err;
