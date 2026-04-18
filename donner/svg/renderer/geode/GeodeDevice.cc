@@ -110,8 +110,10 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 
       // Intel + Vulkan: writing @builtin(sample_mask) from overlapping band
       // quads hangs Mesa ANV / Xe KMD when bandCount >= 2 (observed on Arc
-      // A380, Mesa 25.2.8). Fall back to alpha-coverage AA which folds the
-      // 4-sample mask into the fragment color on a 1-sample render target.
+      // A380, Mesa 25.2.8). Fall back to alpha-coverage AA which folds
+      // coverage into the fragment color and runs at sampleCount = 1 (no
+      // MSAA texture, no hardware resolve) to avoid a second class of flaky
+      // MSAA-resolve hangs on the same driver.
       if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
         result->useAlphaCoverageAA_ = true;
         std::fprintf(stderr,

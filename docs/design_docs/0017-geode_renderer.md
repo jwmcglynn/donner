@@ -96,6 +96,18 @@
   pixels in the alpha-coverage fallback lose coverage — cosmetic AA
   artifact on the Intel-Vulkan path only, does not affect default
   MSAA + sample_mask rendering.
+  **1-sample alpha-coverage variant**: When `useAlphaCoverageAA` is
+  active, all pipelines run at `sampleCount = 1` (no MSAA texture, no
+  hardware resolve). The alpha-coverage shaders compute 4-sample
+  supersampling in the fragment shader and fold coverage into alpha, so
+  hardware MSAA is unnecessary overhead. `GeodeDevice::sampleCount()`
+  returns 1 on the alpha-coverage path, 4 otherwise; all pipeline
+  constructors, `GeoEncoder`, and `RendererGeode` MSAA-texture
+  allocations gate on this value. Note: a separate class of
+  non-deterministic GPU hangs (~20% per-submission) remains on
+  Arc A380 + Mesa ANV 25.2.8 — these affect even empty render passes
+  (clear + readback, no shader execution) and are a driver/hardware
+  bug independent of MSAA or shader variant.
 
 
 ## Summary

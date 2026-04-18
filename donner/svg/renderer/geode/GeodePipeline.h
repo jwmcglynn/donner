@@ -39,11 +39,11 @@ public:
    *   will draw into. Must match the target texture's format at draw time.
    * @param useAlphaCoverageShader When true, selects the alpha-coverage
    *   variant of the fill shader (no `@builtin(sample_mask)` output).
-   *   The pipeline still uses 4× MSAA; coverage is folded into the
-   *   fragment color instead of relying on the hardware sample mask.
+   * @param sampleCount MSAA sample count for the pipeline's multisample
+   *   state. Pass 1 for the alpha-coverage path (no MSAA), 4 otherwise.
    */
   GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                bool useAlphaCoverageShader = false);
+                bool useAlphaCoverageShader = false, uint32_t sampleCount = 4);
 
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
@@ -86,8 +86,9 @@ class GeodeGradientPipeline {
 public:
   /// Construct a gradient pipeline for the given device and color target format.
   /// @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
+  /// @param sampleCount MSAA sample count (1 for alpha-coverage, 4 otherwise).
   GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                        bool useAlphaCoverageShader = false);
+                        bool useAlphaCoverageShader = false, uint32_t sampleCount = 4);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
@@ -137,8 +138,10 @@ public:
    * R8Unorm texture with 4× MSAA.
    *
    * @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
+   * @param sampleCount MSAA sample count (1 for alpha-coverage, 4 otherwise).
    */
-  explicit GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader = false);
+  explicit GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader = false,
+                             uint32_t sampleCount = 4);
 
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;

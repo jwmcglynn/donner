@@ -6,7 +6,8 @@
 namespace donner::geode {
 
 GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
-                                       wgpu::TextureFormat colorFormat)
+                                       wgpu::TextureFormat colorFormat,
+                                       uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Four bindings: uniform buffer, sampler, sampled content texture,
@@ -90,12 +91,9 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // 4× MSAA to match the Slug fill + gradient pipelines. WebGPU requires
-  // all pipelines used against the same render pass attachment to agree
-  // on sample count, and the Geode encoder always targets MSAA textures.
-  // Image blit itself doesn't need per-sample coverage (the quad is
-  // fully-covering), but the pipeline must still advertise 4×.
-  rpDesc.multisample.count = 4;
+  // Match the Slug fill + gradient pipelines' sample count. When the
+  // alpha-coverage path is active this is 1 (no MSAA).
+  rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.createRenderPipeline(rpDesc);

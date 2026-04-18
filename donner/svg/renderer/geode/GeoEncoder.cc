@@ -162,17 +162,20 @@ struct GeoEncoder::Impl {
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
-  // 4× multisampled color attachment. All draws land here and the
-  // hardware resolves into `target` at the end of each render pass.
+  // When sampleCount == 4: multisampled color attachment. All draws land
+  // here and the hardware resolves into `target` at the end of each pass.
+  // When sampleCount == 1: unused (null) — draws go directly to `target`.
   wgpu::Texture msaaTarget;
   wgpu::TextureView msaaTargetView;
-  // 1-sample resolve texture. External code (image blit, readback)
-  // samples / copies from this texture, never the MSAA color.
+  // 1-sample resolve / direct-render texture. External code (image blit,
+  // readback) samples / copies from this texture, never the MSAA color.
   wgpu::Texture target;
   wgpu::TextureView targetView;
   wgpu::CommandEncoder commandEncoder;
   uint32_t targetWidth;
   uint32_t targetHeight;
+  // MSAA sample count from GeodeDevice. 1 = no MSAA (alpha-coverage path).
+  uint32_t sampleCount = 4;
 
   // Dummy 1x1 texture + sampler bound when `paintMode == 0` (solid fill).
   // The bind group layout always requires texture/sampler entries so the
@@ -395,14 +398,20 @@ struct GeoEncoder::Impl {
     }
     wgpu::RenderPassColorAttachment color = {};
 
-    // 4× MSAA color attachment with per-pass resolve. The MSAA view is
-    // the draw target; WebGPU implicitly resolves into `targetView` at
-    // pass end. `storeOp = Store` on the MSAA attachment preserves its
-    // state for a subsequent pass (see `setLoadPreserve()` — we may
-    // reopen a pass to continue drawing on top of the previous MSAA
-    // contents, e.g., after a nested-layer composite).
-    color.view = msaaTargetView;
-    color.resolveTarget = targetView;
+    if (sampleCount > 1) {
+      // 4× MSAA color attachment with per-pass resolve. The MSAA view is
+      // the draw target; WebGPU implicitly resolves into `targetView` at
+      // pass end. `storeOp = Store` on the MSAA attachment preserves its
+      // state for a subsequent pass (see `setLoadPreserve()` — we may
+      // reopen a pass to continue drawing on top of the previous MSAA
+      // contents, e.g., after a nested-layer composite).
+      color.view = msaaTargetView;
+      color.resolveTarget = targetView;
+    } else {
+      // 1-sample (alpha-coverage path): draw directly into the target
+      // texture — no MSAA intermediate, no hardware resolve.
+      color.view = targetView;
+    }
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = clearColor;
@@ -516,12 +525,18 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
   impl_->pipeline = &fillPipeline;
   impl_->gradientPipeline = &gradientPipeline;
   impl_->imagePipeline = &imagePipeline;
-  impl_->msaaTarget = msaaTarget;
-  impl_->msaaTargetView = msaaTarget.createView();
+  impl_->sampleCount = device.sampleCount();
   impl_->target = resolveTarget;
   impl_->targetView = resolveTarget.createView();
   impl_->targetWidth = resolveTarget.getWidth();
   impl_->targetHeight = resolveTarget.getHeight();
+
+  if (impl_->sampleCount > 1) {
+    impl_->msaaTarget = msaaTarget;
+    impl_->msaaTargetView = msaaTarget.createView();
+  }
+  // When sampleCount == 1 the msaaTarget / msaaTargetView stay null —
+  // ensurePassOpen renders directly into targetView with no resolve.
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = wgpuLabel("GeoEncoder");
@@ -661,17 +676,23 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask,
   if (!impl_->maskPipelineOwned) {
     impl_->maskPipelineOwned =
         std::make_unique<GeodeMaskPipeline>(impl_->device->device(),
-                                            impl_->device->useAlphaCoverageAA());
+                                            impl_->device->useAlphaCoverageAA(),
+                                            impl_->device->sampleCount());
   }
 
   impl_->maskPassSavedTransform = impl_->transform;
 
-  wgpu::TextureView msaaView = msaaMask.createView();
   wgpu::TextureView resolveView = resolveMask.createView();
 
   wgpu::RenderPassColorAttachment color = {};
-  color.view = msaaView;
-  color.resolveTarget = resolveView;
+  if (impl_->sampleCount > 1) {
+    wgpu::TextureView msaaView = msaaMask.createView();
+    color.view = msaaView;
+    color.resolveTarget = resolveView;
+  } else {
+    // 1-sample path: draw directly into the resolve texture.
+    color.view = resolveView;
+  }
   color.loadOp = wgpu::LoadOp::Clear;
   color.storeOp = wgpu::StoreOp::Store;
   color.clearValue = {0.0, 0.0, 0.0, 0.0};
