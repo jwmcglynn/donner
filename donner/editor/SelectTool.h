@@ -107,6 +107,14 @@ private:
     Transform2d startTransform;
     Transform2d currentTransform;
     std::optional<AttributeWritebackTarget> writebackTarget;
+    /// Original `transform` attribute value captured at drag start. Used
+    /// for `UndoSnapshot::sourceTransformAttributeValue` on release.
+    /// Captured eagerly in `onMouseDown` (which runs only when the async
+    /// renderer is idle) so `onMouseUp` never needs to touch the entt
+    /// registry itself — reads here racing with a concurrent background
+    /// render would hit `entt::fast_mod` assertions when the worker is
+    /// resizing a dense-map bucket array.
+    std::optional<RcString> sourceTransformAttributeValue;
   };
 
   struct DragState {

@@ -85,6 +85,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
           .startTransform = extraStart,
           .currentTransform = extraStart,
           .writebackTarget = captureAttributeWritebackTarget(selected),
+          .sourceTransformAttributeValue = selected.getAttribute("transform"),
       });
     }
   } else {
@@ -98,6 +99,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
               .writebackTarget = primaryWritebackTarget,
+              .sourceTransformAttributeValue = element.getAttribute("transform"),
           },
       .extras = std::move(extras),
       .startDocumentPoint = documentPoint,
@@ -230,8 +232,9 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
           .startTransform = dragState_->primary.startTransform,
           .currentTransform = dragState_->primary.currentTransform,
           .writebackTarget = dragState_->primary.writebackTarget,
-          .sourceTransformAttributeValue =
-              dragState_->primary.element.getAttribute("transform"),
+          // Captured at drag start — see `PerElementDrag::sourceTransformAttributeValue`
+          // docstring for the thread-safety rationale.
+          .sourceTransformAttributeValue = dragState_->primary.sourceTransformAttributeValue,
           .undoLabel = "Move element",
       };
       dragState_.reset();
@@ -242,7 +245,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
         .element = dragState_->primary.element,
         .transform = dragState_->primary.startTransform,
         .writebackTarget = dragState_->primary.writebackTarget,
-        .sourceTransformAttributeValue = dragState_->primary.element.getAttribute("transform"),
+        .sourceTransformAttributeValue = dragState_->primary.sourceTransformAttributeValue,
         .restoreSourceTransformAttributeValue = true};
     UndoSnapshot after{.element = dragState_->primary.element,
                        .transform = dragState_->primary.currentTransform,
@@ -260,7 +263,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
           .element = extra.element,
           .transform = extra.startTransform,
           .writebackTarget = extra.writebackTarget,
-          .sourceTransformAttributeValue = extra.element.getAttribute("transform"),
+          .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
           .restoreSourceTransformAttributeValue = true};
       UndoSnapshot extraAfter{.element = extra.element,
                               .transform = extra.currentTransform,
