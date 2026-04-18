@@ -1,8 +1,28 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
+
+namespace {
+
+/// Returns a process-wide shared GeodeDevice, created on first access.
+///
+/// Sharing a single device across all test-constructed renderers avoids the
+/// Mesa llvmpipe (and Intel ANV) hang caused by accumulating hundreds of
+/// WebGPU device creations in a single process — the driver state doesn't
+/// reclaim cleanly and the process eventually deadlocks.
+std::shared_ptr<geode::GeodeDevice> SharedTestDevice() {
+  static auto device = [] {
+    auto d = geode::GeodeDevice::CreateHeadless();
+    // Wrap the unique_ptr in a shared_ptr for lifetime sharing.
+    return std::shared_ptr<geode::GeodeDevice>(std::move(d));
+  }();
+  return device;
+}
+
+}  // namespace
 
 RendererBackend ActiveRendererBackend() {
   return RendererBackend::Geode;
@@ -28,18 +48,18 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
 }
 
 std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
-  return std::make_unique<RendererGeode>(verbose);
+  return std::make_unique<RendererGeode>(SharedTestDevice(), verbose);
 }
 
 RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
-  RendererGeode renderer(verbose);
+  RendererGeode renderer(SharedTestDevice(), verbose);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }
 
 RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
   // Geode has no anti-aliasing toggle — ASCII snapshots aren't supported.
-  RendererGeode renderer;
+  RendererGeode renderer(SharedTestDevice());
   renderer.draw(document);
   return renderer.takeSnapshot();
 }

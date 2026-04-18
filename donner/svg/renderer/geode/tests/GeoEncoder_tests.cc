@@ -24,12 +24,23 @@ constexpr uint32_t kSize = 64;
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4 = 256.
 
-/// Test fixture: creates a fresh device + render target + readback buffer per
-/// test, and provides a helper to extract the rendered pixels.
+/// Test fixture: shares a process-wide device and creates per-test render
+/// targets + readback buffer.
+///
+/// Sharing the device avoids the Mesa llvmpipe / Intel ANV driver hang caused
+/// by accumulating many WebGPU device creations in a single process.
 class GeoEncoderTest : public ::testing::Test {
  protected:
+  /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
+  static std::shared_ptr<GeodeDevice> sharedDevice() {
+    static auto device = [] {
+      return std::shared_ptr<GeodeDevice>(GeodeDevice::CreateHeadless());
+    }();
+    return device;
+  }
+
   void SetUp() override {
-    device_ = GeodeDevice::CreateHeadless();
+    device_ = sharedDevice();
     ASSERT_NE(device_, nullptr);
 
     pipeline_ = std::make_unique<GeodePipeline>(device_->device(), kFormat);
@@ -136,7 +147,7 @@ class GeoEncoderTest : public ::testing::Test {
     return {pixels[off], pixels[off + 1], pixels[off + 2], pixels[off + 3]};
   }
 
-  std::unique_ptr<GeodeDevice> device_;
+  std::shared_ptr<GeodeDevice> device_;
   std::unique_ptr<GeodePipeline> pipeline_;
   std::unique_ptr<GeodeGradientPipeline> gradientPipeline_;
   std::unique_ptr<GeodeImagePipeline> imagePipeline_;

@@ -61,6 +61,7 @@ donner_cc_library(
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",
+            "//donner/svg/renderer/geode:geode_device",
         ],
         "//conditions:default": [],
     }),
@@ -268,6 +269,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:stroke_params",
+        "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/resources:image_resource",
         "@com_google_gtest//:gtest_main",
     ],
