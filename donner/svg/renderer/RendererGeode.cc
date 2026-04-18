@@ -1352,14 +1352,24 @@ void RendererGeode::popIsolatedLayer() {
       wgpu::CommandBuffer copyCmd = copyEncoder.finish();
       impl_->device->queue().submit(1, &copyCmd);
 
-      // Open a fresh parent encoder that CLEARS the target — the
-      // blend blit covers every pixel so the clear has no visible
-      // effect, and skipping Load means a stale feedback loop can't
-      // sneak in.
+      // Open a fresh parent encoder that PRESERVES the target's existing
+      // contents (the backdrop pre-push — identical to `snapshot` at
+      // this point, since we just copied from `savedTarget` above).
+      //
+      // We must not CLEAR here: if an outer clip/scissor is active,
+      // `updateEncoderScissor` will restrict the blend blit to the clip
+      // rect, and any pixels outside that rect would remain at the
+      // clear color (transparent) — losing the backdrop outside the
+      // clip. With Load, out-of-scissor pixels are preserved from the
+      // attachment, which already holds the backdrop.
+      //
+      // No feedback loop: `snapshot` is a copy of `savedTarget`, not an
+      // alias, so sampling `snapshot` while writing `savedTarget` is
+      // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
           frame.savedMsaaTarget, frame.savedTarget);
-      newEncoder->clear(css::RGBA(0, 0, 0, 0));
+      newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshot,

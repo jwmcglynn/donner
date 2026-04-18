@@ -505,6 +505,49 @@ TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
   EXPECT_EQ(center[3], 0u) << "Empty image should draw nothing";
 }
 
+/// Popping an isolated layer with a non-Normal blend mode while an outer
+/// clip is active must NOT clobber backdrop pixels outside the clip rect.
+/// This is the Phase 3d regression guarded by loading (not clearing) the
+/// parent attachment on the blend-pop pass — a clear would wipe
+/// out-of-scissor pixels to transparent since the blend blit runs only
+/// inside the scissor.
+TEST_F(RendererGeodeTest, BlendedLayerPopPreservesBackdropOutsideClip) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  // Backdrop: fill the whole canvas red.
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  // Clip to the top-right quadrant (32..64, 0..32) and inside that, push an
+  // isolated layer with mix-blend-mode:Multiply, draw blue, then pop.
+  ResolvedClip clip;
+  clip.clipRect = Box2d({32, 0}, {kViewportSize, 32});
+  renderer.pushClip(clip);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Multiply);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({32, 0}, {kViewportSize, 32}), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+  RendererBitmap snap = renderer.takeSnapshot();
+
+  // Outside the clip (bottom-left quadrant): backdrop must still be red.
+  auto outside = pixelAt(snap, 16, 48);
+  EXPECT_EQ(outside[0], 255u) << "Bottom-left R (outside clip)";
+  EXPECT_EQ(outside[1], 0u) << "Bottom-left G (outside clip)";
+  EXPECT_EQ(outside[2], 0u) << "Bottom-left B (outside clip)";
+  EXPECT_EQ(outside[3], 255u) << "Bottom-left A (outside clip)";
+
+  // Inside the clip: Multiply(red=255,0,0 ; blue=0,0,255) = (0, 0, 0).
+  auto inside = pixelAt(snap, 48, 16);
+  EXPECT_EQ(inside[0], 0u) << "Multiply result R";
+  EXPECT_EQ(inside[1], 0u) << "Multiply result G";
+  EXPECT_EQ(inside[2], 0u) << "Multiply result B";
+  EXPECT_EQ(inside[3], 255u) << "Multiply result A";
+}
+
 /// Stubbed methods (clip/mask/layer/filter/pattern/image/text) should be
 /// safe no-ops that don't crash, and balanced push/pop pairs should keep
 /// drawing functional.
