@@ -56,6 +56,22 @@ wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
 wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device);
 
 /**
+ * Compile the alpha-coverage variant of the Slug fill shader.
+ *
+ * Identical to `createSlugFillShader` except the fragment stage has no
+ * `@builtin(sample_mask)` output — coverage is folded into the fragment
+ * color as `popcount(mask) / 4.0`. Used on Intel + Vulkan where writing
+ * `sample_mask` from overlapping band quads hangs Mesa ANV / Xe KMD.
+ */
+wgpu::ShaderModule createSlugFillAlphaCoverageShader(const wgpu::Device& device);
+
+/// Alpha-coverage variant of `createSlugGradientShader`.
+wgpu::ShaderModule createSlugGradientAlphaCoverageShader(const wgpu::Device& device);
+
+/// Alpha-coverage variant of `createSlugMaskShader`.
+wgpu::ShaderModule createSlugMaskAlphaCoverageShader(const wgpu::Device& device);
+
+/**
  * Compile the image-blit shader for the given device.
  *
  * The WGSL source is embedded at build time from

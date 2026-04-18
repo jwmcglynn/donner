@@ -68,6 +68,62 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
     return nullptr;
   }
 
+  // Log adapter selection so it is obvious at a glance whether we landed
+  // on a discrete GPU / integrated GPU / software rasterizer, and which
+  // native backend (Vulkan / Metal / D3D12 / …) is driving it.
+  {
+    WGPUAdapterInfo info = {};
+    if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
+      auto sv = [](const WGPUStringView& s) {
+        return std::string_view{s.data ? s.data : "", s.data ? s.length : 0};
+      };
+      const char* backend = "?";
+      switch (info.backendType) {
+        case WGPUBackendType_Vulkan: backend = "Vulkan"; break;
+        case WGPUBackendType_Metal: backend = "Metal"; break;
+        case WGPUBackendType_D3D12: backend = "D3D12"; break;
+        case WGPUBackendType_D3D11: backend = "D3D11"; break;
+        case WGPUBackendType_OpenGL: backend = "OpenGL"; break;
+        case WGPUBackendType_OpenGLES: backend = "OpenGLES"; break;
+        case WGPUBackendType_WebGPU: backend = "WebGPU"; break;
+        case WGPUBackendType_Null: backend = "Null"; break;
+        default: break;
+      }
+      const char* type = "?";
+      switch (info.adapterType) {
+        case WGPUAdapterType_DiscreteGPU: type = "DiscreteGPU"; break;
+        case WGPUAdapterType_IntegratedGPU: type = "IntegratedGPU"; break;
+        case WGPUAdapterType_CPU: type = "CPU"; break;
+        case WGPUAdapterType_Unknown: type = "Unknown"; break;
+        default: break;
+      }
+      const auto vendor = sv(info.vendor);
+      const auto device = sv(info.device);
+      const auto arch = sv(info.architecture);
+      std::fprintf(stderr,
+                   "[Geode/wgpu-native] Adapter: %.*s %.*s (%.*s) "
+                   "backend=%s type=%s vendorID=0x%04x deviceID=0x%04x\n",
+                   static_cast<int>(vendor.size()), vendor.data(),
+                   static_cast<int>(device.size()), device.data(),
+                   static_cast<int>(arch.size()), arch.data(), backend, type,
+                   info.vendorID, info.deviceID);
+
+      // Intel + Vulkan: writing @builtin(sample_mask) from overlapping band
+      // quads hangs Mesa ANV / Xe KMD when bandCount >= 2 (observed on Arc
+      // A380, Mesa 25.2.8). Fall back to alpha-coverage AA which folds the
+      // 4-sample mask into the fragment color on a 1-sample render target.
+      if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
+        result->useAlphaCoverageAA_ = true;
+        std::fprintf(stderr,
+                     "[Geode] Intel Arc + Vulkan detected; using alpha-coverage AA "
+                     "(sample_mask output hangs on Mesa 25.2.8 Xe-KMD; "
+                     "upstream fix in Mesa 25.3)\n");
+      }
+
+      wgpuAdapterInfoFreeMembers(info);
+    }
+  }
+
   // 3. Create the device. Error diagnostics are wired via
   //    `uncapturedErrorCallbackInfo` on the descriptor — the callback
   //    stays valid for the device's lifetime.

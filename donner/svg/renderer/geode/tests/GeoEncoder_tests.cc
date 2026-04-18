@@ -32,9 +32,10 @@ class GeoEncoderTest : public ::testing::Test {
     device_ = GeodeDevice::CreateHeadless();
     ASSERT_NE(device_, nullptr);
 
-    pipeline_ = std::make_unique<GeodePipeline>(device_->device(), kFormat);
-    gradientPipeline_ =
-        std::make_unique<GeodeGradientPipeline>(device_->device(), kFormat);
+    pipeline_ = std::make_unique<GeodePipeline>(device_->device(), kFormat,
+                                                device_->useAlphaCoverageAA());
+    gradientPipeline_ = std::make_unique<GeodeGradientPipeline>(
+        device_->device(), kFormat, device_->useAlphaCoverageAA());
     imagePipeline_ = std::make_unique<GeodeImagePipeline>(device_->device(), kFormat);
 
     wgpu::TextureDescriptor td = {};

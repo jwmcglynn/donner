@@ -393,13 +393,14 @@ struct GeoEncoder::Impl {
     if (passOpen) {
       return;
     }
+    wgpu::RenderPassColorAttachment color = {};
+
     // 4× MSAA color attachment with per-pass resolve. The MSAA view is
     // the draw target; WebGPU implicitly resolves into `targetView` at
     // pass end. `storeOp = Store` on the MSAA attachment preserves its
     // state for a subsequent pass (see `setLoadPreserve()` — we may
     // reopen a pass to continue drawing on top of the previous MSAA
     // contents, e.g., after a nested-layer composite).
-    wgpu::RenderPassColorAttachment color = {};
     color.view = msaaTargetView;
     color.resolveTarget = targetView;
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
@@ -658,7 +659,9 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask,
 
   // Lazily build the mask pipeline on first use.
   if (!impl_->maskPipelineOwned) {
-    impl_->maskPipelineOwned = std::make_unique<GeodeMaskPipeline>(impl_->device->device());
+    impl_->maskPipelineOwned =
+        std::make_unique<GeodeMaskPipeline>(impl_->device->device(),
+                                            impl_->device->useAlphaCoverageAA());
   }
 
   impl_->maskPassSavedTransform = impl_->transform;

@@ -157,6 +157,36 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Alpha-coverage shader variants. These differ from their MSAA counterparts
+# only in the fragment output: no @builtin(sample_mask), coverage folded into
+# the fragment color. Used on Intel + Vulkan to avoid a Mesa ANV hang.
+embed_resources(
+    name = "slug_fill_alpha_coverage_wgsl",
+    header_output = "embed_resources/SlugFillAlphaCoverageWgsl.h",
+    resources = {
+        "kSlugFillAlphaCoverageWgsl": "shaders/slug_fill_alpha_coverage.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+embed_resources(
+    name = "slug_gradient_alpha_coverage_wgsl",
+    header_output = "embed_resources/SlugGradientAlphaCoverageWgsl.h",
+    resources = {
+        "kSlugGradientAlphaCoverageWgsl": "shaders/slug_gradient_alpha_coverage.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+embed_resources(
+    name = "slug_mask_alpha_coverage_wgsl",
+    header_output = "embed_resources/SlugMaskAlphaCoverageWgsl.h",
+    resources = {
+        "kSlugMaskAlphaCoverageWgsl": "shaders/slug_mask_alpha_coverage.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -167,8 +197,11 @@ donner_cc_library(
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
+        ":slug_fill_alpha_coverage_wgsl",
         ":slug_gradient_wgsl",
+        ":slug_gradient_alpha_coverage_wgsl",
         ":slug_mask_wgsl",
+        ":slug_mask_alpha_coverage_wgsl",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )

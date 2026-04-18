@@ -55,6 +55,19 @@ public:
   /// Returns the adapter backing this device.
   const wgpu::Adapter& adapter() const { return adapter_; }
 
+  /**
+   * Whether to use alpha-coverage AA instead of hardware 4× MSAA with
+   * `@builtin(sample_mask)`.
+   *
+   * Returns true on Intel + Vulkan, where writing `@builtin(sample_mask)`
+   * from overlapping band quads hangs Mesa ANV / Xe KMD (observed on
+   * Arc A380, Mesa 25.2.8). The alpha-coverage path folds 4-sample
+   * coverage into the fragment color instead of relying on the hardware
+   * sample mask. The pipeline still uses `multisample.count = 4` so
+   * MSAA render targets and resolve steps are unchanged.
+   */
+  bool useAlphaCoverageAA() const { return useAlphaCoverageAA_; }
+
 private:
   GeodeDevice();
 
@@ -66,6 +79,8 @@ private:
   wgpu::Adapter adapter_;
   wgpu::Device device_;
   wgpu::Queue queue_;
+
+  bool useAlphaCoverageAA_ = false;
 };
 
 }  // namespace donner::geode
