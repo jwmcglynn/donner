@@ -34,6 +34,7 @@
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
+#include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -664,6 +665,15 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   ImageParams params;
   params.opacity = style.properties->opacity.getRequired();
   params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
+
+  // `image-rendering: pixelated` and `crisp-edges` (plus the legacy
+  // SVG 1.1 `optimizeSpeed` alias) disable bilinear filtering and use
+  // nearest-neighbor sampling instead. `auto`, `smooth`, and
+  // `optimizeQuality` all fall back to the backend default (bilinear).
+  const ImageRendering imageRendering = style.properties->imageRendering.getRequired();
+  params.imageRenderingPixelated = imageRendering == ImageRendering::Pixelated ||
+                                   imageRendering == ImageRendering::CrispEdges ||
+                                   imageRendering == ImageRendering::OptimizeSpeed;
 
   return params;
 }

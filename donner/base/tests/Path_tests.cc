@@ -1625,6 +1625,29 @@ TEST(Path, VerticesClosedRect) {
   EXPECT_GE(verts.size(), 4u);
 }
 
+// On a closed subpath, the start-marker orientation uses the first segment's
+// outgoing tangent (SVG 2 §11.6.2) — not the bisector with the closing segment.
+// If the first "segment" is zero-length (a degenerate line-to that re-emits the
+// moveTo point), the tangent must walk forward to the next non-zero segment
+// instead of resolving to (0,0), which would produce a 0° marker angle.
+TEST(Path, VerticesClosedPathDegenerateFirstSegment) {
+  // moveTo(5,5) + zero-length lineTo(5,5) + lineTo(15,5) + closePath.
+  // The outgoing tangent at the start should follow the (5,5)→(15,5) segment,
+  // i.e. point in the +X direction, not collapse to zero.
+  Path path = PathBuilder()
+                  .moveTo({5, 5})
+                  .lineTo({5, 5})
+                  .lineTo({15, 5})
+                  .closePath()
+                  .build();
+  std::vector<Path::Vertex> verts = path.vertices();
+  ASSERT_FALSE(verts.empty());
+  EXPECT_EQ(verts.front().point, Vector2d(5, 5));
+  // Orientation should be a unit vector pointing along +X.
+  EXPECT_NEAR(verts.front().orientation.x, 1.0, 1e-9);
+  EXPECT_NEAR(verts.front().orientation.y, 0.0, 1e-9);
+}
+
 // =============================================================================
 // PathBuilder::arcTo
 // =============================================================================

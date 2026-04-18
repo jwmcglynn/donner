@@ -32,6 +32,12 @@ const kMaxStops: u32 = 16u;
 const kGradientLinear: u32 = 0u;
 const kGradientRadial: u32 = 1u;
 
+// Sentinel returned by `radial_t` when a pixel lies outside the gradient cone
+// (negative discriminant or both roots yield negative radii).  Tiny-skia paints
+// these pixels transparent via `Mask2PtConicalDegenerates`; we detect the
+// sentinel in `fs_main` and discard the fragment to match.
+const kInvalidGradientT: f32 = -1e30;
+
 struct GradientUniforms {
   // Model-view-projection: path-space → clip space.
   mvp: mat4x4f,
@@ -368,16 +374,20 @@ fn radial_t(gpos: vec2f) -> f32 {
       // ring. Send everything past the last stop.
       return 1.0;
     }
-    return Ce / (2.0 * B);
+    let linear_t = Ce / (2.0 * B);
+    // Radius must be non-negative for the circle at this `t` to exist.
+    if (Fr + linear_t * Dr < 0.0) {
+      return kInvalidGradientT;
+    }
+    return linear_t;
   }
 
   let disc = B * B - A * Ce;
   if (disc < 0.0) {
-    // No real intersection — this pixel is outside the swept cone. For pad
-    // mode we want the last-stop color; for repeat/reflect it doesn't matter
-    // because the caller folds `t` before sampling, but pad is the hot path.
-    // Return a sentinel well beyond [0,1] so `apply_spread` clamps to 1.
-    return 1e6;
+    // No real intersection — this pixel is outside the swept cone.  Tiny-skia
+    // masks these fragments to transparent; we return a sentinel so `fs_main`
+    // can discard.
+    return kInvalidGradientT;
   }
 
   let sqrtDisc = sqrt(disc);
@@ -396,8 +406,9 @@ fn radial_t(gpos: vec2f) -> f32 {
   if (r0 >= 0.0) {
     return t0;
   }
-  // Both roots give negative radii — treat as outside.
-  return 1e6;
+  // Both roots give negative radii — pixel is outside the valid gradient
+  // region.  Return the sentinel so the fragment is discarded (transparent).
+  return kInvalidGradientT;
 }
 
 fn gradient_t(path_pos: vec2f) -> f32 {
@@ -511,6 +522,14 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // take the cheaper per-pixel path because gradient color varies
   // smoothly and the sample_mask already captures the hard edge AA.
   let raw_t = gradient_t(in.sample_pos);
+
+  // Radial gradients with conical focal configurations have regions where no
+  // circle in the gradient family passes through the pixel (negative
+  // discriminant).  Tiny-skia renders these transparent; we match by
+  // discarding the fragment.
+  if (raw_t < -1e20) {
+    discard;
+  }
   let t = apply_spread(raw_t, uniforms.spreadMode);
   // `sample_stops` returns a STRAIGHT-alpha color (see upload path in
   // GeoEncoder.cc `populateSharedGradientUniforms`). The pipeline blend
