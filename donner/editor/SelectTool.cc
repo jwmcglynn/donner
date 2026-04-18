@@ -14,6 +14,14 @@ namespace donner::editor {
 
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                              MouseModifiers modifiers) {
+  // Drain any pending commit from a previous drag release before we
+  // start the next gesture. The new onMouseDown might start another
+  // drag on the same entity — that drag expects the DOM's transform
+  // attribute to reflect the previous drag's final position so its
+  // startTransform reads correctly. Keeping the commit deferred past
+  // this point is what was letting the drag release feel zero-cost.
+  commitPendingDragMutation(editor);
+
   // Reset any in-progress drag/marquee — a previous mouse-down without
   // a matching mouse-up means the user dragged off the window or a
   // tool switch happened mid-drag. Either way, abandon the old gesture
@@ -204,8 +212,30 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     const bool useCompositedPath =
         compositedDragPreviewEnabled_ && dragState_->extras.empty();
     if (useCompositedPath) {
-      editor.applyMutation(EditorCommand::SetTransformCommand(
-          dragState_->primary.element, dragState_->primary.currentTransform));
+      // Zero-work drag release. Stash everything we'd otherwise do
+      // synchronously here (applyMutation, undo record, writeback latch)
+      // into `pendingCommit_`. `commitPendingDragMutation` drains it the
+      // next time a user action requires a consistent DOM state (next
+      // drag's onMouseDown, undo / redo, writeback consumer, etc).
+      //
+      // The compositor keeps showing the drag-final position via its
+      // cached composited textures + the held drag-translate compose
+      // offset (see `ExperimentalDragPresentation::settlingPreview`),
+      // so the display is visually identical to a world where we'd
+      // eagerly committed. The difference is exclusively on the CPU
+      // side: no `applyMutation`, no `undoTimeline.record`, no tree
+      // walk — so the mouse-release frame does essentially zero work.
+      pendingCommit_ = PendingCommit{
+          .element = dragState_->primary.element,
+          .startTransform = dragState_->primary.startTransform,
+          .currentTransform = dragState_->primary.currentTransform,
+          .writebackTarget = dragState_->primary.writebackTarget,
+          .sourceTransformAttributeValue =
+              dragState_->primary.element.getAttribute("transform"),
+          .undoLabel = "Move element",
+      };
+      dragState_.reset();
+      return;
     }
 
     UndoSnapshot before{
@@ -259,6 +289,35 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   }
 
   dragState_.reset();
+}
+
+void SelectTool::commitPendingDragMutation(EditorApp& editor) {
+  if (!pendingCommit_.has_value()) {
+    return;
+  }
+  PendingCommit commit = std::move(*pendingCommit_);
+  pendingCommit_.reset();
+
+  editor.applyMutation(
+      EditorCommand::SetTransformCommand(commit.element, commit.currentTransform));
+
+  UndoSnapshot before{
+      .element = commit.element,
+      .transform = commit.startTransform,
+      .writebackTarget = commit.writebackTarget,
+      .sourceTransformAttributeValue = commit.sourceTransformAttributeValue,
+      .restoreSourceTransformAttributeValue = true};
+  UndoSnapshot after{.element = commit.element,
+                     .transform = commit.currentTransform,
+                     .writebackTarget = commit.writebackTarget};
+  editor.undoTimeline().record(commit.undoLabel, std::move(before), std::move(after));
+
+  if (commit.writebackTarget.has_value()) {
+    completedDragWriteback_ = CompletedDragWriteback{
+        .target = *commit.writebackTarget,
+        .transform = commit.currentTransform,
+    };
+  }
 }
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() const {

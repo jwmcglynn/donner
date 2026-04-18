@@ -14,6 +14,8 @@
 
 namespace donner::editor {
 
+class SelectTool;
+
 struct TreeViewState {
   std::optional<svg::SVGElement> scrollTarget;
   bool pendingScroll = false;
@@ -39,8 +41,13 @@ public:
   /// Render the tree pane from the current snapshot. When @p liveApp is
   /// non-null, click-induced selection mutations are applied to it; when
   /// null, clicks are dropped (the render is "read-only" because the worker
-  /// thread owns the document).
-  void renderTreeView(EditorApp* liveApp, TreeViewState& state) const;
+  /// thread owns the document). `selectTool` (if non-null) is given a
+  /// chance to commit any deferred drag mutation before the selection
+  /// actually changes — otherwise the fresh render that fires after the
+  /// click would still see the pre-drag DOM transform on the last drag
+  /// target.
+  void renderTreeView(EditorApp* liveApp, SelectTool* selectTool,
+                      TreeViewState& state) const;
 
   /// Render the inspector pane from the current snapshot.
   void renderInspector(const ViewportState& viewport) const;
@@ -67,8 +74,8 @@ private:
   void captureTreeNode(const svg::SVGElement& element,
                         std::span<const svg::SVGElement> selection,
                         TreeNodeSnapshot& out);
-  void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node,
-                      TreeViewState& state) const;
+  void renderTreeNode(EditorApp* liveApp, SelectTool* selectTool,
+                      const TreeNodeSnapshot& node, TreeViewState& state) const;
 
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;

@@ -188,6 +188,8 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
   EXPECT_NEAR(tool.activeDragPreview()->translation.y, 0.0, 1e-6);
 
   tool.onMouseUp(app, v.screenToDocument(targetScreen));
+  // The composited path defers the mutation; commit it before flushing.
+  tool.commitPendingDragMutation(app);
   ASSERT_TRUE(app.flushFrame());
 
   const Transform2d after = rect.transform();
@@ -240,6 +242,7 @@ TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
   }
 
   tool.onMouseUp(app, v.screenToDocument(startScreen + totalScreenDelta));
+  tool.commitPendingDragMutation(app);
   ASSERT_TRUE(app.flushFrame());
   const Transform2d finalTransform = rect.transform();
   EXPECT_NEAR(finalTransform.data[4] - startTransform.data[4], 100.0, 1e-6);
@@ -336,6 +339,7 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
 
   // ---- Frame N+3: IsMouseReleased = true ----
   tool.onMouseUp(app, v.screenToDocument(screenAt2));
+  tool.commitPendingDragMutation(app);
   ASSERT_TRUE(app.flushFrame());
   EXPECT_NEAR(rect.transform().data[4] - startTransform.data[4], 40.0, 1e-6);
   EXPECT_NEAR(rect.transform().data[5] - startTransform.data[5], 30.0, 1e-6);
@@ -410,6 +414,8 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderZoom) {
   EXPECT_NEAR(tool.activeDragPreview()->translation.y, 0.0, 1e-6);
 
   tool.onMouseUp(app, v.screenToDocument(targetScreen));
+  // The composited path defers the mutation; commit it before flushing.
+  tool.commitPendingDragMutation(app);
   ASSERT_TRUE(app.flushFrame());
 
   const Transform2d after = rect.transform();

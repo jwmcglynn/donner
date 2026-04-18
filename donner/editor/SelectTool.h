@@ -84,6 +84,19 @@ public:
   /// Returns the current drag preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
+  /// Apply any drag mutation that `onMouseUp` deferred (only the
+  /// composited single-entity path defers; multi-element drags commit
+  /// eagerly in `onMouseUp` because they have to mutate every frame to
+  /// drive the non-composited preview). Call this before ANY operation
+  /// that assumes the DOM reflects the final drag position — new
+  /// `onMouseDown`, undo, redo, text-source edits — so the queued
+  /// `SetTransformCommand` + undo record land in a consistent order with
+  /// the user's next action. Safe to call when nothing is pending (no-op).
+  void commitPendingDragMutation(EditorApp& editor);
+
+  /// True if `onMouseUp` left an uncommitted drag mutation pending.
+  [[nodiscard]] bool hasPendingDragCommit() const { return pendingCommit_.has_value(); }
+
 private:
   /// Per-element bookkeeping for one participant in a drag. Carries the
   /// start transform (for computing `startTransform * translate(delta)`
@@ -128,9 +141,23 @@ private:
     bool additive = false;
   };
 
+  /// Snapshot of everything `onMouseUp` would have done synchronously on
+  /// the composited single-entity path, kept around so that drag release
+  /// itself can be a zero-work event. `commitPendingDragMutation()` drains
+  /// this on the next user action that actually needs fresh DOM state.
+  struct PendingCommit {
+    svg::SVGElement element;
+    Transform2d startTransform;
+    Transform2d currentTransform;
+    std::optional<AttributeWritebackTarget> writebackTarget;
+    std::optional<RcString> sourceTransformAttributeValue;
+    const char* undoLabel = "Move element";
+  };
+
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
+  std::optional<PendingCommit> pendingCommit_;
   bool compositedDragPreviewEnabled_ = false;
 };
 

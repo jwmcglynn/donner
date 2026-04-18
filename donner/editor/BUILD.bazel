@@ -273,6 +273,7 @@ donner_cc_library(
     deps = [
         ":editor_app",
         ":imgui_headers",
+        ":select_tool",
         ":viewport_state",
         "//donner/base",
         "//donner/svg",

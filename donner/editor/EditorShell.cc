@@ -204,9 +204,14 @@ void EditorShell::handleGlobalShortcuts() {
   if (!sourcePaneFocused) {
     if (pressedZ && cmd && !shift) {
       if (app_.canUndo()) {
+        // Drag release defers the SetTransformCommand into SelectTool's
+        // `pendingCommit_`; flush it onto the undo timeline before popping
+        // so Ctrl+Z actually has the move entry to undo.
+        selectTool_.commitPendingDragMutation(app_);
         app_.undo();
       }
     } else if (pressedZ && cmd && shift) {
+      selectTool_.commitPendingDragMutation(app_);
       app_.redo();
     }
   }
@@ -358,35 +363,22 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       if (options_.experimentalMode && previewBeforeRelease.has_value()) {
-        // Zero re-renders on drag release.
+        // Zero work on drag release.
         //
-        // Apply the `SetTransformCommand` mutation so the DOM reflects the
-        // new position, but do NOT kick off a "settle" render and do NOT
-        // call `maybeRequestRender`. The compositor's last-drag-frame
-        // composited preview (drag layer bitmap at pre-drag position
-        // composed with the final drag translate) is already visually
-        // identical to the post-mutation DOM state (entity at old + drag
-        // = entity at new). Firing a render here would only re-rasterize
-        // the drag layer to achieve the same pixel output, costing a
-        // visible "(rendering…)" flash for no user-visible benefit.
+        // `SelectTool::onMouseUp` stashed the `SetTransformCommand` +
+        // undo data into `pendingCommit_` instead of applying them — no
+        // ECS mutations, no undo allocation, no DOM touch on the release
+        // frame. The commit fires on the user's next interaction
+        // (onMouseDown / undo / redo / writeback consume).
         //
-        // The re-rasterization cost is deferred to the next interaction
-        // that genuinely needs fresh state: a new drag on this entity
-        // takes the fast path and re-rasterizes the drag layer with the
-        // baked-in transform; a selection change pays the prepare cost;
-        // a pan/zoom triggers a regular render. Whichever fires first
-        // absorbs the work naturally under the banner of an action the
-        // user initiated.
-        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
-          renderCoordinator_.refreshSelectionBoundsCache(app_);
-        }
-
-        // Preserve the drag translation visually so the display keeps
-        // showing the element at its drop position (cached-bitmap +
-        // drag-translate offset). Also tells `shouldPrewarm()` that we
-        // consider the cache fresh for the new document version — without
-        // this, the next main-loop tick would see `cachedVersion !=
-        // currentVersion` and fire a prewarm render.
+        // The compositor's last-drag-frame state (cached bg/drag/fg
+        // textures plus the final drag-translate compose offset) remains
+        // the display. We just record that translation in the settling
+        // preview so `presentationPreview()` keeps returning it, and
+        // mark the experimental-drag cache as fresh at the current
+        // (unchanged, since we didn't flush) document version so the
+        // next main-loop tick's `shouldPrewarm` doesn't fire a prewarm
+        // render against a nonexistent version delta.
         const auto currentVersion = app_.document().currentFrameVersion();
         const Vector2i canvasSize = app_.document().document().canvasSize();
         renderCoordinator_.experimentalDragPresentation().recordPostDragSettledWithoutRender(
@@ -436,7 +428,8 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
       .scrollTarget = selectionBeforeTree,
       .pendingScroll = treeviewPendingScroll_,
   };
-  sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
+  sidebarPresenter_.renderTreeView(liveAppForClicks, liveAppForClicks ? &selectTool_ : nullptr,
+                                    treeState);
   treeviewPendingScroll_ = treeState.pendingScroll;
   if (treeState.selectionChangedInTree) {
     treeSelectionOriginatedInTree_ = true;
@@ -517,9 +510,11 @@ void EditorShell::runFrame() {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
   }
   if (menuActions.undo && app_.canUndo()) {
+    selectTool_.commitPendingDragMutation(app_);
     app_.undo();
   }
   if (menuActions.redo) {
+    selectTool_.commitPendingDragMutation(app_);
     app_.redo();
   }
   if (menuActions.cut) {
