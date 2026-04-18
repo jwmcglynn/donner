@@ -153,10 +153,10 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
 
   // Marker tests where Geode produces a visibly different result from
   // the tiny-skia / Skia reference even with a widened AA threshold —
-  // small geometry-level divergences (cusp-direction on auto-orient,
-  // stroke-width-driven marker scaling, error-recovery paths). Real
-  // bugs to chase as follow-up, not cosmetic AA. Gated off Geode for
-  // now with a TODO so the test count doesn't regress.
+  // small geometry-level divergences (stroke-width-driven marker scaling,
+  // error-recovery paths). Real bugs to chase as follow-up, not cosmetic
+  // AA. Gated off Geode for now with a TODO so the test count doesn't
+  // regress.
   if (category == "painting/marker" &&
       (filename == "default-clip.svg" ||
        filename == "orient=auto-on-M-C-C-4.svg" ||
@@ -167,7 +167,7 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
                        "TODO: Geode marker renders diverge from reference "
-                       "(auto-orient cusps, markerUnits scaling, error paths)");
+                       "(rasterization diffs, markerUnits scaling, error paths)");
     };
   }
 
@@ -802,9 +802,10 @@ INSTANTIATE_TEST_SUITE_P(
     ValuesIn(getTestsInCategory("painting/marker",
                                 {
                                     {"marker-on-text.svg", Params::Skip("Not impl: `text`")},
-                                    {"orient=auto-on-M-C-C-4.svg", Params::WithGoldenOverride( "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")},
+                                    {"orient=auto-on-M-C-C-4.svg", Params::WithGoldenOverride(
+                                         "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
+                                         .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
                                     {"orient=auto-on-M-L-L-Z-Z-Z.svg", Params::Skip("Bug: Multiple closepaths")},
-                                    {"orient=auto-on-M-L-Z.svg", Params::WithGoldenOverride( "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-L-Z.png").withReason("BUG? Disagreement about marker direction on cusp")},
                                     {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
                                     {"with-a-text-child.svg", Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on Skia text_full")},
                                     {"with-an-image-child.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-with-an-image-child.png").withReason("We (correctly)")},

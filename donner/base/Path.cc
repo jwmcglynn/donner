@@ -827,17 +827,29 @@ namespace {
  * Interpolate two tangent vectors to find the orientation at a joint.
  *
  * If the tangents are not opposite, returns the normalized sum (the halfway direction).
- * If the tangents are opposite (a cusp), returns a perpendicular to prevTangent.
+ * If the tangents are opposite (a cusp), the bisector is undefined per SVG 2 SS 11.6.2.
+ * We resolve the ambiguity using the angular-midpoint convention from resvg's `calc_angle`:
+ * average the normalized atan2 angles of the two tangents.  For exact cusps
+ * (angular difference = pi), this amounts to choosing the perpendicular of prevTangent
+ * whose direction depends on which half-plane prevTangent's angle falls in.
  */
 Vector2d InterpolateTangents(const Vector2d& prevTangent, const Vector2d& nextTangent) {
   const Vector2d sum = prevTangent + nextTangent;
 
   if (!NearZero(sum.lengthSquared())) {
     return sum.normalize();
-  } else {
-    // Tangents are opposite; choose a perpendicular vector.
-    return Vector2d(prevTangent.y, -prevTangent.x);
   }
+
+  // At a cusp (opposite tangents), resolve the perpendicular direction to match the
+  // angular-midpoint convention used by resvg / Skia / Firefox / Chrome.
+  //
+  // When atan2(y,x) of prevTangent (normalized to [0,2pi)) is < pi, the angular midpoint
+  // with the opposite direction is +pi/2 (CCW rotation).  Otherwise it is -pi/2 (CW).
+  // This condition is equivalent to: y > 0, or (y == 0 and x > 0).
+  if (prevTangent.y > 0.0 || (prevTangent.y == 0.0 && prevTangent.x > 0.0)) {
+    return Vector2d(-prevTangent.y, prevTangent.x).normalize();  // CCW perpendicular
+  }
+  return Vector2d(prevTangent.y, -prevTangent.x).normalize();  // CW perpendicular
 }
 
 /// Compute the tangent at the start (t=0) of command \p i.
@@ -932,26 +944,11 @@ Vector2d tangentAtEnd(const std::vector<Path::Command>& commands,
   return Vector2d::Zero();
 }
 
-/// Find the index of the ClosePath command for the subpath starting at \p moveToIndex,
-/// or size_t(-1) if the subpath is open.
-size_t findClosePathIndex(const std::vector<Path::Command>& commands, size_t moveToIndex) {
-  for (size_t j = moveToIndex + 1; j < commands.size(); ++j) {
-    if (commands[j].verb == Path::Verb::ClosePath) {
-      return j;
-    }
-    if (commands[j].verb == Path::Verb::MoveTo) {
-      return size_t(-1);  // Open subpath (next subpath started before close).
-    }
-  }
-  return size_t(-1);  // Open subpath (end of path without close).
-}
-
 }  // namespace
 
 std::vector<Path::Vertex> Path::vertices() const {
   std::vector<Vertex> result;
   std::optional<size_t> openPathCommand;
-  size_t closePathIndex = size_t(-1);
   bool justMoved = false;
 
   bool wasInternal = false;
@@ -978,7 +975,6 @@ std::vector<Path::Vertex> Path::vertices() const {
       }
 
       openPathCommand = i;
-      closePathIndex = findClosePathIndex(commands_, i);
       justMoved = true;
 
     } else if (command.verb == Verb::ClosePath) {
@@ -1000,14 +996,15 @@ std::vector<Path::Vertex> Path::vertices() const {
         result.push_back(Vertex{startPoint, orientationStart});
       }
 
-      // Place a vertex at the subpath start point. The orientation is interpolated between the
-      // end of the ClosePath line and the start of the first segment after MoveTo.
+      // Place a vertex at the subpath start point. SVG 2 §11.6.2 says the end marker uses
+      // the incoming tangent direction only (not the bisector with the outgoing segment).
       {
-        const Vector2d prevTangent = tangentAtEnd(commands_, points_, i).normalize();
-        const Vector2d nextTangent = tangentAtStart(commands_, points_, *openPathCommand).normalize();
-
-        const Vector2d orientationEnd = InterpolateTangents(prevTangent, nextTangent);
-        result.push_back(Vertex{endPoint, orientationEnd});
+        Vector2d incomingTangent = tangentAtEnd(commands_, points_, i).normalize();
+        if (NearZero(incomingTangent.lengthSquared()) && i > 0) {
+          // Zero-length ClosePath (e.g. circles): use end tangent of the previous command.
+          incomingTangent = tangentAtEnd(commands_, points_, i - 1).normalize();
+        }
+        result.push_back(Vertex{endPoint, incomingTangent});
       }
 
       openPathCommand = std::nullopt;
@@ -1020,17 +1017,10 @@ std::vector<Path::Vertex> Path::vertices() const {
       const Vector2d startOrientation = tangentAtStart(commands_, points_, i).normalize();
 
       if (justMoved) {
-        // First drawing command after a MoveTo.
-        if (closePathIndex != size_t(-1)) {
-          // Closed subpath: interpolate between the ClosePath tangent and the first segment.
-          const Vector2d closeOrientation =
-              tangentAtEnd(commands_, points_, closePathIndex).normalize();
-          result.push_back(
-              Vertex{startPoint, InterpolateTangents(closeOrientation, startOrientation)});
-        } else {
-          // Open subpath: orientation is the direction of the first segment.
-          result.push_back(Vertex{startPoint, startOrientation});
-        }
+        // First drawing command after a MoveTo: use outgoing tangent only.
+        // For closed subpaths, SVG 2 §11.6.2 says the start marker uses the outgoing tangent
+        // direction (not the bisector with the closing segment's tangent).
+        result.push_back(Vertex{startPoint, startOrientation});
       } else {
         // Interior vertex: orientation is interpolated between end of previous and start of this.
         const Vector2d prevOrientation = tangentAtEnd(commands_, points_, i - 1).normalize();
