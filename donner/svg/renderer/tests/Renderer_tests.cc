@@ -102,14 +102,9 @@ const std::map<std::string_view, ImageComparisonParams>& geodeOverrides() {
       {"donner/svg/renderer/testdata/golden/z0rly_test6.png",
        Params::WithThreshold(0.1f, 10000)},
 
-      // TODO(geode): radial gradients with conical focal configurations.
-      // Slug's per-pixel `radial_t` solver diverges from tiny-skia's
-      // mesh-based rasterizer on edge cases where the focal circle is
-      // near the outer circle's boundary. Needs root-cause analysis.
-      {"donner/svg/renderer/testdata/golden/radial-conical-1.png",
-       Params::WithThreshold(0.1f, 3500)},
-      {"donner/svg/renderer/testdata/golden/radial-conical-2.png",
-       Params::WithThreshold(0.1f, 50000)},  // Large: likely a real bug.
+      // Radial-conical focal-boundary divergence fixed: fragments outside the
+      // gradient cone (disc < 0) are now discarded instead of painted with a
+      // sentinel-derived stop color.  Both tests pass at default threshold.
   };
   return overrides;
 }
