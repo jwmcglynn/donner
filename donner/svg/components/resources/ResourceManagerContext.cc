@@ -22,13 +22,44 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   }
 
   auto imageView = registry_.view<ImageComponent>();
-  const bool hasResourcesToLoad = !imageView.empty() || !fontFacesToLoad_.empty();
 
   NullResourceLoader nullLoader;
   ResourceLoaderInterface& loader =
       loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
 
-  if (!loader_ && hasResourcesToLoad) {
+  // Only warn about a missing loader if we actually have something that
+  // would need one. `data:` URLs are decoded inline in `UrlLoader::fromUri`
+  // without touching the resource loader, so their presence alone doesn't
+  // justify the warning.
+  const auto needsExternalLoader = [](std::string_view uri) {
+    return !uri.starts_with("data:");
+  };
+
+  const bool hasExternalImage = [&] {
+    for (auto entity : imageView) {
+      if (registry_.all_of<LoadedImageComponent>(entity) ||
+          registry_.all_of<LoadedSVGImageComponent>(entity)) {
+        continue;
+      }
+      if (needsExternalLoader(imageView.get<ImageComponent>(entity).href)) {
+        return true;
+      }
+    }
+    return false;
+  }();
+  const bool hasExternalFontFace = [&] {
+    for (const auto& fontFace : fontFacesToLoad_) {
+      for (const css::FontFaceSource& source : fontFace.sources) {
+        if (source.kind == css::FontFaceSource::Kind::Url &&
+            needsExternalLoader(std::get<RcString>(source.payload))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }();
+
+  if (!loader_ && (hasExternalImage || hasExternalFontFace)) {
     ParseDiagnostic err;
     err.reason = "Could not load external resources, no ResourceLoader provided";
     warningSink.add(std::move(err));

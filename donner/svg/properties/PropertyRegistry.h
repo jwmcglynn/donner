@@ -18,6 +18,7 @@
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
+#include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/Isolation.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Overflow.h"
@@ -378,6 +379,12 @@ public:
   Property<Isolation> isolation{"isolation",
                                 []() -> std::optional<Isolation> { return Isolation::Auto; }};
 
+  /// `image-rendering` property. Controls the sampling filter for raster image
+  /// upscaling (`auto` = bilinear, `pixelated` = nearest-neighbor). Inherited.
+  Property<ImageRendering, PropertyCascade::Inherit> imageRendering{
+      "image-rendering",
+      []() -> std::optional<ImageRendering> { return ImageRendering::Auto; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -411,7 +418,7 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
         textDecoration, dominantBaseline, writingMode, letterSpacing, wordSpacing, baselineShift,
-        alignmentBaseline, mixBlendMode, isolation);
+        alignmentBaseline, mixBlendMode, isolation, imageRendering);
   }
 
   /**

@@ -393,8 +393,11 @@ TEST_F(ResourceManagerContextTest, LoadResourcesSkipsAlreadyLoadedImages) {
   ParseWarningSink warnings;
   resourceManager_->loadResources(warnings);
 
+  // The image was already loaded, so it's skipped and no warning fires
+  // for the missing resource loader — the `LoadedImageComponent` is
+  // treated as authoritative.
   EXPECT_TRUE(registry_.all_of<LoadedImageComponent>(imageEntity));
-  EXPECT_TRUE(warnings.hasWarnings());
+  EXPECT_FALSE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, LoadResourcesLoadsRasterImage) {

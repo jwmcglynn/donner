@@ -141,6 +141,28 @@ ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> compo
   return err;
 }
 
+/// Parse CSS image-rendering property: auto | smooth | crisp-edges | pixelated |
+/// optimizeSpeed | optimizeQuality. SVG 1.1 `optimizeSpeed` is treated as a
+/// hint for nearest-neighbor (pixelated); `optimizeQuality` is a hint for the
+/// default (auto). See https://drafts.csswg.org/css-images/#the-image-rendering.
+ParseResult<ImageRendering> ParseImageRendering(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("auto")) return ImageRendering::Auto;
+      if (ident->value.equalsLowercase("smooth")) return ImageRendering::Smooth;
+      if (ident->value.equalsLowercase("crisp-edges")) return ImageRendering::CrispEdges;
+      if (ident->value.equalsLowercase("pixelated")) return ImageRendering::Pixelated;
+      // Case-sensitive for SVG 1.1 legacy values.
+      if (ident->value == "optimizeSpeed") return ImageRendering::OptimizeSpeed;
+      if (ident->value == "optimizeQuality") return ImageRendering::OptimizeQuality;
+    }
+  }
+  ParseDiagnostic err;
+  err.reason = "Invalid image-rendering value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components) {
   TextDecoration result = TextDecoration::None;
 
@@ -1581,6 +1603,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseMixBlendMode(params.components());
                        },
                        &registry.mixBlendMode);
+                 }},  //
+                {"image-rendering",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseImageRendering(params.components());
+                       },
+                       &registry.imageRendering);
                  }},  //
                 {"display",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
