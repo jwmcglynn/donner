@@ -1851,17 +1851,38 @@ void computeCurveBoundaryOverrides(const Path& originalPath,
     return;
   }
 
-  // Second pass: for each flat subpath, find boundary vertices by exact-match
-  // on the junction point and attach the overrides.
-  for (auto& flat : subpaths) {
-    for (const auto& b : boundaries) {
-      // Interior vertices only — first and last are handled by caps.
-      for (size_t j = 1; j + 1 < flat.points.size(); ++j) {
+  // Second pass: attach overrides to flat subpaths by walking the boundary
+  // list in the same order it was collected (original-command order) and
+  // advancing a monotonic cursor through `subpaths`. A plain coordinate-
+  // equality match can alias: two different junctions that share the same
+  // coordinate (e.g., separate subpaths reusing a point, or a self-
+  // intersecting path revisiting a coordinate) would both attach to the
+  // first interior vertex equal to that point, applying the wrong
+  // incoming/outgoing normals. Since both `boundaries` and `subpaths` are
+  // built from the original path walk, their traversal orders align — a
+  // cursor that only moves forward keeps each boundary anchored to the
+  // correct junction.
+  size_t cursorSubpath = 0;
+  size_t cursorVertex = 1;  // Interior vertices only — first/last are handled by caps.
+  for (const auto& b : boundaries) {
+    while (cursorSubpath < subpaths.size()) {
+      auto& flat = subpaths[cursorSubpath];
+      bool matched = false;
+      for (size_t j = cursorVertex; j + 1 < flat.points.size(); ++j) {
         if (flat.points[j] == b.vertex) {
           flat.tangentOverrides.push_back({j, b.incomingNormal, b.outgoingNormal});
-          break;  // one override per boundary per subpath
+          cursorVertex = j + 1;
+          matched = true;
+          break;
         }
       }
+      if (matched) break;
+      // Not present from the cursor onward in this subpath — skip to next.
+      cursorSubpath++;
+      cursorVertex = 1;
+    }
+    if (cursorSubpath >= subpaths.size()) {
+      break;  // No more subpaths to search; remaining boundaries are orphans.
     }
   }
 }
