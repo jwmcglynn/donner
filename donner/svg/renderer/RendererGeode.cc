@@ -659,15 +659,11 @@ struct RendererGeode::Impl {
     encoder->setScissorRect(x, y, w, h);
   }
 
-  // Stub-state depth counters — incremented on push, decremented on pop. Used
-  // only to keep stack semantics balanced and to drop the warning to stderr
-  // exactly once per category in verbose mode.
-  bool warnedClip = false;
+  // Stub-state latches — set on first warning in verbose mode so each
+  // unimplemented feature logs exactly once per renderer.
   bool warnedLayer = false;
   bool warnedFilter = false;
-  bool warnedMask = false;
   bool warnedGradient = false;
-  bool warnedImage = false;
   bool warnedText = false;
 
   /// Resolve the current fill/stroke paint's fallback to a solid RGBA color
@@ -1017,11 +1013,10 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // `<image>` dest-rect cases) is implemented via the WebGPU scissor rect
   // (plus the Phase 3a polygon clip for non-axis-aligned ancestors).
   // Path-based clip-paths are implemented via the Phase 3b mask
-  // pipeline below. `<mask>` alpha masks are still stubbed (Phase 3c).
-  if (clip.mask.has_value() && impl_->verbose && !impl_->warnedMask) {
-    std::cerr << "RendererGeode: <mask> compositing not yet implemented (Phase 3c)\n";
-    impl_->warnedMask = true;
-  }
+  // pipeline below. `<mask>` alpha masks run through the Phase 3c mask
+  // blit pipeline via `pushMaskLayer` — by the time `pushClip` runs the
+  // mask is already composed upstream, so there's nothing to do for
+  // `clip.mask` here.
 
   // Compose the incoming clip rect (in user-space) with the current
   // transform to get pixel-space coordinates, then push onto the stack.
