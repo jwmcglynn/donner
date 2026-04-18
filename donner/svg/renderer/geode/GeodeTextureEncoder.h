@@ -106,6 +106,18 @@ public:
     /// Mask bounds in target-pixel space. Ignored unless
     /// `applyMaskBounds` is true.
     Box2d maskBounds;
+    /// Phase 3d SVG `mix-blend-mode` selector. `0` = plain
+    /// source-over; `1..=16` map to the enumeration in
+    /// `donner::svg::MixBlendMode` (Normal..Luminosity). When
+    /// non-zero, `dstSnapshotTexture` must hold the parent render
+    /// target's frozen content for the fragment shader to read as
+    /// the backdrop.
+    uint32_t blendMode = 0;
+    /// Frozen snapshot of the parent render target — see
+    /// `RendererGeode::popIsolatedLayer` which copies the prior
+    /// parent content into a separate texture before opening the
+    /// blend blit pass. Ignored unless `blendMode != 0`.
+    wgpu::Texture dstSnapshotTexture;
   };
 
   /**
