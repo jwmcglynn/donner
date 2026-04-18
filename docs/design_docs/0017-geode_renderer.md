@@ -77,8 +77,8 @@
   authoritative vendoring design; the "Historical: Dawn embedding
   strategy" section is retained for context only. The user-visible
   `--config=geode` / `enable_dawn=true` flags are unchanged.
-- **Phase 3d** (mix-blend-mode): ✅ complete. Implements all 16
-  SVG/CSS `mix-blend-mode` operators (Multiply, Screen, Overlay,
+- **Phase 3d** (mix-blend-mode): ✅ complete, merged in #541. Implements
+  all 16 SVG/CSS `mix-blend-mode` operators (Multiply, Screen, Overlay,
   Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight,
   Difference, Exclusion, Hue, Saturation, Color, Luminosity) via an
   extended `image_blit.wgsl` with a `blendMode` uniform and a
@@ -86,6 +86,13 @@
   of the current target and composite via the shader's in-line blend
   functions. Lifts the `painting/mix-blend-mode` category gate in the
   resvg suite.
+- **Phase 4** (Text rendering): ✅ `drawText` implemented.
+  Routes shaped-glyph outlines through the Slug fill pipeline via the
+  existing `drawPath` path. Enables text rendering for direct Geode
+  consumers. The resvg `text/*` category gate stays closed -- Geode's
+  4x MSAA produces ~600-800 px AA drift per glyph vs tiny-skia's 16x
+  supersample reference; unlocking those 268 tests requires a finer
+  sample pattern or analytic glyph AA (Phase 5 follow-up).
 - **Real-GPU verification (2026-04-17)**: 🚧 first run on real hardware,
   plus a targeted fallback shader path for Intel+Vulkan. Added
   adapter-info logging to `GeodeDevice::CreateHeadless` (commit

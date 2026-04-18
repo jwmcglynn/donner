@@ -56,6 +56,16 @@ donner_cc_library(
     hdrs = [
         "RendererTestBackend.h",
     ],
+    # `DONNER_TEXT_ENABLED` flips the feature bit for
+    # `RendererBackendFeature::Text` inside `RendererTestBackendGeode.cc`
+    # -- Phase 4 text rendering is compiled into RendererGeode only when
+    # the build is configured with `--config=text` / `--config=text-full`,
+    # and the feature flag here needs to agree so the resvg test gate
+    # doesn't incorrectly skip text tests.
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//donner/svg/renderer",
     ] + select({
