@@ -260,25 +260,14 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     };
   }
 
-  // `paint-servers/pattern/tiny-pattern-upscaled` renders a 2×2 tile
-  // pattern scaled 10× containing a circle, tiled across a
-  // rounded-rect fill. Geode samples the pre-rendered tile via
-  // bilinear sampling at device pixels; tiny-skia rasterizes the
-  // pattern tile directly in user-space coordinates without going
-  // through an intermediate texture. The intermediate texture
-  // introduces ~3.5k pixels of sub-pixel-position drift at every
-  // circle edge inside the tile, multiplied across ~64 visible
-  // circles. The fix is to sample the pattern in user-space (without
-  // the intermediate tile texture) for the small-tile upscaled case.
-  // TODO(geode): sample the pattern directly in user-space for small
-  // tiles where the tile texture adds more error than it saves.
+  // `tiny-pattern-upscaled`: 2×2 tile scaled 10× containing a circle.
+  // With the 2× pattern supersample (matching TinySkia), the tile
+  // texture is 40×40 texels. Remaining AA diff (~449 pixels) is from
+  // Slug's 4× MSAA resolve vs TinySkia's software rasterizer — the
+  // same quantisation gap handled by widenThresholdForGeode elsewhere.
   if (category == "paint-servers/pattern" && filename == "tiny-pattern-upscaled.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "small-tile pattern texture introduces sub-pixel drift");
-    };
+    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
-
 
   return std::nullopt;
 }

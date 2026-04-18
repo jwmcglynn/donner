@@ -1494,6 +1494,14 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   // a 1:1 fallback would under-sample patterns that are scaled up before
   // tiling. We clamp to a minimum of 1 pixel per axis so zero-size tiles
   // never allocate a zero-extent texture.
+  //
+  // A 2× supersample factor matches RendererTinySkia's
+  // kPatternSupersampleScale. Without it, small tiles (e.g. a 2×2 tile
+  // scaled 10× → 20×20 device px) produce a 20×20-texel texture whose
+  // bilinear-sampled circle edges visibly drift from the reference golden
+  // that was rendered at 40×40 texels. The extra resolution lets the
+  // MSAA-resolved tile capture finer edge transitions, closing the gap.
+  constexpr double kPatternSupersampleScale = 2.0;
   const Transform2d deviceFromPattern = impl_->currentTransform * targetFromPattern;
   const double scaleX = std::hypot(deviceFromPattern.data[0], deviceFromPattern.data[1]);
   const double scaleY = std::hypot(deviceFromPattern.data[2], deviceFromPattern.data[3]);
@@ -1504,8 +1512,10 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
     constexpr double kMaxTileDim = 4096.0;
     return std::max(1, static_cast<int>(std::ceil(std::min(v, kMaxTileDim))));
   };
-  const int tilePixelWidth = boundedPx(tileRect.width() * (scaleX > 0.0 ? scaleX : 1.0));
-  const int tilePixelHeight = boundedPx(tileRect.height() * (scaleY > 0.0 ? scaleY : 1.0));
+  const double ssX = (scaleX > 0.0 ? scaleX : 1.0) * kPatternSupersampleScale;
+  const double ssY = (scaleY > 0.0 ? scaleY : 1.0) * kPatternSupersampleScale;
+  const int tilePixelWidth = boundedPx(tileRect.width() * ssX);
+  const int tilePixelHeight = boundedPx(tileRect.height() * ssY);
 
   // 1-sample resolve target for the pattern tile (this is what the Slug
   // fill shader samples when the tile is later used as paint).
