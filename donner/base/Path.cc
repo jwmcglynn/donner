@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <span>
 
 #include "donner/base/BezierUtils.h"
 #include "donner/base/FormatNumber.h"
@@ -1646,6 +1647,24 @@ void emitCap(const Vector2d& point, const Vector2d& direction, double halfWidth,
 struct FlatSubpath {
   std::vector<Vector2d> points;
   bool closed = false;
+
+  /// Exact tangent normal override at a curve-command boundary vertex.
+  ///
+  /// When `strokeToFill` flattens curves to polylines, the segment normals at
+  /// curve-command endpoints approximate the true tangent direction.  For
+  /// borderline miter/bevel decisions the approximation error can push the
+  /// miter ratio across the limit, producing a bevel where the exact tangent
+  /// would give a miter (the "Geode bevel-fallback corner drift" bug).
+  ///
+  /// Each override replaces the two segment normals adjacent to the annotated
+  /// vertex with the exact tangent normals derived from the original curve
+  /// control points.
+  struct TangentOverride {
+    size_t vertexIndex;         ///< Index into \c points.
+    Vector2d incomingNormal;    ///< Exact normal for the segment ending at this vertex.
+    Vector2d outgoingNormal;    ///< Exact normal for the segment starting at this vertex.
+  };
+  std::vector<TangentOverride> tangentOverrides;
 };
 
 /// Extract subpaths from a flattened path.
@@ -1693,6 +1712,168 @@ std::vector<FlatSubpath> extractSubpaths(const Path& path) {
   }
 
   return subpaths;
+}
+
+/// Compute the exit tangent direction at the end of a path command.
+///
+/// For curves, this is derived from the last control-point → endpoint vector,
+/// with fallback to earlier control points if degenerate.  Returns a non-zero
+/// vector, or (0,0) if all fallbacks are degenerate.
+Vector2d commandExitTangent(Path::Verb verb, const Vector2d& start,
+                            std::span<const Vector2d> pts, size_t pointIndex) {
+  constexpr double kDegenerateSquared = 1e-20;
+  switch (verb) {
+    case Path::Verb::CurveTo: {
+      Vector2d t = pts[pointIndex + 2] - pts[pointIndex + 1];  // end - c2
+      if (t.lengthSquared() > kDegenerateSquared) return t;
+      t = pts[pointIndex + 2] - pts[pointIndex];  // end - c1
+      if (t.lengthSquared() > kDegenerateSquared) return t;
+      return pts[pointIndex + 2] - start;  // end - start
+    }
+    case Path::Verb::QuadTo: {
+      Vector2d t = pts[pointIndex + 1] - pts[pointIndex];  // end - control
+      if (t.lengthSquared() > kDegenerateSquared) return t;
+      return pts[pointIndex + 1] - start;  // end - start
+    }
+    case Path::Verb::LineTo:
+      return pts[pointIndex] - start;
+    default:
+      return Vector2d(0, 0);
+  }
+}
+
+/// Compute the entry tangent direction at the start of a path command.
+///
+/// For curves, this is derived from the startpoint → first-control-point vector,
+/// with fallback to later control points if degenerate.
+Vector2d commandEntryTangent(Path::Verb verb, const Vector2d& start,
+                             std::span<const Vector2d> pts, size_t pointIndex) {
+  constexpr double kDegenerateSquared = 1e-20;
+  switch (verb) {
+    case Path::Verb::CurveTo: {
+      Vector2d t = pts[pointIndex] - start;  // c1 - start
+      if (t.lengthSquared() > kDegenerateSquared) return t;
+      t = pts[pointIndex + 1] - start;  // c2 - start
+      if (t.lengthSquared() > kDegenerateSquared) return t;
+      return pts[pointIndex + 2] - start;  // end - start
+    }
+    case Path::Verb::QuadTo: {
+      Vector2d t = pts[pointIndex] - start;  // control - start
+      if (t.lengthSquared() > kDegenerateSquared) return t;
+      return pts[pointIndex + 1] - start;  // end - start
+    }
+    case Path::Verb::LineTo:
+      return pts[pointIndex] - start;
+    default:
+      return Vector2d(0, 0);
+  }
+}
+
+/// Populate exact tangent normal overrides at curve-command boundary vertices.
+///
+/// When `Path::flatten` converts curves to polylines, the resulting segment
+/// directions at curve endpoints approximate but don't exactly match the true
+/// tangent.  At joints where the miter ratio is very close to the limit this
+/// tiny angular error can flip the miter/bevel decision.  This function walks
+/// the *original* path commands, identifies each junction where at least one
+/// adjacent command is a curve, and stores the exact tangent normals in the
+/// corresponding `FlatSubpath::tangentOverrides` so that `strokeSubpath` can
+/// use them instead of the approximate segment normals.
+void computeCurveBoundaryOverrides(const Path& originalPath,
+                                   std::vector<FlatSubpath>& subpaths) {
+  const auto cmds = originalPath.commands();
+  const auto pts = originalPath.points();
+
+  if (cmds.size() < 2 || subpaths.empty()) {
+    return;
+  }
+
+  constexpr double kDegenerateSquared = 1e-20;
+
+  // First pass: collect (junctionPoint, incomingNormal, outgoingNormal) for
+  // every curve-command boundary across the whole path.
+  struct BoundaryInfo {
+    Vector2d vertex;
+    Vector2d incomingNormal;
+    Vector2d outgoingNormal;
+  };
+  std::vector<BoundaryInfo> boundaries;
+
+  Vector2d currentPoint;
+
+  for (size_t i = 0; i < cmds.size(); ++i) {
+    const auto& cmd = cmds[i];
+
+    // Skip non-drawing verbs.
+    if (cmd.verb == Path::Verb::MoveTo) {
+      currentPoint = pts[cmd.pointIndex];
+      continue;
+    }
+    if (cmd.verb == Path::Verb::ClosePath) {
+      continue;
+    }
+
+    // Determine endpoint and whether this is a curve.
+    Vector2d endpoint;
+    bool isCurve = false;
+    switch (cmd.verb) {
+      case Path::Verb::CurveTo:
+        endpoint = pts[cmd.pointIndex + 2];
+        isCurve = true;
+        break;
+      case Path::Verb::QuadTo:
+        endpoint = pts[cmd.pointIndex + 1];
+        isCurve = true;
+        break;
+      case Path::Verb::LineTo:
+        endpoint = pts[cmd.pointIndex];
+        break;
+      default:
+        break;
+    }
+
+    // Peek at the next command; only junctions between two drawing commands
+    // (with at least one curve) need overrides.
+    if (i + 1 < cmds.size()) {
+      const auto& nextCmd = cmds[i + 1];
+      const bool nextIsCurve =
+          nextCmd.verb == Path::Verb::CurveTo || nextCmd.verb == Path::Verb::QuadTo;
+      const bool nextIsDrawing = nextIsCurve || nextCmd.verb == Path::Verb::LineTo;
+
+      if (nextIsDrawing && (isCurve || nextIsCurve)) {
+        const Vector2d exitTan = commandExitTangent(cmd.verb, currentPoint, pts, cmd.pointIndex);
+        const Vector2d entryTan =
+            commandEntryTangent(nextCmd.verb, endpoint, pts, nextCmd.pointIndex);
+
+        if (exitTan.lengthSquared() > kDegenerateSquared &&
+            entryTan.lengthSquared() > kDegenerateSquared) {
+          boundaries.push_back(
+              {endpoint, Vector2d(-exitTan.y, exitTan.x).normalize(),
+               Vector2d(-entryTan.y, entryTan.x).normalize()});
+        }
+      }
+    }
+
+    currentPoint = endpoint;
+  }
+
+  if (boundaries.empty()) {
+    return;
+  }
+
+  // Second pass: for each flat subpath, find boundary vertices by exact-match
+  // on the junction point and attach the overrides.
+  for (auto& flat : subpaths) {
+    for (const auto& b : boundaries) {
+      // Interior vertices only — first and last are handled by caps.
+      for (size_t j = 1; j + 1 < flat.points.size(); ++j) {
+        if (flat.points[j] == b.vertex) {
+          flat.tangentOverrides.push_back({j, b.incomingNormal, b.outgoingNormal});
+          break;  // one override per boundary per subpath
+        }
+      }
+    }
+  }
 }
 
 /// Build the stroke outline for a single subpath.
@@ -1758,6 +1939,19 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   std::vector<Vector2d> normals(numSegments);
   for (size_t i = 0; i < numSegments; ++i) {
     normals[i] = segmentNormal(pts[i], pts[i + 1]);
+  }
+
+  // Apply exact tangent normal overrides at curve-command boundary vertices.
+  // This replaces the approximate flattened-segment normals with exact normals
+  // derived from the original curve control points.
+  for (const auto& override : subpath.tangentOverrides) {
+    const size_t k = override.vertexIndex;
+    if (k > 0 && k - 1 < numSegments) {
+      normals[k - 1] = override.incomingNormal;
+    }
+    if (k < numSegments) {
+      normals[k] = override.outgoingNormal;
+    }
   }
 
   // ---- Left contour (forward walk) ----
@@ -2187,7 +2381,12 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
   const Path flattened = flatten(flattenTolerance);
 
   // Step 2: Extract subpaths.
-  const std::vector<FlatSubpath> subpaths = extractSubpaths(flattened);
+  std::vector<FlatSubpath> subpaths = extractSubpaths(flattened);
+
+  // Step 2b: Annotate curve-command boundary vertices with exact tangent
+  // normals so that the stroker's miter/bevel decision uses the true
+  // curvature instead of the approximate flattened-segment direction.
+  computeCurveBoundaryOverrides(*this, subpaths);
 
   // Step 3: Build the stroke outline for each subpath. When a dash pattern
   // is set, each subpath is split into on-dash sub-polylines (each treated
