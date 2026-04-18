@@ -502,6 +502,7 @@ donner_cc_binary(
         ":editor_shell",
         "//donner/editor/gui:editor_window",
         "//donner/base",
+        "//donner/base:failure_signal_handler",
     ],
 )
 
