@@ -766,6 +766,58 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
 }
 
+// A drag-release `SetTransformCommand` mutation must NOT trigger a full
+// `prepareDocumentForRendering` rebuild — that tears down every RIC and
+// every `ComputedShadowTreeComponent`, then recomputes styles / paint /
+// filters across the whole tree (O(N)). For a complex document this was
+// the user-visible ~2s hang on mouse release even though nothing needed
+// to change outside the single dragged entity. The compositor's fast-path
+// catches "only layout/transform dirty flags on promoted-layer-root
+// entities" and refreshes just the affected `entityFromWorldTransform`
+// in place, leaving the rest of the render tree untouched.
+//
+// Test probes a RIC pointer outside the dirty entity's layer — it must
+// stay stable across the mutation, which is only true if no RIC rebuild
+// happened.
+TEST_F(CompositorGoldenTest, TransformMutationOnPromotedEntitySkipsFullPrepare) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect id="bystander" x="100" y="10" width="50" height="50" fill="blue"/>
+  <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+</svg>
+  )svg");
+
+  auto bystander = document.querySelector("#bystander");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(bystander.has_value());
+  ASSERT_TRUE(target.has_value());
+  const Entity bystanderEntity = bystander->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+
+  compositor.renderFrame(viewport_);
+
+  // Capture the bystander's RIC address. `prepareDocumentForRendering`
+  // clears and re-emplaces `RenderingInstanceComponent`, so the object's
+  // storage address changes across the rebuild. If the fast path works,
+  // the bystander's RIC stays put.
+  const components::RenderingInstanceComponent* bystanderRicBefore =
+      &document.registry().get<components::RenderingInstanceComponent>(bystanderEntity);
+
+  // Simulate the drag-release mutation on the promoted target.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(20.0, 0.0));
+
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+
+  const components::RenderingInstanceComponent* bystanderRicAfter =
+      &document.registry().get<components::RenderingInstanceComponent>(bystanderEntity);
+  EXPECT_EQ(bystanderRicBefore, bystanderRicAfter)
+      << "unrelated entity's RIC was reallocated — prepareDocumentForRendering ran and wiped every "
+         "RIC. The compositor should have taken the fast path and updated only the target's RIC.";
+}
+
 // A SetTransformCommand on drag release dirties the dragged entity. The
 // compositor must re-rasterize *only* the drag layer's cached bitmap — NOT
 // every mandatory filter layer it happens to share the document with. A

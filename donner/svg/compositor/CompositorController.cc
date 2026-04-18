@@ -9,6 +9,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -377,7 +378,90 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   const bool needsFullRebuild =
       registry.ctx().contains<components::RenderTreeState>() &&
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild;
-  const bool documentDirty = anyEntityDirty || needsFullRebuild;
+  // `documentDirty` gets flipped to false further down if the fast-path
+  // handles the dirty set surgically, so that the subsequent prepare /
+  // detector / rasterize steps take the "nothing changed" branch.
+  bool documentDirty = anyEntityDirty || needsFullRebuild;
+
+  // Fast path: the drag-release `SetTransformCommand` mutation flips the
+  // dragged entity's `DirtyFlagsComponent` with only position-related bits
+  // (Layout / Transform / WorldTransform — no Style / Paint / Filter /
+  // geometry). The default `prepareDocumentForRendering` handles this by
+  // tearing down every `ComputedShadowTreeComponent`, every RIC, and every
+  // `ComputedClipPathsComponent`, then recomputing styles / paint servers
+  // / filters across the whole tree — O(N) for the splash that's ~200ms of
+  // blocked UI, which is what the user saw as a "2s hang on mouse release"
+  // (compounded by any queued prewarm / settle renders).
+  //
+  // When the only dirty entities are single-entity promoted layer roots
+  // and their dirty flags are pure-position, we can skip the full tree
+  // rebuild entirely: just refresh their `entityFromWorldTransform` from
+  // the freshly-computed `ComputedAbsoluteTransformComponent` (invalidated
+  // in place by `LayoutSystem::setTransform`) and mark the layer dirty.
+  // Everything else — filter layer bitmaps, bg/fg split, style cascade —
+  // stays untouched across the mutation.
+  bool tookFastTransformPath = false;
+  if (documentPrepared_ && !needsFullRebuild && !dirtyEntitySnapshot.empty() &&
+      hintsScanned_) {
+    constexpr uint16_t kTransformOnlyMask =
+        components::DirtyFlagsComponent::Layout |
+        components::DirtyFlagsComponent::Transform |
+        components::DirtyFlagsComponent::WorldTransform |
+        components::DirtyFlagsComponent::RenderInstance;
+
+    bool eligible = true;
+    for (Entity e : dirtyEntitySnapshot) {
+      const auto* dirty = registry.try_get<components::DirtyFlagsComponent>(e);
+      if (dirty == nullptr) continue;
+      if ((dirty->flags & ~kTransformOnlyMask) != 0) {
+        eligible = false;
+        break;
+      }
+      // The entity must be a single-element promoted layer root — if the
+      // layer has a subtree, descendants' `entityFromWorldTransform`
+      // would also need refreshing, and we punt that to the slow path.
+      bool matchedSingleEntityLayer = false;
+      for (auto& layer : layers_) {
+        if (layer.entity() == e && layer.firstEntity() == e && layer.lastEntity() == e) {
+          matchedSingleEntityLayer = true;
+          break;
+        }
+      }
+      if (!matchedSingleEntityLayer) {
+        eligible = false;
+        break;
+      }
+    }
+
+    if (eligible) {
+      for (Entity e : dirtyEntitySnapshot) {
+        if (!registry.all_of<components::RenderingInstanceComponent>(e)) continue;
+        auto& instance = registry.get<components::RenderingInstanceComponent>(e);
+        // `LayoutSystem::setTransform` already removed the stale
+        // `ComputedAbsoluteTransformComponent`, so this recomputes.
+        const auto& abs = components::LayoutSystem().getAbsoluteTransformComponent(
+            EntityHandle(registry, e));
+        // Canvas-space transform, matching the original computation in
+        // `RenderingContext::traverseTree`.
+        const Transform2d canvasFromDocument =
+            components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+        instance.entityFromWorldTransform =
+            abs.entityFromWorld * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+        for (auto& layer : layers_) {
+          if (layer.entity() == e) layer.markDirty();
+        }
+      }
+      // Clear the dirty flags ourselves since we skipped prepare.
+      registry.clear<components::DirtyFlagsComponent>();
+      tookFastTransformPath = true;
+      // Tell the rest of renderFrame that the dirty state is fully resolved
+      // — no need to re-run detectors, re-prepare, or re-resolve. We'll
+      // still fall through to the layer-rasterize loop, which will pick up
+      // the `markDirty` we just set and re-rasterize only the affected
+      // drag layer.
+      documentDirty = false;
+    }
+  }
   // On first renderFrame the `RenderingInstanceComponent` view is empty (it
   // gets built by `prepareDocumentForRendering` below), so the mandatory /
   // bucket detectors can't score anything useful. Defer them to the first
