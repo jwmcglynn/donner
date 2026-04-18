@@ -16,7 +16,7 @@ To enable:
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 # Historical name: see file-level docstring above.
@@ -100,7 +100,7 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "geode_device_tests",
+    name = "geode_device_tests_impl",
     srcs = ["tests/GeodeDevice_tests.cc"],
     target_compatible_with = _DAWN_ONLY,
     deps = [
@@ -109,6 +109,13 @@ donner_cc_test(
         "//donner/base",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_device_tests",
+    dep = ":geode_device_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
 )
 
 # Embed the WGSL shader source as a C++ resource. The generated header
@@ -207,7 +214,7 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "geode_shaders_tests",
+    name = "geode_shaders_tests_impl",
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _DAWN_ONLY,
     deps = [
@@ -215,6 +222,13 @@ donner_cc_test(
         ":geode_shaders",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_shaders_tests",
+    dep = ":geode_shaders_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
 )
 
 donner_cc_library(
@@ -275,7 +289,7 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "geo_encoder_tests",
+    name = "geo_encoder_tests_impl",
     srcs = ["tests/GeoEncoder_tests.cc"],
     target_compatible_with = _DAWN_ONLY,
     deps = [
@@ -289,4 +303,11 @@ donner_cc_test(
         "//donner/svg/resources:image_resource",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_multi_transitioned_test(
+    name = "geo_encoder_tests",
+    dep = ":geo_encoder_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
 )
