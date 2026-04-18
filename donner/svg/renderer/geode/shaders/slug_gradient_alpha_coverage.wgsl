@@ -19,6 +19,12 @@ const kMaxStops: u32 = 16u;
 const kGradientLinear: u32 = 0u;
 const kGradientRadial: u32 = 1u;
 
+// Sentinel returned by `radial_t` when a pixel lies outside the gradient cone
+// (negative discriminant or both roots yield negative radii).  Tiny-skia paints
+// these pixels transparent via `Mask2PtConicalDegenerates`; we detect the
+// sentinel in `fs_main` and discard the fragment to match.
+const kInvalidGradientT: f32 = -1e30;
+
 struct GradientUniforms {
   mvp: mat4x4f,
   viewport: vec2f,
@@ -256,12 +262,16 @@ fn radial_t(gpos: vec2f) -> f32 {
     if (abs(B) < 1e-8) {
       return 1.0;
     }
-    return Ce / (2.0 * B);
+    let linear_t = Ce / (2.0 * B);
+    if (Fr + linear_t * Dr < 0.0) {
+      return kInvalidGradientT;
+    }
+    return linear_t;
   }
 
   let disc = B * B - A * Ce;
   if (disc < 0.0) {
-    return 1e6;
+    return kInvalidGradientT;
   }
 
   let sqrtDisc = sqrt(disc);
@@ -277,7 +287,7 @@ fn radial_t(gpos: vec2f) -> f32 {
   if (r0 >= 0.0) {
     return t0;
   }
-  return 1e6;
+  return kInvalidGradientT;
 }
 
 fn gradient_t(path_pos: vec2f) -> f32 {
@@ -372,6 +382,14 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   }
 
   let raw_t = gradient_t(in.sample_pos);
+
+  // Radial gradients with conical focal configurations have regions where no
+  // circle in the gradient family passes through the pixel (negative
+  // discriminant).  Tiny-skia renders these transparent; we match by
+  // discarding the fragment.
+  if (raw_t < -1e20) {
+    discard;
+  }
   let t = apply_spread(raw_t, uniforms.spreadMode);
   let straight = sample_stops(t);
 
