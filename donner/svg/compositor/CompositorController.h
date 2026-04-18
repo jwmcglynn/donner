@@ -246,7 +246,12 @@ private:
   void composeLayers(const RenderViewport& viewport);
 
   /// Check dirty flags on promoted entities and mark affected layers.
-  void consumeDirtyFlags();
+  /// Translate a pre-captured set of dirty entities (snapshotted before
+  /// `prepareDocumentForRendering` clears `DirtyFlagsComponent`) into
+  /// per-layer `markDirty()` calls. An entity inside a promoted layer's
+  /// range marks just that layer; an entity outside every promoted range
+  /// escalates to `rootDirty_` so the root bitmap / bg / fg rebuild.
+  void consumeDirtyFlags(const std::vector<Entity>& dirtyEntities);
 
   /// Refresh cached render ranges and fallback metadata after render-tree preparation.
   void refreshLayerMetadata();

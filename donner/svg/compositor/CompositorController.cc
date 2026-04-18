@@ -358,11 +358,26 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // document actually changed. First frame always runs (documentPrepared_ is
   // false); subsequent frames only run when something is dirty or a full
   // rebuild is pending. This keeps the per-frame drag cost O(hints), not O(N).
-  const bool documentDirty =
-      (registry.view<components::DirtyFlagsComponent>().begin() !=
-       registry.view<components::DirtyFlagsComponent>().end()) ||
-      (registry.ctx().contains<components::RenderTreeState>() &&
-       registry.ctx().get<components::RenderTreeState>().needsFullRebuild);
+  // Snapshot dirty entities before the detectors / prepare step run:
+  // `prepareDocumentForRendering` clears `DirtyFlagsComponent` as a side
+  // effect, so reading the view later (in `consumeDirtyFlags`) would find
+  // an empty set. With the snapshot we can still do precise per-layer
+  // invalidation after the prepare.
+  std::vector<Entity> dirtyEntitySnapshot;
+  {
+    auto dirtyView = registry.view<components::DirtyFlagsComponent>();
+    for (const Entity entity : dirtyView) {
+      const auto& dirty = dirtyView.get<components::DirtyFlagsComponent>(entity);
+      if (dirty.flags != components::DirtyFlagsComponent::Flags::None) {
+        dirtyEntitySnapshot.push_back(entity);
+      }
+    }
+  }
+  const bool anyEntityDirty = !dirtyEntitySnapshot.empty();
+  const bool needsFullRebuild =
+      registry.ctx().contains<components::RenderTreeState>() &&
+      registry.ctx().get<components::RenderTreeState>().needsFullRebuild;
+  const bool documentDirty = anyEntityDirty || needsFullRebuild;
   // On first renderFrame the `RenderingInstanceComponent` view is empty (it
   // gets built by `prepareDocumentForRendering` below), so the mandatory /
   // bucket detectors can't score anything useful. Defer them to the first
@@ -386,7 +401,18 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   };
   resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
   reconcileLayers(registry);
-  if (documentDirty) {
+  // Only blow away every cached layer bitmap on a full tree rebuild
+  // (`RenderTreeState::needsFullRebuild`) — that's when every entity handle
+  // and RIC has been replaced and none of the old bitmaps are still keyed on
+  // anything valid. Per-entity dirty flags (e.g., a single transform attribute
+  // mutation from `SetTransformCommand` on drag release) intentionally do
+  // NOT set `rootDirty_` here: `consumeDirtyFlags()` below inspects the
+  // dirty set, marks just the affected layers, and escalates to `rootDirty_`
+  // only when a dirty entity lives outside every promoted layer. Keeping
+  // this fine-grained is what lets drag-release → drag-again on the same
+  // entity reuse all the mandatory-filter bitmaps instead of paying the
+  // full filter rasterization cost every time.
+  if (needsFullRebuild) {
     rootDirty_ = true;
   }
 
@@ -423,11 +449,18 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     return;
   }
 
-  // Only prepare the document when it hasn't been prepared yet or when dirty.
-  // prepareDocumentForRendering rebuilds the render instance tree, which is expensive.
-  // During drag (composition transform changes only), we skip preparation since the
-  // document content hasn't changed.
-  if (!documentPrepared_ || rootDirty_) {
+  // Only prepare the document when it hasn't been prepared yet or when
+  // dirty. `prepareDocumentForRendering` rebuilds the render instance tree,
+  // which is expensive. During drag (composition transform changes only),
+  // we skip preparation since the document content hasn't changed.
+  //
+  // `documentDirty` triggers prepare whenever ANY entity changed — we need
+  // RICs rebuilt so the subsequent `consumeDirtyFlags` -> rasterize pass
+  // sees the updated entity transforms. `rootDirty_` is reserved for the
+  // more aggressive "invalidate all caches" path used on full-tree
+  // rebuilds; individual entity dirty flags now flow through
+  // `consumeDirtyFlags` for precise per-layer invalidation.
+  if (!documentPrepared_ || documentDirty || rootDirty_) {
     ParseWarningSink warningSink;
     RendererUtils::prepareDocumentForRendering(*document_, /*verbose=*/false, warningSink);
     documentPrepared_ = true;
@@ -465,16 +498,26 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     return;
   }
 
-  // Check dirty flags on promoted entities.
-  consumeDirtyFlags();
+  // Check dirty flags on promoted entities. Uses the snapshot captured
+  // before `prepareDocumentForRendering` cleared `DirtyFlagsComponent`.
+  // This marks just the layers whose range contains a mutated entity;
+  // everything else stays cached. Filter layers whose subtree didn't
+  // change — the common case when the user drags an unrelated element —
+  // keep their bitmaps through the mutation and the next drag starts
+  // with the filter cache already warm.
+  consumeDirtyFlags(dirtyEntitySnapshot);
 
-  // Re-rasterize dirty promoted layers. Layers requiring conservative fallback are always dirty.
-  // When rootDirty_ is true the document was modified (e.g. a transform change) and all layers
-  // may need repainting — consumeDirtyFlags may have been a no-op because
-  // prepareDocumentForRendering cleared DirtyFlagsComponent before consumeDirtyFlags ran.
+  // Re-rasterize dirty promoted layers. Dirty tracking subsumes what
+  // `requiresConservativeFallback()` used to trigger here: the explicit
+  // "conservative" invalidation above now flips `isDirty()` when the
+  // document actually changed, so we don't need to force re-rasterization
+  // of conservative-fallback layers on every frame. `rootDirty_` is
+  // reserved for full-tree rebuilds; individual entity mutations flow
+  // through `consumeDirtyFlags(dirtyEntitySnapshot)`. This is what keeps
+  // drag-release → drag-again on the same entity from re-rasterizing
+  // every mandatory filter layer.
   for (auto& layer : layers_) {
-    if (layer.requiresConservativeFallback() || layer.isDirty() || !layer.hasValidBitmap() ||
-        rootDirty_) {
+    if (layer.isDirty() || !layer.hasValidBitmap() || rootDirty_) {
       rasterizeLayer(layer, viewport);
     }
   }
@@ -792,16 +835,10 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
   renderer_->endFrame();
 }
 
-void CompositorController::consumeDirtyFlags() {
+void CompositorController::consumeDirtyFlags(const std::vector<Entity>& dirtyEntities) {
   Registry& registry = document_->registry();
 
-  auto dirtyView = registry.view<components::DirtyFlagsComponent>();
-  for (const Entity entity : dirtyView) {
-    const auto& dirty = dirtyView.get<components::DirtyFlagsComponent>(entity);
-    if (dirty.flags == components::DirtyFlagsComponent::Flags::None) {
-      continue;
-    }
-
+  for (const Entity entity : dirtyEntities) {
     bool matchedPromotedRange = false;
     for (auto& layer : layers_) {
       if (!registry.valid(layer.entity())) {

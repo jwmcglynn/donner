@@ -766,6 +766,53 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
 }
 
+// A SetTransformCommand on drag release dirties the dragged entity. The
+// compositor must re-rasterize *only* the drag layer's cached bitmap — NOT
+// every mandatory filter layer it happens to share the document with. A
+// naive `any-entity-dirty → root-dirty → rasterize-everything` policy would
+// pay full filter-rasterization cost on every drag release. The test sets
+// up a drag layer alongside a filter layer, simulates the drag-release
+// mutation, and asserts the filter layer's cached bitmap is preserved
+// (same `.data()` pointer).
+TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="200" height="100" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="150" cy="50" r="20" fill="yellow"/></g>
+  <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+</svg>
+  )svg");
+  auto glow = document.querySelector("#glow");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(glow.has_value());
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+
+  // Initial render populates every layer bitmap and bg/fg.
+  compositor.renderFrame(viewport_);
+
+  // Capture the pre-mutation filter-layer bitmap pointer. An intervening
+  // rasterizeLayer call would reallocate the vector and change `.data()`.
+  const uint8_t* glowDataBefore = compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+  ASSERT_NE(glowDataBefore, nullptr);
+
+  // Simulate the mutation the editor applies on drag release: bake the drag
+  // translation into the element's transform attribute.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(30.0, 0.0));
+
+  // Settling render.
+  compositor.setLayerCompositionTransform(target->entityHandle().entity(), Transform2d());
+  compositor.renderFrame(viewport_);
+
+  const uint8_t* glowDataAfter = compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+  EXPECT_EQ(glowDataBefore, glowDataAfter)
+      << "glow filter layer must be reused across the drag-release mutation — re-rasterizing it "
+         "is what the user felt as a ~2s hang on every new drag";
+}
+
 // Elements whose transformed device-space bounds fall entirely outside the
 // render target (after including stroke width) must be skipped by the
 // renderer's core culling path — drawing them wastes GPU/CPU cycles and
