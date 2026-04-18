@@ -236,14 +236,11 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "renderer_geode_golden_tests",
+    name = "renderer_geode_golden_tests_impl",
     srcs = ["RendererGeodeGolden_tests.cc"],
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Only valid when the Geode backend is the active one. Requires the
-    # --//donner/svg/renderer/geode:enable_dawn flag to be set, which
-    # `--config=geode` takes care of.
     target_compatible_with = renderer_backend_compatible_with(["geode"]),
     deps = [
         ":image_comparison_test_fixture",
@@ -253,8 +250,20 @@ donner_cc_test(
     ],
 )
 
+# Transition wrapper: flips renderer_backend=geode + enable_dawn=true so this
+# target is reachable from `bazel test //...` without --config=geode.
+donner_multi_transitioned_test(
+    name = "renderer_geode_golden_tests",
+    # Software WebGPU (llvmpipe) rendering is slow in fastbuild; the Lion
+    # golden alone can exceed 300 s on aarch64 runners.
+    size = "large",
+    dep = ":renderer_geode_golden_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
+)
+
 donner_cc_test(
-    name = "renderer_geode_tests",
+    name = "renderer_geode_tests_impl",
     srcs = ["RendererGeode_tests.cc"],
     # Geode pulls in Dawn; gate behind the same enable_dawn flag the rest of
     # the geode/ targets use.
@@ -273,6 +282,18 @@ donner_cc_test(
         "//donner/svg/resources:image_resource",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+# Transition wrapper: flips renderer_backend=geode + enable_dawn=true so this
+# target is reachable from `bazel test //...` without --config=geode.
+donner_multi_transitioned_test(
+    name = "renderer_geode_tests",
+    # Software WebGPU (llvmpipe) rendering is slow in fastbuild; give extra
+    # headroom for the full RendererGeode unit-test suite.
+    size = "large",
+    dep = ":renderer_geode_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
 )
 
 donner_cc_test(
