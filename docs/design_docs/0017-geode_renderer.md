@@ -1535,6 +1535,10 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
 
 - [x] Implement `GeodeFilterEngine` scaffolding with WebGPU compute pipeline.
   - [x] Gaussian blur (separable, two-pass compute) — first compute pipeline in Geode.
+  - [x] feOffset (pixel shift via compute shader).
+  - [x] feColorMatrix (4x5 matrix transform via compute shader — all type variants).
+  - [x] feFlood (constant color fill via compute shader).
+  - [x] feMerge (alpha-over composite of N inputs via sequential compute dispatches).
   - [ ] Color matrix (single-pass compute).
   - [ ] Morphology (erode/dilate via compute).
   - [ ] Turbulence (Perlin noise compute shader).

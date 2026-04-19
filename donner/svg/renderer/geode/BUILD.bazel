@@ -204,6 +204,46 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: feOffset compute shader (pixel shift).
+embed_resources(
+    name = "filter_offset_wgsl",
+    header_output = "embed_resources/FilterOffsetWgsl.h",
+    resources = {
+        "kFilterOffsetWgsl": "shaders/filter_offset.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feColorMatrix compute shader (4x5 matrix transform).
+embed_resources(
+    name = "filter_color_matrix_wgsl",
+    header_output = "embed_resources/FilterColorMatrixWgsl.h",
+    resources = {
+        "kFilterColorMatrixWgsl": "shaders/filter_color_matrix.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feFlood compute shader (constant color fill).
+embed_resources(
+    name = "filter_flood_wgsl",
+    header_output = "embed_resources/FilterFloodWgsl.h",
+    resources = {
+        "kFilterFloodWgsl": "shaders/filter_flood.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feMerge alpha-over blit compute shader.
+embed_resources(
+    name = "filter_merge_wgsl",
+    header_output = "embed_resources/FilterMergeWgsl.h",
+    resources = {
+        "kFilterMergeWgsl": "shaders/filter_merge.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -211,6 +251,10 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":filter_color_matrix_wgsl",
+        ":filter_flood_wgsl",
+        ":filter_merge_wgsl",
+        ":filter_offset_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
