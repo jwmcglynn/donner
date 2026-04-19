@@ -6,9 +6,9 @@
 /// \ref donner::svg::components::FilterGraph against a source-graphic
 /// texture, returning the filtered output texture.
 ///
-/// Phase 7 initial scope: only `feGaussianBlur` is implemented. Other
-/// primitives are passed through (the input texture is forwarded
-/// unchanged) with a one-shot warning.
+/// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
+/// `feFlood`, `feMerge`. Other primitives are passed through (the input
+/// texture is forwarded unchanged) with a one-shot warning.
 
 #include <webgpu/webgpu.hpp>
 
@@ -16,6 +16,14 @@
 
 namespace donner::svg::components {
 struct FilterGraph;
+struct FilterNode;
+
+namespace filter_primitive {
+struct Offset;
+struct ColorMatrix;
+struct Flood;
+struct Merge;
+}  // namespace filter_primitive
 }  // namespace donner::svg::components
 
 namespace donner::geode {
@@ -34,6 +42,10 @@ class GeodeDevice;
  *
  * Currently supports:
  * - `feGaussianBlur` (two-pass separable Gaussian via compute shader)
+ * - `feOffset` (pixel shift via compute shader)
+ * - `feColorMatrix` (4x5 matrix transform via compute shader)
+ * - `feFlood` (constant color fill via compute shader)
+ * - `feMerge` (alpha-over composite of N inputs via compute shader)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -84,9 +96,70 @@ private:
   wgpu::Texture runBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
                             float stdDeviation, uint32_t axis, uint32_t edgeMode);
 
+  /// Shift pixels by (dx, dy) via compute shader.
+  /// @param input The input texture.
+  /// @param primitive The feOffset parameters.
+  /// @return The offset texture.
+  wgpu::Texture applyOffset(const wgpu::Texture& input,
+                            const svg::components::filter_primitive::Offset& primitive);
+
+  /// Apply a 4x5 color matrix to each pixel via compute shader.
+  /// @param input The input texture.
+  /// @param primitive The feColorMatrix parameters.
+  /// @return The transformed texture.
+  wgpu::Texture applyColorMatrix(const wgpu::Texture& input,
+                                 const svg::components::filter_primitive::ColorMatrix& primitive);
+
+  /// Fill the output with a constant flood color via compute shader.
+  /// @param width Output texture width.
+  /// @param height Output texture height.
+  /// @param primitive The feFlood parameters.
+  /// @return The flood-filled texture.
+  wgpu::Texture applyFlood(uint32_t width, uint32_t height,
+                           const svg::components::filter_primitive::Flood& primitive);
+
+  /// Alpha-over composite of N input textures via sequential compute dispatches.
+  /// @param node The feMerge filter node (inputs resolve to merge children).
+  /// @param namedBuffers Named intermediate textures.
+  /// @param currentBuffer The "previous" output buffer.
+  /// @param sourceGraphic The original source-graphic texture.
+  /// @return The composited texture.
+  wgpu::Texture applyMerge(
+      const svg::components::FilterNode& node,
+      const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
+      const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic);
+
+  /// Run a single alpha-over composite pass (src over dst → output).
+  /// @param src Source texture.
+  /// @param dst Destination texture.
+  /// @param width Output texture width.
+  /// @param height Output texture height.
+  /// @return The composited texture.
+  wgpu::Texture runMergePass(const wgpu::Texture& src, const wgpu::Texture& dst, uint32_t width,
+                             uint32_t height);
+
   GeodeDevice& device_;
+
+  // Gaussian blur pipeline (reused from Phase 7 initial scope).
   wgpu::ComputePipeline gaussianBlurPipeline_;
   wgpu::BindGroupLayout blurBindGroupLayout_;
+
+  // feOffset pipeline.
+  wgpu::ComputePipeline offsetPipeline_;
+  wgpu::BindGroupLayout offsetBindGroupLayout_;
+
+  // feColorMatrix pipeline.
+  wgpu::ComputePipeline colorMatrixPipeline_;
+  wgpu::BindGroupLayout colorMatrixBindGroupLayout_;
+
+  // feFlood pipeline.
+  wgpu::ComputePipeline floodPipeline_;
+  wgpu::BindGroupLayout floodBindGroupLayout_;
+
+  // feMerge alpha-over blit pipeline.
+  wgpu::ComputePipeline mergePipeline_;
+  wgpu::BindGroupLayout mergeBindGroupLayout_;
+
   bool verbose_ = false;
   bool warnedUnsupported_ = false;
 };

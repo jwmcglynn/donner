@@ -657,5 +657,184 @@ TEST_F(RendererGeodeTest, GaussianBlurZeroStdDevPassthrough) {
   EXPECT_EQ(outside[3], 0u) << "Outside the rect should be transparent with zero blur";
 }
 
+/// feOffset: shift a red rect by (4, 4) and verify pixels moved.
+TEST_F(RendererGeodeTest, FilterOffsetShiftsPixels) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode offsetNode;
+  components::filter_primitive::Offset offset;
+  offset.dx = 4.0;
+  offset.dy = 4.0;
+  offsetNode.primitive = offset;
+  offsetNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(offsetNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // After offset dx=4 dy=4, the rect should shift: center moves from (32,32)
+  // to effectively be at (32,32) still red (inside shifted rect), but (16,16)
+  // should now be transparent (original top-left shifted away).
+  auto shifted = pixelAt(snap, 36, 36);
+  EXPECT_EQ(shifted[0], 255u) << "Shifted center should be red";
+  EXPECT_EQ(shifted[3], 255u) << "Shifted center alpha";
+
+  // Original corner of the rect at (17,17) should now be transparent because
+  // the offset shifted content down-right.
+  auto original = pixelAt(snap, 17, 17);
+  EXPECT_EQ(original[3], 0u) << "Original top-left should be transparent after offset";
+}
+
+/// feColorMatrix type=luminanceToAlpha: red → alpha based on Y-channel luminance.
+TEST_F(RendererGeodeTest, FilterColorMatrixLuminanceToAlpha) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode cmNode;
+  components::filter_primitive::ColorMatrix cm;
+  cm.type = components::filter_primitive::ColorMatrix::Type::LuminanceToAlpha;
+  cmNode.primitive = cm;
+  cmNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(cmNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Pure red: luminance contribution from R is 0.2126.
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // luminanceToAlpha: R'=0, G'=0, B'=0, A'= 0.2126*R + 0.7152*G + 0.0722*B.
+  // For pure red (R=1.0): A' = 0.2126 → ~54 in [0, 255].
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 0u) << "R channel should be 0 (luminanceToAlpha)";
+  EXPECT_EQ(center[1], 0u) << "G channel should be 0 (luminanceToAlpha)";
+  EXPECT_EQ(center[2], 0u) << "B channel should be 0 (luminanceToAlpha)";
+  EXPECT_NEAR(center[3], 54u, 3u) << "Alpha should match Y-channel luminance of red";
+
+  // Outside the rect: transparent.
+  auto outside = pixelAt(snap, 4, 4);
+  EXPECT_EQ(outside[3], 0u) << "Outside should be transparent";
+}
+
+/// feFlood: fill the filter region with a constant color.
+TEST_F(RendererGeodeTest, FilterFloodFillsSubregion) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode floodNode;
+  components::filter_primitive::Flood flood;
+  flood.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+  flood.floodOpacity = 0.5;
+  floodNode.primitive = flood;
+  // feFlood does not use an input.
+  graph.nodes.push_back(floodNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Draw something (feFlood ignores input, but the filter layer needs content
+  // to establish the source-graphic texture dimensions).
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // feFlood with red at 50% opacity. The GPU stores premultiplied (128,0,0,128)
+  // but takeSnapshot() unpremultiplies to straight alpha: (255,0,0,128).
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 255u, 2u) << "Flood R (straight alpha)";
+  EXPECT_EQ(center[1], 0u) << "Flood G";
+  EXPECT_EQ(center[2], 0u) << "Flood B";
+  EXPECT_NEAR(center[3], 128u, 2u) << "Flood A (50% opacity)";
+}
+
+/// feMerge: composite two feFlood layers via alpha-over.
+TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  // Build a filter graph:
+  //   Node 0: feFlood red 50% → result="red"
+  //   Node 1: feFlood blue 50% → result="blue"
+  //   Node 2: feMerge(in="red", in="blue") → alpha-over composite
+  components::FilterGraph graph;
+
+  // Node 0: red flood.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 0.5;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: blue flood.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(0, 0, 255, 255));
+    f.floodOpacity = 0.5;
+    node.primitive = f;
+    node.result = RcString("blue");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feMerge with "red" and "blue" as inputs.
+  {
+    components::FilterNode node;
+    node.primitive = components::filter_primitive::Merge{};
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    node.inputs.push_back(components::FilterInput::Named{RcString("blue")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // GPU alpha-over of premul red(128,0,0,128) then premul blue(0,0,128,128):
+  //   premul result ≈ (64, 0, 128, 192)
+  // takeSnapshot() unpremultiplies: R=64*255/192≈85, B=128*255/192≈170, A=192.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 85u, 6u) << "Merge R (straight, red behind blue)";
+  EXPECT_EQ(center[1], 0u) << "Merge G";
+  EXPECT_NEAR(center[2], 170u, 6u) << "Merge B (straight, blue on top)";
+  EXPECT_GT(center[3], 170u) << "Merge A should be > 170 (composited alpha)";
+}
+
 }  // namespace
 }  // namespace donner::svg
