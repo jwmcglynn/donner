@@ -478,17 +478,6 @@ private:
   /// when the drag target's ancestor segment would otherwise have to
   /// rebuild every cached filter / background bitmap on the first click.
   std::vector<std::pair<Entity, Entity>> staticSegmentBoundaries_;
-  /// Per-segment top-left offset in canvas pixels. Tight-bounded
-  /// segments are rasterized into a pixmap sized to the union of their
-  /// entities' canvas-space bounds rather than the full canvas, so the
-  /// composer needs to know WHERE on the canvas to blit each one. The
-  /// offset is applied as a `Translate` when drawing the segment
-  /// bitmap during `composeLayers` / `recomposeSplitBitmaps`.
-  ///
-  /// `Vector2d::Zero()` means the segment was rasterized full-canvas
-  /// (the fallback path — used when the paint-order range contains
-  /// any entity without a computable `worldBounds()`, or is empty).
-  std::vector<Vector2d> staticSegmentOffsets_;
   /// Canvas size the cached segments were rasterized at. Invalidates on
   /// zoom / window resize so stale bitmaps at the old resolution don't
   /// get composed into a new-sized canvas.

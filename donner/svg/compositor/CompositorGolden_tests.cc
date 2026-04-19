@@ -1291,6 +1291,87 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromot
 }
 
 // Drives the ACTUAL `donner_splash.svg` through the tight-bound
+// segment path with an active drag on one of the letters. This
+// matches the exact scenario the user hits in the editor: click a
+// letter, move it, and every segment rasterize goes through the
+// tight-bound path while the drag target's bitmap composes at a
+// non-identity offset on top. The synthetic rect-based scenes above
+// don't exercise real SVG content (gradients, clip-paths, filtered
+// groups, paths with curves) and the existing no-drag real-splash
+// test doesn't exercise the drag-time split compose. Bugs that only
+// show up when segments border a filtered group AND content lives
+// outside `worldBounds()` (blur radius spilling past geometry, clip-
+// path-expanded bounds, etc.) reproduce here.
+TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDrag) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  SVGDocument document = parseDocument(splashSource);
+
+  // Find a letter in the `Donner` group to promote + drag. The user
+  // reports the `O` as the trouble shape — use the second path in
+  // `#Donner` which is usually an O or similar glyph.
+  auto target = document.querySelector("#Donner path:nth-of-type(2)");
+  if (!target.has_value()) {
+    target = document.querySelector("#Donner path");
+  }
+  ASSERT_TRUE(target.has_value())
+      << "splash has no `#Donner path` — has the file structure changed?";
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(892, 512);
+  viewport.devicePixelRatio = 1.0;
+  document.setCanvasSize(892, 512);
+
+  CompositorController compositor(document, renderer_);
+
+  // Promote as a drag target and apply a small DOM transform to
+  // simulate the first drag frame.
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()))
+      << "letter failed to promote — check compositing-breaking-ancestor";
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
+
+  // First render: lays down cached bitmaps for all mandatory layers
+  // + segments (tight or full-canvas), composites main target.
+  compositor.renderFrame(viewport);
+
+  // Second render at the same DOM state — composition transform for
+  // the drag target is still identity relative to its stamp (the
+  // bitmap was stamped on the first render). Both paths
+  // (composited and full-render reference) see the same scene, so
+  // DualPathVerifier can meaningfully compare.
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport);
+
+  // Tolerance of 5 channel values (0..255) to absorb anti-aliasing
+  // drift between "render entity directly to main canvas" and "render
+  // entity to offscreen + composite onto main" — both paths run the
+  // same backend, but the intermediate float→int rounding between
+  // layer rasterize and composite shifts some AA edge pixels by 1-3
+  // channel values. The tight-bound *shift/crop* bug this test was
+  // designed to catch produced mismatches with max channel diff 239
+  // (black background leaking through where content belonged), so
+  // tolerance 5 still trips loudly on that class of regression while
+  // letting benign AA drift slide.
+  EXPECT_TRUE(result.isWithinTolerance(5))
+      << "real-splash tight-bounds pixel identity under drag failed. Mismatch count="
+      << result.mismatchCount << " max channel diff=" << int(result.maxChannelDiff)
+      << ". If non-zero, tight-bound bounds are cropping or shifting "
+         "content during the drag composite. Likely candidates: "
+         "(a) bounds computed in doc space without applying canvasFromDoc, "
+         "(b) bounds applied in canvas space but offset preserved in doc units, "
+         "(c) filter-group bounds not expanded by filter region (blur spills "
+         "beyond the source geometry extent).";
+}
+
+// Drives the ACTUAL `donner_splash.svg` through the tight-bound
 // segment path. The synthetic rect-based scenes above hit the common
 // fast path but don't exercise the paths the user actually sees:
 // 112 real SVG paths with gradients, clip-paths, and filter groups.
