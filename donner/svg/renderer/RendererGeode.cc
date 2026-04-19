@@ -1591,6 +1591,11 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
+  // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
+  // `frame.filterRegion` is passed in from the driver in user-space
+  // coordinates, not pixel-space; we'd need to transform by the current
+  // CTM snapshot before using it as a scissor. Skipping for this PR —
+  // all current feGaussianBlur resvg tests pass without the clip.
   impl_->encoder->blitFullTarget(filteredTexture, 1.0);
 }
 
@@ -1671,7 +1676,9 @@ void RendererGeode::transitionMaskToContent() {
   if (frame.phase != Impl::MaskStackFrame::Phase::Capturing) {
     return;
   }
-  if (!frame.contentTexture || !frame.contentMsaaTexture || !impl_->encoder) {
+  const bool needsMsaa = impl_->device->sampleCount() > 1;
+  if (!frame.contentTexture || (needsMsaa && !frame.contentMsaaTexture) ||
+      !impl_->encoder) {
     frame.phase = Impl::MaskStackFrame::Phase::Content;
     return;
   }
@@ -1921,8 +1928,12 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // Practical fix: change the render pass load op to Load instead of Clear
   // when there's been at least one prior submission. This requires
   // extending GeoEncoder; see the `reopen` helper added below.
+  // On the 1-sample alpha-coverage path (Intel Arc Vulkan) `frame.savedMsaaTarget`
+  // is intentionally null; `GeoEncoder` handles the no-MSAA case. Only require
+  // the MSAA attachment when the device actually uses multisampling.
+  const bool needsMsaa = impl_->device && impl_->device->sampleCount() > 1;
   if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
-      frame.savedTarget && frame.savedMsaaTarget) {
+      frame.savedTarget && (!needsMsaa || frame.savedMsaaTarget)) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
         frame.savedMsaaTarget, frame.savedTarget);

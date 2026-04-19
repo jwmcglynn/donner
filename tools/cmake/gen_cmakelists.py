@@ -242,6 +242,7 @@ OPTIONAL_DEPS: Set[str] = {
 SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
     "donner_svg_renderer_geode_geo_encoder",
     "donner_svg_renderer_geode_geode_device",
+    "donner_svg_renderer_geode_geode_filter_engine",
     "donner_svg_renderer_geode_geode_image_pipeline",
     "donner_svg_renderer_geode_geode_pipeline",
     "donner_svg_renderer_geode_geode_path_encoder",
