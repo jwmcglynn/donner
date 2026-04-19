@@ -200,30 +200,18 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     };
   }
 
-  // Marker tests where Geode produces a visibly different result from
-  // the CPU-rendered reference even with a widened AA threshold —
-  // structural cusp-tangent disagreement on auto-orient markers at
-  // curve cusps. Real bugs to chase as follow-up (F7b/c in the audit).
+  // `orient=auto-on-M-L-Z.svg` still disagrees with the resvg/tiny-skia
+  // reference at curve cusps — a real auto-orient tangent bug, not just
+  // AA drift, so no threshold widening can absorb it (~624 px at the
+  // strict default). The sibling `orient=auto-on-M-C-C-4.svg` now passes
+  // at default threshold once its WithGoldenOverride is applied, so it
+  // no longer needs the Geode disable. See F7b/c in the Phase 7 audit.
   if (category == "painting/marker" &&
-      (filename == "orient=auto-on-M-C-C-4.svg" ||
-       filename == "orient=auto-on-M-L-Z.svg")) {
+      filename == "orient=auto-on-M-L-Z.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
                        "TODO: Geode auto-orient marker tangent disagrees "
                        "at curve cusps (F7b/c)");
-    };
-  }
-
-  // `painting/isolation/as-property.svg` — `isolation: isolate`
-  // applied as a CSS property rather than an XML attribute diverges
-  // ~22 % of the canvas from the reference. The attribute form
-  // (`as-attribute.svg`) renders correctly, so this is specifically
-  // a property-vs-attribute plumbing gap on Geode. Follow-up bug.
-  if (category == "painting/isolation" && filename == "as-property.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO: Geode `isolation: isolate` CSS property not "
-                       "honored (attribute form works)");
     };
   }
 
@@ -298,17 +286,17 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // Geode filter primitive tests that fail due to pre-existing Geode
-  // limitations (gradient rendering, per-primitive subregion clipping,
-  // complex filter transforms), not due to the filter engine itself.
-  //
-  // complex-transform tests: filter chains applied inside a complex
-  // (non-axis-aligned) transform context; Geode doesn't yet apply
-  // per-node filter region transforms.
+  // complex-transform tests: filter chains applied inside a non-axis-
+  // aligned ancestor transform. Geode's filter engine flattens the
+  // region to the primitive's local box instead of projecting through
+  // the current CTM, so every primitive after the transform winds up
+  // in the wrong pixel space (14k-95k pixel diffs at default threshold,
+  // far past anything a threshold widening could reach). The sibling
+  // feMorphology / feComponentTransfer / feConvolveMatrix directories
+  // in the resvg suite don't ship a `complex-transform.svg`, so the
+  // disable only applies to the four categories that do.
   if ((category == "filters/feFlood" || category == "filters/feOffset" ||
-       category == "filters/feMerge" || category == "filters/feGaussianBlur" ||
-       category == "filters/feMorphology" || category == "filters/feComponentTransfer" ||
-       category == "filters/feConvolveMatrix") &&
+       category == "filters/feMerge" || category == "filters/feGaussianBlur") &&
       filename == "complex-transform.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
