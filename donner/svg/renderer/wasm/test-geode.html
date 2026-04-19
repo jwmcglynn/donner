@@ -136,12 +136,21 @@
     }
 
     // 3. Wrap exported C functions.
-    donnerGeodeInit      = Module.cwrap('donner_geode_init', null, []);
-    donnerGeodeRenderSvg = Module.cwrap('donner_geode_render_svg', 'number', ['string', 'number', 'number']);
+    //
+    // `donner_geode_init` and `donner_geode_render_svg` internally call
+    // wgpu::createInstance() / requestAdapter() / requestDevice() / poll —
+    // all of which suspend the WASM call stack via ASYNCIFY so the JS
+    // microtask queue can drive the browser's WebGPU Promise resolution.
+    // From JS, the exported functions must be wrapped with `async: true`
+    // so the returned value is a Promise we can `await`. Without this,
+    // Emscripten's ASYNCIFY runtime aborts with "The call to X is running
+    // asynchronously. If this was intended, add the async option..."
+    donnerGeodeInit      = Module.cwrap('donner_geode_init', null, [], { async: true });
+    donnerGeodeRenderSvg = Module.cwrap('donner_geode_render_svg', 'number', ['string', 'number', 'number'], { async: true });
     donnerFreePixels     = Module.cwrap('donner_free_pixels', null, ['number']);
     donnerGetError       = Module.cwrap('donner_get_last_error', 'string', []);
 
-    donnerGeodeInit();
+    await donnerGeodeInit();
     status.textContent = 'Geode (WebGPU) WASM module ready.';
     status.classList.remove('error');
     btn.disabled = false;
@@ -163,7 +172,7 @@
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
 
     const t0 = performance.now();
-    const ptr = donnerGeodeRenderSvg(svgText, w, h);
+    const ptr = await donnerGeodeRenderSvg(svgText, w, h);
     const elapsed = (performance.now() - t0).toFixed(1);
 
     if (ptr === 0) {
