@@ -69,6 +69,23 @@ def llvm21_macos_workaround_linkopts():
         "//conditions:default": [],
     })
 
+def libc_compat_deps():
+    """
+    Returns extra deps needed when linking against the hermetic LLVM toolchain
+    on Linux.
+
+    Chromium's Debian Bullseye sysroot (wired into `llvm_toolchain` via
+    `//third_party/bazel/non_bcr_deps.bzl`) exports `copy_file_range@GLIBC_2.27`
+    as a non-default-versioned symbol, so unversioned references from
+    `toolchains_llvm`'s prebuilt libc++.a don't auto-resolve. The tiny shim in
+    `//third_party/libc_compat` provides an unversioned `copy_file_range`
+    that forwards to the versioned glibc entry point.
+    """
+    return select({
+        "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
+        "//conditions:default": [],
+    })
+
 def fuzzer_compatible_with():
     """
     Returns a list of labels that the fuzzer rules are compatible with.
@@ -307,7 +324,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
         testonly = 1,
     )
 
-def donner_cc_binary(name, srcs = [], linkopts = [], tags = [], **kwargs):
+def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
     """
     Create a cc_binary with donner-specific defaults including LLVM 21 workaround.
 
@@ -315,6 +332,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], tags = [], **kwargs):
       name: Rule name.
       srcs: Source files.
       linkopts: List of linker options.
+      deps: List of dependencies.
       tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
@@ -322,6 +340,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], tags = [], **kwargs):
         name = name,
         srcs = srcs,
         linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs
     )
@@ -333,7 +352,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], tags = [], **kwargs):
         tags = tags,
     )
 
-def donner_cc_test(name, srcs = [], linkopts = [], tags = [], **kwargs):
+def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
     """
     Create a cc_test with donner-specific defaults including LLVM 21 workaround.
 
@@ -341,6 +360,7 @@ def donner_cc_test(name, srcs = [], linkopts = [], tags = [], **kwargs):
       name: Rule name.
       srcs: Source files.
       linkopts: List of linker options.
+      deps: List of dependencies.
       tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
@@ -348,6 +368,7 @@ def donner_cc_test(name, srcs = [], linkopts = [], tags = [], **kwargs):
         name = name,
         srcs = srcs,
         linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs
     )
@@ -407,13 +428,14 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         tags = tags,
     )
 
-def donner_cc_fuzzer(name, corpus, **kwargs):
+def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
     """
     Create a libfuzzer-based fuzz target.
 
     Args:
       name: Rule name.
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
+      deps: List of dependencies.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     if not (corpus.startswith("//") or corpus.startswith(":")):
@@ -438,6 +460,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         name = name + "_bin",
         linkopts = fuzzer_linkopts,
         linkstatic = 1,
+        deps = deps + libc_compat_deps(),
         target_compatible_with = fuzzer_compatible_with(),
         tags = ["fuzz_target"],
         **kwargs
@@ -451,6 +474,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
             "-timeout=2",
         ],
         linkstatic = 1,
+        deps = deps,
         target_compatible_with = fuzzer_compatible_with(),
         size = "large",
         data = select({
@@ -466,6 +490,7 @@ def donner_cc_fuzzer(name, corpus, **kwargs):
         linkopts = fuzzer_linkopts,
         args = ["$(locations %s)" % corpus_name],
         linkstatic = 1,
+        deps = deps,
         data = [corpus_name] + select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],

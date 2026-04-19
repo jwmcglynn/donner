@@ -1,0 +1,22 @@
+"""Per-target glibc compatibility shims for the hermetic LLVM toolchain.
+
+See libc_compat.c for the full rationale. This target is injected as an
+implicit `deps` entry by `donner_cc_binary/test/fuzzer` whenever the build is
+using the latest LLVM toolchain on Linux (`--config=latest_llvm`, which
+`--config=re` pulls in transitively).
+"""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "libc_compat",
+    srcs = ["libc_compat.c"],
+    # Must be linked into the final executable even when nothing visibly
+    # references it from our code — libc++.a is the consumer.
+    alwayslink = True,
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+)
