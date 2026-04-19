@@ -92,6 +92,7 @@ struct ConvolveParams {
   float kernel[25];  // Row-major kernel values (max 5×5).
 };
 
+/// GPU storage buffer layout matching the WGSL `TurbulenceParams` struct.
 struct TurbulenceParams {
   float baseFreqX;
   float baseFreqY;
@@ -113,6 +114,66 @@ struct DisplacementParams {
   uint32_t xChannel;
   uint32_t yChannel;
   uint32_t pad;
+};
+
+/// GPU storage buffer layout matching the WGSL diffuse `LightingParams` struct.
+struct DiffuseLightingParams {
+  float surfaceScale;
+  float diffuseConstant;
+  float pad0;
+  float pad1;
+
+  float lightR;
+  float lightG;
+  float lightB;
+  uint32_t lightType;
+
+  float azimuthRad;
+  float elevationRad;
+
+  float lightX;
+  float lightY;
+  float lightZ;
+
+  float pointsAtX;
+  float pointsAtY;
+  float pointsAtZ;
+  float spotExponent;
+  float cosConeAngle;
+
+  float pad2;
+  float pad3;
+  float pad4;
+};
+
+/// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
+struct SpecularLightingParams {
+  float surfaceScale;
+  float specularConstant;
+  float specularExponent;
+  float pad0;
+
+  float lightR;
+  float lightG;
+  float lightB;
+  uint32_t lightType;
+
+  float azimuthRad;
+  float elevationRad;
+
+  float lightX;
+  float lightY;
+  float lightZ;
+
+  float pointsAtX;
+  float pointsAtY;
+  float pointsAtZ;
+  float spotExponent;
+  float cosConeAngle;
+
+  float pad1;
+  float pad2;
+  float pad3;
 };
 
 /// Map a FilterGraph EdgeMode to the shader's uint.
@@ -807,6 +868,90 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     displacementMapBindGroupLayout_ = bgl;
     displacementMapPipeline_ = pipeline;
   }
+
+  // --- feDiffuseLighting pipeline (input + output + storage buffer) ---
+  {
+    wgpu::BindGroupLayoutEntry entries[3]{};
+
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+    entries[0].texture.multisampled = false;
+
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+    entries[1].storageTexture.format = kFormat;
+    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[2].buffer.minBindingSize = sizeof(DiffuseLightingParams);
+
+    wgpu::BindGroupLayoutDescriptor bglDesc{};
+    bglDesc.label = wgpuLabel("FilterDiffuseLightingBGL");
+    bglDesc.entryCount = 3;
+    bglDesc.entries = entries;
+    diffuseLightingBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
+
+    wgpu::PipelineLayoutDescriptor plDesc{};
+    plDesc.label = wgpuLabel("FilterDiffuseLightingPipelineLayout");
+    plDesc.bindGroupLayoutCount = 1;
+    WGPUBindGroupLayout layouts[1] = {diffuseLightingBindGroupLayout_};
+    plDesc.bindGroupLayouts = layouts;
+    wgpu::PipelineLayout pipelineLayout = dev.createPipelineLayout(plDesc);
+
+    wgpu::ComputePipelineDescriptor cpDesc{};
+    cpDesc.label = wgpuLabel("FilterDiffuseLightingPipeline");
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = createFilterDiffuseLightingShader(dev);
+    cpDesc.compute.entryPoint = wgpuLabel("main");
+    diffuseLightingPipeline_ = dev.createComputePipeline(cpDesc);
+  }
+
+  // --- feSpecularLighting pipeline (input + output + storage buffer) ---
+  {
+    wgpu::BindGroupLayoutEntry entries[3]{};
+
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+    entries[0].texture.multisampled = false;
+
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+    entries[1].storageTexture.format = kFormat;
+    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[2].buffer.minBindingSize = sizeof(SpecularLightingParams);
+
+    wgpu::BindGroupLayoutDescriptor bglDesc{};
+    bglDesc.label = wgpuLabel("FilterSpecularLightingBGL");
+    bglDesc.entryCount = 3;
+    bglDesc.entries = entries;
+    specularLightingBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
+
+    wgpu::PipelineLayoutDescriptor plDesc{};
+    plDesc.label = wgpuLabel("FilterSpecularLightingPipelineLayout");
+    plDesc.bindGroupLayoutCount = 1;
+    WGPUBindGroupLayout layouts[1] = {specularLightingBindGroupLayout_};
+    plDesc.bindGroupLayouts = layouts;
+    wgpu::PipelineLayout pipelineLayout = dev.createPipelineLayout(plDesc);
+
+    wgpu::ComputePipelineDescriptor cpDesc{};
+    cpDesc.label = wgpuLabel("FilterSpecularLightingPipeline");
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = createFilterSpecularLightingShader(dev);
+    cpDesc.compute.entryPoint = wgpuLabel("main");
+    specularLightingPipeline_ = dev.createComputePipeline(cpDesc);
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
@@ -910,6 +1055,12 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       }
       pixelScale *= std::sqrt(scaleX * scaleY);
       outputTex = applyDisplacementMap(inputTex, in2Tex, *disp, pixelScale);
+    } else if (const auto* diffuse =
+                   std::get_if<filter_primitive::DiffuseLighting>(&node.primitive)) {
+      outputTex = applyDiffuseLighting(inputTex, *diffuse, scaleX, scaleY);
+    } else if (const auto* specular =
+                   std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
+      outputTex = applySpecularLighting(inputTex, *specular, scaleX, scaleY);
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -1618,6 +1769,208 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
   dispatchTwoInputUniform(device_, displacementMapBindGroupLayout_, displacementMapPipeline_, in1,
                           in2, output, uniformBuffer, sizeof(DisplacementParams),
                           "FilterDisplacementMapPass");
+  return output;
+}
+
+namespace {
+
+/// Fill common light-source fields into the params struct fields starting at
+/// the given pointers. This avoids duplicating the logic between diffuse and specular.
+void fillLightParams(const svg::components::filter_primitive::LightSource& light, double scaleX,
+                     double scaleY, uint32_t* lightType, float* azimuthRad, float* elevationRad,
+                     float* lightX, float* lightY, float* lightZ, float* pointsAtX,
+                     float* pointsAtY, float* pointsAtZ, float* spotExponent,
+                     float* cosConeAngle) {
+  using LT = svg::components::filter_primitive::LightSource::Type;
+  switch (light.type) {
+    case LT::Distant: *lightType = 0; break;
+    case LT::Point: *lightType = 1; break;
+    case LT::Spot: *lightType = 2; break;
+  }
+
+  constexpr double kDegToRad = std::numbers::pi / 180.0;
+  *azimuthRad = static_cast<float>(light.azimuth * kDegToRad);
+  *elevationRad = static_cast<float>(light.elevation * kDegToRad);
+
+  // Point/Spot positions are in user space — convert to pixel space.
+  *lightX = static_cast<float>(light.x * scaleX);
+  *lightY = static_cast<float>(light.y * scaleY);
+  *lightZ = static_cast<float>(light.z * std::sqrt(scaleX * scaleY));
+  *pointsAtX = static_cast<float>(light.pointsAtX * scaleX);
+  *pointsAtY = static_cast<float>(light.pointsAtY * scaleY);
+  *pointsAtZ = static_cast<float>(light.pointsAtZ * std::sqrt(scaleX * scaleY));
+  *spotExponent = static_cast<float>(light.spotExponent);
+  *cosConeAngle = light.limitingConeAngle.has_value()
+                      ? static_cast<float>(std::cos(light.limitingConeAngle.value() * kDegToRad))
+                      : -2.0f;
+}
+
+}  // namespace
+
+wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
+    const wgpu::Texture& input,
+    const svg::components::filter_primitive::DiffuseLighting& primitive, double scaleX,
+    double scaleY) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterDiffuseLightingOutput");
+
+  DiffuseLightingParams params{};
+  params.surfaceScale = static_cast<float>(primitive.surfaceScale);
+  params.diffuseConstant = static_cast<float>(primitive.diffuseConstant);
+  params.pad0 = 0.0f;
+  params.pad1 = 0.0f;
+
+  const css::RGBA rgba = primitive.lightingColor.asRGBA();
+  params.lightR = static_cast<float>(rgba.r) / 255.0f;
+  params.lightG = static_cast<float>(rgba.g) / 255.0f;
+  params.lightB = static_cast<float>(rgba.b) / 255.0f;
+
+  if (primitive.light.has_value()) {
+    fillLightParams(primitive.light.value(), scaleX, scaleY, &params.lightType, &params.azimuthRad,
+                    &params.elevationRad, &params.lightX, &params.lightY, &params.lightZ,
+                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.spotExponent,
+                    &params.cosConeAngle);
+  } else {
+    // Default: distant light with azimuth=0, elevation=0.
+    params.lightType = 0;
+    params.azimuthRad = 0.0f;
+    params.elevationRad = 0.0f;
+  }
+
+  // Upload as storage buffer.
+  wgpu::BufferDescriptor bufDesc{};
+  bufDesc.label = wgpuLabel("DiffuseLightingParamsStorage");
+  bufDesc.size = sizeof(DiffuseLightingParams);
+  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  bufDesc.mappedAtCreation = false;
+  wgpu::Buffer paramsBuffer = dev.createBuffer(bufDesc);
+  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+
+  // Build bind group.
+  wgpu::TextureView inputView = input.createView();
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[3]{};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = inputView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = outputView;
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = paramsBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = sizeof(DiffuseLightingParams);
+
+  wgpu::BindGroupDescriptor bgDesc{};
+  bgDesc.label = wgpuLabel("FilterDiffuseLightingBindGroup");
+  bgDesc.layout = diffuseLightingBindGroupLayout_;
+  bgDesc.entryCount = 3;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+
+  wgpu::CommandEncoderDescriptor ceDesc{};
+  ceDesc.label = wgpuLabel("FilterDiffuseLightingEncoder");
+  wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
+
+  wgpu::ComputePassDescriptor passDesc{};
+  passDesc.label = wgpuLabel("FilterDiffuseLightingPass");
+  wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+  pass.setPipeline(diffuseLightingPipeline_);
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+
+  const uint32_t workgroupsX = (width + 7) / 8;
+  const uint32_t workgroupsY = (height + 7) / 8;
+  pass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+  pass.end();
+
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  device_.queue().submit(1, &cmdBuf);
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applySpecularLighting(
+    const wgpu::Texture& input,
+    const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
+    double scaleY) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterSpecularLightingOutput");
+
+  SpecularLightingParams params{};
+  params.surfaceScale = static_cast<float>(primitive.surfaceScale);
+  params.specularConstant = static_cast<float>(primitive.specularConstant);
+  params.specularExponent = static_cast<float>(std::clamp(primitive.specularExponent, 1.0, 128.0));
+  params.pad0 = 0.0f;
+
+  const css::RGBA rgba = primitive.lightingColor.asRGBA();
+  params.lightR = static_cast<float>(rgba.r) / 255.0f;
+  params.lightG = static_cast<float>(rgba.g) / 255.0f;
+  params.lightB = static_cast<float>(rgba.b) / 255.0f;
+
+  if (primitive.light.has_value()) {
+    fillLightParams(primitive.light.value(), scaleX, scaleY, &params.lightType, &params.azimuthRad,
+                    &params.elevationRad, &params.lightX, &params.lightY, &params.lightZ,
+                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.spotExponent,
+                    &params.cosConeAngle);
+  } else {
+    params.lightType = 0;
+    params.azimuthRad = 0.0f;
+    params.elevationRad = 0.0f;
+  }
+
+  // Upload as storage buffer.
+  wgpu::BufferDescriptor bufDesc{};
+  bufDesc.label = wgpuLabel("SpecularLightingParamsStorage");
+  bufDesc.size = sizeof(SpecularLightingParams);
+  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  bufDesc.mappedAtCreation = false;
+  wgpu::Buffer paramsBuffer = dev.createBuffer(bufDesc);
+  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+
+  // Build bind group.
+  wgpu::TextureView inputView = input.createView();
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[3]{};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = inputView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = outputView;
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = paramsBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = sizeof(SpecularLightingParams);
+
+  wgpu::BindGroupDescriptor bgDesc{};
+  bgDesc.label = wgpuLabel("FilterSpecularLightingBindGroup");
+  bgDesc.layout = specularLightingBindGroupLayout_;
+  bgDesc.entryCount = 3;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+
+  wgpu::CommandEncoderDescriptor ceDesc{};
+  ceDesc.label = wgpuLabel("FilterSpecularLightingEncoder");
+  wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
+
+  wgpu::ComputePassDescriptor passDesc{};
+  passDesc.label = wgpuLabel("FilterSpecularLightingPass");
+  wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+  pass.setPipeline(specularLightingPipeline_);
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+
+  const uint32_t workgroupsX = (width + 7) / 8;
+  const uint32_t workgroupsY = (height + 7) / 8;
+  pass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+  pass.end();
+
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  device_.queue().submit(1, &cmdBuf);
   return output;
 }
 

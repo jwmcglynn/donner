@@ -52,7 +52,7 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
     // frequently fully off, not partial). Revisit once Geode picks
     // up a finer sample pattern (8x or 16x MSAA) or analytic glyph
     // AA lands.
-    case RendererBackendFeature::FilterEffects: return false;
+    case RendererBackendFeature::FilterEffects: return true;
     case RendererBackendFeature::Text: return false;
     case RendererBackendFeature::TextFull: return false;
     case RendererBackendFeature::AsciiSnapshot: return false;

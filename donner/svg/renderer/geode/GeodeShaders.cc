@@ -6,11 +6,13 @@
 #include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterConvolveMatrixWgsl.h"
+#include "embed_resources/FilterDiffuseLightingWgsl.h"
 #include "embed_resources/FilterDisplacementMapWgsl.h"
 #include "embed_resources/FilterFloodWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterOffsetWgsl.h"
+#include "embed_resources/FilterSpecularLightingWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
@@ -154,6 +156,18 @@ wgpu::ShaderModule createFilterDisplacementMapShader(const wgpu::Device& device)
   return createShaderFromWgsl(device, "FilterDisplacementMap",
                               donner::embedded::kFilterDisplacementMapWgsl.data(),
                               donner::embedded::kFilterDisplacementMapWgsl.size());
+}
+
+wgpu::ShaderModule createFilterDiffuseLightingShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterDiffuseLighting",
+                              donner::embedded::kFilterDiffuseLightingWgsl.data(),
+                              donner::embedded::kFilterDiffuseLightingWgsl.size());
+}
+
+wgpu::ShaderModule createFilterSpecularLightingShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterSpecularLighting",
+                              donner::embedded::kFilterSpecularLightingWgsl.data(),
+                              donner::embedded::kFilterSpecularLightingWgsl.size());
 }
 
 }  // namespace donner::geode

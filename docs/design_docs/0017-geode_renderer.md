@@ -1544,15 +1544,15 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   - [x] feMorphology (erode/dilate via 2D min/max kernel compute shader).
   - [x] feComponentTransfer (per-channel 256-entry LUT via storage buffer compute shader).
   - [x] feConvolveMatrix (NxM kernel convolution via compute shader, up to 5x5).
-  - [ ] Color matrix (single-pass compute).
-  - [ ] Turbulence (Perlin noise compute shader).
-  - [ ] Displacement map.
-  - [ ] Lighting (diffuse and specular, point/distant/spot light sources).
+  - [x] feTurbulence (Perlin noise / fractal noise via compute shader, stitchTiles support).
+  - [x] feDisplacementMap (per-pixel channel-driven displacement via compute shader).
+  - [x] feDiffuseLighting (Lambertian shading from alpha height map — distant/point/spot lights).
+  - [x] feSpecularLighting (Phong shading from alpha height map — distant/point/spot lights).
 - [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
 - [x] Implement filter graph execution: route intermediate textures between compute passes
   matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
-- [ ] Run full resvg filter test suite (feGaussianBlur subset unblocked; remaining categories
-  still gated on `FilterEffects` feature flag).
+- [x] Run full resvg filter test suite — all filter categories now run on Geode with the
+  `FilterEffects` feature flag enabled.
 
 ## Testing and Validation
 

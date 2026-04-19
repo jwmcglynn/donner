@@ -314,6 +314,26 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: feDiffuseLighting compute shader (Lambertian shading).
+embed_resources(
+    name = "filter_diffuse_lighting_wgsl",
+    header_output = "embed_resources/FilterDiffuseLightingWgsl.h",
+    resources = {
+        "kFilterDiffuseLightingWgsl": "shaders/filter_diffuse_lighting.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feSpecularLighting compute shader (Phong shading).
+embed_resources(
+    name = "filter_specular_lighting_wgsl",
+    header_output = "embed_resources/FilterSpecularLightingWgsl.h",
+    resources = {
+        "kFilterSpecularLightingWgsl": "shaders/filter_specular_lighting.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -326,11 +346,13 @@ donner_cc_library(
         ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
         ":filter_convolve_matrix_wgsl",
+        ":filter_diffuse_lighting_wgsl",
         ":filter_displacement_map_wgsl",
         ":filter_flood_wgsl",
         ":filter_merge_wgsl",
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
+        ":filter_specular_lighting_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
