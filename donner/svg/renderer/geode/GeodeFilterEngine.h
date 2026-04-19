@@ -7,11 +7,8 @@
 /// texture, returning the filtered output texture.
 ///
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
-/// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
-/// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
-/// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`. Other
-/// primitives are passed through (the input texture is forwarded unchanged)
-/// with a one-shot warning.
+/// `feFlood`, `feMerge`. Other primitives are passed through (the input
+/// texture is forwarded unchanged) with a one-shot warning.
 
 #include <webgpu/webgpu.hpp>
 
@@ -26,15 +23,6 @@ struct Offset;
 struct ColorMatrix;
 struct Flood;
 struct Merge;
-struct Composite;
-struct Blend;
-struct Morphology;
-struct ComponentTransfer;
-struct ConvolveMatrix;
-struct Turbulence;
-struct DisplacementMap;
-struct DiffuseLighting;
-struct SpecularLighting;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -58,15 +46,6 @@ class GeodeDevice;
  * - `feColorMatrix` (4x5 matrix transform via compute shader)
  * - `feFlood` (constant color fill via compute shader)
  * - `feMerge` (alpha-over composite of N inputs via compute shader)
- * - `feComposite` (Porter-Duff compositing of two inputs via compute shader)
- * - `feBlend` (W3C Compositing 1 blend modes via compute shader)
- * - `feMorphology` (erode / dilate via min / max rectangular kernel)
- * - `feComponentTransfer` (per-channel LUT transform via compute shader)
- * - `feConvolveMatrix` (NxM kernel convolution via compute shader)
- * - `feTurbulence` (Perlin noise / fractal noise via compute shader)
- * - `feDisplacementMap` (per-pixel channel-driven displacement via compute shader)
- * - `feDiffuseLighting` (Lambertian shading with distant/point/spot lights)
- * - `feSpecularLighting` (Phong shading with distant/point/spot lights)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -159,91 +138,6 @@ private:
   wgpu::Texture runMergePass(const wgpu::Texture& src, const wgpu::Texture& dst, uint32_t width,
                              uint32_t height);
 
-  /// Porter-Duff compositing of two inputs via compute shader.
-  /// @param in1 First input texture (source).
-  /// @param in2 Second input texture (destination/backdrop).
-  /// @param primitive The feComposite parameters (operator + k1..k4).
-  /// @return The composited texture.
-  wgpu::Texture applyComposite(const wgpu::Texture& in1, const wgpu::Texture& in2,
-                               const svg::components::filter_primitive::Composite& primitive);
-
-  /// W3C Compositing 1 blend of two inputs via compute shader.
-  /// @param in1 First input texture (source).
-  /// @param in2 Second input texture (backdrop).
-  /// @param primitive The feBlend parameters (blend mode).
-  /// @return The blended texture.
-  wgpu::Texture applyBlend(const wgpu::Texture& in1, const wgpu::Texture& in2,
-                           const svg::components::filter_primitive::Blend& primitive);
-
-  /// Morphological erode / dilate via min / max rectangular kernel.
-  /// @param input The input texture.
-  /// @param primitive The feMorphology parameters (operator, radiusX, radiusY).
-  /// @param pixelRadiusX Horizontal radius in pixels.
-  /// @param pixelRadiusY Vertical radius in pixels.
-  /// @return The morphed texture.
-  wgpu::Texture applyMorphology(const wgpu::Texture& input,
-                                const svg::components::filter_primitive::Morphology& primitive,
-                                int pixelRadiusX, int pixelRadiusY);
-
-  /// Per-channel LUT transform (feComponentTransfer).
-  /// @param input The input texture.
-  /// @param primitive The feComponentTransfer parameters (4 channel functions).
-  /// @return The transformed texture.
-  wgpu::Texture applyComponentTransfer(
-      const wgpu::Texture& input,
-      const svg::components::filter_primitive::ComponentTransfer& primitive);
-
-  /// NxM kernel convolution (feConvolveMatrix).
-  /// @param input The input texture.
-  /// @param primitive The feConvolveMatrix parameters.
-  /// @return The convolved texture.
-  wgpu::Texture applyConvolveMatrix(
-      const wgpu::Texture& input,
-      const svg::components::filter_primitive::ConvolveMatrix& primitive);
-
-  /// Perlin noise / fractal noise generator (feTurbulence).
-  /// @param width Output texture width.
-  /// @param height Output texture height.
-  /// @param primitive The feTurbulence parameters.
-  /// @param scaleX User-to-pixel scale X.
-  /// @param scaleY User-to-pixel scale Y.
-  /// @return The noise texture.
-  wgpu::Texture applyTurbulence(uint32_t width, uint32_t height,
-                                const svg::components::filter_primitive::Turbulence& primitive,
-                                double scaleX, double scaleY);
-
-  /// Per-pixel channel-driven displacement (feDisplacementMap).
-  /// @param in1 Source image texture.
-  /// @param in2 Displacement map texture.
-  /// @param primitive The feDisplacementMap parameters.
-  /// @param pixelScale Displacement scale in pixels.
-  /// @return The displaced texture.
-  wgpu::Texture applyDisplacementMap(
-      const wgpu::Texture& in1, const wgpu::Texture& in2,
-      const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale);
-
-  /// Lambertian diffuse lighting (feDiffuseLighting).
-  /// @param input The input texture (alpha = height map).
-  /// @param primitive The feDiffuseLighting parameters.
-  /// @param scaleX User-to-pixel scale X.
-  /// @param scaleY User-to-pixel scale Y.
-  /// @return The lit texture.
-  wgpu::Texture applyDiffuseLighting(
-      const wgpu::Texture& input,
-      const svg::components::filter_primitive::DiffuseLighting& primitive, double scaleX,
-      double scaleY);
-
-  /// Phong specular lighting (feSpecularLighting).
-  /// @param input The input texture (alpha = height map).
-  /// @param primitive The feSpecularLighting parameters.
-  /// @param scaleX User-to-pixel scale X.
-  /// @param scaleY User-to-pixel scale Y.
-  /// @return The lit texture.
-  wgpu::Texture applySpecularLighting(
-      const wgpu::Texture& input,
-      const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
-      double scaleY);
-
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -265,42 +159,6 @@ private:
   // feMerge alpha-over blit pipeline.
   wgpu::ComputePipeline mergePipeline_;
   wgpu::BindGroupLayout mergeBindGroupLayout_;
-
-  // feComposite Porter-Duff pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline compositePipeline_;
-  wgpu::BindGroupLayout compositeBindGroupLayout_;
-
-  // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline blendPipeline_;
-  wgpu::BindGroupLayout blendBindGroupLayout_;
-
-  // feMorphology erode/dilate pipeline (input + output + uniform).
-  wgpu::ComputePipeline morphologyPipeline_;
-  wgpu::BindGroupLayout morphologyBindGroupLayout_;
-
-  // feComponentTransfer LUT pipeline (input + output + storage buffer).
-  wgpu::ComputePipeline componentTransferPipeline_;
-  wgpu::BindGroupLayout componentTransferBindGroupLayout_;
-
-  // feConvolveMatrix kernel pipeline (input + output + uniform).
-  wgpu::ComputePipeline convolveMatrixPipeline_;
-  wgpu::BindGroupLayout convolveMatrixBindGroupLayout_;
-
-  // feTurbulence noise pipeline (output + storage buffer, no input texture).
-  wgpu::ComputePipeline turbulencePipeline_;
-  wgpu::BindGroupLayout turbulenceBindGroupLayout_;
-
-  // feDisplacementMap pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline displacementMapPipeline_;
-  wgpu::BindGroupLayout displacementMapBindGroupLayout_;
-
-  // feDiffuseLighting pipeline (input + output + storage buffer).
-  wgpu::ComputePipeline diffuseLightingPipeline_;
-  wgpu::BindGroupLayout diffuseLightingBindGroupLayout_;
-
-  // feSpecularLighting pipeline (input + output + storage buffer).
-  wgpu::ComputePipeline specularLightingPipeline_;
-  wgpu::BindGroupLayout specularLightingBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

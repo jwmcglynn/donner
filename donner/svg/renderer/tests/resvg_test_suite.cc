@@ -63,14 +63,17 @@ geodeCategoryGate(std::string_view category) {
   // feDiffuseLighting, feDropShadow, feImage, feTurbulence, filter,
   // filter-functions, flood-color, flood-opacity, enable-background, …)
   //
-  // The Geode filter engine implements most of these primitives (used
-  // by the WASM editor path), but the resvg image-comparison suite is
-  // blocked on per-backend (Metal / Vulkan / D3D12) pixel-diff tuning:
-  // `widenThresholdForGeode` alone isn't enough on macOS Metal and
-  // Intel Arc Vulkan, and dialing in a unified bar needs its own PR.
-  // Keep the whole tree skip-gated here until that lands — the CPU
-  // variants continue to run the full suite at their strict
-  // thresholds, so nothing is covered any less than before.
+  // Exception: `filters/feGaussianBlur` runs on Geode (Phase 7 initial
+  // scope) with a widened threshold for MSAA edge drift.
+  if (category == "filters/feGaussianBlur") {
+    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
+  }
+  // Phase 7 extensions: feOffset, feColorMatrix, feFlood, feMerge run on
+  // Geode with the same widened threshold for MSAA edge drift.
+  if (category == "filters/feOffset" || category == "filters/feColorMatrix" ||
+      category == "filters/feFlood" || category == "filters/feMerge") {
+    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
+  }
   if (category.rfind("filters/", 0) == 0 || category == "filters") {
     return [](ImageComparisonParams& p) {
       p.requireFeature(RendererBackendFeature::FilterEffects,
@@ -297,9 +300,7 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
   // (non-axis-aligned) transform context; Geode doesn't yet apply
   // per-node filter region transforms.
   if ((category == "filters/feFlood" || category == "filters/feOffset" ||
-       category == "filters/feMerge" || category == "filters/feGaussianBlur" ||
-       category == "filters/feMorphology" || category == "filters/feComponentTransfer" ||
-       category == "filters/feConvolveMatrix") &&
+       category == "filters/feMerge" || category == "filters/feGaussianBlur") &&
       filename == "complex-transform.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
@@ -325,38 +326,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
                        "Bug: gradient + feColorMatrix edge case mismatch (Geode)");
-    };
-  }
-
-  // feMorphology huge radius exceeds the Geode compute shader kernel cap (31).
-  if (category == "filters/feMorphology" && filename == "huge-radius.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Not impl: feMorphology radius > 31 (Geode kernel cap)");
-    };
-  }
-
-  // feComponentTransfer mixed-types: uses gradients as input which produce
-  // different pixel output on Geode (known gradient rendering limitation).
-  if (category == "filters/feComponentTransfer" && filename == "mixed-types.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Bug: gradient input + feComponentTransfer mismatch (Geode)");
-    };
-  }
-
-  // feConvolveMatrix edge cases: invalid or unusual parameters that exercise
-  // parser/validation paths with different Geode GPU vs CPU behavior.
-  if (category == "filters/feConvolveMatrix" &&
-      (filename == "divisor=0.svg" || filename == "edgeMode=none.svg" ||
-       filename == "kernelMatrix-with-not-enough-values.svg" ||
-       filename == "kernelMatrix-with-too-many-values.svg" ||
-       filename == "order-with-a-negative-value-1.svg" ||
-       filename == "order-with-a-negative-value-2.svg" || filename == "order=0.svg" ||
-       filename == "targetX=-1.svg" || filename == "targetX=3.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Bug: feConvolveMatrix edge case handling (Geode)");
     };
   }
 

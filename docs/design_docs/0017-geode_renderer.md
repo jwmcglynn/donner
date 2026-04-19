@@ -1539,15 +1539,12 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   - [x] feColorMatrix (4x5 matrix transform via compute shader — all type variants).
   - [x] feFlood (constant color fill via compute shader).
   - [x] feMerge (alpha-over composite of N inputs via sequential compute dispatches).
-  - [x] feComposite (Porter-Duff compositing — all 7 operators including arithmetic).
-  - [x] feBlend (W3C Compositing 1 — all 16 blend modes via compute shader).
-  - [x] feMorphology (erode/dilate via 2D min/max kernel compute shader).
-  - [x] feComponentTransfer (per-channel 256-entry LUT via storage buffer compute shader).
-  - [x] feConvolveMatrix (NxM kernel convolution via compute shader, up to 5x5).
-  - [x] feTurbulence (Perlin noise / fractal noise via compute shader, stitchTiles support).
-  - [x] feDisplacementMap (per-pixel channel-driven displacement via compute shader).
-  - [x] feDiffuseLighting (Lambertian shading from alpha height map — distant/point/spot lights).
-  - [x] feSpecularLighting (Phong shading from alpha height map — distant/point/spot lights).
+  - [ ] Color matrix (single-pass compute).
+  - [ ] Morphology (erode/dilate via compute).
+  - [ ] Turbulence (Perlin noise compute shader).
+  - [ ] Displacement map, component transfer, convolution matrix.
+  - [ ] Lighting (diffuse and specular, point/distant/spot light sources).
+  - [ ] Blend and composite operations.
 - [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
 - [x] Implement filter graph execution: route intermediate textures between compute passes
   matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
