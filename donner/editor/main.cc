@@ -790,7 +790,12 @@ int main(int argc, char** argv) {
   textEditor.setActiveAutocomplete(true);
   std::string editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText);
 
-  donner::svg::Renderer renderer;
+  // The document renderer is owned by `asyncRenderer` and lives on
+  // its worker thread — backend resources (especially the WebGPU
+  // device under Geode) must be created and used from a single
+  // thread, so the UI thread intentionally does not hold a Renderer
+  // for document rasterization. Overlay chrome still rasterizes
+  // synchronously on the UI thread via `overlayRenderer` below.
   donner::editor::AsyncRenderer asyncRenderer;
   GLuint texture = 0;
   glGenTextures(1, &texture);
@@ -1749,7 +1754,6 @@ int main(int argc, char** argv) {
       // selection chrome lives in the overlay texture above.
       if (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize) {
         donner::editor::RenderRequest req;
-        req.renderer = &renderer;
         req.document = &app.document().document();
         req.version = currentVersion;
         req.selection = std::nullopt;

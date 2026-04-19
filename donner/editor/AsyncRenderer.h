@@ -1,15 +1,24 @@
 #pragma once
 /// @file
 ///
-/// `AsyncRenderer` runs `svg::Renderer::draw()` + `takeSnapshot()` on a
-/// dedicated worker thread so heavy renders don't block the UI thread.
+/// `AsyncRenderer` owns a `svg::Renderer` and runs its `draw()` +
+/// `takeSnapshot()` on a dedicated worker thread so heavy renders
+/// don't block the UI thread.
 ///
 /// ## Threading model
 ///
-/// The worker thread owns the Renderer, the SVGDocument (exclusively),
-/// and the EditorApp reference (for overlay chrome) **only** during an
-/// active render. The UI thread must not mutate the document or touch
-/// the Renderer while a render is in flight.
+/// The worker thread owns the Renderer for its entire lifetime — the
+/// Renderer is constructed on the worker thread at startup and
+/// destroyed on the worker thread at shutdown. This is load-bearing
+/// for the Geode (WebGPU) backend under Emscripten pthreads: WebGPU
+/// JS objects are per-worker, so the device, pipelines, textures,
+/// and readback buffers must all be created and used on a single
+/// thread. See the "first render aborts with `getJsObject` assertion"
+/// incident that motivated moving renderer ownership here.
+///
+/// The worker additionally takes exclusive ownership of the
+/// `SVGDocument` during an active render. The UI thread must not
+/// mutate the document while a render is in flight.
 ///
 /// UI thread flow per frame:
 /// 1. `pollResult()` — if a render just finished, pick up the bitmap.
@@ -20,10 +29,11 @@
 ///    gets processed and queued — just not dispatched to the ECS.
 ///
 /// The safety invariant: between `requestRender()` and a non-`nullopt`
-/// return from `pollResult()`, the UI thread must not call any method
-/// on the `Renderer`, must not mutate the `SVGDocument`, and must not
-/// touch state the overlay renderer reads (selection, etc. — those are
-/// snapshotted at request time, see `RenderRequest`).
+/// return from `pollResult()`, the UI thread must not mutate the
+/// `SVGDocument`, and must not touch state the overlay renderer reads
+/// (selection, etc. — those are snapshotted at request time, see
+/// `RenderRequest`). The UI thread must not call any method on the
+/// `Renderer` at any time — it lives on the worker.
 
 #include <atomic>
 #include <condition_variable>
@@ -45,7 +55,6 @@ namespace donner::editor {
 /// Per-request handoff data captured at render-request time so the
 /// worker has everything it needs without touching live UI state.
 struct RenderRequest {
-  svg::Renderer* renderer = nullptr;
   svg::SVGDocument* document = nullptr;
   /// Document frame version snapshotted at request time so the UI can
   /// match the landed bitmap with other same-version assets.
