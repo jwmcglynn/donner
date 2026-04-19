@@ -187,6 +187,16 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: Gaussian blur compute shader (two-pass separable).
+embed_resources(
+    name = "gaussian_blur_wgsl",
+    header_output = "embed_resources/GaussianBlurWgsl.h",
+    resources = {
+        "kGaussianBlurWgsl": "shaders/gaussian_blur.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -194,6 +204,7 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
@@ -214,6 +225,22 @@ donner_cc_test(
         ":geode_device",
         ":geode_shaders",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "geode_filter_engine",
+    srcs = ["GeodeFilterEngine.cc"],
+    hdrs = ["GeodeFilterEngine.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_device",
+        ":geode_shaders",
+        ":geode_wgpu_util",
+        "//donner/base",
+        "//donner/svg/components/filter:components",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 

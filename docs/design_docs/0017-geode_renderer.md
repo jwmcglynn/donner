@@ -1505,18 +1505,19 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
 
 ### Phase 7 (v2): Filter Effects
 
-- [ ] Implement `GeodeFilterEngine` using WebGPU compute shaders.
-  - [ ] Gaussian blur (separable, two-pass compute).
+- [x] Implement `GeodeFilterEngine` scaffolding with WebGPU compute pipeline.
+  - [x] Gaussian blur (separable, two-pass compute) — first compute pipeline in Geode.
   - [ ] Color matrix (single-pass compute).
   - [ ] Morphology (erode/dilate via compute).
   - [ ] Turbulence (Perlin noise compute shader).
   - [ ] Displacement map, component transfer, convolution matrix.
   - [ ] Lighting (diffuse and specular, point/distant/spot light sources).
   - [ ] Blend and composite operations.
-- [ ] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
-- [ ] Implement filter graph execution: route intermediate textures between compute passes
-  matching the `FilterGraph` node topology.
-- [ ] Run full resvg filter test suite.
+- [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
+- [x] Implement filter graph execution: route intermediate textures between compute passes
+  matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
+- [ ] Run full resvg filter test suite (feGaussianBlur subset unblocked; remaining categories
+  still gated on `FilterEffects` feature flag).
 
 ## Testing and Validation
 
