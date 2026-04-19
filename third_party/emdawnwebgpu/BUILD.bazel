@@ -37,7 +37,10 @@ cc_library(
 
 # Compiled WebGPU glue (webgpu.cpp → .a). This file implements the C
 # functions declared in webgpu.h by calling into the browser's JS WebGPU
-# API via Emscripten's `EM_JS` / `EM_ASM` macros.
+# API via Emscripten's `EM_JS` / `EM_ASM` macros. It `#include`s
+# `<emscripten/emscripten.h>` directly, so the target is incompatible
+# with native platforms — `bazel build //...` on linux/macos would
+# otherwise try to compile this with system clang and fail.
 cc_library(
     name = "webgpu_impl",
     srcs = ["webgpu/src/webgpu.cpp"],
@@ -45,6 +48,11 @@ cc_library(
         "-std=c++20",
         "-fno-exceptions",
     ],
+    target_compatible_with = select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [":webgpu_header"],
 )
 
