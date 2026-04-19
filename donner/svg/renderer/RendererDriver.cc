@@ -1010,6 +1010,171 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   layerBaseTransform_ = Transform2d();
 }
 
+std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
+    Registry& registry, Entity firstEntity, Entity lastEntity,
+    const RenderViewport& viewport, const Transform2d& baseTransform) {
+  const Vector2d canvasSize = viewport.size;
+  if (canvasSize.x <= 0.0 || canvasSize.y <= 0.0) {
+    return std::nullopt;
+  }
+
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != firstEntity) {
+    view.advance();
+  }
+  if (view.done()) {
+    return std::nullopt;
+  }
+
+  std::optional<Box2d> accumulated;
+  const auto unionBox = [&](const Box2d& box) {
+    if (!accumulated) {
+      accumulated = box;
+    } else {
+      accumulated->addBox(box);
+    }
+  };
+
+  // Advance the view past an entity's subtree (used when a filter
+  // consumes its children — their individual bounds are absorbed into
+  // the filter region).
+  const auto skipSubtree = [&view](Entity lastRenderedEntity) {
+    while (!view.done() && view.currentEntity() != lastRenderedEntity) {
+      view.advance();
+    }
+    if (!view.done()) {
+      view.advance();  // skip past lastRenderedEntity itself
+    }
+  };
+
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    const Entity currentEntity = view.currentEntity();
+    reachedLast = (currentEntity == lastEntity);
+
+    const components::RenderingInstanceComponent& instance = view.get();
+    view.advance();
+
+    const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
+    if (!style.properties.has_value()) {
+      continue;
+    }
+    if (!instance.visible) {
+      continue;
+    }
+    if (style.properties->display.getRequired() == Display::None) {
+      continue;
+    }
+
+    const Transform2d finalTransform = baseTransform * instance.entityFromWorldTransform;
+
+    // Filter-region path: the filter's output rectangle IS the subtree's
+    // contribution to the canvas. The individual descendant entities'
+    // bounds are rolled up inside the filter layer; only the filter's
+    // post-processing extent matters for our outer bounds.
+    //
+    // If a filter is set but we can't compute a region for it (missing
+    // filter reference, non-`url()` CSS filter with no obvious extent),
+    // bail: the safe answer is "we don't know, fall back to full
+    // canvas". The compositor caller treats `nullopt` that way.
+    if (instance.resolvedFilter.has_value()) {
+      const std::optional<Box2d> filterRegionLocal =
+          computeFilterRegion(registry, *instance.resolvedFilter, instance);
+      if (!filterRegionLocal.has_value()) {
+        return std::nullopt;
+      }
+      unionBox(finalTransform.transformBox(*filterRegionLocal));
+      if (instance.subtreeInfo.has_value()) {
+        // The filter consumed its subtree; skip the descendant entities.
+        if (currentEntity != instance.subtreeInfo->lastRenderedEntity) {
+          skipSubtree(instance.subtreeInfo->lastRenderedEntity);
+        }
+      }
+      continue;
+    }
+
+    // Non-geometry bound-expanders we don't yet model: mask, marker-
+    // shape extents, pattern tiles with subtrees. Bail here so the
+    // compositor falls back to full-canvas rather than risking a
+    // visibly wrong crop. `docs/design_docs/0027-tight_bounded_
+    // segments.md` tracks which cases are pending precise handling.
+    if (instance.mask.has_value() && instance.mask->valid()) {
+      return std::nullopt;
+    }
+
+    // Geometry entities: path, rect, ellipse, line, polyline, polygon.
+    if (const auto* path =
+            instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      Box2d localBounds = path->spline.bounds();
+
+      // Markers (arrowheads, etc.) extend draws past the path bounds.
+      // Their precise extent requires walking the marker shape; bail
+      // rather than crop them off.
+      if (instance.markerStart.has_value() || instance.markerMid.has_value() ||
+          instance.markerEnd.has_value()) {
+        return std::nullopt;
+      }
+
+      // Stroke padding. `strokeWidth / 2` is the geometric stroke
+      // extent from the path; miter joins on sharp corners can spike
+      // further — use `miterLimit * strokeWidth / 2` as the worst-case
+      // bound per spec.
+      const PaintParams paint = toPaintParams(registry, instance, style);
+      const bool hasStroke =
+          !std::holds_alternative<PaintServer::None>(paint.stroke);
+      if (hasStroke && paint.strokeParams.strokeWidth > 0.0) {
+        double padding = paint.strokeParams.strokeWidth / 2.0;
+        if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
+          padding *= paint.strokeParams.miterLimit;
+        }
+        localBounds = Box2d(localBounds.topLeft - Vector2d(padding, padding),
+                            localBounds.bottomRight + Vector2d(padding, padding));
+      }
+
+      unionBox(finalTransform.transformBox(localBounds));
+      continue;
+    }
+
+    // Text and image — not yet modeled. Bail.
+    if (instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
+      return std::nullopt;
+    }
+    if (instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
+      return std::nullopt;
+    }
+
+    // An entity with none of the above data components is either a
+    // container group (no direct draw — its children contribute
+    // bounds as they're iterated) or a sub-document boundary (not
+    // modeled yet; bail).
+    if (instance.subtreeInfo.has_value()) {
+      // Plain container — children will be iterated next. Continue.
+      continue;
+    }
+
+    // Unknown entity type. Safe fallback: bail.
+    return std::nullopt;
+  }
+
+  if (!accumulated) {
+    return std::nullopt;
+  }
+
+  // Clamp to canvas — content partially off-canvas shouldn't
+  // over-allocate the offscreen.
+  const Box2d canvasRect(Vector2d::Zero(), canvasSize);
+  const Vector2d clampedTL(
+      std::max(accumulated->topLeft.x, canvasRect.topLeft.x),
+      std::max(accumulated->topLeft.y, canvasRect.topLeft.y));
+  const Vector2d clampedBR(
+      std::min(accumulated->bottomRight.x, canvasRect.bottomRight.x),
+      std::min(accumulated->bottomRight.y, canvasRect.bottomRight.y));
+  if (clampedTL.x >= clampedBR.x || clampedTL.y >= clampedBR.y) {
+    return std::nullopt;  // Fully off-canvas.
+  }
+  return Box2d(clampedTL, clampedBR);
+}
+
 RendererBitmap RendererDriver::takeSnapshot() const {
   return renderer_.takeSnapshot();
 }

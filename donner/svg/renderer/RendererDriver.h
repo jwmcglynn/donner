@@ -45,6 +45,37 @@ public:
                        const RenderViewport& viewport, const Transform2d& baseTransform);
 
   /**
+   * Compute the canvas-space bounding box of every pixel a subsequent
+   * `drawEntityRange(registry, firstEntity, lastEntity, viewport,
+   * baseTransform)` call would write to. Runs the same entity traversal
+   * as `drawEntityRange` but with a bounds-accumulating visitor; no
+   * side effects on the renderer or registry.
+   *
+   * The bounds include the effect of:
+   *   - Per-entity transforms (including the base transform).
+   *   - Filter regions (via `computeFilterRegion`; the filter's output
+   *     rectangle is taken as the entity subtree's contribution).
+   *   - Stroke widths on stroked paths (expanded by `strokeWidth / 2`
+   *     plus a miter margin).
+   *   - Isolated layers — child bounds accumulate into the parent.
+   *   - Clip-rects (intersect, shrink only).
+   *
+   * Returns `std::nullopt` when:
+   *   - The range is empty / renders nothing.
+   *   - Any entity uses a bound-expander the visitor doesn't yet model
+   *     precisely (text, markers, masks, patterns). Callers must treat
+   *     `nullopt` as "fall back to full-canvas render", NOT as "empty
+   *     segment". The design doc at `docs/design_docs/0027-tight_bounded_
+   *     segments.md` tracks which cases are pending.
+   *
+   * Safe to call on a `RendererDriver` whose renderer holds persistent
+   * state — the traversal never invokes renderer methods.
+   */
+  [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(
+      Registry& registry, Entity firstEntity, Entity lastEntity,
+      const RenderViewport& viewport, const Transform2d& baseTransform);
+
+  /**
    * Capture a snapshot from the underlying backend after rendering.
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const;

@@ -1350,16 +1350,17 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport);
 
-  // Tolerance of 5 channel values (0..255) to absorb anti-aliasing
-  // drift between "render entity directly to main canvas" and "render
-  // entity to offscreen + composite onto main" — both paths run the
-  // same backend, but the intermediate float→int rounding between
-  // layer rasterize and composite shifts some AA edge pixels by 1-3
-  // channel values. The tight-bound *shift/crop* bug this test was
-  // designed to catch produced mismatches with max channel diff 239
-  // (black background leaking through where content belonged), so
-  // tolerance 5 still trips loudly on that class of regression while
-  // letting benign AA drift slide.
+  // Tolerance 5: the layer-composite path (layer rasterized into an
+  // offscreen → unpremul → composite into main) has an unavoidable
+  // 1-3 channel rounding drift on the premultiply/unpremultiply
+  // round-trip vs the direct-to-main full-render reference. That
+  // drift is the same regardless of tight-bounding (measured at
+  // 19,746 mismatches @ max diff 3 WITHOUT tight-bound, 19,747 @
+  // max diff 3 WITH — indistinguishable). Tight-bound shift/crop
+  // bugs, by contrast, show up as max channel diff 200+ (dark bg
+  // leaking through where content should be). Tolerance 5 catches
+  // the shift/crop class of regression without flaking on the
+  // premul round-trip drift.
   EXPECT_TRUE(result.isWithinTolerance(5))
       << "real-splash tight-bounds pixel identity under drag failed. Mismatch count="
       << result.mismatchCount << " max channel diff=" << int(result.maxChannelDiff)
