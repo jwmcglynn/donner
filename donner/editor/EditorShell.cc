@@ -14,6 +14,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SourceSync.h"
+#include "donner/editor/TracyWrapper.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -133,6 +134,16 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   textures_.initialize();
+
+  // On-demand render loop: the main thread sleeps in `window.waitEvents()`
+  // between user inputs, so the worker thread has to nudge it when a
+  // render finishes — otherwise the fresh bitmap sits in `result_`
+  // forever. Safe to capture `this` because `AsyncRenderer`'s lifetime
+  // is strictly nested inside `RenderCoordinator`'s, which is a member
+  // of `*this`.
+  renderCoordinator_.asyncRenderer().setWakeCallback(
+      [this]() { window_.wakeEventLoop(); });
+
   valid_ = true;
 }
 
@@ -204,14 +215,9 @@ void EditorShell::handleGlobalShortcuts() {
   if (!sourcePaneFocused) {
     if (pressedZ && cmd && !shift) {
       if (app_.canUndo()) {
-        // Drag release defers the SetTransformCommand into SelectTool's
-        // `pendingCommit_`; flush it onto the undo timeline before popping
-        // so Ctrl+Z actually has the move entry to undo.
-        selectTool_.commitPendingDragMutation(app_);
         app_.undo();
       }
     } else if (pressedZ && cmd && shift) {
-      selectTool_.commitPendingDragMutation(app_);
       app_.redo();
     }
   }
@@ -323,9 +329,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .experimentalDragPresentation = renderCoordinator_.experimentalDragPresentation(),
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
-      .selectionBoundsDoc =
-          std::span<const Box2d>(renderCoordinator_.selectionBoundsCache().displayedBoundsDoc),
-      .marqueeRectDoc = selectTool_.marqueeRect(),
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
       .experimentalMode = options_.experimentalMode,
   };
@@ -351,7 +354,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
                                           options_.experimentalMode, textures_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(app_, interactionController_.viewport(),
-                                                           textures_);
+                                                           textures_, selectTool_.marqueeRect());
     interactionController_.clearPendingClick();
   }
 
@@ -363,30 +366,23 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       if (options_.experimentalMode && previewBeforeRelease.has_value()) {
-        // Zero work on drag release.
-        //
-        // `SelectTool::onMouseUp` stashed the `SetTransformCommand` +
-        // undo data into `pendingCommit_` instead of applying them — no
-        // ECS mutations, no undo allocation, no DOM touch on the release
-        // frame. The commit fires on the user's next interaction
-        // (onMouseDown / undo / redo / writeback consume).
-        //
-        // The compositor's last-drag-frame state (cached bg/drag/fg
-        // textures plus the final drag-translate compose offset) remains
-        // the display. We just record that translation in the settling
-        // preview so `presentationPreview()` keeps returning it, and
-        // mark the experimental-drag cache as fresh at the current
-        // (unchanged, since we didn't flush) document version so the
-        // next main-loop tick's `shouldPrewarm` doesn't fire a prewarm
-        // render against a nonexistent version delta.
-        const auto currentVersion = app_.document().currentFrameVersion();
-        const Vector2i canvasSize = app_.document().document().canvasSize();
-        renderCoordinator_.experimentalDragPresentation().recordPostDragSettledWithoutRender(
-            *previewBeforeRelease, currentVersion, canvasSize);
+        // The DOM was already updated every drag frame via
+        // `SelectTool::onMouseMove` → `applyMutation`, so drag release
+        // needs to do nothing beyond recording undo history (already done
+        // in `onMouseUp`). The compositor has the dragged entity's DOM
+        // position baked in; its cached bitmap is reused via an internal
+        // compose-offset delta for pure-translation drags (see
+        // `CompositorController::rasterizeLayer` + fast path), which
+        // means the display is byte-for-byte identical to a fresh render
+        // of the mutated DOM at identity composition. No "settling" hack
+        // needed — the compositor view IS the settled view.
+        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
+        }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), textures_);
+            app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
       }
     }
   }
@@ -428,8 +424,7 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
       .scrollTarget = selectionBeforeTree,
       .pendingScroll = treeviewPendingScroll_,
   };
-  sidebarPresenter_.renderTreeView(liveAppForClicks, liveAppForClicks ? &selectTool_ : nullptr,
-                                    treeState);
+  sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
   treeviewPendingScroll_ = treeState.pendingScroll;
   if (treeState.selectionChangedInTree) {
     treeSelectionOriginatedInTree_ = true;
@@ -456,6 +451,7 @@ void EditorShell::highlightSelectionSourceIfNeeded() {
 }
 
 void EditorShell::runFrame() {
+  ZoneScopedN("EditorShell::runFrame");
   interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
   updateWindowTitle();
 
@@ -510,11 +506,9 @@ void EditorShell::runFrame() {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
   }
   if (menuActions.undo && app_.canUndo()) {
-    selectTool_.commitPendingDragMutation(app_);
     app_.undo();
   }
   if (menuActions.redo) {
-    selectTool_.commitPendingDragMutation(app_);
     app_.redo();
   }
   if (menuActions.cut) {

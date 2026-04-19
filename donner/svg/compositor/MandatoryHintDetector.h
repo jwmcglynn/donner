@@ -85,6 +85,39 @@ public:
   /// linger into the rebuilt document.
   void clear() { hints_.clear(); }
 
+  /// Defuse every outstanding hint's registry pointer, then drop them.
+  /// Used from `CompositorController::resetAllLayers` when the underlying
+  /// document has been replaced in place — the old Registry was destroyed
+  /// and a new one constructed at the same storage address, so the hints'
+  /// cached `Registry*` now points at a live object that knows nothing
+  /// about the old entity IDs. Running `~ScopedCompositorHint` normally
+  /// would call `registry.valid(old_entity)` and SIGSEGV inside entt's
+  /// sparse-set lookup. The old `CompositorHintComponent`s went down with
+  /// the old entity space, so there's nothing to clean up; just stop the
+  /// dtors from touching the rebuilt registry.
+  void releaseAllHintsNoClean() {
+    for (auto& [entity, hint] : hints_) {
+      hint.release();
+    }
+    hints_.clear();
+  }
+
+  /// Rebuild the hint set against a new entity space after a structurally-
+  /// identical `setDocument`. The detector's hints are derived from
+  /// `RenderingInstanceComponent` features (opacity < 1, filter, mask,
+  /// isolation…) — rather than surgical-remap the old hint set, we release
+  /// the stale hints (they point into a destroyed entt sparse set) and
+  /// run `reconcile()` against the new registry. The detector's `reconcile`
+  /// is deterministic on the ECS state, so a structurally-identical
+  /// re-parse yields the identical hint set, keyed on the new entity ids.
+  void rebuildForReplacedDocument(Registry& newRegistry) {
+    for (auto& [entity, hint] : hints_) {
+      hint.release();
+    }
+    hints_.clear();
+    reconcile(newRegistry);
+  }
+
   /// Stats from the most recent `reconcile()` call. Zeroed on entry.
   [[nodiscard]] const MandatoryHintDetectorStats& stats() const { return stats_; }
 

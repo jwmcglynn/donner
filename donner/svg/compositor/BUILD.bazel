@@ -24,6 +24,16 @@ donner_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        # NOTE: `:tracy_wrapper` from //donner/editor is depended on here
+        # even though the Bazel package direction looks backwards
+        # (editor → svg is the norm). In practice `compositor` is
+        # editor-only — no BCR-facing donner::svg target links against
+        # it, and the only consumers (editor, compositor internal tests)
+        # already pull in Tracy via the editor path. This lets the
+        # compositor emit `ZoneScopedN(...)` for renderFrame phases so
+        # live editor profiling actually shows compositor internals.
+        # Revisit if compositor ever becomes a BCR-surfaced dep.
+        "//donner/editor:tracy_wrapper",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components",
@@ -134,6 +144,9 @@ donner_cc_test(
     name = "compositor_golden_tests",
     srcs = [
         "CompositorGolden_tests.cc",
+    ],
+    data = [
+        "//:donner_splash.svg",
     ],
     deps = [
         ":compositor",

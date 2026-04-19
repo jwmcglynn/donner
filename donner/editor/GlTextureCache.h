@@ -10,6 +10,7 @@
 #include "glad/glad.h"
 #endif
 
+#include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
 
 namespace donner::editor {
@@ -54,6 +55,12 @@ public:
   [[nodiscard]] int foregroundWidth() const { return foregroundWidth_; }
   [[nodiscard]] int foregroundHeight() const { return foregroundHeight_; }
 
+  /// Compositor-reported translation to apply when drawing `promotedTexture()`
+  /// on top of bg/fg. Reflects the delta between the bitmap's rasterize-time
+  /// DOM transform and the entity's current DOM transform — i.e. how far the
+  /// user has dragged since the bitmap was last stamped.
+  [[nodiscard]] const Vector2d& promotedTranslationDoc() const { return promotedTranslationDoc_; }
+
 private:
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
                            int* outHeight);
@@ -75,6 +82,8 @@ private:
   int promotedHeight_ = 0;
   int foregroundWidth_ = 0;
   int foregroundHeight_ = 0;
+
+  Vector2d promotedTranslationDoc_ = Vector2d::Zero();
 };
 
 }  // namespace donner::editor

@@ -16,6 +16,7 @@
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/EditorShell.h"
+#include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
 
 namespace {
@@ -93,10 +94,30 @@ int main(int argc, char** argv) {
   }
 
   while (!window.shouldClose()) {
-    window.pollEvents();
-    window.beginFrame();
-    shell.runFrame();
-    window.endFrame();
+    {
+      ZoneScopedN("waitEvents");
+      // On native this blocks until a user input, window event, or a
+      // `wakeEventLoop()` post from the render worker. The editor is
+      // event-driven — no frames are produced between user inputs and
+      // worker results. Matches the original viewer prototype (commit
+      // 8e78aa49).
+      //
+      // On Emscripten `waitEvents` falls through to `glfwPollEvents`
+      // since the browser drives the loop via `requestAnimationFrame`.
+      window.waitEvents();
+    }
+    {
+      ZoneScopedN("beginFrame");
+      window.beginFrame();
+    }
+    {
+      ZoneScopedN("shell.runFrame");
+      shell.runFrame();
+    }
+    {
+      ZoneScopedN("endFrame");
+      window.endFrame();
+    }
 #ifdef __EMSCRIPTEN__
     // Emscripten-glfw's `glfwSwapBuffers` is a no-op, so we need an
     // explicit asyncify yield every frame; otherwise the main loop
@@ -104,6 +125,7 @@ int main(int argc, char** argv) {
     // clearing and freezing the canvas).
     emscripten_sleep(0);
 #endif
+    FrameMark;
   }
 
   return 0;

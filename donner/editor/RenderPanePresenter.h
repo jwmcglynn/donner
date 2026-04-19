@@ -2,12 +2,10 @@
 /// @file
 
 #include <optional>
-#include <span>
 
 #include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
-#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/ViewportInteractionController.h"
 
 namespace donner::editor {
@@ -19,8 +17,6 @@ struct RenderPanePresenterState {
   const ExperimentalDragPresentation& experimentalDragPresentation;
   const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
   const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
-  std::span<const Box2d> selectionBoundsDoc;
-  std::optional<Box2d> marqueeRectDoc;
   Vector2d contentRegion = Vector2d::Zero();
   bool experimentalMode = false;
 };

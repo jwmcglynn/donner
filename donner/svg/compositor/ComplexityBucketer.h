@@ -128,6 +128,33 @@ public:
   /// assignments don't linger into the rebuilt document.
   void clear() { bucketHints_.clear(); }
 
+  /// Like `clear()`, but releases each hint's registry pointer first so
+  /// the dtor becomes a no-op. Used from `CompositorController::resetAll
+  /// Layers` after `setDocument` has replaced the entity space — the old
+  /// `CompositorHintComponent`s are already gone, and `registry.valid()`
+  /// on the rebuilt registry would SIGSEGV against the stale entity IDs.
+  void releaseAllHintsNoClean() {
+    for (auto& [entity, hint] : bucketHints_) {
+      hint.release();
+    }
+    bucketHints_.clear();
+  }
+
+  /// Rebuild the bucket hint set against a new entity space after a
+  /// structurally-identical `setDocument`. Mirror of `MandatoryHint
+  /// Detector::rebuildForReplacedDocument` — release the stale hints
+  /// without touching the old entity ids, then run `reconcile` on the
+  /// new registry. Because the bucketer's decisions are a pure function
+  /// of the render-tree shape + complexity costs, a structurally-equal
+  /// document produces the identical bucket set keyed on the new ids.
+  void rebuildForReplacedDocument(Registry& newRegistry) {
+    for (auto& [entity, hint] : bucketHints_) {
+      hint.release();
+    }
+    bucketHints_.clear();
+    reconcile(newRegistry);
+  }
+
   [[nodiscard]] const ComplexityBucketerStats& stats() const { return stats_; }
 
   [[nodiscard]] const ComplexityBucketerConfig& config() const { return config_; }

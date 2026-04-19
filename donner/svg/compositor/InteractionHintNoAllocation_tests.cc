@@ -3,6 +3,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/MandatoryHintDetector.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -57,7 +58,7 @@ TEST_F(InteractionHintNoAllocationTest, SteadyStateDragDoesNotChurnECSState) {
   ASSERT_TRUE(compositor.promoteEntity(entity));
 
   // Warm-up frame to move past first-frame setup allocations.
-  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(Vector2d(1.0, 0.0)));
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
   // Capture steady-state invariants.
@@ -67,8 +68,8 @@ TEST_F(InteractionHintNoAllocationTest, SteadyStateDragDoesNotChurnECSState) {
   // Drive 20 steady-state drag frames with different translations. None of
   // them should mutate layer count or bitmap storage.
   for (int i = 0; i < 20; ++i) {
-    compositor.setLayerCompositionTransform(entity,
-                                             Transform2d::Translate(Vector2d(i * 2.0, i * 1.0)));
+    target->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(i * 2.0, i * 1.0)));
     compositor.renderFrame(viewport_);
 
     EXPECT_EQ(compositor.layerCount(), layerCountBefore)
@@ -98,13 +99,13 @@ TEST_F(InteractionHintNoAllocationTest, MandatoryDetectorIsIdleDuringSteadyState
   ASSERT_TRUE(compositor.promoteEntity(entity));
 
   // Warm-up.
-  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(Vector2d(1.0, 0.0)));
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
   // Steady-state drag.
   for (int i = 0; i < 5; ++i) {
-    compositor.setLayerCompositionTransform(entity,
-                                             Transform2d::Translate(Vector2d(i * 2.0, i * 1.0)));
+    target->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(i * 2.0, i * 1.0)));
     compositor.renderFrame(viewport_);
   }
 

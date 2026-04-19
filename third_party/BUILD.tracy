@@ -67,7 +67,8 @@ cc_library(
         "public/common/TracySocket.hpp",
         "public/common/TracyStackFrames.hpp",
         "public/common/TracySystem.hpp",
-        "public/common/TracyUwp.hpp",
+        "public/common/TracyVersion.hpp",
+        "public/common/TracyWinFamily.hpp",
         "public/common/TracyYield.hpp",
         # TracyClient.cpp implementation files.
         "public/common/TracySystem.cpp",

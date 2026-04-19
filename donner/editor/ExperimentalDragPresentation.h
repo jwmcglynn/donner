@@ -76,34 +76,6 @@ struct ExperimentalDragPresentation {
     chromeRefreshTargetVersion = 0;
   }
 
-  /// Record the drag-final state without firing any settle render.
-  ///
-  /// Unlike `beginSettling`, this does NOT set `waitingForFullRender` — we
-  /// deliberately don't plan to run a settle render. The caller has already
-  /// applied the `SetTransformCommand` mutation to the DOM, and the cached
-  /// composited textures (with the drag translation still applied via
-  /// `settlingPreview.translation`) are visually identical to what a fresh
-  /// render of the mutated DOM would produce at identity composition.
-  /// Deferring re-rasterization until the user's next interaction (new
-  /// drag, selection change, viewport change) lets the compositor absorb
-  /// the cost naturally rather than stalling on mouse release.
-  ///
-  /// The paired `noteCachedTextures(entity, version, canvasSize)` tells
-  /// `shouldPrewarm()` that we consider the cache fresh for this version
-  /// so the next main-loop tick doesn't mistakenly fire a prewarm render.
-  void recordPostDragSettledWithoutRender(const SelectTool::ActiveDragPreview& preview,
-                                           std::uint64_t version,
-                                           const Vector2i& canvasSize) {
-    settlingPreview = preview;
-    waitingForFullRender = false;
-    settlingTargetVersion = 0;
-    waitingForChromeRefresh = false;
-    chromeRefreshTargetVersion = 0;
-    hasCachedTextures = true;
-    cachedEntity = preview.entity;
-    cachedVersion = version;
-    cachedCanvasSize = canvasSize;
-  }
 
   /// End settling once a fresh full render has landed.  Also clears cached texture state so the
   /// display falls back to the just-uploaded flat texture instead of showing stale composited
@@ -125,19 +97,39 @@ struct ExperimentalDragPresentation {
   /// Returns the drag preview that should currently be displayed, if any.
   [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> presentationPreview(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview) const {
-    if (activePreview.has_value()) {
+    // Prefer an active preview whose entity matches our cached textures —
+    // that's the happy path where the render worker's cached triple is
+    // still valid for what we're being asked to display.
+    if (activePreview.has_value() && hasCachedTextures &&
+        activePreview->entity == cachedEntity) {
       return activePreview;
     }
-    if (settlingPreview.has_value()) {
+    if (settlingPreview.has_value() && hasCachedTextures &&
+        settlingPreview->entity == cachedEntity) {
       return settlingPreview;
     }
+    // Drag-target swap: the user just clicked a DIFFERENT entity, so
+    // `activePreview` is for the new entity, but `cachedEntity` still
+    // holds the old entity's composited triple. Keep displaying the
+    // cached triple (positioned at zero offset against the old entity's
+    // current DOM transform) until the new render lands — otherwise
+    // the presenter falls back to the stale flat texture and the user
+    // sees a one-frame flash of the pre-drag document state.
+    //
+    // This path also handles the post-drag settling and the "selected
+    // but not dragging" fallback where `activePreview` is nullopt —
+    // covered by the same "have cached textures, keep showing them"
+    // intent.
     if (hasCachedTextures && cachedEntity != entt::null) {
       return SelectTool::ActiveDragPreview{
           .entity = cachedEntity,
           .translation = Vector2d::Zero(),
       };
     }
-    return std::nullopt;
+    // No cached textures yet — return the active preview so the caller
+    // can tell that a drag is in flight (but `shouldDisplayComposited
+    // Layers` will return false and the flat fallback path handles it).
+    return activePreview;
   }
 
   /// Returns true if the UI should draw the composited drag presentation right now.

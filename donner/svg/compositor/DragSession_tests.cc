@@ -120,26 +120,6 @@ TEST_F(DragSessionTest, DestructorDemotes) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-TEST_F(DragSessionTest, UpdateTranslation) {
-  SVGDocument document = makeDocument(R"svg(
-    <rect id="target" width="10" height="10" fill="red" />
-  )svg");
-
-  auto target = document.querySelector("#target");
-  ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
-
-  CompositorController compositor(document, renderer_);
-  auto session = DragSession::begin(compositor, entity);
-  ASSERT_TRUE(session.has_value());
-
-  session->updateTranslation(Vector2d(15.0, 25.0));
-  Transform2d result = compositor.compositionTransformOf(entity);
-  EXPECT_TRUE(result.isTranslation());
-  EXPECT_NEAR(result.translation().x, 15.0, 1e-10);
-  EXPECT_NEAR(result.translation().y, 25.0, 1e-10);
-}
-
 TEST_F(DragSessionTest, BeginWithInvalidEntityFails) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="10" height="10" fill="red" />

@@ -11,8 +11,9 @@ namespace donner::svg::compositor {
  * RAII session for a drag interaction with composited rendering.
  *
  * Promotes the target entity on construction and demotes it on destruction, ensuring the compositor
- * layer lifecycle is tied to the drag gesture. During the drag, `updateTranslation()` sets the
- * composition transform for the promoted layer.
+ * layer lifecycle is tied to the drag gesture. Callers mutate the entity's DOM transform directly
+ * during the drag; the compositor's fast path (`renderFrame`) picks up pure-translation deltas and
+ * reuses the cached bitmap without re-rasterizing.
  *
  * Usage:
  * @code
@@ -21,12 +22,12 @@ namespace donner::svg::compositor {
  * if (!drag) { return; }  // promotion failed, fall back to full re-render
  *
  * // On pointer-move:
- * drag->updateTranslation(currentPos - startPos);
+ * element.setTransform(Transform2d::Translate(currentPos - startPos) * startTransform);
  * compositor.renderFrame(viewport);
  *
  * // On pointer-up / drag end:
  * drag.reset();  // or let it fall out of scope
- * compositor.renderFrame(viewport);  // full re-render with entity at new position
+ * compositor.renderFrame(viewport);  // re-render with entity settled at new DOM position
  * @endcode
  */
 class DragSession {
@@ -49,13 +50,6 @@ public:
   DragSession& operator=(const DragSession&) = delete;
   DragSession(DragSession&& other) noexcept;
   DragSession& operator=(DragSession&& other) noexcept;
-
-  /**
-   * Update the drag translation relative to the start position.
-   *
-   * @param delta Translation offset from the entity's original position, in document coordinates.
-   */
-  void updateTranslation(const Vector2d& delta);
 
   /// Returns the target entity being dragged.
   [[nodiscard]] Entity target() const { return target_; }

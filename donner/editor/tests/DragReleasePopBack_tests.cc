@@ -103,7 +103,6 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   viewport.devicePixelRatio = 1.0;
 
   // ── Phase 1: Pre-drag render ──────────────────────────────────────────
-  compositor.setLayerCompositionTransform(entity, Transform2d());
   compositor.renderFrame(viewport);
 
   {
@@ -123,30 +122,36 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   }
 
   // ── Phase 2: During drag ──────────────────────────────────────────────
-  // DOM unchanged; composition offset moves the promoted layer.
-  compositor.setLayerCompositionTransform(entity, Transform2d::Translate(100, 0));
+  // DOM is the source of truth: mutate the entity's transform directly.
+  // The compositor's fast path detects the pure-translation delta, reuses
+  // the cached bitmap, and reports a compose offset via `layerComposeOffset`.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
   compositor.renderFrame(viewport);
 
   {
     const auto flat = renderer.takeSnapshot();
     EXPECT_THAT(getPixel(flat, kMovedCenterX, kMovedCenterY), IsRed())
-        << "Drag flat: rect at visual position (original + offset)";
+        << "Drag flat: rect at new DOM position";
     EXPECT_THAT(getPixel(flat, kOrigCenterX, kOrigCenterY), IsWhite())
         << "Drag flat: original position should be vacated";
   }
 
   {
-    // The promoted bitmap is at DOM position (no composition offset).
+    // The promoted bitmap is reused via the fast path — its content stays at
+    // the pre-drag stamped position; `layerComposeOffset` carries the delta.
     const auto& promoted = compositor.layerBitmapOf(entity);
     EXPECT_THAT(getPixel(promoted, kOrigCenterX, kOrigCenterY), IsRed())
-        << "Drag promoted: element at original DOM position";
+        << "Drag promoted: bitmap retains stamped (pre-drag) content";
+
+    const Transform2d composeOffset = compositor.layerComposeOffset(entity);
+    EXPECT_TRUE(composeOffset.isTranslation());
+    EXPECT_NEAR(composeOffset.translation().x, 100.0, 1e-6);
+    EXPECT_NEAR(composeOffset.translation().y, 0.0, 1e-6);
   }
 
-  // ── Phase 3: Release + settling render ────────────────────────────────
-  // SetTransformCommand applied: DOM now has translate(100, 0).
-  // Composition transform returns to identity for the settling render.
-  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
-  compositor.setLayerCompositionTransform(entity, Transform2d());
+  // ── Phase 3: Release / settling render ────────────────────────────────
+  // On release the DOM is already at the final transform (applied every drag
+  // frame). A re-render here must produce the same visual result.
   compositor.renderFrame(viewport);
 
   svg::RendererBitmap settlingFlat;
@@ -163,8 +168,8 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
         << "Settling flat: rect at new DOM position";
     EXPECT_THAT(getPixel(settlingFlat, kOrigCenterX, kOrigCenterY), IsWhite())
         << "Settling flat: original position is vacated";
-    EXPECT_THAT(getPixel(settlingPromoted, kMovedCenterX, kMovedCenterY), IsRed())
-        << "Settling promoted: rect at new DOM position";
+    EXPECT_THAT(getPixel(settlingPromoted, kOrigCenterX, kOrigCenterY), IsRed())
+        << "Settling promoted: bitmap retains stamped content (reused, not re-rasterized)";
   }
 
   // ── Phase 4: ReplaceDocument (simulated) ────────────────────────────
@@ -174,7 +179,6 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   // already has the transform from Phase 3 so the visual result is identical.
   compositor.resetAllLayers();
   ASSERT_TRUE(compositor.promoteEntity(entity));
-  compositor.setLayerCompositionTransform(entity, Transform2d());
   compositor.renderFrame(viewport);
 
   {
@@ -423,7 +427,6 @@ TEST(DragReleasePopBackTest, ResetAndRePromoteProducesSplitLayers) {
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
   compositor.resetAllLayers();
   ASSERT_TRUE(compositor.promoteEntity(entity));
-  compositor.setLayerCompositionTransform(entity, Transform2d());
   compositor.renderFrame(viewport);
 
   EXPECT_TRUE(compositor.hasSplitStaticLayers())
@@ -468,10 +471,11 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   bool hasUploadedComposited = false;
 
   // Helper: synchronous render → produces compositor output + flat bitmap.
-  // Uses `currentEntity` which tracks which entity is currently promoted.
+  // Uses `currentEntity` which tracks which entity is currently promoted. The
+  // DOM carries position; the compositor picks up the current transform on
+  // each `renderFrame` and derives its internal compose offset.
   Entity currentEntity = entity;
-  const auto doRender = [&](const Transform2d& compositionTransform) {
-    compositor.setLayerCompositionTransform(currentEntity, compositionTransform);
+  const auto doRender = [&]() {
     compositor.renderFrame(viewport);
 
     uploadedFlat = renderer.takeSnapshot();
@@ -508,7 +512,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   // ══════════════════════════════════════════════════════════════════════
   // Frame 0: Pre-drag prewarm render.
   // ══════════════════════════════════════════════════════════════════════
-  doRender(Transform2d());
+  doRender();
   state.noteCachedTextures(entity, /*version=*/1, Vector2i(200, 100));
   verifyDisplay(std::nullopt, "Frame 0 (prewarm)");
 
@@ -516,9 +520,10 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsRed());
 
   // ══════════════════════════════════════════════════════════════════════
-  // Frame 1: Drag (translate right by 100).
+  // Frame 1: Drag — DOM mutated to translate(100, 0).
   // ══════════════════════════════════════════════════════════════════════
-  doRender(Transform2d::Translate(100, 0));
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
+  doRender();
   state.noteCachedTextures(entity, /*version=*/1, Vector2i(200, 100));
 
   SelectTool::ActiveDragPreview drag{.entity = entity, .translation = Vector2d(100, 0)};
@@ -533,16 +538,16 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   //   The display still shows the DRAG textures with settling offset.
   //   Settling render is in flight but hasn't landed.
   // ══════════════════════════════════════════════════════════════════════
-  // Apply transform to DOM (simulates SetTransformCommand).
-  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
+  // DOM already has the final transform (applied every drag frame). State
+  // machine transitions to settling.
   state.beginSettling(drag, /*targetVersion=*/2);
   // Do NOT render yet — the settling render is "in flight".
   verifyDisplay(std::nullopt, "Frame 2 (release, settling in-flight)");
 
   // ══════════════════════════════════════════════════════════════════════
-  // Frame 3: Settling render lands.
+  // Frame 3: Settling render lands (DOM already at final transform).
   // ══════════════════════════════════════════════════════════════════════
-  doRender(Transform2d());  // Settling render at zero offset, new DOM position.
+  doRender();
   state.noteCachedTextures(entity, /*version=*/2, Vector2i(200, 100));
   state.noteChromeRefreshCompleted(/*refreshedVersion=*/2);
   verifyDisplay(std::nullopt, "Frame 3 (settling landed)");
@@ -586,7 +591,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   // ══════════════════════════════════════════════════════════════════════
   ASSERT_TRUE(compositor.promoteEntity(entity));
   currentEntity = entity;
-  doRender(Transform2d());
+  doRender();
 
   state.noteCachedTextures(simulatedNewEntity, /*version=*/3, Vector2i(200, 100));
   verifyDisplay(std::nullopt, "Frame 5 (prewarm landed)");

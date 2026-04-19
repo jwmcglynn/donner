@@ -134,7 +134,7 @@ HBEOF""",
         name = "tracy",
         build_file = "//third_party:BUILD.tracy",
         # Pinned to the latest stable upstream release. Bump deliberately.
-        tag = "v0.12.2",
+        tag = "v0.13.1",
         remote = "https://github.com/wolfpld/tracy.git",
     )
 

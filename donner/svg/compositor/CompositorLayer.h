@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <optional>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
@@ -97,6 +98,15 @@ public:
   /// Returns the composition transform applied during blitting.
   [[nodiscard]] const Transform2d& compositionTransform() const { return compositionTransform_; }
 
+  /// Returns the entity's absolute transform at the moment the cached
+  /// bitmap was rasterized, if any. The compositor uses this to decide
+  /// whether a subsequent DOM transform mutation can reuse the bitmap
+  /// by updating `compositionTransform_` (pure-translation delta) vs
+  /// forcing re-rasterization (any other delta).
+  [[nodiscard]] const std::optional<Transform2d>& bitmapEntityFromWorldTransform() const {
+    return bitmapEntityFromWorldTransform_;
+  }
+
   /// Returns true if the layer needs re-rasterization.
   [[nodiscard]] bool isDirty() const { return dirty_; }
 
@@ -122,11 +132,26 @@ public:
   /// Clear the dirty flag after re-rasterization.
   void clearDirty() { dirty_ = false; }
 
-  /// Set the cached bitmap for this layer.
-  void setBitmap(RendererBitmap bitmap) {
+  /// Set the cached bitmap for this layer, along with the entity's
+  /// absolute transform at the moment of rasterization. Stored so a
+  /// subsequent fast-path DOM translation mutation can detect that the
+  /// bitmap's pixel content is still valid (only its world-space
+  /// position drifted) and reuse it via a compose-offset delta.
+  ///
+  /// Bumps `generation_` so the editor can tell a fresh rasterization
+  /// from a preserved-across-remap cache via `CompositorTile::
+  /// generation` and skip redundant GL texture uploads.
+  void setBitmap(RendererBitmap bitmap, const Transform2d& entityFromWorldTransform) {
     bitmap_ = std::move(bitmap);
+    bitmapEntityFromWorldTransform_ = entityFromWorldTransform;
     dirty_ = false;
+    ++generation_;
   }
+
+  /// Monotonic version counter — bumped on every `setBitmap`. The
+  /// editor uses it to decide whether to re-upload this layer's
+  /// bitmap to its cached GL texture.
+  [[nodiscard]] uint64_t generation() const { return generation_; }
 
   /// Set the composition transform used during blitting.
   void setCompositionTransform(const Transform2d& transform) {
@@ -140,6 +165,19 @@ public:
   void setEntityRange(Entity firstEntity, Entity lastEntity) {
     firstEntity_ = firstEntity;
     lastEntity_ = lastEntity;
+  }
+
+  /// Remap the layer's entity ids (`entity_`, `firstEntity_`, `lastEntity_`)
+  /// from old to new — used by `CompositorController::remapAfterStructural
+  /// Replace` when a structurally-identical document swap gives every
+  /// element a new entity id but leaves the rasterized pixels valid. The
+  /// cached `bitmap_`, `compositionTransform_`, `bitmapEntityFromWorld
+  /// Transform_`, and `fallbackReasons_` survive unchanged — they're
+  /// keyed on position-in-paint-order, not entity id.
+  void remapEntities(Entity newEntity, Entity newFirstEntity, Entity newLastEntity) {
+    entity_ = newEntity;
+    firstEntity_ = newFirstEntity;
+    lastEntity_ = newLastEntity;
   }
 
   /// Reassign the layer's numeric id. Used by `CompositorController::reconcileLayers()`
@@ -156,9 +194,11 @@ private:
   Entity firstEntity_;
   Entity lastEntity_;
   RendererBitmap bitmap_;
+  std::optional<Transform2d> bitmapEntityFromWorldTransform_;
   Transform2d compositionTransform_;
   FallbackReason fallbackReasons_ = FallbackReason::None;
   bool dirty_ = true;
+  uint64_t generation_ = 0;
 };
 
 }  // namespace donner::svg::compositor

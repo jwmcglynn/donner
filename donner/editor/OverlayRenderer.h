@@ -62,10 +62,32 @@ public:
                                       const Transform2d& canvasFromDoc);
 
   /// Multi-element entry: draw path outlines for every selected
-  /// element using `canvasFromDoc`. Selection AABBs and marquee chrome
-  /// are drawn directly via the ImGui draw list in `main.cc` so clicks
-  /// and marquee drags can update in the same frame without waiting for
-  /// an overlay re-rasterize.
+  /// element, selection AABBs, and the optional marquee rect into
+  /// `renderer`'s active frame using `canvasFromDoc`.
+  ///
+  /// All chrome lives in this one rasterized overlay layer. The earlier
+  /// "two-path" design that drew AABBs + marquee directly via
+  /// ImGui's draw list in `RenderPanePresenter` was folded into here
+  /// — Geode can optimize the whole layer end-to-end (a single
+  /// invalidation envelope, a single GPU upload) once it lands.
+  ///
+  /// @param selection Selected elements whose per-element path outlines
+  ///   should be stroked.
+  /// @param selectionBoundsDoc Document-space AABBs for the selection;
+  ///   each is stroked as the selection chrome rectangle.
+  /// @param marqueeRectDoc Optional marquee rect in document space;
+  ///   drawn as a filled + stroked rectangle matching the prior
+  ///   ImGui chrome style.
+  /// @param canvasFromDoc Maps document coordinates into canvas pixels.
+  static void drawChromeWithTransform(svg::Renderer& renderer,
+                                      std::span<const svg::SVGElement> selection,
+                                      std::span<const Box2d> selectionBoundsDoc,
+                                      const std::optional<Box2d>& marqueeRectDoc,
+                                      const Transform2d& canvasFromDoc);
+
+  /// Back-compat overload without AABBs / marquee. Kept for existing
+  /// callers that only need path outlines (older tests, worker-thread
+  /// helpers). Prefer the full-chrome overload above for new code.
   static void drawChromeWithTransform(svg::Renderer& renderer,
                                       std::span<const svg::SVGElement> selection,
                                       const Transform2d& canvasFromDoc);

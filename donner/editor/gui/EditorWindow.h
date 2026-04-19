@@ -76,8 +76,29 @@ public:
   /// the OS's "close" shortcut.
   [[nodiscard]] bool shouldClose() const;
 
-  /// Pumps the OS event queue. Must be called once per frame.
+  /// Pumps the OS event queue without blocking. Use on Emscripten
+  /// (where `waitEvents` is unimplemented) or when a continuous render
+  /// loop is required (e.g. when an active animation is driving a
+  /// fresh frame every tick).
   void pollEvents();
+
+  /// Blocks until an OS or user-posted event arrives, then pumps the
+  /// event queue once. This is the on-demand render path: the UI thread
+  /// sleeps when the editor is idle and wakes on user input, window
+  /// resize, or an explicit `wakeEventLoop()` from another thread.
+  ///
+  /// No-op on Emscripten, where the browser's requestAnimationFrame
+  /// drives the main loop instead (`glfwWaitEvents` is unimplemented
+  /// upstream).
+  void waitEvents();
+
+  /// Post an empty event into the window's queue, waking a concurrent
+  /// `waitEvents()` call. Safe to call from any thread. Used by the
+  /// async renderer worker to wake the UI thread when a render result
+  /// becomes available.
+  ///
+  /// No-op on Emscripten.
+  void wakeEventLoop();
 
   /// Starts a new ImGui frame. Caller issues `ImGui::*` widget calls
   /// after this returns.

@@ -1,5 +1,7 @@
 #include "donner/editor/GlTextureCache.h"
 
+#include "donner/editor/TracyWrapper.h"
+
 namespace donner::editor {
 
 GlTextureCache::~GlTextureCache() {
@@ -44,17 +46,21 @@ void GlTextureCache::initialize() {
 }
 
 void GlTextureCache::uploadFlat(const svg::RendererBitmap& bitmap) {
+  ZoneScopedN("GlTextureCache::uploadFlat");
   UploadBitmap(flatTexture_, bitmap, &flatWidth_, &flatHeight_);
 }
 
 void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {
+  ZoneScopedN("GlTextureCache::uploadOverlay");
   UploadBitmap(overlayTexture_, bitmap, &overlayWidth_, &overlayHeight_);
 }
 
 void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview) {
+  ZoneScopedN("GlTextureCache::uploadComposited");
   UploadBitmap(backgroundTexture_, preview.backgroundBitmap, &backgroundWidth_, &backgroundHeight_);
   UploadBitmap(promotedTexture_, preview.promotedBitmap, &promotedWidth_, &promotedHeight_);
   UploadBitmap(foregroundTexture_, preview.foregroundBitmap, &foregroundWidth_, &foregroundHeight_);
+  promotedTranslationDoc_ = preview.promotedTranslationDoc;
 }
 
 void GlTextureCache::clearOverlay() {
@@ -69,6 +75,7 @@ void GlTextureCache::resetComposited() {
   promotedHeight_ = 0;
   foregroundWidth_ = 0;
   foregroundHeight_ = 0;
+  promotedTranslationDoc_ = Vector2d::Zero();
 }
 
 void GlTextureCache::UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,

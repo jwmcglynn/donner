@@ -55,7 +55,6 @@ donner_cc_test(
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
-        "//donner/editor:viewport_state",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
@@ -125,8 +124,17 @@ donner_cc_test(
 donner_cc_test(
     name = "async_renderer_tests",
     srcs = ["AsyncRenderer_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+    ],
     deps = [
         "//donner/editor:async_renderer",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:command_queue",
+        "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:tracy_wrapper",
+        "//donner/svg/compositor",
         "//donner/svg/renderer",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",

@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -239,7 +240,7 @@ TEST_F(CompositorControllerTest, PromoteMultipleEntities) {
   EXPECT_TRUE(compositor.isPromoted(b->entityHandle().entity()));
 }
 
-TEST_F(CompositorControllerTest, SetCompositionTransform) {
+TEST_F(CompositorControllerTest, LayerComposeOffsetTracksDomTranslationDelta) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />
   )svg");
@@ -248,19 +249,28 @@ TEST_F(CompositorControllerTest, SetCompositionTransform) {
   ASSERT_TRUE(target.has_value());
   const Entity entity = target->entityHandle().entity();
 
+  configureMockForCaching();
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
 
-  const Transform2d translate = Transform2d::Translate(5.0, 10.0);
-  compositor.setLayerCompositionTransform(entity, translate);
+  // First frame: bitmap is stamped against the DOM's identity transform.
+  RenderViewport viewport;
+  viewport.size = Vector2d(100, 100);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
 
-  const Transform2d result = compositor.compositionTransformOf(entity);
+  // Mutate the DOM — the compositor's fast path detects the pure-translation
+  // delta and should report it via `layerComposeOffset()`.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 10.0));
+  compositor.renderFrame(viewport);
+
+  const Transform2d result = compositor.layerComposeOffset(entity);
   EXPECT_TRUE(result.isTranslation());
   EXPECT_NEAR(result.translation().x, 5.0, 1e-10);
   EXPECT_NEAR(result.translation().y, 10.0, 1e-10);
 }
 
-TEST_F(CompositorControllerTest, CompositionTransformOfNonPromotedReturnsIdentity) {
+TEST_F(CompositorControllerTest, LayerComposeOffsetOfNonPromotedReturnsIdentity) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />
   )svg");
@@ -269,7 +279,7 @@ TEST_F(CompositorControllerTest, CompositionTransformOfNonPromotedReturnsIdentit
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  const Transform2d result = compositor.compositionTransformOf(target->entityHandle().entity());
+  const Transform2d result = compositor.layerComposeOffset(target->entityHandle().entity());
   EXPECT_TRUE(result.isIdentity());
 }
 

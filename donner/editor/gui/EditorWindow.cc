@@ -18,6 +18,7 @@
 #include <string_view>
 
 #include "donner/editor/ImGuiBackendIncludes.h"
+#include "donner/editor/TracyWrapper.h"
 
 namespace donner::editor::gui {
 
@@ -269,14 +270,38 @@ void EditorWindow::pollEvents() {
   glfwPollEvents();
 }
 
+void EditorWindow::waitEvents() {
+#ifdef __EMSCRIPTEN__
+  // emscripten-glfw's `glfwWaitEvents` is a no-op; the browser drives
+  // the main loop via `requestAnimationFrame`. Fall back to a regular
+  // poll so the loop still processes queued input this tick.
+  glfwPollEvents();
+#else
+  glfwWaitEvents();
+#endif
+}
+
+void EditorWindow::wakeEventLoop() {
+#ifdef __EMSCRIPTEN__
+  // No-op — the browser's rAF cadence handles wake-ups implicitly.
+#else
+  glfwPostEmptyEvent();
+#endif
+}
+
 void EditorWindow::beginFrame() {
+  ZoneScopedN("EditorWindow::beginFrame");
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplGlfw_NewFrame();
   ImGui::NewFrame();
 }
 
 void EditorWindow::endFrame() {
-  ImGui::Render();
+  ZoneScopedN("EditorWindow::endFrame");
+  {
+    ZoneScopedN("ImGui::Render");
+    ImGui::Render();
+  }
   int displayW = 0;
   int displayH = 0;
 #ifdef __EMSCRIPTEN__
@@ -289,11 +314,17 @@ void EditorWindow::endFrame() {
   glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
                options_.clearColor[3]);
   glClear(GL_COLOR_BUFFER_BIT);
-  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+  {
+    ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+  }
 #ifndef __EMSCRIPTEN__
   // emscripten-glfw intentionally doesn't implement `glfwSwapBuffers`;
   // the browser drives presentation via `requestAnimationFrame`.
-  glfwSwapBuffers(window_);
+  {
+    ZoneScopedN("glfwSwapBuffers");
+    glfwSwapBuffers(window_);
+  }
 #endif
 }
 

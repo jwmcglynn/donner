@@ -2,6 +2,7 @@
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/TracyWrapper.h"
 
 namespace donner::editor {
 
@@ -14,6 +15,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlaySelectionVec_.clear();
   lastOverlayCanvasSize_ = Vector2i::Zero();
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
+  lastOverlayMarqueeRectDoc_.reset();
   lastRenderedVersion_ = 0;
   lastRenderedCanvasSize_ = Vector2i::Zero();
 }
@@ -33,9 +35,10 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
   PromoteSelectionBoundsIfReady(selectionBoundsCache_, displayedDocVersion_);
 }
 
-bool RenderCoordinator::rasterizeOverlayForCurrentSelection(EditorApp& app,
-                                                            const ViewportState& viewport,
-                                                            GlTextureCache& textures) {
+bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
+    EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
+    const std::optional<Box2d>& marqueeRectDoc) {
+  ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     return false;
   }
@@ -52,7 +55,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(EditorApp& app,
   const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
   const auto& overlaySelection = app.selectedElements();
   OverlayRenderer::drawChromeWithTransform(
-      overlayRenderer_, std::span<const svg::SVGElement>(overlaySelection), canvasFromDoc);
+      overlayRenderer_, std::span<const svg::SVGElement>(overlaySelection),
+      std::span<const Box2d>(selectionBoundsCache_.displayedBoundsDoc), marqueeRectDoc,
+      canvasFromDoc);
   overlayRenderer_.endFrame();
   pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
   pendingOverlayVersion_ = currentVersion;
@@ -71,11 +76,13 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(EditorApp& app,
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlayCanvasSize_ = currentCanvasSize;
   lastOverlayVersion_ = currentVersion;
+  lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
   return true;
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
                                          GlTextureCache& textures) {
+  ZoneScopedN("RenderCoordinator::pollRenderResult");
   auto resultOpt = asyncRenderer_.pollResult();
   if (!resultOpt.has_value()) {
     return;
@@ -102,7 +109,11 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   displayedDocVersion_ = result.version;
   if (hasComposited && experimentalDragPresentation_.waitingForChromeRefresh && app.hasDocument()) {
     refreshSelectionBoundsCache(app);
-    rasterizeOverlayForCurrentSelection(app, viewport, textures);
+    // Preserve the last-known marquee rect across this internal
+    // chrome-refresh path. Composited drag lands here; SelectTool isn't
+    // reachable, so we reuse whatever the most recent main-thread
+    // rasterize baked in.
+    rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_);
     experimentalDragPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   if (pendingOverlayBitmap_.has_value() && pendingOverlayVersion_ == displayedDocVersion_) {
@@ -120,6 +131,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
                                            const ViewportState& viewport, bool experimentalMode,
                                            GlTextureCache& textures) {
+  ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (asyncRenderer_.isBusy() || !app.hasDocument() || viewport.paneSize.x <= 0.0 ||
       viewport.paneSize.y <= 0.0) {
     return;
@@ -148,11 +160,17 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   const auto& overlaySelection = app.selectedElements();
   const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec_;
+  const std::optional<Box2d> marqueeRectDoc = selectTool.marqueeRect();
+  // The marquee rect updates every mouse-move during a marquee drag and
+  // doesn't bump the document version (no DOM mutation), so it needs
+  // its own invalidation check. Comparing via `!=` on the optional<Box2d>
+  // covers "marquee appeared", "marquee moved", and "marquee ended".
+  const bool marqueeDiffers = marqueeRectDoc != lastOverlayMarqueeRectDoc_;
   if ((!experimentalMode || !experimentalDragPresentation_.waitingForFullRender ||
-       dragPreview.has_value()) &&
-      (selectionDiffers || currentCanvasSize != lastOverlayCanvasSize_ ||
+       dragPreview.has_value() || marqueeRectDoc.has_value()) &&
+      (selectionDiffers || marqueeDiffers || currentCanvasSize != lastOverlayCanvasSize_ ||
        currentVersion != lastOverlayVersion_)) {
-    rasterizeOverlayForCurrentSelection(app, viewport, textures);
+    rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc);
   }
 
   const bool needsExperimentalLayerCapture =
@@ -183,6 +201,14 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   req.renderer = &renderer_;
   req.document = &app.document().document();
   req.version = currentVersion;
+  req.documentGeneration = app.document().documentGeneration();
+  // Drain any pending structural remap from a recent `setDocumentMaybe
+  // Structural` call. Non-empty remap lets the worker preserve the
+  // compositor's cached state across the document swap instead of
+  // falling into the full-reset path. Must be consumed on every render
+  // request — a second render without consumption would re-apply a
+  // stale remap against an already-remapped compositor.
+  req.structuralRemap = app.document().consumePendingStructuralRemap();
   req.selection = std::nullopt;
   // Carry the current selection on every render so the compositor can keep
   // the selected entity promoted across drag → idle → drag transitions.
@@ -199,13 +225,11 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (dragPreview.has_value()) {
     req.dragPreview = RenderRequest::DragPreview{
         .entity = dragPreview->entity,
-        .translation = dragPreview->translation,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
     };
   } else if (needsExperimentalPrewarm) {
     req.dragPreview = RenderRequest::DragPreview{
         .entity = prewarmEntity,
-        .translation = Vector2d::Zero(),
         .interactionKind = svg::compositor::InteractionHint::Selection,
     };
   }

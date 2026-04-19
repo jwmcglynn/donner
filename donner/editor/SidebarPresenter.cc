@@ -5,7 +5,6 @@
 #include <string_view>
 
 #include "donner/editor/ImGuiIncludes.h"
-#include "donner/editor/SelectTool.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
@@ -103,8 +102,7 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   inspectorSnapshot_ = std::move(inspector);
 }
 
-void SidebarPresenter::renderTreeNode(EditorApp* liveApp, SelectTool* selectTool,
-                                       const TreeNodeSnapshot& node,
+void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node,
                                        TreeViewState& state) const {
   const bool hasChildren = !node.children.empty();
   const bool onSelectionPath = state.pendingScroll && state.scrollTarget.has_value() &&
@@ -133,13 +131,6 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, SelectTool* selectTool
   // the worker finishes and the main loop catches up next frame.
   if (liveApp != nullptr && ImGui::IsItemClicked()) {
     const bool toggleSelection = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
-    // Flush any deferred drag mutation before the selection changes.
-    // Without this, the fresh render that the selection change is about
-    // to kick off would still see the pre-drag DOM transform for the
-    // last-dragged entity and snap it back to the pre-drag position.
-    if (selectTool != nullptr) {
-      selectTool->commitPendingDragMutation(*liveApp);
-    }
     if (toggleSelection) {
       liveApp->toggleInSelection(*node.element);
     } else {
@@ -151,7 +142,7 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, SelectTool* selectTool
 
   if (nodeOpen && hasChildren) {
     for (const auto& child : node.children) {
-      renderTreeNode(liveApp, selectTool, child, state);
+      renderTreeNode(liveApp, child, state);
     }
     ImGui::TreePop();
   }
@@ -159,13 +150,12 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, SelectTool* selectTool
   ImGui::PopID();
 }
 
-void SidebarPresenter::renderTreeView(EditorApp* liveApp, SelectTool* selectTool,
-                                       TreeViewState& state) const {
+void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state) const {
   if (!treeSnapshot_.has_value()) {
     ImGui::TextDisabled("(no document)");
     return;
   }
-  renderTreeNode(liveApp, selectTool, *treeSnapshot_, state);
+  renderTreeNode(liveApp, *treeSnapshot_, state);
 }
 
 void SidebarPresenter::renderInspector(const ViewportState& viewport) const {

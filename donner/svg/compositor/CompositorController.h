@@ -22,6 +22,68 @@ namespace donner::svg::compositor {
 /// Maximum number of compositor layers that can be simultaneously active.
 inline constexpr int kMaxCompositorLayers = 32;
 
+/// A single bitmap cache unit the compositor exposes for GPU upload —
+/// either a static segment (non-promoted content between promoted
+/// layers) or a promoted layer's own rasterization.
+///
+/// The caller (editor) holds a texture per tile keyed on `tileId`, and
+/// only re-uploads to the GPU when `generation` advances. The
+/// compositor composites these in paint-order (`paintOrderIndex`) on
+/// the editor side.
+struct CompositorTile {
+  /// Stable id for this tile's slot in the compositor's cache
+  /// topology. Segments are (0..N), layers are (1'<<31) | entityId so
+  /// the two namespaces don't collide. Editor uses the tileId as the
+  /// key in its GL texture cache — so as long as the compositor reuses
+  /// the same tileId for a preserved bitmap, the editor keeps its
+  /// texture.
+  uint64_t tileId = 0;
+
+  /// Monotonic version counter, bumped every time this tile's pixel
+  /// content is re-rasterized. Editor uploads to GL only when the
+  /// generation differs from the one it last uploaded for this tileId.
+  /// On the first click-to-drag after page load, at most 3 tile
+  /// generations advance — the split segment's two halves and the new
+  /// drag-target layer — because every other segment / filter layer
+  /// keeps its identity across the layer-set change.
+  uint64_t generation = 0;
+
+  /// Position in paint order among the full compositor output. Editor
+  /// composites tiles by blitting in ascending `paintOrderIndex`.
+  uint32_t paintOrderIndex = 0;
+
+  /// Pointer into the compositor's cached bitmap. Empty if the tile's
+  /// slot is structurally present but no pixel content yet (e.g., a
+  /// segment whose range contains no visible non-promoted entities).
+  const RendererBitmap* bitmap = nullptr;
+
+  /// Non-null for a promoted layer tile: the promoted entity id. Null
+  /// for a static segment tile.
+  Entity layerEntity = entt::null;
+
+  /// Compose transform the tile should be drawn with. Identity for
+  /// segments and for non-drag layers; pure translation for the drag
+  /// layer when the fast path has updated its offset.
+  Transform2d compositionTransform;
+};
+
+/**
+ * Walk the XML trees of @p oldDoc and @p newDoc in lockstep and build a
+ * remap from old-registry entity ids → new-registry entity ids, suitable
+ * for `CompositorController::remapAfterStructuralReplace`. Returns an
+ * empty map if the two trees are not structurally equivalent — defined
+ * as: same preorder walk, same element tag name at every step, and same
+ * `id` attribute at every step (or neither has one). Attribute values
+ * other than `id` are allowed to differ — the drag-end writeback case
+ * changes `transform` values, not tree shape.
+ *
+ * The returned map covers every element visited in the walk. The caller
+ * is responsible for handing it to `remapAfterStructuralReplace` on the
+ * compositor that was previously tracking @p oldDoc's entity space.
+ */
+[[nodiscard]] std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(
+    const SVGDocument& oldDoc, const SVGDocument& newDoc);
+
 /// Maximum total memory budget for compositor layer bitmaps, in bytes.
 inline constexpr size_t kMaxCompositorMemoryBytes = 256 * 1024 * 1024;
 
@@ -72,9 +134,11 @@ struct CompositorConfig {
  * Controls compositor layer promotion/demotion and orchestrates composited rendering.
  *
  * The compositor splits the document into layers: one root layer (everything not promoted) and
- * zero or more promoted layers (one per promoted entity subtree). During interactive drag, only
- * the dragged layer's composition transform changes — no re-rasterization is needed for
- * translation-only drags when the layer's content hasn't changed.
+ * zero or more promoted layers (one per promoted entity subtree). The DOM is the sole source of
+ * truth for entity position: during a drag, callers mutate the entity's transform directly
+ * (`element.setTransform(...)`) and the compositor's fast path diffs the new absolute transform
+ * against the cached bitmap's rasterize-time transform. When the delta is a pure translation, the
+ * bitmap is reused and only the internal compose offset updates — no re-rasterization.
  *
  * Usage:
  * ```cpp
@@ -83,8 +147,8 @@ struct CompositorConfig {
  * // Promote drag target
  * compositor.promoteEntity(dragTarget);
  *
- * // During drag — update composition transform, render composited frame
- * compositor.setLayerCompositionTransform(dragTarget, Transform2d::Translate(dx, dy));
+ * // During drag — mutate the DOM; the compositor tracks the delta internally.
+ * dragElement.setTransform(Transform2d::Translate(dx, dy));
  * compositor.renderFrame(viewport);
  *
  * // When drag ends
@@ -154,22 +218,17 @@ public:
   [[nodiscard]] bool isPromoted(Entity entity) const;
 
   /**
-   * Set the composition transform for a promoted entity's layer.
+   * Returns the current bitmap-compose offset for a promoted entity's layer, or identity if the
+   * entity is not promoted or has no cached bitmap.
    *
-   * For translation-only transforms, the layer bitmap is blitted at the new offset without
-   * re-rasterization. Non-translation transforms mark the layer dirty for re-rasterization.
-   *
-   * @param entity The promoted entity.
-   * @param transform The composition transform to apply during blitting.
-   */
-  void setLayerCompositionTransform(Entity entity, const Transform2d& transform);
-
-  /**
-   * Returns the current composition transform for a promoted entity, or identity if not promoted.
+   * The compose offset is the delta between the cached bitmap's rasterize-time world transform
+   * and the entity's current absolute world transform. Callers who draw the promoted layer's
+   * bitmap independently (e.g. the editor's split-layer display path) must apply this offset so
+   * the bitmap aligns with the bg/fg render the compositor just produced.
    *
    * @param entity The entity to query.
    */
-  [[nodiscard]] Transform2d compositionTransformOf(Entity entity) const;
+  [[nodiscard]] Transform2d layerComposeOffset(Entity entity) const;
 
   /**
    * Prepare and render a composited frame.
@@ -222,11 +281,76 @@ public:
   /**
    * Clear all layers and cached state.
    *
-   * Called when the underlying document is rebuilt (e.g., after `ReplaceDocumentCommand`), which
-   * invalidates all entity handles. After this call, `layerCount()` is 0 and all cached bitmaps
-   * are released.  The next `renderFrame()` will do a full render.
+   * Two callers, two semantics:
+   *
+   * - `documentReplaced = false` (the default, used by tests and by the
+   *    compositor's own internal paths that reset against the still-live
+   *    registry): runs the normal `~ScopedCompositorHint` cleanup, which
+   *    removes `CompositorHintComponent`s from the live registry and lets
+   *    the resolver strip the now-orphan `ComputedLayerAssignment
+   *    Component`s.
+   *
+   * - `documentReplaced = true` (used by `AsyncRenderer` when it detects
+   *    `documentGeneration` has bumped, i.e. a `ReplaceDocumentCommand`
+   *    swapped the inner `SVGDocument` at the same optional storage
+   *    address): the old Registry was destroyed in place and a brand-new
+   *    one constructed at the same address. Every `ScopedCompositorHint`'s
+   *    cached `Registry*` now aims at a live object that knows nothing
+   *    about the old entity IDs, so calling `registry.valid(old_entity)`
+   *    from the dtor SIGSEGVs inside entt's sparse-set lookup. In this
+   *    mode the hints are `release()`-defused before clearing — the old
+   *    `CompositorHintComponent`s went down with the old registry anyway.
+   *
+   * After this call, `layerCount()` is 0 and all cached bitmaps are
+   * released.  The next `renderFrame()` will do a full render.
    */
-  void resetAllLayers();
+  void resetAllLayers(bool documentReplaced = false);
+
+  /**
+   * Rewire the compositor's entity-keyed state (`activeHints_`,
+   * `mandatoryDetector_`, `complexityBucketer_`, `layers_`) from the
+   * old document's entity space onto a new one, after a structurally
+   * identical `setDocument`. The cached bitmaps (segments, layer
+   * bitmaps, `backgroundBitmap_`, `foregroundBitmap_`) survive
+   * untouched — they're keyed on position-in-paint-order, not entity
+   * id. This is the fast alternative to `resetAllLayers(documentReplaced
+   * =true)` for the editor's drag-end writeback round-trip through
+   * `ReplaceDocumentCommand`: with a structurally equal reparse, the
+   * new document describes the same render tree with the identical
+   * visual result, and the compositor can simply swap ids.
+   *
+   * @param remap Mapping from old entity id → new entity id. Every
+   *   entity in `activeHints_` and in each `CompositorLayer`
+   *   (`entity`, `firstEntity`, `lastEntity`) must have an entry;
+   *   detectors rebuild against the new registry so their hint set
+   *   doesn't need remap entries.
+   * @return true on success. On false, the compositor is in an
+   *   indeterminate state — the caller MUST follow up with
+   *   `resetAllLayers(documentReplaced=true)` to recover.
+   */
+  [[nodiscard]] bool remapAfterStructuralReplace(
+      const std::unordered_map<Entity, Entity>& remap);
+
+  /// When true, `renderFrame()` skips the main-renderer compose step while
+  /// the split-static-layers cache (`bg`/`drag`/`fg` triple) is populated.
+  /// The editor's drag overlay reads those bitmaps directly via GL, so the
+  /// per-frame `drawImage` calls into the main renderer are wasted work
+  /// — on a 892×512 Skia backend with a few filter layers the skip saves
+  /// ~100 ms per drag frame. The flat snapshot the editor uploads stays
+  /// stale during drag but is only drawn after drag ends, by which point
+  /// the settle render (no split cache) has refreshed it.
+  void setSkipMainComposeDuringSplit(bool skip) { skipMainComposeDuringSplit_ = skip; }
+
+  /// Enumerate every cacheable unit (static segments + promoted layer
+  /// bitmaps) interleaved in paint order. Each tile carries a
+  /// `generation` counter that advances only when the tile's pixel
+  /// content was actually re-rasterized — so the editor can gate its
+  /// GL texture uploads to the minimum set that actually changed this
+  /// frame. On a click-to-drag, the user should observe at most 3
+  /// tiles advance: the two halves of the split segment and the new
+  /// drag-target layer. All other filter layers, segments, and
+  /// bucket layers keep their generation and their GL texture binding.
+  [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload() const;
 
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
@@ -236,11 +360,44 @@ private:
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport);
 
-  /// Rasterize the root layer (full document render for v1).
-  void rasterizeRootLayer(const RenderViewport& viewport);
+  /// Rasterize any static segments whose `staticSegmentDirty_` flag is
+  /// set. Each segment lives between two consecutive promoted layers in
+  /// paint-order (plus the pre-first and post-last slots) and is rendered
+  /// with all promoted layers hidden + out-of-slot entities hidden. A
+  /// mutation inside a segment only re-rasterizes that one segment —
+  /// every other segment (and every promoted layer bitmap) stays cached.
+  void rasterizeDirtyStaticSegments(const RenderViewport& viewport);
 
-  /// Rasterize cached underlay/overlay bitmaps for the single promoted-layer drag-preview case.
-  void rasterizeSplitRootLayers(const CompositorLayer& layer, const RenderViewport& viewport);
+  /// Locate the paint-order segment that contains @p entity. Returns
+  /// `layers_.size()` (post-last-layer slot) if the entity lies beyond
+  /// every promoted layer or has no `RenderingInstanceComponent`.
+  [[nodiscard]] size_t findSegmentForEntity(Entity entity) const;
+
+  /// Rebuild `staticSegments_` / `staticSegmentDirty_` /
+  /// `staticSegmentBoundaries_` to match the current `layers_` set,
+  /// preserving bitmap caches whose boundary identity (pair of
+  /// neighboring layer entity ids) survived the layer set change. Any
+  /// slot whose boundary identity is new or shifted gets re-rasterized
+  /// on the next `rasterizeDirtyStaticSegments` call. Canvas-size
+  /// changes force a full invalidation (cached pixels are sized to the
+  /// old canvas, can't be reused).
+  ///
+  /// Returns true if the layer set or canvas changed enough that the
+  /// editor-facing bg/fg cache must be dropped; the caller invalidates
+  /// `backgroundBitmap_`/`foregroundBitmap_` accordingly.
+  bool resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize);
+
+  /// Mark every segment dirty (structural rebuilds, layer set changes,
+  /// canvas size changes). Resizes `staticSegmentDirty_` to match
+  /// `layers_.size() + 1` along the way.
+  void markAllSegmentsDirty();
+
+  /// Composite the editor's backwards-compatible bg/fg bitmaps from the
+  /// cached static segments plus any non-drag promoted layer bitmaps,
+  /// using the drag layer's paint-order position as the split point.
+  /// Called from `renderFrame` in the single-drag-target split path after
+  /// segments / layers have been rasterized.
+  void recomposeSplitBitmaps(const CompositorLayer& dragLayer, const RenderViewport& viewport);
 
   /// Compose all layers onto the main render target.
   void composeLayers(const RenderViewport& viewport);
@@ -284,19 +441,62 @@ private:
   std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
   std::vector<CompositorLayer> layers_;
 
-  /// Cached root layer bitmap (everything not in a promoted layer).
-  RendererBitmap rootBitmap_;
+  /// Cached static segments — N+1 bitmaps, one per paint-order gap between
+  /// promoted layers, plus the pre-first and post-last slots. Together
+  /// with `layers_` (interleaved) this reproduces the full document in
+  /// correct paint order without ever baking promoted content into the
+  /// static caches. Empty vector means segments need (re)rasterization.
+  std::vector<RendererBitmap> staticSegments_;
+  /// Per-segment dirty flags. When a non-promoted entity mutates we mark
+  /// just the segment whose paint-order slot contains it; `rasterizeDirty
+  /// StaticSegments` only re-rasterizes segments with `true` here, so the
+  /// other segments (and every promoted layer bitmap) stay cached. Always
+  /// kept the same size as `staticSegments_`.
+  std::vector<bool> staticSegmentDirty_;
+  /// Monotonic version counter per static segment, parallel to
+  /// `staticSegments_`. Bumps every time a segment's bitmap is re-
+  /// rasterized. Used by `snapshotTilesForUpload` to emit a stable
+  /// `generation` value per tile so the editor can skip redundant
+  /// GL texture uploads when a segment survived the layer-set change
+  /// untouched.
+  std::vector<uint64_t> staticSegmentGeneration_;
+  /// Monotonic counter used to seed `staticSegmentGeneration_[i]` when
+  /// a segment slot is freshly created. Survives layer-set shuffles
+  /// (i.e., when a segment splits in two, both new slots get fresh
+  /// generations from this counter).
+  uint64_t nextSegmentGeneration_ = 1;
+  /// Boundary identity for each segment in `staticSegments_`. Segment
+  /// `i`'s identity is `(left, right)` — the entity ids of the promoted
+  /// layers immediately to its left and right in paint order.
+  /// `entt::null` in a slot means "document start" (left of `segment[0]`)
+  /// or "document end" (right of `segment[N]`). When the layer set
+  /// changes (user promotes a drag target, demote on drag-end, etc.),
+  /// segments whose boundary pair survives in the new layer set keep
+  /// their cached bitmaps; the ones whose boundaries changed (typically
+  /// the single segment that the new layer splits) get re-rasterized.
+  /// This is what keeps click-to-first-pixel under the 100 ms budget
+  /// when the drag target's ancestor segment would otherwise have to
+  /// rebuild every cached filter / background bitmap on the first click.
+  std::vector<std::pair<Entity, Entity>> staticSegmentBoundaries_;
+  /// Canvas size the cached segments were rasterized at. Invalidates on
+  /// zoom / window resize so stale bitmaps at the old resolution don't
+  /// get composed into a new-sized canvas.
+  Vector2i staticSegmentsCanvas_ = Vector2i::Zero();
+  /// Number of promoted layers when segments were last rasterized. Changing
+  /// the promoted set changes segment boundaries, so segments invalidate.
+  size_t staticSegmentsLayerCount_ = 0;
+
+  /// Editor-facing split bitmaps — composited from `staticSegments_` plus
+  /// any non-drag promoted layer bitmaps. Populated only in the single
+  /// drag-target split path for the editor's smooth drag-overlay pipeline.
   RendererBitmap backgroundBitmap_;
   RendererBitmap foregroundBitmap_;
   /// Entity whose drag layer the cached bg/fg split is keyed on. When the
-  /// drag target changes, the split must be re-rasterized even if the
+  /// drag target changes, the split must be re-composited even if the
   /// document otherwise appears clean.
   Entity splitStaticLayersEntity_ = entt::null;
-  /// Viewport dimensions the cached bg/fg bitmaps were rasterized at. The
-  /// cache must invalidate when the viewport resizes (e.g. zoom or window
-  /// resize), otherwise stale bitmaps get composed at their old size into
-  /// a larger canvas — the content fills only the top-left region and the
-  /// rest is transparent.
+  /// Canvas size bg/fg were composited at. Mirrors `staticSegmentsCanvas_`
+  /// but tracks bg/fg independently so a no-op frame can skip recompositing.
   Vector2i splitStaticLayersViewport_ = Vector2i::Zero();
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
@@ -307,6 +507,22 @@ private:
   bool hintsScanned_ = false;
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
+  /// When true, `composeLayers` skips the main-renderer draw calls while
+  /// the split bg/drag/fg cache is populated — the editor reads those
+  /// bitmaps directly, so the main-renderer output would go unconsumed.
+  /// See `setSkipMainComposeDuringSplit`.
+  bool skipMainComposeDuringSplit_ = false;
+
+  /// True after `composeLayers` has completed a full (non-skipped)
+  /// main-renderer compose. Used to gate the skip-compose fast path:
+  /// on the first renderFrame of a session the main renderer still
+  /// has an empty pixmap, and callers that read `takeSnapshot()` (e.g.
+  /// the editor's flat-texture upload, or unit tests that assert the
+  /// bitmap is non-empty) expect a real render at least once. We flip
+  /// this to true after the first full compose and only skip on
+  /// subsequent drag frames, preserving the cached non-split frame as
+  /// the flat fallback without ever producing a transparent bitmap.
+  bool mainRendererHasCachedFrame_ = false;
 };
 
 }  // namespace donner::svg::compositor

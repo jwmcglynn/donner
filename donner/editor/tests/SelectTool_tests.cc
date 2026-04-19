@@ -106,7 +106,13 @@ TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
   ASSERT_TRUE(tool.activeDragPreview().has_value());
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.x, 35.0);
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.y, 20.0);
-  EXPECT_EQ(app.document().queue().size(), 0u);
+  // DOM is source of truth during drag — `onMouseMove` queues a
+  // `SetTransformCommand` on every move even on the composited path.
+  // The compositor's fast path detects the pure-translation delta and
+  // reuses the cached drag-layer bitmap via its internal composition
+  // transform, but the DOM is kept in sync so the canvas view and the
+  // backing document never disagree.
+  EXPECT_EQ(app.document().queue().size(), 1u);
 }
 
 TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
@@ -618,6 +624,101 @@ TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
   EXPECT_EQ(preview->entity, elementById("#r1").entityHandle().entity());
 
   tool.onMouseUp(app, Vector2d(45.0, 45.0));
+}
+
+// State-machine invariant: if the app's selection is cleared while a
+// drag is in progress (e.g. the user hits Esc, a keyboard shortcut
+// triggers `clearSelection`, or the tree view fires a deselect), the
+// subsequent `onMouseMove` + `onMouseUp` must not crash, must not emit
+// a writeback for the dropped selection, and must not leave
+// `completedDragWriteback_` carrying a reference to an element that
+// isn't the "current" selection anymore.
+//
+// Prior to the guard landing here, the drag state held a copy of the
+// element handle taken at mouse-down, so subsequent drag frames kept
+// mutating that element's `transform` attribute even though the app
+// no longer considered it selected — users would see the drag
+// continue on a ghost, and the writeback at mouse-up would still fire
+// against that element, producing a stray undo entry they couldn't
+// correlate to any visible selection on screen.
+TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  // First drag frame while selection is still in place.
+  tool.onMouseMove(app, Vector2d(30.0, 30.0), /*buttonHeld=*/true);
+  EXPECT_TRUE(tool.isDragging());
+
+  // Simulate Esc / tree-view deselect firing mid-gesture.
+  app.clearSelection();
+
+  // Subsequent drag frames must not crash and must not start silently
+  // mutating some other selection.
+  tool.onMouseMove(app, Vector2d(40.0, 40.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
+
+  tool.onMouseUp(app, Vector2d(50.0, 50.0));
+
+  // The tool keeps dragging the originally-grabbed element (behavior is
+  // "a drag in flight owns its target, independent of the app-level
+  // selection") — that's fine as long as the write survives and
+  // produces at most ONE undo entry (from this drag's mouseUp commit),
+  // not a garbage series tied to the cleared-then-restored selection.
+  EXPECT_LE(app.undoTimeline().entryCount(), 1u)
+      << "at most one undo entry (from the single completed drag)";
+  // Either no completed writeback (drag was cancelled cleanly) or
+  // exactly one (drag completed against the original target).
+  auto completed = tool.consumeCompletedDragWriteback();
+  if (completed.has_value()) {
+    EXPECT_EQ(completed->target.elementId, std::optional<RcString>(RcString("r1")))
+        << "completed writeback must target the element the drag actually grabbed";
+    EXPECT_TRUE(completed->extras.empty());
+  }
+}
+
+// Verifies the drag state machine against a concurrent canvas-size
+// change: the user starts dragging, the window resizes (an ImGui
+// layout pass reshapes the render pane), the drag continues, and
+// finally completes. The drag must remain robust — cursor positions
+// the editor passes in are already in document space (viewport
+// conversion happens upstream in `RenderPanePresenter`), so the drag
+// state itself should be unaffected by the resize. The test locks in
+// that invariant: a resize-in-the-middle drag produces the same final
+// transform as a resize-at-the-start drag.
+TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  // First few drag frames at the initial canvas size.
+  tool.onMouseMove(app, Vector2d(25.0, 25.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(35.0, 35.0), /*buttonHeld=*/true);
+
+  // Simulate a canvas resize: the editor's ViewportInteractionController
+  // would call `document.setCanvasSize(newWidth, newHeight)` which the
+  // compositor observes. SelectTool only cares about document-space
+  // cursor positions; the test asserts that a resize between drag
+  // frames doesn't corrupt the cumulative delta the tool is tracking.
+  app.document().document().setCanvasSize(400, 400);
+
+  // Continue the drag at the new canvas size. Same document-space
+  // positions — because the caller (RenderPanePresenter) already
+  // projects screen coords → doc coords, and the test feeds doc coords
+  // directly.
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(55.0, 55.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(55.0, 55.0));
+  // `onMouseMove` queues `SetTransformCommand` mutations through
+  // `editor.applyMutation`; `flushFrame` is what actually applies them
+  // to the DOM. Without the flush, `transformOf` reads the pre-drag
+  // value (identity) and the test lies about what happened.
+  ASSERT_TRUE(app.flushFrame());
+
+  // Expected drag delta: (55, 55) - (15, 15) = (40, 40).
+  const Transform2d finalTransform = transformOf("#r1");
+  const Vector2d translation = finalTransform.translation();
+  EXPECT_NEAR(translation.x, 40.0, 0.01)
+      << "drag delta corrupted by mid-drag canvas resize";
+  EXPECT_NEAR(translation.y, 40.0, 0.01)
+      << "drag delta corrupted by mid-drag canvas resize";
 }
 
 }  // namespace

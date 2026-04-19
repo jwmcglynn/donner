@@ -100,6 +100,46 @@ public:
   /// Returns true if this handle is still live (has not been moved from).
   [[nodiscard]] bool active() const { return registry_ != nullptr; }
 
+  /// Defuse the handle without touching the registry — subsequent
+  /// destruction becomes a no-op. Used by `CompositorController::
+  /// resetAllLayers` when the underlying document has been replaced
+  /// (`ReplaceDocumentCommand`): the old Registry was destroyed in place
+  /// and the new one at the same storage address has no knowledge of
+  /// the entity IDs these hints were built from, so calling
+  /// `registry.valid(old_entity)` in the dtor dereferences into entt
+  /// sparse-set pages that don't exist — SIGSEGV. The old `CompositorHint
+  /// Component`s went down with the old entity space, so there's nothing
+  /// to clean up anyway; we just need to make sure the dtor doesn't try.
+  void release() {
+    registry_ = nullptr;
+    entity_ = entt::null;
+  }
+
+  /// Re-target the handle at `(newRegistry, newEntity)` and publish a
+  /// fresh hint on the new entity. Used by `CompositorController::
+  /// remapAfterStructuralReplace` to preserve the hint graph across a
+  /// structurally-equivalent `setDocument`.
+  ///
+  /// `SVGDocument::registry_` is a `shared_ptr<Registry>` — a
+  /// `setDocument` frees the old Registry outright, making any raw
+  /// `Registry*` the hint was holding a dangling pointer. The caller
+  /// must supply the NEW registry's address (the one backing the
+  /// freshly-swapped document) so we re-seat the pointer before
+  /// touching any ECS state.
+  ///
+  /// The old entity id is NOT touched — the old Registry is destroyed,
+  /// and the old `CompositorHintComponent` went with it.
+  ///
+  /// Preconditions:
+  ///   - `active()` — the handle is not moved-from.
+  ///   - `newEntity` is a valid entity in `newRegistry`.
+  void remapToNewEntity(Registry& newRegistry, Entity newEntity) {
+    registry_ = &newRegistry;
+    entity_ = newEntity;
+    auto& component = registry_->get_or_emplace<CompositorHintComponent>(entity_);
+    component.addHint(source_, weight_);
+  }
+
 private:
   ScopedCompositorHint(Registry& registry, Entity entity, HintSource source, uint16_t weight,
                        InteractionHint interactionKind);

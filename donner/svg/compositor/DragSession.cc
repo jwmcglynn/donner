@@ -33,12 +33,6 @@ DragSession& DragSession::operator=(DragSession&& other) noexcept {
   return *this;
 }
 
-void DragSession::updateTranslation(const Vector2d& delta) {
-  if (compositor_) {
-    compositor_->setLayerCompositionTransform(target_, Transform2d::Translate(delta));
-  }
-}
-
 void DragSession::end() {
   if (compositor_) {
     compositor_->demoteEntity(target_);

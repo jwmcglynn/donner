@@ -1,6 +1,7 @@
 #include "donner/editor/AsyncRenderer.h"
 
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -45,6 +46,11 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
   return std::move(result_);
 }
 
+void AsyncRenderer::setWakeCallback(std::function<void()> callback) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  wakeCallback_ = std::move(callback);
+}
+
 void AsyncRenderer::workerLoop() {
   // Construct the Renderer on the worker thread so all its backend-owned
   // resources (WebGPU device/queue/textures under Geode, etc.) are
@@ -70,6 +76,7 @@ void AsyncRenderer::workerLoop() {
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
     if (request.renderer != nullptr && request.document != nullptr) {
+      ZoneScopedN("AsyncRenderer::workerIteration");
       std::optional<RenderResult::CompositedPreview> compositedPreview;
 
       // Keep the compositor alive across drag → idle transitions. Recreate
@@ -81,19 +88,61 @@ void AsyncRenderer::workerLoop() {
           compositorRenderer_ != request.renderer) {
         compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
                                                                               *request.renderer);
+        compositor_->setSkipMainComposeDuringSplit(true);
         compositorDocument_ = request.document;
         compositorRenderer_ = request.renderer;
         compositorEntity_ = entt::null;
-        compositorDocumentVersion_ = request.version;
+        compositorDocumentGeneration_ = request.documentGeneration;
       }
 
-      // Detect document rebuild (ReplaceDocumentCommand). When the document version jumps,
-      // all entity handles from the previous document are invalid. Reset the compositor's
-      // layers so it doesn't try to demote/iterate stale entities.
-      if (request.version != compositorDocumentVersion_) {
-        compositor_->resetAllLayers();
-        compositorEntity_ = entt::null;
-        compositorDocumentVersion_ = request.version;
+      // Detect *document replacement* (ReplaceDocumentCommand / source
+      // reparse). The inner SVGDocument lives in `AsyncSVGDocument`'s
+      // optional storage, so its address is stable across replacement —
+      // pointer identity won't catch it. `documentGeneration` bumps only
+      // on replacement (NOT on every mutation), so comparing against
+      // the compositor's snapshot correctly distinguishes "entity space
+      // blown away" from "user dragged one element". Hitting this branch
+      // every frame (as would happen if we tracked `version` instead)
+      // would nuke activeHints_ on every drag, demote the drag layer,
+      // and crash in `~ScopedCompositorHint` when a subsequent rebuild
+      // leaves the registry in a transient state.
+      if (request.documentGeneration != compositorDocumentGeneration_) {
+        // A `setDocument` happened since our last tick. Two sub-cases:
+        //
+        //   1. The editor built a structural remap (`request.structural
+        //      Remap` non-empty) — the new document describes the same
+        //      tree shape, so we can preserve the compositor's cached
+        //      bitmaps + segments and just swap entity ids via
+        //      `remapAfterStructuralReplace`. If the remap fails an
+        //      invariant check, fall through to the full-reset path.
+        //
+        //   2. Otherwise (user edited source-pane to change the tree,
+        //      new file loaded, etc.): full reset — the old entity
+        //      space is gone and every cache is keyed on dead ids.
+        //      `resetAllLayers(documentReplaced=true)` defuses the
+        //      ScopedCompositorHint dtors so they don't SIGSEGV.
+        bool remapped = false;
+        if (!request.structuralRemap.empty()) {
+          remapped = compositor_->remapAfterStructuralReplace(request.structuralRemap);
+          if (remapped && compositorEntity_ != entt::null) {
+            const auto it = request.structuralRemap.find(compositorEntity_);
+            if (it != request.structuralRemap.end()) {
+              compositorEntity_ = it->second;
+            } else {
+              // The drag/selection target didn't survive the remap — fall
+              // through to the reset branch so subsequent promote calls
+              // start clean.
+              compositorEntity_ = entt::null;
+              remapped = false;
+            }
+          }
+        }
+        if (!remapped) {
+          compositor_->resetAllLayers(/*documentReplaced=*/true);
+          compositorEntity_ = entt::null;
+          compositorResetCount_.fetch_add(1, std::memory_order_release);
+        }
+        compositorDocumentGeneration_ = request.documentGeneration;
       }
 
       // Resolve what the compositor should be promoted on this render.
@@ -117,34 +166,38 @@ void AsyncRenderer::workerLoop() {
         }
       }
 
-      // Apply the drag translation (zero when we're just holding a selection
-      // pre-warmed). When nothing is promoted, this is a no-op.
-      if (compositorEntity_ != entt::null) {
-        const Vector2d translation = request.dragPreview.has_value()
-                                         ? request.dragPreview->translation
-                                         : Vector2d::Zero();
-        compositor_->setLayerCompositionTransform(compositorEntity_,
-                                                  Transform2d::Translate(translation));
-      }
-
+      // The DOM is the sole source of truth for the dragged entity's
+      // position — `SelectTool` mutates the `transform` attribute every
+      // drag frame, so by the time we reach here the compositor's fast
+      // path will diff the new DOM transform against the cached bitmap's
+      // rasterize-time transform and either reuse the bitmap via a
+      // pure-translation compose offset or mark it dirty for re-rasterize.
+      // No emulation layer on top of the DOM.
       svg::RenderViewport viewport;
       const Vector2i canvasSize = request.document->canvasSize();
       viewport.size = Vector2d(canvasSize.x, canvasSize.y);
       viewport.devicePixelRatio = 1.0;
-      compositor_->renderFrame(viewport);
+      {
+        ZoneScopedN("Compositor::renderFrame");
+        compositor_->renderFrame(viewport);
+      }
 
       // Expose the split bg/drag/fg trio to the editor only when it was
-      // actually produced (single-layer drag path). Pre-warmed state with
-      // identity translation still goes through this path, which means the
+      // actually produced (single-layer drag path). Pre-warmed state
+      // (no active drag) still goes through this path, which means the
       // editor can upload the GL textures as soon as selection happens and
-      // the first real drag frame is zero-cost.
+      // the first real drag frame is zero-cost. The compositor-reported
+      // compose offset travels back so the editor can place the promoted
+      // bitmap to line up with bg/fg on the GPU side.
       if (request.dragPreview.has_value() && compositorEntity_ != entt::null &&
           compositor_->hasSplitStaticLayers()) {
+        const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
         compositedPreview = RenderResult::CompositedPreview{
             .backgroundBitmap = compositor_->backgroundBitmap(),
             .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
             .foregroundBitmap = compositor_->foregroundBitmap(),
             .entity = compositorEntity_,
+            .promotedTranslationDoc = composeOffset.translation(),
         };
       }
 
@@ -157,15 +210,30 @@ void AsyncRenderer::workerLoop() {
       // during composited renders.  This prevents a visual "pop" when the display
       // transitions from composited layers to the flat texture (e.g. during
       // settling after a drag release).
-      svg::RendererBitmap bitmap = request.renderer->takeSnapshot();
+      svg::RendererBitmap bitmap;
+      {
+        ZoneScopedN("Renderer::takeSnapshot");
+        bitmap = request.renderer->takeSnapshot();
+      }
 
-      std::lock_guard<std::mutex> lock(mutex_);
-      // Only transition to Done if we weren't shut down mid-render.
-      if (state_ == State::Busy) {
-        result_.bitmap = std::move(bitmap);
-        result_.compositedPreview = std::move(compositedPreview);
-        result_.version = request.version;
-        state_ = State::Done;
+      std::function<void()> wake;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Only transition to Done if we weren't shut down mid-render.
+        if (state_ == State::Busy) {
+          result_.bitmap = std::move(bitmap);
+          result_.compositedPreview = std::move(compositedPreview);
+          result_.version = request.version;
+          state_ = State::Done;
+          // Snapshot the callback under the lock so a concurrent
+          // `setWakeCallback` swap can't tear the invocation. Fire it
+          // outside the lock to keep the hook cheap and avoid any
+          // chance of deadlock if the caller re-enters AsyncRenderer.
+          wake = wakeCallback_;
+        }
+      }
+      if (wake) {
+        wake();
       }
     } else {
       std::lock_guard<std::mutex> lock(mutex_);

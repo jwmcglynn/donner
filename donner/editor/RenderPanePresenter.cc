@@ -11,19 +11,10 @@ namespace {
 constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
-constexpr ImU32 kSelectionChromeColor = IM_COL32(0x00, 0xc8, 0xff, 0xff);
-constexpr float kSelectionChromeThickness = 1.5f;
-constexpr ImU32 kMarqueeFillColor = IM_COL32(0x00, 0xc8, 0xff, 0x33);
-constexpr ImU32 kMarqueeStrokeColor = IM_COL32(0xff, 0xff, 0xff, 0xff);
-constexpr float kMarqueeStrokeThickness = 1.5f;
 
-Vector2d DragPreviewScreenOffset(const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
-                                 const ViewportState& viewport) {
-  if (!dragPreview.has_value()) {
-    return Vector2d::Zero();
-  }
-
-  return dragPreview->translation * viewport.pixelsPerDocUnit();
+Vector2d PromotedTextureScreenOffset(const GlTextureCache& textures,
+                                     const ViewportState& viewport) {
+  return textures.promotedTranslationDoc() * viewport.pixelsPerDocUnit();
 }
 
 void RenderFrameGraph(const FrameHistory& history) {
@@ -101,7 +92,13 @@ void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2&
 }  // namespace
 
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
-  const auto dragScreenOffset = DragPreviewScreenOffset(state.displayedDragPreview, state.viewport);
+  // The DOM is the source of truth for position. The overlay chrome and AABBs
+  // are recomputed against the current DOM transform, so no editor-side
+  // "screen offset" is layered on top. The only offset that survives is the
+  // one the compositor itself reports for the promoted bitmap — the delta
+  // between the bitmap's stamp-time DOM transform and the current DOM
+  // transform, used when a stale bitmap is reused via the fast path.
+  const auto promotedScreenOffset = PromotedTextureScreenOffset(state.textures, state.viewport);
 
   if (state.textures.flatWidth() <= 0 && state.textures.flatHeight() <= 0 &&
       !state.experimentalDragPresentation.hasCachedTextures) {
@@ -127,10 +124,11 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
           imageOrigin, imageBottomRight);
     }
 
-    const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(dragScreenOffset.x),
-                                imageOrigin.y + static_cast<float>(dragScreenOffset.y));
-    const ImVec2 promotedBottomRight(imageBottomRight.x + static_cast<float>(dragScreenOffset.x),
-                                     imageBottomRight.y + static_cast<float>(dragScreenOffset.y));
+    const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(promotedScreenOffset.x),
+                                imageOrigin.y + static_cast<float>(promotedScreenOffset.y));
+    const ImVec2 promotedBottomRight(
+        imageBottomRight.x + static_cast<float>(promotedScreenOffset.x),
+        imageBottomRight.y + static_cast<float>(promotedScreenOffset.y));
     paneDrawList->AddImage(
         static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.promotedTexture())),
         promotedOrigin, promotedBottomRight);
@@ -146,37 +144,16 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
         imageOrigin, imageBottomRight);
   }
 
+  // All editor chrome — path outlines, selection AABBs, and the
+  // marquee rect — is rasterized into `overlayTexture` by
+  // `OverlayRenderer::drawChromeWithTransform` and uploaded once per
+  // frame. The ImGui-direct `AddRect` / `AddRectFilled` chrome path
+  // was removed so there is a single invalidation envelope the GPU
+  // backend (Geode) can optimize end-to-end.
   if (state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0) {
-    const ImVec2 overlayOrigin(imageOrigin.x + static_cast<float>(dragScreenOffset.x),
-                               imageOrigin.y + static_cast<float>(dragScreenOffset.y));
-    const ImVec2 overlayBottomRight(imageBottomRight.x + static_cast<float>(dragScreenOffset.x),
-                                    imageBottomRight.y + static_cast<float>(dragScreenOffset.y));
     paneDrawList->AddImage(
         static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.overlayTexture())),
-        overlayOrigin, overlayBottomRight);
-  }
-
-  for (const Box2d& screenAabb :
-       ComputeSelectionAabbScreenRects(state.viewport, state.selectionBoundsDoc)) {
-    paneDrawList->AddRect(ImVec2(static_cast<float>(screenAabb.topLeft.x + dragScreenOffset.x),
-                                 static_cast<float>(screenAabb.topLeft.y + dragScreenOffset.y)),
-                          ImVec2(static_cast<float>(screenAabb.bottomRight.x + dragScreenOffset.x),
-                                 static_cast<float>(screenAabb.bottomRight.y + dragScreenOffset.y)),
-                          kSelectionChromeColor, 0.0f, ImDrawFlags_None, kSelectionChromeThickness);
-  }
-
-  if (state.marqueeRectDoc.has_value()) {
-    const Box2d marqueeRectScreen = state.viewport.documentToScreen(*state.marqueeRectDoc);
-    paneDrawList->AddRectFilled(ImVec2(static_cast<float>(marqueeRectScreen.topLeft.x),
-                                       static_cast<float>(marqueeRectScreen.topLeft.y)),
-                                ImVec2(static_cast<float>(marqueeRectScreen.bottomRight.x),
-                                       static_cast<float>(marqueeRectScreen.bottomRight.y)),
-                                kMarqueeFillColor);
-    paneDrawList->AddRect(ImVec2(static_cast<float>(marqueeRectScreen.topLeft.x),
-                                 static_cast<float>(marqueeRectScreen.topLeft.y)),
-                          ImVec2(static_cast<float>(marqueeRectScreen.bottomRight.x),
-                                 static_cast<float>(marqueeRectScreen.bottomRight.y)),
-                          kMarqueeStrokeColor, 0.0f, ImDrawFlags_None, kMarqueeStrokeThickness);
+        imageOrigin, imageBottomRight);
   }
 
   constexpr float kFramePadding = 8.0f;
