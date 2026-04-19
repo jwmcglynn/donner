@@ -1544,7 +1544,8 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   - [ ] Turbulence (Perlin noise compute shader).
   - [ ] Displacement map, component transfer, convolution matrix.
   - [ ] Lighting (diffuse and specular, point/distant/spot light sources).
-  - [ ] Blend and composite operations.
+  - [x] feComposite (Porter-Duff compositing — all 7 operators including arithmetic).
+  - [x] feBlend (W3C Compositing 1 — all 16 blend modes via compute shader).
 - [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
 - [x] Implement filter graph execution: route intermediate textures between compute passes
   matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).

@@ -68,10 +68,11 @@ geodeCategoryGate(std::string_view category) {
   if (category == "filters/feGaussianBlur") {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
-  // Phase 7 extensions: feOffset, feColorMatrix, feFlood, feMerge run on
-  // Geode with the same widened threshold for MSAA edge drift.
+  // Phase 7 extensions: feOffset, feColorMatrix, feFlood, feMerge, feComposite,
+  // feBlend run on Geode with the same widened threshold for MSAA edge drift.
   if (category == "filters/feOffset" || category == "filters/feColorMatrix" ||
-      category == "filters/feFlood" || category == "filters/feMerge") {
+      category == "filters/feFlood" || category == "filters/feMerge" ||
+      category == "filters/feComposite" || category == "filters/feBlend") {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
   if (category.rfind("filters/", 0) == 0 || category == "filters") {

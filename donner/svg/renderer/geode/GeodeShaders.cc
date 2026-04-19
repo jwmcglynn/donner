@@ -1,7 +1,9 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
+#include "embed_resources/FilterCompositeWgsl.h"
 #include "embed_resources/FilterFloodWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterOffsetWgsl.h"
@@ -106,6 +108,17 @@ wgpu::ShaderModule createFilterFloodShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterMergeShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterMerge", donner::embedded::kFilterMergeWgsl.data(),
                               donner::embedded::kFilterMergeWgsl.size());
+}
+
+wgpu::ShaderModule createFilterCompositeShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterComposite",
+                              donner::embedded::kFilterCompositeWgsl.data(),
+                              donner::embedded::kFilterCompositeWgsl.size());
+}
+
+wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterBlend", donner::embedded::kFilterBlendWgsl.data(),
+                              donner::embedded::kFilterBlendWgsl.size());
 }
 
 }  // namespace donner::geode
