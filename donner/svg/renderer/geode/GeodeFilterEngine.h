@@ -9,9 +9,10 @@
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
 /// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
 /// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
-/// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`. Other
-/// primitives are passed through (the input texture is forwarded unchanged)
-/// with a one-shot warning.
+/// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`,
+/// `feDropShadow`, `feImage`, `feTile`. Other primitives are passed
+/// through (the input texture is forwarded unchanged) with a one-shot
+/// warning.
 
 #include <webgpu/webgpu.hpp>
 
@@ -35,6 +36,9 @@ struct Turbulence;
 struct DisplacementMap;
 struct DiffuseLighting;
 struct SpecularLighting;
+struct DropShadow;
+struct Image;
+struct Tile;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -67,6 +71,9 @@ class GeodeDevice;
  * - `feDisplacementMap` (per-pixel channel-driven displacement via compute shader)
  * - `feDiffuseLighting` (Lambertian shading with distant/point/spot lights)
  * - `feSpecularLighting` (Phong shading with distant/point/spot lights)
+ * - `feDropShadow` (blur alpha + offset + flood-tint + source-over)
+ * - `feImage` (bilinear placement of external raster / in-document fragment)
+ * - `feTile` (wraparound tiling of input subregion across filter region)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -244,6 +251,41 @@ private:
       const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
       double scaleY);
 
+  /// Drop-shadow composite (feDropShadow): blur alpha, offset, flood, source-over.
+  /// @param input The input texture.
+  /// @param primitive The feDropShadow parameters.
+  /// @param pixelStdDevX Blur standard deviation in pixel units (X).
+  /// @param pixelStdDevY Blur standard deviation in pixel units (Y).
+  /// @param pixelDx Offset in pixel units (X).
+  /// @param pixelDy Offset in pixel units (Y).
+  /// @return The drop-shadowed texture.
+  wgpu::Texture applyDropShadow(const wgpu::Texture& input,
+                                const svg::components::filter_primitive::DropShadow& primitive,
+                                double pixelStdDevX, double pixelStdDevY, double pixelDx,
+                                double pixelDy);
+
+  /// Blit an external image into a freshly-allocated filter-sized texture (feImage).
+  /// @param primitive The feImage parameters (imageData, preserveAspectRatio, fragmentId, ...).
+  /// @param width Output texture width (filter-region pixels).
+  /// @param height Output texture height (filter-region pixels).
+  /// @param graph The enclosing filter graph (for bbox / scale / subregion resolution).
+  /// @param node The enclosing filter node (for primitive subregion overrides).
+  /// @return The placed-image texture.
+  wgpu::Texture applyImage(const svg::components::filter_primitive::Image& primitive,
+                           uint32_t width, uint32_t height,
+                           const svg::components::FilterGraph& graph,
+                           const svg::components::FilterNode& node);
+
+  /// Wraparound tile of an input subregion across the full output (feTile).
+  /// @param input The input texture.
+  /// @param srcX Source rectangle X origin in pixels.
+  /// @param srcY Source rectangle Y origin in pixels.
+  /// @param srcW Source rectangle width in pixels.
+  /// @param srcH Source rectangle height in pixels.
+  /// @return The tiled texture.
+  wgpu::Texture applyTile(const wgpu::Texture& input, int32_t srcX, int32_t srcY, int32_t srcW,
+                          int32_t srcH);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -301,6 +343,18 @@ private:
   // feSpecularLighting pipeline (input + output + storage buffer).
   wgpu::ComputePipeline specularLightingPipeline_;
   wgpu::BindGroupLayout specularLightingBindGroupLayout_;
+
+  // feDropShadow compose pipeline (two inputs + output + uniform).
+  wgpu::ComputePipeline dropShadowPipeline_;
+  wgpu::BindGroupLayout dropShadowBindGroupLayout_;
+
+  // feImage placement pipeline (input texture + output + uniform).
+  wgpu::ComputePipeline imagePipeline_;
+  wgpu::BindGroupLayout imageBindGroupLayout_;
+
+  // feTile wraparound pipeline (input + output + uniform).
+  wgpu::ComputePipeline tilePipeline_;
+  wgpu::BindGroupLayout tileBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

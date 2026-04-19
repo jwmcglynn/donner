@@ -351,6 +351,36 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: feDropShadow compose compute shader (offset + flood + source-over).
+embed_resources(
+    name = "filter_drop_shadow_wgsl",
+    header_output = "embed_resources/FilterDropShadowWgsl.h",
+    resources = {
+        "kFilterDropShadowWgsl": "shaders/filter_drop_shadow.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feImage compute shader (bilinear image placement).
+embed_resources(
+    name = "filter_image_wgsl",
+    header_output = "embed_resources/FilterImageWgsl.h",
+    resources = {
+        "kFilterImageWgsl": "shaders/filter_image.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feTile compute shader (wraparound tiling).
+embed_resources(
+    name = "filter_tile_wgsl",
+    header_output = "embed_resources/FilterTileWgsl.h",
+    resources = {
+        "kFilterTileWgsl": "shaders/filter_tile.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -365,11 +395,14 @@ donner_cc_library(
         ":filter_convolve_matrix_wgsl",
         ":filter_diffuse_lighting_wgsl",
         ":filter_displacement_map_wgsl",
+        ":filter_drop_shadow_wgsl",
         ":filter_flood_wgsl",
+        ":filter_image_wgsl",
         ":filter_merge_wgsl",
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
+        ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",

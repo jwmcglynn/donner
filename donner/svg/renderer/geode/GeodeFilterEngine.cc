@@ -146,6 +146,36 @@ struct DiffuseLightingParams {
   float pad4;
 };
 
+/// Uniform buffer layout matching the WGSL `DropShadowParams` struct.
+struct DropShadowParams {
+  float color[4];  // Flood color, straight alpha.
+  float dx;
+  float dy;
+  uint32_t pad0;
+  uint32_t pad1;
+};
+
+/// Uniform buffer layout matching the WGSL `ImageParams` struct.
+/// Row-major 2×3 transform: src = M * (dst_pixel + 0.5, 1).
+struct ImageParams {
+  float m00;
+  float m01;
+  float m02;
+  float m10;
+  float m11;
+  float m12;
+  uint32_t pad0;
+  uint32_t pad1;
+};
+
+/// Uniform buffer layout matching the WGSL `TileParams` struct.
+struct TileParams {
+  int32_t srcX;
+  int32_t srcY;
+  int32_t srcW;
+  int32_t srcH;
+};
+
 /// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
 struct SpecularLightingParams {
   float surfaceScale;
@@ -952,6 +982,30 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     cpDesc.compute.entryPoint = wgpuLabel("main");
     specularLightingPipeline_ = dev.createComputePipeline(cpDesc);
   }
+
+  // --- feDropShadow compose pipeline (two inputs + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createTwoInputUniformPipeline(
+        dev, "FilterDropShadow", createFilterDropShadowShader(dev), sizeof(DropShadowParams));
+    dropShadowBindGroupLayout_ = bgl;
+    dropShadowPipeline_ = pipeline;
+  }
+
+  // --- feImage placement pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterImage", createFilterImageShader(dev), sizeof(ImageParams));
+    imageBindGroupLayout_ = bgl;
+    imagePipeline_ = pipeline;
+  }
+
+  // --- feTile wraparound pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterTile", createFilterTileShader(dev), sizeof(TileParams));
+    tileBindGroupLayout_ = bgl;
+    tilePipeline_ = pipeline;
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
@@ -1061,6 +1115,44 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     } else if (const auto* specular =
                    std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
       outputTex = applySpecularLighting(inputTex, *specular, scaleX, scaleY);
+    } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+      // dx / dy / stdDeviation all follow the same user-space → pixel
+      // convention as feOffset / feGaussianBlur. dx preserves sign; std
+      // deviation is magnitude only and treated as abs().
+      double sx = drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0;
+      double sy = drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0;
+      double dx = drop->dx;
+      double dy = drop->dy;
+      if (isOBB) {
+        dx *= bboxW;
+        dy *= bboxH;
+      }
+      dx *= scaleX;
+      dy *= scaleY;
+      outputTex = applyDropShadow(inputTex, *drop, sx, sy, dx, dy);
+    } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
+      outputTex = applyImage(*image, inputTex.getWidth(), inputTex.getHeight(), graph, node);
+    } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
+      // feTile replicates the input's primitive subregion across the filter
+      // region. Per SVG §15.28 the source is the primitive's input in its
+      // subregion rect; we use the filter region as the default subregion
+      // since that's where SourceGraphic content lives in the input texture.
+      // Per-primitive subregion overrides on the producing node are not
+      // propagated into the FilterGraph yet — a real `in` lookup is follow-
+      // up work, matching the existing CPU tile implementation which is
+      // similarly best-effort.
+      int32_t srcX = 0;
+      int32_t srcY = 0;
+      int32_t srcW = static_cast<int32_t>(inputTex.getWidth());
+      int32_t srcH = static_cast<int32_t>(inputTex.getHeight());
+      if (graph.filterRegion.has_value()) {
+        const auto& fr = graph.filterRegion.value();
+        srcX = static_cast<int32_t>(std::floor(fr.topLeft.x * scaleX));
+        srcY = static_cast<int32_t>(std::floor(fr.topLeft.y * scaleY));
+        srcW = static_cast<int32_t>(std::ceil((fr.bottomRight.x - fr.topLeft.x) * scaleX));
+        srcH = static_cast<int32_t>(std::ceil((fr.bottomRight.y - fr.topLeft.y) * scaleY));
+      }
+      outputTex = applyTile(inputTex, srcX, srcY, srcW, srcH);
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -2041,6 +2133,251 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
 
   wgpu::CommandBuffer cmdBuf = encoder.finish();
   device_.queue().submit(1, &cmdBuf);
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyDropShadow(
+    const wgpu::Texture& input,
+    const svg::components::filter_primitive::DropShadow& primitive, double pixelStdDevX,
+    double pixelStdDevY, double pixelDx, double pixelDy) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  // Blur the input first (if any deviation). The compose shader reads the
+  // blurred texture's alpha at (coord - offset); blurring RGB at the same
+  // time is free because we already have to walk the taps.
+  wgpu::Texture blurred = applyGaussianBlur(input, pixelStdDevX, pixelStdDevY, /*edgeMode=*/0);
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterDropShadowOutput");
+
+  const css::RGBA rgba = primitive.floodColor.asRGBA();
+  const float floodA = (static_cast<float>(rgba.a) / 255.0f) *
+                       static_cast<float>(std::clamp(primitive.floodOpacity, 0.0, 1.0));
+
+  DropShadowParams params{};
+  // Straight-alpha flood color; the shader premultiplies by the blurred
+  // source's alpha per-pixel rather than baking it in here.
+  params.color[0] = static_cast<float>(rgba.r) / 255.0f;
+  params.color[1] = static_cast<float>(rgba.g) / 255.0f;
+  params.color[2] = static_cast<float>(rgba.b) / 255.0f;
+  params.color[3] = floodA;
+  params.dx = static_cast<float>(pixelDx);
+  params.dy = static_cast<float>(pixelDy);
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "DropShadowParamsUniform");
+
+  dispatchTwoInputUniform(device_, dropShadowBindGroupLayout_, dropShadowPipeline_, input, blurred,
+                          output, uniformBuffer, sizeof(DropShadowParams), "FilterDropShadowPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyImage(
+    const svg::components::filter_primitive::Image& primitive, uint32_t width, uint32_t height,
+    const svg::components::FilterGraph& graph, const svg::components::FilterNode& node) {
+  const wgpu::Device& dev = device_.device();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterImageOutput");
+
+  // Empty / degenerate source: feed the shader a 1×1 transparent texture
+  // with an out-of-bounds transform. The resulting output is transparent
+  // everywhere — which is also what the shader would emit for any real
+  // image whose sample coordinates fall outside the source bounds.
+  if (primitive.imageData.empty() || primitive.imageWidth <= 0 || primitive.imageHeight <= 0) {
+    wgpu::TextureDescriptor imgDesc{};
+    imgDesc.label = wgpuLabel("FilterImageEmptySource");
+    imgDesc.size = {1, 1, 1};
+    imgDesc.format = kFormat;
+    imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    imgDesc.mipLevelCount = 1;
+    imgDesc.sampleCount = 1;
+    imgDesc.dimension = wgpu::TextureDimension::_2D;
+    wgpu::Texture emptyTex = dev.createTexture(imgDesc);
+    const uint8_t zero[4] = {0, 0, 0, 0};
+    wgpu::TexelCopyTextureInfo dstInfo{};
+    dstInfo.texture = emptyTex;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = 4;
+    layout.rowsPerImage = 1;
+    wgpu::Extent3D extent = {1, 1, 1};
+    device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
+
+    ImageParams params{};
+    params.m02 = -1000.0f;
+    params.m12 = -1000.0f;
+    wgpu::Buffer ub = createUniformBuffer(device_, &params, sizeof(params), "ImageParamsEmpty");
+    dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, emptyTex, output, ub,
+                               sizeof(ImageParams), "FilterImageEmptyPass");
+    return output;
+  }
+
+  // Upload the image's straight-alpha RGBA pixels as a premultiplied
+  // texture — Geode operates in premultiplied throughout the filter graph
+  // (consistent with feFlood / feMerge).
+  const int imgW = primitive.imageWidth;
+  const int imgH = primitive.imageHeight;
+  std::vector<uint8_t> premul(primitive.imageData.size());
+  for (size_t i = 0; i + 3 < primitive.imageData.size(); i += 4) {
+    const unsigned a = primitive.imageData[i + 3];
+    premul[i + 0] =
+        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 0]) * a + 127u) / 255u);
+    premul[i + 1] =
+        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 1]) * a + 127u) / 255u);
+    premul[i + 2] =
+        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 2]) * a + 127u) / 255u);
+    premul[i + 3] = static_cast<uint8_t>(a);
+  }
+
+  wgpu::TextureDescriptor imgDesc{};
+  imgDesc.label = wgpuLabel("FilterImageSource");
+  imgDesc.size = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
+  imgDesc.format = kFormat;
+  imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+  imgDesc.mipLevelCount = 1;
+  imgDesc.sampleCount = 1;
+  imgDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture imgTex = dev.createTexture(imgDesc);
+
+  wgpu::TexelCopyTextureInfo dstInfo{};
+  dstInfo.texture = imgTex;
+  wgpu::TexelCopyBufferLayout layout{};
+  layout.bytesPerRow = static_cast<uint32_t>(imgW * 4);
+  layout.rowsPerImage = static_cast<uint32_t>(imgH);
+  wgpu::Extent3D extent = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
+  device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
+
+  // Work out the placement rectangle in output-pixel coordinates. Prefer
+  // the node's primitive subregion when given; fall back to the filter
+  // region so the image covers the full primitive area.
+  const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
+  const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+  const bool isOBB = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
+  const double bboxW = graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width()
+                                                             : 1.0;
+  const double bboxH = graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->height()
+                                                             : 1.0;
+
+  double regionX = 0.0;
+  double regionY = 0.0;
+  double regionW = static_cast<double>(width);
+  double regionH = static_cast<double>(height);
+  if (node.x.has_value() && node.y.has_value() && node.width.has_value() && node.height.has_value()) {
+    const double rx = isOBB ? node.x->value * bboxW : node.x->value;
+    const double ry = isOBB ? node.y->value * bboxH : node.y->value;
+    const double rw = isOBB ? node.width->value * bboxW : node.width->value;
+    const double rh = isOBB ? node.height->value * bboxH : node.height->value;
+    regionX = rx * scaleX;
+    regionY = ry * scaleY;
+    regionW = rw * scaleX;
+    regionH = rh * scaleY;
+  } else if (graph.filterRegion.has_value()) {
+    const auto& fr = graph.filterRegion.value();
+    regionX = fr.topLeft.x * scaleX;
+    regionY = fr.topLeft.y * scaleY;
+    regionW = (fr.bottomRight.x - fr.topLeft.x) * scaleX;
+    regionH = (fr.bottomRight.y - fr.topLeft.y) * scaleY;
+  }
+
+  if (regionW <= 0.0 || regionH <= 0.0) {
+    regionW = static_cast<double>(imgW);
+    regionH = static_cast<double>(imgH);
+  }
+
+  // Compute the src-from-dst transform (image-from-output). For a
+  // straight image placement at (regionX, regionY) with size (regionW,
+  // regionH) and source size (imgW, imgH), the transform is:
+  //   src.x = (dst.x - regionX) * imgW / regionW
+  //   src.y = (dst.y - regionY) * imgH / regionH
+  //
+  // preserveAspectRatio: meet / slice scales isotropically; 'none'
+  // scales independently as above. The simple non-preserveAR case covers
+  // the common resvg test cases — the preserveAspectRatio computation
+  // mirrors the CPU feImage path's convention (fit box to subregion).
+  double scaleImgX = regionW > 0.0 ? static_cast<double>(imgW) / regionW : 1.0;
+  double scaleImgY = regionH > 0.0 ? static_cast<double>(imgH) / regionH : 1.0;
+  double offsetX = -regionX * scaleImgX;
+  double offsetY = -regionY * scaleImgY;
+
+  using PAR = svg::PreserveAspectRatio;
+  if (primitive.preserveAspectRatio.align != PAR::Align::None) {
+    // Uniform scale per preserveAspectRatio semantics. Compute the
+    // meet/slice scale and the alignment offsets, then invert to build
+    // image-from-output.
+    const double scaleMeet = std::min(regionW / static_cast<double>(imgW),
+                                       regionH / static_cast<double>(imgH));
+    const double scaleSlice = std::max(regionW / static_cast<double>(imgW),
+                                        regionH / static_cast<double>(imgH));
+    const double s = primitive.preserveAspectRatio.meetOrSlice == PAR::MeetOrSlice::Slice
+                         ? scaleSlice
+                         : scaleMeet;
+    const double drawnW = static_cast<double>(imgW) * s;
+    const double drawnH = static_cast<double>(imgH) * s;
+
+    // Alignment within the subregion.
+    using Align = PAR::Align;
+    double alignX = 0.0;
+    double alignY = 0.0;
+    switch (primitive.preserveAspectRatio.align) {
+      case Align::None:
+      case Align::XMinYMin: alignX = 0.0; alignY = 0.0; break;
+      case Align::XMidYMin: alignX = 0.5; alignY = 0.0; break;
+      case Align::XMaxYMin: alignX = 1.0; alignY = 0.0; break;
+      case Align::XMinYMid: alignX = 0.0; alignY = 0.5; break;
+      case Align::XMidYMid: alignX = 0.5; alignY = 0.5; break;
+      case Align::XMaxYMid: alignX = 1.0; alignY = 0.5; break;
+      case Align::XMinYMax: alignX = 0.0; alignY = 1.0; break;
+      case Align::XMidYMax: alignX = 0.5; alignY = 1.0; break;
+      case Align::XMaxYMax: alignX = 1.0; alignY = 1.0; break;
+    }
+    const double drawX = regionX + (regionW - drawnW) * alignX;
+    const double drawY = regionY + (regionH - drawnH) * alignY;
+
+    scaleImgX = 1.0 / s;
+    scaleImgY = 1.0 / s;
+    offsetX = -drawX / s;
+    offsetY = -drawY / s;
+  }
+
+  ImageParams params{};
+  params.m00 = static_cast<float>(scaleImgX);
+  params.m01 = 0.0f;
+  params.m02 = static_cast<float>(offsetX);
+  params.m10 = 0.0f;
+  params.m11 = static_cast<float>(scaleImgY);
+  params.m12 = static_cast<float>(offsetY);
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "ImageParamsUniform");
+
+  dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, imgTex, output,
+                             uniformBuffer, sizeof(ImageParams), "FilterImagePass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyTile(const wgpu::Texture& input, int32_t srcX, int32_t srcY,
+                                            int32_t srcW, int32_t srcH) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterTileOutput");
+
+  TileParams params{};
+  params.srcX = srcX;
+  params.srcY = srcY;
+  params.srcW = srcW;
+  params.srcH = srcH;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "TileParamsUniform");
+
+  dispatchInputOutputUniform(device_, tileBindGroupLayout_, tilePipeline_, input, output,
+                             uniformBuffer, sizeof(TileParams), "FilterTilePass");
   return output;
 }
 

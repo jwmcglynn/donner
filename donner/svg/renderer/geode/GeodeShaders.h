@@ -342,4 +342,64 @@ wgpu::ShaderModule createFilterDiffuseLightingShader(const wgpu::Device& device)
  */
 wgpu::ShaderModule createFilterSpecularLightingShader(const wgpu::Device& device);
 
+/**
+ * Compile the feDropShadow compose compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_drop_shadow.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader takes the original source and its pre-blurred counterpart and
+ * produces `source over flood-tinted-offset-blur`, implementing the
+ * compose-step of feDropShadow. The blur itself is run through the existing
+ * Gaussian blur pipeline before this shader executes.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var in1_tex: texture_2d<f32>;`   // Source
+ * - `@group(0) @binding(1) var in2_tex: texture_2d<f32>;`   // Blurred source
+ * - `@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(3) var<uniform> params: DropShadowParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterDropShadowShader(const wgpu::Device& device);
+
+/**
+ * Compile the feImage compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_image.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader bilinearly samples a premultiplied-alpha image through a 2×3
+ * image-from-output transform, producing transparent black outside the
+ * image bounds. Covers the external-raster and simple in-document fragment
+ * reference cases where the caller supplies the image pixels and the
+ * placement transform.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var image_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: ImageParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device);
+
+/**
+ * Compile the feTile compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_tile.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader tiles an input subregion across the entire output texture
+ * with modular (wraparound) sampling.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: TileParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterTileShader(const wgpu::Device& device);
+
 }  // namespace donner::geode

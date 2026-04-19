@@ -1548,6 +1548,12 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   - [x] feDisplacementMap (per-pixel channel-driven displacement via compute shader).
   - [x] feDiffuseLighting (Lambertian shading from alpha height map — distant/point/spot lights).
   - [x] feSpecularLighting (Phong shading from alpha height map — distant/point/spot lights).
+  - [x] feDropShadow (blurred-alpha offset + flood tint composited under the input).
+  - [x] feImage (external raster placement through preserveAspectRatio; in-document
+        fragment references rely on the driver's pre-render pass — the `<svg>`-as-image
+        recursive case reuses the same pre-rendered pixels but has not been regression-
+        tested yet).
+  - [x] feTile (wraparound tiling of the input subregion across the filter region).
 - [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
 - [x] Implement filter graph execution: route intermediate textures between compute passes
   matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
