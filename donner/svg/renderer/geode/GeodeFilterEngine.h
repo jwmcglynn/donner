@@ -7,7 +7,8 @@
 /// texture, returning the filtered output texture.
 ///
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
-/// `feFlood`, `feMerge`, `feComposite`, `feBlend`. Other primitives are
+/// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
+/// `feComponentTransfer`, `feConvolveMatrix`. Other primitives are
 /// passed through (the input texture is forwarded unchanged) with a one-shot
 /// warning.
 
@@ -26,6 +27,9 @@ struct Flood;
 struct Merge;
 struct Composite;
 struct Blend;
+struct Morphology;
+struct ComponentTransfer;
+struct ConvolveMatrix;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -51,6 +55,9 @@ class GeodeDevice;
  * - `feMerge` (alpha-over composite of N inputs via compute shader)
  * - `feComposite` (Porter-Duff compositing of two inputs via compute shader)
  * - `feBlend` (W3C Compositing 1 blend modes via compute shader)
+ * - `feMorphology` (erode / dilate via min / max rectangular kernel)
+ * - `feComponentTransfer` (per-channel LUT transform via compute shader)
+ * - `feConvolveMatrix` (NxM kernel convolution via compute shader)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -159,6 +166,32 @@ private:
   wgpu::Texture applyBlend(const wgpu::Texture& in1, const wgpu::Texture& in2,
                            const svg::components::filter_primitive::Blend& primitive);
 
+  /// Morphological erode / dilate via min / max rectangular kernel.
+  /// @param input The input texture.
+  /// @param primitive The feMorphology parameters (operator, radiusX, radiusY).
+  /// @param pixelRadiusX Horizontal radius in pixels.
+  /// @param pixelRadiusY Vertical radius in pixels.
+  /// @return The morphed texture.
+  wgpu::Texture applyMorphology(const wgpu::Texture& input,
+                                const svg::components::filter_primitive::Morphology& primitive,
+                                int pixelRadiusX, int pixelRadiusY);
+
+  /// Per-channel LUT transform (feComponentTransfer).
+  /// @param input The input texture.
+  /// @param primitive The feComponentTransfer parameters (4 channel functions).
+  /// @return The transformed texture.
+  wgpu::Texture applyComponentTransfer(
+      const wgpu::Texture& input,
+      const svg::components::filter_primitive::ComponentTransfer& primitive);
+
+  /// NxM kernel convolution (feConvolveMatrix).
+  /// @param input The input texture.
+  /// @param primitive The feConvolveMatrix parameters.
+  /// @return The convolved texture.
+  wgpu::Texture applyConvolveMatrix(
+      const wgpu::Texture& input,
+      const svg::components::filter_primitive::ConvolveMatrix& primitive);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -188,6 +221,18 @@ private:
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
   wgpu::ComputePipeline blendPipeline_;
   wgpu::BindGroupLayout blendBindGroupLayout_;
+
+  // feMorphology erode/dilate pipeline (input + output + uniform).
+  wgpu::ComputePipeline morphologyPipeline_;
+  wgpu::BindGroupLayout morphologyBindGroupLayout_;
+
+  // feComponentTransfer LUT pipeline (input + output + storage buffer).
+  wgpu::ComputePipeline componentTransferPipeline_;
+  wgpu::BindGroupLayout componentTransferBindGroupLayout_;
+
+  // feConvolveMatrix kernel pipeline (input + output + uniform).
+  wgpu::ComputePipeline convolveMatrixPipeline_;
+  wgpu::BindGroupLayout convolveMatrixBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

@@ -3,9 +3,12 @@
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
+#include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
+#include "embed_resources/FilterConvolveMatrixWgsl.h"
 #include "embed_resources/FilterFloodWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
+#include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterOffsetWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
@@ -119,6 +122,24 @@ wgpu::ShaderModule createFilterCompositeShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterBlendShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterBlend", donner::embedded::kFilterBlendWgsl.data(),
                               donner::embedded::kFilterBlendWgsl.size());
+}
+
+wgpu::ShaderModule createFilterMorphologyShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterMorphology",
+                              donner::embedded::kFilterMorphologyWgsl.data(),
+                              donner::embedded::kFilterMorphologyWgsl.size());
+}
+
+wgpu::ShaderModule createFilterComponentTransferShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterComponentTransfer",
+                              donner::embedded::kFilterComponentTransferWgsl.data(),
+                              donner::embedded::kFilterComponentTransferWgsl.size());
+}
+
+wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "FilterConvolveMatrix",
+                              donner::embedded::kFilterConvolveMatrixWgsl.data(),
+                              donner::embedded::kFilterConvolveMatrixWgsl.size());
 }
 
 }  // namespace donner::geode
