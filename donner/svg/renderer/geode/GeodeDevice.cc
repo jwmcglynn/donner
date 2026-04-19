@@ -71,6 +71,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   // Log adapter selection so it is obvious at a glance whether we landed
   // on a discrete GPU / integrated GPU / software rasterizer, and which
   // native backend (Vulkan / Metal / D3D12 / …) is driving it.
+  //
+  // Under Emscripten the wgpuAdapterGetInfo / WGPUAdapterInfo struct
+  // layout may differ from wgpu-native v24 (WGPUStringView fields vs raw
+  // char*). Skip the native-specific logging for now — the browser's
+  // DevTools console already surfaces adapter info.
+#ifndef __EMSCRIPTEN__
   {
     WGPUAdapterInfo info = {};
     if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
@@ -125,6 +131,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
       wgpuAdapterInfoFreeMembers(info);
     }
   }
+#else
+  std::fprintf(stderr, "[Geode/emscripten] WebGPU adapter acquired (browser-managed).\n");
+#endif
 
   // 3. Create the device. Error diagnostics are wired via
   //    `uncapturedErrorCallbackInfo` on the descriptor — the callback

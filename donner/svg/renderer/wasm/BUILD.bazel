@@ -1,8 +1,11 @@
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("//build_defs:rules.bzl", "renderer_backend_compatible_with")
+load("//tools/http:serve_http.bzl", "serve_http")
 
 package(default_visibility = ["//visibility:public"])
+
+# ─── Tiny-Skia (software rasterizer) WASM build ────────────────────────
 
 # Internal cc_binary that Emscripten's wasm_cc_binary transitions to WASM.
 cc_binary(
@@ -46,5 +49,85 @@ filegroup(
         "test.html",
         ":donner_wasm",
     ],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+)
+
+# ─── Geode (WebGPU) WASM build ─────────────────────────────────────────
+
+# Internal cc_binary for the Geode backend. Uses ASYNCIFY so that the
+# synchronous GeodeDevice creation + buffer-map readback can yield to
+# the browser's async WebGPU implementation.
+cc_binary(
+    name = "donner_wasm_geode_bin",
+    srcs = ["wasm_bridge_geode.cc"],
+    additional_linker_inputs = [
+        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js",
+        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js",
+        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js",
+        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu.js",
+    ],
+    linkopts = [
+        "-sMODULARIZE=1",
+        "-sEXPORT_ES6=1",
+        "-sENVIRONMENT=web",
+        "-sALLOW_MEMORY_GROWTH=1",
+        "-sASYNCIFY=1",
+        "-sASYNCIFY_STACK_SIZE=131072",
+        "-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
+        "-sUSE_PTHREADS=0",
+        "-sSTACK_SIZE=1048576",
+        "--no-entry",
+        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js)",
+        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js)",
+        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js)",
+        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
+    ],
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    deps = [
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+    ],
+)
+
+# Extracts .js + .wasm artefacts from the Geode Emscripten cc_binary.
+wasm_cc_binary(
+    name = "donner_wasm_geode",
+    cc_target = ":donner_wasm_geode_bin",
+    outputs = [
+        "donner_wasm_geode_bin.js",
+        "donner_wasm_geode_bin.wasm",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+)
+
+# Convenience filegroup for the Geode test page and its assets.
+filegroup(
+    name = "test_page_geode",
+    srcs = [
+        "test-geode.html",
+        ":donner_wasm_geode",
+    ],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+)
+
+# `bazel run :serve_test_geode` starts a local HTTP server at
+# http://localhost:8000/test-geode.html with CORS/COOP/COEP headers set so
+# the Emscripten WebGPU runtime can use SharedArrayBuffer-backed ASYNCIFY.
+# Build artefacts and the test page are served from the same directory.
+serve_http(
+    name = "serve_test_geode",
+    dir = ":test_page_geode",
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+)
+
+# Same, but for the tiny-skia test page (`test.html`).
+serve_http(
+    name = "serve_test",
+    dir = ":test_page",
+    tags = ["manual"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
 )

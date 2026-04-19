@@ -9,7 +9,15 @@ The `wgpu_native_platform` select picks the correct pre-built wgpu-native
 archive for the current (os, cpu). Linux arm64 and macOS x86_64 are wired
 up in addition to the primary linux x86_64 / macOS arm64 combos so the
 same rule works across CI runners and local dev machines.
+
+For **Emscripten/WASM** builds the browser provides the WebGPU API natively
+via `-sUSE_WEBGPU=1`; no prebuilt archive is needed. The `wgpu_emscripten`
+target supplies a stub `wgpu.h` (the wgpu-native extensions header that
+`webgpu.hpp` includes unconditionally) plus link-time stub implementations
+so the C++ wrapper compiles and links.
 """
+
+load("@bazel_skylib//lib:selects.bzl", "selects")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -29,13 +37,34 @@ cc_library(
 # Alias the active wgpu-native archive for the current (os, cpu). Each
 # archive was published by the `non_bcr_deps` module extension in
 # //third_party/bazel/non_bcr_deps.bzl and carries the same target name
-# (`wgpu_native`).
+# (`wgpu_native`).  Emscripten (wasm32/wasm64) uses a stub that delegates
+# to the browser's built-in WebGPU implementation.
 alias(
     name = "wgpu_native_platform",
-    actual = select({
+    actual = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): ":wgpu_emscripten",
         "@platforms//os:macos": ":wgpu_native_macos",
         "@platforms//os:linux": ":wgpu_native_linux",
     }),
+)
+
+# Emscripten WebGPU target. The browser provides the standard webgpu.h
+# functions via the vendored emdawnwebgpu package (Dawn's Emscripten
+# bindings in //third_party/emdawnwebgpu). This target supplies:
+#   1. A stub wgpu.h declaring wgpu-native extension types/functions so
+#      webgpu.hpp compiles.
+#   2. wgpu_native_stubs.cc implementing those extension functions (mostly
+#      no-ops; wgpuDevicePoll yields via emscripten_sleep for ASYNCIFY).
+#   3. The Dawn webgpu.h + compiled webgpu.cpp glue via emdawnwebgpu deps.
+cc_library(
+    name = "wgpu_emscripten",
+    srcs = ["emscripten_stub/wgpu_native_stubs.cc"],
+    hdrs = glob(["emscripten_stub/webgpu/*.h"]),
+    strip_include_prefix = "emscripten_stub",
+    deps = [
+        "//third_party/emdawnwebgpu:webgpu_header",
+        "//third_party/emdawnwebgpu:webgpu_impl",
+    ],
 )
 
 alias(
