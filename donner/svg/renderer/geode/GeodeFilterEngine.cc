@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/base/MathUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -1012,16 +1013,22 @@ GeodeFilterEngine::~GeodeFilterEngine() = default;
 
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
-                                         const Box2d& filterRegion) {
+                                         const Box2d& filterRegion,
+                                         const Transform2d& deviceFromFilter) {
   using namespace svg::components;
 
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   wgpu::Texture currentBuffer = sourceGraphic;
 
-  // Compute user-space → pixel-space scale factors so that primitive
-  // parameters (dx/dy, stdDeviation, etc.) are interpreted in pixels.
-  const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-  const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+  // Derive per-axis scale factors from the full CTM's basis vectors so
+  // that rotation/skew in the ancestor transform is accounted for.
+  // This matches the CPU FilterGraphExecutor's decomposition.
+  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const double scaleX = std::max(transformedXAxis.length(), 1e-12);
+  const double determinant = deviceFromFilter.determinant();
+  const double scaleY =
+      NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3])
+                               : std::max(std::abs(determinant) / scaleX, 1e-12);
 
   // For objectBoundingBox primitiveUnits, values are relative to the element
   // bounding box.  Scale through the bbox dimensions first, then to pixels.
@@ -1036,6 +1043,13 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   };
   auto toPixelY = [&](double val) -> double {
     return std::abs(isOBB ? val * bboxH : val) * scaleY;
+  };
+
+  // Transform a user-space offset vector through the full CTM so that
+  // rotation/skew is preserved (used by feOffset, feDropShadow).
+  auto toPixelOffset = [&](double dx, double dy) -> Vector2d {
+    const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
+    return deviceFromFilter.transformVector(userOffset);
   };
 
   for (const FilterNode& node : graph.nodes) {
@@ -1053,15 +1067,12 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       const uint32_t em = toShaderEdgeMode(blur->edgeMode);
       outputTex = applyGaussianBlur(inputTex, sx, sy, em);
     } else if (const auto* offset = std::get_if<filter_primitive::Offset>(&node.primitive)) {
-      // Scale offset from user-space to pixel-space.  Unlike blur, offset
-      // preserves sign (negative shifts are valid), so do not take abs().
+      // Project the offset vector through the full CTM so rotation/skew
+      // maps correctly to device pixels.
+      const Vector2d pixelOffset = toPixelOffset(offset->dx, offset->dy);
       filter_primitive::Offset scaled = *offset;
-      if (isOBB) {
-        scaled.dx *= bboxW;
-        scaled.dy *= bboxH;
-      }
-      scaled.dx *= scaleX;
-      scaled.dy *= scaleY;
+      scaled.dx = pixelOffset.x;
+      scaled.dy = pixelOffset.y;
       outputTex = applyOffset(inputTex, scaled);
     } else if (const auto* cm = std::get_if<filter_primitive::ColorMatrix>(&node.primitive)) {
       outputTex = applyColorMatrix(inputTex, *cm);
@@ -1116,20 +1127,12 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                    std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
       outputTex = applySpecularLighting(inputTex, *specular, scaleX, scaleY);
     } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
-      // dx / dy / stdDeviation all follow the same user-space → pixel
-      // convention as feOffset / feGaussianBlur. dx preserves sign; std
-      // deviation is magnitude only and treated as abs().
+      // stdDeviation is magnitude only; dx/dy are directional and need
+      // the full CTM projection (matching feOffset).
       double sx = drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0;
       double sy = drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0;
-      double dx = drop->dx;
-      double dy = drop->dy;
-      if (isOBB) {
-        dx *= bboxW;
-        dy *= bboxH;
-      }
-      dx *= scaleX;
-      dy *= scaleY;
-      outputTex = applyDropShadow(inputTex, *drop, sx, sy, dx, dy);
+      const Vector2d pixelOffset = toPixelOffset(drop->dx, drop->dy);
+      outputTex = applyDropShadow(inputTex, *drop, sx, sy, pixelOffset.x, pixelOffset.y);
     } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
       outputTex = applyImage(*image, inputTex.getWidth(), inputTex.getHeight(), graph, node);
     } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
@@ -1149,8 +1152,10 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         const auto& fr = graph.filterRegion.value();
         srcX = static_cast<int32_t>(std::floor(fr.topLeft.x * scaleX));
         srcY = static_cast<int32_t>(std::floor(fr.topLeft.y * scaleY));
-        srcW = static_cast<int32_t>(std::ceil((fr.bottomRight.x - fr.topLeft.x) * scaleX));
-        srcH = static_cast<int32_t>(std::ceil((fr.bottomRight.y - fr.topLeft.y) * scaleY));
+        srcW = static_cast<int32_t>(
+            std::ceil((fr.bottomRight.x - fr.topLeft.x) * scaleX));
+        srcH = static_cast<int32_t>(
+            std::ceil((fr.bottomRight.y - fr.topLeft.y) * scaleY));
       }
       outputTex = applyTile(inputTex, srcX, srcY, srcW, srcH);
     } else {
@@ -1175,22 +1180,23 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   // clear a fresh texture via a render pass and then GPU-copy only the
   // pixels inside the region from the result.
   //
-  // The filter region is in user-space coordinates; transform to pixel
-  // coordinates using the graph's scale factor.
+  // The filter region is in user-space coordinates; project through the
+  // full CTM to get the axis-aligned bounding box in device pixels.
+  // This is necessary so that rotated/skewed ancestor transforms
+  // produce correctly-sized clip bounds.
   {
     const uint32_t width = currentBuffer.getWidth();
     const uint32_t height = currentBuffer.getHeight();
-    const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-    const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+    const Box2d pixelRegion = deviceFromFilter.transformBox(filterRegion);
     const int x0 =
-        std::max(0, static_cast<int>(std::floor(filterRegion.topLeft.x * scaleX)));
+        std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
     const int y0 =
-        std::max(0, static_cast<int>(std::floor(filterRegion.topLeft.y * scaleY)));
+        std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
     const int x1 =
-        std::clamp(static_cast<int>(std::ceil(filterRegion.bottomRight.x * scaleX)), 0,
+        std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.x)), 0,
                    static_cast<int>(width));
     const int y1 =
-        std::clamp(static_cast<int>(std::ceil(filterRegion.bottomRight.y * scaleY)), 0,
+        std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.y)), 0,
                    static_cast<int>(height));
 
     // Skip clipping if the region covers the entire texture.

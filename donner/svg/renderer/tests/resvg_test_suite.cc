@@ -287,20 +287,26 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
   }
 
   // complex-transform tests: filter chains applied inside a non-axis-
-  // aligned ancestor transform. Geode's filter engine flattens the
-  // region to the primitive's local box instead of projecting through
-  // the current CTM, so every primitive after the transform winds up
-  // in the wrong pixel space (14k-95k pixel diffs at default threshold,
-  // far past anything a threshold widening could reach). The sibling
-  // feMorphology / feComponentTransfer / feConvolveMatrix directories
-  // in the resvg suite don't ship a `complex-transform.svg`, so the
-  // disable only applies to the four categories that do.
-  if ((category == "filters/feFlood" || category == "filters/feOffset" ||
-       category == "filters/feMerge" || category == "filters/feGaussianBlur") &&
+  // aligned ancestor transform. The Geode filter engine now projects
+  // through the full CTM; feGaussianBlur and feMerge pass, but feFlood
+  // and feOffset still need per-primitive subregion clipping that the
+  // GPU path doesn't yet implement.
+  if ((category == "filters/feFlood" || category == "filters/feOffset") &&
       filename == "complex-transform.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "Not impl: per-node filter subregion transforms (Geode)");
+                       "Not impl: per-primitive subregion clipping (Geode)");
+    };
+  }
+  // feImage with complex ancestor transform: the fragment reference's
+  // source rendering doesn't incorporate the ancestor CTM, producing
+  // a shifted/unrotated image placement. Separate from the CTM scale
+  // fix — needs fragment-ref rendering to apply the transform.
+  if (category == "filters/feImage" &&
+      filename == "link-on-an-element-with-complex-transform.svg") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "Not impl: feImage fragment ref with ancestor CTM (Geode)");
     };
   }
   // feFlood partial-subregion and OBB-subregion: per-primitive x/y/width/height

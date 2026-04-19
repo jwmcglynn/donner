@@ -17,6 +17,7 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 
 namespace donner::svg::components {
 struct FilterGraph;
@@ -97,11 +98,16 @@ public:
    *
    * @param graph The filter graph to execute.
    * @param sourceGraphic The input texture (layer snapshot).
-   * @param filterRegion The filter region in device-pixel coordinates.
+   * @param filterRegion The filter region in user-space coordinates.
+   * @param deviceFromFilter The combined transform from filter/user-space to
+   *   device-pixel coordinates, captured at `pushFilterLayer` time. Used to
+   *   derive per-axis scale factors and to project directional parameters
+   *   (e.g. feOffset dx/dy) through rotation/skew.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
-                        const wgpu::Texture& sourceGraphic, const Box2d& filterRegion);
+                        const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
+                        const Transform2d& deviceFromFilter);
 
 private:
   /// Two-pass separable Gaussian blur via compute shader.
