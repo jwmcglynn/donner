@@ -28,10 +28,21 @@ extern "C" {
 
 WGPUBool wgpuDevicePoll(WGPUDevice /*device*/, WGPUBool /*wait*/,
                          WGPUSubmissionIndex const* /*wrappedSubmissionIndex*/) {
-  // On the browser, GPU work completes via the microtask queue. Yield to
-  // the event loop so callbacks can fire (requires ASYNCIFY).
+  // On the browser, GPU work completes via the microtask queue — the WASM
+  // call stack must suspend via ASYNCIFY long enough for the JS runtime
+  // to run the WebGPU Promise queue. `emscripten_sleep(0)` yields a
+  // single microtask tick, which is typically NOT enough for a full
+  // submit → onSubmittedWorkDone → mapAsync-callback chain to resolve:
+  // the spin loop `while (!done) poll();` busy-yields without ever
+  // actually waiting for the GPU. Sleeping a few ms each iteration lets
+  // the browser schedule and deliver the callback.
+  //
+  // 5ms is cheap (under a single vsync's budget) but gives the UA
+  // plenty of headroom to drain submission queues. Callers who spin on
+  // `poll(true)` will observe ~5ms granularity, which is fine for the
+  // once-per-frame `takeSnapshot` map-for-read path.
 #ifdef __EMSCRIPTEN__
-  emscripten_sleep(0);
+  emscripten_sleep(5);
 #endif
   return 1;  // "queue empty"
 }
