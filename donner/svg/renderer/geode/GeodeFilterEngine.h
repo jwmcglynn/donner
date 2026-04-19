@@ -8,7 +8,8 @@
 ///
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
 /// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
-/// `feComponentTransfer`, `feConvolveMatrix`. Other primitives are
+/// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
+/// `feDisplacementMap`. Other primitives are
 /// passed through (the input texture is forwarded unchanged) with a one-shot
 /// warning.
 
@@ -30,6 +31,8 @@ struct Blend;
 struct Morphology;
 struct ComponentTransfer;
 struct ConvolveMatrix;
+struct Turbulence;
+struct DisplacementMap;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -58,6 +61,8 @@ class GeodeDevice;
  * - `feMorphology` (erode / dilate via min / max rectangular kernel)
  * - `feComponentTransfer` (per-channel LUT transform via compute shader)
  * - `feConvolveMatrix` (NxM kernel convolution via compute shader)
+ * - `feTurbulence` (Perlin noise / fractal noise via compute shader)
+ * - `feDisplacementMap` (per-pixel channel-driven displacement via compute shader)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -192,6 +197,27 @@ private:
       const wgpu::Texture& input,
       const svg::components::filter_primitive::ConvolveMatrix& primitive);
 
+  /// Perlin noise / fractal noise generator (feTurbulence).
+  /// @param width Output texture width.
+  /// @param height Output texture height.
+  /// @param primitive The feTurbulence parameters.
+  /// @param scaleX User-to-pixel scale X.
+  /// @param scaleY User-to-pixel scale Y.
+  /// @return The noise texture.
+  wgpu::Texture applyTurbulence(uint32_t width, uint32_t height,
+                                const svg::components::filter_primitive::Turbulence& primitive,
+                                double scaleX, double scaleY);
+
+  /// Per-pixel channel-driven displacement (feDisplacementMap).
+  /// @param in1 Source image texture.
+  /// @param in2 Displacement map texture.
+  /// @param primitive The feDisplacementMap parameters.
+  /// @param pixelScale Displacement scale in pixels.
+  /// @return The displaced texture.
+  wgpu::Texture applyDisplacementMap(
+      const wgpu::Texture& in1, const wgpu::Texture& in2,
+      const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -233,6 +259,14 @@ private:
   // feConvolveMatrix kernel pipeline (input + output + uniform).
   wgpu::ComputePipeline convolveMatrixPipeline_;
   wgpu::BindGroupLayout convolveMatrixBindGroupLayout_;
+
+  // feTurbulence noise pipeline (output + storage buffer, no input texture).
+  wgpu::ComputePipeline turbulencePipeline_;
+  wgpu::BindGroupLayout turbulenceBindGroupLayout_;
+
+  // feDisplacementMap pipeline (two inputs + output + uniform).
+  wgpu::ComputePipeline displacementMapPipeline_;
+  wgpu::BindGroupLayout displacementMapBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

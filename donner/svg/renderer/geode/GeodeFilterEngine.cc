@@ -92,6 +92,29 @@ struct ConvolveParams {
   float kernel[25];  // Row-major kernel values (max 5×5).
 };
 
+struct TurbulenceParams {
+  float baseFreqX;
+  float baseFreqY;
+  int32_t numOctaves;
+  int32_t seed;
+  uint32_t stitchTiles;
+  uint32_t typeFlag;
+  float tileWidth;
+  float tileHeight;
+  float filterFromDeviceA;
+  float filterFromDeviceB;
+  float filterFromDeviceC;
+  float filterFromDeviceD;
+};
+
+/// Uniform buffer layout matching the WGSL `DisplacementParams` struct.
+struct DisplacementParams {
+  float scale;
+  uint32_t xChannel;
+  uint32_t yChannel;
+  uint32_t pad;
+};
+
 /// Map a FilterGraph EdgeMode to the shader's uint.
 uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeMode mode) {
   using EM = svg::components::filter_primitive::GaussianBlur::EdgeMode;
@@ -739,6 +762,51 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     cpDesc.compute.entryPoint = wgpuLabel("main");
     convolveMatrixPipeline_ = dev.createComputePipeline(cpDesc);
   }
+
+  // --- feTurbulence pipeline (output + storage buffer, no input texture) ---
+  {
+    wgpu::BindGroupLayoutEntry entries[2]{};
+
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+    entries[0].storageTexture.format = kFormat;
+    entries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[1].buffer.minBindingSize = sizeof(TurbulenceParams);
+
+    wgpu::BindGroupLayoutDescriptor bglDesc{};
+    bglDesc.label = wgpuLabel("FilterTurbulenceBGL");
+    bglDesc.entryCount = 2;
+    bglDesc.entries = entries;
+    turbulenceBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
+
+    wgpu::PipelineLayoutDescriptor plDesc{};
+    plDesc.label = wgpuLabel("FilterTurbulencePipelineLayout");
+    plDesc.bindGroupLayoutCount = 1;
+    WGPUBindGroupLayout layouts[1] = {turbulenceBindGroupLayout_};
+    plDesc.bindGroupLayouts = layouts;
+    wgpu::PipelineLayout pipelineLayout = dev.createPipelineLayout(plDesc);
+
+    wgpu::ComputePipelineDescriptor cpDesc{};
+    cpDesc.label = wgpuLabel("FilterTurbulencePipeline");
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = createFilterTurbulenceShader(dev);
+    cpDesc.compute.entryPoint = wgpuLabel("main");
+    turbulencePipeline_ = dev.createComputePipeline(cpDesc);
+  }
+
+  // --- feDisplacementMap pipeline (two inputs + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createTwoInputUniformPipeline(
+        dev, "FilterDisplacementMap", createFilterDisplacementMapShader(dev),
+        sizeof(DisplacementParams));
+    displacementMapBindGroupLayout_ = bgl;
+    displacementMapPipeline_ = pipeline;
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
@@ -827,6 +895,21 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     } else if (const auto* conv =
                    std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
       outputTex = applyConvolveMatrix(inputTex, *conv);
+    } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
+      outputTex = applyTurbulence(inputTex.getWidth(), inputTex.getHeight(), *turb, scaleX, scaleY);
+    } else if (const auto* disp =
+                   std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
+      wgpu::Texture in2Tex = inputTex;
+      if (node.inputs.size() >= 2) {
+        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
+      }
+      // For objectBoundingBox, scale through sqrt(bboxW * bboxH) per the spec.
+      double pixelScale = std::abs(disp->scale);
+      if (isOBB) {
+        pixelScale *= std::sqrt(bboxW * bboxH);
+      }
+      pixelScale *= std::sqrt(scaleX * scaleY);
+      outputTex = applyDisplacementMap(inputTex, in2Tex, *disp, pixelScale);
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -1428,6 +1511,113 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 
   wgpu::CommandBuffer cmdBuf = encoder.finish();
   device_.queue().submit(1, &cmdBuf);
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyTurbulence(
+    uint32_t width, uint32_t height,
+    const svg::components::filter_primitive::Turbulence& primitive, double scaleX, double scaleY) {
+  const wgpu::Device& dev = device_.device();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterTurbulenceOutput");
+
+  TurbulenceParams params{};
+  params.baseFreqX = static_cast<float>(primitive.baseFrequencyX);
+  params.baseFreqY = static_cast<float>(primitive.baseFrequencyY);
+  params.numOctaves = primitive.numOctaves;
+  params.seed = static_cast<int32_t>(primitive.seed);
+  params.stitchTiles = primitive.stitchTiles ? 1u : 0u;
+  params.typeFlag =
+      primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
+  // Tile dimensions in user space (for stitchTiles).
+  params.tileWidth = static_cast<float>(width / scaleX);
+  params.tileHeight = static_cast<float>(height / scaleY);
+  // Inverse device-to-filter transform: for now assume identity (no skew/rotation).
+  // The 2x2 matrix maps pixel coords back to filter (user) space.
+  params.filterFromDeviceA = static_cast<float>(1.0 / scaleX);
+  params.filterFromDeviceB = 0.0f;
+  params.filterFromDeviceC = 0.0f;
+  params.filterFromDeviceD = static_cast<float>(1.0 / scaleY);
+
+  // Upload as storage buffer (matches the shader's var<storage, read>).
+  wgpu::BufferDescriptor bufDesc{};
+  bufDesc.label = wgpuLabel("TurbulenceParamsStorage");
+  bufDesc.size = sizeof(TurbulenceParams);
+  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  bufDesc.mappedAtCreation = false;
+  wgpu::Buffer paramsBuffer = dev.createBuffer(bufDesc);
+  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[2]{};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = outputView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].buffer = paramsBuffer;
+  bgEntries[1].offset = 0;
+  bgEntries[1].size = sizeof(TurbulenceParams);
+
+  wgpu::BindGroupDescriptor bgDesc{};
+  bgDesc.label = wgpuLabel("FilterTurbulenceBindGroup");
+  bgDesc.layout = turbulenceBindGroupLayout_;
+  bgDesc.entryCount = 2;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+
+  wgpu::CommandEncoderDescriptor ceDesc{};
+  ceDesc.label = wgpuLabel("FilterTurbulenceEncoder");
+  wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
+
+  wgpu::ComputePassDescriptor passDesc{};
+  passDesc.label = wgpuLabel("FilterTurbulencePass");
+  wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+  pass.setPipeline(turbulencePipeline_);
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+
+  const uint32_t workgroupsX = (width + 7) / 8;
+  const uint32_t workgroupsY = (height + 7) / 8;
+  pass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+  pass.end();
+
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  device_.queue().submit(1, &cmdBuf);
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
+    const wgpu::Texture& in1, const wgpu::Texture& in2,
+    const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = in1.getWidth();
+  const uint32_t height = in1.getHeight();
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterDisplacementMapOutput");
+
+  using Channel = svg::components::filter_primitive::DisplacementMap::Channel;
+  auto toIndex = [](Channel ch) -> uint32_t {
+    switch (ch) {
+      case Channel::R: return 0;
+      case Channel::G: return 1;
+      case Channel::B: return 2;
+      case Channel::A: return 3;
+    }
+    return 3;
+  };
+
+  DisplacementParams params{};
+  params.scale = static_cast<float>(pixelScale);
+  params.xChannel = toIndex(primitive.xChannelSelector);
+  params.yChannel = toIndex(primitive.yChannelSelector);
+  params.pad = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "DisplacementMapParamsUniform");
+
+  dispatchTwoInputUniform(device_, displacementMapBindGroupLayout_, displacementMapPipeline_, in1,
+                          in2, output, uniformBuffer, sizeof(DisplacementParams),
+                          "FilterDisplacementMapPass");
   return output;
 }
 

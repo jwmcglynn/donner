@@ -271,4 +271,39 @@ wgpu::ShaderModule createFilterComponentTransferShader(const wgpu::Device& devic
  */
 wgpu::ShaderModule createFilterConvolveMatrixShader(const wgpu::Device& device);
 
+/**
+ * Compile the feTurbulence compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_turbulence.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader generates Perlin noise / fractal noise patterns per the SVG
+ * feTurbulence specification.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(1) var<storage, read> params: TurbulenceParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterTurbulenceShader(const wgpu::Device& device);
+
+/**
+ * Compile the feDisplacementMap compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_displacement_map.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader displaces each output pixel from in1 by channel values read from in2.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var in1_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var in2_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(3) var<uniform> params: DisplacementParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterDisplacementMapShader(const wgpu::Device& device);
+
 }  // namespace donner::geode
