@@ -1927,8 +1927,11 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   wgpu::Extent3D copySize = {width, height, 1};
   enc.copyTextureToBuffer(src, dst, copySize);
 
+  std::cerr << "[takeSnapshot] about to submit copyTextureToBuffer (size=" << bd.size
+            << ", bytesPerRow=" << bytesPerRow << ", rows=" << height << ")" << std::endl;
   wgpu::CommandBuffer cmd = enc.finish();
   impl_->device->queue().submit(1, &cmd);
+  std::cerr << "[takeSnapshot] submitted; about to mapAsync readback buffer" << std::endl;
 
   // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
   // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function
@@ -1947,6 +1950,8 @@ RendererBitmap RendererGeode::takeSnapshot() const {
     auto* s = static_cast<MapState*>(userdata1);
     s->ok = (status == WGPUMapAsyncStatus_Success);
     s->done = true;
+    std::cerr << "[takeSnapshot] map callback fired: status=" << static_cast<int>(status)
+              << " ok=" << s->ok << std::endl;
   };
   mapCb.userdata1 = &mapState;
   mapCb.userdata2 = nullptr;
@@ -1956,9 +1961,23 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   // compatibility.
   mapCb.mode = wgpu::CallbackMode::AllowProcessEvents;
   readback.mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
+  std::cerr << "[takeSnapshot] mapAsync returned; entering poll loop" << std::endl;
+  int pollIter = 0;
   while (!mapState.done) {
+    if (pollIter < 10 || (pollIter % 20) == 0) {
+      std::cerr << "[takeSnapshot] poll iter #" << pollIter
+                << " done=" << mapState.done << std::endl;
+    }
     impl_->device->device().poll(true, nullptr);
+    ++pollIter;
+    if (pollIter > 2000) {  // 2000 * 5ms = 10s bail-out.
+      std::cerr << "[takeSnapshot] poll loop timeout after " << pollIter
+                << " iterations; giving up" << std::endl;
+      break;
+    }
   }
+  std::cerr << "[takeSnapshot] poll loop exited; done=" << mapState.done
+            << " ok=" << mapState.ok << " iters=" << pollIter << std::endl;
   if (!mapState.ok) {
     return bitmap;
   }

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <string>
 
 #include "donner/base/ParseWarningSink.h"
@@ -38,6 +39,8 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
   using namespace donner;
   using namespace donner::svg;
   using namespace donner::svg::parser;
+
+  std::cerr << "[wasm] render_svg entry w=" << width << " h=" << height << std::endl;
 
   gLastError.clear();
 
@@ -66,6 +69,7 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
   const size_t expectedBytes = area * 4;
 
   // Parse the SVG document.
+  std::cerr << "[wasm] parsing SVG (" << std::strlen(svgText) << " bytes)" << std::endl;
   ParseWarningSink warnings;
   ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(svgText, warnings);
 
@@ -73,6 +77,7 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
     gLastError = "Parse error: " + maybeDocument.error().reason.str();
     return nullptr;
   }
+  std::cerr << "[wasm] parsed OK" << std::endl;
 
   SVGDocument document = std::move(maybeDocument.result());
   document.setCanvasSize(width, height);
@@ -81,12 +86,17 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
   // RendererGeode constructor calls GeodeDevice::CreateHeadless() which
   // requests an adapter and device — these are async in the browser and
   // require ASYNCIFY to complete synchronously.
+  std::cerr << "[wasm] constructing RendererGeode (will acquire WebGPU device)" << std::endl;
   RendererGeode renderer(/*verbose=*/true);
+  std::cerr << "[wasm] RendererGeode constructed; calling draw()" << std::endl;
   renderer.draw(document);
+  std::cerr << "[wasm] draw() returned; calling takeSnapshot()" << std::endl;
 
   // Take a snapshot to get RGBA pixel data. This submits a GPU→CPU copy
   // and maps the readback buffer, which again requires ASYNCIFY yield.
   RendererBitmap bitmap = renderer.takeSnapshot();
+  std::cerr << "[wasm] takeSnapshot() returned; pixels.size=" << bitmap.pixels.size()
+            << " rowBytes=" << bitmap.rowBytes << std::endl;
   if (bitmap.empty()) {
     gLastError = "Rendering produced an empty bitmap";
     return nullptr;
