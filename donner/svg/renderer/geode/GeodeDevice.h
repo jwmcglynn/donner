@@ -3,6 +3,7 @@
 /// RAII wrapper around a headless WebGPU (Dawn) device.
 
 #include <memory>
+#include <vector>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/svg/renderer/geode/GeodeCounters.h"
@@ -56,6 +57,31 @@ public:
 
   /// Returns the adapter backing this device.
   const wgpu::Adapter& adapter() const { return adapter_; }
+
+  /**
+   * Enqueue a GPU buffer for deferred destruction. The buffer handle is kept
+   * alive until `drainDeferredDestroys()` is called, preventing the underlying
+   * GPU resource from being freed while an in-flight command buffer may still
+   * reference it.
+   */
+  void deferDestroy(wgpu::Buffer buffer);
+
+  /**
+   * Enqueue a GPU texture for deferred destruction. Same semantics as the
+   * buffer variant.
+   */
+  void deferDestroy(wgpu::Texture texture);
+
+  /**
+   * Drop all deferred-destroy handles, releasing their GPU resources.
+   *
+   * Called at the top of each frame (before new allocations) so resources
+   * from the previous frame's command buffer submission have had time to
+   * complete on the GPU. WebGPU internally reference-counts resources used
+   * by submitted command buffers, so dropping our handle here is safe even
+   * without an explicit `device.poll()`.
+   */
+  void drainDeferredDestroys();
 
   /**
    * Whether to use alpha-coverage AA instead of hardware 4× MSAA with
@@ -180,6 +206,11 @@ private:
 
   bool useAlphaCoverageAA_ = false;
   GeodeCounters* counters_ = nullptr;
+
+  // Deferred-destroy queues: resources enqueued via deferDestroy() are held
+  // alive until drainDeferredDestroys() drops them at the next frame boundary.
+  std::vector<wgpu::Buffer> pendingBuffers_;
+  std::vector<wgpu::Texture> pendingTextures_;
 };
 
 }  // namespace donner::geode

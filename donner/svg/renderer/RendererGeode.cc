@@ -1539,6 +1539,14 @@ int RendererGeode::height() const {
 }
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
+  // Drain deferred-destroy resources from the previous frame before allocating
+  // new ones. By this point any GPU submission from the prior frame has had a
+  // chance to finish, and WebGPU's internal ref-counting keeps resources alive
+  // for any still-in-flight command buffers.
+  if (impl_->device) {
+    impl_->device->drainDeferredDestroys();
+  }
+
   impl_->viewport = viewport;
   impl_->pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
   impl_->pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);

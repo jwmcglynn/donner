@@ -291,4 +291,21 @@ const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
   return impl_->identityInstanceTransformBuffer;
 }
 
+void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {
+  if (buffer) {
+    pendingBuffers_.push_back(std::move(buffer));
+  }
+}
+
+void GeodeDevice::deferDestroy(wgpu::Texture texture) {
+  if (texture) {
+    pendingTextures_.push_back(std::move(texture));
+  }
+}
+
+void GeodeDevice::drainDeferredDestroys() {
+  pendingBuffers_.clear();
+  pendingTextures_.clear();
+}
+
 }  // namespace donner::geode

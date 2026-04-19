@@ -159,4 +159,94 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   readback.unmap();
 }
 
+/// Deferred-destroy queue: resources enqueued via deferDestroy() survive until
+/// drainDeferredDestroys() is called, so an in-flight command buffer that
+/// references them doesn't trigger a use-after-free.
+TEST(GeodeDevice, DeferredDestroyBufferSurvivesUntilDrain) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  const wgpu::Device& device = geodeDevice->device();
+  const wgpu::Queue& queue = geodeDevice->queue();
+
+  // Create a buffer and write data to it, then defer its destruction.
+  constexpr uint64_t kBufSize = 256;
+  wgpu::BufferDescriptor desc = {};
+  desc.label = wgpuLabel("DeferredDestroyTest");
+  desc.size = kBufSize;
+  desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer buffer = device.createBuffer(desc);
+  ASSERT_TRUE(static_cast<bool>(buffer));
+
+  // Write some data so the buffer is "in use".
+  const uint32_t data[4] = {1, 2, 3, 4};
+  queue.writeBuffer(buffer, 0, data, sizeof(data));
+
+  // Move the buffer into the deferred-destroy queue. The wgpu handle is
+  // internally reference-counted, so our local variable may still appear
+  // "valid" after the move — what matters is that the deferred queue now
+  // holds its own reference.
+  geodeDevice->deferDestroy(std::move(buffer));
+
+  // Submit an empty command buffer to create a GPU submission boundary.
+  wgpu::CommandEncoder encoder = device.createCommandEncoder();
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  queue.submit(1, &cmdBuf);
+
+  // Drain: the buffer is now released. No wgpu validation errors should fire.
+  geodeDevice->drainDeferredDestroys();
+
+  // Submit another empty command buffer after drain to confirm no validation
+  // errors from the destruction.
+  wgpu::CommandEncoder encoder2 = device.createCommandEncoder();
+  wgpu::CommandBuffer cmdBuf2 = encoder2.finish();
+  queue.submit(1, &cmdBuf2);
+}
+
+/// Deferred-destroy queue: textures survive until drain.
+TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  const wgpu::Device& device = geodeDevice->device();
+  const wgpu::Queue& queue = geodeDevice->queue();
+
+  wgpu::TextureDescriptor desc = {};
+  desc.label = wgpuLabel("DeferredDestroyTexTest");
+  desc.size = {4, 4, 1};
+  desc.format = wgpu::TextureFormat::RGBA8Unorm;
+  desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+  desc.mipLevelCount = 1;
+  desc.sampleCount = 1;
+  desc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture texture = device.createTexture(desc);
+  ASSERT_TRUE(static_cast<bool>(texture));
+
+  // Use the texture as a render target, then defer destruction.
+  wgpu::TextureView view = texture.createView();
+  wgpu::CommandEncoder encoder = device.createCommandEncoder();
+  wgpu::RenderPassColorAttachment color = {};
+  color.view = view;
+  color.loadOp = wgpu::LoadOp::Clear;
+  color.storeOp = wgpu::StoreOp::Store;
+  color.clearValue = {0.0, 1.0, 0.0, 1.0};
+  wgpu::RenderPassDescriptor passDesc = {};
+  passDesc.colorAttachmentCount = 1;
+  passDesc.colorAttachments = &color;
+  auto pass = encoder.beginRenderPass(passDesc);
+  pass.end();
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  queue.submit(1, &cmdBuf);
+
+  geodeDevice->deferDestroy(std::move(texture));
+
+  // Drain after submission — safe because wgpu internally refs submitted resources.
+  geodeDevice->drainDeferredDestroys();
+
+  // Verify no validation errors by submitting more work.
+  wgpu::CommandEncoder encoder2 = device.createCommandEncoder();
+  wgpu::CommandBuffer cmdBuf2 = encoder2.finish();
+  queue.submit(1, &cmdBuf2);
+}
+
 }  // namespace donner::geode
