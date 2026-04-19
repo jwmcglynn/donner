@@ -94,6 +94,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   colorAttachment.loadOp = wgpu::LoadOp::Clear;
   colorAttachment.storeOp = wgpu::StoreOp::Store;
   colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};  // Red.
+  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // Dawn requires this on 2D views.
 
   wgpu::RenderPassDescriptor passDesc = {};
   passDesc.colorAttachmentCount = 1;

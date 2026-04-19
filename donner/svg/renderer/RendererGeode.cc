@@ -1950,6 +1950,11 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   };
   mapCb.userdata1 = &mapState;
   mapCb.userdata2 = nullptr;
+  // Dawn (browser WebGPU) rejects the zero-initialized `mode = 0` with
+  // "Invalid WGPUCallbackMode 0". wgpu-native is lenient, but both
+  // accept an explicit `AllowProcessEvents`. Set it for cross-backend
+  // compatibility.
+  mapCb.mode = wgpu::CallbackMode::AllowProcessEvents;
   readback.mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   while (!mapState.done) {
     impl_->device->device().poll(true, nullptr);

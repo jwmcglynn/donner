@@ -406,6 +406,11 @@ struct GeoEncoder::Impl {
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = clearColor;
+    // Dawn (browser WebGPU) rejects depthSlice=0 on non-3D views with
+    // "Depth slice was provided but the color attachment's view is not
+    // 3D". wgpu-native is lenient. Set the UNDEFINED sentinel for
+    // cross-backend compatibility.
+    color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
     wgpu::RenderPassDescriptor desc = {};
     desc.colorAttachmentCount = 1;
@@ -675,6 +680,8 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask,
   color.loadOp = wgpu::LoadOp::Clear;
   color.storeOp = wgpu::StoreOp::Store;
   color.clearValue = {0.0, 0.0, 0.0, 0.0};
+  // See ensurePassOpen above — Dawn requires UNDEFINED on non-3D views.
+  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
   wgpu::RenderPassDescriptor desc = {};
   desc.colorAttachmentCount = 1;
