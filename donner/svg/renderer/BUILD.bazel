@@ -356,6 +356,7 @@ donner_cc_library(
         "//donner/svg/components",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_filter_engine",
         "//donner/svg/renderer/geode:geode_image_pipeline",
         "//donner/svg/renderer/geode:geode_pipeline",
         "//donner/svg/renderer/geode:geode_wgpu_util",

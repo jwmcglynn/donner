@@ -285,6 +285,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/css:core",
         "//donner/svg",
+        "//donner/svg/components/filter:components",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:stroke_params",

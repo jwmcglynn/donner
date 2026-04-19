@@ -1,13 +1,14 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/GaussianBlurWgsl.h"
 #include "embed_resources/ImageBlitWgsl.h"
-#include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugFillAlphaCoverageWgsl.h"
-#include "embed_resources/SlugGradientWgsl.h"
+#include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientAlphaCoverageWgsl.h"
-#include "embed_resources/SlugMaskWgsl.h"
+#include "embed_resources/SlugGradientWgsl.h"
 #include "embed_resources/SlugMaskAlphaCoverageWgsl.h"
+#include "embed_resources/SlugMaskWgsl.h"
 
 namespace donner::geode {
 
@@ -24,10 +25,8 @@ namespace {
 /// `setDefault()` which fills in `chain.sType = SType::ShaderSourceWGSL`
 /// so the downstream `nextInChain = &source.chain` pointer walks the
 /// right struct type.
-wgpu::ShaderModule createShaderFromWgsl(const wgpu::Device& device,
-                                         const char* label,
-                                         const unsigned char* source,
-                                         size_t sourceSize) {
+wgpu::ShaderModule createShaderFromWgsl(const wgpu::Device& device, const char* label,
+                                        const unsigned char* source, size_t sourceSize) {
   wgpu::ShaderSourceWGSL wgslSource{wgpu::Default};
   wgslSource.code.data = reinterpret_cast<const char*>(source);
   wgslSource.code.length = sourceSize;
@@ -42,26 +41,22 @@ wgpu::ShaderModule createShaderFromWgsl(const wgpu::Device& device,
 }  // namespace
 
 wgpu::ShaderModule createSlugFillShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "SlugFill",
-                              donner::embedded::kSlugFillWgsl.data(),
+  return createShaderFromWgsl(device, "SlugFill", donner::embedded::kSlugFillWgsl.data(),
                               donner::embedded::kSlugFillWgsl.size());
 }
 
 wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "SlugGradient",
-                              donner::embedded::kSlugGradientWgsl.data(),
+  return createShaderFromWgsl(device, "SlugGradient", donner::embedded::kSlugGradientWgsl.data(),
                               donner::embedded::kSlugGradientWgsl.size());
 }
 
 wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "SlugMask",
-                              donner::embedded::kSlugMaskWgsl.data(),
+  return createShaderFromWgsl(device, "SlugMask", donner::embedded::kSlugMaskWgsl.data(),
                               donner::embedded::kSlugMaskWgsl.size());
 }
 
 wgpu::ShaderModule createImageBlitShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "ImageBlit",
-                              donner::embedded::kImageBlitWgsl.data(),
+  return createShaderFromWgsl(device, "ImageBlit", donner::embedded::kImageBlitWgsl.data(),
                               donner::embedded::kImageBlitWgsl.size());
 }
 
@@ -81,6 +76,11 @@ wgpu::ShaderModule createSlugMaskAlphaCoverageShader(const wgpu::Device& device)
   return createShaderFromWgsl(device, "SlugMaskAlphaCoverage",
                               donner::embedded::kSlugMaskAlphaCoverageWgsl.data(),
                               donner::embedded::kSlugMaskAlphaCoverageWgsl.size());
+}
+
+wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "GaussianBlur", donner::embedded::kGaussianBlurWgsl.data(),
+                              donner::embedded::kGaussianBlurWgsl.size());
 }
 
 }  // namespace donner::geode

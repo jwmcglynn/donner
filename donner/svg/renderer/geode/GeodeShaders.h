@@ -89,4 +89,22 @@ wgpu::ShaderModule createSlugMaskAlphaCoverageShader(const wgpu::Device& device)
  */
 wgpu::ShaderModule createImageBlitShader(const wgpu::Device& device);
 
+/**
+ * Compile the Gaussian blur compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/gaussian_blur.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader implements a two-pass separable Gaussian blur with
+ * configurable edge-mode handling (None / Duplicate / Wrap).
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: BlurParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device);
+
 }  // namespace donner::geode
