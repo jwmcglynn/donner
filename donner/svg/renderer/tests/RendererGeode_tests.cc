@@ -1141,5 +1141,236 @@ TEST_F(RendererGeodeTest, FilterBlendScreen) {
   EXPECT_NEAR(center[3], 255u, 1u) << "Blend-screen A";
 }
 
+/// feMorphology dilate: expand a small white rect by 4 pixels.
+TEST_F(RendererGeodeTest, FilterMorphologyDilateExpands) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode morphNode;
+  components::filter_primitive::Morphology morph;
+  morph.op = components::filter_primitive::Morphology::Operator::Dilate;
+  morph.radiusX = 4.0;
+  morph.radiusY = 4.0;
+  morphNode.primitive = morph;
+  morphNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(morphNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Draw a small white rect in the center: (22,22)-(42,42) = 20×20.
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({22, 22}, {42, 42}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // After dilate r=4, the rect expands by 4 in each direction.
+  // Pixel at (22-3, 32) = (19, 32) should be white (inside expanded region).
+  auto expanded = pixelAt(snap, 19, 32);
+  EXPECT_GT(expanded[3], 200u) << "Dilate should expand the shape outward";
+  EXPECT_GT(expanded[0], 200u) << "Dilated pixel should be white (R)";
+
+  // Center should still be white.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 255u) << "Center should remain white";
+  EXPECT_EQ(center[3], 255u) << "Center alpha should be fully opaque";
+}
+
+/// feMorphology erode: shrink a rect by 4 pixels.
+TEST_F(RendererGeodeTest, FilterMorphologyErodeShrinks) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode morphNode;
+  components::filter_primitive::Morphology morph;
+  morph.op = components::filter_primitive::Morphology::Operator::Erode;
+  morph.radiusX = 4.0;
+  morph.radiusY = 4.0;
+  morphNode.primitive = morph;
+  morphNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(morphNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Draw a white rect (16,16)-(48,48) = 32×32.
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // After erode r=4, the rect shrinks by 4 inward from each edge.
+  // Corner pixel (17, 17) should now be transparent (eroded away).
+  auto corner = pixelAt(snap, 17, 17);
+  EXPECT_EQ(corner[3], 0u) << "Corner should be transparent after erode";
+
+  // Center (32, 32) should still be white (far from edges).
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 255u) << "Center should remain white";
+  EXPECT_EQ(center[3], 255u) << "Center alpha";
+}
+
+/// feComponentTransfer identity: all channels pass through unchanged.
+TEST_F(RendererGeodeTest, FilterComponentTransferIdentityPasses) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode ctNode;
+  components::filter_primitive::ComponentTransfer ct;
+  // All 4 channels default to Identity — no explicit setup needed.
+  ctNode.primitive = ct;
+  ctNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(ctNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(128, 64, 200, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 128u, 2u) << "R should pass through";
+  EXPECT_NEAR(center[1], 64u, 2u) << "G should pass through";
+  EXPECT_NEAR(center[2], 200u, 2u) << "B should pass through";
+  EXPECT_NEAR(center[3], 255u, 1u) << "A should pass through";
+}
+
+/// feComponentTransfer gamma: apply x² to the red channel.
+TEST_F(RendererGeodeTest, FilterComponentTransferGammaInverts) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode ctNode;
+  components::filter_primitive::ComponentTransfer ct;
+  // R: gamma with amplitude=1, exponent=2, offset=0 → R' = R².
+  ct.funcR.type = components::filter_primitive::ComponentTransfer::FuncType::Gamma;
+  ct.funcR.amplitude = 1.0;
+  ct.funcR.exponent = 2.0;
+  ct.funcR.offset = 0.0;
+  ctNode.primitive = ct;
+  ctNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(ctNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Draw a rect with R=128/255 ≈ 0.502. After R² ≈ 0.252 → ~64.
+  renderer.setPaint(solidFill(css::RGBA(128, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto center = pixelAt(snap, 32, 32);
+  // R=128/255≈0.502, R²≈0.252, premultiplied: R*A=0.252*1.0=0.252 → ~64.
+  EXPECT_NEAR(center[0], 64u, 4u) << "R should be squared (~64)";
+  EXPECT_EQ(center[1], 0u) << "G should be zero";
+  EXPECT_EQ(center[2], 0u) << "B should be zero";
+  EXPECT_NEAR(center[3], 255u, 1u) << "A unchanged";
+}
+
+/// feConvolveMatrix box blur: 3×3 kernel of all 1s / divisor=9.
+TEST_F(RendererGeodeTest, FilterConvolveMatrixBoxBlur) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode convNode;
+  components::filter_primitive::ConvolveMatrix conv;
+  conv.orderX = 3;
+  conv.orderY = 3;
+  conv.kernelMatrix = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+  conv.divisor = 9.0;
+  conv.bias = 0.0;
+  conv.edgeMode = components::filter_primitive::ConvolveMatrix::EdgeMode::Duplicate;
+  conv.preserveAlpha = false;
+  convNode.primitive = conv;
+  convNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(convNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Draw a crisp white rect (16,16)-(48,48).
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Center should still be near-white (all neighbours are white).
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_GT(center[0], 240u) << "Center R should be near-white after box blur";
+
+  // Edge pixel (16, 32): 3×3 kernel straddles the edge, so the value
+  // should be intermediate (not fully white, not fully transparent).
+  auto edge = pixelAt(snap, 16, 32);
+  EXPECT_GT(edge[3], 50u) << "Edge pixel should have some alpha (box blur averages)";
+  EXPECT_LT(edge[3], 250u) << "Edge pixel should be less than center";
+}
+
+/// feConvolveMatrix edge detection: Laplacian kernel on a rect.
+TEST_F(RendererGeodeTest, FilterConvolveMatrixEdgeDetect) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode convNode;
+  components::filter_primitive::ConvolveMatrix conv;
+  conv.orderX = 3;
+  conv.orderY = 3;
+  // Laplacian: [[0,-1,0],[-1,4,-1],[0,-1,0]].
+  conv.kernelMatrix = {0, -1, 0, -1, 4, -1, 0, -1, 0};
+  conv.divisor = 1.0;
+  conv.bias = 0.0;
+  conv.edgeMode = components::filter_primitive::ConvolveMatrix::EdgeMode::Duplicate;
+  conv.preserveAlpha = false;
+  convNode.primitive = conv;
+  convNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(convNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  // Draw a white rect (16,16)-(48,48).
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Interior pixel (32, 32): all neighbours are identical white, so
+  // Laplacian = 4*1 - 4*1 = 0. Output should be near-black/transparent.
+  auto interior = pixelAt(snap, 32, 32);
+  EXPECT_LT(interior[0], 20u) << "Interior should be near-black (Laplacian=0)";
+}
+
 }  // namespace
 }  // namespace donner::svg

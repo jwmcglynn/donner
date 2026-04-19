@@ -264,6 +264,36 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: feMorphology compute shader (erode / dilate).
+embed_resources(
+    name = "filter_morphology_wgsl",
+    header_output = "embed_resources/FilterMorphologyWgsl.h",
+    resources = {
+        "kFilterMorphologyWgsl": "shaders/filter_morphology.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feComponentTransfer compute shader (per-channel LUT).
+embed_resources(
+    name = "filter_component_transfer_wgsl",
+    header_output = "embed_resources/FilterComponentTransferWgsl.h",
+    resources = {
+        "kFilterComponentTransferWgsl": "shaders/filter_component_transfer.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feConvolveMatrix compute shader (NxM kernel convolution).
+embed_resources(
+    name = "filter_convolve_matrix_wgsl",
+    header_output = "embed_resources/FilterConvolveMatrixWgsl.h",
+    resources = {
+        "kFilterConvolveMatrixWgsl": "shaders/filter_convolve_matrix.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -273,9 +303,12 @@ donner_cc_library(
     deps = [
         ":filter_blend_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
+        ":filter_convolve_matrix_wgsl",
         ":filter_flood_wgsl",
         ":filter_merge_wgsl",
+        ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
