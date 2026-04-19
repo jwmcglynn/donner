@@ -15,6 +15,7 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -24,14 +25,6 @@
 namespace donner::svg::compositor {
 
 namespace {
-
-/// Tracks entities whose visibility the compositor temporarily set to `false`
-/// during a render pass. The post-pass restore unconditionally sets
-/// `visible = true` (see `RestoreLayerVisibility`), so we only need to
-/// remember *which* entities we touched — not their prior state.
-struct HiddenVisibilityState {
-  Entity entity;
-};
 
 /// Returns true if any ancestor of @p entity carries a clip-path, mask, or
 /// filter. When the editor drags a descendant of `<g filter=...>`, promoting
@@ -81,79 +74,6 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
     cursor = ancestorTree->parent();
   }
   return false;
-}
-
-void HideLayerRange(Registry& registry, const CompositorLayer& layer,
-                    std::vector<HiddenVisibilityState>* hiddenEntities) {
-  if (!registry.valid(layer.firstEntity()) || !registry.valid(layer.lastEntity())) {
-    return;
-  }
-
-  RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != layer.firstEntity()) {
-    view.advance();
-  }
-
-  while (!view.done()) {
-    const Entity entity = view.currentEntity();
-    auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-
-    const auto alreadyHidden = std::find_if(
-        hiddenEntities->begin(), hiddenEntities->end(),
-        [entity](const HiddenVisibilityState& state) { return state.entity == entity; });
-    if (alreadyHidden == hiddenEntities->end()) {
-      hiddenEntities->push_back(HiddenVisibilityState{.entity = entity});
-    }
-
-    instance.visible = false;
-
-    if (entity == layer.lastEntity()) {
-      break;
-    }
-
-    view.advance();
-  }
-}
-
-void HideEntitiesBefore(Registry& registry, Entity boundaryExclusive,
-                        std::vector<HiddenVisibilityState>* hiddenEntities) {
-  if (!registry.valid(boundaryExclusive)) {
-    return;
-  }
-
-  RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != boundaryExclusive) {
-    const Entity entity = view.currentEntity();
-    auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity});
-    instance.visible = false;
-    view.advance();
-  }
-}
-
-void HideEntitiesAfter(Registry& registry, Entity boundaryInclusive,
-                       std::vector<HiddenVisibilityState>* hiddenEntities) {
-  if (!registry.valid(boundaryInclusive)) {
-    return;
-  }
-
-  RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != boundaryInclusive) {
-    view.advance();
-  }
-
-  if (view.done()) {
-    return;
-  }
-
-  view.advance();
-  while (!view.done()) {
-    const Entity entity = view.currentEntity();
-    auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-    hiddenEntities->push_back(HiddenVisibilityState{.entity = entity});
-    instance.visible = false;
-    view.advance();
-  }
 }
 
 /// Convert premultiplied-alpha pixels to unpremultiplied-alpha pixels in
@@ -206,30 +126,6 @@ ImageResource BuildImageResource(const RendererBitmap& bitmap) {
     img.data = bitmap.pixels;
   }
   return img;
-}
-
-void RestoreLayerVisibility(Registry& registry,
-                            const std::vector<HiddenVisibilityState>& hiddenEntities) {
-  // Always restore to `visible = true` for entities we hid. Reasoning:
-  //
-  // `driver.draw()` inside a compositor render pass calls
-  // `prepareDocumentForRendering`, which rebuilds
-  // `RenderingInstanceComponent`s with fresh defaults (`visible = true`).
-  // If we restore using a *stale* saved value instead, we can stomp the
-  // freshly-rebuilt true with a leaked false from a prior pass — leaving
-  // entities permanently hidden across subsequent frames. We only ever hide
-  // user-visible promoted content, so unconditional `true` is correct for the
-  // compositor's use case.
-  for (const auto& hidden : hiddenEntities) {
-    if (!registry.valid(hidden.entity)) {
-      continue;
-    }
-    auto* inst = registry.try_get<components::RenderingInstanceComponent>(hidden.entity);
-    if (inst == nullptr) {
-      continue;
-    }
-    inst->visible = true;
-  }
 }
 
 }  // namespace
@@ -558,6 +454,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   staticSegmentBoundaries_.clear();
   staticSegmentDirty_.clear();
   staticSegmentGeneration_.clear();
+  staticSegmentOffsets_.clear();
   staticSegmentsCanvas_ = Vector2i::Zero();
   staticSegmentsLayerCount_ = 0;
   backgroundBitmap_ = RendererBitmap();
@@ -824,6 +721,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
     staticSegments_.clear();
+    staticSegmentOffsets_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
     staticSegmentsLayerCount_ = 0;
     backgroundBitmap_ = RendererBitmap();
@@ -1020,6 +918,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     staticSegments_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
+    staticSegmentOffsets_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
     staticSegmentsLayerCount_ = 0;
     backgroundBitmap_ = RendererBitmap();
@@ -1063,14 +962,18 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         splitStaticLayersViewport_ == currentCanvasSize;
     if (dragLayer != nullptr && !splitCacheValid) {
       ZoneScopedN("Compositor::splitBitmapsBuild");
-      if (layers_.size() == 1) {
-        // Fast path: no non-drag promoted layers, so bg/fg are just the
-        // two cached segments directly.
-        backgroundBitmap_ = staticSegments_[0];
-        foregroundBitmap_ = staticSegments_[1];
-      } else {
-        recomposeSplitBitmaps(*dragLayer, viewport);
-      }
+      // Always route through `recomposeSplitBitmaps` — it produces
+      // canvas-sized bg/fg bitmaps that the editor uploads to GL
+      // textures and blits at the full canvas screen rect. An earlier
+      // "N=1 fast path" assigned `backgroundBitmap_ = staticSegments_[0]`
+      // directly, which was valid when segments were always canvas-
+      // sized but produces tight-sized bg/fg bitmaps now that segments
+      // are tight-bounded. Those tight bitmaps get drawn stretched to
+      // the full canvas screen rect, which wrecks the display. The
+      // cost of always routing through `composeRange` on N=1 is one
+      // offscreen alloc + one `drawImage` per segment (typically 2
+      // segments, ~0.5 ms combined at 892×512). Worth the correctness.
+      recomposeSplitBitmaps(*dragLayer, viewport);
       splitStaticLayersEntity_ = dragEntity;
       splitStaticLayersViewport_ = currentCanvasSize;
     }
@@ -1222,6 +1125,13 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   UTILS_RELEASE_ASSERT(staticSegments_.size() == layerCount + 1);
   UTILS_RELEASE_ASSERT(staticSegmentDirty_.size() == layerCount + 1);
 
+  // Keep `staticSegmentOffsets_` sized parallel to `staticSegments_`.
+  // `resetAllLayers` / rootDirty wipe it; the first rasterize after a
+  // fresh layer set needs to grow it back up to the current count.
+  if (staticSegmentOffsets_.size() != layerCount + 1) {
+    staticSegmentOffsets_.resize(layerCount + 1, Vector2d::Zero());
+  }
+
   // Snapshot paint order once per frame. Each segment is a slice of this
   // list — no per-segment document traversal needed.
   //
@@ -1274,6 +1184,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     layerRanges[i] = {firstIdx, lastIdx};
   }
 
+  // The document's `canvasFromDocumentTransform` maps viewBox coordinates
+  // (what `worldBounds()` returns for geometry elements) to canvas pixels
+  // (where the segment bitmaps live). We need it per-frame because
+  // zoom / DPR / window resize all mutate it.
+  const Transform2d canvasFromDoc =
+      components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+  const Vector2d canvasSize(viewport.size.x, viewport.size.y);
+
   for (size_t i = 0; i <= layerCount; ++i) {
     if (!staticSegmentDirty_[i]) {
       continue;
@@ -1284,9 +1202,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // layer i (exclusive on both ends). Edge cases: segment 0 starts
     // at the document's first paint-ordered entity; segment N ends at
     // the last. If the computed range is empty (two layers back-to-
-    // back in paint order), skip the rasterize entirely — the bitmap
-    // stays empty, and the `composeRange` / composite paths already
-    // no-op on empty segments.
+    // back in paint order), produce an empty canvas-sized bitmap.
     const size_t startIdx =
         (i == 0) ? 0u : (layerRanges[i - 1].lastIdx + 1u);
     const size_t endIdx =
@@ -1296,6 +1212,69 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
     const bool segmentIsEmpty =
         paintOrder.empty() || startIdx > endIdx || startIdx >= paintOrder.size();
+
+    // Try to compute a tight canvas-space bounding box for the segment
+    // so the offscreen bitmap is sized to the segment's actual content,
+    // not the full canvas. The win is mostly memory / upload bandwidth:
+    // a 1784×1024 canvas with 9 segments is 63 MB of pixel buffers if
+    // each is full-canvas; tight bounds typically drops that by ~10×.
+    // Falls back to full canvas whenever any entity in the range lacks
+    // a computable `worldBounds()` (text, groups with filter regions,
+    // etc.) — those may draw outside their geometry's extent, and tight
+    // bounds would clip the output. Full-canvas fallback is also used
+    // when the computed tight bounds cover ≥ 75% of the canvas: at that
+    // point the allocation savings don't justify the bounds-compute
+    // overhead.
+    std::optional<Box2d> tightBoundsCanvas;
+    if (!segmentIsEmpty) {
+      ZoneScopedN("Compositor::segment::computeBounds");
+      Box2d boundsCanvas = Box2d::CreateEmpty(Vector2d::Zero());
+      bool allGeometryHaveBounds = true;
+      components::ShapeSystem shapeSystem;
+      for (size_t k = startIdx; k <= endIdx; ++k) {
+        const auto worldBounds =
+            shapeSystem.getShapeWorldBounds(EntityHandle(registry, paintOrder[k]));
+        if (!worldBounds.has_value()) {
+          // Non-geometry or unbounded (text, groups with filter regions,
+          // etc.) — bail to the full-canvas fallback since tight bounds
+          // would clip.
+          allGeometryHaveBounds = false;
+          break;
+        }
+        // Project viewBox-space bounds into canvas pixels.
+        const Box2d entityCanvasBounds = canvasFromDoc.transformBox(*worldBounds);
+        if (boundsCanvas.isEmpty()) {
+          boundsCanvas = entityCanvasBounds;
+        } else {
+          boundsCanvas.addBox(entityCanvasBounds);
+        }
+      }
+      if (allGeometryHaveBounds && !boundsCanvas.isEmpty()) {
+        // Pad by 2 canvas pixels on each side so strokes / anti-aliased
+        // edges that extend slightly past `worldBounds()` (which returns
+        // fill-bounds) don't get clipped.
+        constexpr double kEdgePaddingPx = 2.0;
+        boundsCanvas = Box2d(boundsCanvas.topLeft - Vector2d(kEdgePaddingPx, kEdgePaddingPx),
+                             boundsCanvas.bottomRight + Vector2d(kEdgePaddingPx, kEdgePaddingPx));
+        // Snap to integer pixels and clamp to canvas so we don't
+        // allocate an oversized bitmap for content partially off-canvas.
+        const Vector2d snapTL(std::floor(std::max(0.0, boundsCanvas.topLeft.x)),
+                              std::floor(std::max(0.0, boundsCanvas.topLeft.y)));
+        const Vector2d snapBR(std::ceil(std::min(canvasSize.x, boundsCanvas.bottomRight.x)),
+                              std::ceil(std::min(canvasSize.y, boundsCanvas.bottomRight.y)));
+        if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
+          const Box2d snapped(snapTL, snapBR);
+          // Only take the tight path if it's meaningfully smaller than
+          // the full canvas. Above ~75% coverage, the savings don't
+          // justify the per-segment bounds-compute overhead.
+          const double canvasArea = canvasSize.x * canvasSize.y;
+          const double snappedArea = snapped.width() * snapped.height();
+          if (canvasArea > 0.0 && snappedArea < canvasArea * 0.75) {
+            tightBoundsCanvas = snapped;
+          }
+        }
+      }
+    }
 
     std::unique_ptr<RendererInterface> offscreen;
     {
@@ -1318,11 +1297,26 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       ZoneScopedN("Compositor::segment::emptyBitmap");
       offscreen->beginFrame(viewport);
       offscreen->endFrame();
+      staticSegmentOffsets_[i] = Vector2d::Zero();
+    } else if (tightBoundsCanvas.has_value()) {
+      // Tight-bound path: render into a bitmap sized to the segment's
+      // union bounds, shifting all draw calls by `-topLeft` so content
+      // lands within the smaller pixmap's coordinate space.
+      ZoneScopedN("Compositor::segment::drawEntityRangeTight");
+      svg::RenderViewport tightViewport;
+      tightViewport.size = tightBoundsCanvas->size();
+      tightViewport.devicePixelRatio = viewport.devicePixelRatio;
+      RendererDriver driver(*offscreen);
+      driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
+                              Transform2d::Translate(-tightBoundsCanvas->topLeft));
+      staticSegmentOffsets_[i] = tightBoundsCanvas->topLeft;
     } else {
+      // Full-canvas fallback path.
       ZoneScopedN("Compositor::segment::drawEntityRange");
       RendererDriver driver(*offscreen);
       driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
                               Transform2d());
+      staticSegmentOffsets_[i] = Vector2d::Zero();
     }
     {
       ZoneScopedN("Compositor::segment::takeSnapshot");
@@ -1358,6 +1352,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   std::vector<RendererBitmap> newSegments(newCount);
   std::vector<bool> newDirty(newCount, true);
   std::vector<uint64_t> newGeneration(newCount, 0);
+  std::vector<Vector2d> newOffsets(newCount, Vector2d::Zero());
 
   if (!canvasChanged && !staticSegments_.empty()) {
     // Build a lookup from old boundary identity → (old slot index).
@@ -1375,6 +1370,14 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
             // Preserve the old slot's generation so the editor's GL
             // texture cache reuses the existing binding — no upload.
             newGeneration[i] = staticSegmentGeneration_[j];
+          }
+          if (j < staticSegmentOffsets_.size()) {
+            // Preserve the tight-bound offset alongside the bitmap —
+            // the bitmap and the offset together describe where the
+            // segment lives on the canvas. A preserved bitmap with
+            // its offset dropped would blit at (0,0) and wreck the
+            // compose.
+            newOffsets[i] = staticSegmentOffsets_[j];
           }
           break;
         }
@@ -1396,6 +1399,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   staticSegmentDirty_ = std::move(newDirty);
   staticSegmentBoundaries_ = std::move(newBoundaries);
   staticSegmentGeneration_ = std::move(newGeneration);
+  staticSegmentOffsets_ = std::move(newOffsets);
   staticSegmentsCanvas_ = currentCanvasSize;
   staticSegmentsLayerCount_ = layers_.size();
 
@@ -1576,7 +1580,13 @@ void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLaye
           params.targetRect = Box2d(Vector2d::Zero(),
                                     Vector2d(static_cast<double>(segment.dimensions.x),
                                              static_cast<double>(segment.dimensions.y)));
-          offscreen->setTransform(Transform2d());
+          // Tight-bounded segments live at a non-origin offset on the
+          // canvas; full-canvas-fallback segments use `Zero()`. Same
+          // shape either way — the bitmap is drawn at (offset, offset +
+          // dims) in canvas pixels.
+          const Vector2d segmentOffset =
+              i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i] : Vector2d::Zero();
+          offscreen->setTransform(Transform2d::Translate(segmentOffset));
           offscreen->drawImage(image, params);
         }
         if (i < layerEndExclusive) {
@@ -1719,17 +1729,28 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
 
   if (hasSplitStaticLayers()) {
     const Entity dragEntity = activeHints_.begin()->first;
+    // Background/foreground composites are always canvas-sized — they
+    // bake in the tight-bound offsets of their constituent segments,
+    // so the editor can upload them as-is.
     drawBitmap(backgroundBitmap_, Transform2d());
     if (const CompositorLayer* dragLayer = findLayer(dragEntity)) {
       drawLayer(*dragLayer);
     }
     drawBitmap(foregroundBitmap_, Transform2d());
   } else if (!staticSegments_.empty()) {
+    // Segments carry their tight-bound offset (`staticSegmentOffsets_`
+    // was populated during rasterize). Applying `Translate(offset)`
+    // restores their position on the canvas-sized main target.
     for (size_t i = 0; i < layers_.size(); ++i) {
-      drawBitmap(staticSegments_[i], Transform2d());
+      const Vector2d segmentOffset =
+          i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i] : Vector2d::Zero();
+      drawBitmap(staticSegments_[i], Transform2d::Translate(segmentOffset));
       drawLayer(layers_[i]);
     }
-    drawBitmap(staticSegments_.back(), Transform2d());
+    const Vector2d lastOffset = staticSegmentOffsets_.size() == staticSegments_.size()
+                                    ? staticSegmentOffsets_.back()
+                                    : Vector2d::Zero();
+    drawBitmap(staticSegments_.back(), Transform2d::Translate(lastOffset));
   }
 
   renderer_->endFrame();
