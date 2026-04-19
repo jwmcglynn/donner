@@ -1177,6 +1177,170 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   EXPECT_EQ(compositor.foregroundBitmap().dimensions, Vector2i(400, 200));
 }
 
+// Regression: tight-bounded segment rasterize must produce pixel-identical
+// composited output to the full-render reference. `rasterizeDirtyStaticSegments`
+// now sizes each segment's offscreen bitmap to the union of
+// `SVGGeometryElement::worldBounds()` for the entities in the segment's
+// paint-order range (instead of the full canvas), shifting draw calls
+// by `Translate(-topLeft)` so content lands in the smaller pixmap. The
+// composite path then stamps the bitmap back at its stored offset.
+//
+// Any miscalculation in the bounds projection (viewBox→canvas), the
+// padding for stroked edges, or the offset applied at compose time
+// produces shifted or cropped pixels. This test parks a multi-segment
+// scene with content at varied positions and runs the dual-path
+// verifier, which pixel-diffs composited output against a full-render
+// reference. A mismatch count > 0 is the exact signature the user
+// reported ("things shifted and got cropped the wrong way") — surface
+// it here so it can't sneak back.
+TEST_F(CompositorGoldenTest, TightBoundedSegmentsProducePixelIdentityWithMultipleLayers) {
+  // Scene: three small shapes distributed across the canvas, separated
+  // by two filter groups. The filter groups become mandatory promoted
+  // layers, so the non-promoted shapes get partitioned into ≥ 3
+  // segments — each with a different paint-order range and different
+  // canvas-space bounds. That's the setup where tight-bound bounds /
+  // offsets differ between segments, maximizing the chance of catching
+  // a mismatch.
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <defs>
+    <filter id="blur-a"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter>
+    <filter id="blur-b"><feGaussianBlur in="SourceGraphic" stdDeviation="5"/></filter>
+  </defs>
+  <rect width="400" height="200" fill="#0d0f1d"/>
+  <rect id="left" x="20" y="30" width="50" height="50" fill="red"/>
+  <g id="glow-a" filter="url(#blur-a)">
+    <rect x="110" y="30" width="60" height="60" fill="yellow" fill-opacity="0.5"/>
+  </g>
+  <rect id="middle" x="200" y="50" width="40" height="40" fill="cyan"/>
+  <g id="glow-b" filter="url(#blur-b)">
+    <rect x="270" y="30" width="60" height="60" fill="#fae100" fill-opacity="0.5"/>
+  </g>
+  <rect id="right" x="340" y="40" width="40" height="40" fill="magenta"/>
+</svg>
+  )svg");
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(400, 200);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  DualPathVerifier verifier(compositor, renderer_);
+
+  // Frame 1 — no drag, no explicit promote. Any mandatory layers
+  // (filter groups) get auto-promoted on the first render. This is
+  // the cleanest dual-path scenario: every layer's composition
+  // transform is identity, so the full-render reference and the
+  // composited output are supposed to be byte-for-byte equal.
+  const auto result = verifier.renderAndVerify(viewport);
+  EXPECT_TRUE(result.isExact()) << "multi-segment scene with tight-bounded segments: " << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_EQ(result.maxChannelDiff, 0);
+}
+
+// Stronger variant: explicit drag-target promotion on top of the
+// mandatory filter-group layers, so the drag-target's own segment
+// splits in two. Every segment boundary shifts, every segment's
+// paint-order range changes, and every tight-bounds calculation
+// re-runs. A bounds bug that only surfaces on segments that split
+// around a newly promoted layer would reproduce here.
+TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromote) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <defs>
+    <filter id="blur-a"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter>
+    <filter id="blur-b"><feGaussianBlur in="SourceGraphic" stdDeviation="5"/></filter>
+  </defs>
+  <rect width="400" height="200" fill="#0d0f1d"/>
+  <rect id="left" x="20" y="30" width="50" height="50" fill="red"/>
+  <g id="glow-a" filter="url(#blur-a)">
+    <rect x="110" y="30" width="60" height="60" fill="yellow" fill-opacity="0.5"/>
+  </g>
+  <rect id="middle" x="200" y="50" width="40" height="40" fill="cyan"/>
+  <g id="glow-b" filter="url(#blur-b)">
+    <rect x="270" y="30" width="60" height="60" fill="#fae100" fill-opacity="0.5"/>
+  </g>
+  <rect id="right" x="340" y="40" width="40" height="40" fill="magenta"/>
+</svg>
+  )svg");
+
+  auto target = document.querySelector("#middle");
+  ASSERT_TRUE(target.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(400, 200);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  // Leaving `skipMainComposeDuringSplit` at its default (`false`) so
+  // the main renderer actually composes bg + drag + fg onto its
+  // framebuffer — `DualPathVerifier::renderAndVerify` reads that
+  // framebuffer back. With the flag on, the main renderer would be
+  // untouched (the editor path) and the comparison would land on
+  // whatever stale pixels were there before.
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  DualPathVerifier verifier(compositor, renderer_);
+
+  // DOM is at identity (no drag motion). Composition transform is
+  // also identity — composited and reference paths render the same
+  // scene, so they must produce pixel-identical output.
+  const auto result = verifier.renderAndVerify(viewport);
+  EXPECT_TRUE(result.isExact()) << "explicit drag promote with tight segments: " << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_EQ(result.maxChannelDiff, 0);
+}
+
+// Drives the ACTUAL `donner_splash.svg` through the tight-bound
+// segment path. The synthetic rect-based scenes above hit the common
+// fast path but don't exercise the paths the user actually sees:
+// 112 real SVG paths with gradients, clip-paths, and filter groups.
+// If a tight-bounds bug only surfaces on stroked paths (where the
+// stroke extends outside `worldBounds()`'s fill-box), on filter
+// regions that blur beyond the source geometry, or on clip-paths
+// that reshape the visible area, the diff will show up here but not
+// in the synthetic scenes.
+TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  SVGDocument document = parseDocument(splashSource);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(892, 512);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  DualPathVerifier verifier(compositor, renderer_);
+
+  // No drag promoted — mandatory filter groups auto-promote via the
+  // first-frame detector path, which triggers eager segment warmup
+  // (so every segment goes through `rasterizeDirtyStaticSegments`).
+  const auto result = verifier.renderAndVerify(viewport);
+
+  // Exact pixel identity is the strictest gate: tight-bound bounds
+  // must produce bit-identical composited output to the full-render
+  // reference. Any mismatch is either a bounds miscalculation or an
+  // offset misapplication. If this flakes in CI, loosen to
+  // `isWithinTolerance(1)` for anti-aliasing drift across backends
+  // — but only after confirming the diff is AA-noise, not a
+  // cropping/shifting regression.
+  EXPECT_TRUE(result.isExact())
+      << "real-splash tight-bounds pixel identity failed. Mismatch count="
+      << result.mismatchCount << " max channel diff=" << int(result.maxChannelDiff)
+      << ". If non-zero, tight-bound bounds are cropping content the reference renders "
+         "outside the computed bounds. Candidates: strokes on paths, filter regions "
+         "extending beyond geometry, or clip-path-expanded bounds. Widen the padding "
+         "in `rasterizeDirtyStaticSegments` or fall back to full-canvas for paths "
+         "with strokes.";
+}
+
 // Isolates the gradient + filter interaction. Single frame, no drag — does
 // it render correctly at all?
 TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {
