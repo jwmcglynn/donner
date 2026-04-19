@@ -22,7 +22,7 @@
 #include "donner/editor/sandbox/PipelinedRenderer.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererInterface.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::sandbox {
 namespace {
@@ -37,7 +37,7 @@ svg::SVGDocument ParseOrDie(std::string_view svg) {
 svg::RendererBitmap RenderInProcess(std::string_view svg, int w, int h) {
   auto doc = ParseOrDie(svg);
   doc.setCanvasSize(w, h);
-  svg::RendererTinySkia renderer;
+  svg::Renderer renderer;
   renderer.draw(doc);
   return renderer.takeSnapshot();
 }

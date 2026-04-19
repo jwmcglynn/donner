@@ -1,8 +1,8 @@
 /// @file
 ///
 /// End-to-end pipeline tests for the editor sandbox: spawn the child binary,
-/// stream the wire format through a pipe, replay into a host-side
-/// `RendererTinySkia`, and assert the resulting bitmap is pixel-identical to
+/// stream the wire format through a pipe, replay into a host-side backend
+/// (via `Renderer`), and assert the resulting bitmap is pixel-identical to
 /// an in-process render.
 ///
 /// These tests close the loop on S1 + S2 + S3: process isolation (S1), wire
@@ -20,7 +20,7 @@
 #include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererInterface.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::sandbox {
 namespace {
@@ -39,7 +39,7 @@ protected:
     EXPECT_FALSE(parseResult.hasError()) << parseResult.error();
     svg::SVGDocument document = std::move(parseResult.result());
     document.setCanvasSize(w, h);
-    svg::RendererTinySkia renderer;
+    svg::Renderer renderer;
     renderer.draw(document);
     return renderer.takeSnapshot();
   }
@@ -53,7 +53,7 @@ TEST_F(SandboxPipelineTest, SolidRectPixelIdenticalThroughSandbox) {
 
   const auto direct = RenderInProcess(kSvg, 32, 32);
 
-  svg::RendererTinySkia viaBackend;
+  svg::Renderer viaBackend;
   auto host = MakeHost();
   const auto result = host.renderToBackend(kSvg, 32, 32, viaBackend);
   ASSERT_EQ(result.status, SandboxStatus::kOk) << "diagnostics: " << result.diagnostics;
@@ -73,7 +73,7 @@ TEST_F(SandboxPipelineTest, PathFillPixelIdenticalThroughSandbox) {
 
   const auto direct = RenderInProcess(kSvg, 64, 64);
 
-  svg::RendererTinySkia viaBackend;
+  svg::Renderer viaBackend;
   auto host = MakeHost();
   const auto result = host.renderToBackend(kSvg, 64, 64, viaBackend);
   ASSERT_EQ(result.status, SandboxStatus::kOk) << result.diagnostics;
@@ -95,7 +95,7 @@ TEST_F(SandboxPipelineTest, TransformedGroupPixelIdenticalThroughSandbox) {
 
   const auto direct = RenderInProcess(kSvg, 100, 100);
 
-  svg::RendererTinySkia viaBackend;
+  svg::Renderer viaBackend;
   auto host = MakeHost();
   const auto result = host.renderToBackend(kSvg, 100, 100, viaBackend);
   ASSERT_EQ(result.status, SandboxStatus::kOk) << result.diagnostics;
@@ -112,7 +112,7 @@ TEST_F(SandboxPipelineTest, WireBytesAreCapturedOnSuccess) {
          <rect width="10" height="10" fill="black"/>
        </svg>)";
 
-  svg::RendererTinySkia viaBackend;
+  svg::Renderer viaBackend;
   auto host = MakeHost();
   const auto result = host.renderToBackend(kSvg, 10, 10, viaBackend);
   ASSERT_EQ(result.status, SandboxStatus::kOk) << result.diagnostics;
@@ -122,7 +122,7 @@ TEST_F(SandboxPipelineTest, WireBytesAreCapturedOnSuccess) {
 }
 
 TEST_F(SandboxPipelineTest, MalformedSvgSurfacesAsParseError) {
-  svg::RendererTinySkia viaBackend;
+  svg::Renderer viaBackend;
   auto host = MakeHost();
   const auto result = host.renderToBackend("definitely not svg", 10, 10, viaBackend);
   EXPECT_EQ(result.status, SandboxStatus::kParseError);

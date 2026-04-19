@@ -14,7 +14,7 @@ donner_cc_test(
         "//donner/editor/sandbox:donner_parser_child",
     ],
     # Requires Linux: child process uses seccomp + RLIMIT_AS hardening.
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]) + select({
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]) + select({
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
@@ -34,7 +34,7 @@ donner_cc_test(
         "//donner/editor/sandbox:donner_parser_child",
     ],
     # Requires Linux: child process uses seccomp + RLIMIT_AS hardening.
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]) + select({
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]) + select({
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
@@ -45,7 +45,7 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -53,7 +53,7 @@ donner_cc_test(
 donner_cc_test(
     name = "record_replay_tests",
     srcs = ["RecordReplay_tests.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     deps = [
         "//donner/base",
         "//donner/editor/sandbox:frame_inspector",
@@ -64,7 +64,7 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -76,7 +76,7 @@ donner_cc_test(
         "//donner/editor/sandbox:donner_parser_child",
     ],
     # Requires Linux: tests seccomp-bpf filters and RLIMIT_AS/RLIMIT_CPU.
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]) + select({
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]) + select({
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
@@ -101,14 +101,14 @@ donner_cc_test(
 donner_cc_test(
     name = "pipelined_renderer_tests",
     srcs = ["PipelinedRenderer_tests.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     deps = [
         "//donner/base",
         "//donner/editor/sandbox:pipelined_renderer",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -121,14 +121,14 @@ donner_cc_fuzzer(
         "//donner/editor/sandbox:replaying_renderer",
         "//donner/editor/sandbox:wire",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer",
     ],
 )
 
 donner_cc_test(
     name = "sandbox_diff_tests",
     srcs = ["SandboxDiff_tests.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     deps = [
         "//donner/base",
         "//donner/editor/sandbox:frame_inspector",
@@ -145,7 +145,7 @@ donner_cc_test(
 donner_cc_test(
     name = "wire_format_tests",
     srcs = ["WireFormat_tests.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     deps = [
         "//donner/base",
         "//donner/editor/sandbox:replaying_renderer",
@@ -155,7 +155,7 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )

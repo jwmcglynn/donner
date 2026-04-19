@@ -81,7 +81,7 @@ public:
                                svg::RendererInterface& target);
 
   /// Convenience wrapper: renders via `renderToBackend` into a host-side
-  /// `RendererTinySkia` and encodes the snapshot to PNG. Preserves the S1
+  /// `Renderer` and encodes the snapshot to PNG. Preserves the S1
   /// public contract so existing callers (tests, CLIs) don't have to change.
   RenderResult render(std::string_view svgBytes, int width, int height);
 

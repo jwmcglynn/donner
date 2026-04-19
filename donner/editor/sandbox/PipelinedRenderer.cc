@@ -6,12 +6,12 @@
 #include "donner/editor/sandbox/ReplayingRenderer.h"
 #include "donner/editor/sandbox/SerializingRenderer.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::sandbox {
 
-std::unique_ptr<svg::RendererInterface> MakeDefaultRendererTinySkia() {
-  return std::make_unique<svg::RendererTinySkia>();
+std::unique_ptr<svg::RendererInterface> MakeDefaultRenderer() {
+  return std::make_unique<svg::Renderer>();
 }
 
 PipelinedRenderer::PipelinedRenderer(RendererFactory factory) : factory_(factory) {

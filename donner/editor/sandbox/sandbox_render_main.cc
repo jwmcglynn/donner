@@ -4,7 +4,7 @@
 /// sandbox pipeline end-to-end:
 ///
 ///     SvgSource -> SandboxHost -> donner_parser_child -> wire format
-///                -> ReplayingRenderer -> RendererTinySkia -> PNG
+///                -> ReplayingRenderer -> Renderer -> PNG
 ///
 /// It's the address bar's code path with the UI replaced by argv. When the
 /// editor's M2 actually lands, `EditorApp::navigate(uri)` will call the same
@@ -32,7 +32,7 @@
 #include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SvgSource.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace {
 
@@ -94,12 +94,12 @@ int main(int argc, char* argv[]) {
   }
 
   // Step 2: hand the bytes to the sandbox child, replay its wire stream into
-  // a local RendererTinySkia backend.
+  // a local Renderer backend (build-selected: tiny-skia, Skia, or Geode).
   SandboxHost host(ResolveChildPath(argv[0]));
   const std::string_view svgView(reinterpret_cast<const char*>(fetch.bytes.data()),
                                  fetch.bytes.size());
 
-  donner::svg::RendererTinySkia backend;
+  donner::svg::Renderer backend;
   const auto result = host.renderToBackend(svgView, width, height, backend);
   if (result.status != SandboxStatus::kOk) {
     std::fprintf(stderr, "sandbox_render: sandbox render failed (status=%d, exit=%d): %s\n",

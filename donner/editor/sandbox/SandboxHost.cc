@@ -20,7 +20,7 @@
 #include "donner/editor/sandbox/ReplayingRenderer.h"
 #include "donner/editor/sandbox/SandboxProtocol.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 extern "C" char** environ;  // POSIX, not declared in <unistd.h> on glibc.
 
@@ -313,7 +313,7 @@ RenderResult SandboxHost::renderToBackend(std::string_view svgBytes, int width,
 }
 
 RenderResult SandboxHost::render(std::string_view svgBytes, int width, int height) {
-  svg::RendererTinySkia backend;
+  svg::Renderer backend;
   RenderResult result = renderToBackend(svgBytes, width, height, backend);
   if (result.status != SandboxStatus::kOk) {
     return result;
@@ -322,7 +322,7 @@ RenderResult SandboxHost::render(std::string_view svgBytes, int width, int heigh
   const svg::RendererBitmap bitmap = backend.takeSnapshot();
   if (bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0 || bitmap.pixels.empty()) {
     result.status = SandboxStatus::kRenderError;
-    result.diagnostics += "\nhost-side RendererTinySkia produced an empty snapshot";
+    result.diagnostics += "\nhost-side renderer produced an empty snapshot";
     return result;
   }
 

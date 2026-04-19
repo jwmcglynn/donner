@@ -20,7 +20,7 @@ donner_cc_library(
     name = "editor_app",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         "//donner/base",
@@ -37,7 +37,7 @@ donner_cc_library(
     name = "editor_repl",
     srcs = ["EditorRepl.cc"],
     hdrs = ["EditorRepl.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":editor_app",
@@ -52,7 +52,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "donner_editor",
     srcs = ["donner_editor_main.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":editor_app",

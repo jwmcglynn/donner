@@ -1,7 +1,7 @@
 /// @file
 ///
 /// `sandbox_replay` — loads a `.rnr` recording and rasterizes it via
-/// `RendererTinySkia` to a PNG. Purely host-side: no sandbox child, no
+/// the build-selected backend to a PNG. Purely host-side: no sandbox child, no
 /// parser, no network. This is the end-to-end proof that `.rnr` files are
 /// self-contained and deterministic — the only inputs are the bytes on
 /// disk.
@@ -20,7 +20,7 @@
 #include "donner/editor/sandbox/ReplayingRenderer.h"
 #include "donner/editor/sandbox/RnrFile.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace {
 
@@ -74,7 +74,7 @@ int main(int argc, char* argv[]) {
                inputPath.string().c_str(), header.width, header.height,
                static_cast<uint32_t>(header.backend), header.uri.c_str());
 
-  donner::svg::RendererTinySkia backend;
+  donner::svg::Renderer backend;
   const auto status = FrameInspector::ReplayPrefix(
       wire, std::numeric_limits<std::size_t>::max(), backend);
   if (status != ReplayStatus::kOk && status != ReplayStatus::kEncounteredUnsupported) {

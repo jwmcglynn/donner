@@ -106,6 +106,20 @@ common:editor-wasm --//donner/editor/wasm:enable_wasm=true
 build:editor-wasm --copt=-pthread
 build:editor-wasm --linkopt=-pthread
 
+# WASM + Geode (WebGPU via Dawn). Inherits base wasm settings, overrides
+# the renderer backend to Geode. Usage:
+#   bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm
+common:wasm-geode --config=wasm
+common:wasm-geode --//donner/svg/renderer:renderer_backend=geode
+common:wasm-geode --//donner/svg/renderer/geode:enable_dawn=true
+
+# Full editor WASM + Geode. Usage:
+#   bazel build --config=editor-wasm-geode //donner/editor/wasm:wasm
+common:editor-wasm-geode --config=wasm-geode
+common:editor-wasm-geode --//donner/editor/wasm:enable_wasm=true
+build:editor-wasm-geode --copt=-pthread
+build:editor-wasm-geode --linkopt=-pthread
+
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
 build:libc++ --action_env=LDFLAGS=-stdlib=libc++
