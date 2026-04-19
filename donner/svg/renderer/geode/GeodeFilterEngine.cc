@@ -50,6 +50,26 @@ struct FloodParams {
   float color[4];  // RGBA flood color in straight alpha.
 };
 
+/// Uniform buffer layout matching the WGSL `CompositeParams` struct.
+struct CompositeParams {
+  uint32_t op;    // Operator index (0..6).
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
+  float k1;       // Arithmetic coefficient k1.
+  float k2;       // Arithmetic coefficient k2.
+  float k3;       // Arithmetic coefficient k3.
+  float k4;       // Arithmetic coefficient k4.
+};
+
+/// Uniform buffer layout matching the WGSL `BlendParams` struct.
+struct BlendParams {
+  uint32_t mode;  // Blend mode index (0..15).
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
+};
+
 /// Map a FilterGraph EdgeMode to the shader's uint.
 uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeMode mode) {
   using EM = svg::components::filter_primitive::GaussianBlur::EdgeMode;
@@ -131,6 +151,123 @@ InputOutputUniformPipeline createInputOutputUniformPipeline(const wgpu::Device& 
   auto pipeline = dev.createComputePipeline(cpDesc);
 
   return {bgl, pipeline};
+}
+
+/// Helper to create a pipeline with a two-input (in1, in2, output, uniform) bind group layout.
+/// Used by feComposite and feBlend pipelines.
+struct TwoInputUniformPipeline {
+  wgpu::BindGroupLayout bindGroupLayout;
+  wgpu::ComputePipeline pipeline;
+};
+
+TwoInputUniformPipeline createTwoInputUniformPipeline(const wgpu::Device& dev, const char* label,
+                                                      wgpu::ShaderModule shaderModule,
+                                                      size_t uniformSize) {
+  wgpu::BindGroupLayoutEntry entries[4]{};
+
+  // binding 0: in1 (texture_2d)
+  entries[0].binding = 0;
+  entries[0].visibility = wgpu::ShaderStage::Compute;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+  entries[0].texture.multisampled = false;
+
+  // binding 1: in2 (texture_2d)
+  entries[1].binding = 1;
+  entries[1].visibility = wgpu::ShaderStage::Compute;
+  entries[1].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[1].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+  entries[1].texture.multisampled = false;
+
+  // binding 2: output (storage texture)
+  entries[2].binding = 2;
+  entries[2].visibility = wgpu::ShaderStage::Compute;
+  entries[2].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+  entries[2].storageTexture.format = kFormat;
+  entries[2].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  // binding 3: uniform buffer
+  entries[3].binding = 3;
+  entries[3].visibility = wgpu::ShaderStage::Compute;
+  entries[3].buffer.type = wgpu::BufferBindingType::Uniform;
+  entries[3].buffer.minBindingSize = uniformSize;
+
+  std::string bglLabel = std::string(label) + "BGL";
+  wgpu::BindGroupLayoutDescriptor bglDesc{};
+  bglDesc.label = wgpuLabel(bglLabel.c_str());
+  bglDesc.entryCount = 4;
+  bglDesc.entries = entries;
+  auto bgl = dev.createBindGroupLayout(bglDesc);
+
+  std::string plLabel = std::string(label) + "PipelineLayout";
+  wgpu::PipelineLayoutDescriptor plDesc{};
+  plDesc.label = wgpuLabel(plLabel.c_str());
+  plDesc.bindGroupLayoutCount = 1;
+  WGPUBindGroupLayout layouts[1] = {bgl};
+  plDesc.bindGroupLayouts = layouts;
+  wgpu::PipelineLayout pipelineLayout = dev.createPipelineLayout(plDesc);
+
+  std::string cpLabel = std::string(label) + "Pipeline";
+  wgpu::ComputePipelineDescriptor cpDesc{};
+  cpDesc.label = wgpuLabel(cpLabel.c_str());
+  cpDesc.layout = pipelineLayout;
+  cpDesc.compute.module = shaderModule;
+  cpDesc.compute.entryPoint = wgpuLabel("main");
+  auto pipeline = dev.createComputePipeline(cpDesc);
+
+  return {bgl, pipeline};
+}
+
+/// Dispatch a compute shader with a two-input (in1, in2, output, uniform) bind group.
+void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& bgl,
+                             const wgpu::ComputePipeline& pipeline, const wgpu::Texture& in1,
+                             const wgpu::Texture& in2, const wgpu::Texture& output,
+                             const wgpu::Buffer& uniformBuffer, size_t uniformSize,
+                             const char* label) {
+  const wgpu::Device& dev = device.device();
+  const uint32_t width = output.getWidth();
+  const uint32_t height = output.getHeight();
+
+  wgpu::TextureView in1View = in1.createView();
+  wgpu::TextureView in2View = in2.createView();
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[4]{};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = in1View;
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = in2View;
+  bgEntries[2].binding = 2;
+  bgEntries[2].textureView = outputView;
+  bgEntries[3].binding = 3;
+  bgEntries[3].buffer = uniformBuffer;
+  bgEntries[3].offset = 0;
+  bgEntries[3].size = uniformSize;
+
+  wgpu::BindGroupDescriptor bgDesc{};
+  bgDesc.label = wgpuLabel(label);
+  bgDesc.layout = bgl;
+  bgDesc.entryCount = 4;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+
+  wgpu::CommandEncoderDescriptor ceDesc{};
+  ceDesc.label = wgpuLabel(label);
+  wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
+
+  wgpu::ComputePassDescriptor passDesc{};
+  passDesc.label = wgpuLabel(label);
+  wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+
+  const uint32_t workgroupsX = (width + 7) / 8;
+  const uint32_t workgroupsY = (height + 7) / 8;
+  pass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+  pass.end();
+
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  device.queue().submit(1, &cmdBuf);
 }
 
 /// Dispatch a compute shader with a standard (input, output, uniform) bind group.
@@ -417,6 +554,22 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     cpDesc.compute.entryPoint = wgpuLabel("main");
     mergePipeline_ = dev.createComputePipeline(cpDesc);
   }
+
+  // --- feComposite Porter-Duff pipeline (two inputs + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createTwoInputUniformPipeline(
+        dev, "FilterComposite", createFilterCompositeShader(dev), sizeof(CompositeParams));
+    compositeBindGroupLayout_ = bgl;
+    compositePipeline_ = pipeline;
+  }
+
+  // --- feBlend W3C blend-mode pipeline (two inputs + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createTwoInputUniformPipeline(
+        dev, "FilterBlend", createFilterBlendShader(dev), sizeof(BlendParams));
+    blendBindGroupLayout_ = bgl;
+    blendPipeline_ = pipeline;
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
@@ -480,6 +633,21 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       outputTex = applyFlood(inputTex.getWidth(), inputTex.getHeight(), *flood);
     } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
       outputTex = applyMerge(node, namedBuffers, currentBuffer, sourceGraphic);
+    } else if (const auto* composite =
+                   std::get_if<filter_primitive::Composite>(&node.primitive)) {
+      // Resolve second input (in2/backdrop).
+      wgpu::Texture in2Tex = inputTex;
+      if (node.inputs.size() >= 2) {
+        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
+      }
+      outputTex = applyComposite(inputTex, in2Tex, *composite);
+    } else if (const auto* blend = std::get_if<filter_primitive::Blend>(&node.primitive)) {
+      // Resolve second input (in2/backdrop).
+      wgpu::Texture in2Tex = inputTex;
+      if (node.inputs.size() >= 2) {
+        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
+      }
+      outputTex = applyBlend(inputTex, in2Tex, *blend);
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -801,6 +969,69 @@ wgpu::Texture GeodeFilterEngine::runMergePass(const wgpu::Texture& src, const wg
   wgpu::CommandBuffer cmdBuf = encoder.finish();
   device_.queue().submit(1, &cmdBuf);
 
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyComposite(
+    const wgpu::Texture& in1, const wgpu::Texture& in2,
+    const svg::components::filter_primitive::Composite& primitive) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = in1.getWidth();
+  const uint32_t height = in1.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterCompositeOutput");
+
+  // Map the Composite::Operator enum to the shader's uint index.
+  using Op = svg::components::filter_primitive::Composite::Operator;
+  uint32_t opIndex = 0;
+  switch (primitive.op) {
+    case Op::Over: opIndex = 0; break;
+    case Op::In: opIndex = 1; break;
+    case Op::Out: opIndex = 2; break;
+    case Op::Atop: opIndex = 3; break;
+    case Op::Xor: opIndex = 4; break;
+    case Op::Lighter: opIndex = 5; break;
+    case Op::Arithmetic: opIndex = 6; break;
+  }
+
+  CompositeParams params{};
+  params.op = opIndex;
+  params.pad0 = 0;
+  params.pad1 = 0;
+  params.pad2 = 0;
+  params.k1 = static_cast<float>(primitive.k1);
+  params.k2 = static_cast<float>(primitive.k2);
+  params.k3 = static_cast<float>(primitive.k3);
+  params.k4 = static_cast<float>(primitive.k4);
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "CompositeParamsUniform");
+
+  dispatchTwoInputUniform(device_, compositeBindGroupLayout_, compositePipeline_, in1, in2, output,
+                          uniformBuffer, sizeof(CompositeParams), "FilterCompositePass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyBlend(
+    const wgpu::Texture& in1, const wgpu::Texture& in2,
+    const svg::components::filter_primitive::Blend& primitive) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = in1.getWidth();
+  const uint32_t height = in1.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterBlendOutput");
+
+  BlendParams params{};
+  params.mode = static_cast<uint32_t>(primitive.mode);
+  params.pad0 = 0;
+  params.pad1 = 0;
+  params.pad2 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "BlendParamsUniform");
+
+  dispatchTwoInputUniform(device_, blendBindGroupLayout_, blendPipeline_, in1, in2, output,
+                          uniformBuffer, sizeof(BlendParams), "FilterBlendPass");
   return output;
 }
 

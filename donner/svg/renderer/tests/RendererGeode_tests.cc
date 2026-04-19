@@ -836,5 +836,310 @@ TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
   EXPECT_GT(center[3], 170u) << "Merge A should be > 170 (composited alpha)";
 }
 
+/// feComposite operator=in: result = in1 * in2.a.
+/// With in1 = opaque red flood, in2 = 50% alpha green flood:
+///   premul result = (255,0,0,255) * 0.5 = (128,0,0,128)
+///   straight = (255,0,0,128)
+TEST_F(RendererGeodeTest, FilterCompositeInOperator) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+
+  // Node 0: opaque red flood → result="red".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: 50% alpha green flood → result="green".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(0, 255, 0, 255));
+    f.floodOpacity = 0.5;
+    node.primitive = f;
+    node.result = RcString("green");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feComposite in="red" in2="green" operator=in.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Composite comp;
+    comp.op = components::filter_primitive::Composite::Operator::In;
+    node.primitive = comp;
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    node.inputs.push_back(components::FilterInput::Named{RcString("green")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // in1 premul = (255,0,0,255), in2 premul = (0,128,0,128).
+  // operator=in: result = in1 * in2.a = (255,0,0,255) * (128/255) ≈ (128,0,0,128).
+  // takeSnapshot unpremultiplies: R=128*255/128=255, A=128.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 255u, 3u) << "Composite-in R (straight)";
+  EXPECT_EQ(center[1], 0u) << "Composite-in G";
+  EXPECT_EQ(center[2], 0u) << "Composite-in B";
+  EXPECT_NEAR(center[3], 128u, 3u) << "Composite-in A";
+}
+
+/// feComposite defaults to operator=over.
+TEST_F(RendererGeodeTest, FilterCompositeOverDefault) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+
+  // Node 0: opaque red flood → result="red".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: 50% alpha blue flood → result="blue".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(0, 0, 255, 255));
+    f.floodOpacity = 0.5;
+    node.primitive = f;
+    node.result = RcString("blue");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feComposite in="blue" in2="red" (default operator=over).
+  {
+    components::FilterNode node;
+    components::filter_primitive::Composite comp;
+    // Default op is Over.
+    node.primitive = comp;
+    node.inputs.push_back(components::FilterInput::Named{RcString("blue")});
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // in1 = blue 50% premul (0,0,128,128), in2 = red opaque (255,0,0,255).
+  // over: result = in1 + in2 * (1 - in1.a) = (0,0,128,128) + (255,0,0,255)*(1 - 0.502)
+  //     ≈ (0,0,128,128) + (127,0,0,127) = (127,0,128,255).
+  // Straight: R≈127, G=0, B≈128, A=255.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 127u, 4u) << "Composite-over R";
+  EXPECT_EQ(center[1], 0u) << "Composite-over G";
+  EXPECT_NEAR(center[2], 128u, 4u) << "Composite-over B";
+  EXPECT_NEAR(center[3], 255u, 1u) << "Composite-over A";
+}
+
+/// feComposite operator=arithmetic with k1=1,k2=0,k3=0,k4=0 → in1*in2 (multiply).
+TEST_F(RendererGeodeTest, FilterCompositeArithmetic) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+
+  // Node 0: opaque red flood → result="red".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: opaque white flood → result="white".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 255, 255, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("white");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feComposite operator=arithmetic k1=1 k2=0 k3=0 k4=0.
+  // result = k1*in1*in2 = in1*in2. Red * White = Red.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Composite comp;
+    comp.op = components::filter_primitive::Composite::Operator::Arithmetic;
+    comp.k1 = 1.0;
+    comp.k2 = 0.0;
+    comp.k3 = 0.0;
+    comp.k4 = 0.0;
+    node.primitive = comp;
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    node.inputs.push_back(components::FilterInput::Named{RcString("white")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // k1*red*white = red. Expected: (255,0,0,255).
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 255u, 2u) << "Arithmetic R (red*white=red)";
+  EXPECT_EQ(center[1], 0u) << "Arithmetic G";
+  EXPECT_EQ(center[2], 0u) << "Arithmetic B";
+  EXPECT_NEAR(center[3], 255u, 2u) << "Arithmetic A";
+}
+
+/// feBlend mode=multiply: two opaque flood inputs.
+/// Red * Blue = (1,0,0) * (0,0,1) = (0,0,0). Result is black.
+TEST_F(RendererGeodeTest, FilterBlendMultiply) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+
+  // Node 0: opaque red flood → result="red".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: opaque blue flood → result="blue".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(0, 0, 255, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("blue");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feBlend in="red" in2="blue" mode=multiply.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Blend blend;
+    blend.mode = components::filter_primitive::Blend::Mode::Multiply;
+    node.primitive = blend;
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    node.inputs.push_back(components::FilterInput::Named{RcString("blue")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Multiply: red(1,0,0)*blue(0,0,1) = (0,0,0), both opaque → black opaque.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 0u) << "Blend-multiply R";
+  EXPECT_EQ(center[1], 0u) << "Blend-multiply G";
+  EXPECT_EQ(center[2], 0u) << "Blend-multiply B";
+  EXPECT_NEAR(center[3], 255u, 1u) << "Blend-multiply A";
+}
+
+/// feBlend mode=screen: inverse of multiply.
+/// Screen(R, B) = R+B-R*B = (1,0,0)+(0,0,1)-(0,0,0) = (1,0,1) = magenta.
+TEST_F(RendererGeodeTest, FilterBlendScreen) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+
+  // Node 0: opaque red flood → result="red".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: opaque blue flood → result="blue".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(0, 0, 255, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("blue");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feBlend in="red" in2="blue" mode=screen.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Blend blend;
+    blend.mode = components::filter_primitive::Blend::Mode::Screen;
+    node.primitive = blend;
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    node.inputs.push_back(components::FilterInput::Named{RcString("blue")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Screen: red+blue-red*blue = (1,0,1) = magenta, opaque.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_NEAR(center[0], 255u, 1u) << "Blend-screen R";
+  EXPECT_EQ(center[1], 0u) << "Blend-screen G";
+  EXPECT_NEAR(center[2], 255u, 1u) << "Blend-screen B";
+  EXPECT_NEAR(center[3], 255u, 1u) << "Blend-screen A";
+}
+
 }  // namespace
 }  // namespace donner::svg

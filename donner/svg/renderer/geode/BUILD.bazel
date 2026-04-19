@@ -244,6 +244,26 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: feComposite Porter-Duff compositing compute shader.
+embed_resources(
+    name = "filter_composite_wgsl",
+    header_output = "embed_resources/FilterCompositeWgsl.h",
+    resources = {
+        "kFilterCompositeWgsl": "shaders/filter_composite.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feBlend W3C Compositing 1 blend mode compute shader.
+embed_resources(
+    name = "filter_blend_wgsl",
+    header_output = "embed_resources/FilterBlendWgsl.h",
+    resources = {
+        "kFilterBlendWgsl": "shaders/filter_blend.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -251,7 +271,9 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":filter_blend_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_composite_wgsl",
         ":filter_flood_wgsl",
         ":filter_merge_wgsl",
         ":filter_offset_wgsl",

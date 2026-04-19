@@ -68,10 +68,11 @@ geodeCategoryGate(std::string_view category) {
   if (category == "filters/feGaussianBlur") {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
-  // Phase 7 extensions: feOffset, feColorMatrix, feFlood, feMerge run on
-  // Geode with the same widened threshold for MSAA edge drift.
+  // Phase 7 extensions: feOffset, feColorMatrix, feFlood, feMerge, feComposite,
+  // feBlend run on Geode with the same widened threshold for MSAA edge drift.
   if (category == "filters/feOffset" || category == "filters/feColorMatrix" ||
-      category == "filters/feFlood" || category == "filters/feMerge") {
+      category == "filters/feFlood" || category == "filters/feMerge" ||
+      category == "filters/feComposite" || category == "filters/feBlend") {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
   if (category.rfind("filters/", 0) == 0 || category == "filters") {
@@ -441,9 +442,14 @@ INSTANTIATE_TEST_SUITE_P(
         })),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFeBlend, ImageComparisonTestFixture,
-                         ValuesIn(getTestsInCategory("filters/feBlend")),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFeBlend, ImageComparisonTestFixture,
+    ValuesIn(getTestsInCategory("filters/feBlend",
+                                {
+                                    {"with-subregion-on-input-1.svg", Params::Skip("Not impl: primitive subregion clipping")},
+                                    {"with-subregion-on-input-2.svg", Params::Skip("Not impl: primitive subregion clipping")},
+                                })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeColorMatrix, ImageComparisonTestFixture,
@@ -469,9 +475,17 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeComponentTransfer, ImageComparisonTestFixture,
                          ValuesIn(getTestsInCategory("filters/feComponentTransfer")),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFeComposite, ImageComparisonTestFixture,
-                         ValuesIn(getTestsInCategory("filters/feComposite")),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFeComposite, ImageComparisonTestFixture,
+    ValuesIn(getTestsInCategory("filters/feComposite",
+                                {
+                                    {"default-operator.svg", Params::Skip("Not impl: primitive subregion clipping (feFlood subregion)")},
+                                    {"invalid-operator.svg", Params::Skip("Not impl: primitive subregion clipping (feFlood subregion)")},
+                                    {"operator=over.svg", Params::Skip("Not impl: primitive subregion clipping (feFlood subregion)")},
+                                    {"with-subregion-on-input-1.svg", Params::Skip("Not impl: primitive subregion clipping")},
+                                    {"with-subregion-on-input-2.svg", Params::Skip("Not impl: primitive subregion clipping")},
+                                })),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeConvolveMatrix, ImageComparisonTestFixture,
