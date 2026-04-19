@@ -1,6 +1,7 @@
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("//build_defs:rules.bzl", "renderer_backend_compatible_with")
+load("//tools/http:serve_http.bzl", "serve_http")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -110,4 +111,23 @@ filegroup(
         ":donner_wasm_geode",
     ],
     target_compatible_with = renderer_backend_compatible_with(["geode"]),
+)
+
+# `bazel run :serve_test_geode` starts a local HTTP server at
+# http://localhost:8000/test-geode.html with CORS/COOP/COEP headers set so
+# the Emscripten WebGPU runtime can use SharedArrayBuffer-backed ASYNCIFY.
+# Build artefacts and the test page are served from the same directory.
+serve_http(
+    name = "serve_test_geode",
+    dir = ":test_page_geode",
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+)
+
+# Same, but for the tiny-skia test page (`test.html`).
+serve_http(
+    name = "serve_test",
+    dir = ":test_page",
+    tags = ["manual"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
 )

@@ -33,6 +33,12 @@ parser.add_argument(
 )
 args = parser.parse_args()
 serve_dir = os.path.abspath(args.dir)
+# Bazel's `serve_http` rule passes the first file of its `dir` filegroup as
+# `--dir` — which is a file, not a directory. Treat a file arg as its
+# containing directory so e.g. `--dir path/to/test.html` serves the whole
+# directory.
+if os.path.isfile(serve_dir):
+    serve_dir = os.path.dirname(serve_dir)
 
 
 class CrossOriginHandler(http.server.SimpleHTTPRequestHandler):
