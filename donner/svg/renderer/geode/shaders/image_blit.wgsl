@@ -54,6 +54,17 @@ struct Uniforms {
   // only read when `applyMaskBounds != 0`. Sits at offset 112 so it
   // remains 16-byte (`vec4f`) aligned without explicit padding.
   maskBounds: vec4f,
+  // Phase 3d: SVG `mix-blend-mode` selector. `0` = plain source-over
+  // (or `maskMode` when set). `1..=16` map to the enumeration in
+  // `donner::svg::MixBlendMode` in the same order. When non-zero, the
+  // fragment shader samples the `dstSnapshotTexture` at binding 4 and
+  // composites the content through the matching W3C Compositing 1
+  // formula before writing. `maskMode` and `blendMode` are mutually
+  // exclusive; the host sets at most one per draw.
+  blendMode: u32,
+  _blendPad0: u32,
+  _blendPad1: u32,
+  _blendPad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -63,6 +74,12 @@ struct Uniforms {
 // `maskMode == 0`. Sampled with the same `imageSampler` so texels are
 // interpolated between source pixels consistently with the content.
 @group(0) @binding(3) var maskTexture: texture_2d<f32>;
+// Phase 3d destination snapshot for `mix-blend-mode`. Bound to a
+// 1x1 dummy when `blendMode == 0`. When non-zero, this is a copy of
+// the parent render target captured before the blend blit pass, so
+// the blend formula can read the backdrop without the feedback loop
+// of sampling the pass's own color attachment.
+@group(0) @binding(4) var dstSnapshotTexture: texture_2d<f32>;
 
 // The vertex shader uses `@builtin(vertex_index)` to pick one of the six
 // corners of the quad — no vertex buffer is needed. Layout:
@@ -108,6 +125,263 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
   return out;
 }
 
+// ============================================================================
+// W3C Compositing 1 — mix-blend-mode formulas
+// ============================================================================
+//
+// All blend functions `B(Cb, Cs)` operate on STRAIGHT-alpha RGB values.
+// The final W3C composite is applied by `composite_with_blend` below:
+//
+//   Cs' = (1 - αb) * Cs + αb * B(Cb, Cs)           // blended source
+//   Co  = αs * Cs' + (1 - αs) * αb * Cb            // premultiplied output
+//   αo  = αs + αb - αs * αb                        // Porter-Duff "over"
+//
+// which reduces to ordinary source-over when `B(Cb, Cs) == Cs` (the
+// Normal case). The host demultiplies both inputs inside
+// `composite_with_blend` before calling any of the helpers below so
+// these functions can use the straight-alpha formulas verbatim.
+//
+// Non-separable modes (hue, saturation, color, luminosity) get their
+// own dedicated `blend_*_non_separable` helpers because they operate
+// on the full RGB triple rather than per-channel.
+
+fn blend_multiply(cb: vec3f, cs: vec3f) -> vec3f {
+  return cb * cs;
+}
+
+fn blend_screen(cb: vec3f, cs: vec3f) -> vec3f {
+  return cb + cs - cb * cs;
+}
+
+fn blend_hard_light(cb: vec3f, cs: vec3f) -> vec3f {
+  // Overlay(cs, cb) = HardLight(cb, cs). Per W3C §9.1.7 the spec
+  // definition is: if cs <= 0.5 then 2*cb*cs else Screen(cb, 2*cs - 1).
+  let lo = 2.0 * cb * cs;
+  let hi = vec3f(1.0) - 2.0 * (vec3f(1.0) - cb) * (vec3f(1.0) - cs);
+  return select(hi, lo, cs <= vec3f(0.5));
+}
+
+fn blend_overlay(cb: vec3f, cs: vec3f) -> vec3f {
+  // Overlay(cb, cs) = HardLight(cs, cb) — roles swapped.
+  return blend_hard_light(cs, cb);
+}
+
+fn blend_darken(cb: vec3f, cs: vec3f) -> vec3f {
+  return min(cb, cs);
+}
+
+fn blend_lighten(cb: vec3f, cs: vec3f) -> vec3f {
+  return max(cb, cs);
+}
+
+fn blend_color_dodge_channel(cb: f32, cs: f32) -> f32 {
+  if (cb == 0.0) {
+    return 0.0;
+  }
+  if (cs >= 1.0) {
+    return 1.0;
+  }
+  return min(1.0, cb / (1.0 - cs));
+}
+
+fn blend_color_dodge(cb: vec3f, cs: vec3f) -> vec3f {
+  return vec3f(
+    blend_color_dodge_channel(cb.x, cs.x),
+    blend_color_dodge_channel(cb.y, cs.y),
+    blend_color_dodge_channel(cb.z, cs.z),
+  );
+}
+
+fn blend_color_burn_channel(cb: f32, cs: f32) -> f32 {
+  if (cb >= 1.0) {
+    return 1.0;
+  }
+  if (cs <= 0.0) {
+    return 0.0;
+  }
+  return 1.0 - min(1.0, (1.0 - cb) / cs);
+}
+
+fn blend_color_burn(cb: vec3f, cs: vec3f) -> vec3f {
+  return vec3f(
+    blend_color_burn_channel(cb.x, cs.x),
+    blend_color_burn_channel(cb.y, cs.y),
+    blend_color_burn_channel(cb.z, cs.z),
+  );
+}
+
+fn blend_soft_light_channel(cb: f32, cs: f32) -> f32 {
+  // W3C Compositing 1 §9.1.9 soft-light.
+  //
+  //   if (cs <= 0.5):
+  //     B = cb - (1 - 2*cs) * cb * (1 - cb)
+  //   else:
+  //     if (cb <= 0.25):
+  //       D = ((16*cb - 12) * cb + 4) * cb
+  //     else:
+  //       D = sqrt(cb)
+  //     B = cb + (2*cs - 1) * (D - cb)
+  if (cs <= 0.5) {
+    return cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb);
+  }
+  var d: f32;
+  if (cb <= 0.25) {
+    d = ((16.0 * cb - 12.0) * cb + 4.0) * cb;
+  } else {
+    d = sqrt(cb);
+  }
+  return cb + (2.0 * cs - 1.0) * (d - cb);
+}
+
+fn blend_soft_light(cb: vec3f, cs: vec3f) -> vec3f {
+  return vec3f(
+    blend_soft_light_channel(cb.x, cs.x),
+    blend_soft_light_channel(cb.y, cs.y),
+    blend_soft_light_channel(cb.z, cs.z),
+  );
+}
+
+fn blend_difference(cb: vec3f, cs: vec3f) -> vec3f {
+  return abs(cb - cs);
+}
+
+fn blend_exclusion(cb: vec3f, cs: vec3f) -> vec3f {
+  return cb + cs - 2.0 * cb * cs;
+}
+
+// --- Non-separable modes (HSL) --------------------------------------------
+//
+// Lum, Sat, SetLum, SetSat, ClipColor follow W3C Compositing 1 §9.2.
+// The coefficients are the SVG / W3C spec values — NOT BT.709 — and are
+// applied to STRAIGHT RGB.
+
+fn lum_of(c: vec3f) -> f32 {
+  return 0.3 * c.x + 0.59 * c.y + 0.11 * c.z;
+}
+
+fn clip_color(c_in: vec3f) -> vec3f {
+  let l = lum_of(c_in);
+  let n = min(c_in.x, min(c_in.y, c_in.z));
+  let x = max(c_in.x, max(c_in.y, c_in.z));
+  var c = c_in;
+  if (n < 0.0) {
+    c = l + ((c - l) * l) / (l - n);
+  }
+  if (x > 1.0) {
+    c = l + ((c - l) * (1.0 - l)) / (x - l);
+  }
+  return c;
+}
+
+fn set_lum(c_in: vec3f, l: f32) -> vec3f {
+  let d = l - lum_of(c_in);
+  return clip_color(c_in + vec3f(d));
+}
+
+fn sat_of(c: vec3f) -> f32 {
+  return max(c.x, max(c.y, c.z)) - min(c.x, min(c.y, c.z));
+}
+
+fn set_sat(c_in: vec3f, s: f32) -> vec3f {
+  // Sort channels and rewrite mid/max relative to the new saturation.
+  // This is the `SetSat` algorithm from §9.2 expressed without
+  // pointer-chasing: identify min/mid/max indices by successive
+  // min/max operations, then build the output componentwise.
+  let r = c_in.x;
+  let g = c_in.y;
+  let b = c_in.z;
+  let cmax = max(r, max(g, b));
+  let cmin = min(r, min(g, b));
+  let cmid = r + g + b - cmax - cmin;
+
+  var new_min = 0.0;
+  var new_mid = 0.0;
+  var new_max = 0.0;
+  if (cmax > cmin) {
+    new_mid = ((cmid - cmin) * s) / (cmax - cmin);
+    new_max = s;
+  }
+
+  // Rebuild componentwise by comparing each input channel to the
+  // identified extremes. Exact-equality checks match the W3C
+  // reference — ties preserve the input ordering.
+  var out: vec3f;
+  out.x = select(new_min, select(new_max, new_mid, r == cmid), r == cmax);
+  out.y = select(new_min, select(new_max, new_mid, g == cmid), g == cmax);
+  out.z = select(new_min, select(new_max, new_mid, b == cmid), b == cmax);
+  // `set_sat` is followed by `set_lum` so tiny ordering ambiguities
+  // get absorbed by the luminosity restoration step.
+  return out;
+}
+
+fn blend_hue(cb: vec3f, cs: vec3f) -> vec3f {
+  return set_lum(set_sat(cs, sat_of(cb)), lum_of(cb));
+}
+
+fn blend_saturation(cb: vec3f, cs: vec3f) -> vec3f {
+  return set_lum(set_sat(cb, sat_of(cs)), lum_of(cb));
+}
+
+fn blend_color(cb: vec3f, cs: vec3f) -> vec3f {
+  return set_lum(cs, lum_of(cb));
+}
+
+fn blend_luminosity(cb: vec3f, cs: vec3f) -> vec3f {
+  return set_lum(cb, lum_of(cs));
+}
+
+// Dispatch. The caller passes demultiplied `cb` / `cs` and gets back
+// the blended straight-alpha RGB to plug into the Compositing-1
+// composite equation.
+fn apply_blend_fn(mode: u32, cb: vec3f, cs: vec3f) -> vec3f {
+  switch (mode) {
+    case 1u { return blend_multiply(cb, cs); }
+    case 2u { return blend_screen(cb, cs); }
+    case 3u { return blend_overlay(cb, cs); }
+    case 4u { return blend_darken(cb, cs); }
+    case 5u { return blend_lighten(cb, cs); }
+    case 6u { return blend_color_dodge(cb, cs); }
+    case 7u { return blend_color_burn(cb, cs); }
+    case 8u { return blend_hard_light(cb, cs); }
+    case 9u { return blend_soft_light(cb, cs); }
+    case 10u { return blend_difference(cb, cs); }
+    case 11u { return blend_exclusion(cb, cs); }
+    case 12u { return blend_hue(cb, cs); }
+    case 13u { return blend_saturation(cb, cs); }
+    case 14u { return blend_color(cb, cs); }
+    case 15u { return blend_luminosity(cb, cs); }
+    default { return cs; }
+  }
+}
+
+fn composite_with_blend(mode: u32, src_pm: vec4f, dst_pm: vec4f) -> vec4f {
+  // Demultiply both sides so the blend formulas see straight-alpha
+  // inputs. Skip the divide when alpha is zero so we don't emit NaN.
+  var cs = vec3f(0.0);
+  if (src_pm.a > 0.0) {
+    cs = src_pm.rgb / src_pm.a;
+  }
+  var cb = vec3f(0.0);
+  if (dst_pm.a > 0.0) {
+    cb = dst_pm.rgb / dst_pm.a;
+  }
+  let as_ = src_pm.a;
+  let ab = dst_pm.a;
+
+  let blended = apply_blend_fn(mode, cb, cs);
+
+  // Blended source colour per Compositing 1 §5.8.
+  let cs_prime = (1.0 - ab) * cs + ab * blended;
+
+  // Porter-Duff `over` with the blended source, emitting a
+  // premultiplied result:
+  //   co = αs * Cs' + (1 - αs) * αb * Cb
+  //   αo = αs + αb - αs * αb
+  let co = as_ * cs_prime + (1.0 - as_) * ab * cb;
+  let ao = as_ + ab - as_ * ab;
+  return vec4f(co, ao);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   let sampled = textureSample(imageTexture, imageSampler, in.uv);
@@ -125,6 +399,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // premultiplied-source-over blend state.
     let a = sampled.a * uniforms.opacity;
     color = vec4f(sampled.rgb * a, a);
+  }
+
+  if (uniforms.blendMode != 0u) {
+    // Phase 3d `mix-blend-mode`. `color` is the layer being composited
+    // (premultiplied), `dstSnapshotTexture` is the frozen parent
+    // target captured before the blend blit pass. The fragment
+    // output REPLACES the parent pixel — the pipeline is configured
+    // with `srcFactor=One, dstFactor=Zero` so this shader output
+    // lands verbatim in the render target.
+    let dstSample = textureSample(dstSnapshotTexture, imageSampler, in.uv);
+    return composite_with_blend(uniforms.blendMode, color, dstSample);
   }
 
   if (uniforms.maskMode != 0u) {

@@ -44,10 +44,9 @@ void widenThresholdForGeode(ImageComparisonParams& p, float threshold = 0.3f) {
 
 /// Category-level auto-gate for the Geode backend. Geode is
 /// feature-complete for fills/strokes/gradients/patterns/images/basic
-/// shapes/clipping/masking today — filters (Phase 7), text (Phase 4),
-/// markers (Phase 6), mix-blend-mode / isolation (Phase 9) all still
-/// need to land before the matching resvg categories can run under
-/// Geode.
+/// shapes/compositing/clipping/masking/markers/blend-modes today —
+/// filters (Phase 7) and text (Phase 4) still need to land before
+/// the matching resvg categories can run under Geode.
 ///
 /// This helper returns an `ImageComparisonParams` builder that, when
 /// merged onto a testcase, cleanly skips it on Geode while leaving
@@ -88,16 +87,11 @@ geodeCategoryGate(std::string_view category) {
   // `drawPath` / `fillPath` calls), so Geode already supports them
   // via the paths it already implements. No category gate needed.
 
-  // `painting/isolation` works on Geode: `pushIsolatedLayer` handles
-  // opacity + `isolation: isolate` correctly for the default
-  // `mix-blend-mode: normal` path. Non-Normal blend modes remain
-  // unshipped (Phase 9) and would otherwise hit the one-shot warn in
-  // `pushIsolatedLayer`, so the mix-blend-mode category stays gated.
-  if (category == "painting/mix-blend-mode") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "mix-blend-mode (Geode Phase 9)");
-    };
-  }
+  // Phase 3d implements all 16 W3C Compositing 1 blend modes through
+  // the image_blit pipeline's `blendMode` uniform + dst-snapshot
+  // binding, so `painting/mix-blend-mode` and `painting/isolation`
+  // are no longer wholesale gated here. Per-file overrides handle
+  // any remaining divergences.
 
   return std::nullopt;
 }
@@ -285,8 +279,7 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
 // Overrides is keyed by the bare filename (e.g. "rgb-int-int-int.svg") and
 // picks per-test params (Skip, threshold, golden override, etc). Any file not
 // in the overrides map uses defaultParams. When the category matches a
-// Geode-blocked feature (filters, text, clipping, markers, mix-blend-mode,
-// isolation), every resulting testcase is also tagged with the matching
+// Geode-blocked feature (filters, text), every resulting testcase is also tagged with the matching
 // `requireFeature` / `disableBackend` bit so the Geode backend skips cleanly
 // while Skia/TinySkia still run the existing coverage.
 std::vector<ImageComparisonTestcase> getTestsInCategory(

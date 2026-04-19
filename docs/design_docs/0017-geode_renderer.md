@@ -77,6 +77,15 @@
   authoritative vendoring design; the "Historical: Dawn embedding
   strategy" section is retained for context only. The user-visible
   `--config=geode` / `enable_dawn=true` flags are unchanged.
+- **Phase 3d** (mix-blend-mode): ✅ complete. Implements all 16
+  SVG/CSS `mix-blend-mode` operators (Multiply, Screen, Overlay,
+  Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight,
+  Difference, Exclusion, Hue, Saturation, Color, Luminosity) via an
+  extended `image_blit.wgsl` with a `blendMode` uniform and a
+  `dstSnapshotTexture` binding. Non-Normal blend modes take a snapshot
+  of the current target and composite via the shader's in-line blend
+  functions. Lifts the `painting/mix-blend-mode` category gate in the
+  resvg suite.
 - **Real-GPU verification (2026-04-17)**: 🚧 first run on real hardware,
   plus a targeted fallback shader path for Intel+Vulkan. Added
   adapter-info logging to `GeodeDevice::CreateHeadless` (commit
