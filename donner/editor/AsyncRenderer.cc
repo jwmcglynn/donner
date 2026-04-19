@@ -1,5 +1,7 @@
 #include "donner/editor/AsyncRenderer.h"
 
+#include <chrono>
+
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
@@ -177,9 +179,19 @@ void AsyncRenderer::workerLoop() {
       const Vector2i canvasSize = request.document->canvasSize();
       viewport.size = Vector2d(canvasSize.x, canvasSize.y);
       viewport.devicePixelRatio = 1.0;
+      double workerMs = 0.0;
       {
         ZoneScopedN("Compositor::renderFrame");
+        // Wall-clock the core backend render so the editor can plot it
+        // on the frame graph next to the ImGui frame time. This measures
+        // the actual work the compositor performs per request, not the
+        // total worker iteration (which also pays for takeSnapshot and
+        // the result handoff). Scoped here so Tracy's zone cost isn't
+        // included either.
+        const auto renderStart = std::chrono::steady_clock::now();
         compositor_->renderFrame(viewport);
+        const auto renderEnd = std::chrono::steady_clock::now();
+        workerMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
       }
 
       // Expose the split bg/drag/fg trio to the editor only when it was
@@ -224,6 +236,7 @@ void AsyncRenderer::workerLoop() {
           result_.bitmap = std::move(bitmap);
           result_.compositedPreview = std::move(compositedPreview);
           result_.version = request.version;
+          result_.workerMs = workerMs;
           state_ = State::Done;
           // Snapshot the callback under the lock so a concurrent
           // `setWakeCallback` swap can't tear the invocation. Fire it

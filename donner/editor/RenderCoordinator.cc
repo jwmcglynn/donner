@@ -54,10 +54,15 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayRenderer_.beginFrame(overlayViewport);
   const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
   const auto& overlaySelection = app.selectedElements();
-  OverlayRenderer::drawChromeWithTransform(
-      overlayRenderer_, std::span<const svg::SVGElement>(overlaySelection),
-      std::span<const Box2d>(selectionBoundsCache_.displayedBoundsDoc), marqueeRectDoc,
-      canvasFromDoc);
+  // Bounds are now computed inline by `OverlayRenderer::drawChromeWithTransform`
+  // from the live `overlaySelection`, so the AABB and the path outline share a
+  // single DOM snapshot. The `selectionBoundsCache_` is still maintained for
+  // main-loop selection-change detection elsewhere, but no longer gates the
+  // overlay's AABBs — that was the source of the drag-time shear where the
+  // cached bounds lagged the live path outline by a frame or two.
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer_,
+                                           std::span<const svg::SVGElement>(overlaySelection),
+                                           marqueeRectDoc, canvasFromDoc);
   overlayRenderer_.endFrame();
   pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
   pendingOverlayVersion_ = currentVersion;
@@ -81,7 +86,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
-                                         GlTextureCache& textures) {
+                                         GlTextureCache& textures, FrameHistory* frameHistory) {
   ZoneScopedN("RenderCoordinator::pollRenderResult");
   auto resultOpt = asyncRenderer_.pollResult();
   if (!resultOpt.has_value()) {
@@ -89,6 +94,14 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   const auto& result = *resultOpt;
+  // Forward the worker-measured backend time to the frame history so
+  // `RenderFrameGraph` can overlay backend render time on the UI frame
+  // graph. The frame history's latest slot corresponds to the current
+  // UI frame (pushed at the top of `EditorShell::runFrame` before
+  // poll) — a landed result belongs to that frame.
+  if (frameHistory != nullptr) {
+    frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
+  }
   const bool hasComposited =
       result.compositedPreview.has_value() && result.compositedPreview->valid();
   if (hasComposited) {

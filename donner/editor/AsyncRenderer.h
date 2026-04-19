@@ -137,6 +137,13 @@ struct RenderResult {
   svg::RendererBitmap bitmap;
   std::optional<CompositedPreview> compositedPreview;
   std::uint64_t version = 0;
+  /// Wall-clock milliseconds the worker spent inside
+  /// `CompositorController::renderFrame` for this iteration. Reported so
+  /// the editor can plot backend render time alongside ImGui frame time
+  /// on the frame graph. Zero means "no backend work recorded" (e.g. the
+  /// request had a null renderer/document and fell through the early-out
+  /// branch).
+  double workerMs = 0.0;
 };
 
 class AsyncRenderer {

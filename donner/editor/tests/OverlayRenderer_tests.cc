@@ -390,10 +390,20 @@ TEST(OverlayRendererTest, MultiElementSpanDrawsPathOutlinesForEachSelectedElemen
   EXPECT_TRUE(anyNonZero(98, 98, 102, 102)) << "no chrome around r2 top-left corner";
 }
 
-// The selection AABB moved to the ImGui draw list. The overlay must
-// stay path-only or the editor will double-draw the combined rect on
-// top of the immediate-mode chrome.
-TEST(OverlayRendererTest, MultiSelectDoesNotDrawCombinedAabbInOverlay) {
+// Multi-select chrome: per-element path outlines + per-element AABBs +
+// a single combined AABB across the whole selection, all drawn in the
+// Skia overlay. Historically the combined AABB lived on the ImGui draw
+// list (`RenderPanePresenter`) and an earlier test asserted the overlay
+// stayed path-only; that design was folded back into the overlay so
+// Geode can own the whole chrome layer end-to-end. This test locks in
+// the unified behavior: the combined AABB corners (which are NOT on any
+// per-element outline) must appear in the overlay bitmap.
+//
+// Bounds are now computed inline by `OverlayRenderer::drawChrome*`
+// (same call `SnapshotSelectionWorldBounds` makes) so the combined
+// AABB matches the current DOM transform every frame — no more
+// frame-lag shear against the path outlines.
+TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
   constexpr std::string_view kTwoRectsSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
               <rect id="r1" x="20"  y="20"  width="20" height="20" fill="red"/>
@@ -428,11 +438,10 @@ TEST(OverlayRendererTest, MultiSelectDoesNotDrawCombinedAabbInOverlay) {
   };
 
   // The combined AABB of (20..40, 20..40) ∪ (160..180, 160..180) is
-  // (20..180, 20..180). The corner at (180, 20) is INSIDE that
-  // combined rect but OUTSIDE both selected rect outlines. If the
-  // overlay still draws the combined AABB, this pixel cluster lights
-  // up; if it draws only the per-element path outlines, it stays
-  // transparent.
+  // (20..180, 20..180). Its corners at (180, 20) and (20, 180) are
+  // INSIDE the combined rect but OUTSIDE both per-element outlines —
+  // so they only get pixels when the combined AABB is drawn. Under
+  // the unified overlay, they MUST light up.
   const auto anyNonZeroNear = [&](int cx, int cy, int radius) {
     for (int y = cy - radius; y <= cy + radius; ++y) {
       for (int x = cx - radius; x <= cx + radius; ++x) {
@@ -444,10 +453,10 @@ TEST(OverlayRendererTest, MultiSelectDoesNotDrawCombinedAabbInOverlay) {
     }
     return false;
   };
-  EXPECT_FALSE(anyNonZeroNear(180, 20, 2))
-      << "combined-AABB top-right corner still appears in the overlay";
-  EXPECT_FALSE(anyNonZeroNear(20, 180, 2))
-      << "combined-AABB bottom-left corner still appears in the overlay";
+  EXPECT_TRUE(anyNonZeroNear(180, 20, 2))
+      << "combined-AABB top-right corner missing from the unified Skia overlay";
+  EXPECT_TRUE(anyNonZeroNear(20, 180, 2))
+      << "combined-AABB bottom-left corner missing from the unified Skia overlay";
 }
 
 // Marquee chrome also moved to the ImGui draw list. The path overlay

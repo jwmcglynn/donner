@@ -6,9 +6,23 @@ namespace donner::editor {
 
 void FrameHistory::push(float ms) {
   deltaMs[writeIndex] = ms;
+  // Reset the backend slot to zero — `setLatestBackendMs` will fill it
+  // in when a render result lands during the same UI frame.
+  backendMs[writeIndex] = 0.0f;
   writeIndex = (writeIndex + 1) % kFrameHistoryCapacity;
   if (samples < kFrameHistoryCapacity) {
     ++samples;
+  }
+}
+
+void FrameHistory::setLatestBackendMs(float ms) {
+  if (samples == 0) {
+    return;
+  }
+  const std::size_t latestIdx = (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  backendMs[latestIdx] = ms;
+  if (ms > 0.0f) {
+    lastBackendMs = ms;
   }
 }
 

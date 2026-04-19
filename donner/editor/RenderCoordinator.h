@@ -49,7 +49,13 @@ public:
   bool rasterizeOverlayForCurrentSelection(EditorApp& app, const ViewportState& viewport,
                                            GlTextureCache& textures,
                                            const std::optional<Box2d>& marqueeRectDoc);
-  void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures);
+  /// Drain the latest async-render result into the editor's UI state.
+  /// If a `frameHistory` is supplied, its latest slot is stamped with
+  /// the backend (worker) ms reported by `AsyncRenderer` so the frame
+  /// graph can plot backend time alongside ImGui frame time. `nullptr`
+  /// is allowed for callers that don't care about backend timing.
+  void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
+                        FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
                           bool experimentalMode, GlTextureCache& textures);
 

@@ -14,11 +14,32 @@ namespace donner::editor {
 constexpr std::size_t kFrameHistoryCapacity = 120;
 
 struct FrameHistory {
+  /// ImGui frame delta per UI-thread frame — populated from
+  /// `ImGui::GetIO().DeltaTime` by `noteFrameDelta`.
   std::array<float, kFrameHistoryCapacity> deltaMs{};
+  /// Async-renderer worker time (ms) per UI frame, aligned 1:1 with the
+  /// matching `deltaMs[]` slot. Holds `0.0f` for frames where no render
+  /// result landed (the worker was still busy or nothing was requested);
+  /// consumers skip zero entries so the graph doesn't drop to zero
+  /// between drags.
+  std::array<float, kFrameHistoryCapacity> backendMs{};
   std::size_t writeIndex = 0;
   std::size_t samples = 0;
+  /// Most recent non-zero backend sample, so latched-backend-latency
+  /// readers (the numeric readout, sticky-line rendering) have something
+  /// to show between render-result landings.
+  float lastBackendMs = 0.0f;
 
+  /// Append a new frame sample. The matching `backendMs[]` slot is
+  /// reset to 0 ("no backend result this frame"); `setLatestBackendMs`
+  /// fills it in if a render result lands during the same UI frame.
   void push(float ms);
+  /// Record a backend (async-renderer worker) timing for the most
+  /// recently pushed frame. Called by `RenderCoordinator::pollRenderResult`
+  /// when a new `RenderResult` arrives. No-op if no frame has been pushed
+  /// yet. Also updates `lastBackendMs` so UI elements that want to show
+  /// the latest measured backend latency have a persistent value.
+  void setLatestBackendMs(float ms);
   [[nodiscard]] float latest() const;
   [[nodiscard]] float max() const;
 };

@@ -1,10 +1,12 @@
 #include "donner/editor/OverlayRenderer.h"
 
 #include <array>
+#include <vector>
 
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -142,18 +144,27 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
 void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
                                               std::span<const svg::SVGElement> selection,
                                               const Transform2d& canvasFromDoc) {
-  drawChromeWithTransform(renderer, selection, std::span<const Box2d>(),
-                          /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
+  drawChromeWithTransform(renderer, selection, /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
 }
 
-void OverlayRenderer::drawChromeWithTransform(
-    svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
-    std::span<const Box2d> selectionBoundsDoc,
-    const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc) {
+void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
+                                              std::span<const svg::SVGElement> selection,
+                                              const std::optional<Box2d>& marqueeRectDoc,
+                                              const Transform2d& canvasFromDoc) {
   ZoneScopedN("OverlayRenderer::drawChrome");
-  if (selection.empty() && selectionBoundsDoc.empty() && !marqueeRectDoc.has_value()) {
+  if (selection.empty() && !marqueeRectDoc.has_value()) {
     return;
   }
+
+  // AABBs are computed inline from the selection's current DOM transforms
+  // so they track the same frame as the per-element path outlines above.
+  // Historically these came from a `SelectionBoundsCache` promoted by the
+  // main loop — but that cache lagged the live DOM by 1–2 frames during a
+  // drag, producing a visible shear between the path outline (live) and
+  // the AABB (cached). Path outline + AABB are now sampled from the same
+  // DOM snapshot. The cache is still useful for main-loop selection-
+  // changed detection; it's just no longer gating the overlay's bounds.
+  const std::vector<Box2d> selectionBoundsDoc = SnapshotSelectionWorldBounds(selection);
 
   // Compensate for the canvasFromDoc scale so strokes stay a fixed
   // canvas-pixel width regardless of zoom. Computed once and shared

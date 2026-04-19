@@ -455,7 +455,8 @@ void EditorShell::runFrame() {
   interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
   updateWindowTitle();
 
-  renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_);
+  renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
+                                      &interactionController_.frameHistory());
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     if (app_.flushFrame()) {

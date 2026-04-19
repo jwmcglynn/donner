@@ -71,23 +71,27 @@ public:
   /// — Geode can optimize the whole layer end-to-end (a single
   /// invalidation envelope, a single GPU upload) once it lands.
   ///
+  /// AABBs are computed inline from `selection` (via
+  /// `SnapshotSelectionWorldBounds`) at overlay-draw time so they
+  /// always match the current DOM snapshot — same source of truth as
+  /// the per-element path outlines. This avoids the frame-lag-shear
+  /// that happened when AABBs came from a separately-promoted cache
+  /// while the path outlines came from the live DOM.
+  ///
   /// @param selection Selected elements whose per-element path outlines
-  ///   should be stroked.
-  /// @param selectionBoundsDoc Document-space AABBs for the selection;
-  ///   each is stroked as the selection chrome rectangle.
+  ///   + AABBs should be drawn.
   /// @param marqueeRectDoc Optional marquee rect in document space;
   ///   drawn as a filled + stroked rectangle matching the prior
   ///   ImGui chrome style.
   /// @param canvasFromDoc Maps document coordinates into canvas pixels.
   static void drawChromeWithTransform(svg::Renderer& renderer,
                                       std::span<const svg::SVGElement> selection,
-                                      std::span<const Box2d> selectionBoundsDoc,
                                       const std::optional<Box2d>& marqueeRectDoc,
                                       const Transform2d& canvasFromDoc);
 
-  /// Back-compat overload without AABBs / marquee. Kept for existing
-  /// callers that only need path outlines (older tests, worker-thread
-  /// helpers). Prefer the full-chrome overload above for new code.
+  /// Back-compat overload without marquee. Kept for existing callers
+  /// that don't need a marquee rect (older tests, worker-thread
+  /// helpers). Path outlines + selection AABBs are still drawn.
   static void drawChromeWithTransform(svg::Renderer& renderer,
                                       std::span<const svg::SVGElement> selection,
                                       const Transform2d& canvasFromDoc);

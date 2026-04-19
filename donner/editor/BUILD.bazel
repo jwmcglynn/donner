@@ -427,6 +427,7 @@ donner_cc_library(
     hdrs = ["OverlayRenderer.h"],
     deps = [
         ":editor_app",
+        ":selection_aabb",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/css",
