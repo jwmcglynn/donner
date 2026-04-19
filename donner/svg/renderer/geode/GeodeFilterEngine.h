@@ -7,8 +7,9 @@
 /// texture, returning the filtered output texture.
 ///
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
-/// `feFlood`, `feMerge`. Other primitives are passed through (the input
-/// texture is forwarded unchanged) with a one-shot warning.
+/// `feFlood`, `feMerge`, `feComposite`, `feBlend`. Other primitives are
+/// passed through (the input texture is forwarded unchanged) with a one-shot
+/// warning.
 
 #include <webgpu/webgpu.hpp>
 
@@ -23,6 +24,8 @@ struct Offset;
 struct ColorMatrix;
 struct Flood;
 struct Merge;
+struct Composite;
+struct Blend;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -46,6 +49,8 @@ class GeodeDevice;
  * - `feColorMatrix` (4x5 matrix transform via compute shader)
  * - `feFlood` (constant color fill via compute shader)
  * - `feMerge` (alpha-over composite of N inputs via compute shader)
+ * - `feComposite` (Porter-Duff compositing of two inputs via compute shader)
+ * - `feBlend` (W3C Compositing 1 blend modes via compute shader)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -138,6 +143,22 @@ private:
   wgpu::Texture runMergePass(const wgpu::Texture& src, const wgpu::Texture& dst, uint32_t width,
                              uint32_t height);
 
+  /// Porter-Duff compositing of two inputs via compute shader.
+  /// @param in1 First input texture (source).
+  /// @param in2 Second input texture (destination/backdrop).
+  /// @param primitive The feComposite parameters (operator + k1..k4).
+  /// @return The composited texture.
+  wgpu::Texture applyComposite(const wgpu::Texture& in1, const wgpu::Texture& in2,
+                               const svg::components::filter_primitive::Composite& primitive);
+
+  /// W3C Compositing 1 blend of two inputs via compute shader.
+  /// @param in1 First input texture (source).
+  /// @param in2 Second input texture (backdrop).
+  /// @param primitive The feBlend parameters (blend mode).
+  /// @return The blended texture.
+  wgpu::Texture applyBlend(const wgpu::Texture& in1, const wgpu::Texture& in2,
+                           const svg::components::filter_primitive::Blend& primitive);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -159,6 +180,14 @@ private:
   // feMerge alpha-over blit pipeline.
   wgpu::ComputePipeline mergePipeline_;
   wgpu::BindGroupLayout mergeBindGroupLayout_;
+
+  // feComposite Porter-Duff pipeline (two inputs + output + uniform).
+  wgpu::ComputePipeline compositePipeline_;
+  wgpu::BindGroupLayout compositeBindGroupLayout_;
+
+  // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
+  wgpu::ComputePipeline blendPipeline_;
+  wgpu::BindGroupLayout blendBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;
