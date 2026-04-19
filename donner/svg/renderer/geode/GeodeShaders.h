@@ -306,4 +306,40 @@ wgpu::ShaderModule createFilterTurbulenceShader(const wgpu::Device& device);
  */
 wgpu::ShaderModule createFilterDisplacementMapShader(const wgpu::Device& device);
 
+/**
+ * Compile the feDiffuseLighting compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_diffuse_lighting.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader computes Lambertian diffuse lighting from the input's alpha channel
+ * used as a height map. Supports distant, point, and spot light sources via uniforms.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<storage, read> params: LightingParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterDiffuseLightingShader(const wgpu::Device& device);
+
+/**
+ * Compile the feSpecularLighting compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_specular_lighting.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader computes Phong specular lighting from the input's alpha channel
+ * used as a height map. Supports distant, point, and spot light sources via uniforms.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<storage, read> params: LightingParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterSpecularLightingShader(const wgpu::Device& device);
+
 }  // namespace donner::geode

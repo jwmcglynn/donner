@@ -9,9 +9,9 @@
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
 /// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
 /// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
-/// `feDisplacementMap`. Other primitives are
-/// passed through (the input texture is forwarded unchanged) with a one-shot
-/// warning.
+/// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`. Other
+/// primitives are passed through (the input texture is forwarded unchanged)
+/// with a one-shot warning.
 
 #include <webgpu/webgpu.hpp>
 
@@ -33,6 +33,8 @@ struct ComponentTransfer;
 struct ConvolveMatrix;
 struct Turbulence;
 struct DisplacementMap;
+struct DiffuseLighting;
+struct SpecularLighting;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -63,6 +65,8 @@ class GeodeDevice;
  * - `feConvolveMatrix` (NxM kernel convolution via compute shader)
  * - `feTurbulence` (Perlin noise / fractal noise via compute shader)
  * - `feDisplacementMap` (per-pixel channel-driven displacement via compute shader)
+ * - `feDiffuseLighting` (Lambertian shading with distant/point/spot lights)
+ * - `feSpecularLighting` (Phong shading with distant/point/spot lights)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -218,6 +222,28 @@ private:
       const wgpu::Texture& in1, const wgpu::Texture& in2,
       const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale);
 
+  /// Lambertian diffuse lighting (feDiffuseLighting).
+  /// @param input The input texture (alpha = height map).
+  /// @param primitive The feDiffuseLighting parameters.
+  /// @param scaleX User-to-pixel scale X.
+  /// @param scaleY User-to-pixel scale Y.
+  /// @return The lit texture.
+  wgpu::Texture applyDiffuseLighting(
+      const wgpu::Texture& input,
+      const svg::components::filter_primitive::DiffuseLighting& primitive, double scaleX,
+      double scaleY);
+
+  /// Phong specular lighting (feSpecularLighting).
+  /// @param input The input texture (alpha = height map).
+  /// @param primitive The feSpecularLighting parameters.
+  /// @param scaleX User-to-pixel scale X.
+  /// @param scaleY User-to-pixel scale Y.
+  /// @return The lit texture.
+  wgpu::Texture applySpecularLighting(
+      const wgpu::Texture& input,
+      const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
+      double scaleY);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -267,6 +293,14 @@ private:
   // feDisplacementMap pipeline (two inputs + output + uniform).
   wgpu::ComputePipeline displacementMapPipeline_;
   wgpu::BindGroupLayout displacementMapBindGroupLayout_;
+
+  // feDiffuseLighting pipeline (input + output + storage buffer).
+  wgpu::ComputePipeline diffuseLightingPipeline_;
+  wgpu::BindGroupLayout diffuseLightingBindGroupLayout_;
+
+  // feSpecularLighting pipeline (input + output + storage buffer).
+  wgpu::ComputePipeline specularLightingPipeline_;
+  wgpu::BindGroupLayout specularLightingBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

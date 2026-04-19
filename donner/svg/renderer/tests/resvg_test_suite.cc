@@ -75,7 +75,8 @@ geodeCategoryGate(std::string_view category) {
       category == "filters/feComposite" || category == "filters/feBlend" ||
       category == "filters/feMorphology" || category == "filters/feComponentTransfer" ||
       category == "filters/feConvolveMatrix" || category == "filters/feTurbulence" ||
-      category == "filters/feDisplacementMap") {
+      category == "filters/feDisplacementMap" || category == "filters/feDiffuseLighting" ||
+      category == "filters/feSpecularLighting") {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
   if (category.rfind("filters/", 0) == 0 || category == "filters") {
