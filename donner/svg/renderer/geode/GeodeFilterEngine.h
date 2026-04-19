@@ -292,6 +292,18 @@ private:
   wgpu::Texture applyTile(const wgpu::Texture& input, int32_t srcX, int32_t srcY, int32_t srcW,
                           int32_t srcH);
 
+  /// Clip a primitive's output to its user-space subregion via the inverse CTM.
+  /// Pixels whose center maps outside the subregion are zeroed.
+  /// @param input The primitive's output texture.
+  /// @param filterFromDevice Inverse of the deviceFromFilter transform.
+  /// @param usrX0 User-space subregion left edge.
+  /// @param usrY0 User-space subregion top edge.
+  /// @param usrX1 User-space subregion right edge.
+  /// @param usrY1 User-space subregion bottom edge.
+  /// @return A new texture with out-of-subregion pixels cleared.
+  wgpu::Texture applySubregionClip(const wgpu::Texture& input, const Transform2d& filterFromDevice,
+                                   double usrX0, double usrY0, double usrX1, double usrY1);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -361,6 +373,10 @@ private:
   // feTile wraparound pipeline (input + output + uniform).
   wgpu::ComputePipeline tilePipeline_;
   wgpu::BindGroupLayout tileBindGroupLayout_;
+
+  // Per-primitive subregion clipping pipeline (input + output + uniform).
+  wgpu::ComputePipeline subregionClipPipeline_;
+  wgpu::BindGroupLayout subregionClipBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

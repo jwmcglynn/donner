@@ -286,16 +286,16 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // complex-transform tests: filter chains applied inside a non-axis-
-  // aligned ancestor transform. The Geode filter engine now projects
-  // through the full CTM; feGaussianBlur and feMerge pass, but feFlood
-  // and feOffset still need per-primitive subregion clipping that the
-  // GPU path doesn't yet implement.
-  if ((category == "filters/feFlood" || category == "filters/feOffset") &&
-      filename == "complex-transform.svg") {
+  // feOffset/complex-transform: the skewed ancestor transform places
+  // SourceGraphic content at negative device coordinates. The CPU path
+  // expands the filter buffer to capture that content so feOffset can
+  // shift it into the viewport; Geode's fixed-size filter layer clips
+  // it, producing a shifted rectangle instead of the expected
+  // parallelogram. Separate from per-primitive subregion clipping.
+  if (category == "filters/feOffset" && filename == "complex-transform.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "Not impl: per-primitive subregion clipping (Geode)");
+                       "Not impl: filter layer buffer expansion for negative coords (Geode)");
     };
   }
   // feImage with complex ancestor transform: the fragment reference's
@@ -307,16 +307,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
                        "Not impl: feImage fragment ref with ancestor CTM (Geode)");
-    };
-  }
-  // feFlood partial-subregion and OBB-subregion: per-primitive x/y/width/height
-  // subregion clipping not yet implemented in GeodeFilterEngine.
-  if (category == "filters/feFlood" &&
-      (filename == "partial-subregion.svg" ||
-       filename == "subregion-with-primitiveUnits=objectBoundingBox.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Not impl: per-primitive subregion clipping (Geode)");
     };
   }
   // feColorMatrix tests that use linear gradients: Geode gradient rendering

@@ -381,6 +381,16 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Per-primitive subregion clipping compute shader.
+embed_resources(
+    name = "filter_subregion_clip_wgsl",
+    header_output = "embed_resources/FilterSubregionClipWgsl.h",
+    resources = {
+        "kFilterSubregionClipWgsl": "shaders/filter_subregion_clip.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -402,6 +412,7 @@ donner_cc_library(
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
+        ":filter_subregion_clip_wgsl",
         ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",

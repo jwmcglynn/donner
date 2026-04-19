@@ -9,6 +9,7 @@
 
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/base/MathUtils.h"
+#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -175,6 +176,22 @@ struct TileParams {
   int32_t srcY;
   int32_t srcW;
   int32_t srcH;
+};
+
+/// Uniform buffer layout matching the WGSL `SubregionClipParams` struct.
+struct SubregionClipParams {
+  float invA;
+  float invB;
+  float invC;
+  float invD;
+  float invE;
+  float invF;
+  float usrX0;
+  float usrY0;
+  float usrX1;
+  float usrY1;
+  uint32_t pad0;
+  uint32_t pad1;
 };
 
 /// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
@@ -1007,6 +1024,15 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     tileBindGroupLayout_ = bgl;
     tilePipeline_ = pipeline;
   }
+
+  // --- Per-primitive subregion clipping pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterSubregionClip", createFilterSubregionClipShader(dev),
+        sizeof(SubregionClipParams));
+    subregionClipBindGroupLayout_ = bgl;
+    subregionClipPipeline_ = pipeline;
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
@@ -1050,6 +1076,85 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   auto toPixelOffset = [&](double dx, double dy) -> Vector2d {
     const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
     return deviceFromFilter.transformVector(userOffset);
+  };
+
+  // Bounding-box origin for OBB position resolution.
+  const double bboxX =
+      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.x : 0.0;
+  const double bboxY =
+      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y : 0.0;
+
+  // Inverse CTM for rotation-aware subregion clipping.
+  const Transform2d filterFromDevice = deviceFromFilter.inverse();
+
+  // Reference bounds for Length::toPixels in the non-OBB case.
+  const Box2d primitiveUnitsBounds = [&]() -> Box2d {
+    if (isOBB) {
+      return graph.elementBoundingBox.value_or(Box2d(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
+    }
+    const double userW = NearZero(scaleX, 1e-12)
+                             ? static_cast<double>(sourceGraphic.getWidth())
+                             : static_cast<double>(sourceGraphic.getWidth()) / scaleX;
+    const double userH = NearZero(scaleY, 1e-12)
+                             ? static_cast<double>(sourceGraphic.getHeight())
+                             : static_cast<double>(sourceGraphic.getHeight()) / scaleY;
+    return Box2d::FromXYWH(0.0, 0.0, userW, userH);
+  }();
+
+  // Resolve a primitive subregion length to user-space position.
+  auto resolvePrimitivePosition = [&](const Lengthd& len, Lengthd::Extent extent, double origin,
+                                      double bboxDim) -> double {
+    if (isOBB && len.unit == Lengthd::Unit::None) {
+      return origin + len.value * bboxDim;
+    }
+    if (len.unit == Lengthd::Unit::Percent) {
+      const double refOrigin = isOBB ? (extent == Lengthd::Extent::X ? bboxX : bboxY) : 0.0;
+      const double refSize =
+          isOBB ? bboxDim : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                          : primitiveUnitsBounds.height());
+      return refOrigin + refSize * len.value / 100.0;
+    }
+    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  };
+
+  // Resolve a primitive subregion length to user-space size.
+  auto resolvePrimitiveSize = [&](const Lengthd& len, Lengthd::Extent extent,
+                                  double bboxDim) -> double {
+    if (isOBB && len.unit == Lengthd::Unit::None) {
+      return len.value * bboxDim;
+    }
+    if (len.unit == Lengthd::Unit::Percent) {
+      const double refSize =
+          isOBB ? bboxDim : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                          : primitiveUnitsBounds.height());
+      return refSize * len.value / 100.0;
+    }
+    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  };
+
+  // Per-node subregion tracking in user space, mirroring tiny-skia's
+  // defaultNodeSubregion / resolveInputSubregion / previousOutputSubregion.
+  // Used to propagate subregion bounds through the filter graph so that
+  // non-source-generator nodes (feOffset, feComposite, etc.) clip to their
+  // input bounds rather than the full filter region.
+  const Box2d filterRegionSubregion = filterRegion;
+  Box2d previousOutputSubregion = filterRegionSubregion;
+  std::unordered_map<std::string, Box2d> namedSubregions;
+
+  // Resolve the user-space subregion for a filter input reference.
+  auto resolveInputSubregion = [&](const FilterInput& input) -> Box2d {
+    if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
+      auto it = namedSubregions.find(named->name.str());
+      if (it != namedSubregions.end()) {
+        return it->second;
+      }
+      return previousOutputSubregion;
+    }
+    if (std::holds_alternative<FilterInput::Previous>(input.value)) {
+      return previousOutputSubregion;
+    }
+    // StandardInput (SourceGraphic, SourceAlpha, etc.) → full filter region.
+    return filterRegionSubregion;
   };
 
   for (const FilterNode& node : graph.nodes) {
@@ -1166,6 +1271,122 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         warnedUnsupported_ = true;
       }
       outputTex = inputTex;
+    }
+
+    // Per-primitive subregion clipping: compute the user-space subregion
+    // using input-bounds-based logic matching tiny-skia's defaultNodeSubregion.
+    // Source generators (Flood, Turbulence, Image, Tile) and nodes with no
+    // inputs default to the filter region.  Other nodes inherit the union of
+    // their input subregions, with primitive-specific expansion (e.g. blur).
+    // Explicit x/y/width/height attributes override the default and are
+    // intersected with the filter region.
+    {
+      const bool isSourceGenerator =
+          std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
+          std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
+          std::holds_alternative<filter_primitive::Image>(node.primitive) ||
+          std::holds_alternative<filter_primitive::Tile>(node.primitive);
+
+      const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
+                                       node.width.has_value() || node.height.has_value();
+
+      Box2d nodeSubregion = filterRegionSubregion;
+
+      // Helper: intersect two user-space boxes.
+      auto boxIntersect = [](const Box2d& a, const Box2d& b) -> Box2d {
+        return Box2d(Vector2d(std::max(a.topLeft.x, b.topLeft.x),
+                              std::max(a.topLeft.y, b.topLeft.y)),
+                     Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
+                              std::min(a.bottomRight.y, b.bottomRight.y)));
+      };
+
+      if (hasExplicitSubregion) {
+        // Explicit subregion attributes — resolve and intersect with filter region.
+        const double ux =
+            node.x.has_value()
+                ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X, isOBB ? bboxX : 0.0, bboxW)
+                : filterRegion.topLeft.x;
+        const double uy =
+            node.y.has_value()
+                ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y, isOBB ? bboxY : 0.0, bboxH)
+                : filterRegion.topLeft.y;
+        const double uw = node.width.has_value()
+                              ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
+                              : filterRegion.width();
+        const double uh = node.height.has_value()
+                              ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
+                              : filterRegion.height();
+        nodeSubregion = boxIntersect(Box2d(Vector2d(ux, uy), Vector2d(ux + uw, uy + uh)),
+                                     filterRegionSubregion);
+      } else if (!isSourceGenerator && !node.inputs.empty()) {
+        // Non-source node without explicit subregion: use union of input bounds.
+        Box2d inputBounds = resolveInputSubregion(node.inputs[0]);
+        for (size_t i = 1; i < node.inputs.size(); ++i) {
+          inputBounds = Box2d::Union(inputBounds, resolveInputSubregion(node.inputs[i]));
+        }
+
+        // Apply primitive-specific subregion expansion.
+        if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
+          const double expandX = std::ceil(
+              (blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0) * 3.0);
+          const double expandY = std::ceil(
+              (blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0) * 3.0);
+          inputBounds = Box2d(
+              Vector2d(inputBounds.topLeft.x - expandX, inputBounds.topLeft.y - expandY),
+              Vector2d(inputBounds.bottomRight.x + expandX,
+                       inputBounds.bottomRight.y + expandY));
+        } else if (const auto* drop =
+                       std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+          const double expandX = std::ceil(
+              (drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0) * 3.0);
+          const double expandY = std::ceil(
+              (drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0) * 3.0);
+          const Vector2d pixOff = toPixelOffset(drop->dx, drop->dy);
+          Box2d shadowBounds = Box2d(
+              Vector2d(inputBounds.topLeft.x + pixOff.x - expandX,
+                       inputBounds.topLeft.y + pixOff.y - expandY),
+              Vector2d(inputBounds.bottomRight.x + pixOff.x + expandX,
+                       inputBounds.bottomRight.y + pixOff.y + expandY));
+          inputBounds = Box2d::Union(inputBounds, shadowBounds);
+        } else if (const auto* morph =
+                       std::get_if<filter_primitive::Morphology>(&node.primitive)) {
+          if (morph->op == filter_primitive::Morphology::Operator::Dilate) {
+            const double rx = toPixelX(morph->radiusX);
+            const double ry = toPixelY(morph->radiusY);
+            inputBounds = Box2d(
+                Vector2d(inputBounds.topLeft.x - rx, inputBounds.topLeft.y - ry),
+                Vector2d(inputBounds.bottomRight.x + rx, inputBounds.bottomRight.y + ry));
+          }
+        }
+
+        nodeSubregion = boxIntersect(inputBounds, filterRegionSubregion);
+      }
+      // else: source generator or no inputs → nodeSubregion stays as filterRegionSubregion.
+
+      if (hasExplicitSubregion) {
+        // Rotation-aware clip using inverse CTM and user-space bounds.
+        // Only needed when the node has explicit subregion attributes,
+        // matching the CPU path's per-pixel point-in-rect test.
+        outputTex = applySubregionClip(outputTex, filterFromDevice,
+                                       nodeSubregion.topLeft.x, nodeSubregion.topLeft.y,
+                                       nodeSubregion.bottomRight.x, nodeSubregion.bottomRight.y);
+      } else {
+        // AABB clip in pixel space — project the user-space subregion
+        // through the full CTM and clip to the axis-aligned bounding box.
+        // This matches the CPU path, which only uses rotation-aware
+        // clipping when userSpaceSubregion is set (explicit attributes).
+        const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
+        static const Transform2d kIdentity;
+        outputTex = applySubregionClip(outputTex, kIdentity,
+                                       pixelAABB.topLeft.x, pixelAABB.topLeft.y,
+                                       pixelAABB.bottomRight.x, pixelAABB.bottomRight.y);
+      }
+
+      // Record the subregion for downstream nodes.
+      if (node.result.has_value()) {
+        namedSubregions[node.result->str()] = nodeSubregion;
+      }
+      previousOutputSubregion = nodeSubregion;
     }
 
     if (node.result.has_value()) {
@@ -2384,6 +2605,39 @@ wgpu::Texture GeodeFilterEngine::applyTile(const wgpu::Texture& input, int32_t s
 
   dispatchInputOutputUniform(device_, tileBindGroupLayout_, tilePipeline_, input, output,
                              uniformBuffer, sizeof(TileParams), "FilterTilePass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applySubregionClip(const wgpu::Texture& input,
+                                                    const Transform2d& filterFromDevice,
+                                                    double usrX0, double usrY0, double usrX1,
+                                                    double usrY1) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterSubregionClipOutput");
+
+  SubregionClipParams params{};
+  params.invA = static_cast<float>(filterFromDevice.data[0]);
+  params.invB = static_cast<float>(filterFromDevice.data[1]);
+  params.invC = static_cast<float>(filterFromDevice.data[2]);
+  params.invD = static_cast<float>(filterFromDevice.data[3]);
+  params.invE = static_cast<float>(filterFromDevice.data[4]);
+  params.invF = static_cast<float>(filterFromDevice.data[5]);
+  params.usrX0 = static_cast<float>(usrX0);
+  params.usrY0 = static_cast<float>(usrY0);
+  params.usrX1 = static_cast<float>(usrX1);
+  params.usrY1 = static_cast<float>(usrY1);
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "SubregionClipParamsUniform");
+
+  dispatchInputOutputUniform(device_, subregionClipBindGroupLayout_, subregionClipPipeline_, input,
+                             output, uniformBuffer, sizeof(SubregionClipParams),
+                             "FilterSubregionClipPass");
   return output;
 }
 
