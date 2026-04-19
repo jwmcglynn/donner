@@ -73,3 +73,13 @@ config_setting(
         ":llvm_latest": "1",
     },
 )
+
+config_setting(
+    name = "llvm_latest_linux",
+    constraint_values = [
+        "@platforms//os:linux",
+    ],
+    flag_values = {
+        ":llvm_latest": "1",
+    },
+)

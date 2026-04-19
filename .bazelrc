@@ -54,6 +54,17 @@ common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
 common:latest_llvm --//build_defs:llvm_latest=1
 # Disable warning about not eliding copy on return (NRVO), which started triggering in skia on LLVM 21
 build:latest_llvm --copt=-Wno-nrvo
+# Use rules_python's hermetic Python launcher rather than the default
+# `#!/usr/bin/env python3` shebang. Without this, py_binary targets still rely
+# on a host python3 in PATH, which the Bazel remote-execution sandbox
+# (bazel-re1, NixOS) does not provide.
+common:latest_llvm --@rules_python//python/config_settings:bootstrap_impl=script
+# Disable V8's JIT in the emscripten Node runtime. bazel-re1's NativeLink
+# sandbox forbids creating executable memory pages (W+X), so V8 aborts with
+# SIGTRAP in `OS::SetPermissions` the moment it tries to baseline-compile
+# anything. `--jitless` keeps Node in the interpreter-only mode, which
+# emscripten's `compiler.mjs` is happy with.
+common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 
 # Renderer backend selection
 common:skia --//donner/svg/renderer:renderer_backend=skia

@@ -50,6 +50,8 @@ use_repo(
     "harfbuzz",
     "resvg-test-suite",
     "skia",
+    "sysroot_linux_aarch64",
+    "sysroot_linux_x86_64",
     "tracy",
     "wgpu_native_linux_aarch64",
     "wgpu_native_linux_x86_64",
@@ -140,6 +142,21 @@ new_local_repository(
 
 bazel_dep(name = "rules_python", version = "1.9.0", dev_dependency = True)
 
+# Hermetic Python toolchain. Without this, rules_python's py_binary targets
+# fall back to `/usr/bin/env python3` on the host — which is fine for local
+# dev on dev1, but on the Bazel remote-execution sandbox (NixOS) no such
+# host interpreter is available. Registering `python.toolchain()` makes
+# rules_python ship a prebuilt CPython through the action cache so RE
+# workers execute the same interpreter as local builds.
+python = use_extension(
+    "@rules_python//python/extensions:python.bzl",
+    "python",
+    dev_dependency = True,
+)
+python.defaults(python_version = "3.12")
+python.toolchain(python_version = "3.12")
+use_repo(python, "python_3_12")
+
 #
 # Toolchain
 #
@@ -157,6 +174,20 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm", 
 llvm.toolchain(
     name = "llvm_toolchain",
     llvm_version = "21.1.6",
+)
+
+# Hermetic Linux sysroots: keep the toolchain self-contained on Bazel
+# remote-execution workers (bazel-re1, NixOS) that lack system glibc
+# headers. See third_party/bazel/non_bcr_deps.bzl for the tarballs.
+llvm.sysroot(
+    name = "llvm_toolchain",
+    targets = ["linux-aarch64"],
+    label = "@sysroot_linux_aarch64//:sysroot",
+)
+llvm.sysroot(
+    name = "llvm_toolchain",
+    targets = ["linux-x86_64"],
+    label = "@sysroot_linux_x86_64//:sysroot",
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 

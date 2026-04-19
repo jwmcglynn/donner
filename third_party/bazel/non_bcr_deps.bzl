@@ -15,6 +15,10 @@ shipped over BCR:
 - tracy           : In-process profiling client (//donner/editor only — see check_banned_patterns.py)
 - resvg-test-suite: Reference SVG goldens       (image comparison tests)
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
+- sysroot_linux_*: Hermetic Debian Bullseye sysroots for Bazel remote execution
+                   (--config=re). Wired into the `llvm_toolchain` via its
+                   `sysroot` parameter so RE workers without glibc headers
+                   can still compile.
 
 When / how to add a new non-BCR dep:
   1. If the dep is load-bearing for the default tiny-skia + text-base build,
@@ -160,6 +164,60 @@ HBEOF""",
         name = "bazel_clang_tidy",
         commit = "c4d35e0d0b838309358e57a2efed831780f85cd0",
         remote = "https://github.com/erenon/bazel_clang_tidy.git",
+    )
+
+    # Hermetic Linux sysroots for Bazel remote execution via `--config=re`.
+    #
+    # The RE worker on bazel-re1 (NixOS) has no system glibc headers, so
+    # libc++'s <wchar.h> can't find `mbstate_t`. Chromium's prebuilt
+    # Debian Bullseye sysroots give the LLVM toolchain a complete set of
+    # C/C++ headers + runtime stubs to link against, keeping the build
+    # hermetic regardless of what the RE host does (or does not) install.
+    #
+    # Sourced from https://commondatastorage.googleapis.com/chrome-linux-sysroot
+    # (URL + "/" + Sha256Sum; see Chromium's build/linux/sysroot_scripts/
+    # install-sysroot.py). Bump by pulling the latest sysroots.json from
+    # chromium/src and updating both the sha256 + URL fragment.
+    # Exclude non-toolchain subtrees (docs, locale data, systemd units, etc.)
+    # so the filegroup is both smaller and skips files whose names contain
+    # characters Bazel rejects as target names — `lib/systemd/system/` ships
+    # escape-sequence filenames like `system-systemd\x2dcryptsetup.slice`
+    # that trip `glob()`.
+    _SYSROOT_BUILD_FILE = """\
+filegroup(
+    name = "sysroot",
+    srcs = glob(
+        include = ["**"],
+        exclude = [
+            "etc/**",
+            "lib/systemd/**",
+            "usr/lib/systemd/**",
+            "usr/share/doc/**",
+            "usr/share/info/**",
+            "usr/share/locale/**",
+            "usr/share/man/**",
+            "var/**",
+            "**/* *",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+)
+"""
+    http_archive(
+        name = "sysroot_linux_x86_64",
+        build_file_content = _SYSROOT_BUILD_FILE,
+        sha256 = "52d61d4446ffebfaa3dda2cd02da4ab4876ff237853f46d273e7f9b666652e1d",
+        # GCS serves the archive at a bare sha256 path with no extension, so
+        # Bazel can't infer the format — pin `type` explicitly.
+        type = "tar.xz",
+        urls = ["https://commondatastorage.googleapis.com/chrome-linux-sysroot/52d61d4446ffebfaa3dda2cd02da4ab4876ff237853f46d273e7f9b666652e1d"],
+    )
+    http_archive(
+        name = "sysroot_linux_aarch64",
+        build_file_content = _SYSROOT_BUILD_FILE,
+        sha256 = "c7176a4c7aacbf46bda58a029f39f79a68008d3dee6518f154dcf5161a5486d8",
+        type = "tar.xz",
+        urls = ["https://commondatastorage.googleapis.com/chrome-linux-sysroot/c7176a4c7aacbf46bda58a029f39f79a68008d3dee6518f154dcf5161a5486d8"],
     )
 
 non_bcr_deps = module_extension(
