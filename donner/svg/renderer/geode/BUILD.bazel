@@ -16,7 +16,7 @@ To enable:
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 # Historical name: see file-level docstring above.
@@ -100,7 +100,7 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "geode_device_tests",
+    name = "geode_device_tests_impl",
     srcs = ["tests/GeodeDevice_tests.cc"],
     target_compatible_with = _DAWN_ONLY,
     deps = [
@@ -109,6 +109,13 @@ donner_cc_test(
         "//donner/base",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_device_tests",
+    dep = ":geode_device_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
 )
 
 # Embed the WGSL shader source as a C++ resource. The generated header
@@ -187,6 +194,16 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: Gaussian blur compute shader (two-pass separable).
+embed_resources(
+    name = "gaussian_blur_wgsl",
+    header_output = "embed_resources/GaussianBlurWgsl.h",
+    resources = {
+        "kGaussianBlurWgsl": "shaders/gaussian_blur.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -194,6 +211,7 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
         ":slug_fill_wgsl",
@@ -207,13 +225,36 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "geode_shaders_tests",
+    name = "geode_shaders_tests_impl",
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _DAWN_ONLY,
     deps = [
         ":geode_device",
         ":geode_shaders",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_shaders_tests",
+    dep = ":geode_shaders_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
+)
+
+donner_cc_library(
+    name = "geode_filter_engine",
+    srcs = ["GeodeFilterEngine.cc"],
+    hdrs = ["GeodeFilterEngine.h"],
+    target_compatible_with = _DAWN_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_device",
+        ":geode_shaders",
+        ":geode_wgpu_util",
+        "//donner/base",
+        "//donner/svg/components/filter:components",
+        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -275,7 +316,7 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "geo_encoder_tests",
+    name = "geo_encoder_tests_impl",
     srcs = ["tests/GeoEncoder_tests.cc"],
     target_compatible_with = _DAWN_ONLY,
     deps = [
@@ -289,4 +330,11 @@ donner_cc_test(
         "//donner/svg/resources:image_resource",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_multi_transitioned_test(
+    name = "geo_encoder_tests",
+    dep = ":geo_encoder_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
 )

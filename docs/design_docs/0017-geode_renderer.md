@@ -77,8 +77,8 @@
   authoritative vendoring design; the "Historical: Dawn embedding
   strategy" section is retained for context only. The user-visible
   `--config=geode` / `enable_dawn=true` flags are unchanged.
-- **Phase 3d** (mix-blend-mode): ✅ complete. Implements all 16
-  SVG/CSS `mix-blend-mode` operators (Multiply, Screen, Overlay,
+- **Phase 3d** (mix-blend-mode): ✅ complete, merged in #541. Implements
+  all 16 SVG/CSS `mix-blend-mode` operators (Multiply, Screen, Overlay,
   Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight,
   Difference, Exclusion, Hue, Saturation, Color, Luminosity) via an
   extended `image_blit.wgsl` with a `blendMode` uniform and a
@@ -86,6 +86,13 @@
   of the current target and composite via the shader's in-line blend
   functions. Lifts the `painting/mix-blend-mode` category gate in the
   resvg suite.
+- **Phase 4** (Text rendering): ✅ `drawText` implemented.
+  Routes shaped-glyph outlines through the Slug fill pipeline via the
+  existing `drawPath` path. Enables text rendering for direct Geode
+  consumers. The resvg `text/*` category gate stays closed -- Geode's
+  4x MSAA produces ~600-800 px AA drift per glyph vs tiny-skia's 16x
+  supersample reference; unlocking those 268 tests requires a finer
+  sample pattern or analytic glyph AA (Phase 5 follow-up).
 - **Real-GPU verification (2026-04-17)**: 🚧 first run on real hardware,
   plus a targeted fallback shader path for Intel+Vulkan. Added
   adapter-info logging to `GeodeDevice::CreateHeadless` (commit
@@ -105,6 +112,18 @@
   pixels in the alpha-coverage fallback lose coverage — cosmetic AA
   artifact on the Intel-Vulkan path only, does not affect default
   MSAA + sample_mask rendering.
+  **1-sample alpha-coverage variant**: When `useAlphaCoverageAA` is
+  active, all pipelines run at `sampleCount = 1` (no MSAA texture, no
+  hardware resolve). The alpha-coverage shaders compute 4-sample
+  supersampling in the fragment shader and fold coverage into alpha, so
+  hardware MSAA is unnecessary overhead. `GeodeDevice::sampleCount()`
+  returns 1 on the alpha-coverage path, 4 otherwise; all pipeline
+  constructors, `GeoEncoder`, and `RendererGeode` MSAA-texture
+  allocations gate on this value. Note: a separate class of
+  non-deterministic GPU hangs (~20% per-submission) remains on
+  Arc A380 + Mesa ANV 25.2.8 — these affect even empty render passes
+  (clear + readback, no shader execution) and are a driver/hardware
+  bug independent of MSAA or shader variant.
 
 
 ## Summary
@@ -1514,18 +1533,19 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
 
 ### Phase 7 (v2): Filter Effects
 
-- [ ] Implement `GeodeFilterEngine` using WebGPU compute shaders.
-  - [ ] Gaussian blur (separable, two-pass compute).
+- [x] Implement `GeodeFilterEngine` scaffolding with WebGPU compute pipeline.
+  - [x] Gaussian blur (separable, two-pass compute) — first compute pipeline in Geode.
   - [ ] Color matrix (single-pass compute).
   - [ ] Morphology (erode/dilate via compute).
   - [ ] Turbulence (Perlin noise compute shader).
   - [ ] Displacement map, component transfer, convolution matrix.
   - [ ] Lighting (diffuse and specular, point/distant/spot light sources).
   - [ ] Blend and composite operations.
-- [ ] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
-- [ ] Implement filter graph execution: route intermediate textures between compute passes
-  matching the `FilterGraph` node topology.
-- [ ] Run full resvg filter test suite.
+- [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
+- [x] Implement filter graph execution: route intermediate textures between compute passes
+  matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
+- [ ] Run full resvg filter test suite (feGaussianBlur subset unblocked; remaining categories
+  still gated on `FilterEffects` feature flag).
 
 ## Testing and Validation
 

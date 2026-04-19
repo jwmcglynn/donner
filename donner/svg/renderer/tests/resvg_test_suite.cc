@@ -62,6 +62,12 @@ geodeCategoryGate(std::string_view category) {
   // Filters: whole `filters/` tree (feBlend, feColorMatrix, feComposite,
   // feDiffuseLighting, feDropShadow, feImage, feTurbulence, filter,
   // filter-functions, flood-color, flood-opacity, enable-background, …)
+  //
+  // Exception: `filters/feGaussianBlur` runs on Geode (Phase 7 initial
+  // scope) with a widened threshold for MSAA edge drift.
+  if (category == "filters/feGaussianBlur") {
+    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
+  }
   if (category.rfind("filters/", 0) == 0 || category == "filters") {
     return [](ImageComparisonParams& p) {
       p.requireFeature(RendererBackendFeature::FilterEffects,

@@ -11,6 +11,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
@@ -60,7 +61,7 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
 }
 
 class RendererGeodeTest : public ::testing::Test {
- protected:
+protected:
   /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
   static std::shared_ptr<geode::GeodeDevice> sharedDevice() {
     static auto device = [] {
@@ -249,8 +250,7 @@ TEST_F(RendererGeodeTest, FillAndStrokeRect) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
-  renderer.setPaint(
-      solidFillAndStroke(css::RGBA(0, 255, 0, 255), css::RGBA(0, 0, 255, 255)));
+  renderer.setPaint(solidFillAndStroke(css::RGBA(0, 255, 0, 255), css::RGBA(0, 0, 255, 255)));
   StrokeParams stroke;
   stroke.strokeWidth = 4.0;
 
@@ -364,10 +364,10 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
   image.width = 2;
   image.height = 2;
   image.data = {
-      255, 0, 0, 255,    // (0,0) red
-      0, 255, 0, 255,    // (1,0) green
-      0, 0, 255, 255,    // (0,1) blue
-      255, 255, 0, 255,  // (1,1) yellow
+      255, 0,   0,   255,  // (0,0) red
+      0,   255, 0,   255,  // (1,0) green
+      0,   0,   255, 255,  // (0,1) blue
+      255, 255, 0,   255,  // (1,1) yellow
   };
 
   ImageParams params;
@@ -575,6 +575,86 @@ TEST_F(RendererGeodeTest, StubbedMethodsAreNoOps) {
   EXPECT_EQ(center[0], 255u);
   EXPECT_EQ(center[1], 255u);
   EXPECT_EQ(center[3], 255u);
+}
+
+/// Smoke test for Phase 7 feGaussianBlur filter layer. Draws a crisp red
+/// rect, wraps it in a Gaussian blur filter, and verifies that edge pixels
+/// are blurred (reduced alpha compared to center).
+TEST_F(RendererGeodeTest, GaussianBlurSmokes) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  // Build a simple filter graph with a single GaussianBlur node.
+  components::FilterGraph graph;
+  components::FilterNode blurNode;
+  components::filter_primitive::GaussianBlur blur;
+  blur.stdDeviationX = 4.0;
+  blur.stdDeviationY = 4.0;
+  blur.edgeMode = components::filter_primitive::GaussianBlur::EdgeMode::None;
+  blurNode.primitive = blur;
+  blurNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(blurNode);
+
+  // Push the filter layer, draw a crisp rect, pop the filter layer.
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Center pixel should still be red (fully opaque).
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 255u) << "Center red channel should be fully opaque";
+  EXPECT_GT(center[3], 200u) << "Center alpha should still be high";
+
+  // An edge pixel (just inside the rect boundary) should have reduced
+  // alpha compared to the center, proving the blur was applied.
+  auto edge = pixelAt(snap, 16, 32);
+  EXPECT_LT(edge[3], center[3]) << "Edge pixel alpha should be less than center (blur applied)";
+}
+
+/// Filter layer with zero stdDeviation should pass through unchanged.
+TEST_F(RendererGeodeTest, GaussianBlurZeroStdDevPassthrough) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode blurNode;
+  components::filter_primitive::GaussianBlur blur;
+  blur.stdDeviationX = 0.0;
+  blur.stdDeviationY = 0.0;
+  blurNode.primitive = blur;
+  blurNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(blurNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Center should be green (the blur is a passthrough).
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[1], 255u) << "Green channel at center";
+  EXPECT_EQ(center[3], 255u) << "Alpha at center should be fully opaque";
+
+  // Just outside the rect should be transparent (no blur spread).
+  auto outside = pixelAt(snap, 14, 32);
+  EXPECT_EQ(outside[3], 0u) << "Outside the rect should be transparent with zero blur";
 }
 
 }  // namespace

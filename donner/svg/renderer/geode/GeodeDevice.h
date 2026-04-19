@@ -61,12 +61,21 @@ public:
    *
    * Returns true on Intel + Vulkan, where writing `@builtin(sample_mask)`
    * from overlapping band quads hangs Mesa ANV / Xe KMD (observed on
-   * Arc A380, Mesa 25.2.8). The alpha-coverage path folds 4-sample
-   * coverage into the fragment color instead of relying on the hardware
-   * sample mask. The pipeline still uses `multisample.count = 4` so
-   * MSAA render targets and resolve steps are unchanged.
+   * Arc A380, Mesa 25.2.8). The alpha-coverage path folds coverage
+   * into the fragment color instead of relying on the hardware sample
+   * mask, and runs at `sampleCount() == 1` (no MSAA / no resolve) to
+   * avoid a second class of flaky MSAA-resolve hangs on the same driver.
    */
   bool useAlphaCoverageAA() const { return useAlphaCoverageAA_; }
+
+  /**
+   * MSAA sample count for render pipelines and render-target textures.
+   *
+   * Returns 1 on the alpha-coverage path (Intel Arc + Vulkan), where
+   * MSAA resolve triggers flaky GPU hangs on Mesa ANV / Xe KMD. All
+   * other adapters get 4× MSAA with hardware sample-mask AA.
+   */
+  uint32_t sampleCount() const { return useAlphaCoverageAA_ ? 1u : 4u; }
 
 private:
   GeodeDevice();

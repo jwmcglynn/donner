@@ -332,10 +332,15 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientFocal) {
 }
 
 /// Pad / reflect / repeat spread modes for a radial gradient covering only
-/// the central 30% of each strip.
+/// the central 30% of each strip. The golden was captured on llvmpipe; Metal
+/// + Apple Paravirtual (macOS CI) renders the spread-band boundaries one
+/// pixel differently on the reflect/repeat strips, so allow a small diff
+/// budget instead of strict identity.
 TEST_F(RendererGeodeGoldenTests, RadialGradientSpread) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_spread.svg",
-                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_spread.png");
+                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_spread.png",
+                         ImageComparisonParams::WithThreshold(0.02f, 40)
+                             .includeAntiAliasingDifferences());
 }
 
 /// Stroke outline filled with a radial gradient — same dispatch as the

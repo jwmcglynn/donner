@@ -6,7 +6,7 @@
 namespace donner::geode {
 
 GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
-                             bool useAlphaCoverageShader)
+                             bool useAlphaCoverageShader, uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Seven bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
@@ -129,13 +129,10 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // 4× MSAA. Slug's per-pixel winding test is binary — without multisample
-  // coverage, thin axis-aligned strokes stair-step at pixel boundaries and
-  // diverge from tiny-skia's 4× analytic AA (preserveAspectRatio cluster).
-  // The fragment shader writes a `@builtin(sample_mask)` computed from 4
-  // sub-pixel winding tests; the hardware resolve step averages the
-  // surviving samples into the 1-sample resolve attachment.
-  rpDesc.multisample.count = 4;
+  // MSAA sample count. On the alpha-coverage path (Intel Arc + Vulkan) this
+  // is 1 — no MSAA rasterization, no hardware resolve. Other adapters get
+  // 4× with fragment-shader sample_mask AA.
+  rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.createRenderPipeline(rpDesc);
@@ -147,7 +144,8 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 
 GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
                                              wgpu::TextureFormat colorFormat,
-                                             bool useAlphaCoverageShader)
+                                             bool useAlphaCoverageShader,
+                                             uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // Five bindings — uniforms, bands SSBO, curves SSBO, clip-mask texture,
   // clip-mask sampler. The clip-mask bindings always carry something
@@ -251,7 +249,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 
   rpDesc.fragment = &fragmentState;
   // Match the solid-fill pipeline's sample count.
-  rpDesc.multisample.count = 4;
+  rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.createRenderPipeline(rpDesc);
@@ -261,7 +259,8 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 // GeodeMaskPipeline
 // ============================================================================
 
-GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader) {
+GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader,
+                                     uint32_t sampleCount) {
   // Five bindings — uniforms, bands SSBO, curves SSBO, nested clip
   // mask texture, nested clip mask sampler. The clip-mask slot is
   // always bound; a 1x1 dummy is used when `uniforms.hasClipMask ==
@@ -367,11 +366,8 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   rpDesc.primitive.cullMode = wgpu::CullMode::None;
 
   rpDesc.fragment = &fragmentState;
-  // 4× MSAA matching the colour pipelines. The mask texture is
-  // allocated MSAA-4 with a 1-sample R8 resolve target; the main fill
-  // pipelines sample the resolved texture to pick up fractional
-  // coverage at the clip edge.
-  rpDesc.multisample.count = 4;
+  // MSAA sample count matching the colour pipelines.
+  rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_ = device.createRenderPipeline(rpDesc);

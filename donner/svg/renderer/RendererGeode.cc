@@ -1,13 +1,12 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
-#include <webgpu/webgpu.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <optional>
 #include <utility>
 #include <vector>
+#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/Path.h"
@@ -15,6 +14,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
@@ -25,10 +25,17 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/base/MathUtils.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextLayoutParams.h"
+#endif
 
 namespace donner::svg {
 
@@ -44,6 +51,58 @@ constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
 /// matching the helper in RendererTinySkia / RendererSkia.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+
+/// Apply a `Transform2d` to every control point of a `Path`, returning a
+/// new `Path` whose commands mirror the input but whose coordinates are
+/// pre-transformed. Needed because `GeoEncoder::fillPath` draws in the
+/// encoder's current MVP and does not take a separate per-path matrix;
+/// for text we want to translate/rotate each glyph's outline before
+/// handing it to the encoder.
+Path transformPath(const Path& input, const Transform2d& transform) {
+  PathBuilder builder;
+  const auto points = input.points();
+  for (const Path::Command& command : input.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]));
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
+                        transform.transformPosition(points[command.pointIndex + 1]),
+                        transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath:
+        builder.closePath();
+        break;
+    }
+  }
+  return builder.build();
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TextLayoutParams toTextLayoutParams(const TextParams& params) {
+  TextLayoutParams layoutParams;
+  layoutParams.fontFamilies = params.fontFamilies;
+  layoutParams.fontSize = params.fontSize;
+  layoutParams.viewBox = params.viewBox;
+  layoutParams.fontMetrics = params.fontMetrics;
+  layoutParams.textAnchor = params.textAnchor;
+  layoutParams.dominantBaseline = params.dominantBaseline;
+  layoutParams.writingMode = params.writingMode;
+  layoutParams.letterSpacingPx = params.letterSpacingPx;
+  layoutParams.wordSpacingPx = params.wordSpacingPx;
+  layoutParams.textLength = params.textLength;
+  layoutParams.lengthAdjust = params.lengthAdjust;
+  return layoutParams;
+}
+#endif
 
 /// Hard cap on gradient stops baked into the uniform buffer. Must be
 /// <= `GeoEncoder`'s internal `kMaxGradientStops` (which mirrors the WGSL
@@ -114,8 +173,7 @@ inline Lengthd coerceGradientLength(Lengthd value, bool numbersArePercent) {
 
 /// Resolve a `(x, y)` pair of gradient coordinates against the reference
 /// bounds (unit box for objectBoundingBox, viewBox for userSpaceOnUse).
-Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& bounds,
-                               bool numbersArePercent) {
+Vector2d resolveGradientCoords(Lengthd x, Lengthd y, const Box2d& bounds, bool numbersArePercent) {
   return Vector2d(coerceGradientLength(x, numbersArePercent)
                       .toPixels(bounds, FontMetrics(), Lengthd::Extent::X),
                   coerceGradientLength(y, numbersArePercent)
@@ -140,8 +198,7 @@ Transform2d resolveGradientTransform(
   const Vector2d origin = maybeTransformComponent->transformOrigin;
   const Transform2d entityFromParent =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transform2d::Translate(origin) * entityFromParent *
-         Transform2d::Translate(-origin);
+  return Transform2d::Translate(origin) * entityFromParent * Transform2d::Translate(-origin);
 }
 
 /// Resolved frame for either kind of gradient: the bounds against which
@@ -162,8 +219,7 @@ struct ResolvedGradientFrame {
 std::optional<ResolvedGradientFrame> resolveGradientFrame(
     const EntityHandle handle, const components::ComputedGradientComponent& computedGradient,
     const Box2d& pathBounds, const Box2d& viewBox) {
-  const bool objectBoundingBox =
-      computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
+  const bool objectBoundingBox = computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
 
   // Degenerate path bounds disable objectBoundingBox gradients; ditto the
   // other backends, which bail out rather than produce garbage coordinates.
@@ -248,8 +304,7 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
     const GradientStop& stop = computedGradient.stops[i];
     const css::RGBA rgba = stop.color.resolve(currentColor, stop.opacity * opacity);
     geode::LinearGradientParams::Stop out;
-    const float clampedOffset =
-        std::clamp<float>(static_cast<float>(stop.offset), 0.0f, 1.0f);
+    const float clampedOffset = std::clamp<float>(static_cast<float>(stop.offset), 0.0f, 1.0f);
     out.offset = std::max(clampedOffset, minOffset);
     minOffset = out.offset;
     out.rgba[0] = rgba.r / 255.0f;
@@ -266,10 +321,9 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
 /// non-linear / malformed / degenerate gradient; the caller should fall back
 /// to the gradient's fallback color or skip the draw.
 std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
-    const components::PaintResolvedReference& ref, const Box2d& pathBounds,
-    const Box2d& viewBox, const css::RGBA currentColor, float opacity,
-    std::vector<geode::LinearGradientParams::Stop>& stopsStorage,
-    bool* outStopsTruncated) {
+    const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
+    const css::RGBA currentColor, float opacity,
+    std::vector<geode::LinearGradientParams::Stop>& stopsStorage, bool* outStopsTruncated) {
   if (outStopsTruncated != nullptr) {
     *outStopsTruncated = false;
   }
@@ -331,8 +385,8 @@ struct ResolvedRadialGradient {
 /// contains the outer circle, returns an empty result (both fields unset)
 /// so the caller drops the draw.
 std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
-    const components::PaintResolvedReference& ref, const Box2d& pathBounds,
-    const Box2d& viewBox, const css::RGBA currentColor, float opacity,
+    const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
+    const css::RGBA currentColor, float opacity,
     std::vector<geode::RadialGradientParams::Stop>& stopsStorage, bool* outStopsTruncated) {
   if (outStopsTruncated != nullptr) {
     *outStopsTruncated = false;
@@ -387,9 +441,9 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   // SVG 2: if `fx` / `fy` aren't specified, they coincide with `cx` / `cy`.
   // Resolved on the spot — keeps the geometry resolution local to the
   // shader's coordinate system.
-  const Vector2d focalCenter = resolveGradientCoords(
-      radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy), frame->coordBounds,
-      frame->numbersArePercent);
+  const Vector2d focalCenter =
+      resolveGradientCoords(radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy),
+                            frame->coordBounds, frame->numbersArePercent);
 
   // Empty annulus: focal circle entirely contains the outer circle, so the
   // gradient never has a valid `t` anywhere. Match tiny-skia: drop the draw
@@ -492,10 +546,10 @@ struct RendererGeode::Impl {
   /// onto the saved target with the stored opacity.
   struct LayerStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;         // Outer 1-sample resolve target.
-    wgpu::Texture savedMsaaTarget;     // Outer 4× MSAA color attachment.
-    wgpu::Texture layerTexture;        // Inner layer 1-sample resolve.
-    wgpu::Texture layerMsaaTexture;    // Inner layer 4× MSAA color attachment.
+    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
+    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
+    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
+    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
     double opacity = 1.0;
     /// Phase 3d: SVG `mix-blend-mode`. `Normal` (default) keeps the
     /// plain premultiplied source-over compositing path;
@@ -504,6 +558,24 @@ struct RendererGeode::Impl {
     MixBlendMode blendMode = MixBlendMode::Normal;
   };
   std::vector<LayerStackFrame> layerStack;
+
+  /// Phase 7: state for an in-progress filter layer. Captures all draws
+  /// between `pushFilterLayer` / `popFilterLayer` into an offscreen texture,
+  /// then runs the stored `FilterGraph` through `GeodeFilterEngine` and
+  /// composites the result back onto the outer target.
+  struct FilterStackFrame {
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
+    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
+    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
+    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    components::FilterGraph filterGraph;
+    Box2d filterRegion;
+  };
+  std::vector<FilterStackFrame> filterStack;
+
+  /// Phase 7: GPU filter-graph executor (owns compute pipelines).
+  std::unique_ptr<geode::GeodeFilterEngine> filterEngine;
 
   /// Phase 3c: state for an in-progress `<mask>` element. Two offscreen
   /// texture pairs, one capturing the mask element's content and one
@@ -521,9 +593,9 @@ struct RendererGeode::Impl {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
     wgpu::Texture savedMsaaTarget;
-    wgpu::Texture maskTexture;          // Mask element's content (RGBA).
+    wgpu::Texture maskTexture;  // Mask element's content (RGBA).
     wgpu::Texture maskMsaaTexture;
-    wgpu::Texture contentTexture;       // Masked element's content (RGBA).
+    wgpu::Texture contentTexture;  // Masked element's content (RGBA).
     wgpu::Texture contentMsaaTexture;
     /// Raw mask-bounds rectangle from the driver, in the coordinate
     /// space of `maskBoundsTransform` (userSpaceOnUse or the
@@ -657,17 +729,14 @@ struct RendererGeode::Impl {
     // edge pixels that the rasterizer still wants to cover.
     const int32_t x = static_cast<int32_t>(std::floor(active->topLeft.x));
     const int32_t y = static_cast<int32_t>(std::floor(active->topLeft.y));
-    const int32_t w = std::max(
-        0, static_cast<int32_t>(std::ceil(active->bottomRight.x)) - x);
-    const int32_t h = std::max(
-        0, static_cast<int32_t>(std::ceil(active->bottomRight.y)) - y);
+    const int32_t w = std::max(0, static_cast<int32_t>(std::ceil(active->bottomRight.x)) - x);
+    const int32_t h = std::max(0, static_cast<int32_t>(std::ceil(active->bottomRight.y)) - y);
     encoder->setScissorRect(x, y, w, h);
   }
 
   // Stub-state latches — set on first warning in verbose mode so each
   // unimplemented feature logs exactly once per renderer.
   bool warnedLayer = false;
-  bool warnedFilter = false;
   bool warnedGradient = false;
   bool warnedText = false;
 
@@ -730,8 +799,7 @@ struct RendererGeode::Impl {
   /// viewBox→canvas scale.
   geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
                                                     double opacity) const {
-    const Transform2d deviceFromPattern =
-        slot.deviceFromPathAtCapture * slot.targetFromPattern;
+    const Transform2d deviceFromPattern = slot.deviceFromPathAtCapture * slot.targetFromPattern;
     const Transform2d patternFromDevice = deviceFromPattern.inverse();
     const Transform2d patternFromPath = patternFromDevice * currentTransform;
     geode::GeoEncoder::PatternPaint p;
@@ -883,11 +951,14 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     return;
   }
   impl_->pipeline = std::make_unique<geode::GeodePipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA());
+      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
+      impl_->device->sampleCount());
   impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA());
-  impl_->imagePipeline =
-      std::make_unique<geode::GeodeImagePipeline>(impl_->device->device(), kFormat);
+      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
+      impl_->device->sampleCount());
+  impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
+      impl_->device->device(), kFormat, impl_->device->sampleCount());
+  impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
 }
 
 RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
@@ -900,11 +971,15 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
     }
     return;
   }
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat);
-  impl_->gradientPipeline =
-      std::make_unique<geode::GeodeGradientPipeline>(impl_->device->device(), kFormat);
-  impl_->imagePipeline =
-      std::make_unique<geode::GeodeImagePipeline>(impl_->device->device(), kFormat);
+  impl_->pipeline = std::make_unique<geode::GeodePipeline>(
+      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
+      impl_->device->sampleCount());
+  impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
+      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
+      impl_->device->sampleCount());
+  impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
+      impl_->device->device(), kFormat, impl_->device->sampleCount());
+  impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
 }
 
 RendererGeode::~RendererGeode() = default;
@@ -916,8 +991,12 @@ void RendererGeode::draw(SVGDocument& document) {
   driver.draw(document);
 }
 
-int RendererGeode::width() const { return impl_->pixelWidth; }
-int RendererGeode::height() const { return impl_->pixelHeight; }
+int RendererGeode::width() const {
+  return impl_->pixelWidth;
+}
+int RendererGeode::height() const {
+  return impl_->pixelHeight;
+}
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->viewport = viewport;
@@ -939,8 +1018,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   // pattern / layer blits sample from.
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodeTarget");
-  td.size = {static_cast<uint32_t>(impl_->pixelWidth),
-             static_cast<uint32_t>(impl_->pixelHeight), 1};
+  td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
+             1};
   td.format = kFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
              wgpu::TextureUsage::TextureBinding;
@@ -949,18 +1028,22 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   td.dimension = wgpu::TextureDimension::_2D;
   impl_->target = impl_->device->device().createTexture(td);
 
-  // 4× MSAA color attachment: all draws land here, hardware resolves to
-  // `target` at pass end. Per-pixel fragment shader invocations can
-  // write sample-masked output for sub-pixel AA (see slug_fill.wgsl).
-  wgpu::TextureDescriptor msaaDesc = {};
-  msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
-  msaaDesc.size = td.size;
-  msaaDesc.format = kFormat;
-  msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-  msaaDesc.mipLevelCount = 1;
-  msaaDesc.sampleCount = 4;
-  msaaDesc.dimension = wgpu::TextureDimension::_2D;
-  impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+  // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
+  // hardware resolves to `target` at pass end. Skipped on the
+  // alpha-coverage path (sampleCount == 1) where draws go directly
+  // into `target` with no intermediate MSAA texture.
+  const uint32_t sc = impl_->device->sampleCount();
+  if (sc > 1) {
+    wgpu::TextureDescriptor msaaDesc = {};
+    msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
+    msaaDesc.size = td.size;
+    msaaDesc.format = kFormat;
+    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    msaaDesc.mipLevelCount = 1;
+    msaaDesc.sampleCount = sc;
+    msaaDesc.dimension = wgpu::TextureDimension::_2D;
+    impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+  }
 
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
@@ -1046,9 +1129,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // Use a small tolerance to absorb floating-point noise in the
     // composed transform chain.
     constexpr double kAxisAlignedEps = 1e-9;
-    const bool axisAligned =
-        (std::abs(b) < kAxisAlignedEps && std::abs(c) < kAxisAlignedEps) ||
-        (std::abs(a) < kAxisAlignedEps && std::abs(d) < kAxisAlignedEps);
+    const bool axisAligned = (std::abs(b) < kAxisAlignedEps && std::abs(c) < kAxisAlignedEps) ||
+                             (std::abs(a) < kAxisAlignedEps && std::abs(d) < kAxisAlignedEps);
     if (!axisAligned) {
       const Box2d& local = *clip.clipRect;
       const Vector2d tl(local.topLeft.x, local.topLeft.y);
@@ -1090,8 +1172,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // higher layer for the nested clip's children). So the deepest
   // layer is at the tail; we render each layer's mask in reverse,
   // binding the previously-rendered deeper mask as the input clip.
-  if (!clip.clipPaths.empty() && impl_->device && impl_->encoder &&
-      impl_->pixelWidth > 0 && impl_->pixelHeight > 0) {
+  if (!clip.clipPaths.empty() && impl_->device && impl_->encoder && impl_->pixelWidth > 0 &&
+      impl_->pixelHeight > 0) {
     const wgpu::Device& dev = impl_->device->device();
 
     const auto makeResolveTexture = [&](const char* label) {
@@ -1100,14 +1182,17 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                    static_cast<uint32_t>(impl_->pixelHeight), 1u};
       desc.format = wgpu::TextureFormat::R8Unorm;
-      desc.usage =
-          wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+      desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
       desc.mipLevelCount = 1;
       desc.sampleCount = 1;
       desc.dimension = wgpu::TextureDimension::_2D;
       return dev.createTexture(desc);
     };
-    const auto makeMsaaTexture = [&](const char* label) {
+    const auto makeMsaaTexture = [&](const char* label) -> wgpu::Texture {
+      if (impl_->device->sampleCount() == 1) {
+        // Alpha-coverage path: no separate MSAA texture needed.
+        return {};
+      }
       wgpu::TextureDescriptor desc = {};
       desc.label = wgpuLabel(label);
       desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
@@ -1168,7 +1253,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
       wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa");
       wgpu::Texture resolveTexture = makeResolveTexture("RendererGeodeClipMaskResolve");
-      if (!msaaTexture || !resolveTexture) {
+      if (!resolveTexture || (impl_->device->sampleCount() > 1 && !msaaTexture)) {
         continue;
       }
 
@@ -1241,8 +1326,8 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   // stored opacity.
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodeIsolatedLayer");
-  td.size = {static_cast<uint32_t>(impl_->pixelWidth),
-             static_cast<uint32_t>(impl_->pixelHeight), 1u};
+  td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
+             1u};
   td.format = kFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
@@ -1255,18 +1340,21 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     return;
   }
 
-  wgpu::TextureDescriptor msaaDesc = {};
-  msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
-  msaaDesc.size = td.size;
-  msaaDesc.format = kFormat;
-  msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-  msaaDesc.mipLevelCount = 1;
-  msaaDesc.sampleCount = 4;
-  msaaDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
-  if (!layerMsaaTexture) {
-    impl_->layerStack.push_back({});
-    return;
+  wgpu::Texture layerMsaaTexture;
+  if (impl_->device->sampleCount() > 1) {
+    wgpu::TextureDescriptor msaaDesc = {};
+    msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
+    msaaDesc.size = td.size;
+    msaaDesc.format = kFormat;
+    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    msaaDesc.mipLevelCount = 1;
+    msaaDesc.sampleCount = 4;
+    msaaDesc.dimension = wgpu::TextureDimension::_2D;
+    layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
+    if (!layerMsaaTexture) {
+      impl_->layerStack.push_back({});
+      return;
+    }
   }
 
   // Finish the outer encoder so its queued draws land on the saved target
@@ -1396,20 +1484,124 @@ void RendererGeode::popIsolatedLayer() {
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
 }
 
-void RendererGeode::pushFilterLayer(const components::FilterGraph& /*filterGraph*/,
-                                    const std::optional<Box2d>& /*filterRegion*/) {
-  if (impl_->verbose && !impl_->warnedFilter) {
-    std::cerr << "RendererGeode: filter layers not yet implemented (Phase 7)\n";
-    impl_->warnedFilter = true;
+void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
+                                    const std::optional<Box2d>& filterRegion) {
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
+      !impl_->encoder || !impl_->filterEngine) {
+    // Headless or degenerate state — push a placeholder frame so
+    // popFilterLayer stays balanced.
+    impl_->filterStack.push_back({});
+    return;
   }
+
+  // Compute filter region in device-pixel coordinates. Fall back to the
+  // full target if none was specified.
+  Box2d region = filterRegion.value_or(
+      Box2d(Vector2d::Zero(), Vector2d(impl_->pixelWidth, impl_->pixelHeight)));
+
+  // Allocate offscreen 1-sample resolve + 4× MSAA companion for the
+  // filter layer capture. All draws between push/pop land here; pop runs
+  // the filter graph on the resolved texture and composites back.
+  wgpu::TextureDescriptor td{};
+  td.label = wgpuLabel("RendererGeodeFilterLayer");
+  td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
+             1u};
+  td.format = kFormat;
+  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+             wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
+  if (!layerTexture) {
+    impl_->filterStack.push_back({});
+    return;
+  }
+
+  wgpu::TextureDescriptor msaaDesc{};
+  msaaDesc.label = wgpuLabel("RendererGeodeFilterLayerMSAA");
+  msaaDesc.size = td.size;
+  msaaDesc.format = kFormat;
+  msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+  msaaDesc.mipLevelCount = 1;
+  msaaDesc.sampleCount = 4;
+  msaaDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
+  if (!layerMsaaTexture) {
+    impl_->filterStack.push_back({});
+    return;
+  }
+
+  // Finish the outer encoder so its queued draws land on the saved
+  // target before we redirect subsequent work into the filter layer.
+  impl_->encoder->finish();
+
+  Impl::FilterStackFrame frame;
+  frame.savedEncoder = std::move(impl_->encoder);
+  frame.savedTarget = impl_->target;
+  frame.savedMsaaTarget = impl_->msaaTarget;
+  frame.layerTexture = layerTexture;
+  frame.layerMsaaTexture = layerMsaaTexture;
+  frame.filterGraph = filterGraph;
+  frame.filterRegion = region;
+
+  impl_->target = layerTexture;
+  impl_->msaaTarget = layerMsaaTexture;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      layerMsaaTexture, layerTexture);
+  newEncoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->encoder = std::move(newEncoder);
+  impl_->filterStack.push_back(std::move(frame));
+  // The filter layer inherits the outer clip stack.
+  impl_->updateEncoderScissor();
 }
 
-void RendererGeode::popFilterLayer() {}
+void RendererGeode::popFilterLayer() {
+  if (impl_->filterStack.empty()) {
+    return;
+  }
+  Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
+  impl_->filterStack.pop_back();
+
+  if (!frame.layerTexture) {
+    return;  // Placeholder frame from the headless/error path.
+  }
+
+  // Finish the filter layer's render pass so the texture is ready.
+  if (impl_->encoder) {
+    impl_->encoder->finish();
+  }
+
+  // Run the filter graph on the captured layer texture.
+  wgpu::Texture filteredTexture = frame.layerTexture;
+  if (impl_->filterEngine && !frame.filterGraph.empty()) {
+    filteredTexture =
+        impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.filterRegion);
+  }
+
+  // Restore outer target and create a fresh encoder that preserves its
+  // existing contents. Composite the filtered texture back with full
+  // opacity (filter results are already premultiplied).
+  impl_->target = frame.savedTarget;
+  impl_->msaaTarget = frame.savedMsaaTarget;
+  auto newEncoder = std::make_unique<geode::GeoEncoder>(
+      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+      frame.savedMsaaTarget, frame.savedTarget);
+  newEncoder->setLoadPreserve();
+  impl_->encoder = std::move(newEncoder);
+  impl_->updateEncoderScissor();
+  // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
+  // `frame.filterRegion` is passed in from the driver in user-space
+  // coordinates, not pixel-space; we'd need to transform by the current
+  // CTM snapshot before using it as a scissor. Skipping for this PR —
+  // all current feGaussianBlur resvg tests pass without the clip.
+  impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+}
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
-  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline ||
-      !impl_->imagePipeline || !impl_->encoder || impl_->pixelWidth <= 0 ||
-      impl_->pixelHeight <= 0) {
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
+      !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     // Headless / degenerate — push a placeholder so popMask stays balanced.
     impl_->maskStack.push_back({});
     return;
@@ -1419,8 +1611,8 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
                                     wgpu::Texture& outResolve, wgpu::Texture& outMsaa) {
     wgpu::TextureDescriptor td = {};
     td.label = wgpuLabel(label);
-    td.size = {static_cast<uint32_t>(impl_->pixelWidth),
-               static_cast<uint32_t>(impl_->pixelHeight), 1u};
+    td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
+               1u};
     td.format = kFormat;
     td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
                wgpu::TextureUsage::CopySrc;
@@ -1429,15 +1621,17 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     td.dimension = wgpu::TextureDimension::_2D;
     outResolve = impl_->device->device().createTexture(td);
 
-    wgpu::TextureDescriptor msaaDesc = {};
-    msaaDesc.label = wgpuLabel(msaaLabel);
-    msaaDesc.size = td.size;
-    msaaDesc.format = kFormat;
-    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-    msaaDesc.mipLevelCount = 1;
-    msaaDesc.sampleCount = 4;
-    msaaDesc.dimension = wgpu::TextureDimension::_2D;
-    outMsaa = impl_->device->device().createTexture(msaaDesc);
+    if (impl_->device->sampleCount() > 1) {
+      wgpu::TextureDescriptor msaaDesc = {};
+      msaaDesc.label = wgpuLabel(msaaLabel);
+      msaaDesc.size = td.size;
+      msaaDesc.format = kFormat;
+      msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      msaaDesc.mipLevelCount = 1;
+      msaaDesc.sampleCount = 4;
+      msaaDesc.dimension = wgpu::TextureDimension::_2D;
+      outMsaa = impl_->device->device().createTexture(msaaDesc);
+    }
   };
 
   Impl::MaskStackFrame frame;
@@ -1445,8 +1639,9 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
                    frame.maskTexture, frame.maskMsaaTexture);
   allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA",
                    frame.contentTexture, frame.contentMsaaTexture);
-  if (!frame.maskTexture || !frame.maskMsaaTexture || !frame.contentTexture ||
-      !frame.contentMsaaTexture) {
+  const bool needsMsaa = impl_->device->sampleCount() > 1;
+  if (!frame.maskTexture || (needsMsaa && !frame.maskMsaaTexture) || !frame.contentTexture ||
+      (needsMsaa && !frame.contentMsaaTexture)) {
     impl_->maskStack.push_back({});
     return;
   }
@@ -1481,7 +1676,9 @@ void RendererGeode::transitionMaskToContent() {
   if (frame.phase != Impl::MaskStackFrame::Phase::Capturing) {
     return;
   }
-  if (!frame.contentTexture || !frame.contentMsaaTexture || !impl_->encoder) {
+  const bool needsMsaa = impl_->device->sampleCount() > 1;
+  if (!frame.contentTexture || (needsMsaa && !frame.contentMsaaTexture) ||
+      !impl_->encoder) {
     frame.phase = Impl::MaskStackFrame::Phase::Content;
     return;
   }
@@ -1544,8 +1741,7 @@ void RendererGeode::popMask() {
   impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, pixelMaskBounds);
 }
 
-void RendererGeode::beginPatternTile(const Box2d& tileRect,
-                                     const Transform2d& targetFromPattern) {
+void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
   if (!impl_->device || !impl_->pipeline) {
     return;
   }
@@ -1583,8 +1779,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   // fill shader samples when the tile is later used as paint).
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodePatternTile");
-  td.size = {static_cast<uint32_t>(tilePixelWidth),
-             static_cast<uint32_t>(tilePixelHeight), 1u};
+  td.size = {static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight), 1u};
   td.format = kFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
@@ -1597,18 +1792,22 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect,
   }
 
   // 4× MSAA companion render target — shares the same encoder lifetime
-  // as the tile; resolved into `tileTexture` at pass end.
-  wgpu::TextureDescriptor tileMsaaDesc = {};
-  tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
-  tileMsaaDesc.size = td.size;
-  tileMsaaDesc.format = kFormat;
-  tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-  tileMsaaDesc.mipLevelCount = 1;
-  tileMsaaDesc.sampleCount = 4;
-  tileMsaaDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture tileMsaaTexture = impl_->device->device().createTexture(tileMsaaDesc);
-  if (!tileMsaaTexture) {
-    return;
+  // as the tile; resolved into `tileTexture` at pass end. Skipped on
+  // the alpha-coverage path (sampleCount == 1).
+  wgpu::Texture tileMsaaTexture;
+  if (impl_->device->sampleCount() > 1) {
+    wgpu::TextureDescriptor tileMsaaDesc = {};
+    tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
+    tileMsaaDesc.size = td.size;
+    tileMsaaDesc.format = kFormat;
+    tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    tileMsaaDesc.mipLevelCount = 1;
+    tileMsaaDesc.sampleCount = 4;
+    tileMsaaDesc.dimension = wgpu::TextureDimension::_2D;
+    tileMsaaTexture = impl_->device->device().createTexture(tileMsaaDesc);
+    if (!tileMsaaTexture) {
+      return;
+    }
   }
 
   // Stash the currently-active encoder/target/transform state. A nested
@@ -1729,8 +1928,12 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // Practical fix: change the render pass load op to Load instead of Clear
   // when there's been at least one prior submission. This requires
   // extending GeoEncoder; see the `reopen` helper added below.
+  // On the 1-sample alpha-coverage path (Intel Arc Vulkan) `frame.savedMsaaTarget`
+  // is intentionally null; `GeoEncoder` handles the no-MSAA case. Only require
+  // the MSAA attachment when the device actually uses multisampling.
+  const bool needsMsaa = impl_->device && impl_->device->sampleCount() > 1;
   if (impl_->device && impl_->pipeline && impl_->gradientPipeline && impl_->imagePipeline &&
-      frame.savedTarget && frame.savedMsaaTarget) {
+      frame.savedTarget && (!needsMsaa || frame.savedMsaaTarget)) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
         frame.savedMsaaTarget, frame.savedTarget);
@@ -1777,7 +1980,9 @@ void RendererGeode::endPatternTile(bool forStroke) {
   }
 }
 
-void RendererGeode::setPaint(const PaintParams& paint) { impl_->paint = paint; }
+void RendererGeode::setPaint(const PaintParams& paint) {
+  impl_->paint = paint;
+}
 
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
   impl_->fillResolved(path.path, path.fillRule);
@@ -1790,8 +1995,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     return;
   }
 
-  if (stroke.strokeWidth <= 0.0 ||
-      std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
+  if (stroke.strokeWidth <= 0.0 || std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
     return;
   }
 
@@ -1831,17 +2035,15 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       ++subpathCount;
     }
   }
-  const FillRule strokeFillRule =
-      (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
+  const FillRule strokeFillRule = (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
 
   // Pattern dispatch comes first: a stroke pattern slot was populated by the
   // driver via `endPatternTile(forStroke=true)` and consumed here.
   if (impl_->patternStrokePaint.has_value()) {
     impl_->syncTransform();
     const double opacity = impl_->paint.strokeOpacity;
-    impl_->encoder->fillPathPattern(
-        strokedOutline, strokeFillRule,
-        impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
+    impl_->encoder->fillPathPattern(strokedOutline, strokeFillRule,
+                                    impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
     impl_->patternStrokePaint.reset();
     return;
   }
@@ -1888,13 +2090,146 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
                             params.imageRenderingPixelated);
 }
 
-void RendererGeode::drawText(Registry& /*registry*/,
-                             const components::ComputedTextComponent& /*text*/,
-                             const TextParams& /*params*/) {
+void RendererGeode::drawText(Registry& registry,
+                             const components::ComputedTextComponent& text,
+                             const TextParams& params) {
+#ifdef DONNER_TEXT_ENABLED
+  if (!impl_->device || !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    return;
+  }
+  if (!registry.ctx().contains<TextEngine>()) {
+    if (impl_->verbose && !impl_->warnedText) {
+      std::cerr << "RendererGeode: TextEngine not available in registry context\n";
+      impl_->warnedText = true;
+    }
+    return;
+  }
+
+  auto& textEngine = registry.ctx().get<TextEngine>();
+
+  // Use cached layout runs from `ComputedTextGeometryComponent` when
+  // available; otherwise lay out fresh via the engine. This matches
+  // the pattern in `RendererTinySkia::drawText`.
+  std::vector<TextRun> runs;
+  if (params.textRootEntity != entt::null) {
+    if (const auto* cache =
+            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
+      runs = cache->runs;
+    }
+  }
+  if (runs.empty()) {
+    const TextLayoutParams layoutParams = toTextLayoutParams(params);
+    runs = textEngine.layout(text, layoutParams);
+  }
+
+  const float textFontSizePx = static_cast<float>(
+      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+
+  // Resolve a default fill colour from the text-element-level paint
+  // state. Per-span fills override below when present.
+  std::optional<css::RGBA> defaultFill = impl_->resolveSolidFill();
+  if (!defaultFill.has_value()) {
+    // No solid fill and no fallback -- text is effectively invisible.
+    // Still walk through in case a per-span fill kicks in.
+    defaultFill = css::RGBA(0, 0, 0, 0);
+  }
+
+  const css::RGBA currentColor = impl_->paint.currentColor.rgba();
+
+  // The element-level fill is already scaled by the top-level
+  // `setPaint` call, but per-span fill overrides need their own
+  // `span.fillOpacity * span.opacity` applied.
+  const auto resolveSpanFill = [&](size_t runIndex) -> css::RGBA {
+    if (runIndex >= text.spans.size()) {
+      return *defaultFill;
+    }
+    const auto& span = text.spans[runIndex];
+    const float opacityScale = static_cast<float>(span.fillOpacity * span.opacity);
+    if (const auto* solid = std::get_if<PaintServer::Solid>(&span.resolvedFill)) {
+      return solid->color.resolve(currentColor, opacityScale);
+    }
+    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&span.resolvedFill)) {
+      if (ref->fallback.has_value()) {
+        return ref->fallback->resolve(currentColor, opacityScale);
+      }
+    }
+    return *defaultFill;
+  };
+
+  // Snapshot the encoder's current transform so we can restore it if
+  // per-glyph rotations mess with it. `fillPath` honours
+  // `impl_->currentTransform` via `setTransform`, and the glyph
+  // outline coordinates are already mapped into the text element's
+  // local space by the transformPath call below -- so we want the
+  // encoder to use the element's currentTransform unchanged.
+  impl_->encoder->setTransform(impl_->currentTransform);
+
+  for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+    const auto& run = runs[runIndex];
+    if (run.font == FontHandle()) {
+      continue;
+    }
+
+    float spanFontSizePx = textFontSizePx;
+    if (runIndex < text.spans.size() && text.spans[runIndex].fontSize.value != 0.0) {
+      spanFontSizePx = static_cast<float>(text.spans[runIndex].fontSize.toPixels(
+          params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+    }
+
+    const float scale = textEngine.scaleForPixelHeight(run.font, spanFontSizePx);
+    if (scale <= 0.0f) {
+      continue;
+    }
+    if (textEngine.isBitmapOnly(run.font)) {
+      // Bitmap-only (color emoji) fonts need the `GeodeTextureEncoder`
+      // path, which drawText doesn't wire up yet. Skip the run so the
+      // rest of the text still renders.
+      continue;
+    }
+
+    const css::RGBA spanFill = resolveSpanFill(runIndex);
+    if (spanFill.a == 0) {
+      continue;
+    }
+
+    for (const auto& glyph : run.glyphs) {
+      if (glyph.glyphIndex == 0) {
+        continue;  // `.notdef` -- skip to match tiny-skia.
+      }
+
+      Path glyphPath =
+          textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+      if (glyphPath.empty()) {
+        continue;
+      }
+
+      // Build the local-space transform that takes the raw glyph
+      // outline (baseline-origin, em-scaled) to its placed position.
+      // Order matches `RendererTinySkia::drawText`:
+      //   stretchScale -> rotate (around glyph origin) -> translate.
+      Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+      if (glyph.rotateDegrees != 0.0) {
+        const double radians = glyph.rotateDegrees * MathConstants<double>::kPi / 180.0;
+        glyphFromLocal = Transform2d::Rotate(radians) * glyphFromLocal;
+      }
+      if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+        glyphFromLocal =
+            Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) * glyphFromLocal;
+      }
+
+      const Path placed = transformPath(glyphPath, glyphFromLocal);
+      impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+    }
+  }
+#else
+  (void)registry;
+  (void)text;
+  (void)params;
   if (impl_->verbose && !impl_->warnedText) {
-    std::cerr << "RendererGeode: text rendering not yet implemented (Phase 4)\n";
+    std::cerr << "RendererGeode: text rendering requires DONNER_TEXT_ENABLED\n";
     impl_->warnedText = true;
   }
+#endif
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {
@@ -1942,8 +2277,8 @@ RendererBitmap RendererGeode::takeSnapshot() const {
     bool ok = false;
   } mapState;
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/,
-                      void* userdata1, void* /*userdata2*/) {
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                      void* /*userdata2*/) {
     auto* s = static_cast<MapState*>(userdata1);
     s->ok = (status == WGPUMapAsyncStatus_Success);
     s->done = true;
@@ -1958,8 +2293,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
     return bitmap;
   }
 
-  const uint8_t* mapped =
-      static_cast<const uint8_t*>(readback.getConstMappedRange(0, bd.size));
+  const uint8_t* mapped = static_cast<const uint8_t*>(readback.getConstMappedRange(0, bd.size));
 
   // Strip row padding and unpremultiply alpha so the consumer gets a tightly
   // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies

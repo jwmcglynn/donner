@@ -193,7 +193,9 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
     # depends on are in SKIPPED_PACKAGES. Wrap in if(FALSE).
     "donner_svg_renderer_renderer_geode": "FALSE",
     "donner_svg_renderer_tests_renderer_geode_tests": "FALSE",
+    "donner_svg_renderer_tests_renderer_geode_tests_impl": "FALSE",
     "donner_svg_renderer_tests_renderer_geode_golden_tests": "FALSE",
+    "donner_svg_renderer_tests_renderer_geode_golden_tests_impl": "FALSE",
     # TinySkia backend
     "donner_svg_renderer_renderer_tiny_skia": _TINY_SKIA,
     # tiny-skia lib
@@ -242,6 +244,7 @@ OPTIONAL_DEPS: Set[str] = {
 SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
     "donner_svg_renderer_geode_geo_encoder",
     "donner_svg_renderer_geode_geode_device",
+    "donner_svg_renderer_geode_geode_filter_engine",
     "donner_svg_renderer_geode_geode_image_pipeline",
     "donner_svg_renderer_geode_geode_pipeline",
     "donner_svg_renderer_geode_geode_path_encoder",
