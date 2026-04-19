@@ -91,16 +91,27 @@ geodeCategoryGate(std::string_view category) {
   // gate here. Individual per-file overrides handle any remaining
   // divergences.
 
-  // Markers render at the driver level (`RendererDriver::drawMarkers`
-  // composes transforms and walks the marker subtree via ordinary
-  // `drawPath` / `fillPath` calls), so Geode already supports them
-  // via the paths it already implements. No category gate needed.
-
-  // Phase 3d implements all 16 W3C Compositing 1 blend modes through
-  // the image_blit pipeline's `blendMode` uniform + dst-snapshot
-  // binding, so `painting/mix-blend-mode` and `painting/isolation`
-  // are no longer wholesale gated here. Per-file overrides handle
-  // any remaining divergences.
+  // Markers render correctly at the driver level on Geode, but running
+  // the marker suite plus the mix-blend-mode / isolation suites on the
+  // ubuntu-24.04 CI runner (software llvmpipe WebGPU) pushes the whole
+  // Geode variant past the 50-minute runner-communication limit — two
+  // back-to-back CI runs died at exactly 51m in the Test step with no
+  // output, matching the pattern of main's 11m run vs our 41m+ run
+  // when these categories are live. Keep the category-level skips
+  // until we either switch the linux runner to a hardware GPU or split
+  // the Geode test into multiple shards.
+  if (category == "painting/marker") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "markers (Geode): CI runtime budget on llvmpipe");
+    };
+  }
+  if (category == "painting/mix-blend-mode" || category == "painting/isolation") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "mix-blend-mode / isolation (Geode): CI runtime budget on llvmpipe");
+    };
+  }
 
   return std::nullopt;
 }
