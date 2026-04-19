@@ -21,8 +21,10 @@ parser.add_argument(
 )
 parser.add_argument(
     "--https",
-    action="store_true",
-    help="serve over HTTPS using a local development certificate",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="serve over HTTPS using a local development certificate (default: on; "
+    "WebGPU + SharedArrayBuffer require a secure context on non-localhost)",
 )
 parser.add_argument("--certfile", help="path to TLS certificate PEM file")
 parser.add_argument("--keyfile", help="path to TLS private key PEM file")
@@ -35,9 +37,11 @@ args = parser.parse_args()
 serve_dir = os.path.abspath(args.dir)
 # Bazel's `serve_http` rule passes the first file of its `dir` filegroup as
 # `--dir` — which is a file, not a directory. Treat a file arg as its
-# containing directory so e.g. `--dir path/to/test.html` serves the whole
-# directory.
+# containing directory, AND remember the file name so requests for `/` map
+# to that file (the typical case for `serve_http(dir=":test_page")`).
+default_index: str | None = None
 if os.path.isfile(serve_dir):
+    default_index = os.path.basename(serve_dir)
     serve_dir = os.path.dirname(serve_dir)
 
 
@@ -46,6 +50,16 @@ class CrossOriginHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         return super().end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802 — overriding stdlib method name
+        if default_index and self.path in ("/", ""):
+            self.path = "/" + default_index
+        return super().do_GET()
+
+    def do_HEAD(self) -> None:  # noqa: N802 — overriding stdlib method name
+        if default_index and self.path in ("/", ""):
+            self.path = "/" + default_index
+        return super().do_HEAD()
 
 
 def host_for_bind(bind_host: str) -> str:

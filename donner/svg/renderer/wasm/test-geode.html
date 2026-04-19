@@ -95,8 +95,21 @@
       return;
     }
 
-    const adapterInfo = await adapter.requestAdapterInfo();
-    gpuInfo.textContent = `GPU: ${adapterInfo.vendor} ${adapterInfo.device} (${adapterInfo.architecture || 'unknown arch'})`;
+    // Current WebGPU spec: adapter info is a property (`adapter.info`).
+    // Older Chrome/Dawn exposed `requestAdapterInfo()` as a promise; fall
+    // back to that for compatibility. Firefox only has the property form.
+    let adapterInfo = adapter.info;
+    if (!adapterInfo && typeof adapter.requestAdapterInfo === 'function') {
+      adapterInfo = await adapter.requestAdapterInfo();
+    }
+    if (adapterInfo) {
+      const vendor = adapterInfo.vendor || 'unknown vendor';
+      const device = adapterInfo.device || adapterInfo.architecture || 'unknown device';
+      const arch = adapterInfo.architecture || 'unknown arch';
+      gpuInfo.textContent = `GPU: ${vendor} ${device} (${arch})`;
+    } else {
+      gpuInfo.textContent = 'GPU: (adapter info unavailable)';
+    }
 
     let device;
     try {
