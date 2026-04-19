@@ -74,7 +74,7 @@ cc_binary(
         "-sASYNCIFY=1",
         "-sASYNCIFY_STACK_SIZE=131072",
         "-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
-        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",

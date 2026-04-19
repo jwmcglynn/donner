@@ -1955,11 +1955,15 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   };
   mapCb.userdata1 = &mapState;
   mapCb.userdata2 = nullptr;
-  // Dawn (browser WebGPU) rejects the zero-initialized `mode = 0` with
-  // "Invalid WGPUCallbackMode 0". wgpu-native is lenient, but both
-  // accept an explicit `AllowProcessEvents`. Set it for cross-backend
-  // compatibility.
-  mapCb.mode = wgpu::CallbackMode::AllowProcessEvents;
+  // Browser WebGPU fires `mapAsync` completion via the JS Promise
+  // microtask — there is no wgpu-native-style "poll" on the instance.
+  // `AllowProcessEvents` would require an explicit `wgpuInstanceProcessEvents`
+  // call, which we never make (our Emscripten `wgpuDevicePoll` stub only
+  // yields via `emscripten_sleep`). Use `AllowSpontaneous` so the browser
+  // can fire the callback as soon as the Promise resolves, during the
+  // microtask tick that runs while we're sleeping. wgpu-native also
+  // accepts spontaneous mode and fires callbacks during `wgpuDevicePoll`.
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   readback.mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   std::cerr << "[takeSnapshot] mapAsync returned; entering poll loop" << std::endl;
   int pollIter = 0;
