@@ -70,6 +70,28 @@ struct BlendParams {
   uint32_t pad2;
 };
 
+/// Uniform buffer layout matching the WGSL `MorphologyParams` struct.
+struct MorphologyParams {
+  int32_t radiusX;
+  int32_t radiusY;
+  uint32_t op;  // 0 = erode, 1 = dilate.
+  uint32_t pad;
+};
+
+/// GPU storage buffer layout matching the WGSL `ConvolveParams` struct.
+/// Uses storage (not uniform) because WGSL uniform array<f32,N> has 16-byte element stride.
+struct ConvolveParams {
+  int32_t orderX;
+  int32_t orderY;
+  int32_t targetX;
+  int32_t targetY;
+  float divisor;
+  float bias;
+  uint32_t edgeMode;
+  uint32_t preserveAlpha;
+  float kernel[25];  // Row-major kernel values (max 5×5).
+};
+
 /// Map a FilterGraph EdgeMode to the shader's uint.
 uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeMode mode) {
   using EM = svg::components::filter_primitive::GaussianBlur::EdgeMode;
@@ -448,6 +470,59 @@ ColorMatrixParams buildColorMatrix(
   return params;
 }
 
+/// Map a ConvolveMatrix EdgeMode to the shader's uint.
+uint32_t toConvolveEdgeMode(svg::components::filter_primitive::ConvolveMatrix::EdgeMode mode) {
+  using EM = svg::components::filter_primitive::ConvolveMatrix::EdgeMode;
+  switch (mode) {
+    case EM::Duplicate: return 0;
+    case EM::Wrap: return 1;
+    case EM::None: return 2;
+  }
+  return 0;
+}
+
+/// Build a 256-entry uint8 LUT for one channel's feComponentTransfer function.
+void buildChannelLut(const svg::components::filter_primitive::ComponentTransfer::Func& func,
+                     uint32_t* outLut) {
+  using FT = svg::components::filter_primitive::ComponentTransfer::FuncType;
+  for (int i = 0; i < 256; ++i) {
+    const double c = static_cast<double>(i) / 255.0;
+    double result = c;
+
+    switch (func.type) {
+      case FT::Identity: result = c; break;
+      case FT::Table: {
+        const auto& tv = func.tableValues;
+        if (tv.size() >= 2) {
+          const double k = c * static_cast<double>(tv.size() - 1);
+          const int idx = std::min(static_cast<int>(k), static_cast<int>(tv.size() - 2));
+          const double frac = k - static_cast<double>(idx);
+          result = tv[idx] * (1.0 - frac) + tv[idx + 1] * frac;
+        } else if (tv.size() == 1) {
+          result = tv[0];
+        }
+        break;
+      }
+      case FT::Discrete: {
+        const auto& tv = func.tableValues;
+        if (!tv.empty()) {
+          const int idx = std::min(static_cast<int>(c * static_cast<double>(tv.size())),
+                                   static_cast<int>(tv.size() - 1));
+          result = tv[idx];
+        }
+        break;
+      }
+      case FT::Linear: result = func.slope * c + func.intercept; break;
+      case FT::Gamma:
+        result = func.amplitude * std::pow(c, func.exponent) + func.offset;
+        break;
+    }
+
+    result = std::clamp(result, 0.0, 1.0);
+    outLut[i] = static_cast<uint32_t>(std::round(result * 255.0));
+  }
+}
+
 }  // namespace
 
 GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
@@ -570,6 +645,100 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     blendBindGroupLayout_ = bgl;
     blendPipeline_ = pipeline;
   }
+
+  // --- feMorphology pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterMorphology", createFilterMorphologyShader(dev), sizeof(MorphologyParams));
+    morphologyBindGroupLayout_ = bgl;
+    morphologyPipeline_ = pipeline;
+  }
+
+  // --- feComponentTransfer pipeline (input + output + storage buffer for LUT) ---
+  {
+    wgpu::BindGroupLayoutEntry entries[3]{};
+
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+    entries[0].texture.multisampled = false;
+
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+    entries[1].storageTexture.format = kFormat;
+    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[2].buffer.minBindingSize = 1024 * sizeof(uint32_t);
+
+    wgpu::BindGroupLayoutDescriptor bglDesc{};
+    bglDesc.label = wgpuLabel("FilterComponentTransferBGL");
+    bglDesc.entryCount = 3;
+    bglDesc.entries = entries;
+    componentTransferBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
+
+    wgpu::PipelineLayoutDescriptor plDesc{};
+    plDesc.label = wgpuLabel("FilterComponentTransferPipelineLayout");
+    plDesc.bindGroupLayoutCount = 1;
+    WGPUBindGroupLayout layouts[1] = {componentTransferBindGroupLayout_};
+    plDesc.bindGroupLayouts = layouts;
+    wgpu::PipelineLayout pipelineLayout = dev.createPipelineLayout(plDesc);
+
+    wgpu::ComputePipelineDescriptor cpDesc{};
+    cpDesc.label = wgpuLabel("FilterComponentTransferPipeline");
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = createFilterComponentTransferShader(dev);
+    cpDesc.compute.entryPoint = wgpuLabel("main");
+    componentTransferPipeline_ = dev.createComputePipeline(cpDesc);
+  }
+
+  // --- feConvolveMatrix pipeline (input + output + storage buffer for params) ---
+  // Uses ReadOnlyStorage instead of Uniform because WGSL uniform arrays
+  // have 16-byte element stride, making array<f32, 25> 400 bytes vs 100.
+  {
+    wgpu::BindGroupLayoutEntry entries[3]{};
+
+    entries[0].binding = 0;
+    entries[0].visibility = wgpu::ShaderStage::Compute;
+    entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+    entries[0].texture.multisampled = false;
+
+    entries[1].binding = 1;
+    entries[1].visibility = wgpu::ShaderStage::Compute;
+    entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+    entries[1].storageTexture.format = kFormat;
+    entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[2].buffer.minBindingSize = sizeof(ConvolveParams);
+
+    wgpu::BindGroupLayoutDescriptor bglDesc{};
+    bglDesc.label = wgpuLabel("FilterConvolveMatrixBGL");
+    bglDesc.entryCount = 3;
+    bglDesc.entries = entries;
+    convolveMatrixBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
+
+    wgpu::PipelineLayoutDescriptor plDesc{};
+    plDesc.label = wgpuLabel("FilterConvolveMatrixPipelineLayout");
+    plDesc.bindGroupLayoutCount = 1;
+    WGPUBindGroupLayout layouts[1] = {convolveMatrixBindGroupLayout_};
+    plDesc.bindGroupLayouts = layouts;
+    wgpu::PipelineLayout pipelineLayout = dev.createPipelineLayout(plDesc);
+
+    wgpu::ComputePipelineDescriptor cpDesc{};
+    cpDesc.label = wgpuLabel("FilterConvolveMatrixPipeline");
+    cpDesc.layout = pipelineLayout;
+    cpDesc.compute.module = createFilterConvolveMatrixShader(dev);
+    cpDesc.compute.entryPoint = wgpuLabel("main");
+    convolveMatrixPipeline_ = dev.createComputePipeline(cpDesc);
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
@@ -648,6 +817,16 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
       }
       outputTex = applyBlend(inputTex, in2Tex, *blend);
+    } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
+      const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
+      const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
+      outputTex = applyMorphology(inputTex, *morph, rx, ry);
+    } else if (const auto* ct =
+                   std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
+      outputTex = applyComponentTransfer(inputTex, *ct);
+    } else if (const auto* conv =
+                   std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
+      outputTex = applyConvolveMatrix(inputTex, *conv);
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -1102,6 +1281,223 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
 
   dispatchTwoInputUniform(device_, blendBindGroupLayout_, blendPipeline_, in1, in2, output,
                           uniformBuffer, sizeof(BlendParams), "FilterBlendPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyMorphology(
+    const wgpu::Texture& input,
+    const svg::components::filter_primitive::Morphology& primitive, int pixelRadiusX,
+    int pixelRadiusY) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  // Zero or negative radius → passthrough.
+  if (pixelRadiusX <= 0 && pixelRadiusY <= 0) {
+    return input;
+  }
+
+  // Cap total kernel samples at 63×63 = 3969.
+  constexpr int kMaxRadius = 31;
+  if (pixelRadiusX > kMaxRadius || pixelRadiusY > kMaxRadius) {
+    // TODO(geode): Support larger morphology kernels via separable passes.
+    if (verbose_) {
+      std::cerr << "GeodeFilterEngine: feMorphology radius ("
+                << pixelRadiusX << "×" << pixelRadiusY
+                << ") exceeds cap (" << kMaxRadius << "); passthrough\n";
+    }
+    return input;
+  }
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
+
+  using Op = svg::components::filter_primitive::Morphology::Operator;
+  MorphologyParams params{};
+  params.radiusX = pixelRadiusX;
+  params.radiusY = pixelRadiusY;
+  params.op = primitive.op == Op::Dilate ? 1u : 0u;
+  params.pad = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+
+  dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, input, output,
+                             uniformBuffer, sizeof(MorphologyParams), "FilterMorphologyPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
+    const wgpu::Texture& input,
+    const svg::components::filter_primitive::ComponentTransfer& primitive) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterComponentTransferOutput");
+
+  // Build 4 × 256-entry LUTs (R, G, B, A) as uint32 array (1024 entries).
+  std::array<uint32_t, 1024> lutData{};
+  buildChannelLut(primitive.funcR, &lutData[0]);
+  buildChannelLut(primitive.funcG, &lutData[256]);
+  buildChannelLut(primitive.funcB, &lutData[512]);
+  buildChannelLut(primitive.funcA, &lutData[768]);
+
+  // Upload as a storage buffer.
+  wgpu::BufferDescriptor bufDesc{};
+  bufDesc.label = wgpuLabel("ComponentTransferLUT");
+  bufDesc.size = lutData.size() * sizeof(uint32_t);
+  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  bufDesc.mappedAtCreation = false;
+  wgpu::Buffer lutBuffer = dev.createBuffer(bufDesc);
+  device_.queue().writeBuffer(lutBuffer, 0, lutData.data(), bufDesc.size);
+
+  // Build bind group.
+  wgpu::TextureView inputView = input.createView();
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[3]{};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = inputView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = outputView;
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = lutBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = bufDesc.size;
+
+  wgpu::BindGroupDescriptor bgDesc{};
+  bgDesc.label = wgpuLabel("FilterComponentTransferBindGroup");
+  bgDesc.layout = componentTransferBindGroupLayout_;
+  bgDesc.entryCount = 3;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+
+  wgpu::CommandEncoderDescriptor ceDesc{};
+  ceDesc.label = wgpuLabel("FilterComponentTransferEncoder");
+  wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
+
+  wgpu::ComputePassDescriptor passDesc{};
+  passDesc.label = wgpuLabel("FilterComponentTransferPass");
+  wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+  pass.setPipeline(componentTransferPipeline_);
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+
+  const uint32_t workgroupsX = (width + 7) / 8;
+  const uint32_t workgroupsY = (height + 7) / 8;
+  pass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+  pass.end();
+
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  device_.queue().submit(1, &cmdBuf);
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
+    const wgpu::Texture& input,
+    const svg::components::filter_primitive::ConvolveMatrix& primitive) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  // Cap kernel at 5×5.
+  if (primitive.orderX > 5 || primitive.orderY > 5 || primitive.orderX <= 0 ||
+      primitive.orderY <= 0) {
+    // TODO(geode): Support larger convolution kernels.
+    if (verbose_) {
+      std::cerr << "GeodeFilterEngine: feConvolveMatrix kernel ("
+                << primitive.orderX << "×" << primitive.orderY
+                << ") outside 1..5 range; passthrough\n";
+    }
+    return input;
+  }
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterConvolveMatrixOutput");
+
+  // Compute effective divisor (default = sum of kernel values, or 1 if sum is 0).
+  double divisor = 1.0;
+  if (primitive.divisor.has_value()) {
+    divisor = primitive.divisor.value();
+    if (divisor == 0.0) {
+      divisor = 1.0;
+    }
+  } else {
+    double sum = 0.0;
+    for (double v : primitive.kernelMatrix) {
+      sum += v;
+    }
+    divisor = (sum != 0.0) ? sum : 1.0;
+  }
+
+  const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
+  const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
+
+  ConvolveParams params{};
+  params.orderX = primitive.orderX;
+  params.orderY = primitive.orderY;
+  params.targetX = targetX;
+  params.targetY = targetY;
+  params.divisor = static_cast<float>(divisor);
+  params.bias = static_cast<float>(primitive.bias);
+  params.edgeMode = toConvolveEdgeMode(primitive.edgeMode);
+  params.preserveAlpha = primitive.preserveAlpha ? 1u : 0u;
+
+  // Fill kernel array (row-major, max 25 entries).
+  std::fill(std::begin(params.kernel), std::end(params.kernel), 0.0f);
+  const int count = std::min(static_cast<int>(primitive.kernelMatrix.size()),
+                             primitive.orderX * primitive.orderY);
+  for (int i = 0; i < count && i < 25; ++i) {
+    params.kernel[i] = static_cast<float>(primitive.kernelMatrix[i]);
+  }
+
+  // Upload as a storage buffer (not uniform — array<f32,25> has 16-byte stride in uniform).
+  wgpu::BufferDescriptor bufDesc{};
+  bufDesc.label = wgpuLabel("ConvolveMatrixParamsStorage");
+  bufDesc.size = sizeof(ConvolveParams);
+  bufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  bufDesc.mappedAtCreation = false;
+  wgpu::Buffer paramsBuffer = dev.createBuffer(bufDesc);
+  device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
+
+  // Build bind group.
+  wgpu::TextureView inputView = input.createView();
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[3]{};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = inputView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = outputView;
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = paramsBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = sizeof(ConvolveParams);
+
+  wgpu::BindGroupDescriptor bgDesc{};
+  bgDesc.label = wgpuLabel("FilterConvolveMatrixBindGroup");
+  bgDesc.layout = convolveMatrixBindGroupLayout_;
+  bgDesc.entryCount = 3;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+
+  wgpu::CommandEncoderDescriptor ceDesc{};
+  ceDesc.label = wgpuLabel("FilterConvolveMatrixEncoder");
+  wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
+
+  wgpu::ComputePassDescriptor passDesc{};
+  passDesc.label = wgpuLabel("FilterConvolveMatrixPass");
+  wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+  pass.setPipeline(convolveMatrixPipeline_);
+  pass.setBindGroup(0, bindGroup, 0, nullptr);
+
+  const uint32_t workgroupsX = (width + 7) / 8;
+  const uint32_t workgroupsY = (height + 7) / 8;
+  pass.dispatchWorkgroups(workgroupsX, workgroupsY, 1);
+  pass.end();
+
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  device_.queue().submit(1, &cmdBuf);
   return output;
 }
 
