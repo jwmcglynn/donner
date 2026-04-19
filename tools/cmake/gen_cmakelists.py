@@ -193,7 +193,9 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
     # depends on are in SKIPPED_PACKAGES. Wrap in if(FALSE).
     "donner_svg_renderer_renderer_geode": "FALSE",
     "donner_svg_renderer_tests_renderer_geode_tests": "FALSE",
+    "donner_svg_renderer_tests_renderer_geode_tests_impl": "FALSE",
     "donner_svg_renderer_tests_renderer_geode_golden_tests": "FALSE",
+    "donner_svg_renderer_tests_renderer_geode_golden_tests_impl": "FALSE",
     # TinySkia backend
     "donner_svg_renderer_renderer_tiny_skia": _TINY_SKIA,
     # tiny-skia lib
