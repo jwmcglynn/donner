@@ -37,7 +37,7 @@
 #include "donner/editor/sandbox/FrameInspector.h"
 #include "donner/editor/sandbox/RnrFile.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 #include <glad/glad.h>
 
@@ -245,7 +245,7 @@ void DrawInspectorPane(const EditorApp& app, bool& inspectorOpen,
     // the slider value changes.
     const bool justActivated = scrub.scrubActive && !wasActive;
     if (justActivated || scrub.scrubIndex != scrub.lastReplayedIndex) {
-      static svg::RendererTinySkia offscreenBackend;
+      static svg::Renderer offscreenBackend;
       sandbox::FrameInspector::ReplayPrefix(
           wire, static_cast<std::size_t>(scrub.scrubIndex), offscreenBackend);
       auto bitmap = offscreenBackend.takeSnapshot();

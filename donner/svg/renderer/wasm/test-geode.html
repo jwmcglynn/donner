@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Donner SVG – Geode (WebGPU) WASM Renderer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; flex-direction: column; align-items: center; padding: 2rem; gap: 1.5rem; }
+  h1 { font-size: 1.4rem; }
+  .container { display: flex; gap: 2rem; flex-wrap: wrap; justify-content: center; }
+  .panel { background: #313244; border-radius: 8px; padding: 1rem; min-width: 320px; }
+  textarea { width: 100%; height: 260px; font-family: monospace; font-size: 0.85rem; background: #1e1e2e; color: #a6e3a1; border: 1px solid #585b70; border-radius: 4px; padding: 0.5rem; resize: vertical; }
+  canvas { border: 1px solid #585b70; border-radius: 4px; background: #fff; display: block; }
+  button { padding: 0.5rem 1.2rem; border: none; border-radius: 4px; background: #89b4fa; color: #1e1e2e; font-weight: 600; cursor: pointer; margin-top: 0.75rem; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:hover:not(:disabled) { background: #74c7ec; }
+  #status { font-size: 0.85rem; color: #f9e2af; min-height: 1.2em; }
+  #gpu-info { font-size: 0.75rem; color: #6c7086; margin-top: 0.25rem; }
+  label { display: block; margin-bottom: 0.4rem; font-weight: 600; }
+  .dims { display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center; }
+  .dims input { width: 70px; background: #1e1e2e; color: #cdd6f4; border: 1px solid #585b70; border-radius: 4px; padding: 0.3rem 0.4rem; text-align: center; }
+  .error { color: #f38ba8; }
+  .tag { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.7rem; font-weight: 700; background: #f5c2e7; color: #1e1e2e; margin-left: 0.5rem; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<h1>Donner SVG – Geode (WebGPU) WASM<span class="tag">Proof of Life</span></h1>
+<p id="status">Checking WebGPU support...</p>
+<p id="gpu-info"></p>
+
+<div class="container">
+  <!-- SVG input panel -->
+  <div class="panel">
+    <label for="svg-input">SVG Source</label>
+    <textarea id="svg-input"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <rect width="200" height="200" rx="24" fill="#89b4fa"/>
+  <circle cx="100" cy="90" r="40" fill="#1e1e2e" opacity="0.85"/>
+  <rect x="60" y="130" width="80" height="40" rx="8" fill="#a6e3a1"/>
+</svg></textarea>
+    <div class="dims">
+      <label for="w">W</label><input id="w" type="number" value="400" min="1" max="2048">
+      <label for="h">H</label><input id="h" type="number" value="400" min="1" max="2048">
+    </div>
+    <button id="render-btn" disabled>Render via WebGPU</button>
+  </div>
+
+  <!-- Canvas output panel -->
+  <div class="panel">
+    <label>Rendered Output (Geode / WebGPU)</label>
+    <canvas id="canvas" width="400" height="400"></canvas>
+  </div>
+</div>
+
+<script type="module">
+  const status  = document.getElementById('status');
+  const gpuInfo = document.getElementById('gpu-info');
+  const btn     = document.getElementById('render-btn');
+  const svgArea = document.getElementById('svg-input');
+  const wInput  = document.getElementById('w');
+  const hInput  = document.getElementById('h');
+  const canvas  = document.getElementById('canvas');
+  const ctx     = canvas.getContext('2d');
+
+  let Module = null;
+  let donnerGeodeInit      = null;
+  let donnerGeodeRenderSvg = null;
+  let donnerFreePixels     = null;
+  let donnerGetError       = null;
+
+  async function boot() {
+    // 1. Check WebGPU availability.
+    if (!navigator.gpu) {
+      status.textContent = 'WebGPU is not supported in this browser.';
+      status.classList.add('error');
+      gpuInfo.textContent = 'Try Chrome 113+ or Edge 113+ with WebGPU enabled.';
+      return;
+    }
+
+    status.textContent = 'Requesting WebGPU adapter...';
+
+    let adapter;
+    try {
+      adapter = await navigator.gpu.requestAdapter();
+    } catch (e) {
+      status.textContent = 'Failed to request WebGPU adapter: ' + e.message;
+      status.classList.add('error');
+      return;
+    }
+
+    if (!adapter) {
+      status.textContent = 'No WebGPU adapter available.';
+      status.classList.add('error');
+      return;
+    }
+
+    // Current WebGPU spec: adapter info is a property (`adapter.info`).
+    // Older Chrome/Dawn exposed `requestAdapterInfo()` as a promise; fall
+    // back to that for compatibility. Firefox only has the property form.
+    let adapterInfo = adapter.info;
+    if (!adapterInfo && typeof adapter.requestAdapterInfo === 'function') {
+      adapterInfo = await adapter.requestAdapterInfo();
+    }
+    if (adapterInfo) {
+      const vendor = adapterInfo.vendor || 'unknown vendor';
+      const device = adapterInfo.device || adapterInfo.architecture || 'unknown device';
+      const arch = adapterInfo.architecture || 'unknown arch';
+      gpuInfo.textContent = `GPU: ${vendor} ${device} (${arch})`;
+    } else {
+      gpuInfo.textContent = 'GPU: (adapter info unavailable)';
+    }
+
+    let device;
+    try {
+      device = await adapter.requestDevice();
+    } catch (e) {
+      status.textContent = 'Failed to create WebGPU device: ' + e.message;
+      status.classList.add('error');
+      return;
+    }
+
+    status.textContent = 'Loading WASM module (with ASYNCIFY)...';
+
+    // 2. Load the Emscripten ES6 module, injecting the pre-provisioned device.
+    try {
+      const { default: createModule } = await import('./donner_wasm_geode_bin.js');
+      Module = await createModule({
+        preinitializedWebGPUDevice: device,
+      });
+    } catch (err) {
+      status.textContent = 'Failed to load WASM module: ' + err.message;
+      status.classList.add('error');
+      console.error(err);
+      return;
+    }
+
+    // 3. Wrap exported C functions.
+    //
+    // `donner_geode_init` and `donner_geode_render_svg` internally call
+    // wgpu::createInstance() / requestAdapter() / requestDevice() / poll —
+    // all of which suspend the WASM call stack via ASYNCIFY so the JS
+    // microtask queue can drive the browser's WebGPU Promise resolution.
+    // From JS, the exported functions must be wrapped with `async: true`
+    // so the returned value is a Promise we can `await`. Without this,
+    // Emscripten's ASYNCIFY runtime aborts with "The call to X is running
+    // asynchronously. If this was intended, add the async option..."
+    donnerGeodeInit      = Module.cwrap('donner_geode_init', null, [], { async: true });
+    donnerGeodeRenderSvg = Module.cwrap('donner_geode_render_svg', 'number', ['string', 'number', 'number'], { async: true });
+    donnerFreePixels     = Module.cwrap('donner_free_pixels', null, ['number']);
+    donnerGetError       = Module.cwrap('donner_get_last_error', 'string', []);
+
+    await donnerGeodeInit();
+    status.textContent = 'Geode (WebGPU) WASM module ready.';
+    status.classList.remove('error');
+    btn.disabled = false;
+  }
+
+  async function render() {
+    const svgText = svgArea.value;
+    const w = parseInt(wInput.value, 10) || 400;
+    const h = parseInt(hInput.value, 10) || 400;
+
+    canvas.width  = w;
+    canvas.height = h;
+
+    status.textContent = 'Rendering via WebGPU...';
+    btn.disabled = true;
+
+    // Use requestAnimationFrame + setTimeout to ensure the status update
+    // paints before the potentially-blocking ASYNCIFY call.
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+    const t0 = performance.now();
+    const ptr = await donnerGeodeRenderSvg(svgText, w, h);
+    const elapsed = (performance.now() - t0).toFixed(1);
+
+    if (ptr === 0) {
+      const err = donnerGetError();
+      status.textContent = 'Render failed: ' + (err || 'unknown error');
+      status.classList.add('error');
+      btn.disabled = false;
+      return;
+    }
+
+    // Read RGBA pixel data from WASM heap.
+    const numBytes = w * h * 4;
+    const pixels = new Uint8ClampedArray(Module.HEAPU8.buffer, ptr, numBytes);
+    const imageData = new ImageData(new Uint8ClampedArray(pixels), w, h);
+    ctx.putImageData(imageData, 0, 0);
+
+    donnerFreePixels(ptr);
+    status.textContent = `Rendered ${w}x${h} via Geode (WebGPU) in ${elapsed} ms`;
+    status.classList.remove('error');
+    btn.disabled = false;
+  }
+
+  btn.addEventListener('click', render);
+  svgArea.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter' && !btn.disabled) render();
+  });
+
+  boot();
+</script>
+
+</body>
+</html>

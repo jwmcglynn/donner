@@ -204,6 +204,136 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Phase 7: feOffset compute shader (pixel shift).
+embed_resources(
+    name = "filter_offset_wgsl",
+    header_output = "embed_resources/FilterOffsetWgsl.h",
+    resources = {
+        "kFilterOffsetWgsl": "shaders/filter_offset.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feColorMatrix compute shader (4x5 matrix transform).
+embed_resources(
+    name = "filter_color_matrix_wgsl",
+    header_output = "embed_resources/FilterColorMatrixWgsl.h",
+    resources = {
+        "kFilterColorMatrixWgsl": "shaders/filter_color_matrix.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feFlood compute shader (constant color fill).
+embed_resources(
+    name = "filter_flood_wgsl",
+    header_output = "embed_resources/FilterFloodWgsl.h",
+    resources = {
+        "kFilterFloodWgsl": "shaders/filter_flood.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feMerge alpha-over blit compute shader.
+embed_resources(
+    name = "filter_merge_wgsl",
+    header_output = "embed_resources/FilterMergeWgsl.h",
+    resources = {
+        "kFilterMergeWgsl": "shaders/filter_merge.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feComposite Porter-Duff compositing compute shader.
+embed_resources(
+    name = "filter_composite_wgsl",
+    header_output = "embed_resources/FilterCompositeWgsl.h",
+    resources = {
+        "kFilterCompositeWgsl": "shaders/filter_composite.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feBlend W3C Compositing 1 blend mode compute shader.
+embed_resources(
+    name = "filter_blend_wgsl",
+    header_output = "embed_resources/FilterBlendWgsl.h",
+    resources = {
+        "kFilterBlendWgsl": "shaders/filter_blend.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feMorphology compute shader (erode / dilate).
+embed_resources(
+    name = "filter_morphology_wgsl",
+    header_output = "embed_resources/FilterMorphologyWgsl.h",
+    resources = {
+        "kFilterMorphologyWgsl": "shaders/filter_morphology.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feComponentTransfer compute shader (per-channel LUT).
+embed_resources(
+    name = "filter_component_transfer_wgsl",
+    header_output = "embed_resources/FilterComponentTransferWgsl.h",
+    resources = {
+        "kFilterComponentTransferWgsl": "shaders/filter_component_transfer.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feConvolveMatrix compute shader (NxM kernel convolution).
+embed_resources(
+    name = "filter_convolve_matrix_wgsl",
+    header_output = "embed_resources/FilterConvolveMatrixWgsl.h",
+    resources = {
+        "kFilterConvolveMatrixWgsl": "shaders/filter_convolve_matrix.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feTurbulence compute shader (Perlin noise generator).
+embed_resources(
+    name = "filter_turbulence_wgsl",
+    header_output = "embed_resources/FilterTurbulenceWgsl.h",
+    resources = {
+        "kFilterTurbulenceWgsl": "shaders/filter_turbulence.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feDisplacementMap compute shader (per-pixel displacement).
+embed_resources(
+    name = "filter_displacement_map_wgsl",
+    header_output = "embed_resources/FilterDisplacementMapWgsl.h",
+    resources = {
+        "kFilterDisplacementMapWgsl": "shaders/filter_displacement_map.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feDiffuseLighting compute shader (Lambertian shading).
+embed_resources(
+    name = "filter_diffuse_lighting_wgsl",
+    header_output = "embed_resources/FilterDiffuseLightingWgsl.h",
+    resources = {
+        "kFilterDiffuseLightingWgsl": "shaders/filter_diffuse_lighting.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+# Phase 7: feSpecularLighting compute shader (Phong shading).
+embed_resources(
+    name = "filter_specular_lighting_wgsl",
+    header_output = "embed_resources/FilterSpecularLightingWgsl.h",
+    resources = {
+        "kFilterSpecularLightingWgsl": "shaders/filter_specular_lighting.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -211,6 +341,19 @@ donner_cc_library(
     target_compatible_with = _DAWN_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":filter_blend_wgsl",
+        ":filter_color_matrix_wgsl",
+        ":filter_component_transfer_wgsl",
+        ":filter_composite_wgsl",
+        ":filter_convolve_matrix_wgsl",
+        ":filter_diffuse_lighting_wgsl",
+        ":filter_displacement_map_wgsl",
+        ":filter_flood_wgsl",
+        ":filter_merge_wgsl",
+        ":filter_morphology_wgsl",
+        ":filter_offset_wgsl",
+        ":filter_specular_lighting_wgsl",
+        ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",

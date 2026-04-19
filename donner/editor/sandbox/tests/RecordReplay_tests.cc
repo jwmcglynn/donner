@@ -9,7 +9,7 @@
 ///    sensible command list (indices, depth tracking, summaries that aren't
 ///    empty for supported opcodes).
 /// 3. **Pixel round-trip through a `.rnr` file** — serialize → save → load →
-///    replay → compare against an in-process RendererTinySkia render, and
+///    replay → compare against an in-process render, and
 ///    verify the result is byte-identical.
 
 #include <gtest/gtest.h>
@@ -30,7 +30,7 @@
 #include "donner/editor/sandbox/Wire.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererInterface.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::sandbox {
 namespace {
@@ -61,7 +61,7 @@ std::vector<uint8_t> SerializeSimpleFrame(std::string_view svg, int w, int h) {
 svg::RendererBitmap RenderInProcess(std::string_view svg, int w, int h) {
   auto doc = ParseOrDie(svg);
   doc.setCanvasSize(w, h);
-  svg::RendererTinySkia renderer;
+  svg::Renderer renderer;
   renderer.draw(doc);
   return renderer.takeSnapshot();
 }
@@ -219,7 +219,7 @@ TEST(FrameInspectorTest, OpcodeNamesAreStable) {
 TEST(FrameInspectorTest, ReplayPrefixFullStreamMatchesDirect) {
   const auto wire = SerializeSimpleFrame(kSvg, 64, 64);
 
-  svg::RendererTinySkia target;
+  svg::Renderer target;
   const auto status =
       FrameInspector::ReplayPrefix(wire, std::numeric_limits<std::size_t>::max(), target);
   ASSERT_EQ(status, ReplayStatus::kOk);
@@ -233,7 +233,7 @@ TEST(FrameInspectorTest, ReplayPrefixFullStreamMatchesDirect) {
 TEST(FrameInspectorTest, ReplayPrefixZeroProducesBlankFrame) {
   const auto wire = SerializeSimpleFrame(kSvg, 32, 32);
 
-  svg::RendererTinySkia target;
+  svg::Renderer target;
   const auto status = FrameInspector::ReplayPrefix(wire, 0, target);
   EXPECT_EQ(status, ReplayStatus::kOk);
 
@@ -253,7 +253,7 @@ TEST(FrameInspectorTest, ReplayPrefixPartialIsRenderable) {
   // likely). The exact sequence depends on the driver, but the target must
   // end up with a valid framebuffer of the right size thanks to the
   // synthesized endFrame.
-  svg::RendererTinySkia target;
+  svg::Renderer target;
   const auto status = FrameInspector::ReplayPrefix(wire, 3, target);
   EXPECT_EQ(status, ReplayStatus::kOk);
   const auto snap = target.takeSnapshot();
@@ -283,7 +283,7 @@ TEST(RecordReplayEndToEndTest, RoundTripPreservesPixels) {
   ASSERT_EQ(LoadRnrFile(path, loadedHeader, loadedWire), RnrIoStatus::kOk);
   EXPECT_EQ(loadedWire, wire);
 
-  svg::RendererTinySkia target;
+  svg::Renderer target;
   const auto status =
       FrameInspector::ReplayPrefix(loadedWire, std::numeric_limits<std::size_t>::max(), target);
   ASSERT_EQ(status, ReplayStatus::kOk);

@@ -102,6 +102,8 @@ SKIPPED_PACKAGES = {
     "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
     "donner/svg/renderer/geode",  # Geode (WebGPU) — Bazel-only, gated behind --enable_dawn flag (historical name; now selects wgpu-native)
     "donner/svg/renderer/wasm",  # Emscripten WASM module (cc_binary uses --no-entry); native link fails without main()
+    "third_party/emdawnwebgpu",  # Dawn's Emscripten WebGPU bindings — WASM-only; `webgpu.cpp` includes <emscripten/emscripten.h>
+    "third_party/webgpu-cpp",  # wgpu-native C++ wrapper — Bazel-only, pulls webgpu.h from http_archive prebuilts
     "donner/editor",  # Donner Editor — Bazel-only, depends on imgui/glfw/tracy
     "donner/editor/app",
     "donner/editor/app/tests",
@@ -235,6 +237,11 @@ OPTIONAL_DEPS: Set[str] = {
     "donner_third_party_skia_user_config_user_config",
     "donner_svg_renderer_tests_renderer_test_utils",
     "donner_svg_text_text_backend_full",
+    # wgpu-native C++ wrapper: Bazel-only (pulls webgpu.h from http_archive
+    # prebuilts that the CMake mirror doesn't fetch). References from
+    # non-conditional targets are fine because the link path is only exercised
+    # when the Geode backend is selected, which is itself CMake-excluded.
+    "donner_third_party_webgpu-cpp_webgpu_cpp",
 }
 
 # Bazel-only targets that live in packages intentionally skipped by the CMake
@@ -1341,6 +1348,13 @@ _KNOWN_EXTERNAL_TARGETS: Set[str] = {
     # System libraries
     "${FREETYPE_LIBRARIES}", "${HARFBUZZ_LIBRARIES}",
     "${FONTCONFIG_LIBRARIES}",
+    # wgpu-native C++ wrapper. The package is Bazel-only (prebuilt archives
+    # via http_archive that the CMake mirror doesn't fetch). References from
+    # Geode-backend targets are wrapped in `if(TARGET ...)` via OPTIONAL_DEPS,
+    # and the only callers that actually activate the Geode path are CMake-
+    # excluded via CONDITIONAL_TARGETS. So at runtime this name never
+    # resolves, but that's fine — no one links through to it.
+    "donner_third_party_webgpu-cpp_webgpu_cpp",
     # Fallback umbrella
     "donner",
 }

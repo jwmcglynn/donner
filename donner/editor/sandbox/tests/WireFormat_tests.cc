@@ -38,7 +38,7 @@
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
-#include "donner/svg/renderer/RendererTinySkia.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/StrokeParams.h"
 
 namespace donner::editor::sandbox {
@@ -515,7 +515,7 @@ TEST(AdversarialTest, RandomBytesDoNotCrashReplay) {
 }
 
 // -----------------------------------------------------------------------------
-// Pixel-exact RendererTinySkia round-trip — the canonical S2 lossless check.
+// Pixel-exact round-trip — the canonical S2 lossless check.
 // -----------------------------------------------------------------------------
 
 namespace {
@@ -530,7 +530,7 @@ svg::SVGDocument ParseOrDie(std::string_view svg) {
 svg::RendererBitmap RenderDirect(std::string_view svg, int width, int height) {
   auto document = ParseOrDie(svg);
   document.setCanvasSize(width, height);
-  svg::RendererTinySkia renderer;
+  svg::Renderer renderer;
   renderer.draw(document);
   return renderer.takeSnapshot();
 }
@@ -544,7 +544,7 @@ svg::RendererBitmap RenderViaWire(std::string_view svg, int width, int height,
   ser.draw(serDocument);
   outHasUnsupported = ser.hasUnsupported();
 
-  svg::RendererTinySkia replayBackend;
+  svg::Renderer replayBackend;
   ReplayingRenderer replay(replayBackend);
   ReplayReport report;
   const auto status = replay.pumpFrame(ser.data(), report);

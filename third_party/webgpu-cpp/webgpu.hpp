@@ -2118,7 +2118,10 @@ void FutureWaitInfo::setDefault() {
 
 // Methods of InstanceDescriptor
 void InstanceDescriptor::setDefault() {
+#ifndef __EMSCRIPTEN__
+	// Dawn's WGPUInstanceDescriptor has different members than wgpu-native's.
 	((InstanceCapabilities*)&features)->setDefault();
+#endif
 }
 
 

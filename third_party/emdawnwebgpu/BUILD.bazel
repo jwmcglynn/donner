@@ -1,0 +1,76 @@
+"""Vendored Dawn WebGPU bindings for Emscripten (emdawnwebgpu).
+
+This package provides the standard `webgpu/webgpu.h` header and the JavaScript
+glue libraries that implement the C WebGPU API on top of the browser's native
+WebGPU implementation. It is vendored from:
+
+    https://github.com/google/dawn/releases/download/v20251002.162335/
+    emdawnwebgpu_pkg-v20251002.162335.zip
+
+The package is only used by Emscripten (WASM) builds; native builds get their
+`webgpu.h` from the wgpu-native prebuilt archives.
+
+Layout:
+    webgpu/include/webgpu/webgpu.h   — the standard C header
+    webgpu/src/webgpu.cpp             — C++ implementation (compiled into .a)
+    webgpu/src/library_webgpu*.js     — Emscripten JS libraries (link-time)
+"""
+
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//third_party/webgpu-cpp:__pkg__", "//donner/svg/renderer/wasm:__pkg__"])
+
+exports_files([
+    "webgpu/src/library_webgpu_enum_tables.js",
+    "webgpu/src/library_webgpu_generated_sig_info.js",
+    "webgpu/src/library_webgpu_generated_struct_info.js",
+    "webgpu/src/library_webgpu.js",
+    "webgpu/src/webgpu-externs.js",
+])
+
+# C header for <webgpu/webgpu.h>.
+cc_library(
+    name = "webgpu_header",
+    hdrs = ["webgpu/include/webgpu/webgpu.h"],
+    strip_include_prefix = "webgpu/include",
+)
+
+# Compiled WebGPU glue (webgpu.cpp → .a). This file implements the C
+# functions declared in webgpu.h by calling into the browser's JS WebGPU
+# API via Emscripten's `EM_JS` / `EM_ASM` macros. It `#include`s
+# `<emscripten/emscripten.h>` directly, so the target is incompatible
+# with native platforms — `bazel build //...` on linux/macos would
+# otherwise try to compile this with system clang and fail.
+cc_library(
+    name = "webgpu_impl",
+    srcs = ["webgpu/src/webgpu.cpp"],
+    copts = [
+        "-std=c++20",
+        "-fno-exceptions",
+    ],
+    target_compatible_with = select({
+        "@platforms//cpu:wasm32": [],
+        "@platforms//cpu:wasm64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":webgpu_header"],
+)
+
+# JavaScript library files needed at link time. Consumers should add
+# these as `additional_linker_inputs` and reference them via
+# `--js-library=$(location ...)` in linkopts.
+filegroup(
+    name = "js_libraries",
+    srcs = [
+        "webgpu/src/library_webgpu_enum_tables.js",
+        "webgpu/src/library_webgpu_generated_sig_info.js",
+        "webgpu/src/library_webgpu_generated_struct_info.js",
+        "webgpu/src/library_webgpu.js",
+    ],
+)
+
+# Closure compiler externs (optional; only needed if using --closure=1).
+filegroup(
+    name = "js_externs",
+    srcs = ["webgpu/src/webgpu-externs.js"],
+)

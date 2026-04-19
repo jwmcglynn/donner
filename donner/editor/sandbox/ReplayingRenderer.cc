@@ -33,7 +33,7 @@ struct ReplayingRenderer::Impl {
   /// Converts a decoded `WireGradient` into a real `PaintResolvedReference`
   /// suitable for handing to `RendererInterface::setPaint`. The returned
   /// variant references a fresh entity in `registry` that carries exactly
-  /// the components `RendererTinySkia::makeFillPaint` / `makeStrokePaint`
+  /// the components the backend's `makeFillPaint` / `makeStrokePaint`
   /// look up during paint resolution.
   svg::components::ResolvedPaintServer MaterializeGradient(const WireGradient& g) {
     return svg::MaterializeResolvedGradient(registry, g);

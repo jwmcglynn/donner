@@ -495,7 +495,7 @@ void EncodeResolvedPaintServer(WireWriter& w, const svg::components::ResolvedPai
   }
   // Fall through: unresolvable or pattern — emit a stub. The downstream
   // setPaint will decode to None; pattern rendering continues to work via
-  // RendererTinySkia's patternFillPaint_ side channel.
+  // the backend's internal pattern paint side channel.
   w.writeU8(kPaintTagStub);
 }
 
@@ -513,11 +513,11 @@ bool DecodeResolvedPaintServer(WireReader& r, svg::components::ResolvedPaintServ
     }
     case kPaintTagStub:
       // Decode as transparent-solid rather than None. This matters for
-      // patterns: RendererTinySkia::makeFillPaint() returns early on None
-      // (line 2105) before checking patternFillPaint_ (line 2112). A
-      // transparent-solid passes the None check, letting the pattern side
-      // channel take effect. For non-pattern stubs, transparent-solid is
-      // visually identical to None on a transparent-initialized canvas.
+      // patterns: backends may return early on None before checking the
+      // pattern side channel. A transparent-solid passes the None check,
+      // letting the pattern side channel take effect. For non-pattern stubs,
+      // transparent-solid is visually identical to None on a
+      // transparent-initialized canvas.
       out = svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0)));
       return true;
     case kPaintTagGradient: {

@@ -21,7 +21,8 @@
 /// `submit(document)`, which runs the parser/driver inline (fast, mostly
 /// cache-local) and serializes the `RendererInterface` calls into a byte
 /// buffer. The buffer is handed off to a worker thread that decodes it and
-/// invokes a real backend (`RendererTinySkia`, typically). The main thread
+/// invokes a real backend (`Renderer`, resolving to the build-selected
+/// backend). The main thread
 /// returns as soon as serialization completes, freeing it to mutate the
 /// document for frame N+1 while frame N rasterizes in parallel.
 ///
@@ -77,9 +78,9 @@ struct PipelinedFrame {
 /// worker owns the returned renderer for its whole lifetime.
 using RendererFactory = std::unique_ptr<svg::RendererInterface> (*)();
 
-/// Default factory that returns a `RendererTinySkia` — the one backend
-/// guaranteed to be available in every Donner build.
-std::unique_ptr<svg::RendererInterface> MakeDefaultRendererTinySkia();
+/// Default factory that returns a `Renderer` backed by whichever renderer
+/// backend was selected at build time (tiny-skia, Skia, or Geode).
+std::unique_ptr<svg::RendererInterface> MakeDefaultRenderer();
 
 /// A pipelined renderer that moves rasterization off the caller's thread.
 ///
@@ -91,8 +92,8 @@ public:
   ///
   /// @param factory Called on the worker thread to build the real backend
   ///   the first time a frame is rasterized. Defaults to
-  ///   `MakeDefaultRendererTinySkia`.
-  explicit PipelinedRenderer(RendererFactory factory = &MakeDefaultRendererTinySkia);
+  ///   `MakeDefaultRenderer`.
+  explicit PipelinedRenderer(RendererFactory factory = &MakeDefaultRenderer);
 
   /// Stop the worker thread and tear down state. Blocks until the worker
   /// observes the shutdown flag and exits.
