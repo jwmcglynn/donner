@@ -110,6 +110,98 @@ struct TurbulenceParams {
   float filterFromDeviceD;
 };
 
+/// Pre-computed permutation + gradient tables for feTurbulence.
+/// Matches the SVG spec's Perlin noise algorithm (Park-Miller LCG + Fisher-Yates shuffle).
+/// Layout matches the WGSL `TurbulenceTables` struct.
+constexpr int kTurbBLen = 256;
+constexpr int kTurbBLenPlus2 = kTurbBLen + 2;  // 258
+constexpr int kTurbTableSize = kTurbBLen + kTurbBLenPlus2;  // 514
+
+struct TurbulenceTables {
+  int32_t lattice[kTurbTableSize];        // Permutation table (514 entries).
+  float gradX[4 * kTurbTableSize];        // Gradient X: [channel * 514 + index].
+  float gradY[4 * kTurbTableSize];        // Gradient Y: [channel * 514 + index].
+};
+
+// Park-Miller LCG constants matching tiny-skia/resvg.
+constexpr long kRandM = 2147483647;  // 2^31 - 1  // NOLINT
+constexpr long kRandA = 16807;                     // NOLINT
+constexpr long kRandQ = 127773;                    // NOLINT
+constexpr long kRandR = 2836;                      // NOLINT
+
+/// Park-Miller LCG step (Schrage's method to avoid overflow).
+long turbulenceRandom(long seed) {  // NOLINT
+  long result = kRandA * (seed % kRandQ) - kRandR * (seed / kRandQ);  // NOLINT
+  if (result <= 0) {
+    result += kRandM;
+  }
+  return result;
+}
+
+/// Generate permutation + gradient tables from seed, matching tiny-skia exactly.
+void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
+  // Seed clamping matching resvg.
+  long seed;  // NOLINT
+  if (seedVal <= 0) {
+    seed = -(static_cast<long>(seedVal)) % (kRandM - 1) + 1;  // NOLINT
+  } else if (seedVal > kRandM - 1) {
+    seed = kRandM - 1;
+  } else {
+    seed = static_cast<long>(seedVal);  // NOLINT
+  }
+
+  // Temporary double-precision gradient storage during generation.
+  double gradient[4][kTurbTableSize][2] = {};
+
+  // Generate gradient tables for all 4 channels.
+  for (int ch = 0; ch < 4; ch++) {
+    for (int k = 0; k < kTurbBLen; k++) {
+      if (ch == 0) {
+        tables.lattice[k] = k;
+      }
+
+      seed = turbulenceRandom(seed);
+      gradient[ch][k][0] =
+          static_cast<double>((seed % (kTurbBLen + kTurbBLen)) - kTurbBLen) / kTurbBLen;
+      seed = turbulenceRandom(seed);
+      gradient[ch][k][1] =
+          static_cast<double>((seed % (kTurbBLen + kTurbBLen)) - kTurbBLen) / kTurbBLen;
+
+      // Normalize to unit length.
+      const double mag =
+          std::sqrt(gradient[ch][k][0] * gradient[ch][k][0] + gradient[ch][k][1] * gradient[ch][k][1]);
+      if (mag > 1e-10) {
+        gradient[ch][k][0] /= mag;
+        gradient[ch][k][1] /= mag;
+      }
+    }
+  }
+
+  // Fisher-Yates shuffle of the lattice selector.
+  for (int i = kTurbBLen - 1; i > 0; i--) {
+    seed = turbulenceRandom(seed);
+    const int target = static_cast<int>(seed % kTurbBLen);
+    std::swap(tables.lattice[i], tables.lattice[target]);
+  }
+
+  // Duplicate entries for wrapping.
+  for (int i = 0; i < kTurbBLenPlus2; i++) {
+    tables.lattice[kTurbBLen + i] = tables.lattice[i];
+    for (int ch = 0; ch < 4; ch++) {
+      gradient[ch][kTurbBLen + i][0] = gradient[ch][i][0];
+      gradient[ch][kTurbBLen + i][1] = gradient[ch][i][1];
+    }
+  }
+
+  // Convert to float SOA layout matching WGSL struct.
+  for (int ch = 0; ch < 4; ch++) {
+    for (int idx = 0; idx < kTurbTableSize; idx++) {
+      tables.gradX[ch * kTurbTableSize + idx] = static_cast<float>(gradient[ch][idx][0]);
+      tables.gradY[ch * kTurbTableSize + idx] = static_cast<float>(gradient[ch][idx][1]);
+    }
+  }
+}
+
 /// Uniform buffer layout matching the WGSL `DisplacementParams` struct.
 struct DisplacementParams {
   float scale;
@@ -872,9 +964,9 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     convolveMatrixPipeline_ = dev.createComputePipeline(cpDesc);
   }
 
-  // --- feTurbulence pipeline (output + storage buffer, no input texture) ---
+  // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
-    wgpu::BindGroupLayoutEntry entries[2]{};
+    wgpu::BindGroupLayoutEntry entries[3]{};
 
     entries[0].binding = 0;
     entries[0].visibility = wgpu::ShaderStage::Compute;
@@ -887,9 +979,14 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
     entries[1].buffer.minBindingSize = sizeof(TurbulenceParams);
 
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[2].buffer.minBindingSize = sizeof(TurbulenceTables);
+
     wgpu::BindGroupLayoutDescriptor bglDesc{};
     bglDesc.label = wgpuLabel("FilterTurbulenceBGL");
-    bglDesc.entryCount = 2;
+    bglDesc.entryCount = 3;
     bglDesc.entries = entries;
     turbulenceBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
 
@@ -1932,13 +2029,16 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   params.tileWidth = static_cast<float>(width / scaleX);
   params.tileHeight = static_cast<float>(height / scaleY);
   // Inverse device-to-filter transform: for now assume identity (no skew/rotation).
-  // The 2x2 matrix maps pixel coords back to filter (user) space.
   params.filterFromDeviceA = static_cast<float>(1.0 / scaleX);
   params.filterFromDeviceB = 0.0f;
   params.filterFromDeviceC = 0.0f;
   params.filterFromDeviceD = static_cast<float>(1.0 / scaleY);
 
-  // Upload as storage buffer (matches the shader's var<storage, read>).
+  // Generate permutation + gradient tables from the seed.
+  TurbulenceTables tables{};
+  generateTurbulenceTables(primitive.seed, tables);
+
+  // Upload params as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
   bufDesc.label = wgpuLabel("TurbulenceParamsStorage");
   bufDesc.size = sizeof(TurbulenceParams);
@@ -1947,20 +2047,33 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   wgpu::Buffer paramsBuffer = dev.createBuffer(bufDesc);
   device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
 
+  // Upload tables as storage buffer.
+  wgpu::BufferDescriptor tablesBufDesc{};
+  tablesBufDesc.label = wgpuLabel("TurbulenceTablesStorage");
+  tablesBufDesc.size = sizeof(TurbulenceTables);
+  tablesBufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  tablesBufDesc.mappedAtCreation = false;
+  wgpu::Buffer tablesBuffer = dev.createBuffer(tablesBufDesc);
+  device_.queue().writeBuffer(tablesBuffer, 0, &tables, sizeof(tables));
+
   wgpu::TextureView outputView = output.createView();
 
-  wgpu::BindGroupEntry bgEntries[2]{};
+  wgpu::BindGroupEntry bgEntries[3]{};
   bgEntries[0].binding = 0;
   bgEntries[0].textureView = outputView;
   bgEntries[1].binding = 1;
   bgEntries[1].buffer = paramsBuffer;
   bgEntries[1].offset = 0;
   bgEntries[1].size = sizeof(TurbulenceParams);
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = tablesBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = sizeof(TurbulenceTables);
 
   wgpu::BindGroupDescriptor bgDesc{};
   bgDesc.label = wgpuLabel("FilterTurbulenceBindGroup");
   bgDesc.layout = turbulenceBindGroupLayout_;
-  bgDesc.entryCount = 2;
+  bgDesc.entryCount = 3;
   bgDesc.entries = bgEntries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
 
