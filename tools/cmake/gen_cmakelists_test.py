@@ -125,7 +125,7 @@ class IsKnownBazelInternalTest(unittest.TestCase):
 
     def test_ignored_deps(self):
         self.assertTrue(g._is_known_bazel_internal("@re2//:re2"))
-        self.assertTrue(g._is_known_bazel_internal("@skia//src/core:core"))
+        self.assertTrue(g._is_known_bazel_internal("@glfw//:glfw"))
 
     def test_real_dep_not_internal(self):
         self.assertFalse(g._is_known_bazel_internal("@zlib//:z"))
@@ -137,7 +137,7 @@ class SkipCmakeDepTest(unittest.TestCase):
         self.assertTrue(g._should_skip_cmake_dep("donner_svg_renderer_geode_geo_encoder"))
 
     def test_normal_dep_is_not_skipped(self):
-        self.assertFalse(g._should_skip_cmake_dep("donner_svg_renderer_renderer_skia"))
+        self.assertFalse(g._should_skip_cmake_dep("donner_svg_renderer_renderer_tiny_skia"))
         self.assertFalse(g._should_skip_cmake_dep(None))
 
 

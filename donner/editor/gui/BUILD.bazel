@@ -18,7 +18,7 @@ donner_cc_library(
     # and run time. Tagged manual so `bazel build //...` on headless CI
     # doesn't pull in GLFW (which fails without X11 dev headers).
     tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         "//donner/svg/renderer:renderer_interface",
@@ -33,7 +33,7 @@ donner_cc_binary(
     # The binary requires a display to actually run, so we tag it manual
     # to keep it out of `bazel test //...` wildcards. It still builds.
     tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":editor_window",

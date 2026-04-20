@@ -14,7 +14,6 @@ namespace donner::svg {
  * @brief Rendering backend selected for the current Bazel configuration.
  */
 enum class RendererBackend {
-  Skia,
   TinySkia,
   Geode,
 };
@@ -48,7 +47,6 @@ constexpr uint32_t RendererBackendFeatureMask(RendererBackendFeature feature) {
  */
 inline std::string_view RendererBackendName(RendererBackend backend) {
   switch (backend) {
-    case RendererBackend::Skia: return "Skia";
     case RendererBackend::TinySkia: return "TinySkia";
     case RendererBackend::Geode: return "Geode";
   }

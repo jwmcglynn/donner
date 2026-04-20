@@ -79,7 +79,7 @@ struct PipelinedFrame {
 using RendererFactory = std::unique_ptr<svg::RendererInterface> (*)();
 
 /// Default factory that returns a `Renderer` backed by whichever renderer
-/// backend was selected at build time (tiny-skia, Skia, or Geode).
+/// backend was selected at build time (tiny-skia or Geode).
 std::unique_ptr<svg::RendererInterface> MakeDefaultRenderer();
 
 /// A pipelined renderer that moves rasterization off the caller's thread.

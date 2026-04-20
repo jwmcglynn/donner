@@ -19,7 +19,7 @@ The checklist (`docs/release_checklist.md`) enforces real invariants. Don't let 
 
 1. **Warning-clean build** across `//donner/...`.
 2. **Doxygen warning-free** — `doxygen Doxyfile 2>&1 | grep warning` → empty.
-3. **Tests pass in all four configurations**: default (tiny-skia), `--config=skia`, `--config=text-full`, and `--config=text-full --config=skia`. Geode is experimental and not yet a release gate.
+3. **Tests pass in the release-gated configurations**: default (tiny-skia) and `--config=text-full`. Geode is experimental and not yet a release gate.
 4. **Fuzzers run** for a reasonable duration; triage any new crashes.
 5. **CMake build verified** — both Skia and tiny-skia paths.
 6. **Doc audit** — stale "In Progress" markers removed from shipped features, examples still compile, Doxygen HTML navigation intact.

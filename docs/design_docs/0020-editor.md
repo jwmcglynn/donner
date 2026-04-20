@@ -1142,7 +1142,7 @@ Must-align design docs (drift here = rework):
 - `docs/design_docs/0017-geode_renderer.md` — the editor must eventually
   build against all three backends via the existing `renderer_backend`
   transition. No backend-specific assumptions at the editor layer
-  beyond `--config=skia` being the default for this milestone.
+  beyond the legacy full-Skia configuration being the default for this milestone.
 
 Existing external design docs being migrated:
 

@@ -152,7 +152,7 @@ Verify CMake and Bazel builds across both backends.
   (`docs/introduction.md`), Doxyfile (`PROJECT_BRIEF`), and MODULE.bazel.
 - [x] **README.md** — Updated: new branding, full supported elements list (53 elements
   including all 17 filter primitives, text, animation), code examples use `Renderer`
-  (not `RendererSkia`), removed outdated limitations section, added tiny-skia backend mention.
+  (not the old full-Skia renderer class), removed outdated limitations section, added tiny-skia backend mention.
 - [x] **docs/building.md** — Added CMake configuration options table (5 options with
   defaults), Bazel configuration options table (4 configs), updated build time estimates
   for both backends, removed "experimental" label from CMake section.
@@ -364,16 +364,15 @@ Copied from [release_checklist.md](../release_checklist.md) and filled in for v0
 
 ### Pre-Release: Code Quality
 
-- [x] **Warning-clean build** — `bazel build //donner/...`, `--config=skia`,
-  `--config=text-full`, and `--config=text-full --config=skia` all completed warning-clean on
+- [x] **Warning-clean build** — `bazel build //donner/...`, `--config=text-full`,
+  and the legacy full-Skia configuration all completed warning-clean on
   2026-04-16.
 - [x] **Doxygen warning gate waived** — Doxygen warnings are waived for v0.5 and do not block the
   release. The final docs pass still covers doc-comment review and generated-site review.
 - [x] **Tests pass** — `bazel test //donner/...` completed green on 2026-04-16 across:
   - Default (tiny-skia)
-  - `--config=skia`
   - `--config=text-full`
-  - `--config=text-full` + `--config=skia`
+  - legacy full-Skia configuration
 - [x] **Fuzzers run** — All 21 fuzzers ran for 10 minutes and the discovered crash was fixed with
   regression coverage.
 - [x] **CMake build verified** — Both Skia and tiny-skia CMake builds were validated during
@@ -436,7 +435,7 @@ commit, nothing else.
 
 ## Testing and Validation
 
-- **Unit tests**: `bazel test //donner/...` (both `--config=skia` and default tiny-skia).
+- **Unit tests**: `bazel test //donner/...` (both the default tiny-skia configuration and the legacy full-Skia configuration at the time).
 - **Image comparison**: `renderer_tests` and `resvg_test_suite` with reduced thresholds.
 - **Fuzzing**: All 21 fuzzers × 10 minutes, crashes fixed and regression-tested.
 - **Build matrix**: Bazel (Linux/macOS) × CMake (Linux/macOS) × {Skia, tiny-skia}.

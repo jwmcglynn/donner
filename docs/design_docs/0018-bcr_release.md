@@ -24,11 +24,11 @@ Donner's BCR-published surface is a deliberate subset of the full library. The d
 | Tiny-skia software renderer | ✅ | default backend |
 | Text rendering via `stb_truetype` (text-base) | ✅ | default text tier |
 | Filter effects (all 17 primitives) | ✅ | built-in |
-| Skia backend (`--config=skia`) | ❌ | Power users must consume Donner via `git_override` |
+| Removed full-Skia backend (legacy) | ❌ | Historical note only; power users previously needed `git_override` |
 | text-full (HarfBuzz + WOFF2) | ❌ | Power users via `git_override`; also tracked as a future follow-up BCR module |
 | Geode (WebGPU + Slug) backend | ❌ | Experimental; `git_override` only; revisit post-v0.5 |
 
-The mechanism that keeps the non-BCR features invisible to BCR consumers is the `dev_dependency = True` module extension at `third_party/bazel/non_bcr_deps.bzl`. BCR strips dev-only extensions when Donner is consumed as a `bazel_dep`, so downstream users simply never see `@skia`, `@harfbuzz`, `@woff2`, or `@wgpu_native_*`.
+The mechanism that keeps the non-BCR features invisible to BCR consumers is the `dev_dependency = True` module extension at `third_party/bazel/non_bcr_deps.bzl`. BCR strips dev-only extensions when Donner is consumed as a `bazel_dep`, so downstream users simply never see the former full-Skia repo, `@harfbuzz`, `@woff2`, or `@wgpu_native_*`.
 
 Every Donner target that references one of those hidden repos must be guarded by `target_compatible_with` on the relevant config_setting (e.g. `//donner/svg/renderer:text_full_enabled`, `//donner/svg/renderer:renderer_backend_skia`, `//donner/svg/renderer/geode:dawn_enabled`). If a BCR consumer's `bazel build @donner//...` ever tries to resolve one of those repos, the gating is broken — see the checklist below.
 
@@ -47,12 +47,12 @@ Do these in order. Each step is either a command to run or a one-line visual che
 
 ### Dev-config build matrix (local or CI)
 - [ ] `bazel build //...` — default config (tiny-skia + text-base)
-- [ ] `bazel build --config=skia //...` — full Skia backend still builds
+- [ ] Historical note: the removed full-Skia backend used to build in the dev matrix
 - [ ] `bazel build --config=text-full //...` — HarfBuzz + WOFF2 text shaping still builds
 - [ ] `bazel test //...` on at least the default config green
 
 ### BCR-consumer simulation (most important)
-Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is stripped and `@skia`/`@harfbuzz`/`@woff2`/`@wgpu_native_*` do not exist.
+Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is stripped and the former full-Skia repo / `@harfbuzz` / `@woff2` / `@wgpu_native_*` do not exist.
 
 - [ ] No `git_repository` / `new_git_repository` / non-dev `*_override` in top-level `MODULE.bazel` (grep for them):
       ```
@@ -126,7 +126,7 @@ Update this section with real-world lessons as they happen.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| BCR PR presubmit: `Unmapped external dep: @skia//:core` | A target referenced `@skia` but wasn't gated by `target_compatible_with` | Add `target_compatible_with = select({...renderer_backend_skia: [], //conditions:default: ["@platforms//:incompatible"]})` to the offending target (or use `renderer_backend_compatible_with(["skia"])`) |
+| BCR PR presubmit: unmapped former full-Skia external dep | A target referenced the former full-Skia repo but wasn't gated by `target_compatible_with` | Add the appropriate backend gating to the offending target |
 | BCR PR presubmit: target not found | New top-level library added under `//donner` since last release | Add it to `.bcr/presubmit.yml` `build_targets` |
 | BCR PR presubmit: integrity hash mismatch | GitHub regenerated the source tarball or the tag moved | Re-upload the release tarball verbatim; never force-push tags |
 | `source.template.json` URL 404 | `strip_prefix` doesn't match GitHub's tarball layout | Confirm pattern is `donner-{VERSION}` (GitHub uses repo name + version) |

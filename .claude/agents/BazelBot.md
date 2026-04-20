@@ -35,7 +35,6 @@ All flags live under `--//donner/svg/renderer:`. User-facing shortcuts via `--co
 | Config | Effect |
 |---|---|
 | (default) | `renderer_backend=tiny_skia`, no text, filters on |
-| `--config=skia` | `renderer_backend=skia` (full Skia backend) |
 | `--config=text` | stb_truetype basic text |
 | `--config=text-full` | FreeType + HarfBuzz + WOFF2 (implies `text`) |
 | `--config=no-filters` | Disables filter graph support |

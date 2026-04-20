@@ -22,7 +22,7 @@ This plan restores coverage to 80%+ and charts a path to the v1.0 target of 90%.
 ### Remaining gap
 
 ~6% from undertested production code in renderer backends, text engine, and rendering context.
-The largest uncovered files are RendererTinySkia.cc (2,241 lines), RendererSkia.cc (4,232 lines),
+The largest uncovered files are RendererTinySkia.cc (2,241 lines), the archived full-Skia renderer source (4,232 lines),
 TextEngine.cc (1,715 lines), and RenderingContext.cc (1,148 lines).
 
 ## Current State
@@ -94,7 +94,7 @@ The text engine is the largest gap in first-party code. `TextEngine.cc` (1,715 l
 
 ### Phase 2: Renderer tests (est. +2–3%)
 
-The renderer backends (RendererTinySkia.cc: 2,241 lines, RendererSkia.cc: 4,232 lines) are
+The renderer backends (RendererTinySkia.cc: 2,241 lines, archived full-Skia source: 4,232 lines) are
 primarily tested via golden image comparisons. Add targeted unit tests for specific code paths.
 
 - [ ] **RendererDriver paint resolution** — Test fill/stroke paint resolution for solid colors,
@@ -202,4 +202,4 @@ open coverage-report/index.html
 - No test regressions
 - New tests use project conventions (`donner_cc_test`, gTest/gMock)
 - Each new test file has a corresponding fuzzer where applicable
-- Test across all build configs: default, `--config=text-full`, `--config=skia`
+- Test across all build configs: default, `--config=text-full`, legacy full-Skia configuration

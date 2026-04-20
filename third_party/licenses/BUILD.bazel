@@ -6,7 +6,7 @@ application authors consume to obtain a legally-sufficient attribution file
 they can embed into their binary (e.g. via `cc_embed_data`).
 
 Only dependencies whose upstream BUILD files do not already declare a
-`license()` target are redeclared here. `libpng`, `skia`, and `zlib` ship
+`license()` target are redeclared here. `libpng` and `zlib` ship
 their own `license()` in their module overlays, so we reference them
 directly in the variant lists below.
 
@@ -80,12 +80,6 @@ license(
     license_kinds = ["@rules_license//licenses/spdx:MIT"],
     license_text = "@woff2//:LICENSE",
 )
-
-# Skia's upstream `@skia//:license` uses the generic `notice` kind and does
-# not export `LICENSE` for outside packages to reference. The build report's
-# `generate_build_report.py` maps the resulting "notice" kind back to the
-# real SPDX id (BSD-3-Clause) for display; the NOTICE.txt still ships the
-# verbatim license text because `@skia//:license` embeds it.
 
 # FreeType's upstream BUILD.bazel overlay only uses the legacy
 # `licenses(["notice"])` declaration and does not export `LICENSE.TXT`, so we
@@ -183,17 +177,7 @@ TEXT_FULL_LICENSES = DEFAULT_LICENSES + [
     ":woff2",
 ]
 
-SKIA_TEXT_FULL_LICENSES = [
-    ":entt",
-    ":stb",
-    ":brotli",
-    ":freetype",
-    ":harfbuzz",
-    ":woff2",
-    "@libpng//:license",
-    "@skia//:license",
-    "@zlib//:license",
-]
+SKIA_TEXT_FULL_LICENSES = []  # Removed: full-Skia backend no longer exists.
 
 ALL_KNOWN_LICENSES = [
     ":entt",
@@ -210,7 +194,6 @@ ALL_KNOWN_LICENSES = [
     ":roboto",
     ":fira-code",
     "@libpng//:license",
-    "@skia//:license",
     "@zlib//:license",
 ]
 
@@ -224,12 +207,6 @@ donner_notice_file(
     name = "notice_text_full",
     variant = "tiny-skia + text-full",
     licenses = TEXT_FULL_LICENSES,
-)
-
-donner_notice_file(
-    name = "notice_skia_text_full",
-    variant = "skia + text-full",
-    licenses = SKIA_TEXT_FULL_LICENSES,
 )
 
 donner_notice_file_auto(

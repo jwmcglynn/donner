@@ -1,27 +1,9 @@
-"""Donner-level benchmarks comparing performance across backends (Skia vs tiny-skia)."""
+"""Donner-level benchmarks comparing performance across backends."""
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:rules.bzl", "donner_cc_binary")
 
 package(default_visibility = ["//visibility:public"])
-
-donner_cc_binary(
-    name = "skia_filter_perf_bench",
-    srcs = ["SkiaFilterPerfBench.cpp"],
-    deps = [
-        "//donner/svg/renderer:skia_deps",
-        "@google_benchmark//:benchmark_main",
-    ],
-)
-
-donner_cc_binary(
-    name = "skia_render_perf_bench",
-    srcs = ["SkiaRenderPerfBench.cpp"],
-    deps = [
-        "//donner/svg/renderer:skia_deps",
-        "@google_benchmark//:benchmark_main",
-    ],
-)
 
 donner_cc_binary(
     name = "tinyskia_render_perf_bench",
@@ -51,43 +33,5 @@ donner_cc_binary(
         "//donner/svg",
         "//donner/svg/parser",
         "@google_benchmark//:benchmark_main",
-    ],
-)
-
-sh_test(
-    name = "filter_perf_compare",
-    size = "large",
-    srcs = ["run_filter_perf_compare.sh"],
-    args = [
-        "$(COMPILATION_MODE)",
-        "$(location :skia_filter_perf_bench)",
-        "$(location @tiny-skia-cpp//tests/benchmarks:filter_perf_bench_native)",
-    ],
-    data = [
-        ":skia_filter_perf_bench",
-        "@tiny-skia-cpp//tests/benchmarks:filter_perf_bench_native",
-    ],
-    tags = [
-        "exclusive",
-        "perf_compare",
-    ],
-)
-
-sh_test(
-    name = "render_perf_compare",
-    size = "large",
-    srcs = ["run_render_perf_compare.sh"],
-    args = [
-        "$(COMPILATION_MODE)",
-        "$(location :skia_render_perf_bench)",
-        "$(location :tinyskia_render_perf_bench)",
-    ],
-    data = [
-        ":skia_render_perf_bench",
-        ":tinyskia_render_perf_bench",
-    ],
-    tags = [
-        "exclusive",
-        "perf_compare",
     ],
 )

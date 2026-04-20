@@ -276,7 +276,6 @@ class LicenseEntry:
 _PACKAGE_URL_FALLBACKS: dict[str, str] = {
     "libpng": "http://www.libpng.org/pub/png/libpng.html",
     "zlib": "https://zlib.net/",
-    "skia": "https://skia.org/",
 }
 
 
@@ -285,9 +284,7 @@ _PACKAGE_URL_FALLBACKS: dict[str, str] = {
 # instead of a specific SPDX identifier. The NOTICE.txt still carries the
 # verbatim license text from upstream; this only affects the display in the
 # build report.
-_PACKAGE_LICENSE_KIND_OVERRIDES: dict[str, tuple[str, ...]] = {
-    "skia": ("BSD-3-Clause",),
-}
+_PACKAGE_LICENSE_KIND_OVERRIDES: dict[str, tuple[str, ...]] = {}
 
 
 def load_license_manifest(
@@ -711,12 +708,6 @@ _DEPENDENCY_VARIANTS: tuple[DependencyVariant, ...] = (
         query_target="//examples:svg_to_png",
         configs=("--config=text-full",),
         notice_target="//third_party/licenses:notice_text_full",
-    ),
-    DependencyVariant(
-        category_name="skia + text-full",
-        query_target="//examples:svg_to_png",
-        configs=("--config=skia", "--config=text-full"),
-        notice_target="//third_party/licenses:notice_skia_text_full",
     ),
     DependencyVariant(
         category_name="editor (tiny-skia + imgui/glfw/tracy + editor fonts)",

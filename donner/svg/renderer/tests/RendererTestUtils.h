@@ -30,8 +30,7 @@ struct AsciiImage {
    * Match against backend-specific goldens. Usage:
    * ```
    * EXPECT_TRUE(image.matchBackend()
-   *     .tinySkia(R"(...)")
-   *     .skia(R"(...)"));
+   *     .tinySkia(R"(...)"));
    * ```
    * Each backend's golden is only checked when that backend is active. If no
    * backend-specific golden is set, falls back to a default if provided.
@@ -40,7 +39,6 @@ struct AsciiImage {
     const AsciiImage& image;
     std::string_view defaultGolden;
     std::string_view tinySkiaGolden;
-    std::string_view skiaGolden;
 
     BackendMatcher& defaultPattern(std::string_view g) {
       defaultGolden = g;
@@ -48,10 +46,6 @@ struct AsciiImage {
     }
     BackendMatcher& tinySkia(std::string_view g) {
       tinySkiaGolden = g;
-      return *this;
-    }
-    BackendMatcher& skia(std::string_view g) {
-      skiaGolden = g;
       return *this;
     }
 
@@ -62,8 +56,6 @@ struct AsciiImage {
       std::string_view backendGolden;
       if (ActiveRendererBackend() == RendererBackend::TinySkia) {
         backendGolden = tinySkiaGolden;
-      } else if (ActiveRendererBackend() == RendererBackend::Skia) {
-        backendGolden = skiaGolden;
       }
 
       // Try backend-specific pattern first (silently).
@@ -90,7 +82,7 @@ struct AsciiImage {
     }
   };
 
-  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}, {}}; }
+  BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}}; }
 
 
 

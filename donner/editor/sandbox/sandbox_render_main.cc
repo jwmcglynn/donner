@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Step 2: hand the bytes to the sandbox child, replay its wire stream into
-  // a local Renderer backend (build-selected: tiny-skia, Skia, or Geode).
+  // a local Renderer backend (build-selected: tiny-skia or Geode).
   SandboxHost host(ResolveChildPath(argv[0]));
   const std::string_view svgView(reinterpret_cast<const char*>(fetch.bytes.data()),
                                  fetch.bytes.size());

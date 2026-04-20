@@ -12,7 +12,7 @@ client that understands the `.claude/agents/` convention), these files are
 loaded automatically and made available as delegate targets. Instead of asking
 one generic assistant every question, you can route a question to the bot that
 owns the relevant area — BazelBot for a `BUILD.bazel` change, TextBot for a
-HarfBuzz shaping bug, TinySkiaBot for a pixel diff in the default backend, and
+HarfBuzz shaping bug, TinySkia Bot for a pixel diff in the default backend, and
 so on.
 
 This page is the map: what each bot owns, when to call it, and how they hand
@@ -54,11 +54,10 @@ that every agent inherits.
 | **ReadabilityBot** | Modern C++20 readability and safety review | Code review focused on idioms, modern C++, catching antipatterns, template discipline |
 | **ReleaseBot** | Release checklist, versioning, `RELEASE_NOTES.md`, BCR publishing, build report | What's left before cutting a release, BCR publish flow, build-report issues |
 | **SecurityBot** | Trust boundaries, input validation, fuzzing, resource limits, SVG-engine threat model | Security reviews, adversarial-input crash triage, DoS analysis, safe-input guarantees |
-| **SkiaBot** | `RendererSkia` backend (`--config=skia`), Skia text/pathops/fontmgr | Bugs under `--config=skia`, Skia API choices, cross-backend comparison when Skia is the reference |
 | **SpecBot** | SVG2 + dependent web standards (CSS, DOM, XML, Filter Effects, Unicode) | Edge-case spec questions, identifying UB, checking what browsers/resvg/librsvg/batik actually do |
 | **TestBot** | GTest/GMock, diagnosable failures, custom matchers | Test-file reviews, "this failure message is useless" problems, promoting assertions into matchers |
-| **TextBot** | Text rendering across all three tiers (`--config=text`, `--config=text-full`, Skia text) | Any text bug, font matching, `@font-face`, WOFF2, shaping, cross-tier mismatches |
-| **TinySkiaBot** | Vendored `tiny-skia-cpp` + `RendererTinySkia` (the default backend) | Pixel diffs in the default backend, SIMD parity, stroke/dash edge cases |
+| **TextBot** | Text rendering across the no-text default plus `--config=text` and `--config=text-full` | Any text bug, font matching, `@font-face`, WOFF2, shaping, cross-tier mismatches |
+| **TinySkia Bot** | Vendored `tiny-skia-cpp` + `RendererTinySkia` (the default backend) | Pixel diffs in the default backend, SIMD parity, stroke/dash edge cases |
 
 Each agent file in [`.claude/agents/`](https://github.com/jwmcglynn/donner/tree/main/.claude/agents) starts with the
 same YAML frontmatter shape:
@@ -123,9 +122,7 @@ edges:
 - **BazelBot → GeodeBot** for anything touching the `enable_dawn` flag.
 - **BazelBot → ReleaseBot** for build-report layout and release-artifact
   builds.
-- **TextBot → SkiaBot** when a text bug only reproduces under `--config=skia`.
-- **TextBot → TinySkiaBot** when the same bug reproduces under the default
-  backend but not under `--config=skia`.
+- **TextBot → TinySkia Bot** when the bug is in glyph rasterization rather than shaping.
 - **DuckBot → DesignReviewBot** when a big-picture proposal is ready to
   become a design doc.
 - **DuckBot → PerfBot / SecurityBot** when a proposal needs a perf or
@@ -168,7 +165,7 @@ with more worked examples.
 - **Read the bot's file once, so you know what to ask.** Each file is short
   enough (~100-200 lines) to skim. After one read you'll know whether a
   question is on-domain for that bot.
-- **Trust the handoff rules.** If the bot says "that's SkiaBot's area", route
+- **Trust the handoff rules.** If the bot says "that's the renderer bot's area", route
   there immediately rather than pushing the current bot outside its comfort
   zone.
 - **Prefer the bot's source-of-truth files over the bot's paraphrase.** If
@@ -195,7 +192,7 @@ bot is getting too broad — follow the pattern:
    where appropriate.
 4. **Match the house voice.** Each bot has its own tone; match the tone of a
    neighboring bot in the same discipline (for example, a new
-   rendering-backend bot should read like SkiaBot or TinySkiaBot, not like
+   rendering-backend bot should read like TinySkia Bot or GeodeBot, not like
    DuckBot).
 5. **Update this page.** Add a row to the quick-reference table and, if the
    bot is involved in any handoff you think contributors will hit, add it to

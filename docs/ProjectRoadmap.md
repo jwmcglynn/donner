@@ -29,7 +29,7 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ### Renderer Architecture
 
-- **Renderer interface abstraction** — `RendererInterface` / `RendererSkia` split with
+- **Renderer interface abstraction** — `RendererInterface` split from the original full-Skia renderer with
   `RendererDriver` traversing a flat render tree. Enables future backend swaps.
   ([design](design_docs/0003-renderer_interface_design.md))
 - **tiny-skia software renderer** — Full software rasterizer (fill, stroke, gradients, patterns,
@@ -46,8 +46,8 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ### SVG Filter Effects
 
-- All 17 SVG filter primitives implemented in both Skia (native `SkImageFilter` lowering) and
-  tiny-skia backends.
+- All 17 SVG filter primitives implemented in the current tiny-skia backend; the former full-Skia
+  path provided native `SkImageFilter` lowering before its removal.
 - Float-precision filter pipeline with SIMD optimizations (NEON): Gaussian blur, morphology,
   color matrix, turbulence, convolution, blend, composite, lighting, displacement map, component
   transfer, flood, offset, merge, tile.
@@ -233,7 +233,7 @@ Flagship v1.0 feature: a hybrid structured/freeform SVG editor workflow.
 ## Future Work (post-v1.0)
 
 - **"Geode" GPU-accelerated renderer** — Custom GPU rendering backend targeting modern graphics
-  APIs, replacing Skia dependency for high-performance and embedded use cases.
+  APIs for high-performance and embedded use cases.
 - **Multithreading** — Thread-safe access to documents and rendering. Define ownership and
   concurrency model for ECS registry access, enable parallel rendering and background parsing.
 - Boolean path operations and geometry mutation APIs for graphical editors.
@@ -249,8 +249,8 @@ flowchart TD
   A[Core Parser + DOM + CSS Cascade] --> B[Computed Style + Layout]
   B --> C[Rendering Instance Graph]
   C --> D[Renderer Backend Interface]
-  D --> E1[Skia Backend]
-  D --> E2[tiny-skia Software Backend]
+  D --> E1[tiny-skia Software Backend]
+  D --> E2[Geode GPU Backend]
 
   A --> F[Partial Re-parse / Live Patch Engine]
   F --> C

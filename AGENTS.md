@@ -27,7 +27,7 @@ Donner is a dynamic SVG engine (browser-like, not a static renderer). It builds 
 - **Styling** (`Property`, `PropertyRegistry`, `StyleSystem`): Consumes CSS data, implements SVG style model (presentation attributes, cascading, inheritance) → `ComputedStyleComponent`.
 - **Document Model (ECS)**: Built on **EnTT**. Entities = SVG elements, Components = data (`TreeComponent`, `StyleComponent`, `PathComponent`), Systems = logic (`LayoutSystem`, `StyleSystem`, `ShapeSystem`).
 - **API Frontend** (`donner::svg::SVG*Element`): User-facing wrappers around ECS entities/components.
-- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`), **Skia** (`RendererSkia`, full-featured), and **Geode** (`RendererGeode`, in-development GPU backend via Dawn/WebGPU; gated on `--//donner/svg/renderer/geode:enable_dawn=true`). `Renderer` is the public facade. Select with `--config=skia` or `--config=tiny-skia` (Bazel) / `DONNER_RENDERER_BACKEND` (CMake).
+- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Geode** (`RendererGeode`, in-development GPU backend via Dawn/WebGPU; gated on `--//donner/svg/renderer/geode:enable_dawn=true`). `Renderer` is the public facade. Select the default tiny-skia backend or `--config=geode` in Bazel; CMake uses `DONNER_RENDERER_BACKEND` where supported.
 - **Base Library** (`donner::base`): Common utilities (`RcString`, `Vector2`, `Transform`, `Length`).
 
 ### Rendering Pipeline
@@ -44,7 +44,7 @@ Stages transform components through the ECS:
    - `FilterSystem`: `FilterComponent` → `ComputedFilterComponent`
    - `PaintSystem`: Gradients/patterns → `ComputedGradientComponent`, `ComputedPatternComponent`
 3. **Rendering Instantiation** (`RenderingContext`): Traverses computed tree, creates `RenderingInstanceComponent` per visible element with resolved references (paint, clip, mask, marker, filter), offscreen subtrees, layer isolation (opacity < 1, filters, masks), and `drawOrder`.
-4. **Backend** (TinySkia, Skia, or Geode): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
+4. **Backend** (TinySkia or Geode): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
 
 ## Pull Request Workflow
 
@@ -100,7 +100,7 @@ Flag: `--//donner/svg/renderer:renderer_backend` (default: `tiny_skia`)
 | Config | Backend | Notes |
 |--------|---------|-------|
 | (default) | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps |
-| `--config=skia` | Skia (`RendererSkia`) | Full-featured, platform fontmgr, pathops |
+| `--config=geode` | Geode (`RendererGeode`) | Experimental WebGPU + Slug backend |
 
 ### Text Rendering
 
@@ -110,7 +110,6 @@ Text is **off by default**. Two tiers enabled via flags `--//donner/svg/renderer
 |--------|--------------|-------------|
 | `--config=text` | stb_truetype (`TextLayout`) | Basic kern-table kerning, glyph outlines |
 | `--config=text-full` | FreeType + HarfBuzz (`TextShaper`) + WOFF2 | Full OpenType shaping (GSUB/GPOS), web fonts |
-| `--config=skia` | Skia internal | Skia's own text rendering |
 
 `text-full` implicitly enables `text`. When making text changes, test all applicable tiers.
 
@@ -124,7 +123,6 @@ SVG `<filter>` support (filter graph executor + filter primitives). Disable with
 
 ```sh
 bazel test --config=text-full //donner/svg/renderer/tests:resvg_test_suite
-bazel test --config=skia //donner/svg/renderer/tests:resvg_test_suite
 # Update goldens:
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:renderer_tests
 ```

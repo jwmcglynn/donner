@@ -124,7 +124,7 @@ The first phase of mitigations has landed. Recap:
   deps that weren't in `KNOWN_BAZEL_TO_CMAKE_DEPS`. It now warns, and fails
   hard in `--check` mode. Auto-mapping for `absl::*` patterns added.
 - **Ignore list for Bazel-internal deps** — `@bazel_tools//tools/cpp:*`,
-  `@re2//:re2` (test-only transitive), `@skia//src/*:*` (internal modules).
+  `@re2//:re2` (test-only transitive), and the former full-Skia repo's internal modules.
 - **`--check` mode** — generates CMakeLists.txt to the workspace, statically
   validates the output (every referenced source exists, every linked target
   is defined or external), then restores the workspace. Found 2 real pre-existing
@@ -253,7 +253,7 @@ def query_all_select_variants(target: str) -> Dict[str, List[str]]:
     """Run cquery with each config to discover select() branches."""
     configs = {
         "tiny_skia": ["--config=tiny-skia"],
-        "skia": ["--config=skia"],
+        "legacy_full_skia": ["<removed full-Skia config>"],
         "text_full": ["--config=text-full"],
     }
     variants = {}

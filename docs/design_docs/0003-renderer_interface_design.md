@@ -8,7 +8,7 @@
 
 The renderer interface decouples SVG document traversal from backend-specific drawing, enabling
 multiple rendering backends behind a consistent API. Phase 1 extracted a backend-agnostic
-`RendererDriver` and `RendererInterface` from the monolithic `RendererSkia`, preserving Skia
+`RendererDriver` and `RendererInterface` from the monolithic full-Skia renderer, preserving Skia
 behavior and resvg parity. Phase 2a shipped a lightweight `tiny-skia-cpp` backend, Bazel backend
 selection, and a single-backend test architecture so normal test runs compile exactly one renderer
 backend at a time.
@@ -51,7 +51,7 @@ backend selection, and then implementing the recording and structural-test backe
 - [x] Extract traversal code into `RendererDriver` with deferred layer management.
 - [x] Implement all driver features: masks, patterns (with nesting), markers, filters, deferred
   pops, `subtreeConsumedBySubRendering`.
-- [x] Adapt `RendererSkia` to implement `RendererInterface` with full feature parity.
+- [x] Adapt the full-Skia renderer to implement `RendererInterface` with full feature parity.
 - [x] Wire entry points (`SVGRenderer`, tooling, viewer, tests) through `RendererDriver`.
 - [x] Add mock-based driver interaction tests (`renderer_driver_tests`).
 - [x] Achieve full resvg test suite parity (660 tests, 0 regressions).
@@ -106,7 +106,7 @@ backend selection, and then implementing the recording and structural-test backe
 
 ## Background
 
-Donner's renderer was originally a monolithic `RendererSkia::Impl` class that interleaved
+Donner's renderer was originally a monolithic full-Skia renderer implementation that interleaved
 document traversal with Skia-specific drawing. This made it impossible to test traversal logic
 independently, swap backends, or assert on rendering structure without pixel comparison.
 
@@ -128,7 +128,7 @@ RendererDriver  ----> RendererInterface (abstract)
                             |
                 +-----------+-----------+-----------+
                 |           |           |           |
-          RendererSkia  RendererTinySkia  Recorder  MockRenderer
+          FullSkiaRenderer  RendererTinySkia  Recorder  MockRenderer
 ```
 
 ### RendererInterface
@@ -214,7 +214,7 @@ tree:
   `beginPatternTile()`/`endPatternTile()`. `traverseRange()` also pre-renders nested patterns
   before drawing.
 
-### RendererSkia (shipped)
+### Full-Skia renderer (shipped, later removed)
 
 Implements `RendererInterface` using Skia. Owns canvas, bitmap, and font manager. Key
 implementation details:
@@ -299,7 +299,7 @@ donner_cc_library(
     name = "renderer",
     srcs = ["Renderer.cc"] + select({
         ":renderer_backend_tiny_skia": ["RendererTinySkiaBackend.cc"],
-        "//conditions:default": ["RendererSkiaBackend.cc"],
+        "//conditions:default": ["LegacyFullSkiaBackend.cc"],
     }),
     hdrs = ["Renderer.h"],
     deps = [
@@ -307,7 +307,7 @@ donner_cc_library(
         ":renderer_interface",
     ] + select({
         ":renderer_backend_tiny_skia": [":renderer_tiny_skia"],
-        "//conditions:default": [":renderer_skia"],
+        "//conditions:default": [":legacy_full_skia_renderer"],
     }),
 )
 ```
@@ -316,7 +316,7 @@ The repository also defines `.bazelrc` aliases:
 
 ```sh
 bazel test //...                     # default (tiny-skia)
-bazel test --config=skia //...       # Skia backend
+bazel test <legacy full-Skia config> //...  # former full-Skia backend
 bazel test --config=tiny-skia //...  # explicit tiny-skia
 ```
 
@@ -340,8 +340,8 @@ cmake -S . -B build -DDONNER_RENDERER_BACKEND=skia
 
 The `DONNER_RENDERER_BACKEND` variable controls:
 - Which backend library is fetched (Skia via FetchContent or tiny-skia-cpp as a subdirectory).
-- Which backend-specific targets (`renderer_skia` or `renderer_tiny_skia`) are defined.
-- Which backend source (`RendererSkiaBackend.cc` or `RendererTinySkiaBackend.cc`) is compiled
+- Which backend-specific targets (`legacy_full_skia_renderer` or `renderer_tiny_skia`) are defined.
+- Which backend source (`LegacyFullSkiaBackend.cc` or `RendererTinySkiaBackend.cc`) is compiled
   into the `renderer` target.
 
 The generator (`tools/cmake/gen_cmakelists.py`) wraps backend-specific targets in
@@ -438,7 +438,7 @@ Phase 2a changed renderer testing to build only one backend at a time:
 - **Direct backend-vs-backend parity tests in normal suites:** Rejected because they force both
   concrete backends to compile into one test binary and make `bazel test //...` pay the Skia build
   cost even when validating TinySkia.
-- **Single `RendererSkia` with compile-time `#ifdef` for tiny-skia:** Rejected because it would
+- **Single full-Skia renderer with compile-time `#ifdef` for tiny-skia:** Rejected because it would
   pollute the Skia backend with conditional compilation and prevent clean separation of concerns.
 - **Protobuf/FlatBuffers recording format:** Deferred; in-memory recording with text output
   covers the immediate debugging and testing use cases without adding a serialization

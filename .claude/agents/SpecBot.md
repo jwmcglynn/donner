@@ -116,7 +116,7 @@ You should proactively add new divergences to this mental model as they're ident
 ## Handoff rules
 
 - **How Donner currently implements X** (vs. what the spec says) — read `donner/svg/` and report; you know the spec, but the code lives in the repo. Don't assume — verify.
-- **Renderer-specific pixel issues once the SVG interpretation is clear**: TinySkiaBot / SkiaBot / GeodeBot.
+- **Renderer-specific pixel issues once the SVG interpretation is clear**: TinySkia Bot / GeodeBot.
 - **Test readability for SVG test files**: TestBot.
 - **Designing a new SVG feature for Donner**: pair with DesignReviewBot — you provide the spec analysis, DesignReviewBot ensures the design doc covers non-goals/testing/trust boundaries.
 - **Parser diagnostics and error message quality**: point at `docs/parser_diagnostics.md`.

@@ -4,8 +4,8 @@
 
 Donner implements all 17 SVG filter primitives from the
 [Filter Effects Module Level 1](https://drafts.fxtf.org/filter-effects/) spec, plus CSS shorthand
-filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.). Filters work on both the
-TinySkia and Skia rendering backends.
+filter functions (`blur()`, `brightness()`, `drop-shadow()`, etc.). Filters currently ship on the
+TinySkia rendering backend; the removed full-Skia backend had its own native lowering path.
 
 **Key guarantees:**
 - All 17 primitives render correctly with `in`/`result` named buffer routing.
@@ -44,7 +44,7 @@ SVG DOM                    Filter System              Renderer
 | Renderer driver | `donner/svg/renderer/RendererDriver.cc` | Orchestrates capture + graph execution |
 | TinySkia executor | `donner/svg/renderer/FilterGraphExecutor.cc` | CPU pixmap-based graph execution |
 | TinySkia filter lib | `third_party/tiny-skia-cpp/src/tiny_skia/filter/` | Pure pixel math (all primitives) |
-| Skia backend | `donner/svg/renderer/RendererSkia.cc` | Native `SkImageFilter` DAG construction |
+| Historical full-Skia backend | `origin/skia_archive` | Former native `SkImageFilter` DAG construction |
 
 ### Filter Graph Model
 
@@ -73,13 +73,11 @@ FilterNode {
 - Handles linearRGB/sRGB conversion, primitive subregion clipping (rotation-aware via
   `filterFromDevice`), and named buffer routing.
 
-**Skia backend** (`RendererSkia.cc`):
-- `buildNativeSkiaFilterDAG()` constructs an `SkImageFilter` tree for all 17 primitives.
-- `pushFilterLayer()` captures the source graphic into a raster `SkSurface`.
-- `popFilterLayer()` applies the filter DAG and composites with rotation-aware filter region
-  clipping via `SkPath`.
-- Falls back to the shared `FilterGraphExecutor` for complex cases (transformed blur chains,
-  feTile with rotation).
+**Historical full-Skia backend** (removed in 2026-04, archived at `origin/skia_archive`):
+- Built an `SkImageFilter` tree for all 17 primitives.
+- Captured the source graphic into a raster `SkSurface`.
+- Applied the filter DAG with rotation-aware region clipping via `SkPath`.
+- Fell back to the shared `FilterGraphExecutor` for transformed blur chains and rotated `feTile`.
 
 ### feImage Fragment References
 
@@ -163,8 +161,8 @@ Shorthand functions map to equivalent filter graph nodes internally.
 - **Morphology:** Currently O(w*h*rx*ry). Could use van Herk/Gil-Werman for O(w*h).
 - **ConvolveMatrix:** Full 2D convolution, O(w*h*orderX*orderY). Not separable.
 - **Lighting:** Per-pixel normal computation + light vector. Spotlight uses per-pixel cone test.
-- **Skia backend:** Native `SkImageFilter` DAG avoids intermediate buffer copies for most graphs.
-  CPU fallback path still used for transformed blur and feTile with rotation.
+- **Historical full-Skia backend:** the removed native `SkImageFilter` DAG avoided intermediate
+  buffer copies for most graphs.
 
 ## Testing and Observability
 
@@ -173,9 +171,7 @@ Shorthand functions map to equivalent filter graph nodes internally.
 | Target | Backend | Description |
 |---|---|---|
 | `//donner/svg/renderer/tests:resvg_test_suite_tiny_skia` | TinySkia | Full resvg golden image suite |
-| `//donner/svg/renderer/tests:resvg_test_suite_skia` | Skia | Same suite, Skia backend |
 | `//donner/svg/renderer/tests:renderer_tests_tiny_skia` | TinySkia | Deterministic golden tests |
-| `//donner/svg/renderer/tests:renderer_tests_skia` | Skia | Same tests, Skia backend |
 | `//donner/svg/renderer/tests:filter_graph_executor_tests` | TinySkia | Unit tests for executor |
 | `third_party/tiny-skia-cpp/...` | N/A | Per-primitive pixel math unit tests |
 
@@ -221,8 +217,8 @@ primitives. Point/spot light coordinates are scaled from user space to pixel spa
 
 ### RasterizeTransformedImagePremultiplied
 
-Shared utility (in both `FilterGraphExecutor.cc` and `RendererSkia.cc`) for rasterizing images
-through affine transforms. Used by:
+Shared utility used in `FilterGraphExecutor.cc` (and previously by the removed full-Skia backend)
+for rasterizing images through affine transforms. Used by:
 - `feImage` external images with host rotation/skew
 - `feImage` fragment references with host shear
 

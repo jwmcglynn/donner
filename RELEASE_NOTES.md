@@ -1,5 +1,11 @@
 # Donner
 
+## Unreleased
+
+### Removed
+
+- Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains available.
+
 ## v0.5.0
 
 Major release adding a software rendering backend, complete text rendering, all 17 SVG filter
@@ -218,7 +224,7 @@ if (maybeDocument.hasError()) {
   std::abort();
 }
 
-RendererSkia renderer;
+Renderer renderer;
 renderer.draw(maybeDocument.result());
 
 const bool success = renderer.save("output.png");

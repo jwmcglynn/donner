@@ -104,15 +104,11 @@ def renderer_backend_compatible_with(backends):
     Returns compatibility constraints for renderer backend-specific targets.
 
     Args:
-      backends: List of supported backend names. Valid values are "skia",
-        "tiny_skia", and "geode".
+      backends: List of supported backend names. Valid values are
+        "tiny_skia" and "geode".
     """
     conditions = {}
     remaining = list(backends)
-
-    if "skia" in remaining:
-        conditions["//donner/svg/renderer:renderer_backend_skia"] = []
-        remaining.remove("skia")
 
     if "tiny_skia" in remaining:
         conditions["//donner/svg/renderer:renderer_backend_tiny_skia"] = []
@@ -195,7 +191,7 @@ donner_transitioned_cc_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["skia", "tiny_skia", "geode"],
+            values = ["tiny_skia", "geode"],
         ),
     },
 )
@@ -249,7 +245,7 @@ donner_multi_transitioned_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["skia", "tiny_skia", "geode"],
+            values = ["tiny_skia", "geode"],
         ),
         "text": attr.string(
             default = "false",
@@ -542,7 +538,7 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
         # we pass actual File objects — `cc_common.compile` rejects the
         # list of Targets returned by `ctx.attr`. Required for
         # perf-sensitive wrappers that carry their own source files,
-        # not just deps-only wrappers like `skia_deps`.
+        # not just deps-only wrappers.
         srcs = ctx.files.srcs,
         includes = ctx.attr.includes,
         defines = ctx.attr.defines,

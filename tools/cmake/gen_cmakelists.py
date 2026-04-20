@@ -84,11 +84,6 @@ KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
 _IGNORED_EXTERNAL_DEPS: Set[str] = {
     # re2 is pulled in as a test-only dep by googletest; FetchContent handles it.
     "@re2//:re2",
-    # Skia internal module targets - the "skia" FetchContent target covers all of them.
-    "@skia//src/core:core",
-    "@skia//src/pathops:pathops",
-    "@skia//src/ports:fontmgr_empty_freetype",
-    "@skia//src/ports:fontmgr_fontconfig_freetype",
     # ImGui and GLFW are used by the SVG viewer (Bazel-only WASM target).
     "@glfw//:glfw",
     "@imgui//:imgui",
@@ -170,24 +165,12 @@ def _is_known_bazel_internal(dep: str) -> bool:
     return False
 
 # Helper constants for CMake condition strings.
-_SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "skia"'
 _TINY_SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "tiny_skia"'
 _TEXT_FULL = "DONNER_TEXT_FULL"
 
 # Maps CMake target name → CMake condition expression.
 # Targets in this map are wrapped in if(<condition>) … endif().
 CONDITIONAL_TARGETS: Dict[str, str] = {
-    # Skia backend
-    "donner_svg_renderer_renderer_skia": _SKIA,
-    "donner_svg_renderer_skia_deps": _SKIA,
-    "donner_svg_renderer_skia_deps_opt": _SKIA,
-    "donner_svg_renderer_skia_deps_unconfigured": _SKIA,
-    "donner_third_party_skia_user_config_user_config": _SKIA,
-    "skia": _SKIA,
-    # Skia-only tests
-    "donner_svg_renderer_tests_renderer_test_utils": _SKIA,
-    "donner_svg_renderer_tests_renderer_ascii_tests": _SKIA,
-    "donner_svg_tests_svg_renderer_ascii_tests": _SKIA,
     # Geode backend (Bazel-only: depends on wgpu-native prebuilts fetched via
     # http_archive under //third_party/webgpu-cpp). The renderer_geode library
     # and its tests are unbuildable in CMake — the webgpu-cpp wrapper isn't
@@ -223,18 +206,12 @@ CONDITIONAL_TARGETS: Dict[str, str] = {
 OPTIONAL_DEPS: Set[str] = {
     "woff2dec",
     "stb_truetype",
-    "skia",
     "tiny_skia",
-    "donner_svg_renderer_renderer_skia",
     "donner_svg_renderer_renderer_tiny_skia",
     "donner_svg_renderer_renderer_geode",
     "donner_svg_renderer_filter_graph_executor",
     "donner_svg_resources_font_manager",
     "donner_base_fonts_woff2_parser",
-    "donner_svg_renderer_skia_deps",
-    "donner_svg_renderer_skia_deps_opt",
-    "donner_svg_renderer_skia_deps_unconfigured",
-    "donner_third_party_skia_user_config_user_config",
     "donner_svg_renderer_tests_renderer_test_utils",
     "donner_svg_text_text_backend_full",
     # wgpu-native C++ wrapper: Bazel-only (pulls webgpu.h from http_archive
@@ -271,13 +248,11 @@ def _should_skip_cmake_dep(cmake_dep: Optional[str]) -> bool:
 CONDITIONAL_SOURCES: Dict[str, Dict[str, str]] = {
     "donner_svg_renderer_renderer": {
         "RendererTinySkiaBackend.cc": _TINY_SKIA,
-        "RendererSkiaBackend.cc": _SKIA,
         # Geode is Bazel-only — never compile its backend factory in CMake.
         "RendererGeodeBackend.cc": "FALSE",
     },
     "donner_svg_renderer_tests_renderer_test_backend": {
         "RendererTestBackendTinySkia.cc": _TINY_SKIA,
-        "RendererTestBackendSkia.cc": _SKIA,
         "RendererTestBackendGeode.cc": "FALSE",
     },
 }
@@ -291,7 +266,6 @@ CONDITIONAL_DEFINES: List[Tuple[str, str, List[str], str]] = [
     ("donner_svg_resources_font_manager_tests", "DONNER_TEXT_WOFF2", ["DONNER_TEXT_WOFF2_ENABLED"], "PRIVATE"),
     ("donner_svg_text_text_engine", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
     ("donner_svg_renderer_rendering_context", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
-    ("donner_svg_renderer_renderer_skia", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
 ]
 
 # Extra link deps to inject for specific CMake targets.
@@ -718,7 +692,7 @@ def generate_root() -> None:
         # ── Feature options (mirror Bazel flags) ───────────────────────
         f.write("# Feature options (mirror Bazel flags)\n")
         f.write("set(DONNER_RENDERER_BACKEND \"tiny_skia\" CACHE STRING\n")
-        f.write("    \"Renderer backend: 'tiny_skia' (default) or 'skia'\")\n")
+        f.write("    \"Renderer backend: 'tiny_skia' (default)\")\n")
         f.write("option(DONNER_TEXT \"Enable text rendering (stb_truetype)\" ON)\n")
         f.write("option(DONNER_TEXT_FULL \"Enable full text rendering: FreeType + HarfBuzz\" OFF)\n")
         f.write("option(DONNER_TEXT_WOFF2 \"Enable WOFF2 font support (requires DONNER_TEXT)\" ON)\n")
@@ -726,8 +700,8 @@ def generate_root() -> None:
 
         # Validation
         f.write("# Validate options\n")
-        f.write("if(NOT DONNER_RENDERER_BACKEND STREQUAL \"skia\" AND NOT DONNER_RENDERER_BACKEND STREQUAL \"tiny_skia\")\n")
-        f.write("  message(FATAL_ERROR \"DONNER_RENDERER_BACKEND must be 'skia' or 'tiny_skia', got '${DONNER_RENDERER_BACKEND}'\")\n")
+        f.write("if(NOT DONNER_RENDERER_BACKEND STREQUAL \"tiny_skia\")\n")
+        f.write("  message(FATAL_ERROR \"DONNER_RENDERER_BACKEND must be 'tiny_skia', got '${DONNER_RENDERER_BACKEND}'\")\n")
         f.write("endif()\n")
         f.write("if(DONNER_TEXT_WOFF2 AND NOT DONNER_TEXT)\n")
         f.write("  message(FATAL_ERROR \"DONNER_TEXT_WOFF2 requires DONNER_TEXT to be ON\")\n")
@@ -744,34 +718,6 @@ def generate_root() -> None:
             f.write(f"FetchContent_Declare(\n  {name}\n  GIT_REPOSITORY {repo}\n")
             f.write(f"  GIT_TAG        {tag}\n)\n")
             f.write(f"FetchContent_MakeAvailable({name})\n\n")
-
-        # ── Skia (only when backend=skia) ──────────────────────────────
-        f.write(f'if({_SKIA})\n')
-        f.write("FetchContent_Declare(\n")
-        f.write("  skia\n")
-        f.write("  GIT_REPOSITORY https://github.com/google/skia.git\n")
-        f.write("  GIT_TAG        d945cbcbbb5834245256e883803c2704f3a32e18\n")
-        f.write(")\n")
-        f.write("FetchContent_MakeAvailable(skia)\n")
-        f.write(
-            "execute_process(COMMAND python3 bin/fetch-gn "
-            "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
-        )
-        f.write(
-            "execute_process(COMMAND python3 tools/git-sync-deps "
-            "WORKING_DIRECTORY ${skia_SOURCE_DIR})\n"
-        )
-        f.write(
-            "execute_process(\n"
-            "  COMMAND ${skia_SOURCE_DIR}/bin/gn gen ${skia_SOURCE_DIR}/out/cmake\n"
-            "    --ide=json\n"
-            "    --json-ide-script=${skia_SOURCE_DIR}/gn/gn_to_cmake.py\n"
-            "    \"--args=skia_use_gl=false skia_enable_tools=false\"\n"
-            "  WORKING_DIRECTORY ${skia_SOURCE_DIR}\n"
-            ")\n"
-        )
-        f.write("add_subdirectory(${skia_SOURCE_DIR}/out/cmake skia)\n")
-        f.write("endif()\n\n")
 
         # Build / install rules for STB (header-only + impl)
         f.write("# STB libraries (locally vendored)\n")
@@ -867,15 +813,6 @@ def generate_root() -> None:
         f.write("\n")
         f.write("if(DONNER_BUILD_TESTS)\n")
         f.write("  enable_testing()\n")
-        f.write("endif()\n\n")
-
-        # System font dependencies for Linux (Skia only)
-        f.write(f"if({_SKIA})\n")
-        f.write("if(UNIX AND NOT APPLE)\n")
-        f.write("  find_package(PkgConfig REQUIRED)\n")
-        f.write("  pkg_check_modules(FREETYPE REQUIRED freetype2)\n")
-        f.write("  pkg_check_modules(FONTCONFIG REQUIRED fontconfig)\n")
-        f.write("endif()\n")
         f.write("endif()\n\n")
 
         # Symlink hack for rules_cc runfiles
@@ -1154,22 +1091,16 @@ def generate_all_packages() -> None:
                 #
                 # Backend-specific deps are stripped from most targets because
                 # the `renderer` target pulls in the correct backend
-                # conditionally.  For skia-only targets we keep skia deps but
-                # strip tiny-skia deps (and vice-versa).
-                _SKIA_DEPS = {
-                    "donner_svg_renderer_renderer_skia",
-                    "donner_svg_renderer_skia_deps",
-                    "donner_svg_renderer_skia_deps_opt",
-                    "donner_svg_renderer_skia_deps_unconfigured",
-                }
+                # conditionally.  For tiny-skia-only targets we keep tiny-skia
+                # deps.
                 _TINY_SKIA_DEPS = {
                     "donner_svg_renderer_renderer_tiny_skia",
                     "donner_svg_renderer_filter_graph_executor",
-                    "donner_svg_renderer_tiny_skia_deps",
+                    "donner_svg_renderer_software_renderer_deps",
                     "donner_svg_renderer_tiny_skia_filter_deps",
                     "tiny_skia",
                 }
-                _ALL_BACKEND_DEPS = _SKIA_DEPS | _TINY_SKIA_DEPS
+                _ALL_BACKEND_DEPS = _TINY_SKIA_DEPS
                 all_deps: List[str] = []
                 for dep in query_deps(bazel_label):
                     if dep in SKIPPED_TARGETS:
@@ -1233,50 +1164,14 @@ def generate_all_packages() -> None:
                         f.write("endif()\n")
 
                 # Hand-written tweaks
-                if cmake_name == "donner_svg_renderer_tiny_skia_deps":
+                if cmake_name == "donner_svg_renderer_software_renderer_deps":
                     f.write(
-                        f"target_link_libraries(donner_svg_renderer_tiny_skia_deps {scope} tiny_skia)\n"
+                        f"target_link_libraries(donner_svg_renderer_software_renderer_deps {scope} tiny_skia)\n"
                     )
                 if cmake_name == "donner_svg_renderer_tiny_skia_filter_deps":
                     f.write(
                         f"target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps {scope} tiny_skia)\n"
                     )
-                if cmake_name == "donner_svg_renderer_skia_deps":
-                    f.write(
-                        f"target_link_libraries(donner_svg_renderer_skia_deps {scope} skia)\n"
-                    )
-                    f.write(
-                        f"target_include_directories(donner_svg_renderer_skia_deps {scope} "
-                        "${skia_SOURCE_DIR})\n"
-                    )
-
-                    # Use CMake platform detection instead of sys.platform so that
-                    # the generated file is correct regardless of which OS runs the
-                    # generator script.
-                    f.write("if(APPLE)\n")
-                    f.write(
-                        f"  target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
-                        "DONNER_USE_CORETEXT)\n"
-                    )
-                    f.write("elseif(UNIX)\n")
-                    f.write(
-                        f"  target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
-                        "DONNER_USE_FREETYPE_WITH_FONTCONFIG)\n"
-                    )
-                    f.write(
-                        f"  target_link_libraries(donner_svg_renderer_skia_deps {scope} "
-                        "${FREETYPE_LIBRARIES} ${FONTCONFIG_LIBRARIES})\n"
-                    )
-                    f.write(
-                        f"  target_include_directories(donner_svg_renderer_skia_deps {scope} "
-                        "${FREETYPE_INCLUDE_DIRS} ${FONTCONFIG_INCLUDE_DIRS})\n"
-                    )
-                    f.write("else()\n")
-                    f.write(
-                        f"  target_compile_definitions(donner_svg_renderer_skia_deps {scope} "
-                        "DONNER_USE_FREETYPE)\n"
-                    )
-                    f.write("endif()\n")
 
                 # Extra link deps (e.g. system FreeType/HarfBuzz for text_backend_full)
                 for extra_target, extra_cond, extra_libs in EXTRA_LINK_DEPS:
@@ -1521,7 +1416,6 @@ def main() -> None:
             "third_party/tiny-skia-cpp",
             "third_party/stb",
             "third_party/frozen",
-            "third_party/skia_user_config",
             "third_party/css-parsing-tests",
         )
 
@@ -1610,7 +1504,6 @@ def main() -> None:
         print("  cmake -S . -B build && cmake --build build -j$(nproc)")
         print("\nOptions:")
         print("  -DDONNER_RENDERER_BACKEND=tiny_skia  (default)")
-        print("  -DDONNER_RENDERER_BACKEND=skia")
         print("  -DDONNER_TEXT=OFF                     Disable text rendering")
         print("  -DDONNER_TEXT_FULL=ON                 Enable FreeType + HarfBuzz shaping")
         print("  -DDONNER_TEXT_WOFF2=OFF               Disable WOFF2 support")

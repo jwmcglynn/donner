@@ -179,7 +179,7 @@ Donner currently ships two rendering backends behind `RendererInterface`:
 
 | Backend | Type | Binary Size | Strengths | Limitations |
 |---------|------|-------------|-----------|-------------|
-| RendererSkia | CPU/GPU (Skia) | ~50 MB | Full feature parity, reference quality | Heavy dependency, not embeddable |
+| FullSkiaRenderer | CPU/GPU (Skia) | ~50 MB | Full feature parity, reference quality | Heavy dependency, not embeddable |
 | RendererTinySkia | CPU (software) | ~2 MB | Lightweight, no dependencies | No text, limited filters, CPU-bound |
 
 Both backends are CPU-centric for rasterization. For applications requiring high-performance
@@ -392,7 +392,7 @@ critical path to a ~12 MB download with no compile step.
                           |                  |
               +-----------+------+           |
               |           |      |           |
-        RendererSkia  TinySkia  RendererGeode|
+        FullSkiaRenderer  TinySkia  RendererGeode|
                                      |       |
                                      v       v
                               ┌──────────────────┐
@@ -1442,7 +1442,7 @@ cleanup.
 - [ ] Implement cache invalidation via dirty flags from incremental invalidation system.
 - [ ] Implement deferred GPU resource destruction (frame-boundary cleanup).
 - [ ] Implement GPU timestamp profiling (behind `enableTimestamps` flag).
-- [ ] Performance benchmarking: compare against RendererSkia and RendererTinySkia on the
+- [ ] Performance benchmarking: compare against the archived full-Skia renderer and RendererTinySkia on the
   resvg test suite and complex real-world SVGs.
 - [ ] Optimize: batch draw calls for paths sharing the same pipeline state.
 
@@ -1514,7 +1514,7 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   slice-on-svg` (polygon clip edge AA fringes 4 pixels past the 100-px
   max — a follow-up, not a functional gap) and
   `painting/stroke-linejoin/miter` (bevel-fallback corner drift).
-- [x] **Track the pass-rate delta between Geode and RendererSkia.**
+- [x] **Track the pass-rate delta between Geode and the full-Skia renderer.**
   After #504, `resvg_test_suite_geode_text` is **596 passing / 0
   failing / 765 skipped via feature gates** on top of the category
   auto-gate infrastructure. Skia and tiny-skia backends run the same
@@ -1568,7 +1568,7 @@ structural assertions apply identically since `RendererDriver` is backend-agnost
 - Cache hit/miss counters: verify ECS caching is effective across re-renders.
 - Timestamp profiling: regression detection for per-frame GPU time.
 
-**Resvg test suite:** Target is matching RendererSkia's pass rate. Acceptable parity gaps are
+**Resvg test suite:** Target is matching the archived full-Skia renderer's pass rate. Acceptable parity gaps are
 limited to sub-pixel antialiasing differences (GPU vs. CPU rasterizer precision).
 
 **Text rendering:** Test across all three configurations (base, text-full, geode) per the

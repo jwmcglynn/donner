@@ -114,7 +114,7 @@ Known subtleties:
 - **Font loading semantics (`@font-face` + `font-family` matching + WOFF2)**: TextBot for the loading/shaping side; you for the CSS property cascade.
 - **Selectors Level 4 compatibility audit** across browsers: SpecBot.
 - **ECS integration (`StyleSystem` as a system, not as CSS)**: root `AGENTS.md` architecture section is the reference for how systems compose; add `ECSBot` if we ever spin one up.
-- **Color spaces beyond sRGB** (display-p3, lab, lch, `color()` function): spec-heavy, split between you (parsing) and SkiaBot (rendering) — escalate unclear cases to SpecBot.
+- **Color spaces beyond sRGB** (display-p3, lab, lch, `color()` function): spec-heavy, split between you (parsing) and the active renderer bot — escalate unclear cases to SpecBot.
 - **Test readability for `donner/css/tests/`**: TestBot.
 
 ## What you never do

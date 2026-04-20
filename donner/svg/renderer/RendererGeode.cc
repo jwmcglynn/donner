@@ -49,7 +49,7 @@ namespace {
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
-/// matching the helper in RendererTinySkia / RendererSkia.
+/// matching the CPU-renderer helper.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
 /// Apply a `Transform2d` to every control point of a `Path`, returning a
@@ -158,8 +158,8 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
 }
 
 /// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
-/// `objectBoundingBox` mode. Mirrors the `toPercent` helper used by
-/// RendererTinySkia / RendererSkia for gradient coordinate resolution.
+/// `objectBoundingBox` mode. Mirrors the helper used by the software renderer
+/// for gradient coordinate resolution.
 inline Lengthd coerceGradientLength(Lengthd value, bool numbersArePercent) {
   if (!numbersArePercent) {
     return value;
@@ -188,7 +188,7 @@ inline double resolveGradientCoord(Lengthd value, const Box2d& bounds, bool numb
 
 /// Resolve the `gradientTransform` attribute of a gradient into a concrete
 /// Transform2d. If the referenced entity has no transform component, returns
-/// identity. Mirrors the logic in RendererTinySkia / RendererSkia.
+/// identity. Mirrors the logic in the software renderer.
 Transform2d resolveGradientTransform(
     const components::ComputedLocalTransformComponent* maybeTransformComponent,
     const Box2d& viewBox) {
@@ -380,8 +380,8 @@ struct ResolvedRadialGradient {
 /// Same shape as @ref resolveLinearGradientParams, but for radial gradients.
 /// Returns `nullopt` if the referenced entity isn't a radial gradient. If it
 /// IS a radial gradient but is degenerate (zero outer radius), returns a
-/// populated `solidFallback` with the last stop's color — matching
-/// RendererSkia (see `RendererSkia.cc:2354`). If the focal circle fully
+/// populated `solidFallback` with the last stop's color, matching the removed
+/// full-Skia backend. If the focal circle fully
 /// contains the outer circle, returns an empty result (both fields unset)
 /// so the caller drops the draw.
 std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
@@ -419,7 +419,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   const double radius =
       resolveGradientCoord(radial->r, frame->coordBounds, frame->numbersArePercent);
   // SVG2: a radius of zero collapses the gradient to a single point. Match
-  // RendererSkia's behavior of painting a solid color equal to the LAST
+  // the removed full-Skia backend's behavior of painting a solid color equal to the LAST
   // stop in the gradient — this keeps elements visible for valid degenerate
   // radial gradients (e.g., `r="0"` with a single visible color).
   if (radius <= 0.0) {
@@ -826,7 +826,7 @@ struct RendererGeode::Impl {
     }
     // Pattern dispatch comes first: a pattern slot is populated by the
     // driver via `endPatternTile`, and is consumed by the very next fill or
-    // stroke draw (matching RendererTinySkia/RendererSkia semantics).
+    // stroke draw (matching the CPU-renderer semantics).
     if (patternFillPaint.has_value()) {
       syncTransform();
       const double opacity = paint.fillOpacity;

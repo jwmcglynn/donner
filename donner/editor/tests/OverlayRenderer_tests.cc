@@ -16,7 +16,7 @@ constexpr std::string_view kTrivialSvg =
        </svg>)";
 
 // OverlayRenderer is hard to unit-test in isolation because the canvas
-// primitives end up in a TinySkia frame buffer that we don't read
+// primitives end up in a renderer-owned frame buffer that we don't read
 // back at the unit-test layer. The test plan in `editor.md` calls these
 // out as belonging to the framebuffer-golden tier (M4).
 //

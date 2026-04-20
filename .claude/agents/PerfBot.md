@@ -97,7 +97,7 @@ Each step has its own perf pitfalls. The biggest wins are usually in **avoiding 
 - `docs/design_docs/0005-incremental_invalidation.md` — the incremental re-render design; critical reading for animation perf.
 - `docs/design_docs/0013-coverage_improvement.md` — not perf, but coverage work can find dead code to delete.
 - `tools/binary_size.sh` — binary size tracking script (used by build reports).
-- `donner/svg/renderer/RendererSkia.cc` — has text fast-paths like the `std::any_of` glyph-transform detection. Reference for how to micro-optimize hot loops cleanly.
+- The archived full-Skia renderer implementation (see `origin/skia_archive`) — useful historical reference for text fast-paths like `std::any_of` glyph-transform detection.
 
 ## How to answer common questions
 
@@ -117,7 +117,7 @@ Each step has its own perf pitfalls. The biggest wins are usually in **avoiding 
 
 ## Handoff rules
 
-- **Architectural perf decisions in a specific subsystem**: pair with the relevant domain bot (GeodeBot for GPU, TinySkiaBot for CPU raster, CSSBot for cascade perf, TextBot for text layout).
+- **Architectural perf decisions in a specific subsystem**: pair with the relevant domain bot (GeodeBot for GPU, TinySkia Bot for CPU raster, CSSBot for cascade perf, TextBot for text layout).
 - **Incremental invalidation design**: DesignReviewBot owns the doc shape; you own the perf analysis.
 - **CI regression detection for perf**: MiscBot (CI reliability) + you (benchmark harness).
 - **Binary size tracking**: ReleaseBot owns the report; you own "is the growth justified".

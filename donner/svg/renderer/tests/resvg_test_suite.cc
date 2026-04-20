@@ -17,7 +17,7 @@ namespace {
 /// True when the active test binary is the Geode variant
 /// (`resvg_test_suite_geode_*`). Used by the category and filename
 /// auto-gates to decide whether to widen thresholds or apply feature
-/// gates. The Skia / TinySkia variants have their own binaries, so
+/// gates. The CPU variants have their own binaries, so
 /// this is a compile-constant per binary — checking it at gate
 /// evaluation time is safe at static-init time because
 /// `ActiveRendererBackend()` is backed by a per-backend translation
@@ -25,7 +25,7 @@ namespace {
 const bool kActiveIsGeode = ActiveRendererBackend() == RendererBackend::Geode;
 
 /// Widen the per-pixel threshold on Geode only, preserving the
-/// existing tiny-skia / Skia strictness. Geode's 4× MSAA rasterizer
+/// existing CPU-backend strictness. Geode's 4× MSAA rasterizer
 /// quantises edge coverage to 5 distinct alpha values (0, 64, 128,
 /// 191, 255); tiny-skia's 16× supersample produces 17. The maximum
 /// per-pixel alpha drift is therefore 1/16 ≈ 6.25%, which trips the
@@ -50,7 +50,7 @@ void widenThresholdForGeode(ImageComparisonParams& p, float threshold = 0.3f) {
 ///
 /// This helper returns an `ImageComparisonParams` builder that, when
 /// merged onto a testcase, cleanly skips it on Geode while leaving
-/// Skia/TinySkia unaffected. The merge preserves any explicit Skip or
+/// CPU backends unaffected. The merge preserves any explicit Skip or
 /// threshold override from the per-test overrides map so that we
 /// don't over-widen on the CPU backends.
 ///
@@ -68,8 +68,8 @@ geodeCategoryGate(std::string_view category) {
   // blocked on per-backend (Metal / Vulkan / D3D12) pixel-diff tuning:
   // `widenThresholdForGeode` alone isn't enough on macOS Metal and
   // Intel Arc Vulkan, and dialing in a unified bar needs its own PR.
-  // Keep the whole tree skip-gated here until that lands — the Skia /
-  // tiny-skia variants continue to run the full suite at their strict
+  // Keep the whole tree skip-gated here until that lands — the CPU
+  // variants continue to run the full suite at their strict
   // thresholds, so nothing is covered any less than before.
   if (category.rfind("filters/", 0) == 0 || category == "filters") {
     return [](ImageComparisonParams& p) {
@@ -192,7 +192,7 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
   }
 
   // Marker tests where Geode produces a visibly different result from
-  // the tiny-skia / Skia reference even with a widened AA threshold —
+  // the CPU-rendered reference even with a widened AA threshold —
   // structural cusp-tangent disagreement on auto-orient markers at
   // curve cusps. Real bugs to chase as follow-up (F7b/c in the audit).
   if (category == "painting/marker" &&
@@ -372,7 +372,7 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
 // in the overrides map uses defaultParams. When the category matches a
 // Geode-blocked feature (filters, text), every resulting testcase is also tagged with the matching
 // `requireFeature` / `disableBackend` bit so the Geode backend skips cleanly
-// while Skia/TinySkia still run the existing coverage.
+// while the CPU variants still run the existing coverage.
 std::vector<ImageComparisonTestcase> getTestsInCategory(
     std::string_view category,
     std::map<std::string, ImageComparisonParams> overrides = {},
@@ -537,7 +537,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"bias=9999.svg", Params::RenderOnly("UB: bias=9999")},
                                     {"edgeMode=wrap-with-matrix-larger-than-target.svg", Params::RenderOnly("UB: wrap with oversized kernel")},
                                     {"edgeMode=wrap.svg", Params::WithThreshold(kDefaultThreshold, 200, "Minor algorithm differences on edge handling (180px)")},
-                                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg", Params::RenderOnly("Skia MatrixConvolution edge shift vs tiny-skia")},
+                                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg", Params::RenderOnly("MatrixConvolution edge shift vs golden")},
                                 })),
     TestNameFromFilename);
 
@@ -784,8 +784,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"out-of-order-referencing.svg", Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
                                     {"overflow=visible.svg", Params::RenderOnly("UB: overflow=visible")},
                                     {"pattern-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Anti-aliasing artifacts")},
-                                    {"patternContentUnits-with-viewBox.svg", Params::WithThreshold(kDefaultThreshold, 150, "Skia pattern AA")},
-                                    {"patternContentUnits=objectBoundingBox.svg", Params::WithThreshold(kDefaultThreshold, 250, "Skia pattern AA")},
+                                    {"patternContentUnits-with-viewBox.svg", Params::WithThreshold(kDefaultThreshold, 150, "Pattern AA drift")},
+                                    {"patternContentUnits=objectBoundingBox.svg", Params::WithThreshold(kDefaultThreshold, 250, "Pattern AA drift")},
                                     {"recursive-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Larger threshold due to recursive pattern seams.")},
                                     {"self-recursive-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Larger threshold due to recursive pattern seams.")},
                                     {"self-recursive.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Larger threshold due to recursive pattern seams.")},
@@ -899,7 +899,7 @@ INSTANTIATE_TEST_SUITE_P(
                                          .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
                                     {"orient=auto-on-M-L-L-Z-Z-Z.svg", Params::Skip("Bug: Multiple closepaths")},
                                     {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
-                                    {"with-a-text-child.svg", Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on Skia text_full")},
+                                    {"with-a-text-child.svg", Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")},
                                     {"with-an-image-child.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-with-an-image-child.png").withReason("We (correctly)")},
                                     {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
                                 
@@ -1449,7 +1449,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"complex-grapheme-split-by-tspan.svg", Params::RenderOnly("UB: grapheme split by tspan")},
                                     {"complex-graphemes-and-coordinates-list.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-complex-graphemes-and-coordinates-list.png") .onlyTextFull().withReason("Simple text can't compose combining marks")},
                                     {"complex-graphemes.svg", Params().onlyTextFull().withReason("Combining mark needs HarfBuzz")},
-                                    {"compound-emojis-and-coordinates-list.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png", 0.1f) .withMaxPixelsDifferent(1100) .onlyTextFull().withReason("Emoji, Skia bitmap scaling differs from TinySkia")},
+                                    {"compound-emojis-and-coordinates-list.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png", 0.1f) .withMaxPixelsDifferent(1100) .onlyTextFull().withReason("Emoji bitmap scaling differs from the golden")},
                                     {"compound-emojis.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Emoji, differences between resvg and our bitmap") .onlyTextFull()},
                                     {"emojis.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Emoji, differences between").onlyTextFull()},
                                     {"fill-rule=evenodd.svg", Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},

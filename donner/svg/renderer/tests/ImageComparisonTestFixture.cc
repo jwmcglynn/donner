@@ -381,7 +381,6 @@ std::string escapeFilename(std::string filename) {
 
 bool isActiveBackendAllowed(const ImageComparisonParams& params) {
   switch (ActiveRendererBackend()) {
-    case RendererBackend::Skia: return params.allowSkia;
     case RendererBackend::TinySkia: return params.allowTinySkia;
     case RendererBackend::Geode: return params.allowGeode;
   }
@@ -738,7 +737,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
         }
       } else {
         if (params.saveDebugSkpOnFailure) {
-          std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
+          std::cout << "=> Debug .skp capture is not available for the active backend\n";
         }
 
         std::cout << "=> Re-rendering with verbose backend output\n";

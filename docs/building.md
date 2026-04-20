@@ -35,10 +35,10 @@ bazel build //donner/...
 
 All other dependencies will be downloaded on-demand.
 
-The first build downloads LLVM and other external dependencies, and builds all dependencies from source. With the default tiny-skia backend, clean build times are reasonable. The Skia backend takes longer due to the large Skia dependency. After dependencies are downloaded, clean build times are:
+The first build downloads LLVM and other external dependencies, and builds all dependencies from source. With the default tiny-skia backend, clean build times are reasonable. After dependencies are downloaded, clean build times are:
 
-- **Apple Silicon M1**: ~2 minutes (tiny-skia), ~5 minutes (Skia)
-- **GitHub Codespaces (4-core)**: ~10 minutes (tiny-skia), ~20 minutes (Skia)
+- **Apple Silicon M1**: ~2 minutes
+- **GitHub Codespaces (4-core)**: ~10 minutes
 
 ## Running Tests
 
@@ -132,25 +132,16 @@ not built by default and can be enabled with the `DONNER_BUILD_TESTS` option.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `DONNER_RENDERER_BACKEND` | `"tiny_skia"` | Renderer backend: `"tiny_skia"` (lightweight software renderer) or `"skia"` (Chromium's Skia) |
+| `DONNER_RENDERER_BACKEND` | `"tiny_skia"` | Renderer backend selection; the supported default is `"tiny_skia"` |
 | `DONNER_TEXT` | `ON` | Enable text rendering (`<text>`, `<tspan>`) |
 | `DONNER_TEXT_WOFF2` | `ON` | Enable WOFF2 web font loading |
 | `DONNER_FILTERS` | `ON` | Enable SVG filter effects |
 | `DONNER_BUILD_TESTS` | `OFF` | Build unit tests (adds googletest dependency) |
 
-Example: building with the Skia backend:
-
-```sh
-python3 tools/cmake/gen_cmakelists.py
-cmake -S . -B build -DDONNER_RENDERER_BACKEND=skia
-cmake --build build -j$(nproc)
-```
-
 ### Bazel configuration options
 
 | Config / Flag | Description |
 |---------------|-------------|
-| `--config=skia` | Use the Skia renderer backend (default is tiny-skia) |
 | `--config=geode` | Use the experimental Geode GPU backend (WebGPU/Dawn + Slug); also enables `--//donner/svg/renderer/geode:enable_dawn=true` |
 | `--config=text-full` | Enable HarfBuzz text shaping + WOFF2 (advanced text layout) |
 | `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer |
@@ -176,7 +167,7 @@ bazel clean --expunge
 
 ### What's with the build times?
 
-Donner builds everything from source. The Skia backend is large and slow to build; the tiny-skia backend is significantly faster since it has no external rendering dependency. Incremental builds are fast due to Bazel's caching.
+Donner builds everything from source. The tiny-skia backend stays relatively fast because it has no large external rendering dependency. Incremental builds are fast due to Bazel's caching.
 
 ### How do I build the editor?
 

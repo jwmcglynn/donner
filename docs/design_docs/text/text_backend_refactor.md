@@ -382,7 +382,7 @@ public:
 
 ### Renderer Changes
 
-`RendererTinySkia::drawText()` and `RendererSkia::drawText()` stop instantiating backends directly.
+`RendererTinySkia::drawText()` and the former full-Skia renderer's `drawText()` stop instantiating backends directly.
 The render driver passes the active document `Registry&` into `drawText()`, and the renderers use
 shared `FontManager` / `TextEngine` instances already stored in `registry.ctx()`. `RendererDriver`
 still resolves renderer-facing paint state, while layout-facing per-span state is delegated to
@@ -488,12 +488,12 @@ Verification checklist at the end of this refactor:
 
 - [x] `bazel test //...` — 50 pass, 0 fail (2026-04-04)
 - [x] `bazel test //... --config=text-full` — 50 pass, 0 fail (2026-04-04)
-- [ ] `bazel test //... --config=text-full --config=skia` — broader Skia renderer failures
+- [ ] Historical note: broader full-Skia renderer failures existed outside the text stack
   outside the text stack (compositing, renderer image tests, resvg suite shards).
 
 The refactored `TextEngine` + `TextBackendFull` path now matches the previous text-full
 behavior for the resvg suite while removing the duplicated layout logic from `TextShaper`.
-`RendererSkia` and `RendererTinySkia` now use `TextEngine`, and the legacy `TextShaper` source,
+The former full-Skia renderer and `RendererTinySkia` now use `TextEngine`, and the legacy `TextShaper` source,
 target, and dedicated test target have been removed. `TextLayout` and its dedicated test target
 have also been removed because the production renderer no longer uses the legacy simple-layout
 implementation. `FontManager` is now a font registry only and no longer exposes raw
@@ -597,7 +597,7 @@ This integrates with the existing incremental invalidation system (see
 ### Renderer integration
 
 `SVGTextContentElement` and `SVGTextElement` use `ComputedTextGeometryComponent` through
-`TextEngine` for public text geometry APIs. Both renderers (`RendererTinySkia`, `RendererSkia`)
+`TextEngine` for public text geometry APIs. Both renderers (`RendererTinySkia`, the former full-Skia renderer)
 check for cached `TextRun` data in `ComputedTextGeometryComponent` before calling `layout()`,
 avoiding redundant text shaping when the cache is populated.
 
