@@ -68,9 +68,9 @@ every variant is covered by the default test command.
   - [x] M1.2: Paths-scoped `asan-geode` PR gate for `donner/svg/renderer/geode/**` + `RendererDriver.*`. Catches issue #552 class. _(Delegated, PR in flight.)_
   - [x] M1.3: Add `tools/presubmit.sh --variants` running `tiny`/`text-full`/`geode` tiers. **Transitional** — M2.3 replaces this by making `bazel test //...` cover all variants by default. _(Delegated, PR in flight.)_
   - [x] M1.4: Add Category 8 (wall-clock perf) + Category 9 (sanitizer-only) to doc 0016. _(Landed as commit 0e51a695 on this feature branch.)_
-  - [ ] M1.5: Lint as a dedicated fast-fail parallel job. Pull `misc-include-cleaner`, `clang-format`, `check_banned_patterns`, and the `gen_cmakelists.py --check` step into a `lint` job that returns in ≤60s. (Subsumes 0029 M2.)
-  - [ ] M1.6: `concurrency: cancel-in-progress: true` on PR workflows — cancels superseded runs when a PR is rebased/force-pushed. Near-zero cost, eliminates wasted CI minutes.
-  - [ ] M1.7: Docs-only path skip. If a PR touches only `docs/**`, `*.md`, `CHANGELOG*`, or similar, short-circuit the heavy build+test jobs with a `paths-ignore:` filter or a first "gatekeeper" job. Design-doc PRs currently pay the full 10–15 min budget for zero code change.
+  - [x] M1.5: Lint as a dedicated fast-fail parallel job. Pull `misc-include-cleaner`, `clang-format`, `check_banned_patterns`, and the `gen_cmakelists.py --check` step into a `lint` job that returns in ≤60s. (Subsumes 0029 M2.)
+  - [x] M1.6: `concurrency: cancel-in-progress: true` on PR workflows — cancels superseded runs when a PR is rebased/force-pushed. Near-zero cost, eliminates wasted CI minutes.
+  - [x] M1.7: Docs-only path skip. If a PR touches only `docs/**`, `*.md`, `CHANGELOG*`, or similar, short-circuit the heavy build+test jobs with a `paths-ignore:` filter or a first "gatekeeper" job. Design-doc PRs currently pay the full 10–15 min budget for zero code change.
   - [ ] M1.8: Always-green enforcement — update branch protection so required checks include the new `lint`, `asan-geode`, and core test jobs; land `CLAUDE.md` always-green blurb (done this PR).
 
 - [ ] **Milestone 2 — Cache and nightly infrastructure (M effort)**

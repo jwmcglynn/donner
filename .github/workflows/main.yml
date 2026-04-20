@@ -1,20 +1,80 @@
 name: CI
 
-# Controls when the action will run. Triggers the workflow on push or pull request
-# events but only for the main branch
+# Controls when the action will run. Triggers the workflow on pushes to any
+# branch and PRs targeting the mainline branches we actively use.
 on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main]
+    branches: [main, feature/ci-hardening-2026q2]
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
 
 jobs:
+  gatekeeper:
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.docs_only.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: docs_only
+        name: Detect docs-only PR
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          is_docs_only_path() {
+            local path="$1"
+            case "$path" in
+              docs/*|CHANGELOG*|.bazelignore|.editorconfig|.gitattributes|.gitignore|.gitmodules)
+                return 0
+                ;;
+            esac
+
+            if [[ "$path" != */* && "$path" == *.md ]]; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          changed_files="$(git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}")"
+
+          if [[ -z "$changed_files" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            if ! is_docs_only_path "$path"; then
+              echo "Non-doc change: $path"
+              docs_only=false
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+
   linux:
     runs-on: ubuntu-24.04
+    needs: gatekeeper
+    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -52,7 +112,8 @@ jobs:
 
   macos:
     runs-on: macos-15
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    needs: gatekeeper
+    if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
