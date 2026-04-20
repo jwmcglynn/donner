@@ -1745,20 +1745,42 @@ TEST(AsyncRendererE2ETest, DraggingFilterGroupSubtreeHitsTranslationFastPath) {
   }
 
   const double avgDragFrameMs = sumDragFrameMs / kDragFrames;
+  const auto counters = asyncRenderer.compositorFastPathCountersForTesting();
   std::cerr << "[PERF] DraggingFilterGroupSubtree: avg=" << avgDragFrameMs
-            << " ms, max=" << maxDragFrameMs << " ms over " << kDragFrames << " frames\n";
+            << " ms, max=" << maxDragFrameMs << " ms over " << kDragFrames
+            << " frames; fast=" << counters.fastPathFrames
+            << " slowWithDirty=" << counters.slowPathFramesWithDirty
+            << " noDirty=" << counters.noDirtyFrames << "\n";
 
-  // Translation-only drag of a cached filter layer should stay well under
-  // 15 ms on the worker — the fast path is a DOM-transform update plus a
-  // single matrix compose. If this budget is blown the editor can't keep
-  // up with drag events and the async renderer stays saturated (which is
-  // what makes other selections feel unresponsive during the drag).
-  EXPECT_LT(avgDragFrameMs, 15.0)
-      << "average filter-group-subtree drag frame exceeded budget — fast path "
-         "isn't catching the filter-group translation delta";
-  EXPECT_LT(maxDragFrameMs, 40.0)
-      << "max filter-group-subtree drag frame exceeded budget — some frame "
-         "slipped into the full-prepare slow path";
+  // Primary regression gate: the fast path must actually fire. Pre-subtree-
+  // fix the compositor fell through to `prepareDocumentForRendering` EVERY
+  // drag frame, so `slowPathFramesWithDirty` would track 1:1 with drag
+  // frames. The subtree fast path should absorb all 10 drag frames into
+  // `fastPathFrames`. This check is CPU-speed invariant — unlike the
+  // wall-clock budget it doesn't flake on slow CI runners.
+  //
+  // We tolerate up to 1 slow-path frame because the selection pre-warm
+  // render that precedes the drag loop needs the full prepare path to
+  // materialize the initial cached bitmap. Subsequent drag frames must
+  // all take the fast path.
+  EXPECT_GE(counters.fastPathFrames, static_cast<uint64_t>(kDragFrames))
+      << "filter-group subtree drag is not hitting the translation-only fast "
+         "path — compositor is falling through to prepareDocumentForRendering "
+         "every frame";
+  EXPECT_LE(counters.slowPathFramesWithDirty, 1u)
+      << "more than the pre-warm frame slipped into the slow path";
+
+  // Secondary wall-clock budgets: loose enough for shared GitHub CI
+  // runners (which land 30-60 ms per frame on this shape) but still
+  // tight enough to catch the ~250 ms/frame regression this test exists
+  // to gate. The fast-path counter check above is the real regression
+  // detector; these exist so a runaway cost (e.g. someone reintroduces
+  // a full re-rasterize under the fast path) still trips loudly.
+  EXPECT_LT(avgDragFrameMs, 100.0) << "average filter-group drag frame far above even the "
+                                      "widened CI runner budget — something is doing a "
+                                      "full-document re-render per frame";
+  EXPECT_LT(maxDragFrameMs, 200.0) << "max filter-group drag frame exceeded the widened CI "
+                                      "budget — individual frame is doing full-prepare work";
 }
 
 // Regression: a user closing the editor mid-render (or immediately after the
