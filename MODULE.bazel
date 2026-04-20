@@ -31,7 +31,7 @@ bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 ##
 ## Non-BCR dependencies (dev-only extension)
 ##
-# skia, harfbuzz, woff2, wgpu-native, resvg-test-suite, and bazel_clang_tidy all live
+# harfbuzz, woff2, wgpu-native, resvg-test-suite, and bazel_clang_tidy all live
 # behind `git_repository`/`new_git_repository` calls that are not permitted in
 # modules published to the Bazel Central Registry. We hide them behind a
 # module extension flagged `dev_dependency = True`, so downstream BCR consumers
@@ -49,7 +49,6 @@ use_repo(
     "bazel_clang_tidy",
     "harfbuzz",
     "resvg-test-suite",
-    "skia",
     "sysroot_linux_aarch64",
     "sysroot_linux_x86_64",
     "tracy",
@@ -69,13 +68,7 @@ local_repository(
     path = "third_party/tiny-skia-cpp",
 )
 
-# Skia dependencies
 bazel_dep(name = "rules_license", version = "1.0.0")
-
-local_repository(
-    name = "skia_user_config",
-    path = "third_party/skia_user_config",
-)
 
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
 bazel_dep(name = "libpng", version = "1.6.54")

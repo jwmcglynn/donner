@@ -43,7 +43,7 @@ donner_cc_library(
     name = "frame_inspector",
     srcs = ["FrameInspector.cc"],
     hdrs = ["FrameInspector.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":replaying_renderer",
@@ -65,7 +65,7 @@ donner_cc_library(
     name = "sandbox_codecs",
     srcs = ["SandboxCodecs.cc"],
     hdrs = ["SandboxCodecs.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":wire",
@@ -81,7 +81,7 @@ donner_cc_library(
     name = "serializing_renderer",
     srcs = ["SerializingRenderer.cc"],
     hdrs = ["SerializingRenderer.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":sandbox_codecs",
@@ -101,7 +101,7 @@ donner_cc_library(
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":sandbox_codecs",
@@ -122,7 +122,7 @@ donner_cc_library(
     name = "pipelined_renderer",
     srcs = ["PipelinedRenderer.cc"],
     hdrs = ["PipelinedRenderer.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":replaying_renderer",
@@ -137,7 +137,7 @@ donner_cc_library(
     name = "sandbox_host",
     srcs = ["SandboxHost.cc"],
     hdrs = ["SandboxHost.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":replaying_renderer",
@@ -151,7 +151,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "donner_parser_child",
     srcs = ["parser_child_main.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":sandbox_hardening",
@@ -168,7 +168,7 @@ donner_cc_binary(
     name = "sandbox_render",
     srcs = ["sandbox_render_main.cc"],
     data = [":donner_parser_child"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":sandbox_host",
@@ -181,7 +181,7 @@ donner_cc_binary(
 donner_cc_binary(
     name = "sandbox_replay",
     srcs = ["sandbox_replay_main.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":frame_inspector",
@@ -195,7 +195,7 @@ donner_cc_binary(
 donner_cc_binary(
     name = "sandbox_inspect",
     srcs = ["sandbox_inspect_main.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":frame_inspector",
@@ -207,7 +207,7 @@ donner_cc_library(
     name = "sandbox_diff_lib",
     srcs = ["SandboxDiff.cc"],
     hdrs = ["SandboxDiff.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":frame_inspector",
@@ -218,7 +218,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "sandbox_diff",
     srcs = ["sandbox_diff_main.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "skia", "geode"]),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":frame_inspector",

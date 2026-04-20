@@ -104,15 +104,11 @@ def renderer_backend_compatible_with(backends):
     Returns compatibility constraints for renderer backend-specific targets.
 
     Args:
-      backends: List of supported backend names. Valid values are "skia",
-        "tiny_skia", and "geode".
+      backends: List of supported backend names. Valid values are
+        "tiny_skia" and "geode".
     """
     conditions = {}
     remaining = list(backends)
-
-    if "skia" in remaining:
-        conditions["//donner/svg/renderer:renderer_backend_skia"] = []
-        remaining.remove("skia")
 
     if "tiny_skia" in remaining:
         conditions["//donner/svg/renderer:renderer_backend_tiny_skia"] = []
@@ -195,7 +191,7 @@ donner_transitioned_cc_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["skia", "tiny_skia", "geode"],
+            values = ["tiny_skia", "geode"],
         ),
     },
 )
@@ -206,19 +202,19 @@ def _multi_transition_impl(settings, attr):
             "//donner/svg/renderer:renderer_backend": settings["//donner/svg/renderer:renderer_backend"],
             "//donner/svg/renderer:text": settings["//donner/svg/renderer:text"],
             "//donner/svg/renderer:text_full": settings["//donner/svg/renderer:text_full"],
-            "//donner/svg/renderer/geode:enable_dawn": settings["//donner/svg/renderer/geode:enable_dawn"],
+            "//donner/svg/renderer/geode:enable_geode": settings["//donner/svg/renderer/geode:enable_geode"],
         }
 
     # Selecting the geode backend implies turning on Dawn: the
     # `:renderer_geode` library gates its sources behind the
-    # `enable_dawn` flag, so the transition must set it to keep the
+    # `enable_geode` flag, so the transition must set it to keep the
     # dependency graph buildable without the user also passing
     # `--config=geode` on the command line.
     return {
         "//donner/svg/renderer:renderer_backend": attr.renderer_backend,
         "//donner/svg/renderer:text": attr.text == "true" or attr.text_full == "true",
         "//donner/svg/renderer:text_full": attr.text_full == "true",
-        "//donner/svg/renderer/geode:enable_dawn": attr.renderer_backend == "geode",
+        "//donner/svg/renderer/geode:enable_geode": attr.renderer_backend == "geode",
     }
 
 _multi_transition = transition(
@@ -228,13 +224,13 @@ _multi_transition = transition(
         "//donner/svg/renderer:renderer_backend",
         "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
-        "//donner/svg/renderer/geode:enable_dawn",
+        "//donner/svg/renderer/geode:enable_geode",
     ],
     outputs = [
         "//donner/svg/renderer:renderer_backend",
         "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
-        "//donner/svg/renderer/geode:enable_dawn",
+        "//donner/svg/renderer/geode:enable_geode",
     ],
 )
 
@@ -249,7 +245,7 @@ donner_multi_transitioned_test = rule(
         ),
         "renderer_backend": attr.string(
             mandatory = True,
-            values = ["skia", "tiny_skia", "geode"],
+            values = ["tiny_skia", "geode"],
         ),
         "text": attr.string(
             default = "false",
@@ -542,7 +538,7 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
         # we pass actual File objects — `cc_common.compile` rejects the
         # list of Targets returned by `ctx.attr`. Required for
         # perf-sensitive wrappers that carry their own source files,
-        # not just deps-only wrappers like `skia_deps`.
+        # not just deps-only wrappers.
         srcs = ctx.files.srcs,
         includes = ctx.attr.includes,
         defines = ctx.attr.defines,

@@ -45,7 +45,6 @@ flags or C++ code branches are needed:
 | Config | Backend |
 |--------|---------|
 | *(default)* | TinySkia — lightweight software rasterizer |
-| `--config=skia` | Skia — full-featured rasterizer |
 | `--config=geode` | Geode — experimental WebGPU + Slug |
 
 ## Running tests

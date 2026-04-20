@@ -152,7 +152,7 @@ The final transformation occurs to instantiate the render tree, which occurs wit
 
 This step traverses the tree and produces a sorted list of \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent" corresponding to the draw order.
 
-This list is then processed by the selected backend (\ref donner::svg::Renderer, which resolves to `RendererTinySkia` by default or `RendererSkia` under `--config=skia`) to produce the final output.
+This list is then processed by the selected backend (\ref donner::svg::Renderer, which resolves to `RendererTinySkia` by default or `RendererGeode` under `--config=geode`) to produce the final output.
 
 # API Layer
 

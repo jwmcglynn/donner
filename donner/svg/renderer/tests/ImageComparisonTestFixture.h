@@ -54,8 +54,6 @@ struct ImageComparisonParams {
   bool includeAntiAliasing = false;
   /// If true, skip this test case.
   bool skip = false;
-  /// If true, save a .skp file for debugging when a test fails.
-  bool saveDebugSkpOnFailure = true;
   /// If true, allow updating golden images via an environment variable.
   bool updateGoldenFromEnv = false;
   /// If true, emit a terminal preview grid when comparisons fail.
@@ -64,8 +62,6 @@ struct ImageComparisonParams {
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
-  /// If false, skip the test when the active backend is Skia.
-  bool allowSkia = true;
   /// If false, skip the test when the active backend is TinySkia.
   bool allowTinySkia = true;
   /// If false, skip the test when the active backend is Geode.
@@ -160,15 +156,6 @@ struct ImageComparisonParams {
   }
 
   /**
-   * @brief Disables saving of .skp files on test failure.
-   * @return Reference to this ImageComparisonParams object.
-   */
-  ImageComparisonParams& disableDebugSkpOnFailure() {
-    saveDebugSkpOnFailure = false;
-    return *this;
-  }
-
-  /**
    * @brief Counts anti-aliased pixel differences as mismatches.
    * @return Reference to this ImageComparisonParams object.
    */
@@ -208,7 +195,6 @@ struct ImageComparisonParams {
   ImageComparisonParams& disableBackend(RendererBackend backend,
                                         std::string_view reason = std::string_view()) {
     switch (backend) {
-      case RendererBackend::Skia: allowSkia = false; break;
       case RendererBackend::TinySkia: allowTinySkia = false; break;
       case RendererBackend::Geode: allowGeode = false; break;
     }

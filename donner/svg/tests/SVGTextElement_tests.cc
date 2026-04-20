@@ -129,7 +129,7 @@ TEST(SVGTextElementViewportTests, SimpleLetter) {
   )-",
                                        kExperimentalOptions);
 
-  // Both TinySkia and Skia use TextEngine glyph outlines, producing the same
+  // The currently supported raster backends use TextEngine glyph outlines, producing the same
   // output per platform. macOS produces non-AA output, Linux produces AA edges.
   // HarfBuzz/FreeType (text-full) produces a slightly thicker T crossbar than
   // stb_truetype (simple text).

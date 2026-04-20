@@ -51,7 +51,6 @@ inline constexpr uint32_t kRnrMaxUriBytes = 64u * 1024u;
 enum class BackendHint : uint32_t {
   kUnspecified = 0,
   kTinySkia = 1,
-  kSkia = 2,
   kGeode = 3,
 };
 

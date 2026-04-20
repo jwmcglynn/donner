@@ -471,8 +471,8 @@ Transform2d LayoutSystem::elementContentFromViewBoxTransform(
                                                                   viewBox->viewBox);
   } else if (entity.all_of<ImageComponent>()) {
     // Images compute their transform based on the image's intrinsic size, not the viewBox.
-    // TODO: This should be based on the image's intrinsic size, move this transform computation
-    // here from RendererSkia.
+    // TODO: This should be based on the image's intrinsic size; move this transform computation
+    // into layout rather than leaving it in the renderer.
     return Transform2d();
   } else {
     // This branch is hit for <use> elements.

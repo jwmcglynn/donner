@@ -36,9 +36,6 @@ build --features=-layering_check
 build --copt=-fno-exceptions
 build --copt=-fno-rtti
 
-# Disable warning about a 'switch' missing 'default' label, which started triggering in skia on clang 19
-build --copt=-Wno-switch-default
-
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
@@ -52,8 +49,6 @@ common --//donner/svg/renderer:resvg_test_suite_available=true
 # Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
 common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# Disable warning about not eliding copy on return (NRVO), which started triggering in skia on LLVM 21
-build:latest_llvm --copt=-Wno-nrvo
 # Use rules_python's hermetic Python launcher rather than the default
 # `#!/usr/bin/env python3` shebang. Without this, py_binary targets still rely
 # on a host python3 in PATH, which the Bazel remote-execution sandbox
@@ -67,14 +62,14 @@ common:latest_llvm --@rules_python//python/config_settings:bootstrap_impl=script
 common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 
 # Renderer backend selection
-common:skia --//donner/svg/renderer:renderer_backend=skia
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
-# Geode (experimental WebGPU + Slug). Also toggles enable_dawn so that Dawn
-# is compiled; default bazel builds without --config=geode never touch Dawn.
+# Geode (experimental WebGPU + Slug). Also toggles enable_geode so that
+# wgpu-native is compiled; default bazel builds without --config=geode never
+# touch the WebGPU runtime.
 common:geode --//donner/svg/renderer:renderer_backend=geode
-common:geode --//donner/svg/renderer/geode:enable_dawn=true
+common:geode --//donner/svg/renderer/geode:enable_geode=true
 common:dev --//build_defs:disable_backend_test_transition=true
-# Disable forced opt compilation of perf-sensitive deps (Skia, etc.) to avoid
+# Disable forced opt compilation of perf-sensitive deps to avoid
 # cross-configuration link conflicts.  Use: --config=no-perf-opt
 common:no-perf-opt --//build_defs:disable_perf_opt_transition=true
 
@@ -87,18 +82,19 @@ build:wasm --cxxopt=-fconstexpr-steps=10000000
 build:wasm --config=no-perf-opt
 
 # Product tiers
-common:tiny --//donner/svg/renderer:filters=false
-# Note: 'text' and 'text-full' configs already exist
-# donner (default) = no extra config needed (filters=true, text=false by default)
-# donner-max = --config=text-full (filters=true, text=true, text_full=true)
+common:tiny --//donner/svg/renderer:filters=false --//donner/svg/renderer:text=false
+# donner (default) = no extra config needed (filters=true, text=true by default)
+# donner-max     = --config=text-full (filters=true, text=true, text_full=true)
+# donner-tiny    = --config=tiny (filters=false, text=false)
 
 # Filter effects
 common:no-filters --//donner/svg/renderer:filters=false
 
 # Text rendering features:
-#   --config=text         Simple text (stb_truetype only)
+#   (default)             Basic text (stb_truetype, TTF/OTF/WOFF1)
 #   --config=text-full    Full text (FreeType + HarfBuzz + WOFF2)
-common:text --//donner/svg/renderer:text=true
+#   --config=no-text      Disable text rendering entirely
+common:no-text --//donner/svg/renderer:text=false
 common:text-full --//donner/svg/renderer:text=true --//donner/svg/renderer:text_full=true
 
 # WebAssembly (Emscripten) build. Usage:
@@ -120,12 +116,12 @@ build:editor-wasm --linkopt=-pthread
 # Geode (WebGPU) WASM build. Usage:
 #   bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm_geode
 # Inherits --config=wasm (Emscripten toolchain + text disables + perf-opt
-# transition disable) and switches the renderer backend to Geode with Dawn's
-# browser WebGPU bindings. Requires ASYNCIFY for synchronous
+# transition disable) and switches the renderer backend to Geode with the
+# emdawnwebgpu browser WebGPU bindings. Requires ASYNCIFY for synchronous
 # device/adapter/buffer-map operations.
 common:wasm-geode --config=wasm
 common:wasm-geode --//donner/svg/renderer:renderer_backend=geode
-common:wasm-geode --//donner/svg/renderer/geode:enable_dawn=true
+common:wasm-geode --//donner/svg/renderer/geode:enable_geode=true
 build:wasm-geode --cxxopt=-fconstexpr-steps=10000000
 
 # Full editor WASM + Geode. Usage:
@@ -178,7 +174,7 @@ coverage --combined_report=lcov
 coverage --instrumentation_filter="-test_utils$,//donner[:/]"
 coverage --test_tag_filters=-fuzz_target,-lint
 # Continue past build/analysis failures so coverage is collected from all tests
-# that can run (e.g. Skia backend fails ObjC analysis on macOS with LLVM toolchain).
+# that can run.
 coverage --keep_going
 
 coverage:macos --test_env=COVERAGE_GCOV_PATH=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata

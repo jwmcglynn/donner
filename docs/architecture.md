@@ -13,7 +13,7 @@ Donner intends to provide browser-level functionality as a standalone C++ librar
 - Instead of simply rendering `.svg` files, Donner constructs a DOM tree that allows inspecting and modifying the file contents in-memory.
 - Donner transforms the document tree into an efficient in-memory representation that can be repeatedly rendered.
 
-Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the default, a lightweight software rasterizer vendored from Rust's `tiny-skia` library — no external dependencies) and **Skia** (the full Chromium/Firefox 2D graphics library, enabled with `--config=skia`). An experimental **Geode** GPU backend (WebGPU + Slug) is under development and gated behind `--config=geode`.
+Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the default, a lightweight software rasterizer vendored from Rust's `tiny-skia` library — no external dependencies) and **Geode** (an experimental GPU backend built on WebGPU + Slug, gated behind `--config=geode`).
 
 ## System Context
 
@@ -96,7 +96,7 @@ The Document Model is built on top of the [EnTT](https://github.com/skypjack/ent
 
 ### Rendering Backend
 
-The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then consumed by the selected renderer (tiny-skia by default, or Skia with `--config=skia`).
+The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then consumed by the selected renderer (tiny-skia by default, or Geode with `--config=geode`).
 
 Rendering components are attached to the same entities as the document model components, allowing for easy synchronization between the document model and the rendering backend. When the document model is modified, the associated rendering components are invalidated.
 

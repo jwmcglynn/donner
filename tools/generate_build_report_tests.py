@@ -73,8 +73,6 @@ class GenerateBuildReportTests(unittest.TestCase):
                 self._notice_build_result("notice-default"),
             ("bazel", "build", "//third_party/licenses:notice_text_full"):
                 self._notice_build_result("notice-text-full"),
-            ("bazel", "build", "//third_party/licenses:notice_skia_text_full"):
-                self._notice_build_result("notice-skia-text-full"),
             ("bazel", "build", "//third_party/licenses:notice_editor"):
                 self._notice_build_result("notice-editor"),
             (
@@ -121,28 +119,6 @@ class GenerateBuildReportTests(unittest.TestCase):
             (
                 "bazel",
                 "cquery",
-                "deps(//examples:svg_to_png)",
-                "--output=starlark",
-                "--starlark:expr=target.label",
-                "--config=skia",
-                "--config=text-full",
-            ): generate_build_report.CommandResult(
-                label="skia-text-full",
-                args=(),
-                returncode=0,
-                stdout="\n".join(
-                    [
-                        "@+_repo_rules+entt//:entt",
-                        "@non_bcr_deps+skia//:skia",
-                        "@non_bcr_deps+harfbuzz//:harfbuzz",
-                    ]
-                ),
-                stderr="",
-                duration_sec=3.0,
-            ),
-            (
-                "bazel",
-                "cquery",
                 "deps(//donner/editor:editor)",
                 "--output=starlark",
                 "--starlark:expr=target.label",
@@ -176,8 +152,6 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("- tiny-skia-cpp", section.content)
         self.assertIn("### tiny-skia + text-full", section.content)
         self.assertIn("- woff2", section.content)
-        self.assertIn("### skia + text-full", section.content)
-        self.assertIn("- skia", section.content)
         self.assertIn("### editor (tiny-skia + imgui/glfw/tracy + editor fonts)", section.content)
 
     def test_external_dependencies_section_annotates_with_licenses(self):
@@ -210,13 +184,10 @@ class GenerateBuildReportTests(unittest.TestCase):
                     self._notice_build_result("notice-default"),
                 ("bazel", "build", "//third_party/licenses:notice_text_full"):
                     self._notice_build_result("notice-text-full"),
-                ("bazel", "build", "//third_party/licenses:notice_skia_text_full"):
-                    self._notice_build_result("notice-skia-text-full"),
                 ("bazel", "build", "//third_party/licenses:notice_editor"):
                     self._notice_build_result("notice-editor"),
             }
-            for configs in ([], ["--config=text-full"],
-                            ["--config=skia", "--config=text-full"]):
+            for configs in ([], ["--config=text-full"]):
                 key = (
                     "bazel",
                     "cquery",

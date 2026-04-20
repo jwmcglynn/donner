@@ -52,13 +52,6 @@ donner_cc_test(
     ],
 )
 
-donner_transitioned_cc_test(
-    name = "svg_tests_skia",
-    dep = ":svg_tests_impl",
-    renderer_backend = "skia",
-    testonly = 1,
-)
-
 alias(
     name = "svg_tests",
     actual = ":svg_tests_impl",

@@ -381,7 +381,6 @@ std::string escapeFilename(std::string filename) {
 
 bool isActiveBackendAllowed(const ImageComparisonParams& params) {
   switch (ActiveRendererBackend()) {
-    case RendererBackend::Skia: return params.allowSkia;
     case RendererBackend::TinySkia: return params.allowTinySkia;
     case RendererBackend::Geode: return params.allowGeode;
   }
@@ -391,9 +390,10 @@ bool isActiveBackendAllowed(const ImageComparisonParams& params) {
 
 std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFeatures) {
   constexpr RendererBackendFeature kFeatures[] = {
-      RendererBackendFeature::Text,          RendererBackendFeature::TextFull,
-      RendererBackendFeature::FilterEffects, RendererBackendFeature::AsciiSnapshot,
-      RendererBackendFeature::SkpDebug,
+      RendererBackendFeature::Text,
+      RendererBackendFeature::TextFull,
+      RendererBackendFeature::FilterEffects,
+      RendererBackendFeature::AsciiSnapshot,
   };
 
   for (RendererBackendFeature feature : kFeatures) {
@@ -723,27 +723,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
     const bool suppressVerboseOutput = suppressVerboseFailureOutputForLlm();
     if (!suppressVerboseOutput) {
-      if (params.saveDebugSkpOnFailure &&
-          ActiveRendererSupportsFeature(RendererBackendFeature::SkpDebug)) {
-        std::cout << "=> Re-rendering with verbose output and creating .skp (SkPicture)\n";
-
-        const std::filesystem::path skpFilePath =
-            std::filesystem::temp_directory_path() /
-            (escapeFilename(effectiveGoldenFilename) + ".skp");
-        if (WriteActiveRendererDebugSkp(document, skpFilePath)) {
-          std::cout << "Load this .skp into https://debugger.skia.org/\n"
-                    << "=> " << skpFilePath.string() << "\n\n";
-        } else {
-          std::cout << "=> Failed to create debug .skp at " << skpFilePath.string() << "\n";
-        }
-      } else {
-        if (params.saveDebugSkpOnFailure) {
-          std::cout << "=> Debug .skp capture is only available for the Skia backend\n";
-        }
-
-        std::cout << "=> Re-rendering with verbose backend output\n";
-        (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
-      }
+      std::cout << "=> Re-rendering with verbose backend output\n";
+      (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
     } else {
       printVerboseFailureOutputOverrideHint();
     }

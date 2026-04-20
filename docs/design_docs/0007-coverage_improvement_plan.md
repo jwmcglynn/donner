@@ -21,7 +21,7 @@ Closing the gap requires ~1,300–1,900 additional lines covered. The plan combi
 | Rank | File | Lines | Category |
 |------|------|------:|----------|
 | 1 | `svg/parser/AttributeParser.cc` | 2,462 | Parser (no dedicated test) |
-| 2 | `svg/renderer/RendererSkia.cc` | 2,437 | Renderer (covered by integration tests) |
+| 2 | archived full-Skia renderer source | 2,437 | Renderer (covered by integration tests) |
 | 3 | `svg/renderer/RendererTinySkia.cc` | 1,697 | Renderer (covered by integration tests) |
 | 4 | `svg/renderer/RenderingContext.cc` | 1,260 | Renderer (no dedicated test) |
 | 5 | `svg/components/animation/AnimationSystem.cc` | 1,376 | ECS system (no test) |
@@ -57,7 +57,7 @@ Closing the gap requires ~1,300–1,900 additional lines covered. The plan combi
 | `operator<<` debug formatters | 97 files with `operator<<` | ~300 | LCOV_EXCL_LINE on ostream operators that exist only for test/debug output |
 | Signal handler | `FailureSignalHandler.cc` | 224 | LCOV_EXCL_START/STOP the entire file |
 | CLI tool entry points | `xml_tool.cc`, `svg_parser_tool.cc`, `renderer_tool.cc` | 399 | Already excluded by being `*_tool.cc`; verify they're not in coverage denominator |
-| Renderer backends (partially) | `RendererSkia.cc`, `RendererTinySkia.cc` | ~200 | LCOV_EXCL on error-only paths, platform-specific fallbacks |
+| Renderer backends (partially) | archived full-Skia source, `RendererTinySkia.cc` | ~200 | LCOV_EXCL on error-only paths, platform-specific fallbacks |
 | `ElementType.cc` operator<< | 69 lines of switch-case for element names | 60 | LCOV_EXCL_LINE per case |
 
 **Estimated impact:** ~500–800 lines removed from denominator or marked as covered.
@@ -74,7 +74,7 @@ Quick wins that reduce the denominator without writing new tests.
   for enum types and data structures. Focus on `donner/svg/core/*.h` enum formatters and
   `donner/css/` type formatters. Use `EXPECT_THAT(stream.str(), ...)` patterns.
 - [x] **A3: Test renderer error/fallback paths** — Add unit tests that exercise error returns
-  in `RendererSkia.cc` and `RendererTinySkia.cc` (e.g., failed SkSurface creation, null
+  in the archived full-Skia source and `RendererTinySkia.cc` (e.g., failed SkSurface creation, null
   canvas checks, invalid dimensions, OOM-like conditions).
 - [x] **A4: Verify tool files excluded** — Confirm `*_tool.cc` and `*_benchmark.cc` files
   are not included in the coverage denominator by the CI workflow. If they are, exclude

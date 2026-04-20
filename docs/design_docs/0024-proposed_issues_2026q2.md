@@ -569,7 +569,7 @@ actual Donner build configurations:
 | **donner-tiny** | tiny-skia | no | no | `--config=tiny` | All PRs |
 | **donner** (default) | tiny-skia | yes | simple (stb) | `--config=text` | All PRs |
 | **donner-max** | tiny-skia | yes | full (FT+HB+WOFF2) | `--config=text-full` | All PRs |
-| **skia-ref** | skia | yes | full | `--config=skia --config=text-full` | main only |
+| **legacy-skia-ref** | skia | yes | full | removed full-Skia config + `--config=text-full` | main only |
 
 **Changes needed:**
 1. Fix `rules.bzl` transition to also set `//donner/svg/renderer:text=true`.
@@ -666,11 +666,11 @@ Current key includes `.bazelrc` — any comment change invalidates the entire ca
 | **Impact** | Better incremental compile times |
 | **Effort** | 3–5 days |
 
-The four largest `.cc` files are all renderers: `RendererSkia.cc` (4,245 lines),
+The four largest `.cc` files are all renderers: the archived full-Skia renderer source (4,245 lines),
 `RendererTinySkia.cc` (2,254), `RendererDriver.cc` (2,072), `RendererGeode.cc` (1,896).
 
-Split by concern: `RendererSkia_Gradient.cc`, `RendererSkia_Filter.cc`, `RendererSkia_Text.cc`,
-`RendererSkia_Shape.cc`. Changes to gradient code no longer recompile text code.
+Split by concern: `FullSkia_Gradient.cc`, `FullSkia_Filter.cc`, `FullSkia_Text.cc`,
+`FullSkia_Shape.cc`. Changes to gradient code no longer recompile text code.
 
 ---
 

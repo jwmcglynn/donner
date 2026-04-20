@@ -12,11 +12,9 @@ the version number.
   public compounds.
 - [ ] **Tests pass** — `bazel test //donner/...` is green across all configurations:
   - Default (tiny-skia)
-  - `--config=skia`
   - `--config=text-full`
-  - `--config=text-full` + `--config=skia`
 - [ ] **Fuzzers run** — Execute all fuzz targets for a reasonable duration. Check for new crashes.
-- [ ] **CMake build verified** — Build and test with the CMake path (both Skia and tiny-skia).
+- [ ] **CMake build verified** — Build and test with the CMake path.
 
 ## Pre-Release: Documentation
 

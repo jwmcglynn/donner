@@ -73,7 +73,7 @@ def _fallback_package_name(label):
     # Prefer the external repo name (e.g. `libpng`) for licenses declared in
     # upstream BCR overlays that don't set `package_name`. Bazel's canonical
     # workspace names take forms like `libpng+` (direct BCR module) or
-    # `+non_bcr_deps+skia` (module extension), so take the last non-empty
+    # `+non_bcr_deps+harfbuzz` (module extension), so take the last non-empty
     # "+"-delimited component to get the human-readable repo name.
     repo = label.workspace_name
     if repo:

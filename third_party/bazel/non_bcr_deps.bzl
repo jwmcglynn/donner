@@ -8,10 +8,9 @@ Bazel Central Registry. The extension is imported from //MODULE.bazel with
 Each dep listed here is load-bearing for a feature that is opt-in and NOT
 shipped over BCR:
 
-- skia            : Skia renderer backend       (--config=skia)
 - harfbuzz        : Text shaping                (--config=text-full)
 - woff2           : WOFF2 font format           (--config=text-full)
-- wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_dawn=true)
+- wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_geode=true)
 - tracy           : In-process profiling client (//donner/editor only — see check_banned_patterns.py)
 - resvg-test-suite: Reference SVG goldens       (image comparison tests)
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
@@ -39,13 +38,6 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_r
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 def _non_bcr_deps_impl(_mctx):
-    # Skia renderer backend. Gated on //donner/svg/renderer:renderer_backend_skia.
-    git_repository(
-        name = "skia",
-        commit = "d945cbcbbb5834245256e883803c2704f3a32e18",
-        remote = "https://github.com/google/skia",
-    )
-
     # WOFF2 text support. Gated on //donner/svg/renderer:text_full_enabled.
     new_git_repository(
         name = "woff2",
@@ -84,8 +76,7 @@ HBEOF""",
 
     # wgpu-native (Rust/wgpu-based WebGPU implementation) for the Geode GPU
     # renderer. Only fetched when
-    # --//donner/svg/renderer/geode:enable_dawn=true (the flag name is
-    # historical; it now selects wgpu-native, not Dawn).
+    # --//donner/svg/renderer/geode:enable_geode=true.
     #
     # Previous iteration built Dawn from source via rules_foreign_cc's cmake()
     # rule. On GitHub Actions that took ~1 h 45 m per run — too slow for the

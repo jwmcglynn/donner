@@ -45,18 +45,9 @@ jobs:
         run: bazelisk build --config=ci //...
 
       - name: Test
-        # Exclude the Skia reference variant on PRs (only run on main merges)
-        # to avoid compiling the full Skia library on every PR.
         run: |
           bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-skia_ref \
             //...
-
-      - name: Test (Skia reference)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          bazelisk test --config=ci --test_output=errors \
-            //donner/svg/renderer/tests:resvg_test_suite_skia_ref
 
 
   macos:

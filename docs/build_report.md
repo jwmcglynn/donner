@@ -193,8 +193,6 @@ $ bazel test //donner/...
 //donner/base/xml/components:components_tests                            PASSED in 4.1s
 //donner/base/xml/components:components_tests_lint                       PASSED in 0.2s
 //donner/benchmarks:css_parse_perf_bench_lint                            PASSED in 0.2s
-//donner/benchmarks:skia_filter_perf_bench_lint                          PASSED in 0.2s
-//donner/benchmarks:skia_render_perf_bench_lint                          PASSED in 0.2s
 //donner/benchmarks:structured_editing_perf_bench_lint                   PASSED in 0.2s
 //donner/benchmarks:tinyskia_render_perf_bench_lint                      PASSED in 0.2s
 //donner/css:core_lint                                                   PASSED in 0.3s
@@ -413,7 +411,6 @@ $ bazel test //donner/...
 //donner/svg/renderer:renderer_geode_lint                                PASSED in 0.2s
 //donner/svg/renderer:renderer_image_io_lint                             PASSED in 0.2s
 //donner/svg/renderer:renderer_interface_lint                            PASSED in 0.2s
-//donner/svg/renderer:renderer_skia_lint                                 PASSED in 0.3s
 //donner/svg/renderer:renderer_utils_lint                                PASSED in 0.2s
 //donner/svg/renderer:resolved_gradient_lint                             PASSED in 0.3s
 //donner/svg/renderer:stroke_params_lint                                 PASSED in 0.2s
@@ -447,14 +444,12 @@ $ bazel test //donner/...
 //donner/svg/renderer/tests:renderer_public_api_tests                    PASSED in 0.5s
 //donner/svg/renderer/tests:renderer_public_api_tests_impl               PASSED in 0.5s
 //donner/svg/renderer/tests:renderer_public_api_tests_impl_lint          PASSED in 0.2s
-//donner/svg/renderer/tests:renderer_public_api_tests_skia               PASSED in 1.0s
 //donner/svg/renderer/tests:renderer_test_utils_lint                     PASSED in 0.2s
 //donner/svg/renderer/tests:renderer_tests                               PASSED in 4.2s
 //donner/svg/renderer/tests:renderer_tests_lint                          PASSED in 0.2s
 //donner/svg/renderer/tests:resvg_test_suite_default_text                PASSED in 76.3s
 //donner/svg/renderer/tests:resvg_test_suite_impl_lint                   PASSED in 0.2s
 //donner/svg/renderer/tests:resvg_test_suite_max                         PASSED in 77.2s
-//donner/svg/renderer/tests:resvg_test_suite_skia_ref                    PASSED in 79.8s
 //donner/svg/renderer/tests:terminal_image_viewer_tests                  PASSED in 0.1s
 //donner/svg/renderer/tests:terminal_image_viewer_tests_lint             PASSED in 0.2s
 //donner/svg/renderer/tests:text_backend_tests_lint                      PASSED in 0.2s
@@ -481,7 +476,6 @@ $ bazel test //donner/...
 //donner/svg/resources:url_loader_tests_lint                             PASSED in 0.2s
 //donner/svg/tests:parser_test_utils_lint                                PASSED in 0.3s
 //donner/svg/tests:svg_tests_impl_lint                                   PASSED in 0.3s
-//donner/svg/tests:svg_tests_skia                                        PASSED in 3.1s
 //donner/svg/text:text_backend_full_lint                                 PASSED in 0.7s
 //donner/svg/text:text_backend_lint                                      PASSED in 0.2s
 //donner/svg/text:text_backend_simple_lint                               PASSED in 0.3s
@@ -588,20 +582,6 @@ Licenses aggregated from: `//third_party/licenses:notice_text_full` (embed the g
 - [woff2](https://github.com/google/woff2) — MIT
 - [zlib](https://zlib.net/) — Zlib
 
-### skia + text-full
-Generated with: `bazel cquery 'deps(//examples:svg_to_png)' --config=skia --config=text-full`
-Licenses aggregated from: `//third_party/licenses:notice_skia_text_full` (embed the generated NOTICE.txt for attribution).
-
-- [brotli](https://github.com/google/brotli) — MIT
-- [entt](https://github.com/skypjack/entt) — MIT
-- [freetype](https://freetype.org/) — FTL
-- [harfbuzz](https://github.com/harfbuzz/harfbuzz) — MIT
-- [libpng](http://www.libpng.org/pub/png/libpng.html) — libpng-2.0
-- [skia](https://skia.org/) — BSD-3-Clause
-- [stb](https://github.com/nothings/stb) — MIT
-- [woff2](https://github.com/google/woff2) — MIT
-- [zlib](https://zlib.net/) — Zlib
-
 ### editor (tiny-skia + imgui/glfw/tracy + editor fonts)
 Generated with: `bazel cquery 'deps(//donner/editor:editor)'`
 Licenses aggregated from: `//third_party/licenses:notice_editor` (embed the generated NOTICE.txt for attribution).
@@ -613,7 +593,6 @@ Licenses aggregated from: `//third_party/licenses:notice_editor` (embed the gene
 - imgui
 - libpng
 - python_3_11_aarch64-unknown-linux-gnu
-- skia
 - [stb](https://github.com/nothings/stb) — MIT
 - [tiny-skia-cpp](https://github.com/jwmcglynn/tiny-skia-cpp) — BSD-3-Clause
 - tracy

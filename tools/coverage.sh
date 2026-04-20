@@ -83,9 +83,9 @@ fi
   COVERAGE_REPORT=$(bazel info output_path)/_coverage/_coverage_report.dat
 
   # --keep_going is set in .bazelrc for coverage so that analysis failures
-  # (e.g. Skia ObjC on macOS with LLVM toolchain) don't block the rest of the
-  # run.  Record the timestamp before running so we can verify a fresh report
-  # was produced (avoid processing stale data on early exit).
+  # don't block the rest of the run.  Record the timestamp before running so
+  # we can verify a fresh report was produced (avoid processing stale data on
+  # early exit).
   BEFORE_TS=0
   if [ -f "$COVERAGE_REPORT" ]; then
     BEFORE_TS=$(stat -f %m "$COVERAGE_REPORT" 2>/dev/null || stat -c %Y "$COVERAGE_REPORT" 2>/dev/null || echo 0)

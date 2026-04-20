@@ -452,7 +452,7 @@ the upgrade lands. This is the correct outcome, even if it delays things.
 
 5. **Goldens for the new Skia backend**: do we need to regenerate `-skia`
    suffixed goldens too, or are they under the same naming scheme? Check
-   `RendererSkia` golden handling.
+   the legacy full-Skia golden handling.
 
 6. **Should the design include upgrading `resvg-test-triage` to a language
    model-assisted triage flow** (e.g., feed failures to Claude with the SVG

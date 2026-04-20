@@ -65,7 +65,7 @@ Ownership rules (violating these is UB, not a warning):
 - **Transform composition**: `entityFromWorldTransform` must be applied in the right order. Donner uses `destFromSource` naming (see `AGENTS.md` "Transform Naming Convention"); tiny-skia-cpp uses `Transform::preConcat`/`postConcat` explicitly. Getting the concat direction wrong is a frequent source of pixel diffs.
 - **Paint setup**: Donner's `PaintSystem` produces `ComputedGradientComponent` / `ComputedPatternComponent`; `RendererTinySkia` wires those into tiny-skia-cpp `Shader` variants. If a gradient looks off, trace back from the computed component to the tiny-skia-cpp shader args.
 - **Fill rules**: Donner has `even-odd` and `nonzero`; tiny-skia-cpp has `FillRule::EvenOdd` / `FillRule::Winding`. Mismatched mapping → subtle but reproducible pixel diffs on self-intersecting paths.
-- **Text rendering**: under `--config=text`, Donner uses `TextLayout` (stb_truetype) and feeds glyph outlines into tiny-skia-cpp as paths. Under `--config=text-full`, it's `TextShaper` (FreeType + HarfBuzz). When text pixels disagree from Skia's goldens, it's usually a text stack issue, not a rasterizer issue — but verify before pointing the finger.
+- **Text rendering**: by default Donner uses `TextLayout` (stb_truetype) and feeds glyph outlines into tiny-skia-cpp as paths. Under `--config=text-full`, it's `TextShaper` (FreeType + HarfBuzz). When text pixels disagree from goldens, it's usually a text stack issue, not a rasterizer issue — but verify before pointing the finger.
 - **Filter support**: filters in the default backend use tiny-skia-cpp's `filter/` directory plus Donner's `FilterGraphExecutor`. Cross-reference both when a filter primitive misbehaves.
 - **Pattern/marker offscreen subtrees**: `RendererTinySkia` renders offscreen layers for patterns and markers, then composites them back. Check layer isolation (opacity < 1, filters, masks) if a pattern/marker looks wrong.
 
@@ -75,7 +75,7 @@ When someone reports a tiny-skia-cpp pixel diff:
 
 1. **Reproduce with the exact failing test.** `bazel run //donner/svg/renderer/tests:renderer_tests -- '--gtest_filter=*NameOfFailingTest*'`. Note: `renderer_tests` runs the default backend.
 2. **Compare native vs. scalar tiny-skia-cpp** (`//src:tiny_skia_lib` vs `//src:tiny_skia_lib_scalar` as a link dep). If they disagree, it's a SIMD bug in `wide/`.
-3. **Compare against Skia.** `bazel test --config=skia //donner/svg/renderer/tests:renderer_tests`. If Skia agrees with the golden but tiny-skia-cpp disagrees, the bug is in tiny-skia-cpp or the integration. If both disagree, the golden is probably stale or the bug is in Donner's upstream pipeline (parser, styling, layout).
+3. **Compare against the checked-in golden and a minimized repro.** If tiny-skia-cpp disagrees with the golden, determine whether the fault is in tiny-skia-cpp itself, the Donner integration layer, or the upstream document pipeline (parser, styling, layout).
 4. **Compare against the original Rust `tiny-skia`.** This is the gold standard for the C++ port — if the C++ output diverges from Rust, the C++ port has a bug. (Check commit history of the C++ file against the Rust source in the vendored directory if available, or reference the upstream Rust repo.)
 5. **Root-cause, don't bump thresholds.** Per root `AGENTS.md`: threshold changes are a last resort, require human approval, and "glyph outline differences" is *not* a valid explanation without strong evidence. You know this section by heart.
 

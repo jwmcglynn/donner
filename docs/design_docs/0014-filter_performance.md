@@ -10,7 +10,7 @@
 Filter rendering performance has regressed significantly, particularly Gaussian blur. Two root causes:
 
 1. **Skia backend falls through to CPU fallback far too often.** The `getSimpleNativeSkiaBlur()`
-   eligibility check has an inverted condition (line 168 of `RendererSkia.cc`) that rejects
+   eligibility check has an inverted condition (line 168 of the archived full-Skia renderer source) that rejects
    *isotropic* blurs — the most common case. The Donner Splash SVG has three single-node isotropic
    Gaussian blurs (`stdDeviation="6"`, `"3"`, `"4.5"`) that all hit the slow CPU fallback instead
    of Skia's GPU-accelerated `SkImageFilters::Blur()`. Beyond the bug fix, only single-node
@@ -44,7 +44,7 @@ Filter rendering performance has regressed significantly, particularly Gaussian 
 
 ### 1.1 Bug Fix: Inverted Isotropic Blur Check
 
-**File:** `donner/svg/renderer/RendererSkia.cc:168`
+**File:** archived full-Skia renderer source, line 168
 
 ```cpp
 // CURRENT (buggy): rejects when X ≈ Y (isotropic — the common case!)
@@ -119,7 +119,7 @@ needed at all.
 
 #### Implementation: `buildNativeSkiaFilterDAG()`
 
-New function in `RendererSkia.cc` that replaces `getSimpleNativeSkiaBlur()`. Algorithm:
+New function in the archived full-Skia renderer source that replaces `getSimpleNativeSkiaBlur()`. Algorithm:
 
 ```
 function buildNativeSkiaFilterDAG(filterGraph, deviceFromFilter) -> sk_sp<SkImageFilter>:
@@ -660,7 +660,7 @@ quantization behavior (matching resvg's uint8 pipeline may actually improve some
 
 | File | Role | Changes |
 |------|------|---------|
-| `RendererSkia.cc` | Skia filter dispatch | Fix isotropic bug, extend eligibility, add native lowering |
+| archived full-Skia renderer source | Skia filter dispatch | Fix isotropic bug, extend eligibility, add native lowering |
 | `GaussianBlur.cpp` | CPU blur implementation | Running sum, SIMD, cache optimization |
 | `FloatPixmap.h` | Float pixel buffer | SIMD conversion, alignment |
 | `FilterGraph.cpp` | Filter graph executor | No changes (routing stays the same) |

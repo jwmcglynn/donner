@@ -647,7 +647,7 @@
     {
       "filename": "e-feConvolveMatrix-014.svg",
       "params": "Params::RenderOnly()",
-      "comment": "Skia MatrixConvolution edge shift vs tiny-skia",
+      "comment": "MatrixConvolution edge shift vs golden",
       "suite_name": "FeConvolveMatrix",
       "suite_prefix": "e-feConvolveMatrix"
     },
@@ -1025,7 +1025,7 @@
     {
       "filename": "e-marker-018.svg",
       "params": "Params::WithThreshold(kDefaultThreshold, 110)",
-      "comment": "Minor AA diffs on Skia text_full",
+      "comment": "Minor AA diffs on text_full",
       "suite_name": "Marker",
       "suite_prefix": "e-marker"
     },
@@ -1102,14 +1102,14 @@
     {
       "filename": "e-pattern-008.svg",
       "params": "Params::WithThreshold(kDefaultThreshold, 250)",
-      "comment": "Skia pattern AA",
+      "comment": "Pattern AA drift",
       "suite_name": "Pattern",
       "suite_prefix": "e-pattern"
     },
     {
       "filename": "e-pattern-010.svg",
       "params": "Params::WithThreshold(kDefaultThreshold, 150)",
-      "comment": "Skia pattern AA",
+      "comment": "Pattern AA drift",
       "suite_name": "Pattern",
       "suite_prefix": "e-pattern"
     },
@@ -1452,7 +1452,7 @@
     {
       "filename": "e-text-029.svg",
       "params": "Params::WithGoldenOverride(\"donner/svg/renderer/testdata/golden/resvg-e-text-029.png\", 0.1f) .withMaxPixelsDifferent(1100) .onlyTextFull()",
-      "comment": "Emoji, Skia bitmap scaling differs from TinySkia",
+      "comment": "Emoji bitmap scaling differs from the golden",
       "suite_name": "TextElement",
       "suite_prefix": "e-text-"
     },

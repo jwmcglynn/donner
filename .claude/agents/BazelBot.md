@@ -34,12 +34,12 @@ All flags live under `--//donner/svg/renderer:`. User-facing shortcuts via `--co
 
 | Config | Effect |
 |---|---|
-| (default) | `renderer_backend=tiny_skia`, no text, filters on |
-| `--config=skia` | `renderer_backend=skia` (full Skia backend) |
-| `--config=text` | stb_truetype basic text |
+| (default) | `renderer_backend=tiny_skia`, basic text, filters on |
+| `--config=no-text` | Disables text rendering |
 | `--config=text-full` | FreeType + HarfBuzz + WOFF2 (implies `text`) |
 | `--config=no-filters` | Disables filter graph support |
-| `--config=geode` | `renderer_backend=geode` + `enable_dawn=true` (GeodeBot owns this one) |
+| `--config=tiny` | Disables both text and filters (smallest variant) |
+| `--config=geode` | `renderer_backend=geode` + `enable_geode=true` (GeodeBot owns this one) |
 | `--config=asan-fuzzer` | LLVM 21 toolchain for fuzzer sanitizers (needed on macOS — Apple Clang lacks `libclang_rt.fuzzer_osx.a`) |
 
 When answering "what does X do?", open `.bazelrc` and quote the actual flag expansion — don't paraphrase.
@@ -77,7 +77,7 @@ CMake is a second-class citizen generated from `bazel query`. If someone modifie
 
 ## Handoff rules
 
-- **Geode's `enable_dawn` flag specifically**: GeodeBot owns it.
+- **Geode's `enable_geode` flag specifically**: GeodeBot owns it.
 - **Release artifact builds / build report layout**: ReleaseBot.
 - **C++ code quality inside a library**: ReadabilityBot / TestBot.
 

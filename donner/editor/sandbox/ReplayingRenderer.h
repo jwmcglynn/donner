@@ -3,8 +3,7 @@
 ///
 /// Decodes a `SerializingRenderer` wire stream and dispatches its messages
 /// onto a wrapped, real `RendererInterface`. The replay is host-side: the
-/// target can be `RendererTinySkia`, `RendererSkia`, `RendererGeode`, or a
-/// test mock.
+/// target can be `RendererTinySkia`, `RendererGeode`, or a test mock.
 ///
 /// `ReplayingRenderer::pumpFrame()` is the single entry point. It reads
 /// messages from the wire until it encounters `kEndFrame`, an unknown opcode,

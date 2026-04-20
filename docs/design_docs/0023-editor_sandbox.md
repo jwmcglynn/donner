@@ -325,7 +325,7 @@ the tree (grep confirmed). This is greenfield.
 │  │   │  │   forwards to:        │   │  │     │  │     ▼                   │  │
 │  │   │  └───────────────────────┘   │  │     │  │  SerializingRenderer    │  │
 │  │   ▼                              │  │     │  │  (writes wire to stdout)│  │
-│  │  RendererSkia / TinySkia / Geode │  │     │  └─────────────────────────┘  │
+│  │  FullSkiaRenderer / TinySkia / Geode │  │     │  └─────────────────────────┘  │
 │  │   │                              │  │     │                               │
 │  │   ▼                              │  │     │  seccomp-bpf / sandbox_init   │
 │  │  GL framebuffer, on screen       │  │     │  no fs, no net, pipes only    │

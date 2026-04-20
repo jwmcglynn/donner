@@ -2,7 +2,6 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
 #include <string_view>
 
 #include "donner/svg/SVGDocument.h"
@@ -14,7 +13,6 @@ namespace donner::svg {
  * @brief Rendering backend selected for the current Bazel configuration.
  */
 enum class RendererBackend {
-  Skia,
   TinySkia,
   Geode,
 };
@@ -27,7 +25,6 @@ enum class RendererBackendFeature : uint32_t {
   TextFull = 1,
   FilterEffects = 2,
   AsciiSnapshot = 3,
-  SkpDebug = 4,
 };
 
 /**
@@ -48,7 +45,6 @@ constexpr uint32_t RendererBackendFeatureMask(RendererBackendFeature feature) {
  */
 inline std::string_view RendererBackendName(RendererBackend backend) {
   switch (backend) {
-    case RendererBackend::Skia: return "Skia";
     case RendererBackend::TinySkia: return "TinySkia";
     case RendererBackend::Geode: return "Geode";
   }
@@ -67,7 +63,6 @@ inline std::string_view RendererBackendFeatureName(RendererBackendFeature featur
     case RendererBackendFeature::Text: return "text rendering";
     case RendererBackendFeature::TextFull: return "full text rendering";
     case RendererBackendFeature::FilterEffects: return "filter effects";
-    case RendererBackendFeature::SkpDebug: return "SkPicture debug capture";
     case RendererBackendFeature::AsciiSnapshot: return "ASCII snapshot";
   }
 
@@ -122,14 +117,5 @@ RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document);
  * @return A new renderer instance.
  */
 std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose = false);
-
-/**
- * @brief Writes a `.skp` debug file for the active backend when supported.
- *
- * @param document The document to render.
- * @param outputPath The output file to write.
- * @return True if the file was written.
- */
-bool WriteActiveRendererDebugSkp(SVGDocument& document, const std::filesystem::path& outputPath);
 
 }  // namespace donner::svg

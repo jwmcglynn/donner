@@ -1,16 +1,14 @@
 """Geode: GPU-native SVG rendering backend.
 
 This is an experimental backend gated behind a build flag. The default is OFF
-so existing CI does not pull in the WebGPU runtime at all. The flag name
-`enable_dawn` is historical — Geode originally built Google's Dawn from
-source via `rules_foreign_cc`'s CMake wrapper, then swapped to a prebuilt
-`wgpu-native` archive for CI latency. The bool_flag and config_setting
-names are kept stable so downstream command-line invocations don't need to
-change.
+so existing CI does not pull in the WebGPU runtime at all. WebGPU is provided
+on native by a prebuilt `wgpu-native` archive (see
+`third_party/bazel/non_bcr_deps.bzl`) and on WASM by emdawnwebgpu (browser
+WebGPU bindings).
 
 To enable:
 
-    bazel build --//donner/svg/renderer/geode:enable_dawn=true \\
+    bazel build --//donner/svg/renderer/geode:enable_geode=true \\
         //donner/svg/renderer/geode/...
 """
 
@@ -19,27 +17,26 @@ load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
-# Historical name: see file-level docstring above.
 bool_flag(
-    name = "enable_dawn",
+    name = "enable_geode",
     build_setting_default = False,
     visibility = ["//visibility:public"],
 )
 
 config_setting(
-    name = "dawn_enabled",
-    flag_values = {":enable_dawn": "True"},
+    name = "geode_enabled",
+    flag_values = {":enable_geode": "True"},
     visibility = ["//visibility:public"],
 )
 
-# Targets below are only compatible when --//donner/svg/renderer/geode:enable_dawn=true.
-_DAWN_ONLY = select({
-    ":dawn_enabled": [],
+# Targets below are only compatible when --//donner/svg/renderer/geode:enable_geode=true.
+_GEODE_ONLY = select({
+    ":geode_enabled": [],
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
 # CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
-# always built regardless of the enable_dawn flag. Downstream Geode targets
+# always built regardless of the enable_geode flag. Downstream Geode targets
 # (GeoEncoder, RendererGeode) consume the EncodedPath struct this produces
 # and upload it to GPU buffers.
 donner_cc_library(
@@ -65,7 +62,7 @@ donner_cc_test(
 donner_cc_library(
     name = "geode_wgpu_util",
     hdrs = ["GeodeWgpuUtil.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -90,7 +87,7 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_wgpu_util",
@@ -102,7 +99,7 @@ donner_cc_library(
 donner_cc_test(
     name = "geode_device_tests_impl",
     srcs = ["tests/GeodeDevice_tests.cc"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
         ":geode_wgpu_util",
@@ -338,7 +335,7 @@ donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
     hdrs = ["GeodeShaders.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
@@ -370,7 +367,7 @@ donner_cc_library(
 donner_cc_test(
     name = "geode_shaders_tests_impl",
     srcs = ["tests/GeodeShaders_tests.cc"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
         ":geode_shaders",
@@ -389,7 +386,7 @@ donner_cc_library(
     name = "geode_filter_engine",
     srcs = ["GeodeFilterEngine.cc"],
     hdrs = ["GeodeFilterEngine.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
@@ -405,7 +402,7 @@ donner_cc_library(
     name = "geode_pipeline",
     srcs = ["GeodePipeline.cc"],
     hdrs = ["GeodePipeline.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_shaders",
@@ -417,7 +414,7 @@ donner_cc_library(
     name = "geode_image_pipeline",
     srcs = ["GeodeImagePipeline.cc"],
     hdrs = ["GeodeImagePipeline.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_shaders",
@@ -429,7 +426,7 @@ donner_cc_library(
     name = "geode_texture_encoder",
     srcs = ["GeodeTextureEncoder.cc"],
     hdrs = ["GeodeTextureEncoder.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
@@ -443,7 +440,7 @@ donner_cc_library(
     name = "geo_encoder",
     srcs = ["GeoEncoder.cc"],
     hdrs = ["GeoEncoder.h"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
@@ -461,7 +458,7 @@ donner_cc_library(
 donner_cc_test(
     name = "geo_encoder_tests_impl",
     srcs = ["tests/GeoEncoder_tests.cc"],
-    target_compatible_with = _DAWN_ONLY,
+    target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geo_encoder",
         ":geode_device",

@@ -43,9 +43,6 @@ donner_cc_library(
     name = "renderer_test_backend",
     testonly = 1,
     srcs = select({
-        "//donner/svg/renderer:renderer_backend_skia": [
-            "RendererTestBackendSkia.cc",
-        ],
         "//donner/svg/renderer:renderer_backend_geode": [
             "RendererTestBackendGeode.cc",
         ],
@@ -146,13 +143,6 @@ donner_cc_test(
     ],
 )
 
-donner_transitioned_cc_test(
-    name = "renderer_public_api_tests_skia",
-    testonly = 1,
-    dep = ":renderer_public_api_tests_impl",
-    renderer_backend = "skia",
-)
-
 alias(
     name = "renderer_public_api_tests",
     testonly = 1,
@@ -177,7 +167,6 @@ donner_cc_test(
     srcs = [
         "RendererAscii_tests.cc",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["skia"]),
     deps = [
         ":renderer_test_utils",
         "@com_google_gtest//:gtest_main",
@@ -260,7 +249,7 @@ donner_cc_test(
     ],
 )
 
-# Transition wrapper: flips renderer_backend=geode + enable_dawn=true so this
+# Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
 # target is reachable from `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "renderer_geode_golden_tests",
@@ -275,10 +264,10 @@ donner_multi_transitioned_test(
 donner_cc_test(
     name = "renderer_geode_tests_impl",
     srcs = ["RendererGeode_tests.cc"],
-    # Geode pulls in Dawn; gate behind the same enable_dawn flag the rest of
+    # Geode pulls in Dawn; gate behind the same enable_geode flag the rest of
     # the geode/ targets use.
     target_compatible_with = select({
-        "//donner/svg/renderer/geode:dawn_enabled": [],
+        "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
@@ -295,7 +284,7 @@ donner_cc_test(
     ],
 )
 
-# Transition wrapper: flips renderer_backend=geode + enable_dawn=true so this
+# Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
 # target is reachable from `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "renderer_geode_tests",
@@ -366,16 +355,13 @@ donner_variant_cc_test(
     # the resvg test suite exercises filters and text — it would need
     # feature-gated test selection to skip those categories. TODO: add
     # once the test harness supports config-aware test skipping.
-    #
-    # The Skia reference variant (skia_ref) is defined separately below
-    # and only runs on main merges to avoid compiling Skia on every PR.
     size = "enormous",
     dep = ":resvg_test_suite_impl",
     named_variants = [
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
         {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
         # Geode variant: runs the same suite on the WebGPU backend,
-        # auto-transitioned into `--config=geode` + `enable_dawn`. Text
+        # auto-transitioned into `--config=geode` + `enable_geode`. Text
         # and filters are still stubbed, so the fixture's
         # `geodeCategoryGate` / `geodeFilenameGate` logic in
         # `resvg_test_suite.cc` skips those categories automatically;
@@ -383,19 +369,6 @@ donner_variant_cc_test(
         # shapes, clipping, masking, markers, isolation) runs live.
         {"name": "geode", "backend": "geode", "text": "true", "text_full": "false"},
     ],
-)
-
-# Skia reference renderer variant — only built/tested on main merges.
-# Tagged "skia_ref" so CI can filter it out on PR branches.
-donner_multi_transitioned_test(
-    name = "resvg_test_suite_skia_ref",
-    size = "enormous",
-    dep = ":resvg_test_suite_impl",
-    renderer_backend = "skia",
-    tags = ["skia_ref"],
-    testonly = 1,
-    text = "true",
-    text_full = "true",
 )
 
 donner_cc_test(

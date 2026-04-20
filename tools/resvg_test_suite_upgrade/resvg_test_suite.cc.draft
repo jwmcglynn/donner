@@ -46,7 +46,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"bias=9999.svg", Params::RenderOnly("UB: bias=9999")},
                                     {"edgeMode=wrap-with-matrix-larger-than-target.svg", Params::RenderOnly("UB: wrap with oversized kernel")},
                                     {"edgeMode=wrap.svg", Params::WithThreshold(kDefaultThreshold, 200, "Minor algorithm differences on edge handling (180px)")},
-                                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg", Params::RenderOnly("Skia MatrixConvolution edge shift vs tiny-skia")},
+                                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg", Params::RenderOnly("MatrixConvolution edge shift vs golden")},
                                 })),
     TestNameFromFilename);
 
@@ -256,8 +256,8 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"out-of-order-referencing.svg", Params::WithThreshold(0.6f, 800, "Nested pattern AA (768px)")},
                                     {"overflow=visible.svg", Params::RenderOnly("UB: overflow=visible")},
                                     {"pattern-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Anti-aliasing artifacts")},
-                                    {"patternContentUnits-with-viewBox.svg", Params::WithThreshold(kDefaultThreshold, 150, "Skia pattern AA")},
-                                    {"patternContentUnits=objectBoundingBox.svg", Params::WithThreshold(kDefaultThreshold, 250, "Skia pattern AA")},
+                                    {"patternContentUnits-with-viewBox.svg", Params::WithThreshold(kDefaultThreshold, 150, "Pattern AA drift")},
+                                    {"patternContentUnits=objectBoundingBox.svg", Params::WithThreshold(kDefaultThreshold, 250, "Pattern AA drift")},
                                     {"recursive-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Larger threshold due to recursive pattern seams.")},
                                     {"self-recursive-on-child.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Larger threshold due to recursive pattern seams.")},
                                     {"self-recursive.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Larger threshold due to recursive pattern seams.")},
@@ -350,7 +350,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"orient=auto-on-M-L-L-Z-Z-Z.svg", Params::Skip("Bug: Multiple closepaths")},
                                     {"orient=auto-on-M-L-Z.svg", Params::WithGoldenOverride( "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-L-Z.png").withReason("BUG? Disagreement about marker direction on cusp")},
                                     {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
-                                    {"with-a-text-child.svg", Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on Skia text_full")},
+                                    {"with-a-text-child.svg", Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")},
                                     {"with-an-image-child.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-with-an-image-child.png").withReason("We (correctly)")},
                                     {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
                                 })),
@@ -706,7 +706,7 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"complex-grapheme-split-by-tspan.svg", Params::RenderOnly("UB: grapheme split by tspan")},
                                     {"complex-graphemes-and-coordinates-list.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-complex-graphemes-and-coordinates-list.png") .onlyTextFull().withReason("Simple text can't compose combining marks")},
                                     {"complex-graphemes.svg", Params().onlyTextFull().withReason("Combining mark needs HarfBuzz")},
-                                    {"compound-emojis-and-coordinates-list.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png", 0.1f) .withMaxPixelsDifferent(1100) .onlyTextFull().withReason("Emoji, Skia bitmap scaling differs from TinySkia")},
+                                    {"compound-emojis-and-coordinates-list.svg", Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png", 0.1f) .withMaxPixelsDifferent(1100) .onlyTextFull().withReason("Emoji bitmap scaling differs from the golden")},
                                     {"compound-emojis.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Emoji, differences between resvg and our bitmap") .onlyTextFull()},
                                     {"emojis.svg", Params::WithThreshold(0.2f, kDefaultMismatchedPixels, "Emoji, differences between").onlyTextFull()},
                                     {"fill-rule=evenodd.svg", Params().onlyTextFull().withReason("Arabic text shaping requires text-full")},
@@ -848,4 +848,3 @@ INSTANTIATE_TEST_SUITE_P(
                                     {"tb.svg", Params().withMaxPixelsDifferent(1500).withReason("Bug: Baseline is ~2px off compared to resvg")},
                                 })),
     TestNameFromFilename);
-

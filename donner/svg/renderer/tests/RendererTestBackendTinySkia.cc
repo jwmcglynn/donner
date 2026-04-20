@@ -1,4 +1,3 @@
-#include "donner/base/Utils.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
@@ -29,8 +28,7 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
 #else
     case RendererBackendFeature::TextFull: return false;
 #endif
-    case RendererBackendFeature::AsciiSnapshot:
-    case RendererBackendFeature::SkpDebug: return false;
+    case RendererBackendFeature::AsciiSnapshot: return true;
   }
 
   return false;
@@ -51,12 +49,6 @@ RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
   renderer.setAntialias(false);
   renderer.draw(document);
   return renderer.takeSnapshot();
-}
-
-bool WriteActiveRendererDebugSkp(SVGDocument& document, const std::filesystem::path& outputPath) {
-  UTILS_UNUSED(document);
-  UTILS_UNUSED(outputPath);
-  return false;
 }
 
 }  // namespace donner::svg
