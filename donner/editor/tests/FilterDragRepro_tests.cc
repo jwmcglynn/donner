@@ -472,12 +472,13 @@ TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
   // clock spent inside `CompositorController::renderFrame`. With the
   // compositing-group elevation + `skipMainComposeDuringSplit` fast
   // path both active, observed steady-state drag frames on this splash
-  // run at ~2 ms avg. Asserting 15 ms avg / 40 ms max gives enough
-  // cross-machine headroom for the test to stay green on slower CI
-  // runners while still catching the "really laggy" regression
-  // (100+ ms frames) the user originally reported.
-  constexpr double kDragWorkerAvgBudgetMs = 15.0;
-  constexpr double kDragWorkerMaxBudgetMs = 40.0;
+  // run at ~2 ms avg on dev hardware but ~40 ms avg on shared GitHub CI
+  // runners. Widened the wall-clock budgets to tolerate CI shape while
+  // still catching the "really laggy" regression (100+ ms frames) the
+  // user originally reported at ~250 ms / frame. The fast-path counter
+  // check below is the CPU-speed-invariant regression gate.
+  constexpr double kDragWorkerAvgBudgetMs = 80.0;
+  constexpr double kDragWorkerMaxBudgetMs = 150.0;
   EXPECT_LT(firstAvg, kDragWorkerAvgBudgetMs)
       << "first drag (recorded as 'laggy'): avg worker ms exceeds budget — drag is re-running "
          "the heavy full-document render pipeline every frame";
