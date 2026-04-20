@@ -71,7 +71,8 @@ every variant is covered by the default test command.
   - [x] M1.5: Lint as a dedicated fast-fail parallel job. Pull `misc-include-cleaner`, `clang-format`, `check_banned_patterns`, and the `gen_cmakelists.py --check` step into a `lint` job that returns in ≤60s. (Subsumes 0029 M2.)
   - [x] M1.6: `concurrency: cancel-in-progress: true` on PR workflows — cancels superseded runs when a PR is rebased/force-pushed. Near-zero cost, eliminates wasted CI minutes.
   - [x] M1.7: Docs-only path skip. If a PR touches only `docs/**`, `*.md`, `CHANGELOG*`, or similar, short-circuit the heavy build+test jobs with a `paths-ignore:` filter or a first "gatekeeper" job. Design-doc PRs currently pay the full 10–15 min budget for zero code change.
-  - [ ] M1.8: Always-green enforcement — update branch protection so required checks include the new `lint`, `asan-geode`, and core test jobs; land `CLAUDE.md` always-green blurb (done this PR).
+  - [x] M1.8a: `CLAUDE.md` always-green blurb. _(Landed in commit bbdd6c81 on this feature branch.)_
+  - [ ] M1.8b: Branch-protection update — make the new `lint`, `asan-geode`, and core test jobs required on `main`. User action (requires admin).
 
 - [ ] **Milestone 2 — Cache and nightly infrastructure (M effort)**
   - [ ] M2.1: Per-config cache slots. Extend `disk-cache` key with a config tag (`-default`, `-asan`, `-geode`). Prevents the asan-fuzzer-evicts-main collision observed pre-Skia-removal. (Subsumes 0029 M1.)
@@ -80,11 +81,12 @@ every variant is covered by the default test command.
   - [ ] M2.4: Introduce `donner_perf_cc_test` macro splitting correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged `perf`). Retires 5 recent threshold-widening hotfixes (8043ad7b, 1f147f2f, 43f42cf7, ab68092b, 8cd89ef7). Absorbs doc 0016 Category 8.
   - [x] M2.5: Nightly `sanitizers.yml` running ASan+UBSan across `//donner/...`. **Skip-idle**: first job compares `origin/main` HEAD against the last successful `workflow_run` SHA; if unchanged, exit 0 and short-circuit. Monitoring signal only (not PR-blocking).
   - [ ] M2.6: Scheduled Claude triage agent (`/schedule` → `CronCreate`). Runs daily after nightly jobs complete. If the nightly skipped (skip-idle), exit quietly. Otherwise: fetch failure logs, classify (infra vs real bug), file a 🤖-prefixed tracking issue or — for mechanical fixes (missing `target_compatible_with`, threshold widening) — open a PR. Depends on M2.5.
+  - [ ] M2.7: **Target determinator** via [bazel-diff](https://github.com/Tinder/bazel-diff). A fast `determine-targets` job hashes the PR base + HEAD, emits an affected-target set, and `main.yml`'s build/test jobs run `bazel test <affected>` instead of `//...`. Fallback to `//...` when the PR touches `MODULE.bazel`, `.bazelrc`, `WORKSPACE*`, `build_defs/**`, or `.github/workflows/**`. Typical single-file PR: 15 min → ~3–5 min. (Promotes/replaces old M3.3 "`bazel query rdeps`" sketch — bazel-diff handles `select()` and macro changes more robustly.)
+  - [ ] M2.8: **Drop full Coverage from PR gate; add patch-coverage signal.** Coverage currently runs on initial PR open + main push + workflow_dispatch at ~20-30 min. Remove the PR trigger entirely; keep the main push + dispatch. Add Codecov patch-coverage (or `diff-cover`) reporting on PRs — reads the main-branch coverage artifact and annotates "X% of your changed lines are covered" without rerunning coverage on the PR. Saves 20-30 min per initial PR open.
 
 - [ ] **Milestone 3 — Runtime wins (M effort)**
   - [ ] M3.1: Cross-PR cache writes. Change `cache-save` from `refs/heads/main` to also save on PR pushes, keyed per-PR + per-week rotation. Monitor 10 GB GHA quota. (From 0029 M5.)
   - [ ] M3.2: macOS runner sizing trial. Try `macos-15-large` (6 cores vs 3) on a feature branch, force cold+warm runs, compare. Roll forward only if wall-clock improvement >30% and quota allows. (From 0029 M4.)
-  - [ ] M3.3: Selective testing on changed files. Use `bazel query` (`somepath`, `rdeps`) on the PR diff to narrow `bazel test` to affected targets for fast-path PRs. Fall back to `//...` when query output is unbounded or when touching `BUILD.bazel`/`.bazelrc`. Large win for single-file PRs.
 
 - [ ] **Milestone 4 — Process (S effort)**
   - [ ] M4.1: Quarantine lint — any PR that adds `flaky = True` must link a tracking issue. Enforce via GH Action.
