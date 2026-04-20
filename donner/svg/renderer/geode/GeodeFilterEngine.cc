@@ -610,6 +610,20 @@ wgpu::Texture resolveInput(const svg::components::FilterInput& input,
   return currentBuffer;
 }
 
+/// Returns true if the ColorMatrixParams represents an identity transform
+/// (diagonal ones, zero offsets). Used to short-circuit the shader dispatch
+/// and avoid the unpremultiply/premultiply round-trip precision loss that
+/// tiny-skia also avoids (FilterGraph.cpp:462).
+bool isIdentityColorMatrix(const ColorMatrixParams& params) {
+  // clang-format off
+  return params.col0[0] == 1.0f && params.col0[1] == 0.0f && params.col0[2] == 0.0f && params.col0[3] == 0.0f
+      && params.col1[0] == 0.0f && params.col1[1] == 1.0f && params.col1[2] == 0.0f && params.col1[3] == 0.0f
+      && params.col2[0] == 0.0f && params.col2[1] == 0.0f && params.col2[2] == 1.0f && params.col2[3] == 0.0f
+      && params.col3[0] == 0.0f && params.col3[1] == 0.0f && params.col3[2] == 0.0f && params.col3[3] == 1.0f
+      && params.col4[0] == 0.0f && params.col4[1] == 0.0f && params.col4[2] == 0.0f && params.col4[3] == 0.0f;
+  // clang-format on
+}
+
 /// Build the 4x5 color matrix from feColorMatrix parameters.
 /// All type variants are pre-computed here so the shader only needs a
 /// single generic matrix multiply.
@@ -1294,7 +1308,25 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       scaled.dy = pixelOffset.y;
       outputTex = applyOffset(inputTex, scaled);
     } else if (const auto* cm = std::get_if<filter_primitive::ColorMatrix>(&node.primitive)) {
-      outputTex = applyColorMatrix(inputTex, *cm);
+      // Per SVG spec, feColorMatrix operates in linearRGB by default (the
+      // `color-interpolation-filters` property). Match tiny-skia by
+      // wrapping the matrix operation with sRGB↔linear conversion, and
+      // short-circuiting identity matrices to avoid lossy round-trips.
+      ColorMatrixParams matrixParams = buildColorMatrix(*cm);
+      if (isIdentityColorMatrix(matrixParams)) {
+        outputTex = inputTex;
+      } else {
+        const bool nodeLinearRGB =
+            node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+            svg::ColorInterpolationFilters::SRGB;
+        if (nodeLinearRGB) {
+          wgpu::Texture linearInput = applyColorSpaceConversion(inputTex, /*srgbToLinear=*/true);
+          wgpu::Texture matrixOutput = applyColorMatrix(linearInput, *cm);
+          outputTex = applyColorSpaceConversion(matrixOutput, /*srgbToLinear=*/false);
+        } else {
+          outputTex = applyColorMatrix(inputTex, *cm);
+        }
+      }
     } else if (const auto* flood = std::get_if<filter_primitive::Flood>(&node.primitive)) {
       outputTex = applyFlood(inputTex.getWidth(), inputTex.getHeight(), *flood);
     } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
@@ -1598,13 +1630,20 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     const wgpu::Texture& input,
     const svg::components::filter_primitive::ColorMatrix& primitive) {
+  ColorMatrixParams params = buildColorMatrix(primitive);
+
+  // Match tiny-skia's identity shortcut: skip the shader to avoid the
+  // unpremultiply→multiply→premultiply round-trip that introduces precision
+  // loss on semi-transparent pixels (e.g. gradient edges).
+  if (isIdentityColorMatrix(params)) {
+    return input;
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterColorMatrixOutput");
-
-  ColorMatrixParams params = buildColorMatrix(primitive);
 
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(device_, &params, sizeof(params), "ColorMatrixParamsUniform");

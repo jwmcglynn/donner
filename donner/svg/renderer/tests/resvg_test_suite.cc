@@ -286,21 +286,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // feColorMatrix/invalid-type and without-a-type: Geode still disagrees with
-  // tiny-skia on the fallback-matrix path (probably the identity-matrix default
-  // applied at a different colorspace stage). The color-space conversion work
-  // landed here already unlocked `type=matrix-with-too-many-values`; these two
-  // remain a follow-up.
-  if (category == "filters/feColorMatrix" &&
-      (filename == "invalid-type.svg" || filename == "without-a-type.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): feColorMatrix identity-fallback path "
-                       "diverges from tiny-skia on invalid/missing type "
-                       "(gradient input interaction)");
-    };
-  }
-
   // feComponentTransfer/mixed-types: gradient input + mixed channel-function
   // types still diverges after the color-space conversion fix. Narrower
   // follow-up.
