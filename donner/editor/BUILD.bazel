@@ -217,7 +217,13 @@ donner_cc_binary(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = _EDITOR_RUNTIME_DEPS + [":notice"],
+    deps = _EDITOR_RUNTIME_DEPS + [
+        ":notice",
+        # Link the real Tracy client so the desktop editor can be profiled.
+        # The sandboxed backend binary deliberately does NOT depend on this
+        # (see the tracy_wrapper_enabled comment in this file).
+        ":tracy_wrapper_enabled",
+    ],
 )
 
 donner_cc_library(
@@ -254,12 +260,29 @@ donner_cc_library(
     ],
 )
 
-# Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
-# library pulls in the real Tracy client; otherwise the macros are no-ops.
-# Tracy is linked into every editor build (including release + WASM), runtime-
-# gated by a UI toggle — see the Security section of docs/design_docs/0020-editor.md.
+# Header-only Tracy macro wrapper. `TracyWrapper.h` expands the macros to
+# no-ops unless `ENABLE_TRACY` is defined in the translation unit's compile
+# context — which only happens for the main desktop editor binary via
+# `tracy_wrapper_enabled` below.
+#
+# Rationale: the sandboxed `donner_editor_backend` child process must not
+# link `@tracy//:tracy_client`, because Tracy's static initializers call
+# `InitKernelSymbols()` which reads `/proc/kallsyms` and asserts when
+# seccomp blocks the read. Making the wrapper header-only by default keeps
+# Tracy-linked translation units — profiling symbols and all — opt-in.
 donner_cc_library(
     name = "tracy_wrapper",
+    hdrs = ["TracyWrapper.h"],
+    deps = [],
+)
+
+# Opt-in target that activates Tracy profiling. Depend on this instead of
+# `:tracy_wrapper` only from binaries that want the full Tracy runtime
+# linked (i.e. the desktop editor main binary). Intermediate libraries
+# should continue to depend on `:tracy_wrapper` so they can be reused in
+# the sandboxed backend.
+donner_cc_library(
+    name = "tracy_wrapper_enabled",
     hdrs = ["TracyWrapper.h"],
     defines = selects.with_or({
         ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
