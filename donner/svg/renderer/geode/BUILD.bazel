@@ -74,7 +74,7 @@ donner_cc_test(
     deps = [
         ":geode_path_encoder",
         "//donner/base",
-        "@com_google_gtest//:gtest_main",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
@@ -124,12 +124,17 @@ donner_cc_test(
         ":geode_device",
         ":geode_wgpu_util",
         "//donner/base",
-        "@com_google_gtest//:gtest_main",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
 donner_multi_transitioned_test(
     name = "geode_device_tests",
+    # Tight timeout — device-creation tests should never take more than
+    # a few seconds on a healthy driver. If we hit 60s here, the driver
+    # is almost certainly hung and should be killed before it wastes
+    # more CI time (e.g., Intel Arc + Mesa 25.2.8 Xe-KMD regressions).
+    timeout = "short",
     dep = ":geode_device_tests_impl",
     renderer_backend = "geode",
     testonly = 1,
@@ -435,12 +440,14 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_shaders",
-        "@com_google_gtest//:gtest_main",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
 donner_multi_transitioned_test(
     name = "geode_shaders_tests",
+    # See geode_device_tests for the rationale on the short timeout.
+    timeout = "short",
     dep = ":geode_shaders_tests_impl",
     renderer_backend = "geode",
     testonly = 1,
@@ -532,7 +539,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/css",
         "//donner/svg/resources:image_resource",
-        "@com_google_gtest//:gtest_main",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
@@ -561,7 +568,7 @@ donner_cc_test(
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
-        "@com_google_gtest//:gtest_main",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
