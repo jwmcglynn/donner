@@ -126,11 +126,26 @@ algorithm.
     M1.f.2 for the follow-up that collapses `bindgroupCreates` too.
   - [ ] M1.f.2: `hasDynamicOffset = true` bind-group layouts +
     cached-per-pipeline bind group. Drops `bindgroupCreates` to O(1)
-    per pipeline per frame. Requires coordinated changes to
-    `GeodePipeline`, `GeodeGradientPipeline`, `GeodeMaskPipeline`
-    layout definitions and arena-invalidation tracking so the cached
-    bind group rebuilds on arena growth. Deferred — big-enough change
-    to warrant its own PR.
+    per pipeline per frame.
+    - **Investigation 2026-04-19 (abandoned, not shipped):** an
+      initial implementation with `hasDynamicOffset = true` on the
+      uniform / bands / curves bindings + a signature-tracked
+      per-pipeline bind-group cache reached `bindgroupCreates`
+      132 → 5 on Lion. However, multi-draw fixtures (`Rect2`,
+      `Ellipse1`, `QuadBezier`, `Polyline`) rendered with
+      300-2000-pixel differences against goldens — even with the
+      cache bypassed. The corruption is in the dynamic-offset
+      plumbing itself, not the caching logic. Reverted.
+    - Hypotheses to investigate on the next attempt: (a) the
+      bind-group entry `size` field interacts with WGSL uniform-block
+      layout differently than expected when `size != sizeof(struct)`;
+      (b) `queue.writeBuffer` followed by a dynamic-offset bind in
+      the same frame may have an ordering/visibility issue on
+      wgpu-native Metal; (c) storage-buffer dynamic offsets may
+      require a per-slot synchronization barrier we're not emitting.
+      Next attempt should enable wgpu-native validation trace mode
+      and capture a frame with Metal GPU Capture (Xcode) to confirm
+      the actual reads.
   - [x] Delete the redundant `pass.setPipeline` at `GeoEncoder.cc:942`.
     _Landed 2026-04-19._ `submitFillDraw` now relies on
     `bindSolidPipeline` for state tracking — previously the explicit
