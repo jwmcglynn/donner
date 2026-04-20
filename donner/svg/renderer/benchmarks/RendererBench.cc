@@ -203,8 +203,7 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     // -- Parse --
     auto t0 = Clock::now();
     donner::ParseWarningSink warningSink = donner::ParseWarningSink::Disabled();
-    auto result =
-        donner::svg::parser::SVGParser::ParseSVG(workload.source, warningSink);
+    auto result = donner::svg::parser::SVGParser::ParseSVG(workload.source, warningSink);
     auto t1 = Clock::now();
     s.parseMs = toMs(t1 - t0);
 

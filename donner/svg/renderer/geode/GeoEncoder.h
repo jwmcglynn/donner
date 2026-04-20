@@ -2,11 +2,10 @@
 /// @file
 /// Drawing API for the Geode GPU renderer.
 
-#include <webgpu/webgpu.hpp>
-
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
@@ -59,7 +58,7 @@ struct LinearGradientParams {
   /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
   /// A single gradient stop: normalized offset and premultiplied linear RGBA.
   struct Stop {
-    float offset = 0.0f;  ///< Stop offset in [0, 1].
+    float offset = 0.0f;                       ///< Stop offset in [0, 1].
     float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};  ///< Premultiplied linear RGBA color.
   };
   /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
@@ -149,9 +148,8 @@ public:
    *   `finish()`.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
-             const GeodeGradientPipeline& gradientPipeline,
-             const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
-             const wgpu::Texture& resolveTarget);
+             const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
+             const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget);
 
   /**
    * Shared-CommandEncoder constructor (design doc 0030 Milestone 3).
@@ -168,9 +166,8 @@ public:
    * frame's render passes batch into a single command buffer.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
-             const GeodeGradientPipeline& gradientPipeline,
-             const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
-             const wgpu::Texture& resolveTarget,
+             const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
+             const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget,
              wgpu::CommandEncoder sharedCommandEncoder);
 
   ~GeoEncoder();
@@ -477,8 +474,8 @@ private:
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.
   static void initImpl(Impl& impl, GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline,
-                       const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget);
+                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& msaaTarget,
+                       const wgpu::Texture& resolveTarget);
   static void finalizeImpl(Impl& impl);
 
   std::unique_ptr<Impl> impl_;

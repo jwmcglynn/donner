@@ -78,9 +78,7 @@ Path transformPath(const Path& input, const Transform2d& transform) {
                         transform.transformPosition(points[command.pointIndex + 1]),
                         transform.transformPosition(points[command.pointIndex + 2]));
         break;
-      case Path::Verb::ClosePath:
-        builder.closePath();
-        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
     }
   }
   return builder.build();
@@ -198,8 +196,7 @@ Transform2d resolveGradientTransform(
   const Vector2d origin = maybeTransformComponent->transformOrigin;
   const Transform2d parentFromEntity =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transform2d::Translate(origin) * parentFromEntity *
-         Transform2d::Translate(-origin);
+  return Transform2d::Translate(origin) * parentFromEntity * Transform2d::Translate(-origin);
 }
 
 /// Resolved frame for either kind of gradient: the bounds against which
@@ -991,9 +988,9 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     return;
   }
   impl_->device->setCounters(&impl_->counters);
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
-      impl_->device->sampleCount());
+  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat,
+                                                           impl_->device->useAlphaCoverageAA(),
+                                                           impl_->device->sampleCount());
   impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
       impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
       impl_->device->sampleCount());
@@ -1013,9 +1010,9 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
     return;
   }
   impl_->device->setCounters(&impl_->counters);
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
-      impl_->device->sampleCount());
+  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat,
+                                                           impl_->device->useAlphaCoverageAA(),
+                                                           impl_->device->sampleCount());
   impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
       impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
       impl_->device->sampleCount());
@@ -1061,12 +1058,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->paint = PaintParams();
   impl_->encoder.reset();
 
-  // Reset perf counters for this frame. Re-establish the device's
-  // counter pointer because a shared GeodeDevice may have been handed
-  // to another renderer between frames — the last caller wins, which
-  // is exactly the serial per-frame access pattern we want.
+  // Reset counters regardless of device state.
   impl_->counters.reset();
-  impl_->device->setCounters(&impl_->counters);
 
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
@@ -1076,6 +1069,13 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     impl_->targetHeight = 0;
     return;
   }
+
+  // Wire the counters onto the device for this frame. A shared GeodeDevice
+  // may have been handed to another renderer between frames — the last
+  // caller wins, which is exactly the serial per-frame access pattern we
+  // want. Must run AFTER the null-device guard above so headless systems
+  // don't null-ptr-crash in draw()→beginFrame().
+  impl_->device->setCounters(&impl_->counters);
 
   // Reuse the render targets across same-size frames (design doc 0030
   // Milestone 4.1). Content is cleared by the encoder's first
@@ -1089,8 +1089,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     // pattern / layer blits sample from.
     wgpu::TextureDescriptor td = {};
     td.label = wgpuLabel("RendererGeodeTarget");
-    td.size = {static_cast<uint32_t>(impl_->pixelWidth),
-               static_cast<uint32_t>(impl_->pixelHeight), 1};
+    td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
+               1};
     td.format = kFormat;
     td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
                wgpu::TextureUsage::TextureBinding;
@@ -1413,8 +1413,8 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   // target and runs the matching W3C Compositing 1 formula per
   // pixel. `MixBlendMode::Normal` keeps the existing plain
   // source-over composite path.
-  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline ||
-      !impl_->imagePipeline || !impl_->encoder) {
+  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
+      !impl_->encoder) {
     // Headless or degenerate state — drop silently but still push a
     // placeholder frame so popIsolatedLayer stays balanced.
     impl_->layerStack.push_back({});
@@ -1522,8 +1522,7 @@ void RendererGeode::popIsolatedLayer() {
     snapDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
     snapDesc.format = kFormat;
-    snapDesc.usage =
-        wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    snapDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
     snapDesc.mipLevelCount = 1;
     snapDesc.sampleCount = 1;
     snapDesc.dimension = wgpu::TextureDimension::_2D;
@@ -1565,8 +1564,7 @@ void RendererGeode::popIsolatedLayer() {
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshot,
-                                            static_cast<uint32_t>(frame.blendMode),
-                                            frame.opacity);
+                                            static_cast<uint32_t>(frame.blendMode), frame.opacity);
       return;
     }
     // If snapshot allocation failed fall through to the Normal path —
@@ -1750,10 +1748,10 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   };
 
   Impl::MaskStackFrame frame;
-  allocTexturePair("RendererGeodeMaskCapture", "RendererGeodeMaskCaptureMSAA",
-                   frame.maskTexture, frame.maskMsaaTexture);
-  allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA",
-                   frame.contentTexture, frame.contentMsaaTexture);
+  allocTexturePair("RendererGeodeMaskCapture", "RendererGeodeMaskCaptureMSAA", frame.maskTexture,
+                   frame.maskMsaaTexture);
+  allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA", frame.contentTexture,
+                   frame.contentMsaaTexture);
   const bool needsMsaa = impl_->device->sampleCount() > 1;
   if (!frame.maskTexture || (needsMsaa && !frame.maskMsaaTexture) || !frame.contentTexture ||
       (needsMsaa && !frame.contentMsaaTexture)) {
@@ -1792,8 +1790,7 @@ void RendererGeode::transitionMaskToContent() {
     return;
   }
   const bool needsMsaa = impl_->device->sampleCount() > 1;
-  if (!frame.contentTexture || (needsMsaa && !frame.contentMsaaTexture) ||
-      !impl_->encoder) {
+  if (!frame.contentTexture || (needsMsaa && !frame.contentMsaaTexture) || !impl_->encoder) {
     frame.phase = Impl::MaskStackFrame::Phase::Content;
     return;
   }
@@ -2207,8 +2204,7 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
                             params.imageRenderingPixelated);
 }
 
-void RendererGeode::drawText(Registry& registry,
-                             const components::ComputedTextComponent& text,
+void RendererGeode::drawText(Registry& registry, const components::ComputedTextComponent& text,
                              const TextParams& params) {
 #ifdef DONNER_TEXT_ENABLED
   if (!impl_->device || !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
