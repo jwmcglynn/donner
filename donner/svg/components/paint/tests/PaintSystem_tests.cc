@@ -595,7 +595,7 @@ TEST_F(PaintSystemTest, GradientTransformIsApplied) {
       element->entityHandle().try_get<ComputedLocalTransformComponent>();
   ASSERT_THAT(localTransform, NotNull());
   // The gradientTransform is mapped to the entity's local transform, and should not be identity.
-  EXPECT_FALSE(localTransform->entityFromParent.isIdentity());
+  EXPECT_FALSE(localTransform->parentFromEntity.isIdentity());
 }
 
 TEST_F(PaintSystemTest, GradientTransformDefaultIsIdentity) {
@@ -618,7 +618,7 @@ TEST_F(PaintSystemTest, GradientTransformDefaultIsIdentity) {
   auto* localTransform =
       element->entityHandle().try_get<ComputedLocalTransformComponent>();
   if (localTransform) {
-    EXPECT_TRUE(localTransform->entityFromParent.isIdentity());
+    EXPECT_TRUE(localTransform->parentFromEntity.isIdentity());
   }
 }
 

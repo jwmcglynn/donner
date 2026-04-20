@@ -348,6 +348,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/editor/gui:editor_window",
+        "//donner/editor/repro:repro_recorder",
         "//donner/svg",
         "//third_party/fira-code",
         "//third_party/roboto",

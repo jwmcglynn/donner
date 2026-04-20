@@ -76,7 +76,7 @@ struct PathShape {
   Path path;
   FillRule fillRule = FillRule::NonZero;
   /// Transform from clip path child to the clip path's coordinate system.
-  Transform2d entityFromParent;
+  Transform2d parentFromEntity;
   /// Layer index for boolean combination: paths on the same layer are unioned, layers are
   /// intersected.
   int layer = 0;

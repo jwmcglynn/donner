@@ -37,6 +37,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:renderer_utils",

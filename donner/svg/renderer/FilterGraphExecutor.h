@@ -9,17 +9,10 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU: re-export PremultiplyRgba.
 #include "tiny_skia/Pixmap.h"
 
 namespace donner::svg {
-
-/**
- * Converts straight-alpha RGBA bytes to premultiplied RGBA.
- *
- * @param rgbaPixels Straight-alpha RGBA pixel data.
- * @return Premultiplied RGBA bytes.
- */
-[[nodiscard]] std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels);
 
 /**
  * Applies a Donner filter graph to a premultiplied RGBA pixmap in place.

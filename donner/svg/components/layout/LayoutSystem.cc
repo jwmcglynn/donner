@@ -295,7 +295,7 @@ Transform2d LayoutSystem::getRawEntityFromParentTransform(EntityHandle entity) {
   const ComputedLocalTransformComponent& computedTransform =
       createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), disabledSink);
 
-  return computedTransform.entityFromParent;
+  return computedTransform.parentFromEntity;
 }
 
 Transform2d LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
@@ -306,7 +306,7 @@ Transform2d LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
       createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), disabledSink);
 
   return Transform2d::Translate(computedTransform.transformOrigin) *
-         computedTransform.entityFromParent *
+         computedTransform.parentFromEntity *
          Transform2d::Translate(-computedTransform.transformOrigin);
 }
 
@@ -378,9 +378,9 @@ Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entit
 }
 
 void LayoutSystem::setRawEntityFromParentTransform(EntityHandle entity,
-                                                   const Transform2d& entityFromParent) {
+                                                   const Transform2d& parentFromEntity) {
   auto& component = entity.get_or_emplace<components::TransformComponent>();
-  component.transform.set(CssTransform(entityFromParent), css::Specificity::Override());
+  component.transform.set(CssTransform(parentFromEntity), css::Specificity::Override());
 
   invalidate(entity);
 }
@@ -405,7 +405,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
        parent = registry.get<donner::components::TreeComponent>(parent).parent()) {
     if (const auto* computedAbsoluteTransform =
             registry.try_get<ComputedAbsoluteTransformComponent>(parent)) {
-      parentFromWorld = computedAbsoluteTransform->entityFromWorld;
+      parentFromWorld = computedAbsoluteTransform->worldFromEntity;
       worldIsCanvas = computedAbsoluteTransform->worldIsCanvas;
       break;
     }
@@ -440,19 +440,19 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
     EntityHandle currentHandle(registry, parents[parents.size() - 1]);
     parents.pop_back();
 
-    const Transform2d entityFromWorld = getEntityContentFromEntityTransform(currentHandle) *
+    const Transform2d worldFromEntity = getEntityContentFromEntityTransform(currentHandle) *
                                        getEntityFromParentTransform(currentHandle) *
                                        parentFromWorld;
-    currentHandle.emplace<ComputedAbsoluteTransformComponent>(entityFromWorld, worldIsCanvas);
+    currentHandle.emplace<ComputedAbsoluteTransformComponent>(worldFromEntity, worldIsCanvas);
 
-    parentFromWorld = entityFromWorld;
+    parentFromWorld = worldFromEntity;
   }
 
   return entity.get<ComputedAbsoluteTransformComponent>();
 }
 
 Transform2d LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
-  return getAbsoluteTransformComponent(entity).entityFromWorld;
+  return getAbsoluteTransformComponent(entity).worldFromEntity;
 }
 
 void LayoutSystem::invalidate(EntityHandle entity) {
@@ -461,6 +461,45 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedSizedElementComponent>();
   entity.remove<components::ComputedShadowSizedElementComponent>();
   entity.remove<components::ComputedViewBoxComponent>();
+
+  // `ComputedAbsoluteTransformComponent` is a cascaded value — parent
+  // transform × local transform. When this entity's local transform
+  // changes, every descendant's cached absolute is stale. Walk the DOM
+  // subtree and clear them too.
+  //
+  // `getAbsoluteTransformComponent` early-returns any cached value (see
+  // the first branch in that function) before walking up to find a
+  // fresher parent, so a stale descendant cache hides the fresh parent
+  // unless we drop it here. The symptom was: dragging a plain `<g>` by
+  // +Δ moved the group's own RIC transform but left its children
+  // painting at their pre-drag positions on the first post-demote
+  // render. See compositor golden
+  // `TwoPhaseDragOfPlainGroupMovesChildren`.
+  Registry& registry = *entity.registry();
+  std::vector<Entity> descendantStack;
+  if (const auto* tree = entity.try_get<donner::components::TreeComponent>()) {
+    for (Entity child = tree->firstChild(); child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      descendantStack.push_back(child);
+    }
+  }
+  while (!descendantStack.empty()) {
+    const Entity e = descendantStack.back();
+    descendantStack.pop_back();
+    EntityHandle handle(registry, e);
+    handle.remove<components::ComputedAbsoluteTransformComponent>();
+    // Sized-element / viewBox caches can also cascade through a viewport-
+    // bearing ancestor, but those rarely change mid-drag and the RIC
+    // rebuild path already recomputes them via `ensureComputedComponents`.
+    // Keep this cascade narrow to the transform cache — the known
+    // drag-frame offender — to avoid inflating the invalidation surface.
+    if (const auto* childTree = handle.try_get<donner::components::TreeComponent>()) {
+      for (Entity grandchild = childTree->firstChild(); grandchild != entt::null;
+           grandchild = registry.get<donner::components::TreeComponent>(grandchild).nextSibling()) {
+        descendantStack.push_back(grandchild);
+      }
+    }
+  }
 
   // Mark the entity as dirty so that the render tree is rebuilt on the next
   // prepareDocumentForRendering call.  Without this, the render tree fast-path
@@ -631,11 +670,11 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
     computedTransform.transformOrigin = absoluteOrigin;
 
     // The transform itself is also computed relative to the element's bounding box.
-    computedTransform.entityFromParent =
+    computedTransform.parentFromEntity =
         transform.transform.get().value().compute(percentageBox, fontMetrics);
 
   } else {
-    computedTransform.entityFromParent = Transform2d();
+    computedTransform.parentFromEntity = Transform2d();
     computedTransform.transformOrigin = Vector2d();
   }
 

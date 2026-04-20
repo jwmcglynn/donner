@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -22,6 +23,10 @@ namespace donner::editor::gui {
 class EditorWindow;
 }
 
+namespace donner::editor::repro {
+class ReproRecorder;
+}  // namespace donner::editor::repro
+
 namespace donner::editor {
 
 struct EditorShellOptions {
@@ -30,12 +35,18 @@ struct EditorShellOptions {
   std::optional<std::string> initialPath;
   std::string editorNoticeText;
   bool experimentalMode = false;
+  /// Optional destination path for a `.donner-repro` recording of the
+  /// user's UI interactions. When set, the shell constructs a
+  /// `ReproRecorder` and snapshots ImGui input state at the start of
+  /// every frame. Written to disk in the destructor.
+  std::optional<std::string> reproOutputPath;
 };
 
 /// Stateful advanced editor frontend shell. Owns all long-lived GUI/editor orchestration state.
 class EditorShell {
 public:
   EditorShell(gui::EditorWindow& window, EditorShellOptions options);
+  ~EditorShell();
 
   [[nodiscard]] bool valid() const { return valid_; }
   void runFrame();
@@ -78,6 +89,12 @@ private:
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;
+
+  /// Optional UI-input recorder. Populated when `options_.reproOutputPath`
+  /// is set. Snapshots ImGui state at the start of each frame and
+  /// flushes to disk in the destructor. See
+  /// `donner/editor/repro/ReproRecorder.h`.
+  std::unique_ptr<repro::ReproRecorder> reproRecorder_;
 };
 
 }  // namespace donner::editor

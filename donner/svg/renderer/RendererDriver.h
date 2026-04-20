@@ -39,10 +39,15 @@ public:
    * @param firstEntity First entity in the range to render (inclusive).
    * @param lastEntity Last entity in the range to render (inclusive).
    * @param viewport Viewport for the render pass.
-   * @param baseTransform Transform applied to all entities (e.g., layer-local offset).
+   * @param surfaceFromCanvas Transform that maps canvas coords to the render
+   *     surface (`Translate(-topLeft)` for tight-bounded compositor segments,
+   *     identity for full-canvas layers/segments). Named with `destFromSource`
+   *     convention; composed with each entity's `worldFromEntityTransform` as
+   *     `worldFromEntityTransform * surfaceFromCanvas` (donner's left-first
+   *     `operator*`: "apply entity-to-canvas, then canvas-to-surface").
    */
   void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
-                       const RenderViewport& viewport, const Transform2d& baseTransform);
+                       const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /**
    * Compute the canvas-space bounding box of every pixel a subsequent
@@ -73,7 +78,7 @@ public:
    */
   [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(
       Registry& registry, Entity firstEntity, Entity lastEntity,
-      const RenderViewport& viewport, const Transform2d& baseTransform);
+      const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /**
    * Capture a snapshot from the underlying backend after rendering.
@@ -125,7 +130,24 @@ private:
   RendererInterface& renderer_;
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;
-  Transform2d layerBaseTransform_;
+  /// Post-entity transform composed onto the CTM for every entity drawn via
+  /// `drawEntityRange`/`traverse`. Named with `destFromSource` convention: it
+  /// maps canvas coords to the render surface we're drawing into. For the
+  /// compositor's tight-bounded segment path this is `Translate(-topLeft)`
+  /// (canvas → tight-bitmap). For sub-document rendering it's a compound
+  /// `subDocFromLocal * parentAbsoluteTransform * canvasFromDoc` that, when
+  /// post-composed with the sub-doc entity's own `worldFromEntity` (named
+  /// `worldFromEntityTransform` for historical reasons — see
+  /// `RenderingInstanceComponent.h`), yields the correct device CTM.
+  ///
+  /// Composition order matters. `Transform2d::operator*` is left-first
+  /// (`A * B` means "apply A, then B"), so the correct CTM is
+  /// `worldFromEntityTransform * surfaceFromCanvasTransform_`: first map
+  /// entity-local to canvas via `worldFromEntityTransform`, then canvas to
+  /// surface via this. Swapping the two silently mis-renders rotated
+  /// paths (translations commute, rotations don't) — see
+  /// `TightBoundsRotatedEllipseWithRotatingGradient`.
+  Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered

@@ -210,8 +210,8 @@ public:
 
     const auto& absoluteTransformComponent =
         LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry_, treeEntity));
-    instance.entityFromWorldTransform =
-        absoluteTransformComponent.entityFromWorld * (absoluteTransformComponent.worldIsCanvas
+    instance.worldFromEntityTransform =
+        absoluteTransformComponent.worldFromEntity * (absoluteTransformComponent.worldIsCanvas
                                                           ? canvasFromDocumentWorldTransform_
                                                           : Transform2d());
 
@@ -414,9 +414,9 @@ public:
 
       hasAnyChildren = true;
 
-      const Transform2d entityFromParent = LayoutSystem().getEntityFromWorldTransform(entity);
+      const Transform2d parentFromEntity = LayoutSystem().getEntityFromWorldTransform(entity);
       const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
-      clipPaths.emplace_back(clipPathData->spline, entityFromParent, clipRule, layer);
+      clipPaths.emplace_back(clipPathData->spline, parentFromEntity, clipRule, layer);
     };
 
     // Check for clip-path on the <clipPath> itself

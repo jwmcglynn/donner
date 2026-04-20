@@ -83,6 +83,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
                         state.canToggleCompositedRendering)) {
       actions.toggleCompositedRendering = true;
     }
+    if (ImGui::MenuItem("Tight-Bounded Segments (debug)", nullptr,
+                        state.tightBoundedSegmentsEnabled)) {
+      actions.toggleTightBoundedSegments = true;
+    }
     ImGui::EndMenu();
   }
 

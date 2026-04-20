@@ -45,19 +45,30 @@ int main(int argc, char** argv) {
   std::optional<std::string> svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
+  std::optional<std::string> reproOutputPath;
 #ifdef __EMSCRIPTEN__
   initialSource = EmbeddedBytesToString(donner::embedded::kEditorIconSvg);
   initialPath = std::string("donner_icon.svg");
 #else
+  constexpr std::string_view kUsage =
+      "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
       experimentalMode = true;
       continue;
     }
+    if (arg == "--save-repro") {
+      if (i + 1 >= argc) {
+        std::cerr << "--save-repro requires a filename argument\n" << kUsage;
+        return 1;
+      }
+      reproOutputPath = std::string(argv[++i]);
+      continue;
+    }
 
     if (svgPath.has_value()) {
-      std::cerr << "Usage: donner-editor [--experimental] <filename>\n";
+      std::cerr << kUsage;
       return 1;
     }
 
@@ -65,7 +76,7 @@ int main(int argc, char** argv) {
   }
 
   if (!svgPath.has_value()) {
-    std::cerr << "Usage: donner-editor [--experimental] <filename>\n";
+    std::cerr << kUsage;
     return 1;
   }
 #endif
@@ -83,7 +94,8 @@ int main(int argc, char** argv) {
                                              .initialPath = initialPath,
                                              .editorNoticeText =
                                                  EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-                                             .experimentalMode = experimentalMode});
+                                             .experimentalMode = experimentalMode,
+                                             .reproOutputPath = reproOutputPath});
   if (!shell.valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";

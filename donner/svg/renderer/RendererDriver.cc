@@ -356,7 +356,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       PathShape shape;
       shape.path = path.path;
       shape.fillRule = path.clipRule == ClipRule::NonZero ? FillRule::NonZero : FillRule::EvenOdd;
-      shape.entityFromParent = path.entityFromParent;
+      shape.parentFromEntity = path.parentFromEntity;
       shape.layer = path.layer;
       clip.clipPaths.push_back(shape);
     }
@@ -796,9 +796,9 @@ void RendererDriver::draw(SVGDocument& document) {
 
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
-                                     const Transform2d& baseTransform) {
+                                     const Transform2d& surfaceFromCanvas) {
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
-  layerBaseTransform_ = baseTransform;
+  surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
 
@@ -830,7 +830,16 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushClip(viewportClip);
     }
 
-    renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
+    // `Transform2d::operator*` is left-first: `A * B` means "apply A,
+    // then B". The entity's coords need to go local → world via
+    // worldFromEntityTransform, then world → tight-bitmap via
+    // surfaceFromCanvasTransform_ (which is `Translate(-topLeft)` for
+    // tight-bounded segments). Had this swapped; worked when
+    // surfaceFromCanvasTransform_ was identity (non-tight) and for
+    // pure-translation element transforms (translations commute) but
+    // silently pushed rotated paths off the tight bitmap entirely —
+    // regression guarded by TightBoundsRotatedEllipseWithRotatingGradient.
+    renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
@@ -1007,12 +1016,12 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   }
 
   renderer_.endFrame();
-  layerBaseTransform_ = Transform2d();
+  surfaceFromCanvasTransform_ = Transform2d();
 }
 
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     Registry& registry, Entity firstEntity, Entity lastEntity,
-    const RenderViewport& viewport, const Transform2d& baseTransform) {
+    const RenderViewport& viewport, const Transform2d& surfaceFromCanvas) {
   const Vector2d canvasSize = viewport.size;
   if (canvasSize.x <= 0.0 || canvasSize.y <= 0.0) {
     return std::nullopt;
@@ -1027,11 +1036,24 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
   }
 
   std::optional<Box2d> accumulated;
+  static const bool kTrace = std::getenv("DONNER_TRACE_BOUNDS") != nullptr;
+  if (kTrace) {
+    std::fprintf(stderr, "[bounds] --- computeEntityRangeBounds(first=%u, last=%u) ---\n",
+                 static_cast<unsigned>(firstEntity), static_cast<unsigned>(lastEntity));
+  }
   const auto unionBox = [&](const Box2d& box) {
     if (!accumulated) {
       accumulated = box;
     } else {
       accumulated->addBox(box);
+    }
+  };
+  const auto traceEntity = [&](Entity e, const char* kind, const Box2d& box) {
+    if (kTrace) {
+      std::fprintf(stderr,
+                   "[bounds] entity=%u %s box=(%.1f,%.1f → %.1f,%.1f)\n",
+                   static_cast<unsigned>(e), kind, box.topLeft.x, box.topLeft.y,
+                   box.bottomRight.x, box.bottomRight.y);
     }
   };
 
@@ -1066,7 +1088,13 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
       continue;
     }
 
-    const Transform2d finalTransform = baseTransform * instance.entityFromWorldTransform;
+    // `Transform2d::operator*` is left-first: `A * B` means "apply A, then B".
+    // Match `drawEntityRange`'s composition order so bounds are computed in
+    // the same device-space the subsequent rasterize would produce. Today
+    // every caller passes `surfaceFromCanvas = Identity`, but mis-ordering
+    // the two here was a latent twin of the `drawEntityRange` setTransform
+    // bug that cost a day of bisection.
+    const Transform2d finalTransform = instance.worldFromEntityTransform * surfaceFromCanvas;
 
     // Filter-region path: the filter's output rectangle IS the subtree's
     // contribution to the canvas. The individual descendant entities'
@@ -1081,9 +1109,15 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
       const std::optional<Box2d> filterRegionLocal =
           computeFilterRegion(registry, *instance.resolvedFilter, instance);
       if (!filterRegionLocal.has_value()) {
+        if (kTrace) {
+          std::fprintf(stderr, "[bounds] entity=%u filter → BAIL (no region)\n",
+                       static_cast<unsigned>(currentEntity));
+        }
         return std::nullopt;
       }
-      unionBox(finalTransform.transformBox(*filterRegionLocal));
+      const Box2d filterCanvas = finalTransform.transformBox(*filterRegionLocal);
+      traceEntity(currentEntity, "filter", filterCanvas);
+      unionBox(filterCanvas);
       if (instance.subtreeInfo.has_value()) {
         // The filter consumed its subtree; skip the descendant entities.
         if (currentEntity != instance.subtreeInfo->lastRenderedEntity) {
@@ -1131,7 +1165,9 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
                             localBounds.bottomRight + Vector2d(padding, padding));
       }
 
-      unionBox(finalTransform.transformBox(localBounds));
+      const Box2d canvasBounds = finalTransform.transformBox(localBounds);
+      traceEntity(currentEntity, "path/shape", canvasBounds);
+      unionBox(canvasBounds);
       continue;
     }
 
@@ -1172,6 +1208,10 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
   if (clampedTL.x >= clampedBR.x || clampedTL.y >= clampedBR.y) {
     return std::nullopt;  // Fully off-canvas.
   }
+  if (kTrace) {
+    std::fprintf(stderr, "[bounds] ---> final: (%.1f,%.1f → %.1f,%.1f)\n", clampedTL.x,
+                 clampedTL.y, clampedBR.x, clampedBR.y);
+  }
   return Box2d(clampedTL, clampedBR);
 }
 
@@ -1202,16 +1242,16 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     // Set the absolute transform for this entity. This uses setMatrix (no save/restore),
     // so it doesn't interact with the clip/layer save stack.
-    // layerBaseTransform_ is composed with the entity's transform to support sub-document
+    // surfaceFromCanvasTransform_ is composed with the entity's transform to support sub-document
     // rendering where a base transform maps from the parent document's coordinate space.
     if (verbose_) {
-      const Transform2d combined = layerBaseTransform_ * instance.entityFromWorldTransform;
+      const Transform2d combined = surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible << " maskDepth=" << instance.mask.has_value()
                 << " hasSubtree=" << instance.subtreeInfo.has_value() << " transform=" << combined
                 << "\n";
     }
-    renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
+    renderer_.setTransform(surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
@@ -1320,7 +1360,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                 LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
-              layerBaseTransform_ * instance.entityFromWorldTransform;
+              surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
           const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
           cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
         }
@@ -1361,7 +1401,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio, opacity,
-                            layerBaseTransform_ * instance.entityFromWorldTransform);
+                            surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
           }
         }
       } else if (const auto* externalUse =
@@ -1373,7 +1413,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
           if (!externalUse->fragment.empty()) {
             const Transform2d parentAbsoluteTransform =
-                layerBaseTransform_ * instance.entityFromWorldTransform;
+                surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
             drawSubDocumentElement(subDoc, externalUse->fragment, parentAbsoluteTransform,
                                    style.properties->opacity.getRequired());
           } else {
@@ -1381,7 +1421,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const Box2d viewportBounds = Box2d::WithSize(Vector2d(subDocSize.x, subDocSize.y));
             drawSubDocument(subDoc, viewportBounds, PreserveAspectRatio::Default(),
                             style.properties->opacity.getRequired(),
-                            layerBaseTransform_ * instance.entityFromWorldTransform);
+                            surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
           }
 
           clearSubDocumentContextPaint(subDoc);
@@ -1512,13 +1552,13 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     // Apply the layer base transform composed with the entity's world transform.
     if (verbose_) {
-      const Transform2d combined = instance.entityFromWorldTransform * layerBaseTransform_;
+      const Transform2d combined = instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
       std::cout << "[traverseRange] entity=" << entt::to_integral(entity)
-                << " visible=" << instance.visible << "\n  layerBase=" << layerBaseTransform_
-                << "\n  entityFromWorld=" << instance.entityFromWorldTransform
+                << " visible=" << instance.visible << "\n  surfaceFromCanvas=" << surfaceFromCanvasTransform_
+                << "\n  worldFromEntity=" << instance.worldFromEntityTransform
                 << "\n  combined=" << combined << "\n";
     }
-    renderer_.setTransform(instance.entityFromWorldTransform * layerBaseTransform_);
+    renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
     const double opacity = style.properties->opacity.getRequired();
     const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
@@ -1614,7 +1654,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                 LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
-              layerBaseTransform_ * instance.entityFromWorldTransform;
+              surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
           const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
           cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
         }
@@ -1647,7 +1687,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
                             style.properties->opacity.getRequired(),
-                            instance.entityFromWorldTransform * layerBaseTransform_);
+                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
           }
         }
       } else if (const auto* image =
@@ -1799,8 +1839,8 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     if (verbose_) {
       std::cout << "[renderMask] chain depth=" << chain.size()
                 << " maskBounds=" << (maskBounds ? "yes" : "none")
-                << "\n  layerBase=" << layerBaseTransform_
-                << "\n  entityFromWorld=" << instance.entityFromWorldTransform
+                << "\n  surfaceFromCanvas=" << surfaceFromCanvasTransform_
+                << "\n  worldFromEntity=" << instance.worldFromEntityTransform
                 << "\n  maskContentUnits="
                 << (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox ? "OBB"
                                                                                 : "userSpace")
@@ -1808,13 +1848,13 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     }
     renderer_.pushMask(maskBounds);
 
-    const Transform2d savedLayerBase = layerBaseTransform_;
-    layerBaseTransform_ = instance.entityFromWorldTransform * layerBaseTransform_;
+    const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
+    surfaceFromCanvasTransform_ = instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
 
     if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
       const Transform2d userSpaceFromMaskContent = Transform2d::Scale(shapeLocalBounds.size()) *
                                                   Transform2d::Translate(shapeLocalBounds.topLeft);
-      layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
+      surfaceFromCanvasTransform_ = userSpaceFromMaskContent * surfaceFromCanvasTransform_;
     }
 
     if (!shapeLocalBounds.isEmpty()) {
@@ -1824,11 +1864,11 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       skipUntil(view, m->subtreeInfo->lastRenderedEntity);
     }
 
-    layerBaseTransform_ = savedLayerBase;
+    surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
     renderer_.transitionMaskToContent();
   }
 
-  renderer_.setTransform(layerBaseTransform_ * instance.entityFromWorldTransform);
+  renderer_.setTransform(surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
   return static_cast<int>(chain.size());
 }
 
@@ -1898,14 +1938,14 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
 
   renderer_.beginPatternTile(rect.toOrigin(), patternTileFromTarget);
 
-  // Save and override layerBaseTransform for pattern content rendering.
-  const Transform2d savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ = patternContentFromPatternTile;
+  // Save and override surfaceFromCanvasTransform for pattern content rendering.
+  const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
+  surfaceFromCanvasTransform_ = patternContentFromPatternTile;
 
   traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
                 ref.subtreeInfo->lastRenderedEntity);
 
-  layerBaseTransform_ = savedLayerBase;
+  surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
   renderer_.endPatternTile(forStroke);
 }
@@ -2013,15 +2053,15 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
                                       Transform2d::Translate(vertexPosition);
 
   const Transform2d vertexFromWorld =
-      vertexFromEntity * layerBaseTransform_ * instance.entityFromWorldTransform;
+      vertexFromEntity * surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
 
   const Transform2d markerUserSpaceFromWorld =
       Transform2d::Scale(markerUnitsFromViewBox.data[0], markerUnitsFromViewBox.data[3]) *
       markerOffsetFromVertex * vertexFromWorld;
 
   // Save the current layer base transform and override it for the marker subtree.
-  const Transform2d savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ = markerUserSpaceFromWorld;
+  const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
+  surfaceFromCanvasTransform_ = markerUserSpaceFromWorld;
 
   // Apply overflow clipping if needed. The clip rect is in world coordinates,
   // so reset the transform to identity before clipping.
@@ -2045,7 +2085,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
     renderer_.popClip();
   }
 
-  layerBaseTransform_ = savedLayerBase;
+  surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 }
 
 void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
@@ -2075,26 +2115,26 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
   //   1. The parent element's absolute device transform (document-to-device scaling)
   //   2. preserveAspectRatio mapping from sub-doc viewport to the <image> bounds
   //   3. The sub-document's own viewBox-to-document transform
-  // traverse() will compose this with each sub-document entity's entityFromWorldTransform.
+  // traverse() will compose this with each sub-document entity's worldFromEntityTransform.
   const Transform2d subDocFromLocal =
       aspectRatio.elementContentFromViewBoxTransform(viewportBounds, subDocRect);
   const Transform2d canvasFromDoc = subDocument.canvasFromDocumentTransform();
   // Compose the transform chain. Transform2d operator* uses left-first order: A * B = "apply A,
-  // then B". The sub-doc root entity's entityFromWorldTransform already includes canvasFromDoc
+  // then B". The sub-doc root entity's worldFromEntityTransform already includes canvasFromDoc
   // (mapping from document to canvas/device space). Including canvasFromDoc here cancels that
   // out, so the net result maps sub-doc element coordinates through subDocFromLocal (to parent
   // document space), then through parentAbsoluteTransform (to device space).
   const Transform2d baseTransform = subDocFromLocal * parentAbsoluteTransform * canvasFromDoc;
 
-  // Save and override layerBaseTransform for sub-document rendering.
-  const Transform2d savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ = baseTransform;
+  // Save and override surfaceFromCanvasTransform for sub-document rendering.
+  const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
+  surfaceFromCanvasTransform_ = baseTransform;
 
   // Traverse the sub-document's render tree, emitting draw calls to the same renderer.
   RenderingInstanceView subView(subDocument.registry());
   traverse(subView, subDocument.registry());
 
-  layerBaseTransform_ = savedLayerBase;
+  surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
   if (needsOpacityLayer) {
     renderer_.popIsolatedLayer();
@@ -2141,22 +2181,22 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
     renderer_.pushIsolatedLayer(opacity, MixBlendMode::Normal);
   }
 
-  // Set layerBaseTransform to position the target element at the <use> element's location.
-  // The target's entityFromWorldTransform includes all ancestor transforms from the
+  // Set surfaceFromCanvasTransform to position the target element at the <use> element's location.
+  // The target's worldFromEntityTransform includes all ancestor transforms from the
   // sub-document root. By composing parentAbsoluteTransform with the inverse of the target's
   // transform, we strip the sub-document ancestors and place the element at the <use> position.
   // For each entity in the subtree:
   //   finalTransform = parentAbsolute * inverse(target) * entity = parentAbsolute *
   //   entityFromTarget
-  const Transform2d savedLayerBase = layerBaseTransform_;
-  layerBaseTransform_ =
-      parentAbsoluteTransform * targetInstance->entityFromWorldTransform.inverse();
+  const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
+  surfaceFromCanvasTransform_ =
+      parentAbsoluteTransform * targetInstance->worldFromEntityTransform.inverse();
 
   // Traverse only the target element's subtree from the sub-document's render tree.
   RenderingInstanceView subView(subDocument.registry());
   traverseRange(subView, subDocument.registry(), targetEntity, lastEntity);
 
-  layerBaseTransform_ = savedLayerBase;
+  surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
   if (needsOpacityLayer) {
     renderer_.popIsolatedLayer();
@@ -2334,7 +2374,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
 
     // The fragment is rendered at its natural position in the document coordinate system
-    // (no layerBaseTransform_ offset). The filter pipeline applies a device-space post-translation
+    // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space post-translation
     // via SkImageFilters::Offset to position the content at the filter region origin. This is
     // correct for all transforms (skew, rotation, etc.) because the offset doesn't interact with
     // the element's transform — it's applied after the element is fully rendered.

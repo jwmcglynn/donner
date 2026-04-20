@@ -186,6 +186,26 @@ public:
   /// the window's event queue is the intended use.
   void setWakeCallback(std::function<void()> callback);
 
+  /// Toggle whether the compositor uses tight-bounded segment
+  /// rasterization (design doc 0027). The change applies at the start
+  /// of the next worker iteration — `renderFrame` calls
+  /// `CompositorController::setTightBoundedSegmentsEnabled` before
+  /// compositing, which marks all cached segments dirty so the flip
+  /// takes full effect that frame.
+  ///
+  /// Safe to call from the UI thread while a render is in flight; the
+  /// flag is stored in an `std::atomic<bool>`, and the worker reads it
+  /// at a well-defined point in each iteration.
+  void setTightBoundedSegmentsEnabled(bool enabled) {
+    tightBoundedSegments_.store(enabled, std::memory_order_release);
+  }
+
+  /// Mirror of the current toggle state. UI reads this to render the
+  /// correct check state in the View menu without racing the worker.
+  [[nodiscard]] bool tightBoundedSegmentsEnabled() const {
+    return tightBoundedSegments_.load(std::memory_order_acquire);
+  }
+
   /// Number of times the worker has called `CompositorController::resetAllLayers()`
   /// since construction. Exposed for regression tests that want to assert the
   /// compositor is NOT torn down on every mutation — the bug that made drag-
@@ -241,6 +261,12 @@ private:
   /// tests to verify that drag-frame mutations (which bump `frameVersion_`) do
   /// NOT fire a reset — only a true `documentGeneration` change does.
   std::atomic<std::uint64_t> compositorResetCount_{0};
+
+  /// Runtime kill-switch for tight-bounded segment rasterization. Pushed
+  /// into `CompositorController` at the start of each worker iteration.
+  /// Default-true matches `CompositorConfig::tightBoundedSegments`. See
+  /// `setTightBoundedSegmentsEnabled`.
+  std::atomic<bool> tightBoundedSegments_{true};
 };
 
 }  // namespace donner::editor

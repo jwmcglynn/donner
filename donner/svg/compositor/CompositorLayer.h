@@ -141,9 +141,9 @@ public:
   /// Bumps `generation_` so the editor can tell a fresh rasterization
   /// from a preserved-across-remap cache via `CompositorTile::
   /// generation` and skip redundant GL texture uploads.
-  void setBitmap(RendererBitmap bitmap, const Transform2d& entityFromWorldTransform) {
+  void setBitmap(RendererBitmap bitmap, const Transform2d& worldFromEntityTransform) {
     bitmap_ = std::move(bitmap);
-    bitmapEntityFromWorldTransform_ = entityFromWorldTransform;
+    bitmapEntityFromWorldTransform_ = worldFromEntityTransform;
     dirty_ = false;
     ++generation_;
   }

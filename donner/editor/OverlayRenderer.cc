@@ -105,7 +105,7 @@ void DrawElementPathOutline(svg::Renderer& renderer, const svg::SVGElement& sele
     renderer.setTransform(canvasFromElement);
     svg::PathShape shape;
     shape.path = *spline;
-    shape.entityFromParent = Transform2d();
+    shape.parentFromEntity = Transform2d();
     renderer.drawPath(shape, paint.strokeParams);
   }
 }

@@ -16,7 +16,11 @@
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/DualPathVerifier.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 namespace donner::svg::compositor {
 
@@ -772,7 +776,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
 // the user-visible ~2s hang on mouse release even though nothing needed
 // to change outside the single dragged entity. The compositor's fast-path
 // catches "only layout/transform dirty flags on promoted-layer-root
-// entities" and refreshes just the affected `entityFromWorldTransform`
+// entities" and refreshes just the affected `worldFromEntityTransform`
 // in place, leaving the rest of the render tree untouched.
 //
 // Test probes a RIC pointer outside the dirty entity's layer — it must
@@ -1063,25 +1067,44 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   // First render populates both segments.
   compositor.renderFrame(viewport_);
 
-  // `backgroundBitmap()` is segment[0] via the N=1 fast path; this is the
-  // public handle we can observe. Capture its data pointer — the vector
-  // gets reassigned on re-rasterize, so the pointer is a direct probe of
-  // whether segment[0] was re-rasterized.
-  const RendererBitmap& bgBefore = compositor.backgroundBitmap();
-  ASSERT_FALSE(bgBefore.empty());
-  const uint8_t* bgDataBefore = bgBefore.pixels.data();
+  // Capture per-tile generation counters. A segment's generation only
+  // advances when it re-rasterizes, so they're a direct probe of
+  // "did this slot re-raster?" that doesn't depend on whether
+  // `backgroundBitmap_` was recomposed (which always reallocates).
+  const auto tilesBefore = compositor.snapshotTilesForUpload();
+  ASSERT_EQ(tilesBefore.size(), 3u)
+      << "expected 2 segments (before/after the promoted layer) + 1 layer tile";
+  std::uint64_t segment0GenBefore = 0;
+  std::uint64_t segment1GenBefore = 0;
+  for (const auto& tile : tilesBefore) {
+    if (tile.layerEntity == entt::null) {
+      if (tile.paintOrderIndex == 0) segment0GenBefore = tile.generation;
+      else segment1GenBefore = tile.generation;
+    }
+  }
 
   // Mutate `after` (lives in segment[1]) — per-segment dirty tracking
   // should flag only segment[1].
   after->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
   compositor.renderFrame(viewport_);
 
-  const RendererBitmap& bgAfter = compositor.backgroundBitmap();
-  ASSERT_FALSE(bgAfter.empty());
-  EXPECT_EQ(bgDataBefore, bgAfter.pixels.data())
+  const auto tilesAfter = compositor.snapshotTilesForUpload();
+  std::uint64_t segment0GenAfter = 0;
+  std::uint64_t segment1GenAfter = 0;
+  for (const auto& tile : tilesAfter) {
+    if (tile.layerEntity == entt::null) {
+      if (tile.paintOrderIndex == 0) segment0GenAfter = tile.generation;
+      else segment1GenAfter = tile.generation;
+    }
+  }
+  EXPECT_EQ(segment0GenBefore, segment0GenAfter)
       << "segment[0] re-rasterized even though the mutation lived in segment[1] — "
          "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
          "has crept back in somewhere in consumeDirtyFlags.";
+  EXPECT_NE(segment1GenBefore, segment1GenAfter)
+      << "segment[1] did NOT re-rasterize even though `after` (the mutated entity) "
+         "lives in it. The dirty cascade lost the segment-dirty flag somewhere "
+         "between `consumeDirtyFlags` and `rasterizeDirtyStaticSegments`.";
 }
 
 // Elements whose transformed device-space bounds fall entirely outside the
@@ -1421,6 +1444,822 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
          "extending beyond geometry, or clip-path-expanded bounds. Widen the padding "
          "in `rasterizeDirtyStaticSegments` or fall back to full-canvas for paths "
          "with strokes.";
+}
+
+
+
+// Minimal reproduction of the radial-gradient-in-dragged-group artifact:
+// a circle filled by a userSpaceOnUse radial gradient inside a plain
+// `<g>`. Drag the group by +40px. Both compositor and reference should
+// render the circle + gradient at the new position. If the gradient's
+// coordinate system is interpreted differently between the two paths,
+// the diff shows crescent-shaped drift at the gradient's outer radius
+// — the splash symptom on `#Clouds_with_gradients` drag.
+TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <defs>
+        <radialGradient id="grad" cx="100" cy="100" r="30" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ff8800"/>
+          <stop offset="1" stop-color="#111111"/>
+        </radialGradient>
+      </defs>
+      <rect width="200" height="200" fill="#222"/>
+      <g id="group">
+        <circle cx="100" cy="100" r="25" fill="url(#grad)"/>
+      </g>
+    </svg>
+  )svg");
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  // Two-phase drag flow (mirrors editor).
+  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
+  compositor.renderFrame(viewport);
+  compositor.demoteEntity(group->entityHandle().entity());
+  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
+  compositor.renderFrame(viewport);
+  const RendererBitmap composited = renderer_.takeSnapshot();
+
+  // Reference: full-render of the same post-drag state.
+  SVGDocument refDoc = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <defs>
+        <radialGradient id="grad" cx="100" cy="100" r="30" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ff8800"/>
+          <stop offset="1" stop-color="#111111"/>
+        </radialGradient>
+      </defs>
+      <rect width="200" height="200" fill="#222"/>
+      <g id="group" transform="translate(40, 0)">
+        <circle cx="100" cy="100" r="25" fill="url(#grad)"/>
+      </g>
+    </svg>
+  )svg");
+  RendererDriver driver(renderer_);
+  driver.draw(refDoc);
+  const RendererBitmap reference = renderer_.takeSnapshot();
+
+  int maxDiff = 0;
+  int mismatchesOver5 = 0;
+  int worstX = -1;
+  int worstY = -1;
+  for (int y = 0; y < composited.dimensions.y; ++y) {
+    for (int x = 0; x < composited.dimensions.x; ++x) {
+      const size_t off = static_cast<size_t>(y) * composited.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
+                                         static_cast<int>(reference.pixels[off + c])));
+      }
+      if (worst > 5) ++mismatchesOver5;
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
+    }
+  }
+
+  EXPECT_LE(mismatchesOver5, 10)
+      << "radial-gradient circle in dragged group diverges from reference. "
+      << mismatchesOver5 << " pixels with diff>5, maxDiff=" << maxDiff << " at (" << worstX << ","
+      << worstY << "). Expected near-zero (only premul round-trip drift ≤ 3 channels).";
+}
+
+// Next hypothesis: rotated `<ellipse>` (via an element-level
+// `transform="rotate(...)"`) inside a tight-bounded segment.
+// `computeEntityRangeBounds` calls `finalTransform.transformBox(
+// localBounds)` which treats the local AABB as four corners and
+// transforms them. For a rotated ellipse, the resulting box should be
+// the rotated AABB — but if localBounds is wrong (e.g., returns a
+// degenerate box), the segment bitmap is too small and the ellipse
+// gets clipped.
+TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseNoClip) {
+  auto makeDoc = []() {
+    return parseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+        <defs>
+          <radialGradient id="g1" cx="150" cy="100" fx="150" fy="100" r="40"
+              gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#ffaa00"/>
+            <stop offset="1" stop-color="#221100"/>
+          </radialGradient>
+        </defs>
+        <rect width="300" height="200" fill="#222"/>
+        <circle id="trigger" cx="40" cy="100" r="20" fill="red"/>
+        <!-- Rotated ellipse (mimics splash cls-43): cx/cy visible,
+             then transform applies a translate + rotate. The final
+             canvas position is still (150, 100) but with a -85° rotation. -->
+        <ellipse cx="150" cy="100" rx="40" ry="20"
+                 transform="translate(250 400) rotate(-85)"
+                 fill="url(#g1)"/>
+      </svg>
+    )svg");
+  };
+  RenderViewport vp;
+  vp.size = Vector2d(300, 200);
+  vp.devicePixelRatio = 1.0;
+
+  auto render = [&](bool tight) {
+    auto document = makeDoc();
+    auto trigger = document.querySelector("#trigger");
+    EXPECT_TRUE(trigger.has_value());
+    CompositorConfig config;
+    config.tightBoundedSegments = tight;
+    CompositorController compositor(document, renderer_, config);
+    compositor.promoteEntity(trigger->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    return renderer_.takeSnapshot();
+  };
+  const auto on = render(true);
+  const auto off = render(false);
+  int diff = 0;
+  int maxDiff = 0;
+  int worstX = -1, worstY = -1;
+  for (int y = 0; y < on.dimensions.y; ++y) {
+    for (int x = 0; x < on.dimensions.x; ++x) {
+      const size_t o = static_cast<size_t>(y) * on.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(on.pixels[o + c]) -
+                                         static_cast<int>(off.pixels[o + c])));
+      }
+      if (worst > 5) ++diff;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+    }
+  }
+  std::cerr << "[rot-ellipse] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
+            << " at (" << worstX << "," << worstY << ")\n";
+  EXPECT_LE(diff, 10);
+}
+
+// Next hypothesis: rotating gradient + clip-path sibling mandatory-
+// promoted sub-layer. Matches splash structure more closely.
+TEST_F(CompositorGoldenTest, TightBoundsGradientWithClipPathSublayer) {
+  auto makeDoc = []() {
+    return parseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+        <defs>
+          <clipPath id="clip"><rect x="20" y="20" width="60" height="60"/></clipPath>
+          <radialGradient id="g1" cx="160" cy="100" fx="160" fy="100" r="45"
+              gradientUnits="userSpaceOnUse"
+              gradientTransform="translate(342 -284) rotate(65) scale(1 0.94)">
+            <stop offset="0" stop-color="#ff8800"/>
+            <stop offset="1" stop-color="#111111"/>
+          </radialGradient>
+        </defs>
+        <rect width="300" height="200" fill="#222"/>
+        <g clip-path="url(#clip)">
+          <rect x="10" y="10" width="80" height="80" fill="#44aa00"/>
+        </g>
+        <circle id="left" cx="120" cy="100" r="28" fill="url(#g1)"/>
+        <circle id="right" cx="180" cy="100" r="28" fill="url(#g1)"/>
+      </svg>
+    )svg");
+  };
+  RenderViewport vp;
+  vp.size = Vector2d(300, 200);
+  vp.devicePixelRatio = 1.0;
+
+  auto render = [&](bool tightBounds) {
+    auto document = makeDoc();
+    auto left = document.querySelector("#left");
+    EXPECT_TRUE(left.has_value());
+    CompositorConfig config;
+    config.tightBoundedSegments = tightBounds;
+    CompositorController compositor(document, renderer_, config);
+    compositor.promoteEntity(left->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    return renderer_.takeSnapshot();
+  };
+  const auto on = render(true);
+  const auto off = render(false);
+  int diff = 0;
+  int maxDiff = 0;
+  int worstX = -1, worstY = -1;
+  for (int y = 0; y < on.dimensions.y; ++y) {
+    for (int x = 0; x < on.dimensions.x; ++x) {
+      const size_t o = static_cast<size_t>(y) * on.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(on.pixels[o + c]) -
+                                         static_cast<int>(off.pixels[o + c])));
+      }
+      if (worst > 5) ++diff;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+    }
+  }
+  std::cerr << "[clip+grad] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
+            << " at (" << worstX << "," << worstY << ")\n";
+  EXPECT_LE(diff, 10);
+}
+
+// Isolated hypothesis test: a userSpaceOnUse radial gradient with a
+// ROTATION in its `gradientTransform` must render identically under
+// tight-bounded segments vs full-canvas segments. `cls-64` on splash
+// uses exactly this pattern (`Clouds_yellow-2` has
+// `gradientTransform="translate(...) rotate(65.38) scale(1 .94)"`).
+// If this test fails, we have the exact minimal reproduction of the
+// user's click-orb artifact.
+TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
+  // Two orbs side by side. Promote the FIRST one so the second ends
+  // up in a tight-bounded segment.
+  SVGDocument doc = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+      <defs>
+        <radialGradient id="g1" cx="160" cy="100" fx="160" fy="100" r="45"
+            gradientUnits="userSpaceOnUse"
+            gradientTransform="translate(342 -284) rotate(65) scale(1 0.94)">
+          <stop offset="0" stop-color="#ff8800"/>
+          <stop offset="1" stop-color="#111111"/>
+        </radialGradient>
+      </defs>
+      <rect width="300" height="200" fill="#222"/>
+      <circle id="left" cx="80" cy="100" r="30" fill="url(#g1)"/>
+      <circle id="right" cx="160" cy="100" r="30" fill="url(#g1)"/>
+    </svg>
+  )svg");
+
+  RenderViewport vp;
+  vp.size = Vector2d(300, 200);
+  vp.devicePixelRatio = 1.0;
+
+  auto renderVariant = [&](bool tightBounds) -> RendererBitmap {
+    auto document = parseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+        <defs>
+          <radialGradient id="g1" cx="160" cy="100" fx="160" fy="100" r="45"
+              gradientUnits="userSpaceOnUse"
+              gradientTransform="translate(342 -284) rotate(65) scale(1 0.94)">
+            <stop offset="0" stop-color="#ff8800"/>
+            <stop offset="1" stop-color="#111111"/>
+          </radialGradient>
+        </defs>
+        <rect width="300" height="200" fill="#222"/>
+        <circle id="left" cx="80" cy="100" r="30" fill="url(#g1)"/>
+        <circle id="right" cx="160" cy="100" r="30" fill="url(#g1)"/>
+      </svg>
+    )svg");
+    auto left = document.querySelector("#left");
+    EXPECT_TRUE(left.has_value());
+    CompositorConfig config;
+    config.tightBoundedSegments = tightBounds;
+    CompositorController compositor(document, renderer_, config);
+    compositor.promoteEntity(left->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    return renderer_.takeSnapshot();
+  };
+
+  const auto tightOn = renderVariant(true);
+  const auto tightOff = renderVariant(false);
+  int diff = 0;
+  int maxDiff = 0;
+  int worstX = -1, worstY = -1;
+  for (int y = 0; y < tightOn.dimensions.y; ++y) {
+    for (int x = 0; x < tightOn.dimensions.x; ++x) {
+      const size_t off = static_cast<size_t>(y) * tightOn.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(tightOn.pixels[off + c]) -
+                                         static_cast<int>(tightOff.pixels[off + c])));
+      }
+      if (worst > 5) ++diff;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+    }
+  }
+  std::cerr << "[rot-grad] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
+            << " at (" << worstX << "," << worstY << ")\n";
+  EXPECT_LE(diff, 10) << "rotating userSpaceOnUse gradient drifted under tight-bound segment: "
+                      << diff << " px, maxDiff=" << maxDiff;
+}
+
+// Regression test for a tight-bounded-segment bug: an element with a
+// non-trivial rotation (like splash's `cls-43` ellipse, which uses
+// `transform="translate(A B) rotate(T)"` to rotate in place) was
+// vanishing entirely from its tight-bounded segment when the segment's
+// topLeft was non-zero.
+//
+// Root cause: `drawEntityRange` composed the segment's
+// `surfaceFromCanvasTransform_ = Translate(-topLeft)` with the entity's
+// `worldFromEntityTransform` in the wrong order for Donner's
+// left-first `Transform2d::operator*` convention. Translations commute
+// so pure-translation element transforms (and the identity
+// `surfaceFromCanvasTransform_` used by non-tight segments) silently worked.
+// Rotations don't commute, so the final CTM pushed rotated paths off
+// the tight bitmap entirely, leaving only the surrounding background.
+TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
+  auto makeDoc = [this]() {
+    return parseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="900" height="400">
+        <defs>
+          <radialGradient id="g1" cx="430" cy="148" fx="430" fy="148" r="48"
+              gradientUnits="userSpaceOnUse"
+              gradientTransform="translate(-14.9 63.6) rotate(-5.3) scale(1 0.78)">
+            <stop offset="0.46" stop-color="#10131e"/>
+            <stop offset="0.77" stop-color="#727147"/>
+            <stop offset="1" stop-color="#fffbe6"/>
+          </radialGradient>
+        </defs>
+        <rect width="900" height="400" fill="#111"/>
+        <circle id="trigger" cx="50" cy="50" r="20" fill="#fff"/>
+        <ellipse cx="431.65" cy="140.64" rx="37" ry="25"
+                 transform="translate(251.93 557.53) rotate(-84.73)"
+                 fill="url(#g1)"/>
+      </svg>
+    )svg");
+  };
+  RenderViewport vp;
+  vp.size = Vector2d(900, 400);
+  vp.devicePixelRatio = 1.0;
+
+  auto render = [&](bool tight) {
+    auto document = makeDoc();
+    auto trigger = document.querySelector("#trigger");
+    EXPECT_TRUE(trigger.has_value());
+    CompositorConfig config;
+    config.tightBoundedSegments = tight;
+    CompositorController compositor(document, renderer_, config);
+    compositor.promoteEntity(trigger->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    return renderer_.takeSnapshot();
+  };
+
+  const auto on = render(true);
+  const auto off = render(false);
+  int diff = 0;
+  int maxDiff = 0;
+  int worstX = -1, worstY = -1;
+  for (int y = 0; y < on.dimensions.y; ++y) {
+    for (int x = 0; x < on.dimensions.x; ++x) {
+      const size_t o = static_cast<size_t>(y) * on.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(on.pixels[o + c]) -
+                                         static_cast<int>(off.pixels[o + c])));
+      }
+      if (worst > 5) ++diff;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+    }
+  }
+  std::cerr << "[rot-ellipse+grad] tight-on vs tight-off: diff>5=" << diff
+            << " maxDiff=" << maxDiff << " at (" << worstX << "," << worstY << ")\n";
+  EXPECT_LE(diff, 10)
+      << "rotated ellipse with rotating userSpaceOnUse gradient drifted under "
+         "tight-bounded segment (likely drawEntityRange CTM composition order)";
+}
+
+// Reproduction of the user's recorded scenario in
+// `/tmp/clouds_bug.donner-repro`: click a DONNER letter, then click a
+// yellow cloud orb (`cls-64` / `cls-8`-region) inside
+// `#Clouds_with_gradients`. No drag — just Selection-hint promotion
+// of two different entities. Assert the compositor render matches a
+// reference full-render, within premul noise.
+TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  RenderViewport vp;
+  vp.size = Vector2d(892, 512);
+  vp.devicePixelRatio = 1.0;
+
+  const auto renderCompositor = [&](bool tightBounds) -> RendererBitmap {
+    SVGDocument doc = parseDocument(splashSource);
+    doc.setCanvasSize(892, 512);
+    // Click 1: a DONNER letter (cls-82 path).
+    auto letter = doc.querySelector("#Donner path:nth-of-type(2)");
+    EXPECT_TRUE(letter.has_value());
+    // Click 2: the cls-64 cloud orb inside Clouds_with_gradients.
+    auto orb = doc.querySelector("#Clouds_with_gradients circle.cls-64");
+    if (!orb.has_value()) {
+      orb = doc.querySelector(".cls-64");
+    }
+    EXPECT_TRUE(orb.has_value())
+        << "splash missing cls-64 cloud orb — has the file changed?";
+
+    CompositorConfig config;
+    config.tightBoundedSegments = tightBounds;
+    CompositorController compositor(doc, renderer_, config);
+    compositor.promoteEntity(letter->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    compositor.demoteEntity(letter->entityHandle().entity());
+    compositor.promoteEntity(orb->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    return renderer_.takeSnapshot();
+  };
+
+  const auto renderReference = [&]() -> RendererBitmap {
+    SVGDocument doc = parseDocument(splashSource);
+    doc.setCanvasSize(892, 512);
+    RendererDriver driver(renderer_);
+    driver.draw(doc);
+    return renderer_.takeSnapshot();
+  };
+
+  const RendererBitmap tightOn = renderCompositor(true);
+  const RendererBitmap tightOff = renderCompositor(false);
+  const RendererBitmap reference = renderReference();
+  const auto& composited = tightOn;
+  int onVsOffDiff = 0;
+  int onVsOffMax = 0;
+  for (std::size_t p = 0; p + 3 < tightOn.pixels.size(); p += 4) {
+    int worst = 0;
+    for (int c = 0; c < 4; ++c) {
+      worst = std::max(worst, std::abs(static_cast<int>(tightOn.pixels[p + c]) -
+                                       static_cast<int>(tightOff.pixels[p + c])));
+    }
+    if (worst > 0) ++onVsOffDiff;
+    if (worst > onVsOffMax) onVsOffMax = worst;
+  }
+  std::cerr << "[repro] tight-on vs tight-off diff=" << onVsOffDiff
+            << " maxDiff=" << onVsOffMax << "\n";
+  // Also check tight-off vs reference directly.
+  int offVsRefDiff = 0;
+  int offVsRefMax = 0;
+  for (std::size_t p = 0; p + 3 < tightOff.pixels.size(); p += 4) {
+    int worst = 0;
+    for (int c = 0; c < 4; ++c) {
+      worst = std::max(worst, std::abs(static_cast<int>(tightOff.pixels[p + c]) -
+                                       static_cast<int>(reference.pixels[p + c])));
+    }
+    if (worst > 5) ++offVsRefDiff;
+    if (worst > offVsRefMax) offVsRefMax = worst;
+  }
+  std::cerr << "[repro] tight-off vs reference diff>5=" << offVsRefDiff
+            << " maxDiff=" << offVsRefMax << "\n";
+
+  int diffOver5 = 0;
+  int maxDiff = 0;
+  int worstX = -1, worstY = -1;
+  // Report what happens specifically in the cls-8 region since the
+  // user flagged it (x=497±30, y=122±30 → [467..527, 92..152]).
+  int cls8DiffOver5 = 0;
+  int cls8MaxDiff = 0;
+  for (int y = 0; y < composited.dimensions.y; ++y) {
+    for (int x = 0; x < composited.dimensions.x; ++x) {
+      const size_t off = static_cast<size_t>(y) * composited.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
+                                         static_cast<int>(reference.pixels[off + c])));
+      }
+      if (worst > 5) ++diffOver5;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (x >= 467 && x < 527 && y >= 92 && y < 152) {
+        if (worst > 5) ++cls8DiffOver5;
+        if (worst > cls8MaxDiff) cls8MaxDiff = worst;
+      }
+    }
+  }
+  std::cerr << "[repro] click-orb scenario: total diff>5=" << diffOver5
+            << " maxDiff=" << maxDiff << " at (" << worstX << "," << worstY
+            << ") | cls-8 region diff>5=" << cls8DiffOver5 << " maxDiff=" << cls8MaxDiff << "\n";
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_compositor.png",
+                                            composited.pixels, composited.dimensions.x,
+                                            composited.dimensions.y);
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_reference.png", reference.pixels,
+                                            reference.dimensions.x, reference.dimensions.y);
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_tightoff.png", tightOff.pixels,
+                                            tightOff.dimensions.x, tightOff.dimensions.y);
+  // Tight-on vs tight-off heatmap: isolates the tight-specific artifact.
+  std::vector<std::uint8_t> tightHeat(tightOn.pixels.size(), 0);
+  for (std::size_t p = 0; p + 3 < tightOn.pixels.size(); p += 4) {
+    int worst = 0;
+    for (int c = 0; c < 4; ++c) {
+      worst = std::max(worst, std::abs(static_cast<int>(tightOn.pixels[p + c]) -
+                                       static_cast<int>(tightOff.pixels[p + c])));
+    }
+    if (worst > 5) {
+      tightHeat[p + 0] = 255;
+      tightHeat[p + 1] = static_cast<std::uint8_t>(255 - std::min(worst * 2, 255));
+      tightHeat[p + 3] = 255;
+    }
+  }
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_tightdiff.png", tightHeat,
+                                            tightOn.dimensions.x, tightOn.dimensions.y);
+  std::vector<std::uint8_t> heat(composited.pixels.size(), 0);
+  for (std::size_t p = 0; p + 3 < composited.pixels.size(); p += 4) {
+    int worst = 0;
+    for (int c = 0; c < 4; ++c) {
+      worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[p + c]) -
+                                       static_cast<int>(reference.pixels[p + c])));
+    }
+    if (worst > 5) {
+      heat[p + 0] = 255;
+      heat[p + 1] = static_cast<std::uint8_t>(255 - std::min(worst * 2, 255));
+      heat[p + 2] = 0;
+      heat[p + 3] = 255;
+    }
+  }
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_heat.png", heat,
+                                            composited.dimensions.x, composited.dimensions.y);
+  EXPECT_LE(diffOver5, 100)
+      << "click-then-click-orb scenario diverges from reference: " << diffOver5
+      << " px > 5ch, maxDiff=" << maxDiff << " at (" << worstX << "," << worstY
+      << "). Expected near-zero (only premul noise).";
+}
+
+// Splash regression: dragging `#Clouds_with_gradients` must match the
+// reference full-render (within premul noise). Exercises the compositor
+// path where a dragged plain `<g>` contains mandatory-promoted sublayer
+// descendants (cls-90 / cls-93 clip-path groups) — the original user-
+// reported artifact was crescent-shaped color drift at the top of the
+// cls-8 radial-gradient cloud orb.
+TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  RenderViewport vp;
+  vp.size = Vector2d(892, 512);
+  vp.devicePixelRatio = 1.0;
+
+  const auto renderCompositor = [&]() -> RendererBitmap {
+    SVGDocument doc = parseDocument(splashSource);
+    doc.setCanvasSize(892, 512);
+    auto target = doc.querySelector("#Clouds_with_gradients");
+    EXPECT_TRUE(target.has_value());
+    CompositorController compositor(doc, renderer_);
+    compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::Selection);
+    compositor.renderFrame(vp);
+    compositor.demoteEntity(target->entityHandle().entity());
+    compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::ActiveDrag);
+    target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
+    compositor.renderFrame(vp);
+    return renderer_.takeSnapshot();
+  };
+  const auto renderReference = [&]() -> RendererBitmap {
+    SVGDocument doc = parseDocument(splashSource);
+    doc.setCanvasSize(892, 512);
+    auto target = doc.querySelector("#Clouds_with_gradients");
+    EXPECT_TRUE(target.has_value());
+    target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
+    RendererDriver driver(renderer_);
+    driver.draw(doc);
+    return renderer_.takeSnapshot();
+  };
+
+  const RendererBitmap composited = renderCompositor();
+  const RendererBitmap reference = renderReference();
+
+  int diffOver5 = 0;
+  int maxDiff = 0;
+  int worstX = -1, worstY = -1;
+  for (int y = 0; y < composited.dimensions.y; ++y) {
+    for (int x = 0; x < composited.dimensions.x; ++x) {
+      const size_t off = static_cast<size_t>(y) * composited.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
+                                         static_cast<int>(reference.pixels[off + c])));
+      }
+      if (worst > 5) ++diffOver5;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+    }
+  }
+  EXPECT_LE(diffOver5, 100)
+      << "#Clouds_with_gradients drag divergence: " << diffOver5 << " px with diff>5, maxDiff="
+      << maxDiff << " at (" << worstX << "," << worstY << "). Expected near-zero "
+                                                          "(only premul round-trip drift ≤ 3).";
+}
+
+// Evolving minimal repro of the Clouds_with_gradients drag artifact.
+// Adds a mandatory-promoted sub-layer (clip-path group) as a sibling of
+// a radial-gradient-filled shape inside the dragged group. If this fails
+// but `DragGroupWithRadialGradientChild_NoArtifact` passes, the bug is
+// in the interaction between mandatory sub-layer composition and
+// re-rasterized surrounding segments.
+TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <defs>
+        <clipPath id="clip"><rect x="50" y="50" width="40" height="40"/></clipPath>
+        <radialGradient id="grad" cx="100" cy="100" r="30" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ff8800"/>
+          <stop offset="1" stop-color="#111111"/>
+        </radialGradient>
+      </defs>
+      <rect width="200" height="200" fill="#222"/>
+      <g id="group">
+        <g clip-path="url(#clip)"><rect x="40" y="40" width="60" height="60" fill="#44aa00"/></g>
+        <circle cx="100" cy="100" r="25" fill="url(#grad)"/>
+      </g>
+    </svg>
+  )svg");
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
+  compositor.renderFrame(viewport);
+  compositor.demoteEntity(group->entityHandle().entity());
+  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
+  compositor.renderFrame(viewport);
+  const RendererBitmap composited = renderer_.takeSnapshot();
+
+  SVGDocument refDoc = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <defs>
+        <clipPath id="clip"><rect x="50" y="50" width="40" height="40"/></clipPath>
+        <radialGradient id="grad" cx="100" cy="100" r="30" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#ff8800"/>
+          <stop offset="1" stop-color="#111111"/>
+        </radialGradient>
+      </defs>
+      <rect width="200" height="200" fill="#222"/>
+      <g id="group" transform="translate(40, 0)">
+        <g clip-path="url(#clip)"><rect x="40" y="40" width="60" height="60" fill="#44aa00"/></g>
+        <circle cx="100" cy="100" r="25" fill="url(#grad)"/>
+      </g>
+    </svg>
+  )svg");
+  RendererDriver driver(renderer_);
+  driver.draw(refDoc);
+  const RendererBitmap reference = renderer_.takeSnapshot();
+
+  int maxDiff = 0;
+  int mismatchesOver5 = 0;
+  int worstX = -1, worstY = -1;
+  for (int y = 0; y < composited.dimensions.y; ++y) {
+    for (int x = 0; x < composited.dimensions.x; ++x) {
+      const size_t off = static_cast<size_t>(y) * composited.rowBytes + static_cast<size_t>(x) * 4;
+      int worst = 0;
+      for (int c = 0; c < 4; ++c) {
+        worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
+                                         static_cast<int>(reference.pixels[off + c])));
+      }
+      if (worst > 5) ++mismatchesOver5;
+      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+    }
+  }
+  std::cerr << "[DIAG ClipPathSibling] mismatchesOver5=" << mismatchesOver5
+            << " maxDiff=" << maxDiff << " at (" << worstX << "," << worstY << ")\n";
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/clip_sibling_comp.png", composited.pixels,
+                                            composited.dimensions.x, composited.dimensions.y);
+  RendererImageIO::writeRgbaPixelsToPngFile("/tmp/clip_sibling_ref.png", reference.pixels,
+                                            reference.dimensions.x, reference.dimensions.y);
+  // Post-phase2 RIC snapshot.
+  {
+    auto& reg = document.registry();
+    svg::RenderingInstanceView v(reg);
+    while (!v.done()) {
+      const Entity e = v.currentEntity();
+      const auto& inst = reg.get<components::RenderingInstanceComponent>(e);
+      std::cerr << "[POST2 RIC] e=" << static_cast<unsigned>(e)
+                << " tx=" << inst.worldFromEntityTransform.translation().x
+                << " ty=" << inst.worldFromEntityTransform.translation().y << "\n";
+      v.advance();
+    }
+  }
+  EXPECT_LE(mismatchesOver5, 10)
+      << "compositor diverges from reference: " << mismatchesOver5 << " px with diff>5, maxDiff="
+      << maxDiff << " at (" << worstX << "," << worstY << ")";
+}
+
+// Minimal reproduction of the two-phase Selection→ActiveDrag bug:
+// dragging a plain `<g>` (no isolation attrs) causes its children to
+// render at the wrong position when the drag sequence is
+// Selection-prewarm → demote → ActiveDrag-repromote → transform →
+// render. Single-phase drag works correctly; the demote+repromote
+// bounce is what breaks.
+//
+// Scenario: a yellow rect inside a `<g>`. Drag the group by +40px.
+// Expected: reference and compositor both show the rect at +40.
+// Observed: compositor shows the rect at 0 (original position).
+TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g id="group">
+        <rect x="10" y="30" width="40" height="40" fill="#ffcc00"/>
+      </g>
+    </svg>
+  )svg");
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 100);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  // NOT setSkipMainComposeDuringSplit here — we want
+  // `takeSnapshot()` to reflect the post-phase-2 state, not the cached
+  // phase-1 snapshot.
+
+  // Two-phase: Selection prewarm → demote → ActiveDrag re-promote.
+  ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(),
+                                       InteractionHint::Selection));
+  compositor.renderFrame(viewport);
+  compositor.demoteEntity(group->entityHandle().entity());
+  ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(),
+                                       InteractionHint::ActiveDrag));
+  group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
+  compositor.renderFrame(viewport);
+
+  const RendererBitmap composited = renderer_.takeSnapshot();
+
+  // The rect was originally at x=[10, 50]. After +40 translation,
+  // should be at x=[50, 90]. Sample midpoints.
+  const Pixel originalPos = getPixel(composited, 30, 50);
+  const Pixel newPos = getPixel(composited, 70, 50);
+
+  EXPECT_FALSE(originalPos.r > 200 && originalPos.g > 150 && originalPos.b < 100)
+      << "rect is still at original position (30, 50). got: " << originalPos
+      << ". The two-phase Selection→ActiveDrag drag left the rect where it was before drag — "
+         "DOM transform change didn't move the promoted layer's content.";
+  EXPECT_TRUE(newPos.r > 200 && newPos.g > 150 && newPos.b < 100)
+      << "rect didn't move to new position (70, 50). got: " << newPos;
+}
+
+// Exercises `CompositorController::setTightBoundedSegmentsEnabled` as a
+// runtime bisection knob: after the compositor has warmed up with
+// tight-bounded segments enabled (the default), flipping the toggle to
+// false on the next frame must produce the same composited pixels as a
+// compositor that never had tight-bounds enabled at all. This is the
+// invariant the editor's View-menu toggle relies on — the user sees the
+// same frame whether they were toggling or had the feature off from
+// start.
+TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
+  SVGDocument documentTight = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+      <rect x="80" y="20" width="30" height="30" fill="blue"/>
+      <rect x="140" y="40" width="40" height="20" fill="green"/>
+    </svg>
+  )svg");
+  auto target = documentTight.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  CompositorController compositorTight(documentTight, renderer_);
+  ASSERT_TRUE(compositorTight.tightBoundedSegmentsEnabled());
+  ASSERT_TRUE(compositorTight.promoteEntity(target->entityHandle().entity()));
+  compositorTight.renderFrame(viewport_);
+  // Flip the toggle off — all cached segments are marked dirty and
+  // re-rasterize on the next frame at full canvas size.
+  compositorTight.setTightBoundedSegmentsEnabled(false);
+  EXPECT_FALSE(compositorTight.tightBoundedSegmentsEnabled());
+  compositorTight.renderFrame(viewport_);
+  const RendererBitmap afterFlip = renderer_.takeSnapshot();
+
+  // Reference: a fresh compositor with tight-bounds disabled from the start.
+  SVGDocument documentRef = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+      <rect x="80" y="20" width="30" height="30" fill="blue"/>
+      <rect x="140" y="40" width="40" height="20" fill="green"/>
+    </svg>
+  )svg");
+  auto targetRef = documentRef.querySelector("#target");
+  ASSERT_TRUE(targetRef.has_value());
+  CompositorConfig refConfig;
+  refConfig.tightBoundedSegments = false;
+  CompositorController compositorRef(documentRef, renderer_, refConfig);
+  ASSERT_TRUE(compositorRef.promoteEntity(targetRef->entityHandle().entity()));
+  compositorRef.renderFrame(viewport_);
+  const RendererBitmap reference = renderer_.takeSnapshot();
+
+  ASSERT_EQ(afterFlip.dimensions, reference.dimensions);
+  ASSERT_EQ(afterFlip.pixels.size(), reference.pixels.size());
+  int mismatchCount = 0;
+  int maxDiff = 0;
+  for (size_t i = 0; i < afterFlip.pixels.size(); ++i) {
+    const int diff = std::abs(static_cast<int>(afterFlip.pixels[i]) -
+                              static_cast<int>(reference.pixels[i]));
+    if (diff > 0) {
+      ++mismatchCount;
+      maxDiff = std::max(maxDiff, diff);
+    }
+  }
+  EXPECT_EQ(mismatchCount, 0)
+      << "runtime toggle off did not converge to same pixels as construct-time off. "
+         "mismatchCount=" << mismatchCount << " maxDiff=" << maxDiff
+      << ". If non-zero, `setTightBoundedSegmentsEnabled(false)` is not fully "
+         "invalidating prior tight-bound caches — likely a missing "
+         "`markAllSegmentsDirty` call in the setter.";
 }
 
 // Isolates the gradient + filter interaction. Single frame, no drag — does

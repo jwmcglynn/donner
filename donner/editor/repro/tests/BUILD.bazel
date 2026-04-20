@@ -1,0 +1,18 @@
+load("//build_defs:rules.bzl", "donner_cc_test")
+
+donner_cc_test(
+    name = "repro_decode_clicks_test",
+    srcs = ["ReproDecodeClicks_test.cc"],
+    data = [
+        "//:donner_splash.svg",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/editor:editor_app",
+        "//donner/editor:viewport_state",
+        "//donner/editor/repro:repro_file",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

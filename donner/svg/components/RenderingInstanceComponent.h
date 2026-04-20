@@ -135,8 +135,13 @@ struct RenderingInstanceComponent {
   /// True if this instance establishes a new rendering layer, such as if there is opacity.
   bool isolatedLayer = false;
 
-  /// The canvas-space transform of the element, element-from-world.
-  Transform2d entityFromWorldTransform;
+  /// Cascaded transform mapping entity-local coords to canvas coords.
+  /// Applying this to a `<circle>`'s `(cx, cy)` yields that circle's canvas
+  /// position. Composed with `RendererDriver::surfaceFromCanvasTransform_` as
+  /// `worldFromEntityTransform * surfaceFromCanvasTransform_` (donner's
+  /// left-first `operator*`: "apply entity→world, then world→surface") to
+  /// form the final render CTM.
+  Transform2d worldFromEntityTransform;
 
   std::optional<Box2d> clipRect;  //!< The clip rect of the element, if set.
 

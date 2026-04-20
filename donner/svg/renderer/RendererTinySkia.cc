@@ -219,9 +219,9 @@ Transform2d resolveGradientTransform(
   }
 
   const Vector2d origin = maybeTransformComponent->transformOrigin;
-  const Transform2d entityFromParent =
+  const Transform2d parentFromEntity =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transform2d::Translate(origin) * entityFromParent * Transform2d::Translate(-origin);
+  return Transform2d::Translate(origin) * parentFromEntity * Transform2d::Translate(-origin);
 }
 
 std::optional<tiny_skia::Shader> instantiateGradientShader(
@@ -2040,11 +2040,11 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
     }
 
     const Transform2d clipPathTransform =
-        clip.clipPathUnitsTransform * shape.entityFromParent * currentTransform_;
+        clip.clipPathUnitsTransform * shape.parentFromEntity * currentTransform_;
     if (verbose_) {
       const Box2d pathBounds = shape.path.bounds();
       std::cout << "\n  shape layer=" << shape.layer << " bounds=" << pathBounds
-                << "\n    entityFromParent=" << shape.entityFromParent
+                << "\n    parentFromEntity=" << shape.parentFromEntity
                 << "    combinedTransform=" << clipPathTransform
                 << "    transformedBounds=" << clipPathTransform.transformBox(pathBounds);
     }

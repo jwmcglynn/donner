@@ -128,6 +128,21 @@ struct CompositorConfig {
   /// Default is `false`; CI and debug test configurations flip it on for
   /// the covered test targets.
   bool verifyPixelIdentity = false;
+
+  /// When true, `rasterizeDirtyStaticSegments` calls
+  /// `RendererDriver::computeEntityRangeBounds` and sizes each segment's
+  /// offscreen bitmap to the tight canvas-space rectangle its contents
+  /// paint into (with a 1-px AA padding + 75% coverage cutoff). When
+  /// false, every segment rasterizes full-canvas — slower and more
+  /// memory, but bypasses every code path added in design doc 0027,
+  /// which is the bisection fast-path for any visual regression
+  /// suspected to originate in tight-bounded rasterization.
+  ///
+  /// Flipping the field at runtime (via
+  /// `CompositorController::setTightBoundedSegmentsEnabled`) marks all
+  /// cached segments dirty so the next frame re-rasterizes under the
+  /// new policy. See 0027-tight_bounded_segments.md § Reversibility.
+  bool tightBoundedSegments = true;
 };
 
 /**
@@ -331,6 +346,26 @@ public:
   [[nodiscard]] bool remapAfterStructuralReplace(
       const std::unordered_map<Entity, Entity>& remap);
 
+  /// Flip tight-bounded segment rasterization on or off at runtime.
+  /// See `CompositorConfig::tightBoundedSegments` for semantics. Marks
+  /// every cached static segment dirty so the next `renderFrame` call
+  /// re-rasterizes under the new policy (otherwise the flip would
+  /// affect only segments that happened to get re-rasterized for other
+  /// reasons).
+  ///
+  /// Intended as a bisection knob for the editor: if a visual
+  /// regression seems to originate in 0027-tight_bounded_segments, flip
+  /// the toggle and watch whether it disappears. Not a hot path —
+  /// re-rasterizing every segment on the next frame costs one full
+  /// render's worth of work.
+  void setTightBoundedSegmentsEnabled(bool enabled);
+
+  /// Returns the current tight-bounded-segments setting. Mirrors
+  /// `config().tightBoundedSegments` for convenience.
+  [[nodiscard]] bool tightBoundedSegmentsEnabled() const {
+    return config_.tightBoundedSegments;
+  }
+
   /// When true, `renderFrame()` skips the main-renderer compose step while
   /// the split-static-layers cache (`bg`/`drag`/`fg` triple) is populated.
   /// The editor's drag overlay reads those bitmaps directly via GL, so the
@@ -386,6 +421,23 @@ private:
   /// editor-facing bg/fg cache must be dropped; the caller invalidates
   /// `backgroundBitmap_`/`foregroundBitmap_` accordingly.
   bool resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize);
+
+  /// For each dirty entity that has a Transform/WorldTransform flag,
+  /// walk its DOM subtree and mark every static segment that contains
+  /// an RIC-bearing descendant as dirty. Stops descent at subtrees
+  /// rooted in another promoted layer (those are composed via their
+  /// layer's `compositionTransform`, not re-rasterize). Called AFTER
+  /// `resyncSegmentsToLayerSet` so the dirty flags aren't overwritten
+  /// by the resync's default-per-bitmap-validity logic.
+  ///
+  /// Needed because a parent-group transform mutates every descendant's
+  /// canvas position via the layout cascade, but the baseline
+  /// `consumeDirtyFlags` logic only dirties the single segment
+  /// containing the mutated entity's own paint-order slot. Without
+  /// this, dragging a plain `<g>` leaves descendant segments composed
+  /// at pre-drag positions. See compositor golden
+  /// `DragGroupWithClipPathSiblingAndGradient`.
+  void cascadeTransformDirtyToDescendantSegments(const std::vector<Entity>& dirtyEntities);
 
   /// Mark every segment dirty (structural rebuilds, layer set changes,
   /// canvas size changes). Resizes `staticSegmentDirty_` to match

@@ -1,0 +1,34 @@
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+
+donner_cc_library(
+    name = "repro_file",
+    srcs = ["ReproFile.cc"],
+    hdrs = ["ReproFile.h"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+    ],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "repro_recorder",
+    srcs = ["ReproRecorder.cc"],
+    hdrs = ["ReproRecorder.h"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+    ],
+    deps = [
+        ":repro_file",
+        "//donner/editor:imgui_headers",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
+    name = "repro_file_tests",
+    srcs = ["ReproFile_tests.cc"],
+    deps = [
+        ":repro_file",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

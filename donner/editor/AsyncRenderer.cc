@@ -179,6 +179,11 @@ void AsyncRenderer::workerLoop() {
       const Vector2i canvasSize = request.document->canvasSize();
       viewport.size = Vector2d(canvasSize.x, canvasSize.y);
       viewport.devicePixelRatio = 1.0;
+      // Push the current UI-thread setting for tight-bounded segments
+      // into the compositor. Setter is a no-op when unchanged; otherwise
+      // it marks all segments dirty so the flip takes effect this frame.
+      compositor_->setTightBoundedSegmentsEnabled(
+          tightBoundedSegments_.load(std::memory_order_acquire));
       double workerMs = 0.0;
       {
         ZoneScopedN("Compositor::renderFrame");

@@ -15,6 +15,8 @@
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/repro/ReproRecorder.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -144,7 +146,29 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   renderCoordinator_.asyncRenderer().setWakeCallback(
       [this]() { window_.wakeEventLoop(); });
 
+  if (options_.reproOutputPath.has_value()) {
+    repro::ReproRecorderOptions recorderOptions;
+    recorderOptions.outputPath = *options_.reproOutputPath;
+    recorderOptions.svgPath = options_.svgPath;
+    const auto winSize = window_.windowSize();
+    recorderOptions.windowWidth = winSize.x;
+    recorderOptions.windowHeight = winSize.y;
+    recorderOptions.displayScale = window_.displayScale();
+    recorderOptions.experimentalMode = options_.experimentalMode;
+    reproRecorder_ = std::make_unique<repro::ReproRecorder>(std::move(recorderOptions));
+    std::fprintf(stderr, "[repro] recording UI inputs to %s\n",
+                 options_.reproOutputPath->c_str());
+  }
+
   valid_ = true;
+}
+
+EditorShell::~EditorShell() {
+  if (reproRecorder_) {
+    if (!reproRecorder_->flush()) {
+      std::fprintf(stderr, "[repro] flush failed — recording lost\n");
+    }
+  }
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
@@ -452,6 +476,13 @@ void EditorShell::highlightSelectionSourceIfNeeded() {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  if (reproRecorder_) {
+    // Snapshot before any widget consumes input events. ImGui's IO
+    // state for the frame has been populated by
+    // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
+    // upstream of `runFrame`); nothing below has touched it yet.
+    reproRecorder_->snapshotFrame();
+  }
   interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
   updateWindowTitle();
 
@@ -495,6 +526,8 @@ void EditorShell::runFrame() {
       .canRedo = app_.undoTimeline().entryCount() > 0,
       .experimentalMode = options_.experimentalMode,
       .canToggleCompositedRendering = CanToggleCompositedRendering(selectTool_),
+      .tightBoundedSegmentsEnabled =
+          renderCoordinator_.asyncRenderer().tightBoundedSegmentsEnabled(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -537,6 +570,10 @@ void EditorShell::runFrame() {
   }
   if (menuActions.toggleCompositedRendering) {
     applyExperimentalModeChange(!options_.experimentalMode);
+  }
+  if (menuActions.toggleTightBoundedSegments) {
+    auto& asyncRenderer = renderCoordinator_.asyncRenderer();
+    asyncRenderer.setTightBoundedSegmentsEnabled(!asyncRenderer.tightBoundedSegmentsEnabled());
   }
 
   dialogPresenter_.render(

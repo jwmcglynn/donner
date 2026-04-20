@@ -4,7 +4,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/Utils.h"
@@ -16,6 +18,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
@@ -86,41 +89,12 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
 /// Fully-opaque pixels (alpha = 255) are unchanged; this step is only
 /// meaningful for semi-transparent content, which is why single-element
 /// drag of fully-opaque elements worked without the fix.
-std::vector<uint8_t> UnpremultiplyPixels(const std::vector<uint8_t>& src) {
-  std::vector<uint8_t> dst(src.size());
-  for (size_t i = 0; i + 3 < src.size(); i += 4) {
-    const uint8_t a = src[i + 3];
-    if (a == 0) {
-      dst[i] = 0;
-      dst[i + 1] = 0;
-      dst[i + 2] = 0;
-      dst[i + 3] = 0;
-    } else if (a == 255) {
-      dst[i] = src[i];
-      dst[i + 1] = src[i + 1];
-      dst[i + 2] = src[i + 2];
-      dst[i + 3] = 255;
-    } else {
-      // Divide RGB by alpha normalized to [0, 1]. Integer math: round half up.
-      const uint32_t scale = 255 * 256 / a;  // inverse alpha * 256
-      dst[i] = static_cast<uint8_t>(std::min<uint32_t>(255, (src[i] * scale + 128) >> 8));
-      dst[i + 1] = static_cast<uint8_t>(std::min<uint32_t>(255, (src[i + 1] * scale + 128) >> 8));
-      dst[i + 2] = static_cast<uint8_t>(std::min<uint32_t>(255, (src[i + 2] * scale + 128) >> 8));
-      dst[i + 3] = a;
-    }
-  }
-  return dst;
-}
-
-/// Build an `ImageResource` from a `RendererBitmap`, converting from
-/// premultiplied to unpremultiplied alpha when necessary. See
-/// `UnpremultiplyPixels` for the why.
 ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   ImageResource img;
   img.width = bitmap.dimensions.x;
   img.height = bitmap.dimensions.y;
   if (bitmap.alphaType == AlphaType::Premultiplied) {
-    img.data = UnpremultiplyPixels(bitmap.pixels);
+    img.data = UnpremultiplyRgba(bitmap.pixels);
   } else {
     img.data = bitmap.pixels;
   }
@@ -182,6 +156,45 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
 
   if (totalBitmapMemory() >= kMaxCompositorMemoryBytes) {
     return false;
+  }
+
+  // Refuse promotion when any descendant already has its own promoted
+  // layer (non-zero `ComputedLayerAssignmentComponent::layerId`). A
+  // user-promoted layer's range would span those descendants, causing
+  // `drawEntityRange` to render them into this layer's bitmap AND into
+  // the sub-layer's bitmap — double-exposed pixels on compose. This
+  // manifested as crescent-shaped color drift at radial-gradient orb
+  // edges when dragging `#Clouds_with_gradients` on the splash, which
+  // contains cls-90 / cls-93 clip-path sublayers.
+  //
+  // Falling back to non-composited rendering for this specific drag
+  // target costs compositor optimization but preserves correctness.
+  // Typical interactive targets (single shapes, text letters, filter
+  // groups themselves) are unaffected.
+  {
+    using TreeComponent = donner::components::TreeComponent;
+    std::vector<Entity> stack;
+    if (const auto* tree = registry.try_get<TreeComponent>(entity)) {
+      for (Entity child = tree->firstChild(); child != entt::null;
+           child = registry.get<TreeComponent>(child).nextSibling()) {
+        stack.push_back(child);
+      }
+    }
+    while (!stack.empty()) {
+      const Entity descendant = stack.back();
+      stack.pop_back();
+      const auto* assignment =
+          registry.try_get<ComputedLayerAssignmentComponent>(descendant);
+      if (assignment != nullptr && assignment->layerId != 0) {
+        return false;
+      }
+      if (const auto* descTree = registry.try_get<TreeComponent>(descendant)) {
+        for (Entity grandchild = descTree->firstChild(); grandchild != entt::null;
+             grandchild = registry.get<TreeComponent>(grandchild).nextSibling()) {
+          stack.push_back(grandchild);
+        }
+      }
+    }
   }
 
   // Phase 2: under `autoPromoteInteractions`, the editor-driven
@@ -468,6 +481,18 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   mainRendererHasCachedFrame_ = false;
 }
 
+void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
+  if (config_.tightBoundedSegments == enabled) {
+    return;
+  }
+  config_.tightBoundedSegments = enabled;
+  // Existing cached segments were rasterized under the previous policy
+  // — a segment rasterized tight has a non-zero offset that the
+  // full-canvas path would mis-apply on compose, and vice versa. Mark
+  // every slot dirty so the next frame rebuilds under the new policy.
+  markAllSegmentsDirty();
+}
+
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   ZoneScopedN("Compositor::renderFrame");
   UTILS_RELEASE_ASSERT(document_ != nullptr);
@@ -505,12 +530,17 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // an empty set. With the snapshot we can still do precise per-layer
   // invalidation after the prepare.
   std::vector<Entity> dirtyEntitySnapshot;
+  std::vector<Entity> transformDirtyEntities;
   {
     auto dirtyView = registry.view<components::DirtyFlagsComponent>();
     for (const Entity entity : dirtyView) {
       const auto& dirty = dirtyView.get<components::DirtyFlagsComponent>(entity);
       if (dirty.flags != components::DirtyFlagsComponent::Flags::None) {
         dirtyEntitySnapshot.push_back(entity);
+        if ((dirty.flags & (components::DirtyFlagsComponent::Transform |
+                            components::DirtyFlagsComponent::WorldTransform)) != 0) {
+          transformDirtyEntities.push_back(entity);
+        }
       }
     }
   }
@@ -539,7 +569,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   //
   // When the only dirty entities are single-entity promoted layer roots
   // and their dirty flags are pure-position, we can skip the full tree
-  // rebuild entirely: just refresh their `entityFromWorldTransform` from
+  // rebuild entirely: just refresh their `worldFromEntityTransform` from
   // the freshly-computed `ComputedAbsoluteTransformComponent` (invalidated
   // in place by `LayoutSystem::setTransform`) and mark the layer dirty.
   // Everything else — filter layer bitmaps, bg/fg split, style cascade —
@@ -561,7 +591,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         break;
       }
       // The entity must be a single-element promoted layer root — if the
-      // layer has a subtree, descendants' `entityFromWorldTransform`
+      // layer has a subtree, descendants' `worldFromEntityTransform`
       // would also need refreshing, and we punt that to the slow path.
       bool matchedSingleEntityLayer = false;
       for (auto& layer : layers_) {
@@ -594,8 +624,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         const Transform2d canvasFromDocument =
             components::LayoutSystem().getCanvasFromDocumentTransform(registry);
         const Transform2d newEntityFromWorld =
-            abs.entityFromWorld * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
-        instance.entityFromWorldTransform = newEntityFromWorld;
+            abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+        instance.worldFromEntityTransform = newEntityFromWorld;
 
         // Bitmap-reuse fast path. If the entity has a valid cached
         // bitmap and the delta between the current DOM transform and
@@ -835,6 +865,38 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
   }
 
+  // Update composition transforms for layers whose stamped transform
+  // differs from their current RIC transform by a pure translation.
+  // This covers the descendant-layer case: when a parent group drags,
+  // its mandatory-promoted descendant layers (filter groups, clip-path
+  // groups) get new RIC transforms via the cascade in
+  // `prepareDocumentForRendering`, but aren't themselves in
+  // `dirtyEntitySnapshot`, so the fast-path loop above misses them.
+  // Without this pass, those layers' cached bitmaps compose at the
+  // pre-drag stamp position while surrounding static segments re-
+  // rasterize at the post-drag position, producing misalignment
+  // crescents at the sub-layers' rendered edges (the
+  // `#Clouds_with_gradients` splash artifact).
+  for (auto& layer : layers_) {
+    if (!layer.hasValidBitmap() || !layer.bitmapEntityFromWorldTransform().has_value()) {
+      continue;
+    }
+    if (!registry.valid(layer.entity()) ||
+        !registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
+      continue;
+    }
+    const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
+    const Transform2d& bitmapStamp = *layer.bitmapEntityFromWorldTransform();
+    const Transform2d delta = instance.worldFromEntityTransform * bitmapStamp.inverse();
+    if (delta.isTranslation()) {
+      layer.setCompositionTransform(delta);
+    }
+    // Non-translation deltas (scale / rotate of an ancestor) require a
+    // re-rasterize; `consumeDirtyFlags` / the rasterize loop handle
+    // that via `layer.markDirty()`. We just silently leave those
+    // layers alone here.
+  }
+
   if (!offscreenSupportKnown_) {
     offscreenSupported_ = renderer_->createOffscreenInstance() != nullptr;
     offscreenSupportKnown_ = true;
@@ -938,6 +1000,10 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     foregroundBitmap_ = RendererBitmap();
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
+  }
+  {
+    ZoneScopedN("Compositor::cascadeTransformDirtyToDescendantSegments");
+    cascadeTransformDirtyToDescendantSegments(transformDirtyEntities);
   }
   {
     ZoneScopedN("Compositor::rasterizeDirtyStaticSegments");
@@ -1102,12 +1168,12 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // the tree was prepared — treat it as transform identity, which makes
   // the subsequent fast-path delta equal to the new transform, which is
   // correct for the "bitmap was drawn at origin" case.
-  Transform2d entityFromWorld;
+  Transform2d worldFromEntity;
   if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
-    entityFromWorld =
-        registry.get<components::RenderingInstanceComponent>(layer.entity()).entityFromWorldTransform;
+    worldFromEntity =
+        registry.get<components::RenderingInstanceComponent>(layer.entity()).worldFromEntityTransform;
   }
-  layer.setBitmap(offscreen->takeSnapshot(), entityFromWorld);
+  layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
   // Don't reset `compositionTransform_` here — a caller may have set it
   // explicitly (tests, editor drag hand-off paths) and expect that
   // additional offset to apply on top of the freshly-rasterized bitmap.
@@ -1237,13 +1303,12 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       // 0027-tight_bounded_segments.md for which cases are pending
       // precise handling.
       std::optional<Box2d> tightBoundsCanvas;
-      {
+      if (config_.tightBoundedSegments) {
         ZoneScopedN("Compositor::segment::computeBounds");
         RendererDriver boundsDriver(*renderer_);
         tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
             registry, paintOrder[startIdx], paintOrder[endIdx], viewport, Transform2d());
       }
-
       // The bounds-compute overhead per segment is ~O(entities) with
       // no pixel work — negligible vs any render. But tight-bound
       // also adds the crop-into-smaller-bitmap overhead at compose
@@ -1342,8 +1407,6 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
         if (staticSegmentBoundaries_[j].first == left &&
             staticSegmentBoundaries_[j].second == right) {
           newSegments[i] = std::move(staticSegments_[j]);
-          // Trust bitmap validity, not the (possibly re-initialized)
-          // old dirty flag.
           newDirty[i] = newSegments[i].empty();
           if (j < staticSegmentGeneration_.size()) {
             // Preserve the old slot's generation so the editor's GL
@@ -1736,6 +1799,53 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
   mainRendererHasCachedFrame_ = true;
 }
 
+void CompositorController::cascadeTransformDirtyToDescendantSegments(
+    const std::vector<Entity>& transformDirtyEntities) {
+  Registry& registry = document_->registry();
+  using TreeComponent = donner::components::TreeComponent;
+  for (const Entity entity : transformDirtyEntities) {
+    // Also dirty the segment containing `entity` itself — the baseline
+    // `consumeDirtyFlags` path may have dirtied a layer instead, but if
+    // we're here the entity had a transform flag and re-rasterizing its
+    // own segment is needed when the entity is in a layer that doesn't
+    // re-raster (composition-transform path).
+    if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
+      const size_t selfSegIdx = findSegmentForEntity(entity);
+      if (selfSegIdx < staticSegmentDirty_.size()) {
+        staticSegmentDirty_[selfSegIdx] = true;
+      }
+    }
+    std::vector<Entity> stack;
+    if (const auto* tree = registry.try_get<TreeComponent>(entity)) {
+      for (Entity child = tree->firstChild(); child != entt::null;
+           child = registry.get<TreeComponent>(child).nextSibling()) {
+        stack.push_back(child);
+      }
+    }
+    while (!stack.empty()) {
+      const Entity descendant = stack.back();
+      stack.pop_back();
+      const auto* assignment =
+          registry.try_get<ComputedLayerAssignmentComponent>(descendant);
+      if (assignment != nullptr && assignment->layerId != 0) {
+        continue;  // sub-layer: handled by its own compositionTransform.
+      }
+      if (registry.all_of<components::RenderingInstanceComponent>(descendant)) {
+        const size_t segIdx = findSegmentForEntity(descendant);
+        if (segIdx < staticSegmentDirty_.size()) {
+          staticSegmentDirty_[segIdx] = true;
+        }
+      }
+      if (const auto* dtree = registry.try_get<TreeComponent>(descendant)) {
+        for (Entity grandchild = dtree->firstChild(); grandchild != entt::null;
+             grandchild = registry.get<TreeComponent>(grandchild).nextSibling()) {
+          stack.push_back(grandchild);
+        }
+      }
+    }
+  }
+}
+
 void CompositorController::consumeDirtyFlags(const std::vector<Entity>& dirtyEntities) {
   Registry& registry = document_->registry();
 
@@ -1914,7 +2024,54 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
     }
   }
 
-  return {entity, entity};
+  // No `SubtreeInfo` — the entity's RIC didn't establish an isolated
+  // rendering scope (plain `<g>`, e.g.). Walk the DOM tree to find
+  // the last RIC-bearing descendant so the promoted layer's
+  // paint-order range covers every descendant that paints.
+  //
+  // Rationale: if the range stays at {entity, entity}, the layer's
+  // bitmap rasterizes only the group root (usually a no-op draw) and
+  // the children end up in an adjacent static segment. When the
+  // group's transform mutates on drag, `consumeDirtyFlags` matches
+  // the entity against its single-entity layer range and stops;
+  // segments carrying descendants never get marked dirty, so cached
+  // bitmaps keep the children at pre-drag positions — visible as
+  // "children don't move when I drag their parent." See compositor
+  // golden `TwoPhaseDragOfPlainGroupMovesChildren`.
+  //
+  // Widening here also disables the single-entity fast path
+  // (eligibility requires `firstEntity == lastEntity == e`, see
+  // `renderFrame`), forcing `prepareDocumentForRendering` to run on
+  // the drag-start frame. That's the correct behavior: the full
+  // RIC rebuild cascades transforms to descendants. Subsequent
+  // same-entity drag frames (steady state) hit the bitmap-reuse fast
+  // path via `compositionTransform`, so interactivity is preserved.
+  //
+  // Known limitation: when the subtree contains mandatory-promoted
+  // sublayers (filter groups, clip-path groups), those entities are
+  // still iterated by `drawEntityRange` and burned into this layer's
+  // bitmap AS WELL AS into their own. The double-draw produces
+  // crescent-shaped drift at gradient-orb tops on
+  // `#Clouds_with_gradients` drag. Tracked for a follow-up — fix
+  // requires making `drawEntityRange` layer-aware or refusing
+  // user-promotion when descendants are already promoted.
+  using TreeComponent = donner::components::TreeComponent;
+  const auto findLastPaintingDescendant = [&registry](auto& self, Entity start) -> Entity {
+    Entity result =
+        registry.all_of<components::RenderingInstanceComponent>(start) ? start : entt::null;
+    const auto* tree = registry.try_get<TreeComponent>(start);
+    if (tree == nullptr) return result;
+    for (Entity child = tree->firstChild(); child != entt::null;) {
+      const Entity descendantLast = self(self, child);
+      if (descendantLast != entt::null) {
+        result = descendantLast;
+      }
+      child = registry.get<TreeComponent>(child).nextSibling();
+    }
+    return result;
+  };
+  const Entity lastPainting = findLastPaintingDescendant(findLastPaintingDescendant, entity);
+  return {entity, lastPainting != entt::null ? lastPainting : entity};
 }
 
 FallbackReason CompositorController::detectFallbackReasons(

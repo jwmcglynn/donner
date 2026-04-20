@@ -213,7 +213,7 @@ TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
     auto& textInstance =
         document.registry().emplace<components::RenderingInstanceComponent>(textEntity);
     textInstance.dataEntity = textEntity;
-    textInstance.entityFromWorldTransform = Transform2d();
+    textInstance.worldFromEntityTransform = Transform2d();
     textInstance.resolvedFill = PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0)));
 
     const Vector2i canvasSize = document.canvasSize();
@@ -307,7 +307,7 @@ TEST_F(RendererDriverTest, ResolvesSpanStrokeAndDecorationPaintFromTextStyle) {
     auto& textInstance =
         document.registry().emplace<components::RenderingInstanceComponent>(textEntity);
     textInstance.dataEntity = textEntity;
-    textInstance.entityFromWorldTransform = Transform2d();
+    textInstance.worldFromEntityTransform = Transform2d();
     textInstance.resolvedFill = PaintServer::Solid(css::Color(css::RGBA(255, 255, 0, 255)));
     textInstance.resolvedStroke = PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255)));
 
