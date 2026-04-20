@@ -2,15 +2,18 @@
 /// @file
 /// Geode (WebGPU/Slug) implementation of \ref donner::svg::RendererInterface.
 ///
-/// This is the **skeleton** stage of the Geode backend: only solid-color path
-/// fills round-trip through the GPU pipeline. Stroke, gradient, pattern,
-/// image, text, clip, mask, layer, and filter operations are stubbed and will
-/// land in later phases (see `docs/design_docs/0017-geode_renderer.md`).
+/// Geode is a GPU-native SVG rendering backend using WebGPU and the Slug
+/// algorithm for resolution-independent vector rasterization. It can run
+/// **headless** (creating its own device) or **embedded** inside a host
+/// application that provides an existing WebGPU device and render target.
+///
+/// See `docs/design_docs/0017-geode_renderer.md` for the full design.
 
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
+#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -22,6 +25,7 @@ namespace donner::geode {
 class GeodeDevice;
 class GeodePipeline;
 class GeoEncoder;
+struct GeodeEmbedConfig;
 }  // namespace donner::geode
 
 // Forward-declare std::shared_ptr specialization to avoid pulling <memory>
@@ -61,19 +65,26 @@ struct FrameTimings {
  * Geode rendering backend — GPU-native via WebGPU + the Slug algorithm.
  *
  * `RendererGeode` implements `RendererInterface` by translating draw calls
- * into the lower-level `donner::geode::GeoEncoder` API. It owns its own
- * headless `GeodeDevice` and a single `GeodePipeline` (Slug fill).
+ * into the lower-level `donner::geode::GeoEncoder` API.
  *
- * Currently supported (skeleton):
- * - `beginFrame` / `endFrame` lifecycle and `takeSnapshot` readback.
- * - Transform stack (`setTransform`, `pushTransform`, `popTransform`).
- * - Solid-color `drawPath` (any `Path`, both fill rules) — strokes ignored.
- * - `drawRect` and `drawEllipse` via path conversion.
+ * ## Construction modes
  *
- * Stubbed (no-op, optionally warned in verbose mode):
- * - Clips, masks, isolated layers, filter layers, pattern tiles.
- * - Gradient and pattern paint servers (only `PaintServer::Solid` is honored).
- * - `drawImage`, `drawText`.
+ * | Mode | Constructor | Device ownership |
+ * |------|-------------|-----------------|
+ * | Headless | `RendererGeode(verbose)` | Geode creates + owns device |
+ * | Shared | `RendererGeode(shared_ptr<GeodeDevice>)` | Caller shares ownership |
+ *
+ * In all modes, Geode creates its own offscreen render target each frame
+ * unless a host-owned target is set via `setTargetTexture()`.
+ *
+ * ## Embedded rendering
+ *
+ * Host applications that already own a WebGPU device can:
+ * 1. Create a `GeodeDevice` from their existing device via
+ *    `GeodeDevice::CreateFromExternal(GeodeEmbedConfig{...})`.
+ * 2. Optionally call `setTargetTexture()` to render directly into a
+ *    swap-chain texture or other host-owned surface.
+ * 3. Call `draw()` or the `beginFrame()`/`endFrame()` lifecycle as usual.
  *
  * If `GeodeDevice::CreateHeadless()` fails (no GPU available), all draw
  * operations become no-ops and `takeSnapshot()` returns an empty bitmap.
@@ -113,6 +124,33 @@ public:
   RendererGeode(RendererGeode&&) noexcept;
   /// Move assignment operator.
   RendererGeode& operator=(RendererGeode&&) noexcept;
+
+  // --- Embedded rendering ---
+
+  /**
+   * Set a host-owned texture as the render target for subsequent frames.
+   *
+   * When a target texture is set, `beginFrame()` renders into it instead of
+   * allocating an internal offscreen target. The texture must:
+   * - Have `wgpu::TextureUsage::RenderAttachment` set.
+   * - Match the texture format configured on the `GeodeDevice` (default:
+   *   `RGBA8Unorm`).
+   * - Be at least as large as the viewport (in device pixels).
+   *
+   * If the texture also has `CopySrc` usage, `takeSnapshot()` can read it back.
+   * If it lacks `CopySrc`, `takeSnapshot()` returns an empty bitmap.
+   *
+   * The host retains ownership of the texture; it must remain valid from
+   * `beginFrame()` through `endFrame()`. Call `clearTargetTexture()` to
+   * revert to internal offscreen targets.
+   *
+   * @param texture Host-owned render target texture. Must not be null.
+   */
+  void setTargetTexture(wgpu::Texture texture);
+
+  /// Clear a previously set target texture, reverting to internal offscreen
+  /// targets allocated per-frame by `beginFrame()`.
+  void clearTargetTexture();
 
   // --- RendererInterface ---
 

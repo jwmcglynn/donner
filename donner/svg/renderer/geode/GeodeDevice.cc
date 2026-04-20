@@ -32,7 +32,8 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
 
 /// PIMPL struct: holds the wgpu::Instance so its lifetime is tied to
 /// the GeodeDevice wrapper. Adapter/device/queue handles are stored
-/// directly on the outer class.
+/// directly on the outer class. In embedded mode, `instance` is null
+/// because the host owns the instance.
 struct GeodeDevice::Impl {
   wgpu::Instance instance;
 
@@ -289,6 +290,40 @@ const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
 }
 const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
   return impl_->identityInstanceTransformBuffer;
+}
+
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
+  if (!config.device || !config.queue) {
+    std::fprintf(stderr, "[Geode] CreateFromExternal: null device or queue in config\n");
+    return nullptr;
+  }
+
+  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
+  result->external_ = true;
+  result->device_ = config.device;
+  result->queue_ = config.queue;
+  result->textureFormat_ = config.textureFormat;
+  // impl_->instance stays null — host owns the instance.
+
+  // Use the host-provided adapter for hardware workaround detection. When no
+  // adapter is supplied, skip detection — the host controls its own device.
+  if (config.adapter) {
+    result->adapter_ = config.adapter;
+    WGPUAdapterInfo info = {};
+    if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
+      if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
+        result->useAlphaCoverageAA_ = true;
+        std::fprintf(stderr,
+                     "[Geode] Intel Arc + Vulkan detected (embedded); "
+                     "using alpha-coverage AA\n");
+      }
+      wgpuAdapterInfoFreeMembers(info);
+    }
+  }
+
+  result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
+
+  return result;
 }
 
 void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {

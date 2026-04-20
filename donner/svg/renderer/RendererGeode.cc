@@ -52,7 +52,10 @@ using ::donner::geode::wgpuLabel;
 
 namespace {
 
-constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
+// Render-target texture format stored per-instance in Impl::textureFormat (initialized from
+// GeodeDevice). Filter-engine intermediate textures always use RGBA8Unorm for compute-shader
+// compatibility regardless of the host format.
+constexpr wgpu::TextureFormat kFilterIntermediateFormat = wgpu::TextureFormat::RGBA8Unorm;
 
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
 /// matching the CPU-renderer helper.
@@ -504,6 +507,16 @@ struct RendererGeode::Impl {
   std::unique_ptr<geode::GeodePipeline> pipeline;
   std::unique_ptr<geode::GeodeGradientPipeline> gradientPipeline;
   std::unique_ptr<geode::GeodeImagePipeline> imagePipeline;
+
+  // --- Host-provided target texture (Phase 6 embedding) ---
+  //
+  // When non-null, `beginFrame()` renders into this texture instead of
+  // creating its own offscreen target. The host retains ownership.
+  wgpu::Texture hostTarget;
+
+  // Texture format for all render targets. Matches the GeodeDevice's configured
+  // format (RGBA8Unorm for headless, host-specified for embedded mode).
+  wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
 
   // Per-frame resources, recreated in `beginFrame`.
   RenderViewport viewport;
@@ -1447,6 +1460,21 @@ struct RendererGeode::Impl {
   // and a subsequent geometry change fires `remove<GeodePathCacheComponent>`
   // (which is a no-op if the component isn't present), or the
   // registry is gone and no signal will ever fire again.
+
+  /// Initialize GPU pipelines after the device is set. Called from all
+  /// RendererGeode constructors to avoid duplicating pipeline-creation.
+  void initPipelines(bool verboseFlag) {
+    const wgpu::TextureFormat fmt = device->textureFormat();
+    textureFormat = fmt;
+    device->setCounters(&counters);
+    pipeline = std::make_unique<geode::GeodePipeline>(
+        device->device(), fmt, device->useAlphaCoverageAA(), device->sampleCount());
+    gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
+        device->device(), fmt, device->useAlphaCoverageAA(), device->sampleCount());
+    imagePipeline =
+        std::make_unique<geode::GeodeImagePipeline>(device->device(), fmt, device->sampleCount());
+    filterEngine = std::make_unique<geode::GeodeFilterEngine>(*device, verboseFlag);
+  }
 };
 
 void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
@@ -1483,16 +1511,7 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     }
     return;
   }
-  impl_->device->setCounters(&impl_->counters);
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat,
-                                                           impl_->device->useAlphaCoverageAA(),
-                                                           impl_->device->sampleCount());
-  impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
-      impl_->device->sampleCount());
-  impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
-      impl_->device->device(), kFormat, impl_->device->sampleCount());
-  impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
+  impl_->initPipelines(verbose);
 }
 
 RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
@@ -1505,16 +1524,7 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
     }
     return;
   }
-  impl_->device->setCounters(&impl_->counters);
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat,
-                                                           impl_->device->useAlphaCoverageAA(),
-                                                           impl_->device->sampleCount());
-  impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
-      impl_->device->sampleCount());
-  impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
-      impl_->device->device(), kFormat, impl_->device->sampleCount());
-  impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
+  impl_->initPipelines(verbose);
 }
 
 void RendererGeode::enableTimestamps(bool /*enabled*/) {
@@ -1527,6 +1537,14 @@ FrameTimings RendererGeode::lastFrameTimings() const {
   timings.counters = impl_->counters;
   // `renderPassNs` / `totalGpuNs` stay zero until timestamp support lands.
   return timings;
+}
+
+void RendererGeode::setTargetTexture(wgpu::Texture texture) {
+  impl_->hostTarget = std::move(texture);
+}
+
+void RendererGeode::clearTargetTexture() {
+  impl_->hostTarget = wgpu::Texture();
 }
 
 RendererGeode::~RendererGeode() = default;
@@ -1600,39 +1618,23 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   // don't null-ptr-crash in draw()→beginFrame().
   impl_->device->setCounters(&impl_->counters);
 
-  // Reuse the render targets across same-size frames (design doc 0030
-  // Milestone 4.1). Content is cleared by the encoder's first
-  // render-pass `LoadOp::Clear`, so lingering pixels from the previous
-  // frame don't leak into this one.
-  const bool canReuseTargets = impl_->target && impl_->targetWidth == impl_->pixelWidth &&
-                               impl_->targetHeight == impl_->pixelHeight;
+  if (impl_->hostTarget) {
+    // Embedded mode: render into the host-provided target texture.
+    // Override pixel dimensions from the texture itself.
+    impl_->pixelWidth = static_cast<int>(impl_->hostTarget.getWidth());
+    impl_->pixelHeight = static_cast<int>(impl_->hostTarget.getHeight());
+    impl_->target = impl_->hostTarget;
+    impl_->targetWidth = 0;
+    impl_->targetHeight = 0;
 
-  if (!canReuseTargets) {
-    // 1-sample resolve target: what `takeSnapshot()` copies back and what
-    // pattern / layer blits sample from.
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel("RendererGeodeTarget");
-    td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-               1};
-    td.format = kFormat;
-    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
-               wgpu::TextureUsage::TextureBinding;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    impl_->target = impl_->device->device().createTexture(td);
-    impl_->device->countTexture();
-
-    // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
-    // hardware resolves to `target` at pass end. Skipped on the
-    // alpha-coverage path (sampleCount == 1) where draws go directly
-    // into `target` with no intermediate MSAA texture.
+    // 4× MSAA color attachment (when sampleCount > 1).
     const uint32_t sc = impl_->device->sampleCount();
     if (sc > 1) {
       wgpu::TextureDescriptor msaaDesc = {};
       msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
-      msaaDesc.size = td.size;
-      msaaDesc.format = kFormat;
+      msaaDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                       static_cast<uint32_t>(impl_->pixelHeight), 1};
+      msaaDesc.format = impl_->textureFormat;
       msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
       msaaDesc.mipLevelCount = 1;
       msaaDesc.sampleCount = sc;
@@ -1642,8 +1644,52 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     } else {
       impl_->msaaTarget = wgpu::Texture();
     }
-    impl_->targetWidth = impl_->pixelWidth;
-    impl_->targetHeight = impl_->pixelHeight;
+  } else {
+    // Headless mode: reuse render targets across same-size frames (design doc
+    // 0030 Milestone 4.1). Content is cleared by the encoder's first
+    // render-pass `LoadOp::Clear`, so lingering pixels from the previous
+    // frame don't leak into this one.
+    const bool canReuseTargets = impl_->target && impl_->targetWidth == impl_->pixelWidth &&
+                                 impl_->targetHeight == impl_->pixelHeight;
+
+    if (!canReuseTargets) {
+      // 1-sample resolve target: what `takeSnapshot()` copies back and what
+      // pattern / layer blits sample from.
+      wgpu::TextureDescriptor td = {};
+      td.label = wgpuLabel("RendererGeodeTarget");
+      td.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                 static_cast<uint32_t>(impl_->pixelHeight), 1};
+      td.format = impl_->textureFormat;
+      td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
+                 wgpu::TextureUsage::TextureBinding;
+      td.mipLevelCount = 1;
+      td.sampleCount = 1;
+      td.dimension = wgpu::TextureDimension::_2D;
+      impl_->target = impl_->device->device().createTexture(td);
+      impl_->device->countTexture();
+
+      // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
+      // hardware resolves to `target` at pass end. Skipped on the
+      // alpha-coverage path (sampleCount == 1) where draws go directly
+      // into `target` with no intermediate MSAA texture.
+      const uint32_t sc = impl_->device->sampleCount();
+      if (sc > 1) {
+        wgpu::TextureDescriptor msaaDesc = {};
+        msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
+        msaaDesc.size = td.size;
+        msaaDesc.format = impl_->textureFormat;
+        msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+        msaaDesc.mipLevelCount = 1;
+        msaaDesc.sampleCount = sc;
+        msaaDesc.dimension = wgpu::TextureDimension::_2D;
+        impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+        impl_->device->countTexture();
+      } else {
+        impl_->msaaTarget = wgpu::Texture();
+      }
+      impl_->targetWidth = impl_->pixelWidth;
+      impl_->targetHeight = impl_->pixelHeight;
+    }
   }
 
   // Single CommandEncoder for the entire frame — shared across the
@@ -2002,7 +2048,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   td.label = wgpuLabel("RendererGeodeIsolatedLayer");
   td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
              1u};
-  td.format = kFormat;
+  td.format = impl_->textureFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
@@ -2019,7 +2065,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   if (impl_->device->sampleCount() > 1) {
     msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
     msaaDesc.size = td.size;
-    msaaDesc.format = kFormat;
+    msaaDesc.format = impl_->textureFormat;
     msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
     msaaDesc.mipLevelCount = 1;
     msaaDesc.sampleCount = 4;
@@ -2096,7 +2142,7 @@ void RendererGeode::popIsolatedLayer() {
     snapDesc.label = wgpuLabel("RendererGeodeBlendDstSnapshot");
     snapDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
-    snapDesc.format = kFormat;
+    snapDesc.format = impl_->textureFormat;
     snapDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
     snapDesc.mipLevelCount = 1;
     snapDesc.sampleCount = 1;
@@ -2219,7 +2265,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   wgpu::TextureDescriptor td{};
   td.label = wgpuLabel("RendererGeodeFilterLayer");
   td.size = {static_cast<uint32_t>(bufferWidth), static_cast<uint32_t>(bufferHeight), 1u};
-  td.format = kFormat;
+  td.format = impl_->textureFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
@@ -2234,7 +2280,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   wgpu::TextureDescriptor msaaDesc{};
   msaaDesc.label = wgpuLabel("RendererGeodeFilterLayerMSAA");
   msaaDesc.size = td.size;
-  msaaDesc.format = kFormat;
+  msaaDesc.format = impl_->textureFormat;
   msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
   msaaDesc.mipLevelCount = 1;
   msaaDesc.sampleCount = 4;
@@ -2342,7 +2388,7 @@ void RendererGeode::popFilterLayer() {
     wgpu::TextureDescriptor vpDesc{};
     vpDesc.label = wgpuLabel("RendererGeodeFilterViewport");
     vpDesc.size = {vpW, vpH, 1u};
-    vpDesc.format = kFormat;
+    vpDesc.format = kFilterIntermediateFormat;
     vpDesc.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
     vpDesc.mipLevelCount = 1;
     vpDesc.sampleCount = 1;
@@ -2397,7 +2443,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     outDesc.label = wgpuLabel(label);
     outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                     static_cast<uint32_t>(impl_->pixelHeight), 1u};
-    outDesc.format = kFormat;
+    outDesc.format = impl_->textureFormat;
     outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
                     wgpu::TextureUsage::CopySrc;
     outDesc.mipLevelCount = 1;
@@ -2409,7 +2455,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
       outMsaaDesc = wgpu::TextureDescriptor{};
       outMsaaDesc.label = wgpuLabel(msaaLabel);
       outMsaaDesc.size = outDesc.size;
-      outMsaaDesc.format = kFormat;
+      outMsaaDesc.format = impl_->textureFormat;
       outMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
       outMsaaDesc.mipLevelCount = 1;
       outMsaaDesc.sampleCount = 4;
@@ -2575,7 +2621,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodePatternTile");
   td.size = {static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight), 1u};
-  td.format = kFormat;
+  td.format = impl_->textureFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
@@ -2595,7 +2641,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     wgpu::TextureDescriptor tileMsaaDesc = {};
     tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
     tileMsaaDesc.size = td.size;
-    tileMsaaDesc.format = kFormat;
+    tileMsaaDesc.format = impl_->textureFormat;
     tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
     tileMsaaDesc.mipLevelCount = 1;
     tileMsaaDesc.sampleCount = 4;

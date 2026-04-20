@@ -127,6 +127,9 @@ SKIPPED_TARGETS: Set[str] = {
     # svg_viewer depends on @imgui (which pulls GLFW), neither of which is
     # wired into the CMake mirror. Bazel-only, tagged manual.
     "//examples:svg_viewer",
+    # geode_embed depends on @glfw plus the Bazel-only --config=geode renderer
+    # and is not part of the CMake build.
+    "//examples:geode_embed",
 }
 
 # Bazel toolchain-internal deps that are not real C++ libraries and should not

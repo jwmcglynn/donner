@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// RAII wrapper around a headless WebGPU (Dawn) device.
+/// RAII wrapper around a WebGPU device — headless or host-provided.
 
 #include <memory>
 #include <vector>
@@ -11,32 +11,89 @@
 namespace donner::geode {
 
 /**
- * Owns a headless WebGPU device/queue pair for GPU rendering.
+ * Configuration for embedding Geode into a host application that already owns a
+ * WebGPU device.
  *
- * GeodeDevice is the entry point to the Geode rendering backend. It creates a
- * Dawn instance, selects a default adapter, and creates a device — all without
- * any window system integration. All rendering happens into offscreen textures.
+ * The host is responsible for the lifetime of the device and queue — they must
+ * remain valid for the entire lifetime of any `GeodeDevice` or `RendererGeode`
+ * constructed from this config.
  *
- * Typical usage:
+ * Example:
+ * @code
+ *   GeodeEmbedConfig config;
+ *   config.device = myDevice;
+ *   config.queue = myQueue;
+ *   config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
+ *
+ *   auto geodeDevice = GeodeDevice::CreateFromExternal(config);
+ *   RendererGeode renderer(std::move(geodeDevice));
+ * @endcode
+ */
+struct GeodeEmbedConfig {
+  /// Host-provided WebGPU device. Must not be null.
+  wgpu::Device device;
+
+  /// Host-provided queue associated with `device`. Must not be null.
+  wgpu::Queue queue;
+
+  /// Texture format for render targets. Must match the format of any texture
+  /// passed to `RendererGeode::setTargetTexture()`.
+  wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
+
+  /// Optional adapter handle. When provided, Geode uses it for hardware
+  /// workaround detection (e.g., Intel Arc + Vulkan alpha-coverage fallback).
+  /// When null, workaround detection is skipped — the host is assumed to
+  /// know its own hardware characteristics.
+  wgpu::Adapter adapter;
+};
+
+/**
+ * Owns (or wraps) a WebGPU device/queue pair for GPU rendering.
+ *
+ * GeodeDevice is the entry point to the Geode rendering backend. In **headless
+ * mode** (`CreateHeadless`), it creates a WebGPU instance, selects a default
+ * adapter, and creates a device — all without any window system integration.
+ *
+ * In **embedded mode** (`CreateFromExternal`), it wraps a device and queue
+ * already created by the host application. The host retains ownership of the
+ * underlying WebGPU objects; GeodeDevice's destructor will not destroy them.
+ *
+ * Typical headless usage:
  *
  *     auto maybeDevice = GeodeDevice::CreateHeadless();
  *     if (!maybeDevice) {
- *       // Dawn initialization failed — likely no GPU available.
+ *       // No GPU available.
  *       return;
  *     }
- *     GeodeDevice& device = *maybeDevice;
- *     wgpu::Texture target = device.device().CreateTexture(...);
- *     // ... render ...
+ *
+ * Typical embedded usage:
+ *
+ *     GeodeEmbedConfig config;
+ *     config.device = hostDevice;
+ *     config.queue = hostQueue;
+ *     auto geodeDevice = GeodeDevice::CreateFromExternal(config);
  */
 class GeodeDevice {
 public:
   /**
    * Create a headless GeodeDevice.
    *
-   * @return A valid GeodeDevice on success, or an empty unique_ptr if Dawn
-   *   could not create an adapter/device (e.g., no GPU, no driver).
+   * @return A valid GeodeDevice on success, or an empty unique_ptr if the
+   *   runtime could not create an adapter/device (e.g., no GPU, no driver).
    */
   static std::unique_ptr<GeodeDevice> CreateHeadless();
+
+  /**
+   * Create a GeodeDevice wrapping a host-provided device and queue.
+   *
+   * The returned device does NOT own the underlying WebGPU instance, adapter,
+   * device, or queue — the host is responsible for keeping them alive.
+   *
+   * @param config Embedding configuration with valid device/queue handles.
+   * @return A valid GeodeDevice on success, or null if \p config.device or
+   *   \p config.queue is null.
+   */
+  static std::unique_ptr<GeodeDevice> CreateFromExternal(const GeodeEmbedConfig& config);
 
   /// Destructor releases the device and all GPU resources.
   ~GeodeDevice();
@@ -55,8 +112,13 @@ public:
   /// Returns the default queue.
   const wgpu::Queue& queue() const { return queue_; }
 
-  /// Returns the adapter backing this device.
+  /// Returns the adapter backing this device. May be null in embedded mode if
+  /// the host did not provide an adapter.
   const wgpu::Adapter& adapter() const { return adapter_; }
+
+  /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;
+  /// set by the host via `GeodeEmbedConfig::textureFormat` in embedded mode.
+  wgpu::TextureFormat textureFormat() const { return textureFormat_; }
 
   /**
    * Enqueue a GPU buffer for deferred destruction. The buffer handle is kept
@@ -203,8 +265,15 @@ private:
   wgpu::Adapter adapter_;
   wgpu::Device device_;
   wgpu::Queue queue_;
+  wgpu::TextureFormat textureFormat_ = wgpu::TextureFormat::RGBA8Unorm;
 
   bool useAlphaCoverageAA_ = false;
+  bool supportsTimestamps_ = false;
+
+  /// True when this device was created via CreateFromExternal(). The destructor
+  /// skips releasing the instance/adapter since the host owns them.
+  bool external_ = false;
+
   GeodeCounters* counters_ = nullptr;
 
   // Deferred-destroy queues: resources enqueued via deferDestroy() are held

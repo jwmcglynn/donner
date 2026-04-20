@@ -107,7 +107,10 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    visibility = [
+        "//donner/svg/renderer:__subpackages__",
+        "//examples:__pkg__",
+    ],
     deps = [
         ":geode_counters",
         ":geode_wgpu_util",
@@ -585,6 +588,28 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "geode_perf_tests",
     dep = ":geode_perf_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
+)
+
+donner_cc_test(
+    name = "geode_embed_tests_impl",
+    srcs = ["tests/GeodeEmbed_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        ":geode_wgpu_util",
+        "//donner/base",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_embed_tests",
+    timeout = "moderate",
+    dep = ":geode_embed_tests_impl",
     renderer_backend = "geode",
     testonly = 1,
 )

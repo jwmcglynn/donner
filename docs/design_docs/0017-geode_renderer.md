@@ -1563,10 +1563,10 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
 
 ### Phase 6: Embeddability
 
-- [ ] Implement `GeodeEmbedConfig`: host-provided device/queue/format.
-- [ ] Implement `setTargetTexture` for rendering into host-owned textures.
-- [ ] Document embedding API and provide example integration code.
-- [ ] Test embedded mode with a minimal SDL/GLFW host application.
+- [x] Implement `GeodeEmbedConfig`: host-provided device/queue/format.
+- [x] Implement `setTargetTexture` for rendering into host-owned textures.
+- [x] Document embedding API and provide example integration code.
+- [x] Test embedded mode with a minimal SDL/GLFW host application.
 
 ### Phase 7 (v2): Filter Effects
 
