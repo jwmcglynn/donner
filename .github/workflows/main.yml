@@ -71,9 +71,168 @@ jobs:
 
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
 
-  linux:
+  determine-targets:
     runs-on: ubuntu-24.04
     needs: gatekeeper
+    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
+    env:
+      BAZEL_DIFF_VERSION: "18.1.0"
+    outputs:
+      fallback: ${{ steps.determine.outputs.fallback }}
+      affected: ${{ steps.determine.outputs.affected }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Download bazel-diff
+        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_VERSION}/bazel-diff_deploy.jar"
+
+      - id: determine
+        name: Determine affected Bazel targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "Non-PR event; keeping full //... coverage."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          eval "$(
+            python3 - <<'PY'
+            import json
+            import os
+            import shlex
+
+            with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
+                event = json.load(f)
+
+            pr = event.get("pull_request", {})
+            labels = [label.get("name", "") for label in pr.get("labels", [])]
+            values = {
+                "BASE_SHA": pr.get("base", {}).get("sha", ""),
+                "HEAD_SHA": pr.get("head", {}).get("sha", ""),
+                "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false",
+            }
+
+            for key, value in values.items():
+                print(f"{key}={shlex.quote(value)}")
+            PY
+          )"
+
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "Missing PR base/head SHA; falling back to //...."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$FORCE_FULL_TEST" == "true" ]]; then
+            echo "ci:full-test label present; forcing full //... coverage."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+
+          if [[ -z "$changed_files" ]]; then
+            echo "No changed files detected; falling back to //...."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          should_fallback=false
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              MODULE.bazel|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*)
+                echo "Infra change requires full //... coverage: $path"
+                should_fallback=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          if [[ "$should_fallback" == "true" ]]; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          work_dir="$(mktemp -d)"
+          base_dir="$work_dir/base"
+          head_dir="$work_dir/head"
+          cleanup() {
+            git worktree remove --force "$base_dir" 2>/dev/null || true
+            git worktree remove --force "$head_dir" 2>/dev/null || true
+            rm -rf "$work_dir"
+          }
+          trap cleanup EXIT
+
+          git worktree add --detach "$base_dir" "$BASE_SHA"
+          git worktree add --detach "$head_dir" "$HEAD_SHA"
+
+          java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+            -w "$base_dir" \
+            -b bazelisk \
+            "$work_dir/base-hashes.json"
+
+          java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+            -w "$head_dir" \
+            -b bazelisk \
+            "$work_dir/head-hashes.json"
+
+          java -jar "$RUNNER_TEMP/bazel-diff.jar" get-impacted-targets \
+            -w "$head_dir" \
+            -b bazelisk \
+            -sh "$work_dir/base-hashes.json" \
+            -fh "$work_dir/head-hashes.json" \
+            -o "$work_dir/affected.txt"
+
+          affected="$(
+            python3 - "$work_dir/affected.txt" <<'PY'
+            import pathlib
+            import sys
+
+            path = pathlib.Path(sys.argv[1])
+            labels = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            print(" ".join(labels))
+            PY
+          )"
+
+          if [[ -z "$affected" ]]; then
+            echo "bazel-diff produced no affected targets; falling back to //...."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "fallback=false" >> "$GITHUB_OUTPUT"
+          echo "affected=$affected" >> "$GITHUB_OUTPUT"
+
+  linux:
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper, determine-targets]
     if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
     steps:
       - name: Checkout
@@ -102,17 +261,32 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk build --config=ci $TARGETS
 
       - name: Test
+        shell: bash
         run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
           bazelisk test --config=ci --test_output=errors \
-            //...
+            $TARGETS
 
 
   macos:
     runs-on: macos-15
-    needs: gatekeeper
+    needs: [gatekeeper, determine-targets]
     if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
@@ -128,10 +302,26 @@ jobs:
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk build --config=ci $TARGETS
 
       - name: Test
-        run: bazelisk test --config=ci --test_output=errors //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk test --config=ci --test_output=errors $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
