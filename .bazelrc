@@ -165,6 +165,16 @@ build:linux --config=host_libstdc++ --copt=-fno-modules
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
 
+# apple_support's `wrapped_clang` fails with "Error: DEVELOPER_DIR not set"
+# when the action runs outside Bazel's DarwinSandboxedSpawnRunner — notably
+# the remote spawn runner used by `--config=re` dispatching to bazel-re2.
+# Propagate an explicit path (standard Xcode install location on both klein
+# and the bazel-re2 worker) so the wrapper can locate Xcode in any spawn
+# strategy. Local darwin-sandbox builds already had this set implicitly;
+# making it explicit here changes nothing for them but unblocks RE.
+build:macos --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+build:macos --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
 build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
