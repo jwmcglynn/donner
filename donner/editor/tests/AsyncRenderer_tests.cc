@@ -1240,16 +1240,20 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   // boundary pair survived, so click-D and click-O both land around
   // the same "first promote on this shape" cost.
   //
-  // Budget: 1500 ms. That's loose enough to pass on today's code (both
-  // clicks ~1.3 s at 1784x1024) but tight enough to catch the
-  // regression that used to put click-O at ~3.7 s. The remaining 1.3 s
-  // is dominated by the first-promote segment rasterize cascade — a
+  // Budget: 2500 ms. Dev hardware lands both clicks ~1.3 s at
+  // 1784x1024; shared GitHub macOS runners land ~1.6-1.7 s with
+  // occasional spikes to ~2.0 s under load, so 1500 ms flaked in CI
+  // even though the code itself is behaving. 2500 ms stays tight
+  // enough to catch the regression this test exists for (click-O at
+  // ~3.7 s before the `demoteEntity` fix) while tolerating runner
+  // shape. The `click-O < 2 × click-D` ratio assertion below is the
+  // stricter regression gate and is unaffected by runner speed. A
   // follow-up optimization (incremental segment split around the new
-  // layer) can pull both clicks into the 100-300 ms range that the
-  // user ultimately wants.
+  // layer) can pull both clicks into the 100-300 ms range the user
+  // ultimately wants; when that lands, drop this budget accordingly.
   for (const auto& t : timings) {
     if (t.label == "click-D (first promote)" || t.label == "click-O (second promote)") {
-      EXPECT_LT(t.wallMs, 1500.0)
+      EXPECT_LT(t.wallMs, 2500.0)
           << t.label << " — slow-frame diagnostic should have fired to stderr. "
              "If this trips, the most common regression is re-introducing the "
              "eager `rootDirty_ = true` / segment-cache wipe in `CompositorController"
