@@ -286,47 +286,40 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // feColorMatrix tests that use linear gradients: Geode gradient rendering
-  // produces different pixel output in edge cases (invalid type, too many
-  // values, missing type attribute).
+  // feColorMatrix/invalid-type and without-a-type: Geode still disagrees with
+  // tiny-skia on the fallback-matrix path (probably the identity-matrix default
+  // applied at a different colorspace stage). The color-space conversion work
+  // landed here already unlocked `type=matrix-with-too-many-values`; these two
+  // remain a follow-up.
   if (category == "filters/feColorMatrix" &&
-      (filename == "invalid-type.svg" || filename == "type=matrix-with-too-many-values.svg" ||
-       filename == "without-a-type.svg")) {
+      (filename == "invalid-type.svg" || filename == "without-a-type.svg")) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "Bug: gradient + feColorMatrix edge case mismatch (Geode)");
+                       "TODO(geode): feColorMatrix identity-fallback path "
+                       "diverges from tiny-skia on invalid/missing type "
+                       "(gradient input interaction)");
     };
   }
 
-  // feMorphology huge radius exceeds the Geode compute shader kernel cap (31).
-  if (category == "filters/feMorphology" && filename == "huge-radius.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Not impl: feMorphology radius > 31 (Geode kernel cap)");
-    };
-  }
-
-  // feComponentTransfer mixed-types: uses gradients as input which produce
-  // different pixel output on Geode (known gradient rendering limitation).
+  // feComponentTransfer/mixed-types: gradient input + mixed channel-function
+  // types still diverges after the color-space conversion fix. Narrower
+  // follow-up.
   if (category == "filters/feComponentTransfer" && filename == "mixed-types.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "Bug: gradient input + feComponentTransfer mismatch (Geode)");
+                       "TODO(geode): feComponentTransfer gradient + mixed "
+                       "per-channel types still diverges");
     };
   }
 
-  // feConvolveMatrix edge cases: invalid or unusual parameters that exercise
-  // parser/validation paths with different Geode GPU vs CPU behavior.
-  if (category == "filters/feConvolveMatrix" &&
-      (filename == "divisor=0.svg" || filename == "edgeMode=none.svg" ||
-       filename == "kernelMatrix-with-not-enough-values.svg" ||
-       filename == "kernelMatrix-with-too-many-values.svg" ||
-       filename == "order-with-a-negative-value-1.svg" ||
-       filename == "order-with-a-negative-value-2.svg" || filename == "order=0.svg" ||
-       filename == "targetX=-1.svg" || filename == "targetX=3.svg")) {
+  // feConvolveMatrix/edgeMode=none: `edgeMode="none"` should make out-of-bounds
+  // samples transparent-black; Geode samples still wrap/clamp. Follow-up —
+  // targetX offsets are already fixed.
+  if (category == "filters/feConvolveMatrix" && filename == "edgeMode=none.svg") {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "Bug: feConvolveMatrix edge case handling (Geode)");
+                       "TODO(geode): feConvolveMatrix edgeMode=none samples "
+                       "still wrap/clamp instead of zero");
     };
   }
 

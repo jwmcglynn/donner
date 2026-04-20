@@ -307,6 +307,13 @@ private:
   wgpu::Texture applySubregionClip(const wgpu::Texture& input, const Transform2d& filterFromDevice,
                                    double usrX0, double usrY0, double usrX1, double usrY1);
 
+  /// Convert a texture between sRGB and linearRGB color spaces.
+  /// Used to implement `color-interpolation-filters: linearRGB` (the SVG default).
+  /// @param input The input texture in premultiplied sRGB (or linear, for the reverse).
+  /// @param srgbToLinear True to convert sRGB→linear, false for linear→sRGB.
+  /// @return A new texture in the target color space.
+  wgpu::Texture applyColorSpaceConversion(const wgpu::Texture& input, bool srgbToLinear);
+
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
@@ -380,6 +387,10 @@ private:
   // Per-primitive subregion clipping pipeline (input + output + uniform).
   wgpu::ComputePipeline subregionClipPipeline_;
   wgpu::BindGroupLayout subregionClipBindGroupLayout_;
+
+  // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
+  wgpu::ComputePipeline colorSpaceConvertPipeline_;
+  wgpu::BindGroupLayout colorSpaceConvertBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

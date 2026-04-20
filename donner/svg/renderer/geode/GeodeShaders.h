@@ -422,4 +422,22 @@ wgpu::ShaderModule createFilterTileShader(const wgpu::Device& device);
  */
 wgpu::ShaderModule createFilterSubregionClipShader(const wgpu::Device& device);
 
+/**
+ * Compile the sRGB↔linearRGB color space conversion compute shader.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_color_space_convert.wgsl` via the `embed_resources()` Bazel
+ * rule. The shader converts premultiplied sRGB textures to premultiplied linear
+ * (or vice-versa) to implement `color-interpolation-filters: linearRGB`.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: Params;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterColorSpaceConvertShader(const wgpu::Device& device);
+
 }  // namespace donner::geode

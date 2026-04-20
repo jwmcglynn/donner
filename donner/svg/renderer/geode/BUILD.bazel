@@ -396,6 +396,15 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+embed_resources(
+    name = "filter_color_space_convert_wgsl",
+    header_output = "embed_resources/FilterColorSpaceConvertWgsl.h",
+    resources = {
+        "kFilterColorSpaceConvertWgsl": "shaders/filter_color_space_convert.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -417,6 +426,7 @@ donner_cc_library(
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
+        ":filter_color_space_convert_wgsl",
         ":filter_subregion_clip_wgsl",
         ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",

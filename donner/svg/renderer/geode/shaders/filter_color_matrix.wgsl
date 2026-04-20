@@ -38,13 +38,34 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
   let c = textureLoad(input_tex, coord, 0);
 
-  // Matrix-vector multiply: result = col0*R + col1*G + col2*B + col3*A + col4.
-  let result = params.col0 * c.r
-             + params.col1 * c.g
-             + params.col2 * c.b
-             + params.col3 * c.a
+  // Un-premultiply: feColorMatrix is defined on straight-alpha values per SVG 2.
+  var straight: vec4f;
+  if (c.a > 0.0) {
+    straight = vec4f(c.rgb / c.a, c.a);
+  } else {
+    // Transparent pixel: apply matrix to (0,0,0,0).
+    let ca = clamp(params.col4.w, 0.0, 1.0);
+    if (ca == 0.0) {
+      textureStore(output_tex, coord, vec4f(0.0));
+      return;
+    }
+    let result = clamp(params.col4, vec4f(0.0), vec4f(1.0));
+    textureStore(output_tex, coord, vec4f(result.rgb * ca, ca));
+    return;
+  }
+
+  // Matrix-vector multiply on straight-alpha values:
+  //   result = col0*R + col1*G + col2*B + col3*A + col4.
+  let result = params.col0 * straight.r
+             + params.col1 * straight.g
+             + params.col2 * straight.b
+             + params.col3 * straight.a
              + params.col4;
 
   // Clamp to [0, 1] per SVG spec.
-  textureStore(output_tex, coord, clamp(result, vec4f(0.0), vec4f(1.0)));
+  let clamped = clamp(result, vec4f(0.0), vec4f(1.0));
+
+  // Re-premultiply.
+  let newAlpha = clamped.a;
+  textureStore(output_tex, coord, vec4f(clamped.rgb * newAlpha, newAlpha));
 }

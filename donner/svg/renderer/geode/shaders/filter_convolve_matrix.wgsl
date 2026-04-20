@@ -61,19 +61,35 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     for (var i = 0; i < params.order_x; i = i + 1) {
       let src = coord + vec2i(i - params.target_x, j - params.target_y);
       let sample = sampleEdge(src, size);
-      let k = params.kernel[j * params.order_x + i];
-      sum_rgb = sum_rgb + sample.rgb * k;
+
+      // SVG spec: kernel is rotated 180° relative to source/destination.
+      let ki = (params.order_y - 1 - j) * params.order_x + (params.order_x - 1 - i);
+      let k = params.kernel[ki];
+
+      if (params.preserve_alpha == 1u && sample.a > 0.0) {
+        // preserveAlpha: convolve un-premultiplied color values.
+        let straight_rgb = sample.rgb / sample.a;
+        sum_rgb = sum_rgb + straight_rgb * k;
+      } else {
+        sum_rgb = sum_rgb + sample.rgb * k;
+      }
       sum_a = sum_a + sample.a * k;
     }
   }
 
-  var result: vec4f;
-  result = vec4f(sum_rgb / params.divisor + vec3f(params.bias),
-                 sum_a / params.divisor + params.bias);
+  let src_alpha = textureLoad(input_tex, coord, 0).a;
 
+  var result: vec4f;
   if (params.preserve_alpha == 1u) {
-    let original = textureLoad(input_tex, coord, 0);
-    result.a = original.a;
+    // preserveAlpha: bias is unscaled, re-premultiply with source alpha.
+    let rgb = clamp(sum_rgb / params.divisor + vec3f(params.bias), vec3f(0.0), vec3f(1.0));
+    result = vec4f(rgb * src_alpha, src_alpha);
+  } else {
+    // Standard: bias scaled by source alpha, clamp RGB to [0, outA].
+    let biased = params.bias * src_alpha;
+    let out_a = clamp(sum_a / params.divisor + biased, 0.0, 1.0);
+    let out_rgb = clamp(sum_rgb / params.divisor + vec3f(biased), vec3f(0.0), vec3f(out_a));
+    result = vec4f(out_rgb, out_a);
   }
 
   textureStore(output_tex, coord, clamp(result, vec4f(0.0), vec4f(1.0)));

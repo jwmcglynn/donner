@@ -286,6 +286,14 @@ struct SubregionClipParams {
   uint32_t pad1;
 };
 
+/// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
+struct ColorSpaceConvertParams {
+  uint32_t direction;  // 0 = sRGB→linear, 1 = linear→sRGB.
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
+};
+
 /// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
 struct SpecularLightingParams {
   float surfaceScale;
@@ -621,7 +629,7 @@ ColorMatrixParams buildColorMatrix(
 
   switch (primitive.type) {
     case Type::Matrix: {
-      if (primitive.values.size() >= 20) {
+      if (primitive.values.size() == 20) {
         // Row-major 4x5 → column-major 5×4.
         for (int row = 0; row < 4; ++row) {
           params.col0[row] = static_cast<float>(primitive.values[row * 5 + 0]);
@@ -1129,6 +1137,15 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         sizeof(SubregionClipParams));
     subregionClipBindGroupLayout_ = bgl;
     subregionClipPipeline_ = pipeline;
+  }
+
+  // --- sRGB↔linearRGB color space conversion pipeline ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterColorSpaceConvert", createFilterColorSpaceConvertShader(dev),
+        sizeof(ColorSpaceConvertParams));
+    colorSpaceConvertBindGroupLayout_ = bgl;
+    colorSpaceConvertPipeline_ = pipeline;
   }
 }
 
@@ -1806,33 +1823,64 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     return input;
   }
 
-  // Cap total kernel samples at 63×63 = 3969.
+  // Morphology is separable: min/max over a 2D rectangle equals
+  // row-wise min/max followed by column-wise min/max. Decompose into
+  // horizontal (X-only) then vertical (Y-only) passes, each capped at
+  // kMaxRadius per pass to stay within the shader's loop limit.
   constexpr int kMaxRadius = 31;
-  if (pixelRadiusX > kMaxRadius || pixelRadiusY > kMaxRadius) {
-    // TODO(geode): Support larger morphology kernels via separable passes.
-    if (verbose_) {
-      std::cerr << "GeodeFilterEngine: feMorphology radius ("
-                << pixelRadiusX << "×" << pixelRadiusY
-                << ") exceeds cap (" << kMaxRadius << "); passthrough\n";
-    }
-    return input;
+  wgpu::Texture current = input;
+
+  // Horizontal passes (Y radius = 0).
+  int remainX = std::max(pixelRadiusX, 0);
+  while (remainX > 0) {
+    const int passX = std::min(remainX, kMaxRadius);
+
+    wgpu::Texture output =
+        createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
+
+    using Op = svg::components::filter_primitive::Morphology::Operator;
+    MorphologyParams params{};
+    params.radiusX = passX;
+    params.radiusY = 0;
+    params.op = primitive.op == Op::Dilate ? 1u : 0u;
+    params.pad = 0;
+
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+
+    dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, current,
+                               output, uniformBuffer, sizeof(MorphologyParams),
+                               "FilterMorphologyPassX");
+    current = output;
+    remainX -= passX;
   }
 
-  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
+  // Vertical passes (X radius = 0).
+  int remainY = std::max(pixelRadiusY, 0);
+  while (remainY > 0) {
+    const int passY = std::min(remainY, kMaxRadius);
 
-  using Op = svg::components::filter_primitive::Morphology::Operator;
-  MorphologyParams params{};
-  params.radiusX = pixelRadiusX;
-  params.radiusY = pixelRadiusY;
-  params.op = primitive.op == Op::Dilate ? 1u : 0u;
-  params.pad = 0;
+    wgpu::Texture output =
+        createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+    using Op = svg::components::filter_primitive::Morphology::Operator;
+    MorphologyParams params{};
+    params.radiusX = 0;
+    params.radiusY = passY;
+    params.op = primitive.op == Op::Dilate ? 1u : 0u;
+    params.pad = 0;
 
-  dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, input, output,
-                             uniformBuffer, sizeof(MorphologyParams), "FilterMorphologyPass");
-  return output;
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+
+    dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, current,
+                               output, uniformBuffer, sizeof(MorphologyParams),
+                               "FilterMorphologyPassY");
+    current = output;
+    remainY -= passY;
+  }
+
+  return current;
 }
 
 wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
@@ -1909,38 +1957,45 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
-  // Cap kernel at 5×5.
-  if (primitive.orderX > 5 || primitive.orderY > 5 || primitive.orderX <= 0 ||
-      primitive.orderY <= 0) {
-    // TODO(geode): Support larger convolution kernels.
-    if (verbose_) {
-      std::cerr << "GeodeFilterEngine: feConvolveMatrix kernel ("
-                << primitive.orderX << "×" << primitive.orderY
-                << ") outside 1..5 range; passthrough\n";
-    }
-    return input;
-  }
+  const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
+  const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
+  const int requiredSize = primitive.orderX * primitive.orderY;
 
-  wgpu::Texture output =
-      createIntermediateTexture(dev, width, height, "FilterConvolveMatrixOutput");
-
-  // Compute effective divisor (default = sum of kernel values, or 1 if sum is 0).
+  // Compute effective divisor.
   double divisor = 1.0;
   if (primitive.divisor.has_value()) {
     divisor = primitive.divisor.value();
-    if (divisor == 0.0) {
-      divisor = 1.0;
-    }
   } else {
     double sum = 0.0;
     for (double v : primitive.kernelMatrix) {
       sum += v;
     }
-    divisor = (sum != 0.0) ? sum : 1.0;
+    divisor = (std::abs(sum) < 1e-10) ? 1.0 : sum;
   }
 
-  const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
-  const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
+  // SVG spec validation: invalid parameters produce transparent black.
+  // Matches the CPU reference's guard in FilterGraph.cpp.
+  const bool invalid = primitive.orderX <= 0 || primitive.orderY <= 0 ||
+                        primitive.orderX > 5 || primitive.orderY > 5 ||
+                        static_cast<int>(primitive.kernelMatrix.size()) != requiredSize ||
+                        targetX < 0 || targetX >= primitive.orderX ||
+                        targetY < 0 || targetY >= primitive.orderY ||
+                        (primitive.divisor.has_value() && primitive.divisor.value() == 0.0);
+
+  if (invalid) {
+    if (verbose_) {
+      std::cerr << "GeodeFilterEngine: feConvolveMatrix invalid params ("
+                << primitive.orderX << "×" << primitive.orderY
+                << ", targetX=" << targetX << ", targetY=" << targetY
+                << ", divisor=" << divisor
+                << "); outputting transparent black\n";
+    }
+    // Return a transparent texture (matches CPU reference behavior).
+    return createIntermediateTexture(dev, width, height, "FilterConvolveMatrixTransparent");
+  }
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterConvolveMatrixOutput");
 
   ConvolveParams params{};
   params.orderX = primitive.orderX;
@@ -2674,6 +2729,27 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(const wgpu::Texture& input,
   dispatchInputOutputUniform(device_, subregionClipBindGroupLayout_, subregionClipPipeline_, input,
                              output, uniformBuffer, sizeof(SubregionClipParams),
                              "FilterSubregionClipPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(const wgpu::Texture& input,
+                                                           bool srgbToLinear) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterColorSpaceConvertOutput");
+
+  ColorSpaceConvertParams params{};
+  params.direction = srgbToLinear ? 0u : 1u;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "ColorSpaceConvertParamsUniform");
+
+  dispatchInputOutputUniform(device_, colorSpaceConvertBindGroupLayout_,
+                             colorSpaceConvertPipeline_, input, output, uniformBuffer,
+                             sizeof(ColorSpaceConvertParams), "FilterColorSpaceConvertPass");
   return output;
 }
 
