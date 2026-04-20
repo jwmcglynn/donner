@@ -32,7 +32,13 @@
 
 namespace {
 
-constexpr unsigned int kDefaultTimeoutSeconds = 30;
+// 60 s budget by default: tight enough to catch a real driver hang quickly
+// but loose enough that slow-software-renderer paths (Mesa llvmpipe on CI,
+// for example) can legitimately finish a heavy filter primitive without
+// tripping the watchdog. Override with `--donner_test_timeout_seconds=N`
+// or `DONNER_TEST_TIMEOUT_SECONDS=N` if a test is genuinely faster or
+// needs even more slack.
+constexpr unsigned int kDefaultTimeoutSeconds = 60;
 constexpr int kTimeoutExitCode = 124;
 
 // Ownership: set on the main thread in `OnTestStart`, read from the signal
