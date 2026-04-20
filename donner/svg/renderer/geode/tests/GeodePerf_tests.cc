@@ -387,5 +387,79 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
          "fill- or stroke-slot cache missed despite zero geometry changes.";
 }
 
+// ---------------------------------------------------------------------------
+// Milestone 4.2: Transient render-target pool — zero-alloc repeat render.
+//
+// Per design doc 0030 §M4.2: a size-keyed free list for layer / filter /
+// mask / clip-mask scratch textures. Combined with M4.1 (target + MSAA
+// reuse) and the per-encoder persistent dummy texture (M1), a repeat
+// render of the same document at the same size should allocate zero
+// textures on frame 2.
+// ---------------------------------------------------------------------------
+
+TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroTextures) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
+  printCounters("SimpleShapes_NoDirtyPath_ZeroTextures (frame2)", c);
+
+  // Exercises only the main target / MSAA pair; no isolated layers.
+  // Any texture allocation here means M4.1 regressed or a dummy is
+  // leaking per-frame.
+  EXPECT_EQ(c.textureCreates, 0u)
+      << "Texture allocation on unchanged second render: main target or "
+         "dummy texture leaking across frames.";
+}
+
+TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = countersForSecondRender(kModerateSvg, device);
+  printCounters("Moderate_NoDirtyPath_ZeroTextures (frame2)", c);
+
+  // Moderate fixture has `<path opacity="0.8">` which triggers a
+  // `pushIsolatedLayer` / `popIsolatedLayer` round-trip per frame. The
+  // layer allocates an RGBA8 resolve + 4× MSAA companion — M4.2 must
+  // pool and reuse both.
+  EXPECT_EQ(c.textureCreates, 0u)
+      << "Isolated-layer texture leak on unchanged second render. "
+         "Layer push/pop should draw from the M4.2 texture pool.";
+}
+
+TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
+  if (svg.empty()) {
+    GTEST_SKIP() << "testdata/lion.svg not readable.";
+    return;
+  }
+
+  const geode::GeodeCounters c = countersForSecondRender(svg, device);
+  printCounters("Lion_NoDirtyPath_ZeroTextures (frame2)", c);
+
+  EXPECT_EQ(c.textureCreates, 0u) << "Texture allocation on unchanged second render of lion.svg.";
+}
+
+TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  if (svg.empty()) {
+    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable.";
+    return;
+  }
+
+  const geode::GeodeCounters c = countersForSecondRender(svg, device);
+  printCounters("GhostscriptTiger_NoDirtyPath_ZeroTextures (frame2)", c);
+
+  EXPECT_EQ(c.textureCreates, 0u)
+      << "Texture allocation on unchanged second render of Ghostscript_Tiger.svg.";
+}
+
 }  // namespace
 }  // namespace donner::svg
