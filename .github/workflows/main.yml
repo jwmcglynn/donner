@@ -71,20 +71,6 @@ jobs:
 
       - name: Test
         run: bazelisk test --config=ci --test_output=errors //...
-
-      # Run fuzzers on macOS via the LLVM 21 toolchain (Apple Clang lacks
-      # libclang_rt.fuzzer_osx.a, but --config=asan-fuzzer activates
-      # --config=latest_llvm which does provide it). This closes the gap where
-      # bazel test //... on macOS skips fuzzer targets.
-      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          bazelisk test \
-            --config=asan-fuzzer \
-            --test_output=errors \
-            --test_tag_filters=fuzz_target \
-            --build_tag_filters=fuzz_target \
-            //... || true
-        # Marked informational for now: fuzzer tests were previously macOS-disabled
-        # so we don't want to break macOS CI during the rollout. Remove `|| true`
-        # and the comment once the fuzzer corpus passes cleanly on macOS.
+        # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
+        # nightly cron so it doesn't gate every main push. PRs touching
+        # fuzzer code re-trigger that workflow via path filter.

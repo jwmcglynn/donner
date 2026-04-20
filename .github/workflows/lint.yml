@@ -6,14 +6,55 @@ on:
   pull_request:
     branches: [main]
 
-# Fast lint job covering checks that don't live inside `bazel test //...`:
+# Fast lint jobs covering checks that don't live inside `bazel test //...`:
 #
+# - clang-format (changed C++ files only — runs in <30s for typical PRs)
 # - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
 #   prevents running --check from inside bazel test; see Phase 3 design doc)
 # - banned source patterns lint is NOT here: it runs automatically as a
 #   py_test emitted by donner_cc_library/test/binary, so it's covered by
 #   the main CI bazel test step.
 jobs:
+  clang-format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need history to diff against the merge base. Depth 50 covers
+          # typical PR sizes; if a PR has > 50 commits we just check
+          # the latest 50.
+          fetch-depth: 50
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Check formatting on changed C++ files
+        run: |
+          # Determine the base ref. PR events expose it directly; pushes
+          # diff against origin/main (HEAD~1 fallback for the very first
+          # commit on a branch).
+          if [[ -n "${{ github.event.pull_request.base.sha }}" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            git fetch --depth=50 origin main 2>/dev/null || true
+            BASE="$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD~1)"
+          fi
+
+          MODIFIED="$(git diff --name-only --diff-filter=ACMR "${BASE}" HEAD \
+            | grep -E '\.(cc|h|hpp|cpp)$' \
+            | grep -v '^third_party/' || true)"
+
+          if [[ -z "${MODIFIED}" ]]; then
+            echo "No modified C++ files; nothing to check."
+            exit 0
+          fi
+
+          echo "Checking ${MODIFIED}" | tr ' ' '\n'
+          echo "${MODIFIED}" | xargs clang-format --dry-run -Werror
+
   cmake-validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
