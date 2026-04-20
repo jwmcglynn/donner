@@ -1,0 +1,129 @@
+name: Sanitizers
+
+# Runs the sanitizer variants on a nightly schedule, but first checks whether
+# main has advanced since the last successful run so idle days don't consume CI.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  gatekeeper:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Decide whether nightly sanitizer jobs should run
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "Manual dispatch requested; running sanitizer jobs."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin main
+          main_sha="$(git rev-parse origin/main)"
+          last_success_sha="$(gh run list \
+            --workflow=sanitizers.yml \
+            --status=success \
+            --limit=1 \
+            --json headSha \
+            --jq '.[0].headSha')"
+
+          if [[ -z "$last_success_sha" || "$last_success_sha" == "null" ]]; then
+            echo "No previous successful sanitizers.yml run found; running sanitizer jobs."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$last_success_sha" == "$main_sha" ]]; then
+            echo "origin/main has not advanced since the last successful sanitizers.yml run; skipping."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "origin/main advanced from $last_success_sha to $main_sha; running sanitizer jobs."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  asan:
+    runs-on: ubuntu-24.04
+    needs: gatekeeper
+    if: needs.gatekeeper.outputs.should_run == 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Test //donner/... with ASan
+        run: |
+          bazelisk test \
+            --config=asan \
+            --test_output=errors \
+            //donner/...
+
+  ubsan:
+    runs-on: ubuntu-24.04
+    needs: gatekeeper
+    if: needs.gatekeeper.outputs.should_run == 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-ubsan
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Test //donner/... with UBSan
+        run: |
+          bazelisk test \
+            --config=ubsan \
+            --test_output=errors \
+            //donner/...
