@@ -434,17 +434,14 @@ donner_variant_cc_test(
         # everything else (fills, strokes, gradients, patterns, images,
         # shapes, clipping, masking, markers, isolation) runs live.
         #
-        # Gated off on both Linux and macOS CI:
-        # - `no_linux_ci`: Mesa llvmpipe Vulkan 25.2.8 crashes with
-        #   `corrupted double-linked list` after ~130 filter compute
-        #   dispatches in a single process — issue #551.
-        # - `no_macos_ci`: Metal crashes at `FiltersFeImage/chained_feImage`
-        #   (recursive fragment references). Unique to the resvg suite;
-        #   `renderer_geode_tests` / `renderer_geode_golden_tests` pass
-        #   cleanly on macOS Metal so they keep running there.
-        # Follow-up tracking: root-cause the chained-feImage Metal path.
+        # `no_linux_ci` tag: excluded from Linux CI via
+        # `--test_tag_filters=-no_linux_ci` because Mesa llvmpipe Vulkan
+        # 25.2.8 (GHA Ubuntu 24.04 default) crashes with
+        # `corrupted double-linked list` after ~130 filter compute dispatches
+        # in a single process — see issue #551. macOS CI (Metal backend) is
+        # not affected and still runs the Geode variant.
         {"name": "geode", "backend": "geode", "text": "true", "text_full": "false",
-         "tags": ["no_linux_ci", "no_macos_ci"]},
+         "tags": ["no_linux_ci"]},
     ],
 )
 
