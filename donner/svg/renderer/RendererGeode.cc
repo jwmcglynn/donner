@@ -1115,39 +1115,33 @@ struct RendererGeode::Impl {
     }
   }
 
-  ~Impl() {
-    // Disconnect the M2 cache-invalidation listener before the Impl is
-    // gone. Connection + disconnection are both no-ops when no registry
-    // was ever seen (e.g., a headless renderer that never drew anything).
-    //
-    // We rely on the normal lifecycle — SVGDocument outlives the
-    // renderer that drew it. In the reverse case (registry destroyed
-    // first) this disconnect would UB on a freed registry; tests that
-    // invert the lifetime don't exist today and would need to handle
-    // their own cleanup.
-    if (cacheInvalidationRegistry) {
-      cacheInvalidationRegistry->on_update<components::ComputedPathComponent>()
-          .disconnect<&Impl::onComputedPathChanged>();
-      cacheInvalidationRegistry->on_destroy<components::ComputedPathComponent>()
-          .disconnect<&Impl::onComputedPathChanged>();
-      cacheInvalidationRegistry = nullptr;
-    }
-  }
+  // No custom destructor: the M2 cache-invalidation listener is a
+  // free function with no dependency on `this`, so the natural entt
+  // lifecycle is correct — connections die with the `Registry` they
+  // live on. Calling `.disconnect<&fn>()` from a dtor would UB when
+  // the registry is destroyed BEFORE the renderer (common in tests
+  // where an `SVGDocument` is declared after its `Renderer` in the
+  // same scope, so the document destructs first). Leaving the
+  // connection attached is harmless: either the registry is alive
+  // and a subsequent geometry change fires `remove<GeodePathCacheComponent>`
+  // (which is a no-op if the component isn't present), or the
+  // registry is gone and no signal will ever fire again.
 };
 
 void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
   if (&registry == cacheInvalidationRegistry) {
     return;
   }
-  if (cacheInvalidationRegistry) {
-    cacheInvalidationRegistry->on_update<components::ComputedPathComponent>()
-        .disconnect<&Impl::onComputedPathChanged>();
-    cacheInvalidationRegistry->on_destroy<components::ComputedPathComponent>()
-        .disconnect<&Impl::onComputedPathChanged>();
-    // Reconnecting to a fresh registry: leave the old one's cache
-    // components in place (they die with the old registry) and start
-    // fresh on the new one.
-  }
+  // When the renderer switches documents (rare — test fixtures reusing
+  // one renderer across parses), we do NOT disconnect from the old
+  // registry. There's no safe way to know whether the old registry is
+  // still alive at this point, and `disconnect<>()` on a freed
+  // registry is UB. Leaving the old connection attached is harmless:
+  // our free-function listener is fine to outlive the renderer
+  // (see the `~Impl` comment above). Worst case: the old document
+  // keeps paying one signal dispatch on geometry changes; the removal
+  // call is a cheap no-op because the old `GeodePathCacheComponent`
+  // entries aren't being re-installed.
   registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   cacheInvalidationRegistry = &registry;

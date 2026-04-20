@@ -170,8 +170,13 @@ algorithm.
   - [x] Tightened Milestone 0 counter ceilings in `GeodePerf_tests.cc`:
     Lion `bufferCreates` ceiling now 10 (down from 800); Lion
     `bindgroupCreates` ceiling stays 200 pending M1.f.2.
-- [ ] Milestone 2: `GeodePathCacheComponent` — cache the CPU encode
-  (Tier 3 findings, maps to 0017 Phase 5 bullet 1).
+- [x] Milestone 2: `GeodePathCacheComponent` — cache the CPU encode
+  (Tier 3 findings, maps to 0017 Phase 5 bullet 1). _Landed
+  2026-04-20._ Observed frame-2 `pathEncodes` deltas:
+  SimpleShapes 3→0, Moderate 2→0, Lion 132→0,
+  Ghostscript_Tiger 305→0. GPU-arena-handle retention (original
+  bullet 3) deferred to a follow-up PR; `<use>` instancing
+  stays on Milestone 6.
   - Cache only the final `EncodedPath`, not the intermediate
     `quadPath` / `monotonicPath`. The intermediate stages are fused
     inside `GeodePathEncoder::encode` and retaining them buys
