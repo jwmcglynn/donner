@@ -61,10 +61,11 @@ struct CompositorTile {
   /// for a static segment tile.
   Entity layerEntity = entt::null;
 
-  /// Compose transform the tile should be drawn with. Identity for
-  /// segments and for non-drag layers; pure translation for the drag
-  /// layer when the fast path has updated its offset.
-  Transform2d compositionTransform;
+  /// `canvasFromBitmap` transform the tile should be drawn with:
+  /// maps the bitmap's local pixel grid into canvas pixels. Identity
+  /// for segments and for non-drag layers; pure translation for the
+  /// drag layer when the fast path has updated its offset.
+  Transform2d canvasFromBitmap;
 };
 
 /**
@@ -442,7 +443,7 @@ private:
   /// walk its DOM subtree and mark every static segment that contains
   /// an RIC-bearing descendant as dirty. Stops descent at subtrees
   /// rooted in another promoted layer (those are composed via their
-  /// layer's `compositionTransform`, not re-rasterize). Called AFTER
+  /// layer's `canvasFromBitmap`, not re-rasterize). Called AFTER
   /// `resyncSegmentsToLayerSet` so the dirty flags aren't overwritten
   /// by the resync's default-per-bitmap-validity logic.
   ///

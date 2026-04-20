@@ -95,13 +95,18 @@ public:
   /// Returns the cached bitmap for this layer. Empty if not yet rasterized.
   [[nodiscard]] const RendererBitmap& bitmap() const { return bitmap_; }
 
-  /// Returns the composition transform applied during blitting.
-  [[nodiscard]] const Transform2d& compositionTransform() const { return compositionTransform_; }
+  /// Returns the `canvasFromBitmap` transform applied during blitting.
+  /// Maps bitmap-local pixel coordinates (origin at the bitmap's top
+  /// left, i.e. the rasterize-time coordinate frame) into canvas pixels.
+  /// Identity when the DOM entity has not moved since rasterization; a
+  /// pure translation during the bitmap-reuse fast path; other
+  /// transforms force re-rasterization before compose.
+  [[nodiscard]] const Transform2d& canvasFromBitmap() const { return canvasFromBitmap_; }
 
   /// Returns the entity's absolute transform at the moment the cached
   /// bitmap was rasterized, if any. The compositor uses this to decide
   /// whether a subsequent DOM transform mutation can reuse the bitmap
-  /// by updating `compositionTransform_` (pure-translation delta) vs
+  /// by updating `canvasFromBitmap_` (pure-translation delta) vs
   /// forcing re-rasterization (any other delta).
   [[nodiscard]] const std::optional<Transform2d>& bitmapEntityFromWorldTransform() const {
     return bitmapEntityFromWorldTransform_;
@@ -153,10 +158,8 @@ public:
   /// bitmap to its cached GL texture.
   [[nodiscard]] uint64_t generation() const { return generation_; }
 
-  /// Set the composition transform used during blitting.
-  void setCompositionTransform(const Transform2d& transform) {
-    compositionTransform_ = transform;
-  }
+  /// Set the `canvasFromBitmap` transform used during blitting.
+  void setCanvasFromBitmap(const Transform2d& transform) { canvasFromBitmap_ = transform; }
 
   /// Set the fallback reasons for this layer.
   void setFallbackReasons(FallbackReason reasons) { fallbackReasons_ = reasons; }
@@ -171,7 +174,7 @@ public:
   /// from old to new — used by `CompositorController::remapAfterStructural
   /// Replace` when a structurally-identical document swap gives every
   /// element a new entity id but leaves the rasterized pixels valid. The
-  /// cached `bitmap_`, `compositionTransform_`, `bitmapEntityFromWorld
+  /// cached `bitmap_`, `canvasFromBitmap_`, `bitmapEntityFromWorld
   /// Transform_`, and `fallbackReasons_` survive unchanged — they're
   /// keyed on position-in-paint-order, not entity id.
   void remapEntities(Entity newEntity, Entity newFirstEntity, Entity newLastEntity) {
@@ -195,7 +198,9 @@ private:
   Entity lastEntity_;
   RendererBitmap bitmap_;
   std::optional<Transform2d> bitmapEntityFromWorldTransform_;
-  Transform2d compositionTransform_;
+  /// `canvasFromBitmap` transform applied during blitting — see the
+  /// public accessor for the full semantics.
+  Transform2d canvasFromBitmap_;
   FallbackReason fallbackReasons_ = FallbackReason::None;
   bool dirty_ = true;
   uint64_t generation_ = 0;
