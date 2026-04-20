@@ -1035,6 +1035,15 @@ struct RendererGeode::Impl {
   /// the same address doesn't carry the tag.
   struct ListenerInstalled {};
 
+  /// M6-B detection (design doc 0030 §M6 Bullet 2): track the source
+  /// entity of the most recent `drawPath` call so `drawPath` can bump
+  /// `sameSourceDrawPairs` whenever it sees two consecutive
+  /// entity-matched calls. Reset to `entt::null` at `beginFrame`.
+  /// Value is the `PathShape::sourceEntity`'s entity (not its
+  /// registry-qualified handle — two drawPath calls from different
+  /// registries are never considered "consecutive same-source").
+  Entity lastDrawSourceEntity = entt::null;
+
   /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
   /// `on_destroy<ComputedPathComponent>` listener onto `registry`.
   /// Called at the start of each `draw()`. Idempotent for the same
@@ -1415,6 +1424,10 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   // resize.
   ++impl_->currentFrameIndex;
   impl_->evictStalePoolBuckets();
+
+  // M6-B detection: drop the previous-draw source-entity memo so
+  // cross-frame draws don't show up as "same-source runs".
+  impl_->lastDrawSourceEntity = entt::null;
 
   // Reset counters regardless of device state.
   impl_->counters.reset();
@@ -2508,6 +2521,20 @@ void RendererGeode::setPaint(const PaintParams& paint) {
 }
 
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
+  // M6-B detection (design doc 0030 §M6 Bullet 2): when a `<use>`
+  // draws a path that was also just drawn by the previous call —
+  // same source entity, same paint — this is exactly the case an
+  // instancing pass would collapse into one GPU draw. Count it here
+  // so the benefit of a future batcher is measurable before the
+  // batcher ships. Null source (non-driver callers) never matches,
+  // so editor overlay / convenience `drawRect` calls don't skew the
+  // counter.
+  if (path.sourceEntity.entity() != entt::null &&
+      path.sourceEntity.entity() == impl_->lastDrawSourceEntity) {
+    ++impl_->counters.sameSourceDrawPairs;
+  }
+  impl_->lastDrawSourceEntity = path.sourceEntity.entity();
+
   // M2 cache lookup for the fill encode. Null `sourceEntity` (editor
   // overlay, test-harness direct draws) returns nullptr and `GeoEncoder`
   // falls back to the inline encode path.
