@@ -2,8 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
@@ -13,15 +16,28 @@
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/resources/ImageResource.h"
+#include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/Lighting.h"
 
 namespace donner::svg {
 namespace {
 
 constexpr double kViewportSize = 64.0;
+
+struct BitmapDiffStats {
+  int differingChannels = 0;
+  int maxChannelDiff = 0;
+  int firstDiffX = -1;
+  int firstDiffY = -1;
+  int firstDiffChannel = -1;
+  uint8_t actualValue = 0;
+  uint8_t expectedValue = 0;
+};
 
 /// Build a `PaintParams` whose fill is the given solid color.
 PaintParams solidFill(const css::RGBA& rgba) {
@@ -60,6 +76,165 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
           bitmap.pixels[off + 3]};
 }
 
+BitmapDiffStats DiffBitmapAgainstStraightRgba(const RendererBitmap& actual,
+                                              std::span<const uint8_t> expected, int tolerance = 1,
+                                              int inset = 0) {
+  BitmapDiffStats stats;
+  const int width = actual.dimensions.x;
+  const int height = actual.dimensions.y;
+  for (int y = inset; y < height - inset; ++y) {
+    for (int x = inset; x < width - inset; ++x) {
+      const size_t actualOffset =
+          static_cast<size_t>(y) * actual.rowBytes + static_cast<size_t>(x) * 4u;
+      const size_t expectedOffset =
+          (static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4u;
+      for (int channel = 0; channel < 4; ++channel) {
+        const int diff = std::abs(static_cast<int>(actual.pixels[actualOffset + channel]) -
+                                  static_cast<int>(expected[expectedOffset + channel]));
+        stats.maxChannelDiff = std::max(stats.maxChannelDiff, diff);
+        if (diff > tolerance) {
+          ++stats.differingChannels;
+          if (stats.firstDiffX < 0) {
+            stats.firstDiffX = x;
+            stats.firstDiffY = y;
+            stats.firstDiffChannel = channel;
+            stats.actualValue = actual.pixels[actualOffset + channel];
+            stats.expectedValue = expected[expectedOffset + channel];
+          }
+        }
+      }
+    }
+  }
+
+  return stats;
+}
+
+double PixelScaleForLighting(const Transform2d& deviceFromFilter) {
+  const Vector2d sx = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
+                      deviceFromFilter.transformPosition(Vector2d(0, 0));
+  const Vector2d sy = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
+                      deviceFromFilter.transformPosition(Vector2d(0, 0));
+  return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
+}
+
+std::array<double, 6> PixelToUserForLighting(const Transform2d& deviceFromFilter) {
+  const Transform2d inv = deviceFromFilter.inverse();
+  return {inv.data[0], inv.data[2], inv.data[4], inv.data[1], inv.data[3], inv.data[5]};
+}
+
+bool HasShearForLighting(const Transform2d& deviceFromFilter) {
+  const double a = deviceFromFilter.data[0];
+  const double b = deviceFromFilter.data[1];
+  const double c = deviceFromFilter.data[2];
+  const double d = deviceFromFilter.data[3];
+  const double dot = a * c + b * d;
+  const double lenSq1 = a * a + b * b;
+  const double lenSq2 = c * c + d * d;
+  return dot * dot > 0.0003 * lenSq1 * lenSq2;
+}
+
+tiny_skia::filter::LightSourceParams ToTinySkiaLightParams(
+    const components::filter_primitive::LightSource& light, const Transform2d& deviceFromFilter) {
+  using DonnerLight = components::filter_primitive::LightSource;
+  using TinyLight = tiny_skia::filter::LightType;
+
+  tiny_skia::filter::LightSourceParams params;
+  switch (light.type) {
+    case DonnerLight::Type::Distant: params.type = TinyLight::Distant; break;
+    case DonnerLight::Type::Point: params.type = TinyLight::Point; break;
+    case DonnerLight::Type::Spot: params.type = TinyLight::Spot; break;
+  }
+
+  params.azimuth = light.azimuth;
+  params.elevation = light.elevation;
+
+  const Vector2d lightPixel = deviceFromFilter.transformPosition(Vector2d(light.x, light.y));
+  const Vector2d pointsAtPixel =
+      deviceFromFilter.transformPosition(Vector2d(light.pointsAtX, light.pointsAtY));
+  const double pixelScale = PixelScaleForLighting(deviceFromFilter);
+
+  params.x = lightPixel.x;
+  params.y = lightPixel.y;
+  params.z = light.z * pixelScale;
+  params.pointsAtX = pointsAtPixel.x;
+  params.pointsAtY = pointsAtPixel.y;
+  params.pointsAtZ = light.pointsAtZ * pixelScale;
+  params.spotExponent = light.spotExponent;
+  params.limitingConeAngle = light.limitingConeAngle;
+  params.userX = light.x;
+  params.userY = light.y;
+  params.userZ = light.z;
+  params.userPointsAtX = light.pointsAtX;
+  params.userPointsAtY = light.pointsAtY;
+  params.userPointsAtZ = light.pointsAtZ;
+  return params;
+}
+
+std::vector<uint8_t> CpuDiffuseLightingReferenceForFlatSource(
+    const components::filter_primitive::DiffuseLighting& primitive,
+    const Transform2d& deviceFromFilter) {
+  auto src = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  auto dst = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  EXPECT_TRUE(src.has_value());
+  EXPECT_TRUE(dst.has_value());
+  if (!src.has_value() || !dst.has_value()) {
+    return {};
+  }
+
+  std::fill(src->data().begin(), src->data().end(), 255u);
+
+  tiny_skia::filter::DiffuseLightingParams params;
+  params.surfaceScale = primitive.surfaceScale;
+  params.diffuseConstant = primitive.diffuseConstant;
+  const css::RGBA rgba = primitive.lightingColor.asRGBA();
+  params.lightR = static_cast<double>(rgba.r) / 255.0;
+  params.lightG = static_cast<double>(rgba.g) / 255.0;
+  params.lightB = static_cast<double>(rgba.b) / 255.0;
+  params.pixelToUser = PixelToUserForLighting(deviceFromFilter);
+  params.hasShear = HasShearForLighting(deviceFromFilter);
+  if (primitive.light.has_value()) {
+    params.light = ToTinySkiaLightParams(*primitive.light, deviceFromFilter);
+  }
+
+  tiny_skia::filter::diffuseLighting(*src, *dst, params);
+  return UnpremultiplyRgba(dst->data());
+}
+
+std::vector<uint8_t> CpuSpecularLightingReferenceForFlatSource(
+    const components::filter_primitive::SpecularLighting& primitive,
+    const Transform2d& deviceFromFilter) {
+  auto src = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  auto dst = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  EXPECT_TRUE(src.has_value());
+  EXPECT_TRUE(dst.has_value());
+  if (!src.has_value() || !dst.has_value()) {
+    return {};
+  }
+
+  std::fill(src->data().begin(), src->data().end(), 255u);
+
+  tiny_skia::filter::SpecularLightingParams params;
+  params.surfaceScale = primitive.surfaceScale;
+  params.specularConstant = primitive.specularConstant;
+  params.specularExponent = primitive.specularExponent;
+  const css::RGBA rgba = primitive.lightingColor.asRGBA();
+  params.lightR = static_cast<double>(rgba.r) / 255.0;
+  params.lightG = static_cast<double>(rgba.g) / 255.0;
+  params.lightB = static_cast<double>(rgba.b) / 255.0;
+  params.pixelToUser = PixelToUserForLighting(deviceFromFilter);
+  params.hasShear = HasShearForLighting(deviceFromFilter);
+  if (primitive.light.has_value()) {
+    params.light = ToTinySkiaLightParams(*primitive.light, deviceFromFilter);
+  }
+
+  tiny_skia::filter::specularLighting(*src, *dst, params);
+  return UnpremultiplyRgba(dst->data());
+}
+
 class RendererGeodeTest : public ::testing::Test {
 protected:
   /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
@@ -78,6 +253,22 @@ protected:
     viewport.size = Vector2d(kViewportSize, kViewportSize);
     viewport.devicePixelRatio = 1.0;
     renderer.beginFrame(viewport);
+  }
+
+  RendererBitmap renderFlatSourceThroughFilter(const components::FilterGraph& graph,
+                                               const Transform2d& deviceFromFilter) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.setTransform(deviceFromFilter);
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+    renderer.setTransform(Transform2d());
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+
+    renderer.popFilterLayer();
+    renderer.endFrame();
+    return renderer.takeSnapshot();
   }
 };
 
@@ -928,6 +1119,80 @@ TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
   EXPECT_EQ(center[1], 0u);
   EXPECT_EQ(center[2], 0u);
   EXPECT_EQ(center[3], 255u);
+}
+
+TEST_F(RendererGeodeTest, FilterSpecularLightingPointLightExponentZeroMatchesCpuReference) {
+  components::FilterGraph graph;
+  components::FilterNode specularNode;
+  components::filter_primitive::SpecularLighting specular;
+  specular.surfaceScale = 3.0;
+  specular.specularConstant = 1.0;
+  specular.specularExponent = 0.0;
+  specular.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
+
+  components::filter_primitive::LightSource light;
+  light.type = components::filter_primitive::LightSource::Type::Point;
+  light.x = 48.0;
+  light.y = 16.0;
+  light.z = 24.0;
+  specular.light = light;
+
+  specularNode.primitive = specular;
+  specularNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(specularNode);
+
+  const Transform2d deviceFromFilter = Transform2d();
+  const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
+  ASSERT_FALSE(actual.empty());
+  const std::vector<uint8_t> expected =
+      CpuSpecularLightingReferenceForFlatSource(specular, deviceFromFilter);
+  ASSERT_FALSE(expected.empty());
+
+  const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected);
+  EXPECT_EQ(diff.differingChannels, 0)
+      << "maxDiff=" << diff.maxChannelDiff << " first=(" << diff.firstDiffX << ", "
+      << diff.firstDiffY << ") channel=" << diff.firstDiffChannel
+      << " actual=" << static_cast<int>(diff.actualValue)
+      << " expected=" << static_cast<int>(diff.expectedValue);
+}
+
+TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {
+  components::FilterGraph graph;
+  components::FilterNode diffuseNode;
+  components::filter_primitive::DiffuseLighting diffuse;
+  diffuse.surfaceScale = 2.0;
+  diffuse.diffuseConstant = 1.0;
+  diffuse.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
+
+  components::filter_primitive::LightSource light;
+  light.type = components::filter_primitive::LightSource::Type::Spot;
+  light.x = 12.0;
+  light.y = 20.0;
+  light.z = 20.0;
+  light.pointsAtX = 56.0;
+  light.pointsAtY = 36.0;
+  light.pointsAtZ = 0.0;
+  light.spotExponent = 4.0;
+  light.limitingConeAngle = 30.0;
+  diffuse.light = light;
+
+  diffuseNode.primitive = diffuse;
+  diffuseNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(diffuseNode);
+
+  const Transform2d deviceFromFilter = Transform2d();
+  const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
+  ASSERT_FALSE(actual.empty());
+  const std::vector<uint8_t> expected =
+      CpuDiffuseLightingReferenceForFlatSource(diffuse, deviceFromFilter);
+  ASSERT_FALSE(expected.empty());
+
+  const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected, 1, 1);
+  EXPECT_EQ(diff.differingChannels, 0)
+      << "maxDiff=" << diff.maxChannelDiff << " first=(" << diff.firstDiffX << ", "
+      << diff.firstDiffY << ") channel=" << diff.firstDiffChannel
+      << " actual=" << static_cast<int>(diff.actualValue)
+      << " expected=" << static_cast<int>(diff.expectedValue);
 }
 
 TEST_F(RendererGeodeTest, FilterEmptyMergeProducesTransparentBlack) {

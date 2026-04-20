@@ -249,7 +249,8 @@ private:
   wgpu::Texture applyDiffuseLighting(
       const wgpu::Texture& input,
       const svg::components::filter_primitive::DiffuseLighting& primitive,
-      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter);
+      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+      const Box2d& sampleSubregion);
 
   /// Phong specular lighting (feSpecularLighting).
   /// @param input The input texture (alpha = height map).
@@ -260,7 +261,8 @@ private:
   wgpu::Texture applySpecularLighting(
       const wgpu::Texture& input,
       const svg::components::filter_primitive::SpecularLighting& primitive,
-      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter);
+      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+      const Box2d& sampleSubregion);
 
   /// Drop-shadow composite (feDropShadow): blur alpha, offset, flood, source-over.
   /// @param input The input texture.

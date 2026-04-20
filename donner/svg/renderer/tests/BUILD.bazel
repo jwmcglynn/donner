@@ -316,11 +316,14 @@ donner_cc_test(
         "//donner/css:core",
         "//donner/svg",
         "//donner/svg/components/filter:components",
+        "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/resources:image_resource",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ],
 )
 
