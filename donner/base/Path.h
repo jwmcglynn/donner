@@ -383,6 +383,15 @@ public:
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Path& path);
 
+  /// Value equality. Two paths compare equal iff their command verb /
+  /// point-index sequences and point arrays are bitwise-equal. Used as an
+  /// invalidation edge by `ShapeSystem` to suppress redundant
+  /// `ComputedPathComponent` rewrites when shape attributes recompute to
+  /// the same geometry (design doc 0030 Milestone 2).
+  bool operator==(const Path& other) const {
+    return commands_ == other.commands_ && points_ == other.points_;
+  }
+
 private:
   friend class PathBuilder;
 
