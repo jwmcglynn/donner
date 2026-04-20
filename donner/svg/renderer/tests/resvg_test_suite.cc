@@ -312,17 +312,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     };
   }
 
-  // feConvolveMatrix/edgeMode=none: `edgeMode="none"` should make out-of-bounds
-  // samples transparent-black; Geode samples still wrap/clamp. Follow-up —
-  // targetX offsets are already fixed.
-  if (category == "filters/feConvolveMatrix" && filename == "edgeMode=none.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): feConvolveMatrix edgeMode=none samples "
-                       "still wrap/clamp instead of zero");
-    };
-  }
-
   return std::nullopt;
 }
 

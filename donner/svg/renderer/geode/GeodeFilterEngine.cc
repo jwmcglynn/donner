@@ -1975,8 +1975,9 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 
   // SVG spec validation: invalid parameters produce transparent black.
   // Matches the CPU reference's guard in FilterGraph.cpp.
+  // The shader kernel array holds 25 elements, so any orderX*orderY <= 25 is valid.
   const bool invalid = primitive.orderX <= 0 || primitive.orderY <= 0 ||
-                        primitive.orderX > 5 || primitive.orderY > 5 ||
+                        primitive.orderX * primitive.orderY > 25 ||
                         static_cast<int>(primitive.kernelMatrix.size()) != requiredSize ||
                         targetX < 0 || targetX >= primitive.orderX ||
                         targetY < 0 || targetY >= primitive.orderY ||
@@ -2071,6 +2072,12 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   const wgpu::Device& dev = device_.device();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterTurbulenceOutput");
+
+  // Negative baseFrequency is invalid per SVG Filter Effects §15.20.3; produce transparent black
+  // (matching resvg/tiny-skia behavior).
+  if (primitive.baseFrequencyX < 0.0 || primitive.baseFrequencyY < 0.0) {
+    return output;
+  }
 
   TurbulenceParams params{};
   params.baseFreqX = static_cast<float>(primitive.baseFrequencyX);
