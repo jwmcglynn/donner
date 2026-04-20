@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -580,6 +581,100 @@ struct RendererGeode::Impl {
   };
   std::vector<PatternStackFrame> patternStack;
 
+  // --------------------------------------------------------------------
+  // M4.2 transient-texture pool (design doc 0030 §M4.2).
+  //
+  // Every push/pop of isolated-layer / filter-layer / mask / clip-mask
+  // scratch allocates a resolve + MSAA-companion pair — prior to this
+  // pool those allocations fired on every frame even when the same
+  // document was re-rendered at the same viewport. The pool holds
+  // released textures keyed by `(width, height, format, sampleCount,
+  // usage)`; same-dim / same-format acquisition on a later frame pops
+  // from the bucket instead of calling `createTexture`.
+  //
+  // Exact-size pooling (no power-of-two bucketing). Works for the
+  // repeat-render case this PR targets because layer sizes are
+  // derived from `pixelWidth`/`pixelHeight`, which don't change
+  // between idle re-renders. A size-bucketing extension is a future
+  // follow-up for viewport-resize scenarios.
+  // --------------------------------------------------------------------
+
+  /// Key used for texture-pool bucket lookup. Two textures are
+  /// interchangeable iff every field matches — same size, same
+  /// format, same MSAA sample count, same usage flags.
+  struct TextureKey {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
+    uint32_t sampleCount = 1;
+    wgpu::TextureUsage usage = wgpu::TextureUsage::None;
+
+    auto operator<=>(const TextureKey& other) const = default;
+
+    static TextureKey From(const wgpu::TextureDescriptor& desc) {
+      return TextureKey{desc.size.width, desc.size.height, desc.format, desc.sampleCount,
+                        desc.usage};
+    }
+  };
+  std::map<TextureKey, std::vector<wgpu::Texture>> texturePool;
+
+  /// Acquire a pooled texture matching `desc`, or create a fresh one
+  /// on miss. Always increments the `textureCreates` counter on miss;
+  /// never on hit. Returns a null texture on device failure.
+  wgpu::Texture acquireTexture(const wgpu::TextureDescriptor& desc) {
+    auto& bucket = texturePool[TextureKey::From(desc)];
+    if (!bucket.empty()) {
+      wgpu::Texture texture = std::move(bucket.back());
+      bucket.pop_back();
+      return texture;
+    }
+    wgpu::Texture texture = device->device().createTexture(desc);
+    if (texture) {
+      device->countTexture();
+    }
+    return texture;
+  }
+
+  /// Return a texture to its pool bucket IMMEDIATELY. Caller must
+  /// pass the same descriptor used to acquire, otherwise the next
+  /// acquire with the original descriptor will miss the bucket.
+  ///
+  /// Prefer `releaseTextureAtFrameEnd` for textures whose GPU work was
+  /// recorded into the shared `frameCommandEncoder`: releasing those
+  /// mid-frame would let a subsequent `acquireTexture` on the same
+  /// bucket hand the texture back out before the GPU has finished
+  /// writing it.
+  void releaseTexture(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
+    if (!texture) {
+      return;
+    }
+    texturePool[TextureKey::From(desc)].push_back(std::move(texture));
+  }
+
+  /// Defer a release until after the frame's command buffer has been
+  /// submitted. Used by `popIsolatedLayer` / `popFilterLayer` / etc.,
+  /// where the layer texture is still referenced by commands recorded
+  /// into the frame encoder and must not be recycled mid-frame.
+  struct PendingRelease {
+    wgpu::Texture texture;
+    wgpu::TextureDescriptor desc;
+  };
+  std::vector<PendingRelease> framePendingReleases;
+
+  void releaseTextureAtFrameEnd(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
+    if (!texture) {
+      return;
+    }
+    framePendingReleases.push_back({std::move(texture), desc});
+  }
+
+  void drainPendingReleases() {
+    for (auto& pending : framePendingReleases) {
+      releaseTexture(std::move(pending.texture), pending.desc);
+    }
+    framePendingReleases.clear();
+  }
+
   /// A saved encoder + target state for an in-progress isolated layer
   /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
   /// group with non-identity opacity or a non-Normal blend mode, we
@@ -592,6 +687,11 @@ struct RendererGeode::Impl {
     wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
     wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
     wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    /// Descriptors captured at push time so `popIsolatedLayer` can
+    /// release the textures back to the correct pool bucket via
+    /// `releaseTexture`.
+    wgpu::TextureDescriptor layerDesc = {};
+    wgpu::TextureDescriptor layerMsaaDesc = {};
     double opacity = 1.0;
     /// Phase 3d: SVG `mix-blend-mode`. `Normal` (default) keeps the
     /// plain premultiplied source-over compositing path;
@@ -611,6 +711,9 @@ struct RendererGeode::Impl {
     wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
     wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
     wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    /// Descriptors captured at push for M4.2 pool release.
+    wgpu::TextureDescriptor layerDesc = {};
+    wgpu::TextureDescriptor layerMsaaDesc = {};
     components::FilterGraph filterGraph;
     Box2d filterRegion;
   };
@@ -639,6 +742,11 @@ struct RendererGeode::Impl {
     wgpu::Texture maskMsaaTexture;
     wgpu::Texture contentTexture;  // Masked element's content (RGBA).
     wgpu::Texture contentMsaaTexture;
+    /// Descriptors captured at push for M4.2 pool release.
+    wgpu::TextureDescriptor maskDesc = {};
+    wgpu::TextureDescriptor maskMsaaDesc = {};
+    wgpu::TextureDescriptor contentDesc = {};
+    wgpu::TextureDescriptor contentMsaaDesc = {};
     /// Raw mask-bounds rectangle from the driver, in the coordinate
     /// space of `maskBoundsTransform` (userSpaceOnUse or the
     /// objectBoundingBox-mapped user space — either way, NOT yet in
@@ -708,7 +816,10 @@ struct RendererGeode::Impl {
     wgpu::Texture maskMsaaTexture;
     wgpu::Texture maskResolveTexture;
     wgpu::TextureView maskResolveView;
-    std::vector<wgpu::Texture> maskLayerTextures;
+    /// Paired (texture, descriptor) entries. Every clip-mask texture
+    /// allocated by `pushClip` (across all nested layers) lives here
+    /// until `popClip` hands them back to the M4.2 texture pool.
+    std::vector<PendingRelease> maskLayerTextures;
   };
   std::vector<ClipStackEntry> clipStack;
 
@@ -1338,6 +1449,13 @@ void RendererGeode::endFrame() {
     impl_->frameCommandEncoder = wgpu::CommandEncoder();
   }
 
+  // Now that the command buffer is submitted, it's safe to return the
+  // frame's transient layer / filter / mask / snapshot textures to
+  // the pool. WebGPU's driver tracks texture dependencies across
+  // submits, so acquiring these on the next frame will schedule the
+  // new writes after the previous submit's GPU work completes.
+  impl_->drainPendingReleases();
+
   impl_->currentTransform = Transform2d();
   impl_->transformStack.clear();
 }
@@ -1456,37 +1574,34 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       impl_->pixelHeight > 0) {
     const wgpu::Device& dev = impl_->device->device();
 
-    const auto makeResolveTexture = [&](const char* label) {
-      wgpu::TextureDescriptor desc = {};
-      desc.label = wgpuLabel(label);
-      desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                   static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      desc.format = wgpu::TextureFormat::R8Unorm;
-      desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
-      desc.mipLevelCount = 1;
-      desc.sampleCount = 1;
-      desc.dimension = wgpu::TextureDimension::_2D;
-      auto t = dev.createTexture(desc);
-      impl_->device->countTexture();
-      return t;
+    const auto makeResolveTexture = [&](const char* label, wgpu::TextureDescriptor& outDesc) {
+      outDesc = wgpu::TextureDescriptor{};
+      outDesc.label = wgpuLabel(label);
+      outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+      outDesc.mipLevelCount = 1;
+      outDesc.sampleCount = 1;
+      outDesc.dimension = wgpu::TextureDimension::_2D;
+      return impl_->acquireTexture(outDesc);
     };
-    const auto makeMsaaTexture = [&](const char* label) -> wgpu::Texture {
+    const auto makeMsaaTexture = [&](const char* label,
+                                     wgpu::TextureDescriptor& outDesc) -> wgpu::Texture {
       if (impl_->device->sampleCount() == 1) {
         // Alpha-coverage path: no separate MSAA texture needed.
         return {};
       }
-      wgpu::TextureDescriptor desc = {};
-      desc.label = wgpuLabel(label);
-      desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                   static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      desc.format = wgpu::TextureFormat::R8Unorm;
-      desc.usage = wgpu::TextureUsage::RenderAttachment;
-      desc.mipLevelCount = 1;
-      desc.sampleCount = 4;
-      desc.dimension = wgpu::TextureDimension::_2D;
-      auto t = dev.createTexture(desc);
-      impl_->device->countTexture();
-      return t;
+      outDesc = wgpu::TextureDescriptor{};
+      outDesc.label = wgpuLabel(label);
+      outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      outDesc.mipLevelCount = 1;
+      outDesc.sampleCount = 4;
+      outDesc.dimension = wgpu::TextureDimension::_2D;
+      return impl_->acquireTexture(outDesc);
     };
 
     // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
@@ -1534,10 +1649,18 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
     }
 
+    (void)dev;  // Kept for potential future use; texture allocation
+                // routes through `impl_->acquireTexture` now.
     for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
-      wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa");
-      wgpu::Texture resolveTexture = makeResolveTexture("RendererGeodeClipMaskResolve");
+      wgpu::TextureDescriptor msaaDesc = {};
+      wgpu::TextureDescriptor resolveDesc = {};
+      wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa", msaaDesc);
+      wgpu::Texture resolveTexture =
+          makeResolveTexture("RendererGeodeClipMaskResolve", resolveDesc);
       if (!resolveTexture || (impl_->device->sampleCount() > 1 && !msaaTexture)) {
+        // Release anything we managed to acquire before giving up.
+        if (msaaTexture) impl_->releaseTexture(std::move(msaaTexture), msaaDesc);
+        if (resolveTexture) impl_->releaseTexture(std::move(resolveTexture), resolveDesc);
         continue;
       }
 
@@ -1561,9 +1684,12 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
       nestedMaskView = resolveTexture.createView();
 
-      // Keep the intermediate textures alive until popClip.
-      entry.maskLayerTextures.push_back(std::move(msaaTexture));
-      entry.maskLayerTextures.push_back(resolveTexture);
+      // Keep the intermediate textures alive until popClip, paired
+      // with their descs for M4.2 pool release.
+      if (msaaTexture) {
+        entry.maskLayerTextures.push_back({std::move(msaaTexture), msaaDesc});
+      }
+      entry.maskLayerTextures.push_back({resolveTexture, resolveDesc});
 
       // The outermost layer (the LAST one processed by this loop,
       // i.e. the FIRST run in `runs`) provides the resolve view the
@@ -1584,6 +1710,16 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
 void RendererGeode::popClip() {
   if (!impl_->clipStack.empty()) {
+    // Defer release of the mask textures to endFrame — the main
+    // encoder that was just drawing under this clip may have recorded
+    // samples from `maskResolveTexture` into the frame encoder, and
+    // recycling mid-frame could hand the texture to a later acquire
+    // before the submit.
+    Impl::ClipStackEntry& entry = impl_->clipStack.back();
+    for (auto& release : entry.maskLayerTextures) {
+      impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+    }
+    entry.maskLayerTextures.clear();
     impl_->clipStack.pop_back();
   }
   impl_->updateEncoderScissor();
@@ -1618,16 +1754,15 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
-  impl_->device->countTexture();
+  wgpu::Texture layerTexture = impl_->acquireTexture(td);
   if (!layerTexture) {
     impl_->layerStack.push_back({});
     return;
   }
 
+  wgpu::TextureDescriptor msaaDesc = {};
   wgpu::Texture layerMsaaTexture;
   if (impl_->device->sampleCount() > 1) {
-    wgpu::TextureDescriptor msaaDesc = {};
     msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
     msaaDesc.size = td.size;
     msaaDesc.format = kFormat;
@@ -1635,9 +1770,9 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     msaaDesc.mipLevelCount = 1;
     msaaDesc.sampleCount = 4;
     msaaDesc.dimension = wgpu::TextureDimension::_2D;
-    layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
-    impl_->device->countTexture();
+    layerMsaaTexture = impl_->acquireTexture(msaaDesc);
     if (!layerMsaaTexture) {
+      impl_->releaseTexture(std::move(layerTexture), td);
       impl_->layerStack.push_back({});
       return;
     }
@@ -1655,6 +1790,8 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   frame.savedMsaaTarget = impl_->msaaTarget;
   frame.layerTexture = layerTexture;
   frame.layerMsaaTexture = layerMsaaTexture;
+  frame.layerDesc = td;
+  frame.layerMsaaDesc = msaaDesc;
   frame.opacity = opacity;
   frame.blendMode = blendMode;
 
@@ -1709,8 +1846,7 @@ void RendererGeode::popIsolatedLayer() {
     snapDesc.mipLevelCount = 1;
     snapDesc.sampleCount = 1;
     snapDesc.dimension = wgpu::TextureDimension::_2D;
-    wgpu::Texture snapshot = impl_->device->device().createTexture(snapDesc);
-    impl_->device->countTexture();
+    wgpu::Texture snapshot = impl_->acquireTexture(snapDesc);
 
     if (snapshot) {
       // Record the snapshot copy into the shared frame CommandEncoder
@@ -1748,6 +1884,13 @@ void RendererGeode::popIsolatedLayer() {
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshot,
                                             static_cast<uint32_t>(frame.blendMode), frame.opacity);
+      // Defer release: `blitFullTargetBlended` recorded samples from
+      // both `frame.layerTexture` and `snapshot` into the shared
+      // frameCommandEncoder; they must stay alive until that buffer
+      // is submitted at `endFrame`.
+      impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
+      impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
     // If snapshot allocation failed fall through to the Normal path —
@@ -1767,6 +1910,9 @@ void RendererGeode::popIsolatedLayer() {
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
+  // Same deferred-release rationale as the blend-mode branch above.
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
 }
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
@@ -1797,8 +1943,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
-  impl_->device->countTexture();
+  wgpu::Texture layerTexture = impl_->acquireTexture(td);
   if (!layerTexture) {
     impl_->filterStack.push_back({});
     return;
@@ -1812,9 +1957,9 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   msaaDesc.mipLevelCount = 1;
   msaaDesc.sampleCount = 4;
   msaaDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
-  impl_->device->countTexture();
+  wgpu::Texture layerMsaaTexture = impl_->acquireTexture(msaaDesc);
   if (!layerMsaaTexture) {
+    impl_->releaseTexture(std::move(layerTexture), td);
     impl_->filterStack.push_back({});
     return;
   }
@@ -1829,6 +1974,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.savedMsaaTarget = impl_->msaaTarget;
   frame.layerTexture = layerTexture;
   frame.layerMsaaTexture = layerMsaaTexture;
+  frame.layerDesc = td;
+  frame.layerMsaaDesc = msaaDesc;
   frame.filterGraph = filterGraph;
   frame.filterRegion = region;
 
@@ -1891,6 +2038,13 @@ void RendererGeode::popFilterLayer() {
   // CTM snapshot before using it as a scissor. Skipping for this PR —
   // all current feGaussianBlur resvg tests pass without the clip.
   impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  // Defer release to endFrame: `blitFullTarget` recorded a sample from
+  // `filteredTexture` (which is `frame.layerTexture` when the filter
+  // graph is empty) into the frame encoder. Filter-engine-owned
+  // intermediates are tracked separately by `GeodeFilterEngine` and
+  // covered by M5; we only recycle the layer capture pair here.
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
@@ -1902,39 +2056,38 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   }
 
   const auto allocTexturePair = [&](const char* label, const char* msaaLabel,
-                                    wgpu::Texture& outResolve, wgpu::Texture& outMsaa) {
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel(label);
-    td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-               1u};
-    td.format = kFormat;
-    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-               wgpu::TextureUsage::CopySrc;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    outResolve = impl_->device->device().createTexture(td);
-    impl_->device->countTexture();
+                                    wgpu::Texture& outResolve, wgpu::TextureDescriptor& outDesc,
+                                    wgpu::Texture& outMsaa, wgpu::TextureDescriptor& outMsaaDesc) {
+    outDesc = wgpu::TextureDescriptor{};
+    outDesc.label = wgpuLabel(label);
+    outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                    static_cast<uint32_t>(impl_->pixelHeight), 1u};
+    outDesc.format = kFormat;
+    outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                    wgpu::TextureUsage::CopySrc;
+    outDesc.mipLevelCount = 1;
+    outDesc.sampleCount = 1;
+    outDesc.dimension = wgpu::TextureDimension::_2D;
+    outResolve = impl_->acquireTexture(outDesc);
 
     if (impl_->device->sampleCount() > 1) {
-      wgpu::TextureDescriptor msaaDesc = {};
-      msaaDesc.label = wgpuLabel(msaaLabel);
-      msaaDesc.size = td.size;
-      msaaDesc.format = kFormat;
-      msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-      msaaDesc.mipLevelCount = 1;
-      msaaDesc.sampleCount = 4;
-      msaaDesc.dimension = wgpu::TextureDimension::_2D;
-      outMsaa = impl_->device->device().createTexture(msaaDesc);
-      impl_->device->countTexture();
+      outMsaaDesc = wgpu::TextureDescriptor{};
+      outMsaaDesc.label = wgpuLabel(msaaLabel);
+      outMsaaDesc.size = outDesc.size;
+      outMsaaDesc.format = kFormat;
+      outMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      outMsaaDesc.mipLevelCount = 1;
+      outMsaaDesc.sampleCount = 4;
+      outMsaaDesc.dimension = wgpu::TextureDimension::_2D;
+      outMsaa = impl_->acquireTexture(outMsaaDesc);
     }
   };
 
   Impl::MaskStackFrame frame;
   allocTexturePair("RendererGeodeMaskCapture", "RendererGeodeMaskCaptureMSAA", frame.maskTexture,
-                   frame.maskMsaaTexture);
+                   frame.maskDesc, frame.maskMsaaTexture, frame.maskMsaaDesc);
   allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA", frame.contentTexture,
-                   frame.contentMsaaTexture);
+                   frame.contentDesc, frame.contentMsaaTexture, frame.contentMsaaDesc);
   const bool needsMsaa = impl_->device->sampleCount() > 1;
   if (!frame.maskTexture || (needsMsaa && !frame.maskMsaaTexture) || !frame.contentTexture ||
       (needsMsaa && !frame.contentMsaaTexture)) {
@@ -2034,6 +2187,15 @@ void RendererGeode::popMask() {
 
   // Composite `content * luminance(mask)` onto the outer target.
   impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, pixelMaskBounds);
+
+  // Defer release to endFrame — `blitFullTargetMasked` recorded
+  // samples from both `contentTexture` and `maskTexture` into the
+  // frame encoder. MSAA companions had no post-render samples but
+  // are bucketed alongside their resolve for symmetry.
+  impl_->releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.maskMsaaTexture), frame.maskMsaaDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.contentMsaaTexture), frame.contentMsaaDesc);
 }
 
 void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
