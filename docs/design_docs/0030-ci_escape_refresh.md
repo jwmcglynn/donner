@@ -38,7 +38,7 @@ Since [doc 0016](0016-ci_escape_prevention.md) landed Phase 1 (CMake `--check`, 
 - [ ] **Milestone 2 — Generator + perf hardening (M effort)**
   - [ ] Extend `tools/cmake/gen_cmakelists.py --check` to invoke `cmake --build` in a sandbox for Linux + macOS tiers (catches drift the static validator misses).
   - [ ] Introduce `donner_perf_cc_test` macro in `build_defs/rules.bzl` splitting correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged `perf`).
-  - [ ] Add nightly `sanitizers.yml` running ASan+UBSan on `//donner/...`, required for `main` merges (not PR-blocking).
+  - [ ] Add nightly `sanitizers.yml` running ASan+UBSan on `//donner/...`, required for `main` merges (not PR-blocking). **Gate the run on "commits on `main` since the last successful nightly"**: first job calls `git log origin/main --since="yesterday"` (or compares SHAs against the last `workflow_run`) and exits 0 if empty, short-circuiting the expensive jobs. Avoids burning CI minutes on idle days.
 - [ ] **Milestone 3 — Process (S effort, do last)**
   - [ ] Quarantine lint: any PR that adds `flaky = True` must reference a tracking issue; enforce via GH Action.
   - [ ] ReadabilityBot/GeodeBot rule: raw pointers into objects owned by a different `shared_ptr` chain → review flag. (Narrow but prevents #552 twin.)
@@ -105,6 +105,7 @@ The scoped `asan-geode` job is the only new PR-required job; it only runs when G
 ## Open Questions
 
 - **Perf-test tagging:** should the nightly perf job fail `main` or just file an issue? Start with issue-only, escalate to blocking after stabilization.
+- **Skip-idle heuristic:** "no commits today" is simple but misses cases where dependencies (Bazel registry, Dawn) auto-update. Initial heuristic: `git log` only; revisit if we miss real regressions.
 - **ASan on macOS Metal:** Metal validation layers sometimes false-positive under ASan — may need a specific `bazel test --config=asan` allowlist for Geode targets.
 - **Scope of `gen_cmakelists.py --build`:** full CMake build is slow; a compile-only (`cmake --build -- -k`) pass may suffice.
 
