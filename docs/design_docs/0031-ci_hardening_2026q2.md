@@ -64,7 +64,7 @@ every variant is covered by the default test command.
 ## Implementation Plan
 
 - [ ] **Milestone 1 — Fast wins (S effort)**
-  - [x] M1.1: Land `misc-include-cleaner` in `.clang-tidy` + required `lint.yml` job. Fixes 0016 Category 2 (header-graph divergence); prevents the #520 `<ostream>` hotfix chain. _(Delegated, PR in flight.)_
+  - [x] M1.1: Land `misc-include-cleaner` in `.clang-tidy` + required `lint.yml` job. Fixes 0016 Category 2 (header-graph divergence); prevents the #520 `<ostream>` hotfix chain. _(Landed with diff-only enforcement; historical debt tracked in [#559](https://github.com/jwmcglynn/donner/issues/559).)_
   - [x] M1.2: Paths-scoped `asan-geode` PR gate for `donner/svg/renderer/geode/**` + `RendererDriver.*`. Catches issue #552 class. _(Delegated, PR in flight.)_
   - [x] M1.3: Add `tools/presubmit.sh --variants` running `tiny`/`text-full`/`geode` tiers. **Transitional** — M2.3 replaces this by making `bazel test //...` cover all variants by default. _(Delegated, PR in flight.)_
   - [x] M1.4: Add Category 8 (wall-clock perf) + Category 9 (sanitizer-only) to doc 0016. _(Landed as commit 0e51a695 on this feature branch.)_
@@ -220,6 +220,7 @@ Specific acceptance gates:
 
 ## Future Work
 
+- [ ] Historical `misc-include-cleaner` debt tracked in [#559](https://github.com/jwmcglynn/donner/issues/559); clear it in directory-scoped waves while the diff-only gate keeps new debt from growing.
 - [ ] ThreadSanitizer nightly once threaded code lands.
 - [ ] Per-backend pixel-diff threshold auto-calibration (0016 Category 4).
 - [ ] Convert `tools/presubmit.sh` death (post-M2.3) into a `tombstone`

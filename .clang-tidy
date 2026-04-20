@@ -5,6 +5,7 @@ Checks: >
     -bugprone-easily-swappable-parameters,
     -bugprone-branch-clone,
     -bugprone-unchecked-optional-access,
+    misc-include-cleaner,
     cppcoreguidelines-*,
     -cppcoreguidelines-avoid-magic-numbers,
     -cppcoreguidelines-pro-type-union-access,

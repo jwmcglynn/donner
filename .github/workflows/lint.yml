@@ -4,11 +4,13 @@ on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main]
+    branches: [main, feature/ci-hardening-2026q2]
 
 # Fast lint jobs covering checks that don't live inside `bazel test //...`:
 #
 # - clang-format (changed C++ files only — runs in <30s for typical PRs)
+# - misc-include-cleaner (changed C++ files only — avoids blocking on
+#   historical include debt while enforcing new diffs)
 # - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
 #   prevents running --check from inside bazel test; see Phase 3 design doc)
 # - banned source patterns lint is NOT here: it runs automatically as a
@@ -54,6 +56,45 @@ jobs:
 
           echo "Checking ${MODIFIED}" | tr ' ' '\n'
           echo "${MODIFIED}" | xargs clang-format --dry-run -Werror
+
+  misc-include-cleaner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 50
+
+      - name: Install clang-tidy
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y clang-tidy-19
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check misc-include-cleaner on changed C++ files
+        run: |
+          if [[ -n "${{ github.base_ref }}" ]]; then
+            git fetch --depth=50 origin "${{ github.base_ref }}"
+            BASE="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          else
+            git fetch --depth=50 origin main 2>/dev/null || true
+            BASE="$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD~1)"
+          fi
+
+          tools/run_misc_include_cleaner_diff.sh "${BASE}"
 
   cmake-validate:
     runs-on: ubuntu-24.04
