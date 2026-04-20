@@ -51,12 +51,28 @@ protected:
   }
 };
 
+namespace {
+/// Returns a string describing `resp` for assertion-failure output. Surfaces
+/// the child's stderr tail so flakes aren't opaque.
+std::string Describe(const WireResponse& resp) {
+  std::string out = "status=" + std::to_string(static_cast<int>(resp.status));
+  out += " bytes=" + std::to_string(resp.bytes.size());
+  if (!resp.diagnostics.empty()) {
+    out += " diagnostics=[" + resp.diagnostics + "]";
+  }
+  return out;
+}
+}  // namespace
+
+#define EXPECT_WIRE_OK(resp) EXPECT_EQ((resp).status, SandboxStatus::kOk) << Describe(resp)
+#define ASSERT_WIRE_OK(resp) ASSERT_EQ((resp).status, SandboxStatus::kOk) << Describe(resp)
+
 TEST_F(SandboxSessionTest, Handshake) {
   SandboxSession session(MakeOptions());
   ASSERT_TRUE(session.childAlive());
 
   WireResponse resp = DoHandshake(session);
-  EXPECT_EQ(resp.status, SandboxStatus::kOk);
+  EXPECT_WIRE_OK(resp);
   // Payload should contain: u32 version + u64 pid.
   ASSERT_GE(resp.bytes.size(), 12u);
 
@@ -76,7 +92,7 @@ TEST_F(SandboxSessionTest, PersistentChild) {
 
   for (int i = 0; i < 5; ++i) {
     WireResponse resp = DoHandshake(session, static_cast<uint64_t>(i + 1));
-    ASSERT_EQ(resp.status, SandboxStatus::kOk) << "iteration " << i;
+    ASSERT_WIRE_OK(resp) << "iteration " << i;
     ASSERT_GE(resp.bytes.size(), 12u);
 
     uint64_t pid = 0;
@@ -102,7 +118,7 @@ TEST_F(SandboxSessionTest, LoadBytesStub) {
   auto future = session.submit(std::move(req));
   WireResponse resp = future.get();
 
-  EXPECT_EQ(resp.status, SandboxStatus::kOk);
+  EXPECT_WIRE_OK(resp);
   // Should be a kFrame placeholder response — at least the frameId + minimal fields.
   EXPECT_GE(resp.bytes.size(), 8u);
 }
@@ -123,8 +139,8 @@ TEST_F(SandboxSessionTest, ConcurrentInFlight) {
   WireResponse resp1 = future1.get();
   WireResponse resp2 = future2.get();
 
-  EXPECT_EQ(resp1.status, SandboxStatus::kOk);
-  EXPECT_EQ(resp2.status, SandboxStatus::kOk);
+  EXPECT_WIRE_OK(resp1);
+  EXPECT_WIRE_OK(resp2);
 }
 
 TEST_F(SandboxSessionTest, CleanShutdown) {
@@ -147,7 +163,7 @@ TEST_F(SandboxSessionTest, UnknownOpcodeReturnsError) {
   auto future = session.submit(std::move(req));
   WireResponse resp = future.get();
 
-  EXPECT_EQ(resp.status, SandboxStatus::kOk);
+  EXPECT_WIRE_OK(resp);
   // The payload should be a kError response with kUnknownOpcode.
   ASSERT_GE(resp.bytes.size(), 4u);
   uint32_t errorKind = 0;
@@ -164,7 +180,7 @@ TEST_F(SandboxSessionTest, ExportStub) {
   auto future = session.submit(std::move(req));
   WireResponse resp = future.get();
 
-  EXPECT_EQ(resp.status, SandboxStatus::kOk);
+  EXPECT_WIRE_OK(resp);
   // kExportResponse with format=0, bytesLength=0.
   ASSERT_GE(resp.bytes.size(), 8u);
 }
