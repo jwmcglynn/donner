@@ -122,6 +122,9 @@ FrameResult DecodeFrameResult(const FramePayload& frame, svg::Renderer& renderer
     result.parseDiagnostics.push_back(std::move(pd));
   }
 
+  // Tree summary.
+  result.tree = frame.tree;
+
   return result;
 }
 
@@ -215,6 +218,18 @@ public:
     return submitFrameRequest(SessionOpcode::kRedo, sandbox::EncodeRedo());
   }
 
+  // ------------ tree selection ------------
+
+  std::future<FrameResult> selectElement(uint64_t entityId, uint64_t entityGeneration,
+                                         uint8_t mode) override {
+    sandbox::SelectElementPayload payload;
+    payload.entityId = entityId;
+    payload.entityGeneration = entityGeneration;
+    payload.mode = mode;
+    return submitFrameRequest(SessionOpcode::kSelectElement,
+                              sandbox::EncodeSelectElement(payload));
+  }
+
   // ------------ export ------------
 
   std::future<ExportResult> exportDocument(const ExportPayload& payload) override {
@@ -298,6 +313,11 @@ public:
     return lastParseError_;
   }
 
+  const sandbox::FrameTreeSummary& tree() const override {
+    std::lock_guard lock(stateMutex_);
+    return tree_;
+  }
+
 private:
   /// Encodes + submits a request that expects a kFrame response, spawning a
   /// worker thread to decode the response and produce a FrameResult.
@@ -347,6 +367,7 @@ private:
     lastFrameId_ = result.frameId;
     selection_ = result.selection;
     latestBitmap_ = result.bitmap;
+    tree_ = result.tree;
     if (!result.parseDiagnostics.empty()) {
       lastParseError_ = result.parseDiagnostics.front();
     } else {
@@ -365,6 +386,7 @@ private:
   uint64_t lastFrameId_ = 0;
   SelectionOverlay selection_;
   svg::RendererBitmap latestBitmap_;
+  sandbox::FrameTreeSummary tree_;
   std::optional<ParseDiagnostic> lastParseError_;
 
   // Callbacks.

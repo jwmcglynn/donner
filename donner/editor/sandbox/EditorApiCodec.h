@@ -72,6 +72,12 @@ struct SetToolPayload {
   ToolKind toolKind = ToolKind::kSelect;
 };
 
+struct SelectElementPayload {
+  uint64_t entityId = 0;
+  uint64_t entityGeneration = 0;
+  uint8_t mode = 0;  ///< 0 = Replace, 1 = Toggle, 2 = Add.
+};
+
 struct ExportRequestPayload {
   ExportFormat format = ExportFormat::kSvgText;
 };
@@ -119,6 +125,27 @@ enum class FrameStatusKind : uint8_t {
   kParseError = 3,
 };
 
+/// Single node in the backend's flattened tree summary.
+struct TreeNodeEntry {
+  uint64_t entityId = 0;          ///< Opaque handle — sandbox-assigned.
+  uint64_t entityGeneration = 0;
+  uint32_t parentIndex = 0xFFFFFFFF;  ///< Index into FrameTreeSummary::nodes; 0xFFFFFFFF for root.
+  uint32_t depth = 0;
+  std::string tagName;            ///< Lower-case: "rect", "g", etc.
+  std::string idAttr;             ///< DOM id or empty.
+  std::string displayName;        ///< e.g. "<rect id=foo>".
+  uint32_t sourceStart = 0;
+  uint32_t sourceEnd = 0;
+  bool selected = false;
+};
+
+/// Flat tree summary shipped with every frame.
+struct FrameTreeSummary {
+  uint64_t generation = 0;        ///< Bumped on structural changes.
+  uint32_t rootIndex = 0xFFFFFFFF;
+  std::vector<TreeNodeEntry> nodes;
+};
+
 struct FramePayload {
   uint64_t frameId = 0;
   std::vector<uint8_t> renderWire;
@@ -135,6 +162,7 @@ struct FramePayload {
   std::vector<FrameDiagnosticEntry> diagnostics;
   bool hasCursorHint = false;
   uint32_t cursorHintSourceOffset = 0;
+  FrameTreeSummary tree;
 };
 
 struct ExportResponsePayload {
@@ -182,6 +210,7 @@ std::vector<uint8_t> EncodePointerEvent(const PointerEventPayload& payload);
 std::vector<uint8_t> EncodeKeyEvent(const KeyEventPayload& payload);
 std::vector<uint8_t> EncodeWheelEvent(const WheelEventPayload& payload);
 std::vector<uint8_t> EncodeSetTool(const SetToolPayload& payload);
+std::vector<uint8_t> EncodeSelectElement(const SelectElementPayload& payload);
 std::vector<uint8_t> EncodeUndo();
 std::vector<uint8_t> EncodeRedo();
 std::vector<uint8_t> EncodeExport(const ExportRequestPayload& payload);
@@ -216,6 +245,7 @@ bool DecodePointerEvent(std::span<const uint8_t> data, PointerEventPayload& out)
 bool DecodeKeyEvent(std::span<const uint8_t> data, KeyEventPayload& out);
 bool DecodeWheelEvent(std::span<const uint8_t> data, WheelEventPayload& out);
 bool DecodeSetTool(std::span<const uint8_t> data, SetToolPayload& out);
+bool DecodeSelectElement(std::span<const uint8_t> data, SelectElementPayload& out);
 bool DecodeUndo(std::span<const uint8_t> data);
 bool DecodeRedo(std::span<const uint8_t> data);
 bool DecodeExport(std::span<const uint8_t> data, ExportRequestPayload& out);

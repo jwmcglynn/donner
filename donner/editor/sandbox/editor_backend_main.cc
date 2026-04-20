@@ -216,6 +216,16 @@ int main(int /*argc*/, char** /*argv*/) {
         break;
       }
 
+      case SessionOpcode::kSelectElement: {
+        donner::editor::sandbox::SelectElementPayload sel;
+        if (!DecodeSelectElement(request.payload, sel)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleSelectElement(sel), request.requestId)) return 1;
+        break;
+      }
+
       case SessionOpcode::kUndo:
         if (!RespondFrame(core.handleUndo(), request.requestId)) return 1;
         break;

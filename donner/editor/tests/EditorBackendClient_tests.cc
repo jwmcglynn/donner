@@ -29,6 +29,14 @@ constexpr std::string_view kSimpleSvg =
   <rect id="r1" x="10" y="10" width="80" height="80" fill="red"/>
 </svg>)SVG";
 
+/// SVG with multiple children for tree tests.
+constexpr std::string_view kMultiRectSvg =
+    R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect id="a" x="0" y="0" width="30" height="30" fill="red"/>
+  <rect id="b" x="35" y="0" width="30" height="30" fill="green"/>
+  <rect id="c" x="70" y="0" width="30" height="30" fill="blue"/>
+</svg>)SVG";
+
 /// Invalid SVG for parse-error testing.
 constexpr std::string_view kInvalidSvg = R"SVG(<not-svg>broken<)SVG";
 
@@ -197,6 +205,97 @@ TEST_P(EditorBackendClientTest, PointerEventMissClearsSelection) {
   EXPECT_TRUE(missResult.ok);
   EXPECT_EQ(missResult.selection.selections.size(), 0u)
       << "Clicking outside should clear selection";
+}
+
+TEST_P(EditorBackendClientTest, TreeSummaryPopulated) {
+  std::vector<uint8_t> bytes(kMultiRectSvg.begin(), kMultiRectSvg.end());
+  auto future = client().loadBytes(bytes, std::nullopt);
+  FrameResult result = future.get();
+  ASSERT_TRUE(result.ok);
+
+  // Tree should contain at least root <svg> + 3 <rect> children.
+  ASSERT_GE(result.tree.nodes.size(), 4u);
+  EXPECT_EQ(result.tree.rootIndex, 0u);
+  EXPECT_GT(result.tree.generation, 0u);
+
+  // Root should be svg.
+  EXPECT_EQ(result.tree.nodes[0].tagName, "svg");
+  EXPECT_EQ(result.tree.nodes[0].depth, 0u);
+  EXPECT_EQ(result.tree.nodes[0].parentIndex, 0xFFFFFFFFu);
+
+  // Children should be rects at depth 1.
+  EXPECT_EQ(result.tree.nodes[1].tagName, "rect");
+  EXPECT_EQ(result.tree.nodes[1].idAttr, "a");
+  EXPECT_EQ(result.tree.nodes[1].depth, 1u);
+  EXPECT_EQ(result.tree.nodes[1].parentIndex, 0u);
+
+  EXPECT_EQ(result.tree.nodes[2].tagName, "rect");
+  EXPECT_EQ(result.tree.nodes[2].idAttr, "b");
+
+  EXPECT_EQ(result.tree.nodes[3].tagName, "rect");
+  EXPECT_EQ(result.tree.nodes[3].idAttr, "c");
+
+  // None should be selected initially.
+  for (const auto& node : result.tree.nodes) {
+    EXPECT_FALSE(node.selected) << "Node " << node.displayName << " should not be selected";
+  }
+}
+
+TEST_P(EditorBackendClientTest, SelectElementMarksSelected) {
+  std::vector<uint8_t> bytes(kMultiRectSvg.begin(), kMultiRectSvg.end());
+  auto loadFuture = client().loadBytes(bytes, std::nullopt);
+  FrameResult loadResult = loadFuture.get();
+  ASSERT_TRUE(loadResult.ok);
+  ASSERT_GE(loadResult.tree.nodes.size(), 4u);
+
+  // Select the second rect ("b") via selectElement — Replace mode.
+  const auto& targetNode = loadResult.tree.nodes[2];  // "b"
+  ASSERT_EQ(targetNode.idAttr, "b");
+
+  auto selFuture = client().selectElement(targetNode.entityId, targetNode.entityGeneration, 0);
+  FrameResult selResult = selFuture.get();
+  ASSERT_TRUE(selResult.ok);
+  ASSERT_GE(selResult.tree.nodes.size(), 4u);
+
+  // The "b" rect should now be selected.
+  EXPECT_TRUE(selResult.tree.nodes[2].selected)
+      << "Node 'b' should be selected after selectElement";
+
+  // Other nodes should not be selected.
+  EXPECT_FALSE(selResult.tree.nodes[0].selected);
+  EXPECT_FALSE(selResult.tree.nodes[1].selected);
+  EXPECT_FALSE(selResult.tree.nodes[3].selected);
+}
+
+TEST_P(EditorBackendClientTest, SelectElementToggleMode) {
+  std::vector<uint8_t> bytes(kMultiRectSvg.begin(), kMultiRectSvg.end());
+  auto loadFuture = client().loadBytes(bytes, std::nullopt);
+  FrameResult loadResult = loadFuture.get();
+  ASSERT_TRUE(loadResult.ok);
+  ASSERT_GE(loadResult.tree.nodes.size(), 4u);
+
+  // Select "a" first (Replace).
+  const auto& nodeA = loadResult.tree.nodes[1];
+  auto selA = client().selectElement(nodeA.entityId, nodeA.entityGeneration, 0);
+  FrameResult rA = selA.get();
+  ASSERT_TRUE(rA.ok);
+  EXPECT_TRUE(rA.tree.nodes[1].selected);
+
+  // Toggle "b" (mode=1) — should add to selection.
+  const auto& nodeB = loadResult.tree.nodes[2];
+  auto selB = client().selectElement(nodeB.entityId, nodeB.entityGeneration, 1);
+  FrameResult rB = selB.get();
+  ASSERT_TRUE(rB.ok);
+  // Note: toggle on an unselected element adds it. Both should be selected.
+  EXPECT_TRUE(rB.tree.nodes[1].selected) << "'a' should still be selected";
+  EXPECT_TRUE(rB.tree.nodes[2].selected) << "'b' should now be selected (toggle-on)";
+
+  // Toggle "a" again (mode=1) — should deselect it.
+  auto selA2 = client().selectElement(nodeA.entityId, nodeA.entityGeneration, 1);
+  FrameResult rA2 = selA2.get();
+  ASSERT_TRUE(rA2.ok);
+  EXPECT_FALSE(rA2.tree.nodes[1].selected) << "'a' should be deselected (toggle-off)";
+  EXPECT_TRUE(rA2.tree.nodes[2].selected) << "'b' should remain selected";
 }
 
 INSTANTIATE_TEST_SUITE_P(AllClients, EditorBackendClientTest,

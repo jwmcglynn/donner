@@ -1364,9 +1364,87 @@ int main(int argc, char** argv) {
 
     ImGui::End();
 
-    // --- Tree View pane (placeholder) ---
+    // --- Tree View pane ---
     ImGui::Begin("Tree View");
-    ImGui::TextDisabled("Tree view pending backend tree-summary API (S9 follow-up).");
+    {
+      const auto& treeSummary = backend->tree();
+      if (treeSummary.nodes.empty()) {
+        ImGui::TextDisabled("No document loaded.");
+      } else {
+        ImGui::BeginChild("TreeViewScroll", ImVec2(0, 0), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+
+        // Single-pass depth-walk using the flat node array.
+        // Track open/close state via a depth stack of "currently open" depths.
+        int prevDepth = -1;
+        bool scrollToSelected = false;
+
+        for (size_t i = 0; i < treeSummary.nodes.size(); ++i) {
+          const auto& node = treeSummary.nodes[i];
+          int depth = static_cast<int>(node.depth);
+
+          // Close tree nodes that are deeper than current depth.
+          while (prevDepth >= depth) {
+            ImGui::TreePop();
+            --prevDepth;
+          }
+
+          ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                                     ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                                     ImGuiTreeNodeFlags_SpanAvailWidth |
+                                     ImGuiTreeNodeFlags_DefaultOpen;
+
+          if (node.selected) {
+            flags |= ImGuiTreeNodeFlags_Selected;
+          }
+
+          // Check if this node has children (next node is deeper).
+          bool hasChildren = (i + 1 < treeSummary.nodes.size() &&
+                              treeSummary.nodes[i + 1].depth > node.depth);
+          if (!hasChildren) {
+            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+          }
+
+          ImGui::PushID(static_cast<int>(i));
+          bool open = ImGui::TreeNodeEx(node.displayName.c_str(), flags);
+          ImGui::PopID();
+
+          // Handle click → selection.
+          if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+            uint8_t mode = 0;  // Replace.
+            if (ImGui::GetIO().KeyCtrl) {
+              mode = 1;  // Toggle.
+            } else if (ImGui::GetIO().KeyShift) {
+              mode = 2;  // Add.
+            }
+            (void)backend->selectElement(node.entityId, node.entityGeneration, mode);
+          }
+
+          // Scroll to selected node.
+          if (node.selected && !scrollToSelected) {
+            ImGui::SetScrollHereY();
+            scrollToSelected = true;
+          }
+
+          if (hasChildren && open) {
+            prevDepth = depth;
+          } else if (!hasChildren) {
+            // Leaf — don't change prevDepth (no TreePush happened).
+          } else {
+            // Node closed — don't descend. Skip all children.
+            // (ImGui handles the skip via TreeNodeEx returning false.)
+          }
+        }
+
+        // Close remaining open tree nodes.
+        while (prevDepth >= 0) {
+          ImGui::TreePop();
+          --prevDepth;
+        }
+
+        ImGui::EndChild();
+      }
+    }
     ImGui::End();
 
     // --- Inspector pane (placeholder) ---

@@ -536,5 +536,135 @@ TEST(EditorApiCodecTest, InvalidErrorKind) {
   EXPECT_FALSE(DecodeError(encoded, out));
 }
 
+// ===========================================================================
+// SelectElement round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, SelectElementRoundTrip) {
+  SelectElementPayload in;
+  in.entityId = 42;
+  in.entityGeneration = 7;
+  in.mode = 1;  // Toggle.
+
+  auto encoded = EncodeSelectElement(in);
+  SelectElementPayload out;
+  ASSERT_TRUE(DecodeSelectElement(encoded, out));
+  EXPECT_EQ(out.entityId, 42u);
+  EXPECT_EQ(out.entityGeneration, 7u);
+  EXPECT_EQ(out.mode, 1u);
+}
+
+TEST(EditorApiCodecTest, SelectElementInvalidMode) {
+  SelectElementPayload in;
+  in.entityId = 1;
+  in.entityGeneration = 1;
+  in.mode = 0;
+  auto encoded = EncodeSelectElement(in);
+  // Overwrite mode byte (at offset 16 = 8+8) with invalid value.
+  encoded[16] = 5;
+  SelectElementPayload out;
+  EXPECT_FALSE(DecodeSelectElement(encoded, out));
+}
+
+// ===========================================================================
+// FrameTreeSummary round-trip (embedded in FramePayload)
+// ===========================================================================
+
+TEST(EditorApiCodecTest, FrameTreeSummaryRoundTrip) {
+  FramePayload in;
+  in.frameId = 100;
+
+  in.tree.generation = 3;
+  in.tree.rootIndex = 0;
+
+  TreeNodeEntry root;
+  root.entityId = 1;
+  root.entityGeneration = 3;
+  root.parentIndex = 0xFFFFFFFF;
+  root.depth = 0;
+  root.tagName = "svg";
+  root.idAttr = "";
+  root.displayName = "<svg>";
+  root.sourceStart = 0;
+  root.sourceEnd = 50;
+  root.selected = false;
+  in.tree.nodes.push_back(root);
+
+  TreeNodeEntry child1;
+  child1.entityId = 2;
+  child1.entityGeneration = 3;
+  child1.parentIndex = 0;
+  child1.depth = 1;
+  child1.tagName = "rect";
+  child1.idAttr = "myRect";
+  child1.displayName = "<rect id=\"myRect\">";
+  child1.sourceStart = 5;
+  child1.sourceEnd = 30;
+  child1.selected = true;
+  in.tree.nodes.push_back(child1);
+
+  TreeNodeEntry child2;
+  child2.entityId = 3;
+  child2.entityGeneration = 3;
+  child2.parentIndex = 0;
+  child2.depth = 1;
+  child2.tagName = "circle";
+  child2.idAttr = "";
+  child2.displayName = "<circle>";
+  child2.sourceStart = 31;
+  child2.sourceEnd = 48;
+  child2.selected = false;
+  in.tree.nodes.push_back(child2);
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+
+  EXPECT_EQ(out.tree.generation, 3u);
+  EXPECT_EQ(out.tree.rootIndex, 0u);
+  ASSERT_EQ(out.tree.nodes.size(), 3u);
+
+  // Root node.
+  EXPECT_EQ(out.tree.nodes[0].entityId, 1u);
+  EXPECT_EQ(out.tree.nodes[0].entityGeneration, 3u);
+  EXPECT_EQ(out.tree.nodes[0].parentIndex, 0xFFFFFFFFu);
+  EXPECT_EQ(out.tree.nodes[0].depth, 0u);
+  EXPECT_EQ(out.tree.nodes[0].tagName, "svg");
+  EXPECT_EQ(out.tree.nodes[0].idAttr, "");
+  EXPECT_EQ(out.tree.nodes[0].displayName, "<svg>");
+  EXPECT_EQ(out.tree.nodes[0].sourceStart, 0u);
+  EXPECT_EQ(out.tree.nodes[0].sourceEnd, 50u);
+  EXPECT_FALSE(out.tree.nodes[0].selected);
+
+  // Child 1 (selected rect).
+  EXPECT_EQ(out.tree.nodes[1].entityId, 2u);
+  EXPECT_EQ(out.tree.nodes[1].tagName, "rect");
+  EXPECT_EQ(out.tree.nodes[1].idAttr, "myRect");
+  EXPECT_EQ(out.tree.nodes[1].displayName, "<rect id=\"myRect\">");
+  EXPECT_EQ(out.tree.nodes[1].parentIndex, 0u);
+  EXPECT_EQ(out.tree.nodes[1].depth, 1u);
+  EXPECT_TRUE(out.tree.nodes[1].selected);
+
+  // Child 2 (circle).
+  EXPECT_EQ(out.tree.nodes[2].entityId, 3u);
+  EXPECT_EQ(out.tree.nodes[2].tagName, "circle");
+  EXPECT_EQ(out.tree.nodes[2].parentIndex, 0u);
+  EXPECT_EQ(out.tree.nodes[2].depth, 1u);
+  EXPECT_FALSE(out.tree.nodes[2].selected);
+}
+
+TEST(EditorApiCodecTest, FrameTreeSummaryEmpty) {
+  FramePayload in;
+  in.frameId = 200;
+  // tree left default (empty).
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+  EXPECT_EQ(out.tree.generation, 0u);
+  EXPECT_EQ(out.tree.rootIndex, 0xFFFFFFFFu);
+  EXPECT_TRUE(out.tree.nodes.empty());
+}
+
 }  // namespace
 }  // namespace donner::editor::sandbox

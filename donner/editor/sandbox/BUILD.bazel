@@ -264,6 +264,7 @@ donner_cc_library(
     deps = [
         ":editor_api_codec",
         ":serializing_renderer",
+        "//donner/base/xml",
         "//donner/editor/backend_lib:editor_app",
         "//donner/svg",
     ],

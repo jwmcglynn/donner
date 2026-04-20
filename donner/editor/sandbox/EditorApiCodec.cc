@@ -25,6 +25,7 @@ constexpr uint32_t kMaxSessionErrorKind = static_cast<uint32_t>(SessionErrorKind
 constexpr uint32_t kMaxSelectionCount = 100'000;
 constexpr uint32_t kMaxWritebackCount = 100'000;
 constexpr uint32_t kMaxDiagnosticCount = 100'000;
+constexpr uint32_t kMaxTreeNodeCount = 500'000;
 
 }  // namespace
 
@@ -109,6 +110,14 @@ std::vector<uint8_t> EncodeWheelEvent(const WheelEventPayload& payload) {
 std::vector<uint8_t> EncodeSetTool(const SetToolPayload& payload) {
   WireWriter w;
   w.writeU32(static_cast<uint32_t>(payload.toolKind));
+  return std::move(w).take();
+}
+
+std::vector<uint8_t> EncodeSelectElement(const SelectElementPayload& payload) {
+  WireWriter w;
+  w.writeU64(payload.entityId);
+  w.writeU64(payload.entityGeneration);
+  w.writeU8(payload.mode);
   return std::move(w).take();
 }
 
@@ -212,6 +221,23 @@ std::vector<uint8_t> EncodeFrame(const FramePayload& payload) {
   w.writeBool(payload.hasCursorHint);
   if (payload.hasCursorHint) {
     w.writeU32(payload.cursorHintSourceOffset);
+  }
+
+  // tree summary
+  w.writeU64(payload.tree.generation);
+  w.writeU32(payload.tree.rootIndex);
+  w.writeU32(static_cast<uint32_t>(payload.tree.nodes.size()));
+  for (const auto& node : payload.tree.nodes) {
+    w.writeU64(node.entityId);
+    w.writeU64(node.entityGeneration);
+    w.writeU32(node.parentIndex);
+    w.writeU32(node.depth);
+    w.writeString(node.tagName);
+    w.writeString(node.idAttr);
+    w.writeString(node.displayName);
+    w.writeU32(node.sourceStart);
+    w.writeU32(node.sourceEnd);
+    w.writeBool(node.selected);
   }
 
   return std::move(w).take();
@@ -371,6 +397,15 @@ bool DecodeSetTool(std::span<const uint8_t> data, SetToolPayload& out) {
   return !r.failed();
 }
 
+bool DecodeSelectElement(std::span<const uint8_t> data, SelectElementPayload& out) {
+  WireReader r(data);
+  if (!r.readU64(out.entityId)) return false;
+  if (!r.readU64(out.entityGeneration)) return false;
+  if (!r.readU8(out.mode)) return false;
+  if (out.mode > 2) return false;
+  return !r.failed();
+}
+
 bool DecodeUndo(std::span<const uint8_t> /*data*/) {
   return true;
 }
@@ -492,6 +527,26 @@ bool DecodeFrame(std::span<const uint8_t> data, FramePayload& out) {
   if (!r.readBool(out.hasCursorHint)) return false;
   if (out.hasCursorHint) {
     if (!r.readU32(out.cursorHintSourceOffset)) return false;
+  }
+
+  // tree summary
+  if (!r.readU64(out.tree.generation)) return false;
+  if (!r.readU32(out.tree.rootIndex)) return false;
+  uint32_t treeNodeCount = 0;
+  if (!r.readCount(treeNodeCount, kMaxTreeNodeCount)) return false;
+  out.tree.nodes.resize(treeNodeCount);
+  for (uint32_t i = 0; i < treeNodeCount; ++i) {
+    auto& node = out.tree.nodes[i];
+    if (!r.readU64(node.entityId)) return false;
+    if (!r.readU64(node.entityGeneration)) return false;
+    if (!r.readU32(node.parentIndex)) return false;
+    if (!r.readU32(node.depth)) return false;
+    if (!r.readString(node.tagName)) return false;
+    if (!r.readString(node.idAttr)) return false;
+    if (!r.readString(node.displayName)) return false;
+    if (!r.readU32(node.sourceStart)) return false;
+    if (!r.readU32(node.sourceEnd)) return false;
+    if (!r.readBool(node.selected)) return false;
   }
 
   return !r.failed();
