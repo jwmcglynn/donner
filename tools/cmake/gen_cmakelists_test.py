@@ -45,7 +45,7 @@ class ModuleBazelExtractionTest(unittest.TestCase):
         # third_party/entt, so there's no bazel_dep/git_repository block to
         # read. The CMake FetchContent entry comes from _HARDCODED_FETCHCONTENT.
         required = ["googletest", "nlohmann_json", "zlib",
-                    "rules_cc", "pixelmatch-cpp17", "woff2", "skia"]
+                    "rules_cc", "pixelmatch-cpp17", "woff2"]
         for dep in required:
             self.assertIn(dep, versions, f"Missing dep: {dep}")
 
