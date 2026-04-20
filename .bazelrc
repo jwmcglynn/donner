@@ -49,20 +49,25 @@ build --incompatible_enable_cc_toolchain_resolution
 # @resvg-test-suite, which lives in the dev-only non_bcr_deps extension.
 common --//donner/svg/renderer:resvg_test_suite_available=true
 
-# Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
-#
-# Register the default host-exec toolchain plus the explicit per-exec-platform
-# variants. The resolver picks whichever toolchain's exec_compatible_with
-# matches the build's exec platform, so cross-target remote execution (e.g.
-# macOS client dispatching to bazel-re1 Linux workers) downloads and uploads
-# the right clang for the worker instead of the client host.
-common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
+# Enable building with the latest llvm toolchain (downloaded on-demand, see
+# MODULE.bazel). Only Linux exec variants are registered here because LLVM's
+# generic clang cannot satisfy `objc_library` targets (e.g. @glfw//:glfw_cocoa
+# pulled in by //donner/editor) — that rule requires the Apple CC toolchain,
+# which is provided by `@build_bazel_apple_support` and only wins resolution
+# when no LLVM toolchain matches the macOS exec platform. On macOS exec,
+# `--config=latest_llvm` therefore falls back to apple_support's Xcode clang,
+# which handles both C++ and ObjC. On Linux exec (local dev1 builds or remote
+# dispatch to bazel-re1), the matching per-arch LLVM variant is picked and
+# used with the hermetic sysroot declared in MODULE.bazel.
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
-common:latest_llvm --extra_toolchains=@llvm_toolchain_macos_aarch64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# Disable warning about not eliding copy on return (NRVO), which started triggering in skia on LLVM 21
-build:latest_llvm --copt=-Wno-nrvo
+# Disable warning about not eliding copy on return (NRVO), which started
+# triggering in skia on LLVM 21. Only applies on Linux (via
+# --enable_platform_specific_config) because `--config=latest_llvm` on
+# macOS no longer activates LLVM — it falls back to apple_support's
+# Xcode clang, which rejects `-Wno-nrvo` as an unknown warning.
+build:linux --copt=-Wno-nrvo
 # Use rules_python's hermetic Python launcher rather than the default
 # `#!/usr/bin/env python3` shebang. Without this, py_binary targets still rely
 # on a host python3 in PATH, which the Bazel remote-execution sandbox

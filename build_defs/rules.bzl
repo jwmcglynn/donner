@@ -54,20 +54,17 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
 
 def llvm21_macos_workaround_linkopts():
     """
-    Returns linkopts needed for LLVM 21 __hash_memory symbol workaround on macOS.
+    No-op retained for call-site compatibility.
 
-    See: https://github.com/llvm/llvm-project/issues/155606
-    The fuzzer runtime and other LLVM 21 compiled code needs symbols from libc++ 21,
-    but the linker finds the system libc++. We explicitly link against LLVM 21's static libraries.
+    Previously forced linking against LLVM 21's static libc++ on macOS to
+    satisfy https://github.com/llvm/llvm-project/issues/155606. That path
+    only applied when `--config=latest_llvm` selected LLVM as the macOS CC
+    toolchain, but that registration was removed (see `.bazelrc` comment on
+    `--config=latest_llvm` and MODULE.bazel note on `llvm_toolchain_macos_aarch64`).
+    `--config=latest_llvm` on macOS now uses apple_support's Xcode clang,
+    which has its own libc++ and doesn't need the workaround.
     """
-    return select({
-        "//build_defs:llvm_latest_macos": [
-            "-nostdlib++",
-            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++.a",
-            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++abi.a",
-        ],
-        "//conditions:default": [],
-    })
+    return []
 
 def libc_compat_deps():
     """
@@ -89,13 +86,14 @@ def libc_compat_deps():
 def fuzzer_compatible_with():
     """
     Returns a list of labels that the fuzzer rules are compatible with.
-    """
 
-    # Only run on Linux, or if --config=toolchains_llvm is used.
-    # Since the macOS clang is missing libclang_rt.fuzzer_osx.a, we cannot use the built-in macOS toolchain
+    Fuzzers are Linux-only: they depend on libclang_rt.fuzzer from the
+    hermetic LLVM 21 toolchain, and `--config=latest_llvm` now only
+    activates that toolchain on Linux exec platforms. macOS builds use
+    apple_support's Xcode clang, which doesn't ship the fuzzer runtime.
+    """
     return select({
         "@platforms//os:linux": [],
-        "//build_defs:fuzzers_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     })
 

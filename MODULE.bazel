@@ -242,15 +242,14 @@ llvm.sysroot(
     label = "@sysroot_linux_x86_64//:sysroot",
 )
 
-# bazel-re2 (macOS aarch64): Linux client → macOS worker via
-# --config=re-macos. No sysroot — macOS uses the Xcode SDK present on the
-# RE worker.
-llvm.toolchain(
-    name = "llvm_toolchain_macos_aarch64",
-    llvm_version = "21.1.6",
-    exec_os = "darwin",
-    exec_arch = "aarch64",
-)
+# Note on macOS exec: we deliberately do NOT register an
+# `llvm_toolchain_macos_aarch64` variant. LLVM's generic clang cannot satisfy
+# `objc_library` (required by //donner/editor via glfw's Cocoa backend), so
+# macOS builds — local on klein and remote on bazel-re2 — use
+# `@build_bazel_apple_support`'s Xcode toolchain instead. That toolchain is
+# not hermetic, but it handles both C++ and ObjC correctly. If cross-target
+# Linux→macOS RE is ever needed, add the variant back and also ship a macOS
+# sysroot in `non_bcr_deps` (see handoff: Fix 1, option B).
 
 use_repo(
     llvm,
@@ -258,7 +257,6 @@ use_repo(
     "llvm_toolchain_llvm",
     "llvm_toolchain_linux_aarch64",
     "llvm_toolchain_linux_x86_64",
-    "llvm_toolchain_macos_aarch64",
 )
 
 # NOTE: To use any of these toolchains specify --config=latest_llvm (which
