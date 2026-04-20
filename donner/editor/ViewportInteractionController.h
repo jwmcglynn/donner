@@ -3,6 +3,7 @@
 
 #include <array>
 #include <optional>
+#include <vector>
 
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/RenderPaneGesture.h"

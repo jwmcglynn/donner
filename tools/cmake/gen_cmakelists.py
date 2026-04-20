@@ -240,6 +240,13 @@ SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
     "donner_svg_renderer_geode_geode_shaders",
     "donner_svg_renderer_geode_geode_texture_encoder",
     "donner_svg_renderer_geode_geode_wgpu_util",
+    # `//donner/editor:tracy_wrapper` is depended on by the compositor for
+    # `ZoneScopedN` profiling. In Bazel it resolves to a real Tracy client;
+    # in CMake the editor package is skipped (SKIPPED_PACKAGES), so the
+    # link edge has nowhere to go. Drop the dep entirely — Tracy's headers
+    # compile to no-ops when `TRACY_ENABLE` is undefined (the CMake default),
+    # so the zones on the compositor hot path are silently elided.
+    "donner_editor_tracy_wrapper",
 }
 
 
@@ -1257,13 +1264,6 @@ _KNOWN_EXTERNAL_TARGETS: Set[str] = {
     "donner_third_party_webgpu-cpp_webgpu_cpp",
     # Fallback umbrella
     "donner",
-    # `//donner/editor:tracy_wrapper` is referenced by `//donner/svg/compositor`
-    # for ZoneScopedN profiling, but the editor package is skipped in CMake
-    # (tracy/imgui/glfw aren't wired into the CMake mirror). The Bazel path
-    # pulls in real Tracy; the CMake build gets a zero-cost no-op (Tracy's
-    # headers compile to nothing when `TRACY_ENABLE` is undefined, which is
-    # the CMake default).
-    "donner_editor_tracy_wrapper",
 }
 
 
