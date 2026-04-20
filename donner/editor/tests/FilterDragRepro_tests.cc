@@ -412,10 +412,13 @@ TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
       else
         buckets[5]++;
     }
-    std::cerr << "[FilterDragRepro] " << label << " worker-ms histogram: "
-              << " <5=" << buckets[0] << " 5-15=" << buckets[1] << " 15-30=" << buckets[2]
-              << " 30-60=" << buckets[3] << " 60-120=" << buckets[4] << " >=120=" << buckets[5]
-              << "\n";
+    std::cerr << "[FilterDragRepro] " << label << " worker-ms histogram:";
+    std::cerr << " <5=" << buckets[0];
+    std::cerr << " 5-15=" << buckets[1];
+    std::cerr << " 15-30=" << buckets[2];
+    std::cerr << " 30-60=" << buckets[3];
+    std::cerr << " 60-120=" << buckets[4];
+    std::cerr << " >=120=" << buckets[5] << "\n";
   };
   dumpHistogram(firstDown, firstUp, "first-drag");
   dumpHistogram(secondDown, secondUp, "second-drag");
