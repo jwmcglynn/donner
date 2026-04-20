@@ -1070,11 +1070,15 @@ struct RendererGeode::Impl {
         const FillRule fillRule = strokeFillRuleFor(stroked);
         device->countPathEncode();
         geode::EncodedPath encoded = geode::GeodePathEncoder::encode(stroked, fillRule);
-        cache.strokeSlot.emplace();
-        cache.strokeSlot->strokeKey = strokeStyle;
-        cache.strokeSlot->strokedPath = std::move(stroked);
-        cache.strokeSlot->strokedEncode = std::move(encoded);
-        cache.strokeSlot->strokeFillRule = fillRule;
+        // GCC 14 libstdc++ rejects `.emplace()` here with "is_constructible_v<StrokeSlot> was not
+        // satisfied"; clang + libc++ accepts it. Build the value explicitly and assign to sidestep
+        // the toolchain disagreement.
+        cache.strokeSlot = geode::GeodePathCacheComponent::StrokeSlot{
+            .strokeKey = strokeStyle,
+            .strokedPath = std::move(stroked),
+            .strokedEncode = std::move(encoded),
+            .strokeFillRule = fillRule,
+        };
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
       result.encoded = &cache.strokeSlot->strokedEncode;

@@ -8,6 +8,8 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry_fwd.h"
+#include "donner/base/FillRule.h"
+#include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
@@ -19,10 +21,8 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/base/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MixBlendMode.h"
-#include "donner/base/Path.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/WritingMode.h"
@@ -110,7 +110,7 @@ struct PaintParams {
  * Clip stack entry combining rectangles, paths, and optional masks.
  */
 struct ResolvedClip {
-  std::optional<Box2d> clipRect;  ///< Optional axis-aligned clip rectangle.
+  std::optional<Box2d> clipRect;     ///< Optional axis-aligned clip rectangle.
   std::vector<PathShape> clipPaths;  ///< Ordered list of clip path shapes to intersect.
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
   Transform2d clipPathUnitsTransform;  ///< Transform applied to the clip path coordinate system.

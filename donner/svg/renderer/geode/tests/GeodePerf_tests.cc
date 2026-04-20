@@ -430,9 +430,8 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
   // `pushIsolatedLayer` / `popIsolatedLayer` round-trip per frame. The
   // layer allocates an RGBA8 resolve + 4× MSAA companion — M4.2 must
   // pool and reuse both.
-  EXPECT_EQ(c.textureCreates, 0u)
-      << "Isolated-layer texture leak on unchanged second render. "
-         "Layer push/pop should draw from the M4.2 texture pool.";
+  EXPECT_EQ(c.textureCreates, 0u) << "Isolated-layer texture leak on unchanged second render. "
+                                     "Layer push/pop should draw from the M4.2 texture pool.";
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
