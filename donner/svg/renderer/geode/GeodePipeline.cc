@@ -338,9 +338,9 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   vbLayout.attributes = vertexAttribs;
 
   // Max-blend so multiple clip paths rendered into the same mask layer
-  // UNION. Each shader writes `1.0` for covered samples, `0.0` would
-  // otherwise be the clear value, so `Max` over the red channel keeps
-  // the larger coverage — exactly the union.
+  // UNION. On the sample-mask path every channel carries the same scalar
+  // coverage. On the alpha-coverage path each channel carries one of the
+  // four subpixel samples, and Max unions them independently per sample.
   wgpu::BlendState blend = {};
   blend.color.srcFactor = wgpu::BlendFactor::One;
   blend.color.dstFactor = wgpu::BlendFactor::One;
@@ -350,9 +350,9 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   blend.alpha.operation = wgpu::BlendOperation::Max;
 
   wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = wgpu::TextureFormat::R8Unorm;
+  colorTarget.format = wgpu::TextureFormat::RGBA8Unorm;
   colorTarget.blend = &blend;
-  colorTarget.writeMask = wgpu::ColorWriteMask::Red;
+  colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader;

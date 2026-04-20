@@ -66,6 +66,13 @@ struct Band {
 @group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(4) var clipMaskSampler: sampler;
 
+fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
+  let dims = vec2i(textureDimensions(clipMaskTexture));
+  let texel = clamp(vec2i(round(pixel_center - vec2f(0.5))), vec2i(0), dims - vec2i(1));
+  let sample = textureLoad(clipMaskTexture, texel, 0);
+  return clamp((sample.r + sample.g + sample.b + sample.a) * 0.25, 0.0, 1.0);
+}
+
 // ============================================================================
 // Vertex stage
 // ============================================================================
@@ -249,20 +256,16 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // intersection rule.
   var clipCoverage: f32 = 1.0;
   if (uniforms.hasClipMask != 0u) {
-    let mask_uv = pixel_center / uniforms.viewport;
-    clipCoverage = clamp(textureSample(clipMaskTexture, clipMaskSampler, mask_uv).r,
-                         0.0, 1.0);
+    clipCoverage = clip_mask_coverage(pixel_center);
     if (clipCoverage <= 0.0) {
       discard;
     }
   }
 
   var out: FragOutput;
-  // Red-channel coverage. The alpha channel is ignored because the
-  // downstream fill pipeline samples `.r` as the clip value. Multiply
-  // by the nested clip coverage so shape edges land inside the deeper
-  // union.
-  out.color = vec4f(clipCoverage, 0.0, 0.0, 1.0);
+  // Replicate scalar coverage into all four channels so downstream
+  // shaders can always average RGBA to recover clip coverage.
+  out.color = vec4f(clipCoverage, clipCoverage, clipCoverage, clipCoverage);
   out.mask = mask;
   return out;
 }

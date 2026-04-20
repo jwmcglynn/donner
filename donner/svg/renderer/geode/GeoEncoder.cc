@@ -57,8 +57,8 @@ struct alignas(16) Uniforms {
   float patternOpacity;       // 168 .. 172
   uint32_t hasClipPolygon;    // 172 .. 176 — 0 = no clip, 1 = clipPolygon active
   // Phase 3b path-clip mask flag. When nonzero, the shader samples the
-  // clip mask texture at binding 5 (linear-filtered R8Unorm) and folds
-  // its red-channel coverage into the fragment colour. A 1x1 dummy
+  // clip mask texture at binding 5 (linear-filtered RGBA8Unorm) and folds
+  // its averaged coverage into the fragment colour. A 1x1 dummy
   // texture is always bound so the `textureSample` is always legal.
   uint32_t hasClipMask;  // 176 .. 180
   uint32_t _clipPad0;    // 180 .. 184 — std140 alignment for next vec4 array
@@ -729,7 +729,7 @@ void GeoEncoder::clearClipPolygon() {
 // ============================================================================
 
 void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask) {
-  if (!msaaMask || !resolveMask) {
+  if (!resolveMask || (impl_->sampleCount > 1 && !msaaMask)) {
     return;
   }
 
@@ -1471,6 +1471,7 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
   // structure/use/opacity-inheritance where a use opacity=0.5 wraps a
   // rect opacity=0.5 and should composite to 0.25).
   qp.sourceIsPremultiplied = true;
+  qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
@@ -1506,6 +1507,7 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
   // in premultiplied alpha.
   qp.sourceIsPremultiplied = true;
   qp.maskTexture = mask;
+  qp.clipMaskView = impl_->activeClipMaskView;
   if (maskBounds.has_value()) {
     qp.applyMaskBounds = true;
     qp.maskBounds = *maskBounds;
@@ -1551,6 +1553,7 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
   qp.sourceIsPremultiplied = true;
   qp.blendMode = blendMode;
   qp.dstSnapshotTexture = dstSnapshot;
+  qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, layer,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
@@ -1602,6 +1605,7 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   qp.opacity = opacity;
   qp.filter =
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);

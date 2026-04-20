@@ -248,7 +248,7 @@ public:
   /**
    * Phase 3b: open a new render pass that writes into the given mask
    * texture pair. Used by `RendererGeode::pushClip` to materialise a
-   * path-based clip into an R8Unorm coverage texture that subsequent
+   * path-based clip into an RGBA8Unorm coverage texture that subsequent
    * fill/gradient draws can sample.
    *
    * The main render pass, if open, is closed first. Subsequent
@@ -256,10 +256,11 @@ public:
    * pipeline. `endMaskPass` closes the mask pass and re-opens the
    * main pass (with `LoadOp::Load`) when the next draw lands.
    *
-   * @param msaaMask 4× MSAA R8Unorm render target. Must be the same
-   *   size as this encoder's target. Cleared to 0 at the start of
-   *   the pass.
-   * @param resolveMask 1-sample R8Unorm resolve target. Sampled by
+   * @param msaaMask 4× MSAA RGBA8Unorm render target. Must be the same
+   *   size as this encoder's target when `GeodeDevice::sampleCount() >
+   *   1`. On the alpha-coverage path (`sampleCount() == 1`) this may be
+   *   null and the pass draws directly into `resolveMask`.
+   * @param resolveMask 1-sample RGBA8Unorm resolve target. Sampled by
    *   `setClipMask` after `endMaskPass`.
    */
   void beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask);
@@ -282,7 +283,7 @@ public:
 
   /**
    * Bind `maskView` as the clip mask texture for subsequent fill /
-   * gradient draws. The view must reference a 1-sample R8Unorm
+   * gradient draws. The view must reference a 1-sample RGBA8Unorm
    * texture the same size as the encoder's target — typically the
    * resolve texture produced by `beginMaskPass` + `endMaskPass`.
    *

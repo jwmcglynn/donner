@@ -17,9 +17,13 @@ namespace donner::geode {
  * repeating fill.
  *
  * Bind group layout (matches `shaders/image_blit.wgsl`):
- * - binding 0: uniform buffer (mvp, destRect, srcRect, opacity)
+ * - binding 0: uniform buffer (mvp, destRect, srcRect, targetSize, opacity, flags)
  * - binding 1: sampler (filter mode chosen at draw time)
  * - binding 2: sampled texture 2D (float)
+ * - binding 3: sampled mask texture for `<mask>` luminance mode
+ * - binding 4: sampled destination snapshot for `mix-blend-mode`
+ * - binding 5: sampled Phase 3b clip-mask texture
+ * - binding 6: clip-mask sampler (always linear clamp-to-edge)
  *
  * The pipeline takes no vertex buffer — the shader generates quad corners
  * from `@builtin(vertex_index)`. A draw call is `pass.Draw(6, 1, 0, 0)`.
@@ -60,6 +64,9 @@ public:
   /// `ImageParams::imageRenderingPixelated` is true.
   const wgpu::Sampler& nearestSampler() const { return nearestSampler_; }
 
+  /// Linear clamp-to-edge sampler used for Phase 3b clip-mask textures.
+  const wgpu::Sampler& clipMaskSampler() const { return clipMaskSampler_; }
+
   /// Color format the pipeline was built for.
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
@@ -69,6 +76,7 @@ private:
   wgpu::RenderPipeline pipeline_;
   wgpu::Sampler linearSampler_;
   wgpu::Sampler nearestSampler_;
+  wgpu::Sampler clipMaskSampler_;
 };
 
 }  // namespace donner::geode

@@ -26,6 +26,9 @@ struct Uniforms {
   // For a full-image blit this is (0,0,1,1). For pattern tile sampling
   // (Phase 2H) the caller may pass a sub-rect.
   srcRect: vec4f,
+  // Target dimensions in pixels. Used to map fragment positions to the
+  // Phase 3b clip-mask texture's normalized UVs.
+  targetSize: vec2f,
   // Overall multiplier applied to the sampled texel. Used for
   // `ImageParams::opacity * paint.opacity` on the draw path.
   opacity: f32,
@@ -62,9 +65,11 @@ struct Uniforms {
   // formula before writing. `maskMode` and `blendMode` are mutually
   // exclusive; the host sets at most one per draw.
   blendMode: u32,
+  // Nonzero when a Phase 3b path-clip mask is bound at binding 5/6 and
+  // should gate the SOURCE content before mask/blend compositing.
+  hasClipMask: u32,
   _blendPad0: u32,
   _blendPad1: u32,
-  _blendPad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -80,6 +85,18 @@ struct Uniforms {
 // the blend formula can read the backdrop without the feedback loop
 // of sampling the pass's own color attachment.
 @group(0) @binding(4) var dstSnapshotTexture: texture_2d<f32>;
+// Phase 3b path-clip mask input. Bound to a 1x1 dummy when
+// `hasClipMask == 0`. Sampled in target-pixel space rather than source
+// UV space so it applies equally to whole-target blits and partial image draws.
+@group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
+@group(0) @binding(6) var clipMaskSampler: sampler;
+
+fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
+  let dims = vec2i(textureDimensions(clipMaskTexture));
+  let texel = clamp(vec2i(round(pixel_center - vec2f(0.5))), vec2i(0), dims - vec2i(1));
+  let sample = textureLoad(clipMaskTexture, texel, 0);
+  return clamp((sample.r + sample.g + sample.b + sample.a) * 0.25, 0.0, 1.0);
+}
 
 // The vertex shader uses `@builtin(vertex_index)` to pick one of the six
 // corners of the quad — no vertex buffer is needed. Layout:
@@ -399,6 +416,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // premultiplied-source-over blend state.
     let a = sampled.a * uniforms.opacity;
     color = vec4f(sampled.rgb * a, a);
+  }
+
+  if (uniforms.hasClipMask != 0u) {
+    let clipCoverage = clip_mask_coverage(in.clip_pos.xy);
+    color = color * clipCoverage;
   }
 
   if (uniforms.blendMode != 0u) {

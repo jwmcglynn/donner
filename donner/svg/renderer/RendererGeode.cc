@@ -1890,7 +1890,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       outDesc.label = wgpuLabel(label);
       outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                       static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.format = wgpu::TextureFormat::RGBA8Unorm;
       outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
       outDesc.mipLevelCount = 1;
       outDesc.sampleCount = 1;
@@ -1907,7 +1907,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       outDesc.label = wgpuLabel(label);
       outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                       static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.format = wgpu::TextureFormat::RGBA8Unorm;
       outDesc.usage = wgpu::TextureUsage::RenderAttachment;
       outDesc.mipLevelCount = 1;
       outDesc.sampleCount = 4;
@@ -2329,12 +2329,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.deviceFromFilter = impl_->deviceFromLocalTransform;
   frame.filterBufferOffsetX = filterBufferOffsetX;
   frame.filterBufferOffsetY = filterBufferOffsetY;
-  frame.savedClipStack = std::move(impl_->clipStack);
-
-  // SVG paints into SourceGraphic first, then filters, then applies clip-path/mask.
-  // Capture the filter input without the outer clip stack and reapply those clips
-  // when compositing the filtered result back to the parent target.
-  impl_->clipStack.clear();
+  frame.savedClipStack = impl_->clipStack;
 
   impl_->target = layerTexture;
   impl_->msaaTarget = layerMsaaTexture;
@@ -2356,7 +2351,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   // filter region's device-space AABB so the SourceGraphic fed into filter
   // primitives (e.g. feGaussianBlur) respects that boundary.
   Impl::ClipStackEntry filterClipEntry;
-  filterClipEntry.pixelRect = impl_->currentTransform.transformBox(region);
+  filterClipEntry.pixelRect = impl_->deviceFromLocalTransform.transformBox(region);
   filterClipEntry.valid = true;
   impl_->clipStack.push_back(std::move(filterClipEntry));
 
@@ -2372,7 +2367,7 @@ void RendererGeode::popFilterLayer() {
   }
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
-  impl_->clipStack = std::move(frame.savedClipStack);
+  impl_->clipStack = frame.savedClipStack;
 
   if (!frame.layerTexture) {
     return;  // Placeholder frame from the headless/error path.

@@ -10,13 +10,12 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
                                        uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
-  // Five bindings: uniform buffer, sampler, sampled content texture,
+  // Seven bindings: uniform buffer, sampler, sampled content texture,
   // sampled luminance-mask texture (Phase 3c), sampled parent-
-  // snapshot texture (Phase 3d blend modes). The mask and snapshot
-  // textures are only read when their respective uniform flags are
-  // non-zero; in normal blit mode both bind to a 1x1 dummy so the
-  // bind group layout stays stable across every draw.
-  wgpu::BindGroupLayoutEntry entries[5] = {};
+  // snapshot texture (Phase 3d blend modes), sampled Phase 3b
+  // clip-mask texture, clip-mask sampler. Optional textures always
+  // bind some valid view so the layout stays stable across every draw.
+  wgpu::BindGroupLayoutEntry entries[7] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -45,9 +44,19 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   entries[4].texture.viewDimension = wgpu::TextureViewDimension::_2D;
   entries[4].texture.multisampled = false;
 
+  entries[5].binding = 5;
+  entries[5].visibility = wgpu::ShaderStage::Fragment;
+  entries[5].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[5].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+  entries[5].texture.multisampled = false;
+
+  entries[6].binding = 6;
+  entries[6].visibility = wgpu::ShaderStage::Fragment;
+  entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeImageBlitBGL");
-  bglDesc.entryCount = 5;
+  bglDesc.entryCount = 7;
   bglDesc.entries = entries;
   bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
@@ -126,6 +135,15 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
   nearestDesc.label = wgpuLabel("GeodeImageBlitNearest");
   nearestDesc.maxAnisotropy = 1;
   nearestSampler_ = device.createSampler(nearestDesc);
+
+  wgpu::SamplerDescriptor clipMaskDesc{wgpu::Default};
+  clipMaskDesc.label = wgpuLabel("GeodeImageBlitClipMask");
+  clipMaskDesc.addressModeU = wgpu::AddressMode::ClampToEdge;
+  clipMaskDesc.addressModeV = wgpu::AddressMode::ClampToEdge;
+  clipMaskDesc.magFilter = wgpu::FilterMode::Linear;
+  clipMaskDesc.minFilter = wgpu::FilterMode::Linear;
+  clipMaskDesc.maxAnisotropy = 1;
+  clipMaskSampler_ = device.createSampler(clipMaskDesc);
 }
 
 }  // namespace donner::geode

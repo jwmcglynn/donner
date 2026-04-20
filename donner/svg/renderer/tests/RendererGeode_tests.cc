@@ -548,6 +548,169 @@ TEST_F(RendererGeodeTest, BlendedLayerPopPreservesBackdropOutsideClip) {
   EXPECT_EQ(inside[3], 255u) << "Multiply result A";
 }
 
+/// Phase 3b repro: an arbitrary path clip should gate color draws to the mask.
+/// A full-viewport blue rect clipped by a left-half rect encoded as a PATH
+/// must render blue only on the left half.
+TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(0.0, 0.0))
+                       .lineTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(32.0, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 16, 32);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
+TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(0.0, 0.0))
+                       .lineTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(32.0, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 16, 32);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
+TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerCompositeForTriangle) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(kViewportSize, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 32, 40);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 8, 8);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
+TEST_F(RendererGeodeTest, PathClipMaskClipsFilterLayerCompositeForTriangle) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(kViewportSize, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.pushFilterLayer(components::FilterGraph{}, std::nullopt);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 32, 40);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 8, 8);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
 /// Stubbed methods (clip/mask/layer/filter/pattern/image/text) should be
 /// safe no-ops that don't crash, and balanced push/pop pairs should keep
 /// drawing functional.

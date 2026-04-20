@@ -117,8 +117,10 @@ private:
  *
  * The mask pipeline is a stripped-down sibling of @ref GeodePipeline —
  * it reuses the same vertex shader, the same band/curve storage SSBOs,
- * and the same 4× MSAA coverage path, but the fragment stage writes a
- * single-channel coverage value into an `R8Unorm` color attachment. The
+ * and the same 4× MSAA coverage path, but the fragment stage writes clip
+ * coverage into an `RGBA8Unorm` color attachment. The sample-mask path
+ * replicates scalar coverage into all 4 channels; the alpha-coverage path
+ * packs one subpixel sample per channel so Max blending unions them exactly.
  * resulting mask texture is then sampled by @ref GeodePipeline and
  * @ref GeodeGradientPipeline as a clip coverage multiplier.
  *
@@ -135,7 +137,7 @@ class GeodeMaskPipeline {
 public:
   /**
    * Create a Slug mask pipeline for the given device. Renders into an
-   * R8Unorm texture with 4× MSAA.
+   * RGBA8Unorm texture with 4× MSAA.
    *
    * @param useAlphaCoverageShader When true, selects the alpha-coverage shader variant.
    * @param sampleCount MSAA sample count (1 for alpha-coverage, 4 otherwise).
@@ -151,8 +153,8 @@ public:
 
   const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
   const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
-  /// The color format the pipeline targets. Always `R8Unorm`.
-  wgpu::TextureFormat colorFormat() const { return wgpu::TextureFormat::R8Unorm; }
+  /// The color format the pipeline targets. Always `RGBA8Unorm`.
+  wgpu::TextureFormat colorFormat() const { return wgpu::TextureFormat::RGBA8Unorm; }
 
 private:
   wgpu::BindGroupLayout bindGroupLayout_;

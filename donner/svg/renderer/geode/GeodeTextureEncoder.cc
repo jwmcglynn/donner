@@ -30,17 +30,18 @@ struct alignas(16) Uniforms {
   float mvp[16];             //   0 ..  64
   float destRect[4];         //  64 ..  80
   float srcRect[4];          //  80 ..  96
-  float opacity;             //  96 .. 100
-  uint32_t sourceIsPremult;  // 100 .. 104
-  uint32_t maskMode;         // 104 .. 108 — Phase 3c <mask> luminance blit
-  uint32_t applyMaskBounds;  // 108 .. 112 — clip output to `maskBounds`
-  float maskBounds[4];       // 112 .. 128 — (x0, y0, x1, y1) in target-pixel space
-  uint32_t blendMode;        // 128 .. 132 — Phase 3d mix-blend-mode selector
-  uint32_t _blendPad0;       // 132 .. 136
-  uint32_t _blendPad1;       // 136 .. 140
-  uint32_t _blendPad2;       // 140 .. 144
+  float targetSize[2];       //  96 .. 104 — target size for clip-mask UVs
+  float opacity;             // 104 .. 108
+  uint32_t sourceIsPremult;  // 108 .. 112
+  uint32_t maskMode;         // 112 .. 116 — Phase 3c <mask> luminance blit
+  uint32_t applyMaskBounds;  // 116 .. 120 — clip output to `maskBounds`
+  float maskBounds[4];       // 120 .. 136 — (x0, y0, x1, y1) in target-pixel space
+  uint32_t blendMode;        // 136 .. 140 — Phase 3d mix-blend-mode selector
+  uint32_t hasClipMask;      // 140 .. 144 — Phase 3b path-clip mask blit
+  uint32_t _pad0;            // 144 .. 148
+  uint32_t _pad1;            // 148 .. 152
 };
-static_assert(sizeof(Uniforms) == 144, "Image-blit Uniforms layout mismatch");
+static_assert(sizeof(Uniforms) == 160, "Image-blit Uniforms layout mismatch");
 
 }  // namespace
 
@@ -105,10 +106,10 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
 }
 
 void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
-                                           const wgpu::RenderPassEncoder& pass,
-                                           const wgpu::Texture& texture, const float mvp[16],
-                                           uint32_t /*targetWidth*/, uint32_t /*targetHeight*/,
-                                           const QuadParams& params) {
+                                            const wgpu::RenderPassEncoder& pass,
+                                            const wgpu::Texture& texture, const float mvp[16],
+                                            uint32_t targetWidth, uint32_t targetHeight,
+                                            const QuadParams& params) {
   if (!texture) {
     return;
   }
@@ -127,6 +128,8 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   u.srcRect[1] = static_cast<float>(params.srcRect.topLeft.y);
   u.srcRect[2] = static_cast<float>(params.srcRect.bottomRight.x);
   u.srcRect[3] = static_cast<float>(params.srcRect.bottomRight.y);
+  u.targetSize[0] = static_cast<float>(targetWidth);
+  u.targetSize[1] = static_cast<float>(targetHeight);
   u.opacity = static_cast<float>(params.opacity);
   u.sourceIsPremult = params.sourceIsPremultiplied ? 1u : 0u;
   u.maskMode = params.maskTexture ? 1u : 0u;
@@ -136,6 +139,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   u.maskBounds[2] = static_cast<float>(params.maskBounds.bottomRight.x);
   u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
   u.blendMode = params.blendMode;
+  u.hasClipMask = params.clipMaskView ? 1u : 0u;
 
   wgpu::BufferDescriptor uniDesc = {};
   uniDesc.label = wgpuLabel("GeodeImageBlitUniforms");
@@ -149,15 +153,16 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   const wgpu::Sampler& sampler =
       (params.filter == Filter::Nearest) ? pipeline.nearestSampler() : pipeline.linearSampler();
 
-  // Bind group — the mask and dst-snapshot texture bindings must
-  // always carry a valid view. When their owning feature flags are
-  // off, we bind the source content texture view as a cheap dummy
-  // (the shader never samples it because the mode guard is 0).
+  // Bind group — optional texture bindings must always carry a valid
+  // view. When their owning feature flags are off, we bind the source
+  // content texture view as a cheap dummy (the shader never samples it
+  // because the corresponding mode guard is 0).
   wgpu::TextureView view = texture.createView();
   wgpu::TextureView maskView = params.maskTexture ? params.maskTexture.createView() : view;
   wgpu::TextureView dstView =
       params.dstSnapshotTexture ? params.dstSnapshotTexture.createView() : view;
-  wgpu::BindGroupEntry entries[5] = {};
+  wgpu::TextureView clipMaskView = params.clipMaskView ? params.clipMaskView : view;
+  wgpu::BindGroupEntry entries[7] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
   entries[0].size = sizeof(Uniforms);
@@ -169,11 +174,15 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   entries[3].textureView = maskView;
   entries[4].binding = 4;
   entries[4].textureView = dstView;
+  entries[5].binding = 5;
+  entries[5].textureView = clipMaskView;
+  entries[6].binding = 6;
+  entries[6].sampler = pipeline.clipMaskSampler();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeImageBlitBindGroup");
   bgDesc.layout = pipeline.bindGroupLayout();
-  bgDesc.entryCount = 5;
+  bgDesc.entryCount = 7;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
   device.countBindGroup();

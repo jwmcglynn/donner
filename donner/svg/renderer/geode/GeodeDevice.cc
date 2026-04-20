@@ -220,22 +220,24 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   }
 
   {
-    // Clip-mask dummy: 1×1 R8Unorm with value 0xFF (= 1.0 coverage).
+    // Clip-mask dummy: 1×1 RGBA8Unorm with all channels 0xFF (= 1.0 coverage per
+    // sample lane in the alpha-coverage packed-mask path introduced by the
+    // Phase 3b clip-mask fix).
     wgpu::TextureDescriptor md = {};
     md.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMask"}};
     md.size = {1u, 1u, 1u};
-    md.format = wgpu::TextureFormat::R8Unorm;
+    md.format = wgpu::TextureFormat::RGBA8Unorm;
     md.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
     md.mipLevelCount = 1;
     md.sampleCount = 1;
     md.dimension = wgpu::TextureDimension::_2D;
     result->impl_->dummyClipMaskTexture = result->device_.createTexture(md);
 
-    const uint8_t mpixel[1] = {0xFF};
+    const uint8_t mpixel[4] = {0xFF, 0xFF, 0xFF, 0xFF};
     wgpu::TexelCopyTextureInfo mdst = {};
     mdst.texture = result->impl_->dummyClipMaskTexture;
     wgpu::TexelCopyBufferLayout mlayout = {};
-    mlayout.bytesPerRow = 1;
+    mlayout.bytesPerRow = 4;
     mlayout.rowsPerImage = 1;
     wgpu::Extent3D mextent = {1u, 1u, 1u};
     result->queue_.writeTexture(mdst, mpixel, sizeof(mpixel), mlayout, mextent);

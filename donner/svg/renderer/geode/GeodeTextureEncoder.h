@@ -118,6 +118,10 @@ public:
     /// parent content into a separate texture before opening the
     /// blend blit pass. Ignored unless `blendMode != 0`.
     wgpu::Texture dstSnapshotTexture;
+    /// Phase 3b path-clip mask view. When set, the image shader samples
+    /// it in target-pixel space and gates the source content before any
+    /// blend/mask compositing.
+    wgpu::TextureView clipMaskView;
   };
 
   /**
