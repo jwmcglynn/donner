@@ -1,0 +1,42 @@
+"""Standalone wgpu-native repros for Mesa Vulkan bugs.
+
+See `docs/design_docs/0031-mesa_vulkan_repro_and_patch.md` for the
+broader investigation plan. These binaries deliberately have zero
+donner-specific dependencies so a Mesa developer can rebuild them
+from the source file + a wgpu-native install without understanding
+the rest of the repo.
+
+Build:
+    bazel build --config=geode //tools/mesa_repro:lvp_compute_churn
+
+Run (force llvmpipe on Linux):
+    VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \\
+    bazel run --config=geode //tools/mesa_repro:lvp_compute_churn -- 500
+"""
+
+load("//build_defs:rules.bzl", "donner_cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+donner_cc_binary(
+    name = "lvp_compute_churn",
+    srcs = ["lvp_compute_churn.cc"],
+    # wgpu-native is only wired up on platforms that can use Geode
+    # (Linux x86_64/aarch64, macOS arm64/x86_64). Gate the same way.
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    # Linux needs dl + pthread because wgpu-native's .so references them
+    # but doesn't runtime-load them itself. Matches //donner/svg/renderer/geode:geode_device.
+    linkopts = select({
+        "@platforms//os:linux": [
+            "-ldl",
+            "-lpthread",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
