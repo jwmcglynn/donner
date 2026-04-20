@@ -47,6 +47,30 @@ constexpr std::string_view kSimpleShapesSvg = R"SVG(
 </svg>
 )SVG";
 
+/// Inline fixture: a single defined shape referenced by eight `<use>`
+/// instances at distinct positions. The whole document resolves to
+/// eight draws of the same source entity — exactly the shape
+/// Milestone 6 Bullet 2 targets for instancing. Today these draw as
+/// eight separate GPU calls; `sameSourceDrawPairs` should report
+/// seven (= 8 − 1) adjacent-same-source pairs, which is the draw-call
+/// savings an instancing pass would unlock.
+constexpr std::string_view kUseHeavySvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 400 100">
+  <defs>
+    <rect id="r" width="20" height="20" fill="red"/>
+  </defs>
+  <use xlink:href="#r" x="0"   y="0"/>
+  <use xlink:href="#r" x="40"  y="0"/>
+  <use xlink:href="#r" x="80"  y="0"/>
+  <use xlink:href="#r" x="120" y="0"/>
+  <use xlink:href="#r" x="160" y="0"/>
+  <use xlink:href="#r" x="200" y="0"/>
+  <use xlink:href="#r" x="240" y="0"/>
+  <use xlink:href="#r" x="280" y="0"/>
+</svg>
+)SVG";
+
 /// Inline fixture: a handful of cubic Bezier paths plus one linear
 /// gradient. Hits the `fillPathLinearGradient` Tier-1 site and exercises
 /// stroke outline encoding on the open-path `path` elements.
@@ -69,11 +93,12 @@ constexpr std::string_view kModerateSvg = R"SVG(
 /// counter on its own column for easy diffing across milestones.
 void printCounters(const char* label, const geode::GeodeCounters& c) {
   std::fprintf(stderr,
-               "[GeodePerf] %-32s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
+               "[GeodePerf] %-40s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
                "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64
-               "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64 "\n",
+               "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64
+               "  sameSourceDrawPairs=%3" PRIu64 "\n",
                label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates,
-               c.submits, c.drawCalls, c.pipelineSwitches);
+               c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs);
 }
 
 /// Read a file from disk. Returns the empty string on any I/O error —
@@ -253,13 +278,53 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //                       (`<use>` instancing) is the knob that moves
   //                       drawCalls for `<use>`-heavy fixtures; Lion
   //                       has no `<use>` so this ceiling stays at 132.
-  EXPECT_LE(c.pathEncodes, 200u);       // M2: target = 0.
-  EXPECT_LE(c.bufferCreates, 10u);      // M1.f.2: target ~= 5 steady-state.
-  EXPECT_LE(c.bindgroupCreates, 200u);  // M1.f.2: target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 3u);      // Target + MSAA on first render; 0 on repeat.
-  EXPECT_LE(c.submits, 3u);             // M3: target = 1.
-  EXPECT_LE(c.drawCalls, 200u);         // 132 paths, one draw each (no <use>).
-  EXPECT_LE(c.pipelineSwitches, 2u);    // All-solid fixture: tracker binds solid once.
+  EXPECT_LE(c.pathEncodes, 200u);        // M2: target = 0.
+  EXPECT_LE(c.bufferCreates, 10u);       // M1.f.2: target ~= 5 steady-state.
+  EXPECT_LE(c.bindgroupCreates, 200u);   // M1.f.2: target <= #pipelines.
+  EXPECT_LE(c.textureCreates, 3u);       // Target + MSAA on first render; 0 on repeat.
+  EXPECT_LE(c.submits, 3u);              // M3: target = 1.
+  EXPECT_LE(c.drawCalls, 200u);          // 132 paths, one draw each (no <use>).
+  EXPECT_LE(c.pipelineSwitches, 2u);     // All-solid fixture: tracker binds solid once.
+  EXPECT_EQ(c.sameSourceDrawPairs, 0u);  // No `<use>` in Lion — every draw has a unique source.
+}
+
+// ---------------------------------------------------------------------------
+// Fixture: eight `<use>` instances of one source `<rect>`. Motivates
+// M6 Bullet 2 (`<use>` instancing): today these render as eight
+// separate GPU draws; the future batcher collapses them into one
+// instanced draw. The detection counter `sameSourceDrawPairs` reports
+// seven adjacent-same-source pairs = the draw-call savings an
+// instancing pass would unlock.
+// ---------------------------------------------------------------------------
+
+TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  geode::GeodeCounters c = renderAndGetCounters(kUseHeavySvg, device);
+
+  RecordProperty("bufferCreates", std::to_string(c.bufferCreates));
+  RecordProperty("bindgroupCreates", std::to_string(c.bindgroupCreates));
+  RecordProperty("textureCreates", std::to_string(c.textureCreates));
+  RecordProperty("submits", std::to_string(c.submits));
+  RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
+  RecordProperty("drawCalls", std::to_string(c.drawCalls));
+  RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
+  RecordProperty("sameSourceDrawPairs", std::to_string(c.sameSourceDrawPairs));
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+  // M2: the `<use>` instances share one source `<rect>` entity, so
+  // its encoded path is cached once and reused for all eight draws
+  // on frame 1 (first draw encodes, next seven hit the cache).
+  EXPECT_LE(c.pathEncodes, 2u);
+  // Current state: eight separate GPU draws, one per `<use>`.
+  // Target after M6 Bullet 2: `drawCalls == 1` (single instanced).
+  EXPECT_LE(c.drawCalls, 10u);
+  // Seven adjacent-same-source pairs = the exact count an instancing
+  // pass would collapse. Pinning this value so a regression in the
+  // detection path (e.g. `<use>` stops resolving to a shared
+  // `dataEntity`) trips immediately.
+  EXPECT_EQ(c.sameSourceDrawPairs, 7u);
 }
 
 // ---------------------------------------------------------------------------

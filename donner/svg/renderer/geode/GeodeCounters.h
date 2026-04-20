@@ -66,6 +66,18 @@ struct GeodeCounters {
   /// style many-solid-fill input).
   uint64_t pipelineSwitches = 0;
 
+  /// Number of consecutive `drawPath` calls whose source entity
+  /// matches the immediately previous call's source entity — i.e.
+  /// the draw-call savings that would be unlocked by M6 Bullet 2
+  /// (`<use>` instancing). A run of N consecutive same-source draws
+  /// contributes `N - 1` here.
+  ///
+  /// Zero on fixtures without `<use>` (Lion, Tiger). Non-zero on
+  /// fixtures where `<use>` elements reference the same source in
+  /// adjacent draw order, which is what the future instancing pass
+  /// will collapse into one GPU draw call per group.
+  uint64_t sameSourceDrawPairs = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };
