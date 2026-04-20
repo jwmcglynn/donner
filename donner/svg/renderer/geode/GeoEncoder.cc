@@ -283,6 +283,18 @@ struct GeoEncoder::Impl {
   // `activeClipMaskView` is non-null, `hasClipMask == 1` in the
   // uniforms and draws sample `activeClipMaskView` through the
   // clip-mask binding. When null, the device's shared dummy is bound.
+  //
+  // `activeClipMaskTexture` keeps the VIEW's parent texture alive for
+  // as long as the encoder holds the view. Without this keepalive,
+  // when the clip-stack entry that originated the view is destroyed
+  // (in `RendererGeode::popClip` — `clipStack.pop_back()` happens
+  // BEFORE the follow-up `updateEncoderScissor`), the underlying
+  // Vulkan `VkImage` / `VkImageView` are freed while our C++ handle
+  // still points at them. A subsequent `createBindGroup` then passes
+  // a stale `VkImageView` handle to the Vulkan driver, tripping
+  // lvp's `vk_object_base_assert_valid` on debug Mesa and corrupting
+  // the heap on release Mesa — see issue #551.
+  wgpu::Texture activeClipMaskTexture;
   wgpu::TextureView activeClipMaskView;
 
   // Lazily-constructed mask-rendering pipeline. We build one when the
@@ -881,10 +893,23 @@ void GeoEncoder::endMaskPass() {
 
 void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
   impl_->activeClipMaskView = maskView;
+  // activeClipMaskTexture keepalive is left empty by this overload; the
+  // caller must guarantee the parent stays alive. The 2-arg overload
+  // is preferred for any path that doesn't own the texture's lifetime
+  // at the call site (e.g. `RendererGeode::updateEncoderScissor`
+  // pulling the view off a clip-stack entry that may be destroyed
+  // before the next draw).
+  impl_->activeClipMaskTexture = wgpu::Texture{};
+}
+
+void GeoEncoder::setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView) {
+  impl_->activeClipMaskTexture = maskTexture;
+  impl_->activeClipMaskView = maskView;
 }
 
 void GeoEncoder::clearClipMask() {
   impl_->activeClipMaskView = wgpu::TextureView{};
+  impl_->activeClipMaskTexture = wgpu::Texture{};
 }
 
 void GeoEncoder::setLoadPreserve() {

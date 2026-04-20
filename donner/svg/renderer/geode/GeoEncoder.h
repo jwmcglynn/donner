@@ -292,6 +292,19 @@ public:
    */
   void setClipMask(const wgpu::TextureView& maskView);
 
+  /**
+   * Preferred overload: sets both the view AND the parent texture so the
+   * encoder keeps the underlying Vulkan resource alive for as long as it's
+   * bound. The 1-arg overload is kept only for call sites that guarantee
+   * the parent's lifetime by other means.
+   *
+   * See the `activeClipMaskTexture` field comment (and issue #551) for
+   * the bug this addresses — without the parent keepalive, popping the
+   * clip stack can free a VkImage while the encoder's
+   * `createBindGroup` still references its view.
+   */
+  void setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView);
+
   /// Remove any active clip mask, restoring unclipped rasterisation.
   void clearClipMask();
 

@@ -943,7 +943,12 @@ struct RendererGeode::Impl {
     }
 
     if (maskEntry != nullptr) {
-      encoder->setClipMask(maskEntry->maskResolveView);
+      // Pass the parent texture alongside the view so the encoder keeps
+      // the Vulkan resource alive even after this clip-stack entry is
+      // destroyed. The 1-arg setClipMask overload accidentally left the
+      // view dangling across `popClip`→`pop_back`→destructor →
+      // `updateEncoderScissor` sequences; see issue #551.
+      encoder->setClipMask(maskEntry->maskResolveTexture, maskEntry->maskResolveView);
     } else {
       encoder->clearClipMask();
     }
@@ -1935,9 +1940,11 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // with it as it's being rendered. Without this seed the outer
     // ancestor clip would be lost the moment the inner clip lands
     // because `updateEncoderScissor` only binds the topmost entry.
+    wgpu::Texture nestedMaskTexture;
     wgpu::TextureView nestedMaskView;
     for (auto rit = impl_->clipStack.rbegin(); rit != impl_->clipStack.rend(); ++rit) {
       if (rit->maskResolveView) {
+        nestedMaskTexture = rit->maskResolveTexture;
         nestedMaskView = rit->maskResolveView;
         break;
       }
@@ -1961,7 +1968,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // Bind the previously-rendered nested mask (if any) so this
       // layer's fragment shader samples it and intersects.
       if (nestedMaskView) {
-        impl_->encoder->setClipMask(nestedMaskView);
+        impl_->encoder->setClipMask(nestedMaskTexture, nestedMaskView);
       } else {
         impl_->encoder->clearClipMask();
       }
@@ -1976,6 +1983,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
       impl_->encoder->endMaskPass();
 
+      nestedMaskTexture = resolveTexture;
       nestedMaskView = resolveTexture.createView();
 
       // Keep the intermediate textures alive until popClip, paired
@@ -1988,7 +1996,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // The outermost layer (the LAST one processed by this loop,
       // i.e. the FIRST run in `runs`) provides the resolve view the
       // main draws sample as their clip.
-      entry.maskResolveTexture = resolveTexture;
+      entry.maskResolveTexture = nestedMaskTexture;
       entry.maskResolveView = nestedMaskView;
     }
 
