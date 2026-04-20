@@ -383,16 +383,7 @@ donner_cc_test(
         "@resvg-test-suite//:resources",
         "@resvg-test-suite//:tests",
     ],
-    # Bumped from 16 → 50: the Geode variant runs hundreds of filter and
-    # render tests in a single process, and Mesa llvmpipe (CI Linux) and
-    # Intel Arc Xe-KMD accumulate internal driver state over ~80 tests per
-    # shard that eventually deadlocks an arbitrary later compute dispatch —
-    # reproducing as `Exit 124` (per-case watchdog) on whichever unlucky
-    # test happens to be running when the driver wedges. Sharding to 50
-    # (Bazel's hard cap) cuts per-process test count to ~27, below the
-    # observed deadlock threshold on CI. TinySkia variants benefit too via
-    # extra CI parallelism.
-    shard_count = 50,
+    shard_count = 16,
     target_compatible_with = select({
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],

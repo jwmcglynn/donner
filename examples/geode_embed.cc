@@ -46,7 +46,6 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-
 #include "examples/geode_embed_surface.h"
 
 extern "C" {
@@ -126,8 +125,8 @@ int main(int argc, char* argv[]) {
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-  GLFWwindow* window = glfwCreateWindow(kWindowWidth, kWindowHeight,
-                                        "Donner Geode Embed", nullptr, nullptr);
+  GLFWwindow* window =
+      glfwCreateWindow(kWindowWidth, kWindowHeight, "Donner Geode Embed", nullptr, nullptr);
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
