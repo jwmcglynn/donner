@@ -1577,6 +1577,54 @@ Each test renders both paths and asserts pixel identity.
   for identical input, and (c) never assigns two overlapping
   subtrees to different layers unless forced by mandatory hints.
 
+### Perf-gate waivers (v1)
+
+The v1 `CompositorPerfTest` and `AsyncRendererE2ETest` suites gate
+per-frame cost, but at **measurement thresholds**, not at the
+aspirational targets from this design doc. The aspirational values
+(recorded throughout Goals § and this section — `p50 < 16 ms, p99
+< 33 ms`, `60Hz fluid drag`, `click → first pixel < 100 ms`) are
+the *targets*; the gates are ~2-3× the numbers GitHub's shared
+`ubuntu-latest` and `macos-latest` runners reliably hit today. The
+gap is the v1 cost that hasn't been optimized out yet — primarily
+`recomposeSplitBitmaps` on the first promote and the per-segment
+dirty walk on every drag frame.
+
+| Test | Aspirational | v1 gate | Observed (CI) | Gap attribution |
+| ---- | ------------ | ------- | ------------- | ---------------- |
+| `DragFrameOverhead_1kNodes` | < 1 ms/frame | 30 ms | ~12 ms | Per-frame compositor overhead includes segment dirty walk + `ComplexityBucketer::reconcile` — both O(entities). |
+| `DragFrameOverhead_10kNodes` | < 5 ms/frame | 350 ms | ~64-135 ms | Same root cause as 1k, scaled. |
+| `ClickToFirstDragUpdate_10kNodes` dragMs | < 100 ms | 300 ms | ~60-135 ms | First drag frame still pays the segment-dirty walk. |
+| `ClickToFirstDragUpdate_10kNodes` combinedMs | < 1500 ms | 4000 ms | ~810-2115 ms | Cold `instantiateRenderTree` + prewarm rasterize are O(entities); dominant at 10k. |
+| `ClickToFirstDragUpdate_1kNodes` combinedMs | < 200 ms | 650 ms | ~80-250 ms | Same, scaled. |
+| `kClickToFirstPixelBudgetMs` | < 100 ms | 1000 ms | ~150-490 ms | `recomposeSplitBitmaps` on first promote composites bg/fg from segments + non-drag layers. |
+| `kDragFrameBudgetMs` | < 8 ms (120Hz) | 40 ms | ~7-20 ms | Worker-side compose + `takeSnapshot` per drag frame. |
+| `FaithfulFrameDragOnRealSplash` steady-avg | < 16 ms (60Hz) | 75 ms | ~39 ms | Worker compose + overlay rasterize per drag frame, including HiDPI scale. |
+
+The gates still catch real regressions — a full re-rasterize every
+frame would trip every one of them by order-of-magnitude, and the
+single-line `drawEntityRange` composition-order bug fixed during
+this PR (see § "Milestone 0.6" in design doc 0030) would have broken
+the tight-bounds golden, not these perf gates. Tightening back toward
+the aspirationals is tracked as:
+
+- [ ] **First-promote latency** — eliminate `recomposeSplitBitmaps`
+      by having the editor consume raw segments + layer textures
+      instead of pre-composited bg/fg. Cross-cutting editor refactor;
+      brings `kClickToFirstPixelBudgetMs` back under 100 ms.
+- [ ] **Per-frame dirty walk** — cache
+      `RenderingInstanceComponent::localDrawBounds` at RIC
+      instantiation time (design doc 0030, Milestone 2) so the
+      per-segment bounds check is a single cache-line read.
+      Brings `DragFrameOverhead_*` back toward the 1/5 ms targets.
+- [ ] **Cold prewarm** — `ClickToFirstDragUpdate_10kNodes` prewarm
+      is dominated by first-ever style cascade. Tracked separately
+      as "incremental style invalidation" (design 0005).
+
+The comments in `CompositorPerf_tests.cc` / `AsyncRenderer_tests.cc`
+next to each `EXPECT_LT` call out the aspirational target so future
+perf work knows where to tighten back.
+
 ## Security and Trust Boundaries
 
 ### Memory budget
