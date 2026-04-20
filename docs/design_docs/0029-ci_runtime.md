@@ -151,15 +151,28 @@ refs/heads/main`.
 | 24613404030 (cold)          | 605s  | 141s | 170s | 1391s | 173s |
 | 24597636830 (warm)          | 314s  | 173s |  13s | 330s  | 129s |
 
-### Post-Skia baseline (TBD)
-
-Run 24648369948 (PR #546 merge) is in flight at the time of writing.
-Expected to drop macOS cold Build by ~70-80% based on Skia's contribution to
-total source volume.
+### Post-Skia baseline (sampled 2026-04-20)
 
 | Run | macOS Build | macOS Test | macOS Fuzz | Linux Build | Linux Test |
 |---:|---:|---:|---:|---:|---:|
-| 24648369948 (PR #546, cold) | TBD | TBD | TBD | TBD | TBD |
+| 24648369948 (PR #546, cold) | 1130s | 178s | 266s | 1891s | 158s |
+
+**Surprise**: Skia removal saved less than predicted. macOS Build dropped from
+the ~1250–1492s cold range to 1130s — about 15%, not the 70–80% I expected
+based on Skia's source volume. Linux Build was actually the highest cold
+number we've recorded (1891s vs prior max of 1391s), almost certainly because
+removing Skia invalidated the entire transitive cache and this run rebuilt
+everything from scratch.
+
+**Implication for the plan**: the dominant CI cost is *not* one big slow
+dependency — it's cache eviction across configs and runner sizing. M1
+(per-config cache slots, accomplished in this PR by moving fuzzers to a
+separate workflow) and M4 (macos-15-large) become more attractive than
+they looked when I assumed Skia was the silver bullet.
+
+The next 2–3 main pushes should show whether warm-cache numbers improve now
+that the cache no longer alternates between default-config and asan-fuzzer
+toolchains in the same slot.
 
 ### Observations from pre-Skia data
 
