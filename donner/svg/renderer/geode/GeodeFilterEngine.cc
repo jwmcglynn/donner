@@ -1239,7 +1239,8 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       const Vector2d pixelOffset = toPixelOffset(drop->dx, drop->dy);
       outputTex = applyDropShadow(inputTex, *drop, sx, sy, pixelOffset.x, pixelOffset.y);
     } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
-      outputTex = applyImage(*image, inputTex.getWidth(), inputTex.getHeight(), graph, node);
+      outputTex =
+          applyImage(*image, inputTex.getWidth(), inputTex.getHeight(), graph, node, deviceFromFilter);
     } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
       // feTile replicates the input's primitive subregion across the filter
       // region. Per SVG §15.28 the source is the primitive's input in its
@@ -1397,85 +1398,13 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   }
 
   // Clip the final output to the filter region.  The SVG filter model
-  // requires pixels outside the filter region to be transparent.  We
-  // clear a fresh texture via a render pass and then GPU-copy only the
-  // pixels inside the region from the result.
-  //
-  // The filter region is in user-space coordinates; project through the
-  // full CTM to get the axis-aligned bounding box in device pixels.
-  // This is necessary so that rotated/skewed ancestor transforms
-  // produce correctly-sized clip bounds.
-  {
-    const uint32_t width = currentBuffer.getWidth();
-    const uint32_t height = currentBuffer.getHeight();
-    const Box2d pixelRegion = deviceFromFilter.transformBox(filterRegion);
-    const int x0 =
-        std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
-    const int y0 =
-        std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
-    const int x1 =
-        std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.x)), 0,
-                   static_cast<int>(width));
-    const int y1 =
-        std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.y)), 0,
-                   static_cast<int>(height));
-
-    // Skip clipping if the region covers the entire texture.
-    if (x0 > 0 || y0 > 0 || x1 < static_cast<int>(width) || y1 < static_cast<int>(height)) {
-      const wgpu::Device& dev = device_.device();
-
-      // Allocate destination with RenderAttachment (for clear) + CopyDst.
-      wgpu::TextureDescriptor td{};
-      td.label = wgpuLabel("FilterClipOutput");
-      td.size = {width, height, 1};
-      td.format = kFormat;
-      td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-                 wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst;
-      td.mipLevelCount = 1;
-      td.sampleCount = 1;
-      td.dimension = wgpu::TextureDimension::_2D;
-      wgpu::Texture clipped = dev.createTexture(td);
-
-      // Clear the destination to transparent via a render pass.
-      wgpu::TextureView clippedView = clipped.createView();
-      wgpu::RenderPassColorAttachment colorAtt{};
-      colorAtt.view = clippedView;
-      colorAtt.loadOp = wgpu::LoadOp::Clear;
-      colorAtt.storeOp = wgpu::StoreOp::Store;
-      colorAtt.clearValue = {0.0, 0.0, 0.0, 0.0};
-
-      wgpu::RenderPassDescriptor rpDesc{};
-      rpDesc.label = wgpuLabel("FilterClipClear");
-      rpDesc.colorAttachmentCount = 1;
-      rpDesc.colorAttachments = &colorAtt;
-
-      wgpu::CommandEncoderDescriptor ceDesc{};
-      ceDesc.label = wgpuLabel("FilterClipEncoder");
-      wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
-
-      wgpu::RenderPassEncoder rp = encoder.beginRenderPass(rpDesc);
-      rp.end();
-
-      // Copy just the filter region from the result into the cleared texture.
-      if (x1 > x0 && y1 > y0) {
-        wgpu::TexelCopyTextureInfo srcCopy{};
-        srcCopy.texture = currentBuffer;
-        srcCopy.origin = {static_cast<uint32_t>(x0), static_cast<uint32_t>(y0), 0};
-
-        wgpu::TexelCopyTextureInfo dstCopy{};
-        dstCopy.texture = clipped;
-        dstCopy.origin = {static_cast<uint32_t>(x0), static_cast<uint32_t>(y0), 0};
-
-        wgpu::Extent3D extent = {static_cast<uint32_t>(x1 - x0),
-                                 static_cast<uint32_t>(y1 - y0), 1};
-        encoder.copyTextureToTexture(srcCopy, dstCopy, extent);
-      }
-
-      wgpu::CommandBuffer cmdBuf = encoder.finish();
-      device_.queue().submit(1, &cmdBuf);
-      currentBuffer = clipped;
-    }
-  }
+  // requires pixels outside the filter region to be transparent.
+  // Use rotation-aware clipping (via the inverse CTM) so that skewed/rotated
+  // filter regions produce correctly-shaped parallelogram clips, matching the
+  // CPU path's per-pixel point-in-rect test in ClipFilterOutputToRegion.
+  currentBuffer = applySubregionClip(currentBuffer, filterFromDevice, filterRegion.topLeft.x,
+                                     filterRegion.topLeft.y, filterRegion.bottomRight.x,
+                                     filterRegion.bottomRight.y);
 
   return currentBuffer;
 }
@@ -2334,7 +2263,8 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
 
 wgpu::Texture GeodeFilterEngine::applyImage(
     const svg::components::filter_primitive::Image& primitive, uint32_t width, uint32_t height,
-    const svg::components::FilterGraph& graph, const svg::components::FilterNode& node) {
+    const svg::components::FilterGraph& graph, const svg::components::FilterNode& node,
+    const Transform2d& deviceFromFilter) {
   const wgpu::Device& dev = device_.device();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterImageOutput");
@@ -2405,6 +2335,69 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   layout.rowsPerImage = static_cast<uint32_t>(imgH);
   wgpu::Extent3D extent = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
   device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
+
+  // Fragment references with a non-axis-aligned ancestor transform: project the fragment image
+  // through the full CTM (rotation/skew) so placement matches the CPU path. The transform
+  // chain is:
+  //   fragment pixel → (÷ viewBoxScale) → document user space
+  //   → (+ filterRegion.topLeft) → host user space
+  //   → (× deviceFromFilter) → device pixels
+  // The shader receives the inverse: device pixel → fragment pixel.
+  const bool hasRotation = !NearZero(deviceFromFilter.data[1], 1e-6) ||
+                           !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (primitive.isFragmentReference && hasRotation &&
+      !NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    const double uScaleX = graph.userToPixelScale.x;
+    const double uScaleY = graph.userToPixelScale.y;
+    const Transform2d viewBoxScaleInv = Transform2d::Scale(
+        NearZero(uScaleX, 1e-12) ? 1.0 : 1.0 / uScaleX,
+        NearZero(uScaleY, 1e-12) ? 1.0 : 1.0 / uScaleY);
+    const Transform2d regionOffset = Transform2d::Translate(
+        primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
+    const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
+    const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
+
+    ImageParams params{};
+    params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
+    params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
+    params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
+    params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
+    params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
+    params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
+    params.pad0 = 0;
+    params.pad1 = 0;
+
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "ImageParamsFragRef");
+    dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, imgTex, output,
+                               uniformBuffer, sizeof(ImageParams), "FilterImageFragRefPass");
+    return output;
+  }
+
+  // Fragment references without rotation: simple device-space post-translation to position
+  // content at the filter region origin, matching the CPU path's non-rotated fragment case.
+  if (primitive.isFragmentReference) {
+    const double uScaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
+    const double uScaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+    const double deviceOffsetX = primitive.fragmentRegionTopLeft.x * uScaleX;
+    const double deviceOffsetY = primitive.fragmentRegionTopLeft.y * uScaleY;
+
+    ImageParams params{};
+    params.m00 = 1.0f;
+    params.m01 = 0.0f;
+    params.m02 = static_cast<float>(-deviceOffsetX);
+    params.m10 = 0.0f;
+    params.m11 = 1.0f;
+    params.m12 = static_cast<float>(-deviceOffsetY);
+    params.pad0 = 0;
+    params.pad1 = 0;
+
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "ImageParamsFragRef");
+    dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, imgTex, output,
+                               uniformBuffer, sizeof(ImageParams), "FilterImageFragRefPass");
+    return output;
+  }
 
   // Work out the placement rectangle in output-pixel coordinates. Prefer
   // the node's primitive subregion when given; fall back to the filter

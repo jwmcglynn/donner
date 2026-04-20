@@ -115,6 +115,18 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
 /// (see `GeodeGradientCacheComponent` in the Geode design doc).
 constexpr size_t kMaxGradientStopsClient = 16;
 
+/// Returns true when the filter graph contains spatial-shift primitives (feOffset) that can bring
+/// content from outside the viewport into view, requiring the filter layer buffer to be expanded.
+bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
+  using namespace components::filter_primitive;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    if (std::holds_alternative<Offset>(node.primitive)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
 /// buffers. This rounds the unpadded row width up to the next 256 boundary.
 constexpr uint32_t alignBytesPerRow(uint32_t unpadded) {
@@ -764,6 +776,8 @@ struct RendererGeode::Impl {
     components::FilterGraph filterGraph;
     Box2d filterRegion;
     Transform2d deviceFromFilter;    // Full CTM at push time.
+    int filterBufferOffsetX = 0;     // Expansion into negative device X.
+    int filterBufferOffsetY = 0;     // Expansion into negative device Y.
   };
   std::vector<FilterStackFrame> filterStack;
 
@@ -1698,6 +1712,15 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     impl_->deviceFromLocalTransform = scaled;
     return;
   }
+  if (!impl_->filterStack.empty()) {
+    const auto& filterFrame = impl_->filterStack.back();
+    if (filterFrame.filterBufferOffsetX != 0 || filterFrame.filterBufferOffsetY != 0) {
+      impl_->deviceFromLocalTransform =
+          transform *
+          Transform2d::Translate(filterFrame.filterBufferOffsetX, filterFrame.filterBufferOffsetY);
+      return;
+    }
+  }
   impl_->deviceFromLocalTransform = transform;
 }
 
@@ -2163,13 +2186,39 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   Box2d region = filterRegion.value_or(
       Box2d(Vector2d::Zero(), Vector2d(impl_->pixelWidth, impl_->pixelHeight)));
 
+  // Compute buffer expansion for spatial-shift primitives (feOffset). When the filter region's
+  // device-space AABB extends to negative coordinates (due to skew/rotation), expand the buffer
+  // so SourceGraphic captures all content that feOffset can shift into view.
+  int filterBufferOffsetX = 0;
+  int filterBufferOffsetY = 0;
+  const int viewportWidth = impl_->pixelWidth;
+  const int viewportHeight = impl_->pixelHeight;
+
+  if (filterRegion.has_value()) {
+    const Box2d deviceRegion = impl_->deviceFromLocalTransform.transformBox(*filterRegion);
+    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
+    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
+
+    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
+      constexpr int kMaxExpansion = 4096;
+      if (regionX0 < 0) {
+        filterBufferOffsetX = std::min(-regionX0, std::max(0, kMaxExpansion - viewportWidth));
+      }
+      if (regionY0 < 0) {
+        filterBufferOffsetY = std::min(-regionY0, std::max(0, kMaxExpansion - viewportHeight));
+      }
+    }
+  }
+
+  const int bufferWidth = viewportWidth + filterBufferOffsetX;
+  const int bufferHeight = viewportHeight + filterBufferOffsetY;
+
   // Allocate offscreen 1-sample resolve + 4× MSAA companion for the
   // filter layer capture. All draws between push/pop land here; pop runs
   // the filter graph on the resolved texture and composites back.
   wgpu::TextureDescriptor td{};
   td.label = wgpuLabel("RendererGeodeFilterLayer");
-  td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-             1u};
+  td.size = {static_cast<uint32_t>(bufferWidth), static_cast<uint32_t>(bufferHeight), 1u};
   td.format = kFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
@@ -2211,7 +2260,9 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.layerMsaaDesc = msaaDesc;
   frame.filterGraph = filterGraph;
   frame.filterRegion = region;
-  frame.deviceFromFilter = impl_->currentTransform;
+  frame.deviceFromFilter = impl_->deviceFromLocalTransform;
+  frame.filterBufferOffsetX = filterBufferOffsetX;
+  frame.filterBufferOffsetY = filterBufferOffsetY;
 
   impl_->target = layerTexture;
   impl_->msaaTarget = layerMsaaTexture;
@@ -2223,6 +2274,13 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   impl_->filterStack.push_back(std::move(frame));
   // The filter layer inherits the outer clip stack.
   impl_->updateEncoderScissor();
+
+  // Apply the buffer offset to the current transform so content at negative device coordinates
+  // renders into the expanded region. Subsequent setTransform calls will also pick up the offset.
+  if (filterBufferOffsetX != 0 || filterBufferOffsetY != 0) {
+    impl_->deviceFromLocalTransform =
+        impl_->deviceFromLocalTransform * Transform2d::Translate(filterBufferOffsetX, filterBufferOffsetY);
+  }
 }
 
 void RendererGeode::popFilterLayer() {
@@ -2249,11 +2307,19 @@ void RendererGeode::popFilterLayer() {
   // submit, paid only on frames that use a filter).
   impl_->flushFrameCommandEncoder();
 
+  // When the filter buffer was expanded to capture negative-coordinate content, adjust
+  // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
+  const Transform2d bufferDeviceFromFilter =
+      (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
+          ? frame.deviceFromFilter *
+                Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
+          : frame.deviceFromFilter;
+
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
     filteredTexture = impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture,
-                                                    frame.filterRegion, frame.deviceFromFilter);
+                                                    frame.filterRegion, bufferDeviceFromFilter);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
@@ -2267,12 +2333,45 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
-  // `frame.filterRegion` is passed in from the driver in user-space
-  // coordinates, not pixel-space; we'd need to transform by the current
-  // CTM snapshot before using it as a scissor. Skipping for this PR —
-  // all current feGaussianBlur resvg tests pass without the clip.
-  impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+    // The filter result is in an expanded texture. Extract the viewport-sized region at the
+    // buffer offset using a GPU texture copy, then blit the viewport-sized result.
+    const uint32_t vpW = static_cast<uint32_t>(impl_->pixelWidth);
+    const uint32_t vpH = static_cast<uint32_t>(impl_->pixelHeight);
+
+    wgpu::TextureDescriptor vpDesc{};
+    vpDesc.label = wgpuLabel("RendererGeodeFilterViewport");
+    vpDesc.size = {vpW, vpH, 1u};
+    vpDesc.format = kFormat;
+    vpDesc.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
+    vpDesc.mipLevelCount = 1;
+    vpDesc.sampleCount = 1;
+    vpDesc.dimension = wgpu::TextureDimension::_2D;
+    wgpu::Texture viewportTexture = impl_->device->device().createTexture(vpDesc);
+
+    if (viewportTexture) {
+      wgpu::CommandEncoder copyEncoder = impl_->device->device().createCommandEncoder();
+      wgpu::TexelCopyTextureInfo src = {};
+      src.texture = filteredTexture;
+      src.origin = {static_cast<uint32_t>(frame.filterBufferOffsetX),
+                    static_cast<uint32_t>(frame.filterBufferOffsetY), 0u};
+      wgpu::TexelCopyTextureInfo dst = {};
+      dst.texture = viewportTexture;
+      const wgpu::Extent3D extent = {vpW, vpH, 1u};
+      copyEncoder.copyTextureToTexture(src, dst, extent);
+      wgpu::CommandBuffer copyCmd = copyEncoder.finish();
+      impl_->device->queue().submit(1, &copyCmd);
+
+      impl_->encoder->blitFullTarget(viewportTexture, 1.0);
+    }
+  } else {
+    // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
+    // `frame.filterRegion` is passed in from the driver in user-space
+    // coordinates, not pixel-space; we'd need to transform by the current
+    // CTM snapshot before using it as a scissor. Skipping for this PR —
+    // all current feGaussianBlur resvg tests pass without the clip.
+    impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  }
   // Defer release to endFrame: `blitFullTarget` recorded a sample from
   // `filteredTexture` (which is `frame.layerTexture` when the filter
   // graph is empty) into the frame encoder. Filter-engine-owned
@@ -2975,6 +3074,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     impl_->warnedText = true;
   }
 #endif
+}
+
+std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() const {
+  if (!impl_->device) {
+    return nullptr;
+  }
+  return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {

@@ -286,29 +286,6 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
   }
 
-  // feOffset/complex-transform: the skewed ancestor transform places
-  // SourceGraphic content at negative device coordinates. The CPU path
-  // expands the filter buffer to capture that content so feOffset can
-  // shift it into the viewport; Geode's fixed-size filter layer clips
-  // it, producing a shifted rectangle instead of the expected
-  // parallelogram. Separate from per-primitive subregion clipping.
-  if (category == "filters/feOffset" && filename == "complex-transform.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Not impl: filter layer buffer expansion for negative coords (Geode)");
-    };
-  }
-  // feImage with complex ancestor transform: the fragment reference's
-  // source rendering doesn't incorporate the ancestor CTM, producing
-  // a shifted/unrotated image placement. Separate from the CTM scale
-  // fix — needs fragment-ref rendering to apply the transform.
-  if (category == "filters/feImage" &&
-      filename == "link-on-an-element-with-complex-transform.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "Not impl: feImage fragment ref with ancestor CTM (Geode)");
-    };
-  }
   // feColorMatrix tests that use linear gradients: Geode gradient rendering
   // produces different pixel output in edge cases (invalid type, too many
   // values, missing type attribute).

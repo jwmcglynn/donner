@@ -276,11 +276,14 @@ private:
   /// @param height Output texture height (filter-region pixels).
   /// @param graph The enclosing filter graph (for bbox / scale / subregion resolution).
   /// @param node The enclosing filter node (for primitive subregion overrides).
+  /// @param deviceFromFilter The combined CTM from filter/user-space to device pixels.
+  ///   Used by fragment references to project through rotation/skew.
   /// @return The placed-image texture.
   wgpu::Texture applyImage(const svg::components::filter_primitive::Image& primitive,
                            uint32_t width, uint32_t height,
                            const svg::components::FilterGraph& graph,
-                           const svg::components::FilterNode& node);
+                           const svg::components::FilterNode& node,
+                           const Transform2d& deviceFromFilter);
 
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.
