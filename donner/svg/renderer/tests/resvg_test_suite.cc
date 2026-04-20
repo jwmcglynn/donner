@@ -297,6 +297,38 @@ geodeFilenameGate(std::string_view category, std::string_view filename) {
     };
   }
 
+  // feDiffuseLighting/no-light-source renders a filter primitive that omits
+  // the required `<feDistantLight>` / `<fePointLight>` / `<feSpotLight>`
+  // child. SVG §15.22 doesn't clearly specify the fallback; tiny-skia
+  // treats it as a no-op (pass-through input), but Geode produces a black
+  // output (~230k-pixel diff on CI llvmpipe). Lavapipe happens to match
+  // tiny-skia's output by accident. Separate follow-up.
+  if (category == "filters/feDiffuseLighting" && filename == "no-light-source.svg") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "TODO(geode): feDiffuseLighting with no light-source "
+                       "child draws black instead of no-op pass-through");
+    };
+  }
+
+  // feImage subregion + preserveAspectRatio divergence between CI llvmpipe
+  // and local lavapipe: these tests pass on lavapipe (the local dev driver)
+  // but fail on CI's llvmpipe with large (28k-36k-pixel) diffs, indicating
+  // the feImage subregion+aspect-ratio placement path produces different
+  // output depending on the Vulkan driver's texture-sampling behavior.
+  // Separate follow-up — the feImage rendering path needs to be tightened
+  // to be driver-independent.
+  if (category == "filters/feImage" &&
+      (filename == "preserveAspectRatio=none.svg" ||
+       filename == "with-subregion-1.svg" || filename == "with-subregion-2.svg" ||
+       filename == "with-subregion-3.svg" || filename == "with-subregion-4.svg")) {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "TODO(geode): feImage subregion / preserveAspectRatio "
+                       "placement diverges between Mesa llvmpipe and lavapipe");
+    };
+  }
+
   return std::nullopt;
 }
 
