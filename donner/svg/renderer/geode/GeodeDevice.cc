@@ -21,9 +21,8 @@ namespace {
 /// The WebGPU C API passes the message as a `WGPUStringView` (pointer +
 /// length) rather than a NUL-terminated string, so we use the
 /// precision-length form of `printf` to avoid reading past `length`.
-void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type,
-                       WGPUStringView message, void* /*userdata1*/,
-                       void* /*userdata2*/) {
+void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStringView message,
+                       void* /*userdata1*/, void* /*userdata2*/) {
   std::fprintf(stderr, "[Geode/wgpu-native] Uncaptured error (type=%d): %.*s\n",
                static_cast<int>(type), static_cast<int>(message.length),
                message.data ? message.data : "");
@@ -36,6 +35,17 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type,
 /// directly on the outer class.
 struct GeodeDevice::Impl {
   wgpu::Instance instance;
+
+  // Shared dummies used by every GeoEncoder's bind groups — see
+  // comment block on `GeodeDevice::dummyPatternTexture()`. Created
+  // once at `CreateHeadless` time so they never count against
+  // per-frame `textureCreates` ceilings.
+  wgpu::Texture dummyPatternTexture;
+  wgpu::TextureView dummyPatternTextureView;
+  wgpu::Sampler dummyPatternSampler;
+  wgpu::Texture dummyClipMaskTexture;
+  wgpu::TextureView dummyClipMaskTextureView;
+  wgpu::Sampler dummyClipMaskSampler;
 };
 
 GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
@@ -109,9 +119,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
       std::fprintf(stderr,
                    "[Geode/wgpu-native] Adapter: %.*s %.*s (%.*s) "
                    "backend=%s type=%s vendorID=0x%04x deviceID=0x%04x\n",
-                   static_cast<int>(vendor.size()), vendor.data(),
-                   static_cast<int>(device.size()), device.data(),
-                   static_cast<int>(arch.size()), arch.data(), backend, type,
+                   static_cast<int>(vendor.size()), vendor.data(), static_cast<int>(device.size()),
+                   device.data(), static_cast<int>(arch.size()), arch.data(), backend, type,
                    info.vendorID, info.deviceID);
 
       // Intel + Vulkan: writing @builtin(sample_mask) from overlapping band
@@ -161,7 +170,99 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
     return nullptr;
   }
 
+  // 5. Create the shared dummy textures / samplers used by every
+  // GeoEncoder. These are 1×1 "identity" fills for the pattern and
+  // clip-mask bind slots when the current draw doesn't actually use
+  // them. Previously each GeoEncoder allocated its own pair, which
+  // showed up as 2+ `textureCreates` per frame for every
+  // push/pop layer/filter/mask encoder. See design doc 0030 §M4.2.
+  //
+  // Created here (before any `setCounters()` call) so the allocations
+  // never count against per-frame ceilings.
+  {
+    // Pattern dummy: 1×1 RGBA8 opaque black.
+    wgpu::TextureDescriptor td = {};
+    td.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPattern"}};
+    td.size = {1u, 1u, 1u};
+    td.format = wgpu::TextureFormat::RGBA8Unorm;
+    td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    td.mipLevelCount = 1;
+    td.sampleCount = 1;
+    td.dimension = wgpu::TextureDimension::_2D;
+    result->impl_->dummyPatternTexture = result->device_.createTexture(td);
+
+    const uint8_t pixel[4] = {0, 0, 0, 255};
+    wgpu::TexelCopyTextureInfo dst = {};
+    dst.texture = result->impl_->dummyPatternTexture;
+    wgpu::TexelCopyBufferLayout layout = {};
+    layout.bytesPerRow = 4;
+    layout.rowsPerImage = 1;
+    wgpu::Extent3D extent = {1u, 1u, 1u};
+    result->queue_.writeTexture(dst, pixel, sizeof(pixel), layout, extent);
+    result->impl_->dummyPatternTextureView = result->impl_->dummyPatternTexture.createView();
+
+    wgpu::SamplerDescriptor sd{wgpu::Default};
+    sd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPatternSampler"}};
+    sd.addressModeU = wgpu::AddressMode::Repeat;
+    sd.addressModeV = wgpu::AddressMode::Repeat;
+    sd.minFilter = wgpu::FilterMode::Linear;
+    sd.magFilter = wgpu::FilterMode::Linear;
+    sd.maxAnisotropy = 1;
+    result->impl_->dummyPatternSampler = result->device_.createSampler(sd);
+  }
+
+  {
+    // Clip-mask dummy: 1×1 R8Unorm with value 0xFF (= 1.0 coverage).
+    wgpu::TextureDescriptor md = {};
+    md.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMask"}};
+    md.size = {1u, 1u, 1u};
+    md.format = wgpu::TextureFormat::R8Unorm;
+    md.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    md.mipLevelCount = 1;
+    md.sampleCount = 1;
+    md.dimension = wgpu::TextureDimension::_2D;
+    result->impl_->dummyClipMaskTexture = result->device_.createTexture(md);
+
+    const uint8_t mpixel[1] = {0xFF};
+    wgpu::TexelCopyTextureInfo mdst = {};
+    mdst.texture = result->impl_->dummyClipMaskTexture;
+    wgpu::TexelCopyBufferLayout mlayout = {};
+    mlayout.bytesPerRow = 1;
+    mlayout.rowsPerImage = 1;
+    wgpu::Extent3D mextent = {1u, 1u, 1u};
+    result->queue_.writeTexture(mdst, mpixel, sizeof(mpixel), mlayout, mextent);
+    result->impl_->dummyClipMaskTextureView = result->impl_->dummyClipMaskTexture.createView();
+
+    wgpu::SamplerDescriptor msd{wgpu::Default};
+    msd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMaskSampler"}};
+    msd.addressModeU = wgpu::AddressMode::ClampToEdge;
+    msd.addressModeV = wgpu::AddressMode::ClampToEdge;
+    msd.minFilter = wgpu::FilterMode::Linear;
+    msd.magFilter = wgpu::FilterMode::Linear;
+    msd.maxAnisotropy = 1;
+    result->impl_->dummyClipMaskSampler = result->device_.createSampler(msd);
+  }
+
   return result;
+}
+
+const wgpu::Texture& GeodeDevice::dummyPatternTexture() const {
+  return impl_->dummyPatternTexture;
+}
+const wgpu::TextureView& GeodeDevice::dummyPatternTextureView() const {
+  return impl_->dummyPatternTextureView;
+}
+const wgpu::Sampler& GeodeDevice::dummyPatternSampler() const {
+  return impl_->dummyPatternSampler;
+}
+const wgpu::Texture& GeodeDevice::dummyClipMaskTexture() const {
+  return impl_->dummyClipMaskTexture;
+}
+const wgpu::TextureView& GeodeDevice::dummyClipMaskTextureView() const {
+  return impl_->dummyClipMaskTextureView;
+}
+const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
+  return impl_->dummyClipMaskSampler;
 }
 
 }  // namespace donner::geode

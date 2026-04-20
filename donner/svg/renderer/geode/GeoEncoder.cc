@@ -266,29 +266,19 @@ struct GeoEncoder::Impl {
   // MSAA sample count from GeodeDevice. 1 = no MSAA (alpha-coverage path).
   uint32_t sampleCount = 4;
 
-  // Dummy 1x1 texture + sampler bound when `paintMode == 0` (solid fill).
-  // The bind group layout always requires texture/sampler entries so the
-  // pipeline can be shared between solid and pattern fills, but in solid
-  // mode the shader never reads from them. Lazily initialised on first use
-  // because the device may create the encoder before any draw is issued.
-  wgpu::Texture dummyTexture;
-  wgpu::TextureView dummyTextureView;
-  wgpu::Sampler dummySampler;
-
-  // 1x1 R8Unorm dummy texture bound to the clip-mask slot when no
-  // clip is active. The single texel is `0xFF` so `textureSample(...).r`
-  // returns 1.0 — i.e., "this pixel is fully unclipped" — allowing
-  // the shader to sample unconditionally without branching on
-  // `hasClipMask` just to avoid an invalid texture read.
-  wgpu::Texture dummyClipMaskTexture;
-  wgpu::TextureView dummyClipMaskTextureView;
+  // Dummy texture / sampler resources are now owned by `GeodeDevice`
+  // and shared across every GeoEncoder — see `GeodeDevice::dummyPatternTexture()`
+  // and the M4.2 notes in design doc 0030. Access them via
+  // `device->dummyPatternTextureView()`, etc. The bind-group layout
+  // always includes the pattern + clip-mask slots so the pipeline can
+  // be shared between solid/pattern/gradient/masked draws; the device
+  // dummies fill the unused slots.
 
   // Currently-bound clip mask state (Phase 3b). When
   // `activeClipMaskView` is non-null, `hasClipMask == 1` in the
   // uniforms and draws sample `activeClipMaskView` through the
-  // clip-mask binding. When null, the dummy is bound instead.
+  // clip-mask binding. When null, the device's shared dummy is bound.
   wgpu::TextureView activeClipMaskView;
-  wgpu::Sampler clipMaskSampler;
 
   // Lazily-constructed mask-rendering pipeline. We build one when the
   // first `beginMaskPass` call arrives so encoders that never touch
@@ -390,95 +380,15 @@ struct GeoEncoder::Impl {
     }
   }
 
-  /// Lazily create the dummy texture + sampler used by the solid-fill path
-  /// *and* the Phase 3b dummy clip mask texture + clip mask sampler.
-  void ensureDummyResources() {
-    if (dummyTextureView) {
-      return;
-    }
-    const wgpu::Device& dev = device->device();
-
-    // --- Pattern dummy (RGBA8Unorm, 1x1, opaque black) ---
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel("GeoEncoderDummyPattern");
-    td.size = {1u, 1u, 1u};
-    td.format = wgpu::TextureFormat::RGBA8Unorm;
-    td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    dummyTexture = dev.createTexture(td);
-    device->countTexture();
-
-    // Write a single opaque-black pixel so sampling returns a defined value
-    // even though the shader never reads it in solid mode. WriteTexture
-    // allows unpadded rows when the transfer fits in a single row.
-    const uint8_t pixel[4] = {0, 0, 0, 255};
-    wgpu::TexelCopyTextureInfo dst = {};
-    dst.texture = dummyTexture;
-    wgpu::TexelCopyBufferLayout layout = {};
-    layout.bytesPerRow = 4;
-    layout.rowsPerImage = 1;
-    wgpu::Extent3D extent = {1u, 1u, 1u};
-    device->queue().writeTexture(dst, pixel, sizeof(pixel), layout, extent);
-
-    dummyTextureView = dummyTexture.createView();
-
-    // `{wgpu::Default}` initializes with `maxAnisotropy = 1`; plain `= {}`
-    // leaves it at 0 which wgpu-native rejects as a validation error.
-    wgpu::SamplerDescriptor sd{wgpu::Default};
-    sd.label = wgpuLabel("GeoEncoderDummySampler");
-    sd.addressModeU = wgpu::AddressMode::Repeat;
-    sd.addressModeV = wgpu::AddressMode::Repeat;
-    sd.minFilter = wgpu::FilterMode::Linear;
-    sd.magFilter = wgpu::FilterMode::Linear;
-    sd.maxAnisotropy = 1;
-    dummySampler = dev.createSampler(sd);
-
-    // --- Clip-mask dummy (R8Unorm, 1x1, value 0xFF = 1.0) ---
-    wgpu::TextureDescriptor maskDummyDesc = {};
-    maskDummyDesc.label = wgpuLabel("GeoEncoderDummyClipMask");
-    maskDummyDesc.size = {1u, 1u, 1u};
-    maskDummyDesc.format = wgpu::TextureFormat::R8Unorm;
-    maskDummyDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-    maskDummyDesc.mipLevelCount = 1;
-    maskDummyDesc.sampleCount = 1;
-    maskDummyDesc.dimension = wgpu::TextureDimension::_2D;
-    dummyClipMaskTexture = dev.createTexture(maskDummyDesc);
-    device->countTexture();
-
-    const uint8_t maskPixel[1] = {0xFF};
-    wgpu::TexelCopyTextureInfo maskDst = {};
-    maskDst.texture = dummyClipMaskTexture;
-    wgpu::TexelCopyBufferLayout maskLayout = {};
-    maskLayout.bytesPerRow = 1;
-    maskLayout.rowsPerImage = 1;
-    wgpu::Extent3D maskExtent = {1u, 1u, 1u};
-    device->queue().writeTexture(maskDst, maskPixel, sizeof(maskPixel), maskLayout, maskExtent);
-
-    dummyClipMaskTextureView = dummyClipMaskTexture.createView();
-
-    // Clip mask sampler — Linear / ClampToEdge so edge coverage
-    // interpolates smoothly without wrapping back to the opposite
-    // side of the mask texture.
-    wgpu::SamplerDescriptor maskSd{wgpu::Default};
-    maskSd.label = wgpuLabel("GeoEncoderClipMaskSampler");
-    maskSd.addressModeU = wgpu::AddressMode::ClampToEdge;
-    maskSd.addressModeV = wgpu::AddressMode::ClampToEdge;
-    maskSd.minFilter = wgpu::FilterMode::Linear;
-    maskSd.magFilter = wgpu::FilterMode::Linear;
-    maskSd.maxAnisotropy = 1;
-    clipMaskSampler = dev.createSampler(maskSd);
-  }
-
   /// Return the texture view that should be bound to the clip-mask
-  /// slot for the next draw — the active mask if set, or the dummy
-  /// otherwise. Always returns a valid view after `ensureDummyResources`.
+  /// slot for the next draw — the active mask if set, or the device's
+  /// shared identity-mask dummy otherwise (see
+  /// `GeodeDevice::dummyClipMaskTextureView()`).
   const wgpu::TextureView& currentClipMaskView() {
     if (activeClipMaskView) {
       return activeClipMaskView;
     }
-    return dummyClipMaskTextureView;
+    return device->dummyClipMaskTextureView();
   }
 
   /// Open the render pass on demand.
@@ -637,12 +547,12 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
   // ensurePassOpen renders directly into targetView with no resolve.
 }
 
-// Post-init: pre-create dummies + configure per-draw arenas. Runs once
-// `commandEncoder` has been installed. Called by both constructors.
+// Post-init: configure per-draw arenas. Runs once `commandEncoder`
+// has been installed. Called by both constructors.
 void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
-  // Pre-create the solid-fill / clip-mask dummy texture + sampler + view
-  // resources once per encoder; avoids a per-draw ensure call.
-  impl.ensureDummyResources();
+  // Dummy pattern / clip-mask textures + samplers are now owned by
+  // `GeodeDevice` (see design doc 0030 §M4.2) and shared across
+  // encoders — no per-encoder create needed.
 
   // Configure per-draw arenas (bump-allocated GPU buffers, design
   // doc 0030 Milestone 1). They stay empty here; the first draw
@@ -927,7 +837,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   entries[3].binding = 3;
   entries[3].textureView = impl_->currentClipMaskView();
   entries[4].binding = 4;
-  entries[4].sampler = impl_->clipMaskSampler;
+  entries[4].sampler = impl_->device->dummyClipMaskSampler();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeMaskBindGroup");
@@ -1021,8 +931,8 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   // Solid-mode binds the pre-created dummy texture + sampler so the
   // bind group layout (which always includes pattern bindings) is
   // complete. Both are built once in the encoder constructor.
-  args.patternView = impl_->dummyTextureView;
-  args.patternSampler = impl_->dummySampler;
+  args.patternView = impl_->device->dummyPatternTextureView();
+  args.patternSampler = impl_->device->dummyPatternSampler();
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
@@ -1157,7 +1067,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   entries[5].binding = 5;
   entries[5].textureView = impl_->currentClipMaskView();
   entries[6].binding = 6;
-  entries[6].sampler = impl_->clipMaskSampler;
+  entries[6].sampler = impl_->device->dummyClipMaskSampler();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeBindGroup");
@@ -1304,7 +1214,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   entries[3].binding = 3;
   entries[3].textureView = impl_->currentClipMaskView();
   entries[4].binding = 4;
-  entries[4].sampler = impl_->clipMaskSampler;
+  entries[4].sampler = impl_->device->dummyClipMaskSampler();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeGradientBindGroup");
@@ -1400,7 +1310,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   entries[3].binding = 3;
   entries[3].textureView = impl_->currentClipMaskView();
   entries[4].binding = 4;
-  entries[4].sampler = impl_->clipMaskSampler;
+  entries[4].sampler = impl_->device->dummyClipMaskSampler();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeRadialGradientBindGroup");

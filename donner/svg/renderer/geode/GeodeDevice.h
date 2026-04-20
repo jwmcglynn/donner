@@ -116,6 +116,38 @@ public:
    */
   bool supportsTimestamps() const { return false; }
 
+  /// @name Shared dummy resources (design doc 0030 Milestone 4.2)
+  /// @{
+  ///
+  /// GeoEncoder's bind groups always include pattern + clip-mask
+  /// texture/sampler slots, even when the current draw doesn't
+  /// actually use them. Each slot is filled with a 1×1 "identity"
+  /// texture when the feature is inactive. Prior to M4.2 every
+  /// GeoEncoder instance created its own dummies (two textures per
+  /// encoder), which showed up as 2+ `textureCreates` per frame per
+  /// push/pop. Caching the dummies on the device — one instance per
+  /// GeodeDevice — drops that to zero steady-state.
+
+  /// 1×1 opaque-black RGBA8 dummy. Bound into the pattern slot when
+  /// the current draw is solid / gradient (not a pattern). The shader
+  /// does not sample from it, but the bind group layout still requires
+  /// a valid binding.
+  const wgpu::Texture& dummyPatternTexture() const;
+  /// View of `dummyPatternTexture()`.
+  const wgpu::TextureView& dummyPatternTextureView() const;
+  /// Linear-Repeat sampler used for both the dummy and real pattern tiles.
+  const wgpu::Sampler& dummyPatternSampler() const;
+
+  /// 1×1 R8Unorm with value `0xFF` (= 1.0 coverage). Bound into the
+  /// clip-mask slot when no clip mask is active — the shader
+  /// multiplies coverage by this value, so `1.0` is a no-op.
+  const wgpu::Texture& dummyClipMaskTexture() const;
+  /// View of `dummyClipMaskTexture()`.
+  const wgpu::TextureView& dummyClipMaskTextureView() const;
+  /// Linear-ClampToEdge sampler used for both the dummy and real clip masks.
+  const wgpu::Sampler& dummyClipMaskSampler() const;
+  /// @}
+
 private:
   GeodeDevice();
 
