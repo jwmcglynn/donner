@@ -56,6 +56,7 @@ When creating a pull request:
    - `tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - `clang-format --dry-run` on modified files.
    Fast iteration: `tools/presubmit.sh --fast` skips `bazel test`.
+   If your PR touches `BUILD.bazel` or `.bzl` files, also run `tools/presubmit.sh --variants` to cover the local `tiny`, `text-full`, and `geode` Bazel matrix checks before CI.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
 4. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
 5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.

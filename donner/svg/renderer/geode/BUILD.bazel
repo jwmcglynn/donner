@@ -49,6 +49,18 @@ donner_cc_library(
     ],
 )
 
+# Header-only ECS component for the M2 Geode path-encode cache. See
+# design doc 0030 §Milestone 2.
+donner_cc_library(
+    name = "geode_path_cache_component",
+    hdrs = ["GeodePathCacheComponent.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_path_encoder",
+        "//donner/base",
+    ],
+)
+
 # Header-only perf-counters struct. See design doc 0030.
 donner_cc_library(
     name = "geode_counters",

@@ -90,7 +90,7 @@ ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
 }
 
 std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
-                                               const parser::PropertyParseFnParams& params) {
+                                                    const parser::PropertyParseFnParams& params) {
   if (const std::string_view* str = std::get_if<std::string_view>(&params.valueOrComponents)) {
     properties.d.set(RcString(*str), params.specificity);
   } else {
@@ -104,6 +104,22 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
   }
 
   return std::nullopt;
+}
+
+/// Emplace or replace ComputedPathComponent only if the newly computed
+/// path differs from any existing one. Suppressing the write when the
+/// geometry is unchanged keeps entt's on_update<ComputedPathComponent>
+/// signal a precise "geometry actually changed" edge — downstream
+/// caches (e.g. the Geode encode cache from design doc 0030
+/// Milestone 2) listen on that signal and rely on it not firing for
+/// no-op regenerations.
+ComputedPathComponent& emplaceComputedPathIfChanged(EntityHandle handle, Path newPath) {
+  if (auto* existing = handle.try_get<ComputedPathComponent>()) {
+    if (existing->spline == newPath) {
+      return *existing;
+    }
+  }
+  return handle.emplace_or_replace<ComputedPathComponent>(std::move(newPath));
 }
 
 /**
@@ -162,8 +178,9 @@ constexpr bool ForEachShape(const F& f) {
 
 }  // namespace
 
-ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
-    EntityHandle handle, const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+ComputedPathComponent* ShapeSystem::createComputedPathIfShape(EntityHandle handle,
+                                                              const FontMetrics& fontMetrics,
+                                                              ParseWarningSink& warningSink) {
   ComputedPathComponent* computedPath = handle.try_get<ComputedPathComponent>();
   if (computedPath) {
     return computedPath;
@@ -188,8 +205,7 @@ ComputedPathComponent* ShapeSystem::createComputedPathIfShape(
   return computedPath;
 }
 
-void ShapeSystem::instantiateAllComputedPaths(Registry& registry,
-                                              ParseWarningSink& warningSink) {
+void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSink& warningSink) {
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
@@ -237,7 +253,7 @@ bool ShapeSystem::pathStrokeIntersects(EntityHandle handle, const Vector2d& poin
 }
 
 std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
-                                                           const Transform2d& worldFromTarget) {
+                                                            const Transform2d& worldFromTarget) {
   std::optional<Box2d> overallBounds;
 
   if (const ComputedStyleComponent* style = handle.try_get<ComputedStyleComponent>()) {
@@ -291,7 +307,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (radius > 0.0) {
     Path path = PathBuilder().addCircle(center, radius).build();
 
-    return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
+    return &emplaceComputedPathIfChanged(handle, std::move(path));
   } else {
     return nullptr;
   }
@@ -314,7 +330,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (radius.x > 0.0 && radius.y > 0.0) {
     Path path = PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
 
-    return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
+    return &emplaceComputedPathIfChanged(handle, std::move(path));
   } else {
     return nullptr;
   }
@@ -331,7 +347,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
                      line.y2.toPixels(viewport, fontMetrics));
 
   Path path = PathBuilder().moveTo(start).lineTo(end).build();
-  return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
+  return &emplaceComputedPathIfChanged(handle, std::move(path));
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
@@ -352,7 +368,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   }
 
   if (path.splineOverride) {
-    return &handle.emplace_or_replace<ComputedPathComponent>(path.splineOverride.value());
+    return &emplaceComputedPathIfChanged(handle, path.splineOverride.value());
   } else if (actualD.hasValue()) {
     auto maybePath = parser::PathParser::Parse(actualD.get().value());
     if (maybePath.hasError()) {
@@ -362,7 +378,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
     if (maybePath.hasResult() && !maybePath.result().empty()) {
       // Success: Return path
-      return &handle.emplace_or_replace<ComputedPathComponent>(std::move(maybePath.result()));
+      return &emplaceComputedPathIfChanged(handle, std::move(maybePath.result()));
     }
   }
 
@@ -388,7 +404,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     builder.closePath();
   }
 
-  return &handle.emplace_or_replace<ComputedPathComponent>(builder.build());
+  return &emplaceComputedPathIfChanged(handle, builder.build());
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
@@ -416,17 +432,15 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
                 size.y * 0.5));
 
       // Success: Draw a rect with rounded corners.
-      Path path = PathBuilder()
-                      .addRoundedRect(Box2d(pos, pos + size), radius.x, radius.y)
-                      .build();
+      Path path = PathBuilder().addRoundedRect(Box2d(pos, pos + size), radius.x, radius.y).build();
 
-      return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
+      return &emplaceComputedPathIfChanged(handle, std::move(path));
 
     } else {
       // Success: Draw a rect with sharp corners
       Path path = PathBuilder().addRect(Box2d(pos, pos + size)).build();
 
-      return &handle.emplace_or_replace<ComputedPathComponent>(std::move(path));
+      return &emplaceComputedPathIfChanged(handle, std::move(path));
     }
   }
 

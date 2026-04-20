@@ -3,22 +3,26 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <utility>
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Path.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -27,6 +31,8 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
+#include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -575,6 +581,147 @@ struct RendererGeode::Impl {
   };
   std::vector<PatternStackFrame> patternStack;
 
+  // --------------------------------------------------------------------
+  // M4.2 transient-texture pool (design doc 0030 §M4.2).
+  //
+  // Every push/pop of isolated-layer / filter-layer / mask / clip-mask
+  // scratch allocates a resolve + MSAA-companion pair — prior to this
+  // pool those allocations fired on every frame even when the same
+  // document was re-rendered at the same viewport. The pool holds
+  // released textures keyed by `(width, height, format, sampleCount,
+  // usage)`; same-dim / same-format acquisition on a later frame pops
+  // from the bucket instead of calling `createTexture`.
+  //
+  // Exact-size pooling (no power-of-two bucketing). Works for the
+  // repeat-render case this PR targets because layer sizes are
+  // derived from `pixelWidth`/`pixelHeight`, which don't change
+  // between idle re-renders. A size-bucketing extension is a future
+  // follow-up for viewport-resize scenarios.
+  // --------------------------------------------------------------------
+
+  /// Key used for texture-pool bucket lookup. Two textures are
+  /// interchangeable iff every field matches — same size, same
+  /// format, same MSAA sample count, same usage flags.
+  struct TextureKey {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
+    uint32_t sampleCount = 1;
+    wgpu::TextureUsage usage = wgpu::TextureUsage::None;
+
+    auto operator<=>(const TextureKey& other) const = default;
+
+    static TextureKey From(const wgpu::TextureDescriptor& desc) {
+      return TextureKey{desc.size.width, desc.size.height, desc.format, desc.sampleCount,
+                        desc.usage};
+    }
+  };
+  struct TextureBucket {
+    std::vector<wgpu::Texture> free;
+    /// Monotonic frame index when this bucket was last touched by
+    /// either `acquireTexture` or `releaseTexture`. Used by
+    /// `evictStalePoolBuckets` to age out buckets whose size hasn't
+    /// been seen in a while (viewport-resize scenarios).
+    uint64_t lastUsedFrame = 0;
+  };
+  std::map<TextureKey, TextureBucket> texturePool;
+
+  /// Per-bucket hard cap. Prevents a single size from accumulating
+  /// unbounded textures even if a pathological frame pushes and pops
+  /// dozens of layers at that size without ever reacquiring.
+  static constexpr std::size_t kMaxPoolEntriesPerKey = 8;
+
+  /// Drop a bucket entirely if it hasn't been touched in this many
+  /// consecutive frames. At 60 fps this is ~2 seconds of idleness;
+  /// long enough to survive transient dips (e.g. an editor dragging
+  /// slightly then stopping) while still releasing memory on real
+  /// viewport-size changes.
+  static constexpr uint64_t kBucketEvictAfterFrames = 120;
+
+  /// Monotonic frame counter. Incremented in `beginFrame`; used to
+  /// stamp `TextureBucket::lastUsedFrame`.
+  uint64_t currentFrameIndex = 0;
+
+  /// Acquire a pooled texture matching `desc`, or create a fresh one
+  /// on miss. Always increments the `textureCreates` counter on miss;
+  /// never on hit. Returns a null texture on device failure.
+  wgpu::Texture acquireTexture(const wgpu::TextureDescriptor& desc) {
+    TextureBucket& bucket = texturePool[TextureKey::From(desc)];
+    bucket.lastUsedFrame = currentFrameIndex;
+    if (!bucket.free.empty()) {
+      wgpu::Texture texture = std::move(bucket.free.back());
+      bucket.free.pop_back();
+      return texture;
+    }
+    wgpu::Texture texture = device->device().createTexture(desc);
+    if (texture) {
+      device->countTexture();
+    }
+    return texture;
+  }
+
+  /// Return a texture to its pool bucket IMMEDIATELY. Caller must
+  /// pass the same descriptor used to acquire, otherwise the next
+  /// acquire with the original descriptor will miss the bucket.
+  ///
+  /// Prefer `releaseTextureAtFrameEnd` for textures whose GPU work was
+  /// recorded into the shared `frameCommandEncoder`: releasing those
+  /// mid-frame would let a subsequent `acquireTexture` on the same
+  /// bucket hand the texture back out before the GPU has finished
+  /// writing it.
+  void releaseTexture(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
+    if (!texture) {
+      return;
+    }
+    TextureBucket& bucket = texturePool[TextureKey::From(desc)];
+    bucket.lastUsedFrame = currentFrameIndex;
+    if (bucket.free.size() >= kMaxPoolEntriesPerKey) {
+      // Bucket full — let the released texture go out of scope instead
+      // of unbounded growth.
+      return;
+    }
+    bucket.free.push_back(std::move(texture));
+  }
+
+  /// Drop every bucket whose `lastUsedFrame` is older than
+  /// `kBucketEvictAfterFrames` frames. Called at `beginFrame`. On
+  /// steady-state workloads this is a no-op (all buckets refresh
+  /// their stamps each frame); under viewport-resize churn it caps
+  /// pool memory at whatever sizes have been seen recently.
+  void evictStalePoolBuckets() {
+    for (auto it = texturePool.begin(); it != texturePool.end();) {
+      if (currentFrameIndex - it->second.lastUsedFrame > kBucketEvictAfterFrames) {
+        it = texturePool.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  /// Defer a release until after the frame's command buffer has been
+  /// submitted. Used by `popIsolatedLayer` / `popFilterLayer` / etc.,
+  /// where the layer texture is still referenced by commands recorded
+  /// into the frame encoder and must not be recycled mid-frame.
+  struct PendingRelease {
+    wgpu::Texture texture;
+    wgpu::TextureDescriptor desc;
+  };
+  std::vector<PendingRelease> framePendingReleases;
+
+  void releaseTextureAtFrameEnd(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
+    if (!texture) {
+      return;
+    }
+    framePendingReleases.push_back({std::move(texture), desc});
+  }
+
+  void drainPendingReleases() {
+    for (auto& pending : framePendingReleases) {
+      releaseTexture(std::move(pending.texture), pending.desc);
+    }
+    framePendingReleases.clear();
+  }
+
   /// A saved encoder + target state for an in-progress isolated layer
   /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
   /// group with non-identity opacity or a non-Normal blend mode, we
@@ -587,6 +734,11 @@ struct RendererGeode::Impl {
     wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
     wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
     wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    /// Descriptors captured at push time so `popIsolatedLayer` can
+    /// release the textures back to the correct pool bucket via
+    /// `releaseTexture`.
+    wgpu::TextureDescriptor layerDesc = {};
+    wgpu::TextureDescriptor layerMsaaDesc = {};
     double opacity = 1.0;
     /// Phase 3d: SVG `mix-blend-mode`. `Normal` (default) keeps the
     /// plain premultiplied source-over compositing path;
@@ -606,6 +758,9 @@ struct RendererGeode::Impl {
     wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
     wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
     wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    /// Descriptors captured at push for M4.2 pool release.
+    wgpu::TextureDescriptor layerDesc = {};
+    wgpu::TextureDescriptor layerMsaaDesc = {};
     components::FilterGraph filterGraph;
     Box2d filterRegion;
   };
@@ -634,6 +789,11 @@ struct RendererGeode::Impl {
     wgpu::Texture maskMsaaTexture;
     wgpu::Texture contentTexture;  // Masked element's content (RGBA).
     wgpu::Texture contentMsaaTexture;
+    /// Descriptors captured at push for M4.2 pool release.
+    wgpu::TextureDescriptor maskDesc = {};
+    wgpu::TextureDescriptor maskMsaaDesc = {};
+    wgpu::TextureDescriptor contentDesc = {};
+    wgpu::TextureDescriptor contentMsaaDesc = {};
     /// Raw mask-bounds rectangle from the driver, in the coordinate
     /// space of `maskBoundsTransform` (userSpaceOnUse or the
     /// objectBoundingBox-mapped user space — either way, NOT yet in
@@ -703,7 +863,10 @@ struct RendererGeode::Impl {
     wgpu::Texture maskMsaaTexture;
     wgpu::Texture maskResolveTexture;
     wgpu::TextureView maskResolveView;
-    std::vector<wgpu::Texture> maskLayerTextures;
+    /// Paired (texture, descriptor) entries. Every clip-mask texture
+    /// allocated by `pushClip` (across all nested layers) lives here
+    /// until `popClip` hands them back to the M4.2 texture pool.
+    std::vector<PendingRelease> maskLayerTextures;
   };
   std::vector<ClipStackEntry> clipStack;
 
@@ -854,10 +1017,148 @@ struct RendererGeode::Impl {
     }
   }
 
+  // --------------------------------------------------------------------
+  // M2 path-encode cache (design doc 0030 §Milestone 2).
+  //
+  // Our entt `on_update<ComputedPathComponent>` / `on_destroy<ComputedPathComponent>`
+  // listener is connected lazily at `draw()` entry. Presence is tracked
+  // via a sentinel context component on the registry itself
+  // (`ListenerInstalled`) — pointer-identity on `&registry` would be
+  // unsafe across document lifetimes (a destroyed document's registry
+  // memory can be reused, giving us the same pointer value for an
+  // entirely different `entt::basic_registry` with no listener).
+  // --------------------------------------------------------------------
+
+  /// Sentinel context component, emplaced on a registry the first
+  /// time it's seen by `ensureCacheInvalidationWired`. Lifetime ties
+  /// to the registry — dies with it, so a re-allocated registry at
+  /// the same address doesn't carry the tag.
+  struct ListenerInstalled {};
+
+  /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
+  /// `on_destroy<ComputedPathComponent>` listener onto `registry`.
+  /// Called at the start of each `draw()`. Idempotent for the same
+  /// registry. When switching registries (test fixtures reusing one
+  /// renderer), disconnects from the old first.
+  void ensureCacheInvalidationWired(Registry& registry);
+
+  /// Wipe the cache component from an entity when its source
+  /// `ComputedPathComponent` is rewritten by `ShapeSystem` or destroyed.
+  /// Connected to entt's `on_update` / `on_destroy` signals.
+  /// File-scope free function with this signature is the only shape
+  /// entt's `.connect<&fn>()` accepts that doesn't couple lifetime to
+  /// `this` — see M2 notes in design doc 0030.
+  static void onComputedPathChanged(Registry& registry, Entity entity);
+
+  /// Scratch buffer for the no-source-entity stroke path. `getStrokeDerived`
+  /// uses this as stable storage when there's no `GeodePathCacheComponent`
+  /// to live on (e.g. `drawRect` / `drawEllipse` convenience draws). Only
+  /// one active draw at a time, so a single slot is safe.
+  Path strokeScratchPath;
+
+  /// Value returned by `getFillEncode` / `getStrokeDerived` describing
+  /// which encode the caller should pass down to `GeoEncoder`.
+  struct StrokeDerived {
+    /// Path to draw. Null means "no stroke geometry — skip the draw".
+    /// Points into the entity's cache slot on hit, or into
+    /// `strokeScratchPath` on the no-entity fallback.
+    const Path* strokedPath = nullptr;
+    /// Precomputed encode pointer for `GeoEncoder`. Non-null only when
+    /// the stroke came from a cache slot — the no-entity fallback
+    /// leaves this null and lets `GeoEncoder` encode inline.
+    const geode::EncodedPath* encoded = nullptr;
+    /// Fill rule to use. For open-path strokes, `strokeToFill` emits one
+    /// subpath → NonZero; for closed-path strokes, two → EvenOdd.
+    FillRule fillRule = FillRule::NonZero;
+  };
+
+  /// Encode-side of the cache. If `source` holds a valid entity handle,
+  /// installs / reuses a `GeodePathCacheComponent::fillEncode` on it and
+  /// returns a stable pointer into that component. If `source` is null
+  /// (non-driver callers), returns null and `GeoEncoder` will encode
+  /// inline — the old pre-M2 code path.
+  const geode::EncodedPath* getFillEncode(EntityHandle source, const Path& path, FillRule rule) {
+    if (!source) {
+      return nullptr;
+    }
+    auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
+    if (!cache.fillEncode) {
+      device->countPathEncode();
+      cache.fillEncode = geode::GeodePathEncoder::encode(path, rule);
+    }
+    return &*cache.fillEncode;
+  }
+
+  /// Determine the fill rule for a stroked outline per the subpath-count
+  /// rule documented in `RendererGeode::drawPath`. Open-path strokes
+  /// produce one subpath (NonZero); closed-path strokes produce two
+  /// same-winding subpaths (EvenOdd hollow-ring semantics).
+  static FillRule strokeFillRuleFor(const Path& strokedOutline) {
+    size_t subpathCount = 0;
+    for (const auto& cmd : strokedOutline.commands()) {
+      if (cmd.verb == Path::Verb::MoveTo) {
+        ++subpathCount;
+      }
+    }
+    return (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
+  }
+
+  /// Stroke-side of the cache. Builds (or reuses) the `strokeToFill`
+  /// output and its encode on `source`'s `GeodePathCacheComponent`.
+  /// Returns a `StrokeDerived` pointing into the cache (entity path) or
+  /// into `strokeScratchPath` (no-entity fallback). The caller must
+  /// check `strokedPath == nullptr` for the "zero-stroke" case.
+  StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
+                                 const StrokeStyle& strokeStyle) {
+    StrokeDerived result;
+    if (source) {
+      auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
+      if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle) {
+        // Miss (or stroke-params changed) — rebuild.
+        Path stroked = geometry.strokeToFill(strokeStyle);
+        if (stroked.empty()) {
+          cache.strokeSlot.reset();
+          return result;  // strokedPath stays null.
+        }
+        const FillRule fillRule = strokeFillRuleFor(stroked);
+        device->countPathEncode();
+        geode::EncodedPath encoded = geode::GeodePathEncoder::encode(stroked, fillRule);
+        // GCC 14 libstdc++ rejects `.emplace()` here with "is_constructible_v<StrokeSlot> was not
+        // satisfied"; clang + libc++ accepts it. Build the value explicitly and assign to sidestep
+        // the toolchain disagreement.
+        cache.strokeSlot = geode::GeodePathCacheComponent::StrokeSlot{
+            .strokeKey = strokeStyle,
+            .strokedPath = std::move(stroked),
+            .strokedEncode = std::move(encoded),
+            .strokeFillRule = fillRule,
+        };
+      }
+      result.strokedPath = &cache.strokeSlot->strokedPath;
+      result.encoded = &cache.strokeSlot->strokedEncode;
+      result.fillRule = cache.strokeSlot->strokeFillRule;
+      return result;
+    }
+    // No-entity fallback: compute into the Impl-local scratch buffer.
+    // GeoEncoder will encode inline when `encoded` is left null.
+    strokeScratchPath = geometry.strokeToFill(strokeStyle);
+    if (strokeScratchPath.empty()) {
+      return result;
+    }
+    result.strokedPath = &strokeScratchPath;
+    result.fillRule = strokeFillRuleFor(strokeScratchPath);
+    return result;
+  }
+
   /// Issue a fill of the given path using the current `paint.fill`. Handles
   /// solid colors, linear and radial gradients, and pattern tiles. None and
   /// unsupported types are ignored or fall back to their fallback color.
-  void fillResolved(const Path& path, FillRule rule) {
+  ///
+  /// `precomputedEncoded` is the M2 cache-hit payload (see
+  /// `getFillEncode`). When non-null, the encoder skips the
+  /// `GeodePathEncoder::encode` + `countPathEncode()` pair; otherwise
+  /// `GeoEncoder` runs the inline encode path.
+  void fillResolved(const Path& path, FillRule rule,
+                    const geode::EncodedPath* precomputedEncoded = nullptr) {
     if (!encoder) {
       return;
     }
@@ -867,19 +1168,21 @@ struct RendererGeode::Impl {
     if (patternFillPaint.has_value()) {
       syncTransform();
       const double opacity = paint.fillOpacity;
-      encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity));
+      encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity),
+                               precomputedEncoded);
       patternFillPaint.reset();
       return;
     }
     const double effectiveOpacity = paint.fillOpacity;
-    drawPaintedPath(path, paint.fill, effectiveOpacity, rule);
+    drawPaintedPath(path, paint.fill, effectiveOpacity, rule, precomputedEncoded);
   }
 
   /// Core dispatch: given a path and a resolved paint server, emit the
   /// appropriate fill call (solid color or gradient).
   void drawPaintedPath(const Path& path, const components::ResolvedPaintServer& server,
-                       double effectiveOpacity, FillRule rule) {
-    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule);
+                       double effectiveOpacity, FillRule rule,
+                       const geode::EncodedPath* precomputedEncoded = nullptr) {
+    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule, precomputedEncoded);
   }
 
   /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
@@ -890,7 +1193,8 @@ struct RendererGeode::Impl {
   /// would warp the gradient direction relative to the underlying shape.
   void drawPaintedPathAgainst(const Path& geometryPath, const Path& drawPath,
                               const components::ResolvedPaintServer& server,
-                              double effectiveOpacity, FillRule rule) {
+                              double effectiveOpacity, FillRule rule,
+                              const geode::EncodedPath* precomputedEncoded = nullptr) {
     if (!encoder || drawPath.empty()) {
       return;
     }
@@ -904,7 +1208,8 @@ struct RendererGeode::Impl {
     // Solid color: straight through the flat fill pipeline.
     if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
       syncTransform();
-      encoder->fillPath(drawPath, solid->color.resolve(currentColor, opacity), rule);
+      encoder->fillPath(drawPath, solid->color.resolve(currentColor, opacity), rule,
+                        precomputedEncoded);
       return;
     }
 
@@ -923,7 +1228,7 @@ struct RendererGeode::Impl {
           warnedGradient = true;
         }
         syncTransform();
-        encoder->fillPathLinearGradient(drawPath, *linear, rule);
+        encoder->fillPathLinearGradient(drawPath, *linear, rule, precomputedEncoded);
         return;
       }
 
@@ -937,14 +1242,14 @@ struct RendererGeode::Impl {
         }
         if (radial->gradient.has_value()) {
           syncTransform();
-          encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule);
+          encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule, precomputedEncoded);
           return;
         }
         if (radial->solidFallback.has_value()) {
           // SVG2 degenerate radial (r=0): paint the last stop color as a
           // solid fill so the element remains visible.
           syncTransform();
-          encoder->fillPath(drawPath, *radial->solidFallback, rule);
+          encoder->fillPath(drawPath, *radial->solidFallback, rule, precomputedEncoded);
           return;
         }
         // Recognized as radial but otherwise unusable (empty stops, focal
@@ -963,7 +1268,8 @@ struct RendererGeode::Impl {
       // solid fallback color if one was declared, otherwise drop the draw.
       if (ref->fallback.has_value()) {
         syncTransform();
-        encoder->fillPath(drawPath, ref->fallback->resolve(currentColor, opacity), rule);
+        encoder->fillPath(drawPath, ref->fallback->resolve(currentColor, opacity), rule,
+                          precomputedEncoded);
         return;
       }
 
@@ -976,7 +1282,44 @@ struct RendererGeode::Impl {
       }
     }
   }
+
+  // No custom destructor: the M2 cache-invalidation listener is a
+  // free function with no dependency on `this`, so the natural entt
+  // lifecycle is correct — connections die with the `Registry` they
+  // live on. Calling `.disconnect<&fn>()` from a dtor would UB when
+  // the registry is destroyed BEFORE the renderer (common in tests
+  // where an `SVGDocument` is declared after its `Renderer` in the
+  // same scope, so the document destructs first). Leaving the
+  // connection attached is harmless: either the registry is alive
+  // and a subsequent geometry change fires `remove<GeodePathCacheComponent>`
+  // (which is a no-op if the component isn't present), or the
+  // registry is gone and no signal will ever fire again.
 };
+
+void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
+  // Sentinel lives on the registry's context store, so its presence
+  // implies "this registry has already had our listener connected".
+  // When the registry is destroyed the sentinel goes with it — a
+  // later registry allocated at the same address will (correctly)
+  // miss the sentinel and get its own listener. Pointer-identity on
+  // `&registry` alone can't distinguish those cases.
+  if (registry.ctx().contains<ListenerInstalled>()) {
+    return;
+  }
+  registry.ctx().emplace<ListenerInstalled>();
+  registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
+  registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
+  // Leaving the connection attached across renderer destruction is
+  // intentional: our free-function listener has no `this`-capture,
+  // so it's safe to outlive the renderer. Connections die with the
+  // registry.
+}
+
+void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entity) {
+  // entt allows `remove` on a component the entity doesn't hold — it's a
+  // cheap no-op in that case. We don't need an `all_of` guard.
+  registry.remove<geode::GeodePathCacheComponent>(entity);
+}
 
 RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
   impl_->verbose = verbose;
@@ -1038,6 +1381,14 @@ RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
 
 void RendererGeode::draw(SVGDocument& document) {
+  // Wire the M2 cache-invalidation listener onto this document's
+  // registry BEFORE the driver runs `RenderingContext::instantiateRenderTree`.
+  // The listener must be connected when `ShapeSystem` fires its
+  // `on_update<ComputedPathComponent>` signals; otherwise a geometry
+  // change between draws would silently leave a stale encode in
+  // `GeodePathCacheComponent`.
+  impl_->ensureCacheInvalidationWired(document.registry());
+
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);
 }
@@ -1057,6 +1408,13 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->transformStack.clear();
   impl_->paint = PaintParams();
   impl_->encoder.reset();
+
+  // M4.2: stamp each frame with a monotonic index and age out pool
+  // buckets that haven't been touched in the last
+  // `kBucketEvictAfterFrames` frames. Caps memory under viewport
+  // resize.
+  ++impl_->currentFrameIndex;
+  impl_->evictStalePoolBuckets();
 
   // Reset counters regardless of device state.
   impl_->counters.reset();
@@ -1154,6 +1512,13 @@ void RendererGeode::endFrame() {
     impl_->device->countSubmit();
     impl_->frameCommandEncoder = wgpu::CommandEncoder();
   }
+
+  // Now that the command buffer is submitted, it's safe to return the
+  // frame's transient layer / filter / mask / snapshot textures to
+  // the pool. WebGPU's driver tracks texture dependencies across
+  // submits, so acquiring these on the next frame will schedule the
+  // new writes after the previous submit's GPU work completes.
+  impl_->drainPendingReleases();
 
   impl_->currentTransform = Transform2d();
   impl_->transformStack.clear();
@@ -1273,37 +1638,34 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       impl_->pixelHeight > 0) {
     const wgpu::Device& dev = impl_->device->device();
 
-    const auto makeResolveTexture = [&](const char* label) {
-      wgpu::TextureDescriptor desc = {};
-      desc.label = wgpuLabel(label);
-      desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                   static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      desc.format = wgpu::TextureFormat::R8Unorm;
-      desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
-      desc.mipLevelCount = 1;
-      desc.sampleCount = 1;
-      desc.dimension = wgpu::TextureDimension::_2D;
-      auto t = dev.createTexture(desc);
-      impl_->device->countTexture();
-      return t;
+    const auto makeResolveTexture = [&](const char* label, wgpu::TextureDescriptor& outDesc) {
+      outDesc = wgpu::TextureDescriptor{};
+      outDesc.label = wgpuLabel(label);
+      outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+      outDesc.mipLevelCount = 1;
+      outDesc.sampleCount = 1;
+      outDesc.dimension = wgpu::TextureDimension::_2D;
+      return impl_->acquireTexture(outDesc);
     };
-    const auto makeMsaaTexture = [&](const char* label) -> wgpu::Texture {
+    const auto makeMsaaTexture = [&](const char* label,
+                                     wgpu::TextureDescriptor& outDesc) -> wgpu::Texture {
       if (impl_->device->sampleCount() == 1) {
         // Alpha-coverage path: no separate MSAA texture needed.
         return {};
       }
-      wgpu::TextureDescriptor desc = {};
-      desc.label = wgpuLabel(label);
-      desc.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                   static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      desc.format = wgpu::TextureFormat::R8Unorm;
-      desc.usage = wgpu::TextureUsage::RenderAttachment;
-      desc.mipLevelCount = 1;
-      desc.sampleCount = 4;
-      desc.dimension = wgpu::TextureDimension::_2D;
-      auto t = dev.createTexture(desc);
-      impl_->device->countTexture();
-      return t;
+      outDesc = wgpu::TextureDescriptor{};
+      outDesc.label = wgpuLabel(label);
+      outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      outDesc.mipLevelCount = 1;
+      outDesc.sampleCount = 4;
+      outDesc.dimension = wgpu::TextureDimension::_2D;
+      return impl_->acquireTexture(outDesc);
     };
 
     // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
@@ -1351,10 +1713,18 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
     }
 
+    (void)dev;  // Kept for potential future use; texture allocation
+                // routes through `impl_->acquireTexture` now.
     for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
-      wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa");
-      wgpu::Texture resolveTexture = makeResolveTexture("RendererGeodeClipMaskResolve");
+      wgpu::TextureDescriptor msaaDesc = {};
+      wgpu::TextureDescriptor resolveDesc = {};
+      wgpu::Texture msaaTexture = makeMsaaTexture("RendererGeodeClipMaskMsaa", msaaDesc);
+      wgpu::Texture resolveTexture =
+          makeResolveTexture("RendererGeodeClipMaskResolve", resolveDesc);
       if (!resolveTexture || (impl_->device->sampleCount() > 1 && !msaaTexture)) {
+        // Release anything we managed to acquire before giving up.
+        if (msaaTexture) impl_->releaseTexture(std::move(msaaTexture), msaaDesc);
+        if (resolveTexture) impl_->releaseTexture(std::move(resolveTexture), resolveDesc);
         continue;
       }
 
@@ -1378,9 +1748,12 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
       nestedMaskView = resolveTexture.createView();
 
-      // Keep the intermediate textures alive until popClip.
-      entry.maskLayerTextures.push_back(std::move(msaaTexture));
-      entry.maskLayerTextures.push_back(resolveTexture);
+      // Keep the intermediate textures alive until popClip, paired
+      // with their descs for M4.2 pool release.
+      if (msaaTexture) {
+        entry.maskLayerTextures.push_back({std::move(msaaTexture), msaaDesc});
+      }
+      entry.maskLayerTextures.push_back({resolveTexture, resolveDesc});
 
       // The outermost layer (the LAST one processed by this loop,
       // i.e. the FIRST run in `runs`) provides the resolve view the
@@ -1401,6 +1774,16 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
 void RendererGeode::popClip() {
   if (!impl_->clipStack.empty()) {
+    // Defer release of the mask textures to endFrame — the main
+    // encoder that was just drawing under this clip may have recorded
+    // samples from `maskResolveTexture` into the frame encoder, and
+    // recycling mid-frame could hand the texture to a later acquire
+    // before the submit.
+    Impl::ClipStackEntry& entry = impl_->clipStack.back();
+    for (auto& release : entry.maskLayerTextures) {
+      impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
+    }
+    entry.maskLayerTextures.clear();
     impl_->clipStack.pop_back();
   }
   impl_->updateEncoderScissor();
@@ -1435,16 +1818,15 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
-  impl_->device->countTexture();
+  wgpu::Texture layerTexture = impl_->acquireTexture(td);
   if (!layerTexture) {
     impl_->layerStack.push_back({});
     return;
   }
 
+  wgpu::TextureDescriptor msaaDesc = {};
   wgpu::Texture layerMsaaTexture;
   if (impl_->device->sampleCount() > 1) {
-    wgpu::TextureDescriptor msaaDesc = {};
     msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
     msaaDesc.size = td.size;
     msaaDesc.format = kFormat;
@@ -1452,9 +1834,9 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     msaaDesc.mipLevelCount = 1;
     msaaDesc.sampleCount = 4;
     msaaDesc.dimension = wgpu::TextureDimension::_2D;
-    layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
-    impl_->device->countTexture();
+    layerMsaaTexture = impl_->acquireTexture(msaaDesc);
     if (!layerMsaaTexture) {
+      impl_->releaseTexture(std::move(layerTexture), td);
       impl_->layerStack.push_back({});
       return;
     }
@@ -1472,6 +1854,8 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   frame.savedMsaaTarget = impl_->msaaTarget;
   frame.layerTexture = layerTexture;
   frame.layerMsaaTexture = layerMsaaTexture;
+  frame.layerDesc = td;
+  frame.layerMsaaDesc = msaaDesc;
   frame.opacity = opacity;
   frame.blendMode = blendMode;
 
@@ -1526,8 +1910,7 @@ void RendererGeode::popIsolatedLayer() {
     snapDesc.mipLevelCount = 1;
     snapDesc.sampleCount = 1;
     snapDesc.dimension = wgpu::TextureDimension::_2D;
-    wgpu::Texture snapshot = impl_->device->device().createTexture(snapDesc);
-    impl_->device->countTexture();
+    wgpu::Texture snapshot = impl_->acquireTexture(snapDesc);
 
     if (snapshot) {
       // Record the snapshot copy into the shared frame CommandEncoder
@@ -1565,6 +1948,13 @@ void RendererGeode::popIsolatedLayer() {
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshot,
                                             static_cast<uint32_t>(frame.blendMode), frame.opacity);
+      // Defer release: `blitFullTargetBlended` recorded samples from
+      // both `frame.layerTexture` and `snapshot` into the shared
+      // frameCommandEncoder; they must stay alive until that buffer
+      // is submitted at `endFrame`.
+      impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
+      impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
     // If snapshot allocation failed fall through to the Normal path —
@@ -1584,6 +1974,9 @@ void RendererGeode::popIsolatedLayer() {
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
   impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
+  // Same deferred-release rationale as the blend-mode branch above.
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
 }
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
@@ -1614,8 +2007,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
-  impl_->device->countTexture();
+  wgpu::Texture layerTexture = impl_->acquireTexture(td);
   if (!layerTexture) {
     impl_->filterStack.push_back({});
     return;
@@ -1629,9 +2021,9 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   msaaDesc.mipLevelCount = 1;
   msaaDesc.sampleCount = 4;
   msaaDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
-  impl_->device->countTexture();
+  wgpu::Texture layerMsaaTexture = impl_->acquireTexture(msaaDesc);
   if (!layerMsaaTexture) {
+    impl_->releaseTexture(std::move(layerTexture), td);
     impl_->filterStack.push_back({});
     return;
   }
@@ -1646,6 +2038,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.savedMsaaTarget = impl_->msaaTarget;
   frame.layerTexture = layerTexture;
   frame.layerMsaaTexture = layerMsaaTexture;
+  frame.layerDesc = td;
+  frame.layerMsaaDesc = msaaDesc;
   frame.filterGraph = filterGraph;
   frame.filterRegion = region;
 
@@ -1708,6 +2102,13 @@ void RendererGeode::popFilterLayer() {
   // CTM snapshot before using it as a scissor. Skipping for this PR —
   // all current feGaussianBlur resvg tests pass without the clip.
   impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  // Defer release to endFrame: `blitFullTarget` recorded a sample from
+  // `filteredTexture` (which is `frame.layerTexture` when the filter
+  // graph is empty) into the frame encoder. Filter-engine-owned
+  // intermediates are tracked separately by `GeodeFilterEngine` and
+  // covered by M5; we only recycle the layer capture pair here.
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
@@ -1719,39 +2120,38 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   }
 
   const auto allocTexturePair = [&](const char* label, const char* msaaLabel,
-                                    wgpu::Texture& outResolve, wgpu::Texture& outMsaa) {
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel(label);
-    td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-               1u};
-    td.format = kFormat;
-    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-               wgpu::TextureUsage::CopySrc;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    outResolve = impl_->device->device().createTexture(td);
-    impl_->device->countTexture();
+                                    wgpu::Texture& outResolve, wgpu::TextureDescriptor& outDesc,
+                                    wgpu::Texture& outMsaa, wgpu::TextureDescriptor& outMsaaDesc) {
+    outDesc = wgpu::TextureDescriptor{};
+    outDesc.label = wgpuLabel(label);
+    outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                    static_cast<uint32_t>(impl_->pixelHeight), 1u};
+    outDesc.format = kFormat;
+    outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                    wgpu::TextureUsage::CopySrc;
+    outDesc.mipLevelCount = 1;
+    outDesc.sampleCount = 1;
+    outDesc.dimension = wgpu::TextureDimension::_2D;
+    outResolve = impl_->acquireTexture(outDesc);
 
     if (impl_->device->sampleCount() > 1) {
-      wgpu::TextureDescriptor msaaDesc = {};
-      msaaDesc.label = wgpuLabel(msaaLabel);
-      msaaDesc.size = td.size;
-      msaaDesc.format = kFormat;
-      msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-      msaaDesc.mipLevelCount = 1;
-      msaaDesc.sampleCount = 4;
-      msaaDesc.dimension = wgpu::TextureDimension::_2D;
-      outMsaa = impl_->device->device().createTexture(msaaDesc);
-      impl_->device->countTexture();
+      outMsaaDesc = wgpu::TextureDescriptor{};
+      outMsaaDesc.label = wgpuLabel(msaaLabel);
+      outMsaaDesc.size = outDesc.size;
+      outMsaaDesc.format = kFormat;
+      outMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      outMsaaDesc.mipLevelCount = 1;
+      outMsaaDesc.sampleCount = 4;
+      outMsaaDesc.dimension = wgpu::TextureDimension::_2D;
+      outMsaa = impl_->acquireTexture(outMsaaDesc);
     }
   };
 
   Impl::MaskStackFrame frame;
   allocTexturePair("RendererGeodeMaskCapture", "RendererGeodeMaskCaptureMSAA", frame.maskTexture,
-                   frame.maskMsaaTexture);
+                   frame.maskDesc, frame.maskMsaaTexture, frame.maskMsaaDesc);
   allocTexturePair("RendererGeodeMaskContent", "RendererGeodeMaskContentMSAA", frame.contentTexture,
-                   frame.contentMsaaTexture);
+                   frame.contentDesc, frame.contentMsaaTexture, frame.contentMsaaDesc);
   const bool needsMsaa = impl_->device->sampleCount() > 1;
   if (!frame.maskTexture || (needsMsaa && !frame.maskMsaaTexture) || !frame.contentTexture ||
       (needsMsaa && !frame.contentMsaaTexture)) {
@@ -1851,6 +2251,15 @@ void RendererGeode::popMask() {
 
   // Composite `content * luminance(mask)` onto the outer target.
   impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, pixelMaskBounds);
+
+  // Defer release to endFrame — `blitFullTargetMasked` recorded
+  // samples from both `contentTexture` and `maskTexture` into the
+  // frame encoder. MSAA companions had no post-render samples but
+  // are bucketed alongside their resolve for symmetry.
+  impl_->releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.maskMsaaTexture), frame.maskMsaaDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
+  impl_->releaseTextureAtFrameEnd(std::move(frame.contentMsaaTexture), frame.contentMsaaDesc);
 }
 
 void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
@@ -2099,7 +2508,12 @@ void RendererGeode::setPaint(const PaintParams& paint) {
 }
 
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
-  impl_->fillResolved(path.path, path.fillRule);
+  // M2 cache lookup for the fill encode. Null `sourceEntity` (editor
+  // overlay, test-harness direct draws) returns nullptr and `GeoEncoder`
+  // falls back to the inline encode path.
+  const geode::EncodedPath* fillEncoded =
+      impl_->getFillEncode(path.sourceEntity, path.path, path.fillRule);
+  impl_->fillResolved(path.path, path.fillRule, fillEncoded);
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
   // device init failed, zero-pixel viewport, or draw-before-beginFrame),
@@ -2135,29 +2549,25 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // segment rectangle drops out). NonZero handles that case correctly
   // because the overlapping winding still sums to non-zero.
   //
-  // Pick per-source: count the subpaths produced by `strokeToFill`.
-  // A 1-subpath result means the source was open, use NonZero. A
-  // 2-subpath result means the source was closed and we need EvenOdd.
-  const Path strokedOutline = path.path.strokeToFill(toStrokeStyle(stroke));
-  if (strokedOutline.empty()) {
+  // The M2 cache (`GeodePathCacheComponent::strokeSlot`) memoizes the
+  // `strokeToFill` output + its encode + the derived fill rule, keyed
+  // by `StrokeStyle` equality. A cache hit skips all three computations.
+  const StrokeStyle strokeStyle = toStrokeStyle(stroke);
+  const Impl::StrokeDerived strokeDerived =
+      impl_->getStrokeDerived(path.sourceEntity, path.path, strokeStyle);
+  if (!strokeDerived.strokedPath) {
     return;
   }
-
-  size_t subpathCount = 0;
-  for (const auto& cmd : strokedOutline.commands()) {
-    if (cmd.verb == Path::Verb::MoveTo) {
-      ++subpathCount;
-    }
-  }
-  const FillRule strokeFillRule = (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
+  const Path& strokedOutline = *strokeDerived.strokedPath;
 
   // Pattern dispatch comes first: a stroke pattern slot was populated by the
   // driver via `endPatternTile(forStroke=true)` and consumed here.
   if (impl_->patternStrokePaint.has_value()) {
     impl_->syncTransform();
     const double opacity = impl_->paint.strokeOpacity;
-    impl_->encoder->fillPathPattern(strokedOutline, strokeFillRule,
-                                    impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
+    impl_->encoder->fillPathPattern(strokedOutline, strokeDerived.fillRule,
+                                    impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity),
+                                    strokeDerived.encoded);
     impl_->patternStrokePaint.reset();
     return;
   }
@@ -2170,7 +2580,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const double effectiveOpacity = impl_->paint.strokeOpacity;
   auto strokeServer = impl_->paint.stroke;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
-                                strokeFillRule);
+                                strokeDerived.fillRule, strokeDerived.encoded);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
