@@ -616,16 +616,41 @@ struct RendererGeode::Impl {
                         desc.usage};
     }
   };
-  std::map<TextureKey, std::vector<wgpu::Texture>> texturePool;
+  struct TextureBucket {
+    std::vector<wgpu::Texture> free;
+    /// Monotonic frame index when this bucket was last touched by
+    /// either `acquireTexture` or `releaseTexture`. Used by
+    /// `evictStalePoolBuckets` to age out buckets whose size hasn't
+    /// been seen in a while (viewport-resize scenarios).
+    uint64_t lastUsedFrame = 0;
+  };
+  std::map<TextureKey, TextureBucket> texturePool;
+
+  /// Per-bucket hard cap. Prevents a single size from accumulating
+  /// unbounded textures even if a pathological frame pushes and pops
+  /// dozens of layers at that size without ever reacquiring.
+  static constexpr std::size_t kMaxPoolEntriesPerKey = 8;
+
+  /// Drop a bucket entirely if it hasn't been touched in this many
+  /// consecutive frames. At 60 fps this is ~2 seconds of idleness;
+  /// long enough to survive transient dips (e.g. an editor dragging
+  /// slightly then stopping) while still releasing memory on real
+  /// viewport-size changes.
+  static constexpr uint64_t kBucketEvictAfterFrames = 120;
+
+  /// Monotonic frame counter. Incremented in `beginFrame`; used to
+  /// stamp `TextureBucket::lastUsedFrame`.
+  uint64_t currentFrameIndex = 0;
 
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns a null texture on device failure.
   wgpu::Texture acquireTexture(const wgpu::TextureDescriptor& desc) {
-    auto& bucket = texturePool[TextureKey::From(desc)];
-    if (!bucket.empty()) {
-      wgpu::Texture texture = std::move(bucket.back());
-      bucket.pop_back();
+    TextureBucket& bucket = texturePool[TextureKey::From(desc)];
+    bucket.lastUsedFrame = currentFrameIndex;
+    if (!bucket.free.empty()) {
+      wgpu::Texture texture = std::move(bucket.free.back());
+      bucket.free.pop_back();
       return texture;
     }
     wgpu::Texture texture = device->device().createTexture(desc);
@@ -648,7 +673,29 @@ struct RendererGeode::Impl {
     if (!texture) {
       return;
     }
-    texturePool[TextureKey::From(desc)].push_back(std::move(texture));
+    TextureBucket& bucket = texturePool[TextureKey::From(desc)];
+    bucket.lastUsedFrame = currentFrameIndex;
+    if (bucket.free.size() >= kMaxPoolEntriesPerKey) {
+      // Bucket full — let the released texture go out of scope instead
+      // of unbounded growth.
+      return;
+    }
+    bucket.free.push_back(std::move(texture));
+  }
+
+  /// Drop every bucket whose `lastUsedFrame` is older than
+  /// `kBucketEvictAfterFrames` frames. Called at `beginFrame`. On
+  /// steady-state workloads this is a no-op (all buckets refresh
+  /// their stamps each frame); under viewport-resize churn it caps
+  /// pool memory at whatever sizes have been seen recently.
+  void evictStalePoolBuckets() {
+    for (auto it = texturePool.begin(); it != texturePool.end();) {
+      if (currentFrameIndex - it->second.lastUsedFrame > kBucketEvictAfterFrames) {
+        it = texturePool.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   /// Defer a release until after the frame's command buffer has been
@@ -973,14 +1020,20 @@ struct RendererGeode::Impl {
   // --------------------------------------------------------------------
   // M2 path-encode cache (design doc 0030 §Milestone 2).
   //
-  // `cacheInvalidationRegistry` tracks the registry our entt
-  // `on_update<ComputedPathComponent>` / `on_destroy<ComputedPathComponent>`
-  // listener is connected to. When `draw()` comes in with a different
-  // registry (e.g. a test fixture reusing one renderer across documents),
-  // we disconnect from the old and reconnect to the new.
+  // Our entt `on_update<ComputedPathComponent>` / `on_destroy<ComputedPathComponent>`
+  // listener is connected lazily at `draw()` entry. Presence is tracked
+  // via a sentinel context component on the registry itself
+  // (`ListenerInstalled`) — pointer-identity on `&registry` would be
+  // unsafe across document lifetimes (a destroyed document's registry
+  // memory can be reused, giving us the same pointer value for an
+  // entirely different `entt::basic_registry` with no listener).
   // --------------------------------------------------------------------
 
-  Registry* cacheInvalidationRegistry = nullptr;
+  /// Sentinel context component, emplaced on a registry the first
+  /// time it's seen by `ensureCacheInvalidationWired`. Lifetime ties
+  /// to the registry — dies with it, so a re-allocated registry at
+  /// the same address doesn't carry the tag.
+  struct ListenerInstalled {};
 
   /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
   /// `on_destroy<ComputedPathComponent>` listener onto `registry`.
@@ -1244,22 +1297,22 @@ struct RendererGeode::Impl {
 };
 
 void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
-  if (&registry == cacheInvalidationRegistry) {
+  // Sentinel lives on the registry's context store, so its presence
+  // implies "this registry has already had our listener connected".
+  // When the registry is destroyed the sentinel goes with it — a
+  // later registry allocated at the same address will (correctly)
+  // miss the sentinel and get its own listener. Pointer-identity on
+  // `&registry` alone can't distinguish those cases.
+  if (registry.ctx().contains<ListenerInstalled>()) {
     return;
   }
-  // When the renderer switches documents (rare — test fixtures reusing
-  // one renderer across parses), we do NOT disconnect from the old
-  // registry. There's no safe way to know whether the old registry is
-  // still alive at this point, and `disconnect<>()` on a freed
-  // registry is UB. Leaving the old connection attached is harmless:
-  // our free-function listener is fine to outlive the renderer
-  // (see the `~Impl` comment above). Worst case: the old document
-  // keeps paying one signal dispatch on geometry changes; the removal
-  // call is a cheap no-op because the old `GeodePathCacheComponent`
-  // entries aren't being re-installed.
+  registry.ctx().emplace<ListenerInstalled>();
   registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
-  cacheInvalidationRegistry = &registry;
+  // Leaving the connection attached across renderer destruction is
+  // intentional: our free-function listener has no `this`-capture,
+  // so it's safe to outlive the renderer. Connections die with the
+  // registry.
 }
 
 void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entity) {
@@ -1355,6 +1408,13 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->transformStack.clear();
   impl_->paint = PaintParams();
   impl_->encoder.reset();
+
+  // M4.2: stamp each frame with a monotonic index and age out pool
+  // buckets that haven't been touched in the last
+  // `kBucketEvictAfterFrames` frames. Caps memory under viewport
+  // resize.
+  ++impl_->currentFrameIndex;
+  impl_->evictStalePoolBuckets();
 
   // Reset counters regardless of device state.
   impl_->counters.reset();
