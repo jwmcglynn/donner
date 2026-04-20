@@ -78,7 +78,7 @@ every variant is covered by the default test command.
   - [ ] M2.2: Extend `tools/cmake/gen_cmakelists.py --check` to actually `cmake --build` the generated CMake on Linux + macOS tiers. Catches drift that the static validator missed in commits 19d41df8, 398d312b, 89448ad7, a7d682fe.
   - [ ] M2.3: Make `bazel test //...` cover every variant by default. Audit `donner_variant_cc_test` usage; ensure `tiny`, `text-full`, `geode` variants auto-emit under the default test command. Once green, delete `tools/presubmit.sh`.
   - [ ] M2.4: Introduce `donner_perf_cc_test` macro splitting correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged `perf`). Retires 5 recent threshold-widening hotfixes (8043ad7b, 1f147f2f, 43f42cf7, ab68092b, 8cd89ef7). Absorbs doc 0016 Category 8.
-  - [ ] M2.5: Nightly `sanitizers.yml` running ASan+UBSan across `//donner/...`. **Skip-idle**: first job compares `origin/main` HEAD against the last successful `workflow_run` SHA; if unchanged, exit 0 and short-circuit. Required for `main` merges (not PR-blocking).
+  - [x] M2.5: Nightly `sanitizers.yml` running ASan+UBSan across `//donner/...`. **Skip-idle**: first job compares `origin/main` HEAD against the last successful `workflow_run` SHA; if unchanged, exit 0 and short-circuit. Monitoring signal only (not PR-blocking).
   - [ ] M2.6: Scheduled Claude triage agent (`/schedule` → `CronCreate`). Runs daily after nightly jobs complete. If the nightly skipped (skip-idle), exit quietly. Otherwise: fetch failure logs, classify (infra vs real bug), file a 🤖-prefixed tracking issue or — for mechanical fixes (missing `target_compatible_with`, threshold widening) — open a PR. Depends on M2.5.
 
 - [ ] **Milestone 3 — Runtime wins (M effort)**
@@ -197,7 +197,7 @@ Specific acceptance gates:
   fails.
 - M2.4: threshold-widening hotfix commits no longer need to exist
   (perf flakes land on nightly; correctness counters stay on PR gate).
-- M2.5: skip-idle — `sanitizers.yml` records a "skipped" outcome on days
+- M2.5: skip-idle — `sanitizers.yml` skips the `asan` / `ubsan` jobs on days
   with no commits.
 
 ## Rollout Plan
