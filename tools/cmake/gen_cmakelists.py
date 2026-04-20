@@ -98,6 +98,7 @@ SKIPPED_PACKAGES = {
     "",  # root package - handled by generate_root()
     "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
     "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
+    "donner/svg/renderer/benchmarks",  # renderer_bench is Geode-only; its .cc includes webgpu/webgpu.hpp which the CMake mirror doesn't fetch (Bazel-only)
     "donner/svg/renderer/geode",  # Geode (WebGPU) — Bazel-only, gated behind --enable_geode flag
     "donner/svg/renderer/wasm",  # Emscripten WASM module (cc_binary uses --no-entry); native link fails without main()
     "third_party/emdawnwebgpu",  # Dawn's Emscripten WebGPU bindings — WASM-only; `webgpu.cpp` includes <emscripten/emscripten.h>
