@@ -10,13 +10,15 @@ concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Fast lint job covering checks that don't live inside `bazel test //...`:
+# Fast lint jobs covering checks that don't live inside `bazel test //...`:
 #
 # - clang-format (changed C++ files only — runs in <30s for typical PRs)
-# - build_defs/check_banned_patterns.py (same rules as the generated *_lint
-#   Bazel tests, but fast enough to run here without waiting for bazel test)
-# - gen_cmakelists.py --check validator (reentrant bazel prevents running
-#   this from inside bazel test; see Phase 3 design doc)
+# - misc-include-cleaner (changed C++ files only — avoids blocking on
+#   historical include debt while enforcing new diffs)
+# - build_defs/check_banned_patterns.py (covers the examples/ dir which
+#   is not fully enumerated by the donner_cc_* py_test lint macros)
+# - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
+#   prevents running --check from inside bazel test; see design doc 0016)
 jobs:
   lint:
     runs-on: ubuntu-24.04
@@ -75,12 +77,12 @@ jobs:
           echo "Checking ${MODIFIED}" | tr ' ' '\n'
           echo "${MODIFIED}" | xargs clang-format --dry-run -Werror
 
-      - name: Check banned patterns
+      - name: Check banned patterns in examples/
         shell: bash
         run: |
-          # Keep this aligned with the default Bazel lint surface: examples that
-          # are tagged manual are excluded from `bazel test //...` today, so the
-          # fast lint job skips those same manual-only sources.
+          # Examples/ isn't fully enumerated by the donner_cc_* py_test lint
+          # macros (some examples are tagged manual and excluded from
+          # `bazel test //...`), so we run the checker here directly.
           mapfile -t example_sources < <(
             find examples -maxdepth 1 -type f -name '*.cc' \
               ! -name 'render_test.cc' \
@@ -90,17 +92,50 @@ jobs:
 
           python3 build_defs/check_banned_patterns.py donner "${example_sources[@]}"
 
-      # TODO(0031 M1.1): Replace this stub with the real bazel
-      # `--config=clang-tidy` invocation once the delegated .clang-tidy
-      # misc-include-cleaner change lands on this branch.
-      - name: misc-include-cleaner (stub until .clang-tidy lands)
+  misc-include-cleaner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 50
+
+      - name: Install clang-tidy
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y clang-tidy-19
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check misc-include-cleaner on changed C++ files
         run: |
-          if ! grep -q 'misc-include-cleaner' .clang-tidy; then
-            echo "::notice::Skipping misc-include-cleaner: .clang-tidy does not enable it on this branch yet."
-            exit 0
+          if [[ -n "${{ github.base_ref }}" ]]; then
+            git fetch --depth=50 origin "${{ github.base_ref }}"
+            BASE="$(git merge-base "origin/${{ github.base_ref }}" HEAD)"
+          else
+            git fetch --depth=50 origin main 2>/dev/null || true
+            BASE="$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD~1)"
           fi
 
-          echo "::notice::TODO: enable bazel --config=clang-tidy lint here once the M1.1 wiring lands."
+          tools/run_misc_include_cleaner_diff.sh "${BASE}"
+
+  cmake-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
 
       - name: gen_cmakelists.py --check
         run: python3 tools/cmake/gen_cmakelists.py --check
