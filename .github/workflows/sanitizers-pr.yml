@@ -1,0 +1,49 @@
+name: Sanitizers PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "donner/svg/renderer/geode/**"
+      - "donner/svg/renderer/RendererDriver.*"
+      - "donner/svg/renderer/RendererGeode.*"
+
+jobs:
+  asan-geode:
+    name: asan-geode
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # TODO(doc 0030 M1.2, add asan-geode PR gate): remove continue-on-error
+    # once main is green under `--config=asan --config=geode` again
+    # (issue #552's fix plus the current Geode ASan build breakage).
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test (Geode ASan)
+        run: |
+          bazelisk test --config=asan --config=geode --test_output=errors \
+            //donner/svg/renderer/tests:resvg_test_suite_geode
