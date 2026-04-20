@@ -840,12 +840,13 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
 //   - Subsequent drag frames: < 8 ms (120 Hz fluid dragging).
 //
 // Observed floors on GitHub's shared macOS runners are worse than dev
-// hardware: click-to-first-pixel lands ~365-490 ms and steady-state
-// drag frames average 19-20 ms. Budgets are set to ~2x observed so
-// the gate catches real regressions without flaking on a busy runner;
-// the aspirational targets live in comments above and get tightened
-// when the editor-side bg/fg-split refactor lands.
-constexpr double kClickToFirstPixelBudgetMs = 1000.0;
+// hardware: click-to-first-pixel lands ~365-490 ms on a quiet runner,
+// but a busy runner has been seen at ~1167 ms. Budgets widened to
+// ~3x the quiet-runner upper bound to absorb that variance while
+// still catching real regressions; the aspirational targets live in
+// comments above and get tightened when the editor-side bg/fg-split
+// refactor lands.
+constexpr double kClickToFirstPixelBudgetMs = 1500.0;
 constexpr double kDragFrameBudgetMs = 40.0;
 
 TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
