@@ -117,7 +117,7 @@ Each step has its own perf pitfalls. The biggest wins are usually in **avoiding 
 
 ## Handoff rules
 
-- **Architectural perf decisions in a specific subsystem**: pair with the relevant domain bot (GeodeBot for GPU, TinySkia Bot for CPU raster, CSSBot for cascade perf, TextBot for text layout).
+- **Architectural perf decisions in a specific subsystem**: pair with the relevant domain bot (GeodeBot for GPU, TinySkiaBot for CPU raster, CSSBot for cascade perf, TextBot for text layout).
 - **Incremental invalidation design**: DesignReviewBot owns the doc shape; you own the perf analysis.
 - **CI regression detection for perf**: MiscBot (CI reliability) + you (benchmark harness).
 - **Binary size tracking**: ReleaseBot owns the report; you own "is the growth justified".

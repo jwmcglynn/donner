@@ -39,7 +39,7 @@ When triaging a CI-only escape:
 
 ## What you're *not* for
 
-- Domain design decisions inside a code area (defer to GeodeBot / TinySkia Bot / BazelBot / TestBot / ReadabilityBot / ReleaseBot).
+- Domain design decisions inside a code area (defer to GeodeBot / TinySkiaBot / BazelBot / TestBot / ReadabilityBot / ReleaseBot).
 - Writing production C++ that a domain bot should write. You can sketch an approach, but don't pretend to know the C++ footguns a specialist owns.
 - Greenfield architectural design (that's DesignReviewBot's territory paired with a domain bot).
 

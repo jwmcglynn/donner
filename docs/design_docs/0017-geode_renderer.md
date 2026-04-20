@@ -29,7 +29,7 @@
     curved flattened strokes on closed subpaths). See Phase 2 checklist
     for details and follow-up tasks.
   - ✅ `--config=geode` backend selection — sets both
-    `renderer_backend=geode` and `enable_dawn=true`. Default builds are
+    `renderer_backend=geode` and `enable_geode=true`. Default builds are
     unaffected (Dawn still gated off).
   - ✅ Golden image tests for solid-fill SVGs — 5/5 green.
     `renderer_geode_golden_tests` uses per-backend goldens under
@@ -76,7 +76,7 @@
   strategy (wgpu-native)" section under Background for the current
   authoritative vendoring design; the "Historical: Dawn embedding
   strategy" section is retained for context only. The user-visible
-  `--config=geode` / `enable_dawn=true` flags are unchanged.
+  `--config=geode` / `enable_geode=true` flags are unchanged.
 - **Phase 3d** (mix-blend-mode): ✅ complete, merged in #541. Implements
   all 16 SVG/CSS `mix-blend-mode` operators (Multiply, Screen, Overlay,
   Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight,
@@ -315,7 +315,7 @@ Pins (see `//third_party/bazel/non_bcr_deps.bzl`):
   against the release asset when bumping.
 
 This is opt-in: Geode's entire directory is gated behind
-`--//donner/svg/renderer/geode:enable_dawn=true` (default: false; flag name
+`--//donner/svg/renderer/geode:enable_geode=true` (default: false; flag name
 is historical — kept stable to avoid churning command-line invocations).
 Default `bazel test //...` never fetches wgpu-native, so contributors not
 working on Geode pay zero time/disk cost for WebGPU.
@@ -1190,7 +1190,7 @@ cleanup.
     `cmake()` makes `rules_foreign_cc` apply them during Dawn's own
     compiler-test step and breaks the build.
   - Clean build takes ~4.5 min on macOS via Bazel's parallelism.
-  - Gated behind `--//donner/svg/renderer/geode:enable_dawn=true`
+  - Gated behind `--//donner/svg/renderer/geode:enable_geode=true`
     (default: false) so existing CI is unaffected.
 - [x] Implement `GeodeDevice`: headless device/queue factory.
   - Uses `dawn::native::Instance::EnumerateAdapters()` + `wgpu::Adapter(ptr)`

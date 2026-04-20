@@ -19,11 +19,12 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
-# Enable text rendering (stb_truetype, TTF/OTF/WOFF1).
-# Override with --//donner/svg/renderer:text=true or via donner.configure(text = True).
+# Enable text rendering (stb_truetype, TTF/OTF/WOFF1). On by default.
+# Disable with --//donner/svg/renderer:text=false (or --config=no-text), or via
+# donner.configure(text = False).
 bool_flag(
     name = "text",
-    build_setting_default = DONNER_CONFIG.get("text", False),
+    build_setting_default = DONNER_CONFIG.get("text", True),
     visibility = ["//visibility:public"],
 )
 
@@ -58,8 +59,8 @@ config_setting(
 )
 
 # Geode (WebGPU + Slug) backend selection. Using this backend also requires
-# --//donner/svg/renderer/geode:enable_dawn=true so that Dawn is compiled;
-# `--config=geode` in .bazelrc sets both flags together.
+# --//donner/svg/renderer/geode:enable_geode=true so that wgpu-native is
+# compiled; `--config=geode` in .bazelrc sets both flags together.
 config_setting(
     name = "renderer_backend_geode",
     flag_values = {":renderer_backend": "geode"},
@@ -270,10 +271,10 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     # Geode pulls in wgpu-native via GeoEncoder. Gate behind the same
-    # enable_dawn build flag (historical name — see the Geode BUILD.bazel
+    # enable_geode build flag (historical name — see the Geode BUILD.bazel
     # file-level docstring) that the rest of the geode/ targets use.
     target_compatible_with = select({
-        "//donner/svg/renderer/geode:dawn_enabled": [],
+        "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//visibility:public"],

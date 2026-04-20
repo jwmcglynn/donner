@@ -54,8 +54,6 @@ struct ImageComparisonParams {
   bool includeAntiAliasing = false;
   /// If true, skip this test case.
   bool skip = false;
-  /// If true, save a .skp file for debugging when a test fails.
-  bool saveDebugSkpOnFailure = true;
   /// If true, allow updating golden images via an environment variable.
   bool updateGoldenFromEnv = false;
   /// If true, emit a terminal preview grid when comparisons fail.
@@ -154,15 +152,6 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& withReason(std::string_view text) {
     reason = text;
-    return *this;
-  }
-
-  /**
-   * @brief Disables saving of .skp files on test failure.
-   * @return Reference to this ImageComparisonParams object.
-   */
-  ImageComparisonParams& disableDebugSkpOnFailure() {
-    saveDebugSkpOnFailure = false;
     return *this;
   }
 

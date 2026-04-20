@@ -163,6 +163,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "renderer_ascii_tests",
+    srcs = [
+        "RendererAscii_tests.cc",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "terminal_image_viewer_tests",
     srcs = ["TerminalImageViewer_tests.cc"],
     deps = [
@@ -238,7 +249,7 @@ donner_cc_test(
     ],
 )
 
-# Transition wrapper: flips renderer_backend=geode + enable_dawn=true so this
+# Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
 # target is reachable from `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "renderer_geode_golden_tests",
@@ -253,10 +264,10 @@ donner_multi_transitioned_test(
 donner_cc_test(
     name = "renderer_geode_tests_impl",
     srcs = ["RendererGeode_tests.cc"],
-    # Geode pulls in Dawn; gate behind the same enable_dawn flag the rest of
+    # Geode pulls in Dawn; gate behind the same enable_geode flag the rest of
     # the geode/ targets use.
     target_compatible_with = select({
-        "//donner/svg/renderer/geode:dawn_enabled": [],
+        "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
@@ -273,7 +284,7 @@ donner_cc_test(
     ],
 )
 
-# Transition wrapper: flips renderer_backend=geode + enable_dawn=true so this
+# Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
 # target is reachable from `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "renderer_geode_tests",
@@ -350,7 +361,7 @@ donner_variant_cc_test(
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
         {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
         # Geode variant: runs the same suite on the WebGPU backend,
-        # auto-transitioned into `--config=geode` + `enable_dawn`. Text
+        # auto-transitioned into `--config=geode` + `enable_geode`. Text
         # and filters are still stubbed, so the fixture's
         # `geodeCategoryGate` / `geodeFilenameGate` logic in
         # `resvg_test_suite.cc` skips those categories automatically;

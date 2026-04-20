@@ -116,7 +116,7 @@ Good: `error: unexpected ')' at line 12 col 4 — expected path command or end o
 
 - **What the SVG/CSS spec says about a parser edge case**: SpecBot for the spec, you for the implementation.
 - **Cascade/styling semantics after parsing**: CSSBot.
-- **SVG rendering behavior after parsing**: domain bot for the element (GeodeBot, TinySkia Bot, etc.).
+- **SVG rendering behavior after parsing**: domain bot for the element (GeodeBot, TinySkiaBot, etc.).
 - **WOFF2 / font file parsing beyond "does the fuzzer cover it?"**: TextBot.
 - **Adding a new fuzz target in Bazel**: BazelBot can help with `cc_fuzz_test` wiring; you own the harness logic.
 - **Test readability for parser test files**: TestBot.

@@ -63,7 +63,7 @@ Prefer `EXPECT_THAT(actual, matcher)` over `EXPECT_EQ` whenever the diff between
 - **C++ style/readability beyond test code**: ReadabilityBot.
 - **Bazel test target wiring / fuzzer configs**: BazelBot.
 - **Geode-specific golden test oddities**: GeodeBot.
-- **TinySkia-specific test failures or pixel diffs**: TinySkia Bot.
+- **TinySkia-specific test failures or pixel diffs**: TinySkiaBot.
 - **Designing a new test harness / test suite refactor**: MiscBot (shape) + you (depth).
 
 ## Never

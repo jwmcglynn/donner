@@ -1131,7 +1131,7 @@ coexist with the renderer, ImGui, and the cascade.
 | Token callback re-tokenize (per line, cached) | 100 µs | needs measurement — lexer-only mode required |
 | Per-line re-tokenize on `<!--` at top of 10k-line file | 5 ms | needs measurement; fall back to async if over |
 | Cascade recompute for inline `style=` edit on deeply-nested element | needs measurement | |
-| Renderer re-raster after targeted invalidation (per backend) | needs measurement | TinySkia Bot / GeodeBot bot-handoff |
+| Renderer re-raster after targeted invalidation (per backend) | needs measurement | TinySkiaBot / GeodeBot bot-handoff |
 | Structural fallback keystroke roundtrip (500KB file) | **20–100 ms — off-main-thread** | needs measurement; gate on user-visible lag budget |
 | **Full incremental keystroke roundtrip — scalar attr** | **<1 ms** | headline goal |
 

@@ -27,7 +27,7 @@ Donner is a dynamic SVG engine (browser-like, not a static renderer). It builds 
 - **Styling** (`Property`, `PropertyRegistry`, `StyleSystem`): Consumes CSS data, implements SVG style model (presentation attributes, cascading, inheritance) → `ComputedStyleComponent`.
 - **Document Model (ECS)**: Built on **EnTT**. Entities = SVG elements, Components = data (`TreeComponent`, `StyleComponent`, `PathComponent`), Systems = logic (`LayoutSystem`, `StyleSystem`, `ShapeSystem`).
 - **API Frontend** (`donner::svg::SVG*Element`): User-facing wrappers around ECS entities/components.
-- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Geode** (`RendererGeode`, in-development GPU backend via Dawn/WebGPU; gated on `--//donner/svg/renderer/geode:enable_dawn=true`). `Renderer` is the public facade. Select the default tiny-skia backend or `--config=geode` in Bazel; CMake uses `DONNER_RENDERER_BACKEND` where supported.
+- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Geode** (`RendererGeode`, in-development GPU backend via Dawn/WebGPU; gated on `--//donner/svg/renderer/geode:enable_geode=true`). `Renderer` is the public facade. Select the default tiny-skia backend or `--config=geode` in Bazel; CMake uses `DONNER_RENDERER_BACKEND` where supported.
 - **Base Library** (`donner::base`): Common utilities (`RcString`, `Vector2`, `Transform`, `Length`).
 
 ### Rendering Pipeline

@@ -97,7 +97,7 @@ When you find a gap, name the specific question the author should answer next. D
 
 ## Handoff rules
 
-- **Implementation details inside a code area**: defer to the domain bot (GeodeBot, TinySkia Bot, BazelBot, etc.). You review the *shape* of the design, not whether the code will compile.
+- **Implementation details inside a code area**: defer to the domain bot (GeodeBot, TinySkiaBot, BazelBot, etc.). You review the *shape* of the design, not whether the code will compile.
 - **C++ readability of example snippets in a doc**: ReadabilityBot.
 - **Test plan depth (matcher choice, diagnosability)**: TestBot reviews the *tests*; you just check that a test plan exists and names specifics.
 - **Refactor sequencing within a design doc's implementation plan**: MiscBot.

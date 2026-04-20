@@ -12,7 +12,7 @@ client that understands the `.claude/agents/` convention), these files are
 loaded automatically and made available as delegate targets. Instead of asking
 one generic assistant every question, you can route a question to the bot that
 owns the relevant area — BazelBot for a `BUILD.bazel` change, TextBot for a
-HarfBuzz shaping bug, TinySkia Bot for a pixel diff in the default backend, and
+HarfBuzz shaping bug, TinySkiaBot for a pixel diff in the default backend, and
 so on.
 
 This page is the map: what each bot owns, when to call it, and how they hand
@@ -47,7 +47,7 @@ that every agent inherits.
 | **CSSBot** | `donner::css` parser, selectors, cascade, `PropertyRegistry`, `StyleSystem` | Selector parsing bugs, specificity/inheritance questions, how presentation attributes interact with CSS in SVG2 |
 | **DesignReviewBot** | Design docs under `docs/design_docs/` | Before a design moves from draft to implementing; periodic scope-drift checks during implementation |
 | **DuckBot** | Big-picture brainstorming, Donner's innovation registry | You're stuck on *what* to build, not *how* — architectural reframes, "is there a cleverer way?" |
-| **GeodeBot** | Geode GPU backend (WebGPU/Dawn, Slug, WGSL), `RendererGeode`, `--config=geode` | Geode architecture questions, `enable_dawn` gating, adding or editing shaders |
+| **GeodeBot** | Geode GPU backend (WebGPU/Dawn, Slug, WGSL), `RendererGeode`, `--config=geode` | Geode architecture questions, `enable_geode` gating, adding or editing shaders |
 | **MiscBot** | Cross-cutting refactors, multi-PR initiatives | Planning a background project, breaking work into reviewable chunks; delegates to domain bots for depth |
 | **ParserBot** | `donner::xml`, `donner::svg::parser`, `donner::css::parser`, fuzzer discipline, diagnostics | Parser bugs, fuzzer crashes, error-message quality, designing a new parser |
 | **PerfBot** | Frame-budget discipline, profiling, allocation/hot-path analysis | Perf regressions, animation smoothness, "is this fast enough for 60/120fps?" |
@@ -57,7 +57,7 @@ that every agent inherits.
 | **SpecBot** | SVG2 + dependent web standards (CSS, DOM, XML, Filter Effects, Unicode) | Edge-case spec questions, identifying UB, checking what browsers/resvg/librsvg/batik actually do |
 | **TestBot** | GTest/GMock, diagnosable failures, custom matchers | Test-file reviews, "this failure message is useless" problems, promoting assertions into matchers |
 | **TextBot** | Text rendering across the no-text default plus `--config=text` and `--config=text-full` | Any text bug, font matching, `@font-face`, WOFF2, shaping, cross-tier mismatches |
-| **TinySkia Bot** | Vendored `tiny-skia-cpp` + `RendererTinySkia` (the default backend) | Pixel diffs in the default backend, SIMD parity, stroke/dash edge cases |
+| **TinySkiaBot** | Vendored `tiny-skia-cpp` + `RendererTinySkia` (the default backend) | Pixel diffs in the default backend, SIMD parity, stroke/dash edge cases |
 
 Each agent file in [`.claude/agents/`](https://github.com/jwmcglynn/donner/tree/main/.claude/agents) starts with the
 same YAML frontmatter shape:
@@ -119,10 +119,10 @@ Agents cooperate. Every bot's prompt ends with a short list of questions it
 does *not* own, each paired with the bot that does. A few representative
 edges:
 
-- **BazelBot → GeodeBot** for anything touching the `enable_dawn` flag.
+- **BazelBot → GeodeBot** for anything touching the `enable_geode` flag.
 - **BazelBot → ReleaseBot** for build-report layout and release-artifact
   builds.
-- **TextBot → TinySkia Bot** when the bug is in glyph rasterization rather than shaping.
+- **TextBot → TinySkiaBot** when the bug is in glyph rasterization rather than shaping.
 - **DuckBot → DesignReviewBot** when a big-picture proposal is ready to
   become a design doc.
 - **DuckBot → PerfBot / SecurityBot** when a proposal needs a perf or
@@ -192,7 +192,7 @@ bot is getting too broad — follow the pattern:
    where appropriate.
 4. **Match the house voice.** Each bot has its own tone; match the tone of a
    neighboring bot in the same discipline (for example, a new
-   rendering-backend bot should read like TinySkia Bot or GeodeBot, not like
+   rendering-backend bot should read like TinySkiaBot or GeodeBot, not like
    DuckBot).
 5. **Update this page.** Add a row to the quick-reference table and, if the
    bot is involved in any handoff you think contributors will hit, add it to

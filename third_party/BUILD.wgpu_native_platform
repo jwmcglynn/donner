@@ -18,9 +18,6 @@ the three wrong archives and a functional `srcs = [...]` on the right one.
 `//third_party/webgpu-cpp:wgpu_native_platform` then picks the archive
 matching the current host via `select()`, so only the matching archive's
 `:wgpu_native` target ever ends up in the runtime link line.
-
-The Dawn→wgpu-native swap keeps the flag name (`enable_dawn`) as-is for
-backwards compat with existing build plumbing.
 """
 
 package(default_visibility = ["//visibility:public"])
