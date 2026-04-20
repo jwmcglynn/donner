@@ -8,14 +8,31 @@
 
 #include "donner/base/Box.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGeometryElement.h"
 
 namespace donner::editor {
 
-/// Snapshot world-space bounds for every selected geometry element that
-/// currently has computable bounds.
+/// Collect every renderable \ref svg::SVGGeometryElement in @p root's
+/// subtree (including @p root itself if it is geometry). Skips container
+/// subtrees that are not part of the visual tree — \c defs, \c clipPath,
+/// \c mask, \c filter, \c pattern, gradients, \c symbol, \c marker, \c
+/// style.
+///
+/// Used by the editor to expand a group selection ("I picked this
+/// `<g filter>`") into the set of leaves whose outlines + world bounds
+/// should drive selection chrome.
+[[nodiscard]] std::vector<svg::SVGGeometryElement> CollectRenderableGeometry(
+    const svg::SVGElement& root);
+
+/// Snapshot world-space bounds for every selected element that has
+/// renderable geometry. Elements that are themselves geometry contribute
+/// their own bounds; group-like elements contribute the union of their
+/// renderable geometry descendants. Elements with no renderable geometry
+/// produce no entry.
 ///
 /// @param selection Current selection handles.
-/// @return Document-space AABBs in selection order.
+/// @return Document-space AABBs in selection order (one per selected
+///   element that has geometry).
 [[nodiscard]] std::vector<Box2d> SnapshotSelectionWorldBounds(
     std::span<const svg::SVGElement> selection);
 

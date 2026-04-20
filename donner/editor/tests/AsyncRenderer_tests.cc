@@ -4,6 +4,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <thread>
 
@@ -11,6 +12,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -1656,6 +1658,168 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
                  << resetCount << ". Tracked in 0026 Milestone B3 Step 3.";
   }
   EXPECT_EQ(resetCount, 0u) << "source-pane structurally-equivalent edit took the reset path";
+}
+
+// Regression: dragging a `<g filter=...>` subtree (the editor's flow when
+// the user picks the filter group from the tree view and drags) must go
+// through the compositor's translation-only fast path. Before the subtree-
+// layer fast-path extension, the fast path disqualified ANY layer with
+// `firstEntity != lastEntity` — i.e. anything but a single geometry leaf.
+// That forced the compositor to fall through to
+// `prepareDocumentForRendering`, which rebuilds every RIC, every resolved
+// paint server, and every resolved filter from scratch. On a filter-heavy
+// document the cost is ~100 ms per drag frame, which the user reported as
+// "really laggy" and "I can't select any other elements" (the async
+// renderer stays saturated long enough that the UI-thread's `isBusy()`
+// check never clears).
+//
+// The test measures the drag-frame latency for a filter-group target and
+// asserts a tight budget. Without the subtree fast-path the test blows
+// past it by an order of magnitude.
+TEST(AsyncRendererE2ETest, DraggingFilterGroupSubtreeHitsTranslationFastPath) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  AsyncSVGDocument asyncDoc;
+  ASSERT_TRUE(asyncDoc.loadFromString(splashSource));
+  asyncDoc.document().setCanvasSize(892, 512);
+  svg::SVGDocument& document = asyncDoc.document();
+
+  // `#Big_lightning_glow` is a `<g filter="url(#big_lightning_glow_blur)">`
+  // containing 2 paths. This is the EXACT shape the user hits when they
+  // drag a filter group on the splash — a subtree layer whose root has a
+  // filter and whose range spans multiple RICs.
+  auto targetElement = document.querySelector("#Big_lightning_glow");
+  ASSERT_TRUE(targetElement.has_value());
+  const Entity targetEntity = targetElement->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+
+  const auto postRequest = [&](uint64_t version, bool activeDrag) {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = targetEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = targetEntity,
+        .interactionKind = activeDrag
+                               ? svg::compositor::InteractionHint::ActiveDrag
+                               : svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  };
+
+  // Pre-warm: selection-kind promotion warms the layer bitmap. Drag
+  // frames that follow should all re-use this cached bitmap via a
+  // compose-offset update, not re-rasterize the filter.
+  postRequest(/*version=*/1, /*activeDrag=*/false);
+  ASSERT_TRUE(waitForResult().has_value());
+
+  constexpr int kDragFrames = 10;
+  double maxDragFrameMs = 0.0;
+  double sumDragFrameMs = 0.0;
+  for (int i = 0; i < kDragFrames; ++i) {
+    targetElement->cast<svg::SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 3.0, 0.0)));
+    const auto t = std::chrono::steady_clock::now();
+    postRequest(/*version=*/static_cast<uint64_t>(i + 2), /*activeDrag=*/true);
+    auto result = waitForResult();
+    const double frameMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+    ASSERT_TRUE(result.has_value()) << "filter-group drag frame " << i << " didn't land";
+    ASSERT_TRUE(result->compositedPreview.has_value())
+        << "filter-group drag frame " << i
+        << " produced no composited preview — compositor fell through to the "
+           "non-composited path and will be slow for every subsequent frame";
+    sumDragFrameMs += frameMs;
+    maxDragFrameMs = std::max(maxDragFrameMs, frameMs);
+  }
+
+  const double avgDragFrameMs = sumDragFrameMs / kDragFrames;
+  std::cerr << "[PERF] DraggingFilterGroupSubtree: avg=" << avgDragFrameMs
+            << " ms, max=" << maxDragFrameMs << " ms over " << kDragFrames << " frames\n";
+
+  // Translation-only drag of a cached filter layer should stay well under
+  // 15 ms on the worker — the fast path is a DOM-transform update plus a
+  // single matrix compose. If this budget is blown the editor can't keep
+  // up with drag events and the async renderer stays saturated (which is
+  // what makes other selections feel unresponsive during the drag).
+  EXPECT_LT(avgDragFrameMs, 15.0)
+      << "average filter-group-subtree drag frame exceeded budget — fast path "
+         "isn't catching the filter-group translation delta";
+  EXPECT_LT(maxDragFrameMs, 40.0)
+      << "max filter-group-subtree drag frame exceeded budget — some frame "
+         "slipped into the full-prepare slow path";
+}
+
+// Regression: a user closing the editor mid-render (or immediately after the
+// last drag frame) was SIGSEGV'ing inside the compositor's `composeLayers`
+// `drawBitmap` lambda. Root cause: `RenderCoordinator` declared
+// `asyncRenderer_` before `renderer_`, so C++'s reverse-declaration-order
+// member destruction tore down the external `svg::Renderer` first and only
+// then ran `~AsyncRenderer` (which joins the worker thread). The worker,
+// still mid-iteration from a pending request, dereferenced a dangling
+// `RendererInterface*` through `CompositorController::renderer_` and
+// crashed. This test drives the exact teardown shape — post a render and
+// destroy the coordinator before it settles — so any future regression to
+// the declaration order trips this test instead of shipping a crash on
+// every editor close after a filter drag.
+TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs>
+      <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="8"/></filter>
+    </defs>
+    <rect width="400" height="400" fill="#0d0f1d"/>
+    <g filter="url(#blur)">
+      <rect x="20" y="20" width="200" height="200" fill="#ffe54a"/>
+      <rect x="80" y="80" width="200" height="200" fill="#ff4a54"/>
+      <rect x="140" y="140" width="200" height="200" fill="#4aff54"/>
+    </g>
+  )svg");
+  document.setCanvasSize(400, 400);
+
+  auto coordinator = std::make_unique<RenderCoordinator>();
+
+  RenderRequest request;
+  request.renderer = &coordinator->renderer();
+  request.document = &document;
+  request.version = 1;
+  request.documentGeneration = 1;
+  coordinator->asyncRenderer().requestRender(request);
+
+  // Brief yield so the worker actually picks up the render before
+  // teardown. Without it, the worker may still be blocked on `cv_.wait`
+  // when `~RenderCoordinator` runs and the race closes before it can
+  // trigger. With the yield, the worker is reliably inside
+  // `CompositorController::renderFrame` — if `renderer_` is torn down
+  // before `asyncRenderer_`, the next `renderer_->…` inside the
+  // compose-layers lambdas is a use-after-free.
+  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+  // With the correct member order, `~RenderCoordinator` destroys
+  // `asyncRenderer_` first (joining the worker), then tears down
+  // `renderer_`. Reaching the end of this test without a crash is the
+  // assertion.
+  coordinator.reset();
 }
 
 }  // namespace

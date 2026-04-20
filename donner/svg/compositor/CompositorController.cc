@@ -17,6 +17,7 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -574,6 +575,10 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // in place by `LayoutSystem::setTransform`) and mark the layer dirty.
   // Everything else — filter layer bitmaps, bg/fg split, style cascade —
   // stays untouched across the mutation.
+  if (dirtyEntitySnapshot.empty() && !needsFullRebuild) {
+    ++fastPathCounters_.noDirtyFrames;
+  }
+  bool fastPathTakenThisFrame = false;
   if (documentPrepared_ && !needsFullRebuild && !dirtyEntitySnapshot.empty() &&
       hintsScanned_) {
     constexpr uint16_t kTransformOnlyMask =
@@ -581,6 +586,20 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         components::DirtyFlagsComponent::Transform |
         components::DirtyFlagsComponent::WorldTransform |
         components::DirtyFlagsComponent::RenderInstance;
+
+    // Pre-compute per-entity resolution so we can validate ALL dirty
+    // entities before mutating any RIC or layer state. If any check fails
+    // the whole block bails out cleanly and the slow path
+    // (`prepareDocumentForRendering`) takes over.
+    struct FastPathResolution {
+      Entity entity = entt::null;
+      CompositorLayer* layer = nullptr;
+      Transform2d newWorldFromEntity;
+      Transform2d delta;
+      bool isSubtree = false;
+    };
+    std::vector<FastPathResolution> resolutions;
+    resolutions.reserve(dirtyEntitySnapshot.size());
 
     bool eligible = true;
     for (Entity e : dirtyEntitySnapshot) {
@@ -590,84 +609,109 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         eligible = false;
         break;
       }
-      // The entity must be a single-element promoted layer root — if the
-      // layer has a subtree, descendants' `worldFromEntityTransform`
-      // would also need refreshing, and we punt that to the slow path.
-      bool matchedSingleEntityLayer = false;
-      for (auto& layer : layers_) {
-        if (layer.entity() == e && layer.firstEntity() == e && layer.lastEntity() == e) {
-          matchedSingleEntityLayer = true;
-          break;
-        }
-      }
-      if (!matchedSingleEntityLayer) {
+      if (!registry.all_of<components::RenderingInstanceComponent>(e)) {
         eligible = false;
         break;
       }
+
+      // Dirty entity must be a promoted layer's root (so its RIC owns the
+      // layer's `bitmapEntityFromWorldTransform` anchor). The old check
+      // additionally required `firstEntity == lastEntity == e` —
+      // rejecting every subtree layer and forcing a full
+      // `prepareDocumentForRendering` on every drag frame. For filter
+      // groups and other subtree-promoted roots on the splash that cost
+      // ~40 ms/frame; the relaxation below brings it back under 5 ms by
+      // running the same compose-offset update and lifting the
+      // translation into descendants via `propagateFastPathTranslation
+      // ToSubtree`.
+      CompositorLayer* matchedLayer = nullptr;
+      for (auto& layer : layers_) {
+        if (layer.entity() == e) {
+          matchedLayer = &layer;
+          break;
+        }
+      }
+      if (matchedLayer == nullptr || !matchedLayer->hasValidBitmap() ||
+          !matchedLayer->bitmapEntityFromWorldTransform().has_value()) {
+        eligible = false;
+        break;
+      }
+
+      const auto& abs = components::LayoutSystem().getAbsoluteTransformComponent(
+          EntityHandle(registry, e));
+      const Transform2d canvasFromDocument =
+          components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+      const Transform2d newWorldFromEntity =
+          abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+      const Transform2d delta =
+          newWorldFromEntity * matchedLayer->bitmapEntityFromWorldTransform()->inverse();
+
+      const bool isSubtree =
+          matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
+      // Subtree layers require a pure-translation delta: only then can we
+      // cheaply propagate the same offset to descendant RICs without
+      // walking the layout system. Non-translation subtree mutations
+      // (scale, rotate, transform-list change) stay on the slow path.
+      // Single-entity layers can tolerate non-translation deltas via a
+      // targeted re-rasterize later in `renderFrame`.
+      if (isSubtree && !delta.isTranslation()) {
+        eligible = false;
+        break;
+      }
+
+      resolutions.push_back(FastPathResolution{
+          .entity = e,
+          .layer = matchedLayer,
+          .newWorldFromEntity = newWorldFromEntity,
+          .delta = delta,
+          .isSubtree = isSubtree,
+      });
     }
 
     if (eligible) {
       std::vector<Entity> unhandledDirtyEntities;
-      unhandledDirtyEntities.reserve(dirtyEntitySnapshot.size());
-      for (Entity e : dirtyEntitySnapshot) {
-        if (!registry.all_of<components::RenderingInstanceComponent>(e)) {
-          unhandledDirtyEntities.push_back(e);
-          continue;
-        }
-        auto& instance = registry.get<components::RenderingInstanceComponent>(e);
-        // `LayoutSystem::setTransform` already removed the stale
-        // `ComputedAbsoluteTransformComponent`, so this recomputes.
-        const auto& abs = components::LayoutSystem().getAbsoluteTransformComponent(
-            EntityHandle(registry, e));
-        // Canvas-space transform, matching the original computation in
-        // `RenderingContext::traverseTree`.
-        const Transform2d canvasFromDocument =
-            components::LayoutSystem().getCanvasFromDocumentTransform(registry);
-        const Transform2d newEntityFromWorld =
-            abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
-        instance.worldFromEntityTransform = newEntityFromWorld;
+      unhandledDirtyEntities.reserve(resolutions.size());
+      for (const auto& res : resolutions) {
+        auto& instance =
+            registry.get<components::RenderingInstanceComponent>(res.entity);
+        instance.worldFromEntityTransform = res.newWorldFromEntity;
 
-        // Bitmap-reuse fast path. If the entity has a valid cached
-        // bitmap and the delta between the current DOM transform and
-        // the bitmap's rasterize-time transform is a pure translation,
-        // we can reuse the bitmap by updating `compositionTransform_`
-        // instead of re-rasterizing. This is what makes DOM-per-frame
-        // drag mutations stay cheap — every mouse-move flips the
-        // entity's transform attribute, but the compositor just
-        // updates a ~single-matrix compose offset rather than going
-        // back to the renderer.
-        bool fastPathHandled = false;
-        for (auto& layer : layers_) {
-          if (layer.entity() != e) continue;
-          if (layer.hasValidBitmap() && layer.bitmapEntityFromWorldTransform().has_value()) {
-            const Transform2d delta =
-                newEntityFromWorld * layer.bitmapEntityFromWorldTransform()->inverse();
-            if (delta.isTranslation()) {
-              layer.setCompositionTransform(delta);
-              fastPathHandled = true;
-              break;
-            }
+        if (res.delta.isTranslation()) {
+          // Bitmap-reuse fast path: the delta between the current DOM
+          // transform and the bitmap's rasterize-time transform is a
+          // pure translation, so reuse the bitmap by updating
+          // `compositionTransform_` instead of re-rasterizing. Every
+          // mouse-move flips the entity's transform attribute, but the
+          // compositor just writes a ~single-matrix compose offset
+          // rather than going back to the renderer.
+          res.layer->setCompositionTransform(res.delta);
+          if (res.isSubtree) {
+            propagateFastPathTranslationToSubtree(registry, res.entity, res.delta);
           }
-          layer.markDirty();
-        }
-
-        // If the fast path didn't handle the entity, leave it in the dirty
-        // list so `consumeDirtyFlags` below can flag the containing layer
-        // (and escalate to `rootDirty_` if the entity isn't in any layer).
-        // Entities handled by the fast path are intentionally removed so
-        // `consumeDirtyFlags` doesn't redundantly re-rasterize the layer
-        // we just updated via `compositionTransform_`.
-        if (!fastPathHandled) {
-          unhandledDirtyEntities.push_back(e);
+        } else {
+          // Single-entity layer with non-translation delta (scale,
+          // rotate, etc.). Fall through to `consumeDirtyFlags` + the
+          // per-layer re-rasterize — correctness over optimization
+          // since the single entity has no descendants to worry about.
+          res.layer->markDirty();
+          unhandledDirtyEntities.push_back(res.entity);
         }
       }
-      // Clear the dirty flags ourselves since we skipped prepare.
-      registry.clear<components::DirtyFlagsComponent>();
-      // Tell the rest of renderFrame that the dirty state is fully resolved
+      // Clear the dirty flags ourselves since we skipped prepare. Tell
+      // the rest of renderFrame that the dirty state is fully resolved
       // — no need to re-run detectors, re-prepare, or re-resolve.
+      registry.clear<components::DirtyFlagsComponent>();
       documentDirty = false;
+      if (unhandledDirtyEntities.empty()) {
+        fastPathTakenThisFrame = true;
+      }
       dirtyEntitySnapshot = std::move(unhandledDirtyEntities);
     }
+  }
+  if (fastPathTakenThisFrame) {
+    ++fastPathCounters_.fastPathFrames;
+  } else if (!dirtyEntitySnapshot.empty() || needsFullRebuild) {
+    ++fastPathCounters_.slowPathFramesWithDirty;
   }
   // On first renderFrame the `RenderingInstanceComponent` view is empty (it
   // gets built by `prepareDocumentForRendering` below), so the mandatory /
@@ -1809,7 +1853,23 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
     // we're here the entity had a transform flag and re-rasterizing its
     // own segment is needed when the entity is in a layer that doesn't
     // re-raster (composition-transform path).
-    if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    //
+    // EXCEPTION: if the entity is a promoted layer ROOT (non-zero
+    // `ComputedLayerAssignmentComponent::layerId` and the layer is
+    // rooted at this entity), its content lives in the layer's cached
+    // bitmap — NOT in any segment. The layer's bitmap is either reused
+    // via a compose-transform (fast path) or re-rasterized via
+    // `rasterizeLayer` (slow path); the segment carries zero pixels
+    // that belong to this entity. Marking `findSegmentForEntity(entity)`
+    // dirty just forces an unnecessary canvas-sized re-rasterize of an
+    // adjacent segment on every drag frame — on the splash that's the
+    // tail segment (100+ paths), costing ~40 ms/frame. Skip it.
+    const auto* selfAssignment =
+        registry.try_get<ComputedLayerAssignmentComponent>(entity);
+    const bool entityIsPromotedLayerRoot =
+        selfAssignment != nullptr && selfAssignment->layerId != 0;
+    if (!entityIsPromotedLayerRoot &&
+        registry.all_of<components::RenderingInstanceComponent>(entity)) {
       const size_t selfSegIdx = findSegmentForEntity(entity);
       if (selfSegIdx < staticSegmentDirty_.size()) {
         staticSegmentDirty_[selfSegIdx] = true;
@@ -2072,6 +2132,48 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   };
   const Entity lastPainting = findLastPaintingDescendant(findLastPaintingDescendant, entity);
   return {entity, lastPainting != entt::null ? lastPainting : entity};
+}
+
+void CompositorController::propagateFastPathTranslationToSubtree(Registry& registry,
+                                                                 Entity root,
+                                                                 const Transform2d& delta) {
+  using TreeComponent = donner::components::TreeComponent;
+  std::vector<Entity> stack;
+  if (const auto* tree = registry.try_get<TreeComponent>(root)) {
+    for (Entity child = tree->firstChild(); child != entt::null;
+         child = registry.get<TreeComponent>(child).nextSibling()) {
+      stack.push_back(child);
+    }
+  }
+  while (!stack.empty()) {
+    const Entity descendant = stack.back();
+    stack.pop_back();
+
+    if (auto* instance =
+            registry.try_get<components::RenderingInstanceComponent>(descendant)) {
+      // `worldFromEntity` maps entity-local points to world space. Since
+      // only the root's local transform changed — by a pure world-space
+      // translation — every descendant's world transform pre-multiplies
+      // by that same delta (root-from-descendant is unchanged, world-
+      // from-root shifts by delta, so world-from-descendant shifts too).
+      instance->worldFromEntityTransform = delta * instance->worldFromEntityTransform;
+      // Invalidate the cached absolute-transform so any later
+      // `LayoutSystem::getAbsoluteTransformComponent` query recomputes
+      // from the authoritative DOM instead of returning the pre-drag
+      // cache. Without this, a subsequent fast-path frame rooted at a
+      // descendant (e.g. user clicks inside the dragged group after
+      // dropping it) would compute a delta against the stale cached
+      // transform and pick the wrong branch.
+      registry.remove<components::ComputedAbsoluteTransformComponent>(descendant);
+    }
+
+    if (const auto* dtree = registry.try_get<TreeComponent>(descendant)) {
+      for (Entity grandchild = dtree->firstChild(); grandchild != entt::null;
+           grandchild = registry.get<TreeComponent>(grandchild).nextSibling()) {
+        stack.push_back(grandchild);
+      }
+    }
+  }
 }
 
 FallbackReason CompositorController::detectFallbackReasons(

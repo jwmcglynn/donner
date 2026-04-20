@@ -62,7 +62,15 @@ public:
 private:
   [[nodiscard]] Entity selectedExperimentalEntity(EditorApp& app, bool experimentalMode) const;
 
-  AsyncRenderer asyncRenderer_;
+  // `renderer_` must be declared before `asyncRenderer_`. The `AsyncRenderer`
+  // worker holds a `RendererInterface*` to this `renderer_` for the whole
+  // drag session (via `CompositorController::renderer_`), and its destructor
+  // joins the worker thread. C++ destroys non-static members in reverse
+  // declaration order, so declaring `asyncRenderer_` LAST guarantees it is
+  // destroyed FIRST — joining the worker while `renderer_` is still alive.
+  // The reverse ordering caused exit-time SIGSEGVs inside
+  // `CompositorController::composeLayers`' `drawBitmap` lambda when the
+  // worker was mid-render while `renderer_` was torn down first.
   svg::Renderer renderer_;
   svg::Renderer overlayRenderer_;
   ExperimentalDragPresentation experimentalDragPresentation_;
@@ -82,6 +90,11 @@ private:
 
   std::uint64_t lastRenderedVersion_ = 0;
   Vector2i lastRenderedCanvasSize_ = Vector2i::Zero();
+
+  // Declared last so it is destroyed first — see the comment on
+  // `renderer_` above. Its destructor joins the worker thread, which
+  // must happen while `renderer_` is still alive.
+  AsyncRenderer asyncRenderer_;
 };
 
 }  // namespace donner::editor

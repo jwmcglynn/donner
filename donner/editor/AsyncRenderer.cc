@@ -248,6 +248,7 @@ void AsyncRenderer::workerLoop() {
           result_.compositedPreview = std::move(compositedPreview);
           result_.version = request.version;
           result_.workerMs = workerMs;
+          lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
           state_ = State::Done;
           // Snapshot the callback under the lock so a concurrent
           // `setWakeCallback` swap can't tear the invocation. Fire it

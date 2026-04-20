@@ -293,6 +293,26 @@ public:
   /// Cached bitmap for the promoted entity, or an empty bitmap if unavailable.
   [[nodiscard]] const RendererBitmap& layerBitmapOf(Entity entity) const;
 
+  /// Diagnostic counters for the translation-only fast path. Tests read
+  /// these to assert that a drag is taking the fast path every frame,
+  /// not falling through to `prepareDocumentForRendering`.
+  struct FastPathCounters {
+    /// Incremented every frame that takes the fast path and successfully
+    /// handled every dirty entity via a compose-transform update.
+    uint64_t fastPathFrames = 0;
+    /// Incremented every frame whose dirty-entity set disqualified the
+    /// fast path (transform+other flags, subtree with non-translation
+    /// delta, missing layer, etc.) and fell through to the slow path.
+    uint64_t slowPathFramesWithDirty = 0;
+    /// Incremented every frame where the fast-path eligibility check
+    /// wasn't reached because no entities were dirty (e.g. page-load,
+    /// selection-change-only frames).
+    uint64_t noDirtyFrames = 0;
+  };
+  [[nodiscard]] const FastPathCounters& fastPathCountersForTesting() const {
+    return fastPathCounters_;
+  }
+
   /**
    * Clear all layers and cached state.
    *
@@ -484,6 +504,16 @@ private:
   static FallbackReason detectFallbackReasons(
       const components::RenderingInstanceComponent& instance);
 
+  /// Fast-path helper: a promoted subtree layer's root just shifted by a pure
+  /// world-space translation. Descendants' local transforms are unchanged, so
+  /// their world transforms shift by the same delta. Pre-multiply every
+  /// descendant RIC's `worldFromEntityTransform` by @p delta so subsequent
+  /// reads (e.g. a forced re-rasterize later in the session, or the next
+  /// frame's fast-path delta computation against a descendant-rooted layer)
+  /// see up-to-date world positions.
+  static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
+                                                    const Transform2d& delta);
+
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;
   CompositorConfig config_;
@@ -589,6 +619,8 @@ private:
   /// subsequent drag frames, preserving the cached non-split frame as
   /// the flat fallback without ever producing a transparent bitmap.
   bool mainRendererHasCachedFrame_ = false;
+
+  FastPathCounters fastPathCounters_;
 };
 
 }  // namespace donner::svg::compositor

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
@@ -11,6 +12,52 @@
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
+
+namespace {
+
+/// Walk @p leaf's ancestor chain and return the outermost ancestor whose
+/// presentation attributes break the compositor's promotion invariants —
+/// `filter`, `mask`, or `clip-path` as an inline attribute. If the entire
+/// chain is clear, returns @p leaf unchanged.
+///
+/// Motivation: clicking a path that lives inside `<g filter="url(#blur)">`
+/// hit-tests to the path, but `CompositorController::promoteEntity` refuses
+/// to promote any descendant of a compositing-breaking ancestor (correctly
+/// — promoting the leaf would bake the path into its own bitmap and lose
+/// the ancestor filter's contribution). The compositor then falls through
+/// to the full-document render path at every drag frame, which on the
+/// splash costs ~250 ms per frame — "really laggy". Elevating the drag
+/// target to the filter group itself matches user intent ("move the blurred
+/// group") AND lets the compositor promote it into its own cached bitmap,
+/// so steady-state drag frames drop to ~15 ms via the translation-only
+/// fast path. Figma, Illustrator, and Inkscape all select the filter/mask
+/// group when the user clicks a descendant, for the same reasons.
+///
+/// We elevate to the OUTERMOST such ancestor so nested filter-group chains
+/// (`<g filter><g filter>…</g></g>`) still promote cleanly: the innermost
+/// group would itself be refused by `HasCompositingBreakingAncestor`.
+///
+/// We check inline attributes only, not resolved CSS-derived filters —
+/// intentional: `onMouseDown` fires on any click, including before the
+/// next `renderFrame` has had a chance to resolve styles. Inline
+/// attributes are available immediately after parse and catch the common
+/// case. Missing a CSS-applied filter here means that rare case still
+/// falls into the slow path; not a correctness issue, just a perf one.
+svg::SVGElement ElevateToCompositingGroupAncestor(svg::SVGElement leaf) {
+  svg::SVGElement best = leaf;
+  svg::SVGElement cursor = leaf;
+  while (auto parent = cursor.parentElement()) {
+    if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
+        parent->hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
+        parent->hasAttribute(xml::XMLQualifiedNameRef("clip-path"))) {
+      best = *parent;
+    }
+    cursor = *parent;
+  }
+  return best;
+}
+
+}  // namespace
 
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                              MouseModifiers modifiers) {
@@ -43,18 +90,29 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 
   // Shift+click on an element → toggle membership in the current
   // selection without starting a drag. The user is curating a
-  // multi-element set, not moving anything.
-  svg::SVGElement element = *hit;
+  // multi-element set, not moving anything. Leaf-accuracy matters here
+  // so the user can add/remove individual paths from a set — no
+  // compositing-group elevation.
   if (modifiers.shift) {
-    editor.toggleInSelection(element);
+    editor.toggleInSelection(*hit);
     return;
   }
 
-  // Plain click on an element. If the element is already in the current
-  // multi-selection, preserve the selection and drag ALL selected
-  // elements in lockstep — classic design-tool behavior (grab any item
-  // in the group, the group moves). Otherwise replace the selection
-  // with just this element and drag it alone.
+  // Plain click on an element. If the hit-tested leaf is a descendant
+  // of a `<g filter>` / `<g mask>` / `<g clip-path>` group, elevate to
+  // that group — both because the user's intent is to move the visible
+  // filtered shape (not a single internal path that can't exist
+  // visually on its own post-filter) AND because the compositor can
+  // only promote the outermost compositing group into its own cached
+  // layer. Without elevation the drag falls back to full-document
+  // rendering at ~250 ms / frame on the splash.
+  svg::SVGElement element = ElevateToCompositingGroupAncestor(*hit);
+
+  // If the element is already in the current multi-selection, preserve
+  // the selection and drag ALL selected elements in lockstep — classic
+  // design-tool behavior (grab any item in the group, the group moves).
+  // Otherwise replace the selection with just this element and drag it
+  // alone.
   const auto& currentSelection = editor.selectedElements();
   const bool elementAlreadySelected =
       std::any_of(currentSelection.begin(), currentSelection.end(),
