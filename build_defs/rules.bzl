@@ -283,9 +283,6 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
     if named_variants:
         for v in named_variants:
             target_name = "{}_{}".format(name, v["name"])
-            variant_kwargs = dict(kwargs)
-            if "tags" in v:
-                variant_kwargs["tags"] = list(variant_kwargs.get("tags", [])) + list(v["tags"])
             donner_multi_transitioned_test(
                 name = target_name,
                 dep = dep,
@@ -293,7 +290,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
                 text = v.get("text", "false"),
                 text_full = v.get("text_full", "false"),
                 testonly = 1,
-                **variant_kwargs
+                **kwargs
             )
     elif variants:
         backends = variants[0] if len(variants) > 0 else ["tiny_skia"]

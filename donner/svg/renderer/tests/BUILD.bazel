@@ -295,10 +295,6 @@ donner_multi_transitioned_test(
     # 900 s so a driver hang (e.g., Intel Arc + Mesa 25.2.8 Xe-KMD) gets
     # killed in 15 min instead of rolling up to the default 3600 s.
     size = "large",
-    # `no_linux_ci`: Mesa llvmpipe Vulkan 25.2.8 crashes with
-    # `corrupted double-linked list` after repeated filter compute
-    # dispatches (see issue #551). macOS CI (Metal) still runs this suite.
-    tags = ["no_linux_ci"],
     timeout = "long",
     dep = ":renderer_geode_golden_tests_impl",
     renderer_backend = "geode",
@@ -337,10 +333,6 @@ donner_multi_transitioned_test(
     # at 900 s so a driver hang gets killed in 15 min instead of rolling
     # up to the default 3600 s.
     size = "large",
-    # `no_linux_ci`: Mesa llvmpipe Vulkan 25.2.8 exhibits both the ANV-
-    # adjacent fence hang (#542) and the heap-corruption crash (#551)
-    # after running enough compute dispatches. macOS CI (Metal) is clean.
-    tags = ["no_linux_ci"],
     timeout = "long",
     dep = ":renderer_geode_tests_impl",
     renderer_backend = "geode",
@@ -433,15 +425,7 @@ donner_variant_cc_test(
         # `resvg_test_suite.cc` skips those categories automatically;
         # everything else (fills, strokes, gradients, patterns, images,
         # shapes, clipping, masking, markers, isolation) runs live.
-        #
-        # `no_linux_ci` tag: excluded from Linux CI via
-        # `--test_tag_filters=-no_linux_ci` because Mesa llvmpipe Vulkan
-        # 25.2.8 (GHA Ubuntu 24.04 default) crashes with
-        # `corrupted double-linked list` after ~130 filter compute dispatches
-        # in a single process — see issue #551. macOS CI (Metal backend) is
-        # not affected and still runs the Geode variant.
-        {"name": "geode", "backend": "geode", "text": "true", "text_full": "false",
-         "tags": ["no_linux_ci"]},
+        {"name": "geode", "backend": "geode", "text": "true", "text_full": "false"},
     ],
 )
 
