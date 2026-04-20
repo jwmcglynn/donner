@@ -76,7 +76,7 @@ jobs:
     needs: gatekeeper
     if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
     env:
-      BAZEL_DIFF_VERSION: "18.1.0"
+      BAZEL_DIFF_TAG: "v18.1.0"
     outputs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
@@ -101,7 +101,7 @@ jobs:
           cache-save: false
 
       - name: Download bazel-diff
-        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_VERSION}/bazel-diff_deploy.jar"
+        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
 
       - id: determine
         name: Determine affected Bazel targets
