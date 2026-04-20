@@ -48,6 +48,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -57,7 +58,7 @@ class SVGDocument;
 namespace compositor {
 class CompositorController;
 }
-}
+}  // namespace donner::svg
 
 namespace donner::editor {
 
@@ -73,8 +74,7 @@ struct RenderRequest {
     /// extra translation is passed here. The compositor stamps the correct
     /// `InteractionHint` on the entity based on this field so downstream
     /// introspection stays accurate.
-    svg::compositor::InteractionHint interactionKind =
-        svg::compositor::InteractionHint::ActiveDrag;
+    svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
   };
 
   svg::Renderer* renderer = nullptr;
@@ -130,9 +130,7 @@ struct RenderResult {
     /// hidden).
     Vector2d promotedTranslationDoc = Vector2d::Zero();
 
-    [[nodiscard]] bool valid() const {
-      return entity != entt::null && !promotedBitmap.empty();
-    }
+    [[nodiscard]] bool valid() const { return entity != entt::null && !promotedBitmap.empty(); }
   };
 
   svg::RendererBitmap bitmap;
@@ -222,6 +220,16 @@ public:
     return compositorResetCount_.load(std::memory_order_acquire);
   }
 
+  /// Snapshot of the compositor's fast-path counters. Read-only — the worker
+  /// writes them under the mutex when transitioning to Done. Returns zeros
+  /// before the compositor is constructed (first render not yet requested).
+  /// UI-thread safe.
+  [[nodiscard]] svg::compositor::CompositorController::FastPathCounters
+  compositorFastPathCountersForTesting() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastFastPathCounters_;
+  }
+
 private:
   void workerLoop();
 
@@ -230,10 +238,10 @@ private:
   std::condition_variable cv_;
 
   enum class State : std::uint8_t {
-    Idle,    ///< No work. Worker is blocked on `cv_`.
-    Busy,    ///< Render in progress on the worker.
-    Done,    ///< Render finished; bitmap available in `result_`.
-    Shutdown ///< Destructor requested shutdown; worker exits.
+    Idle,     ///< No work. Worker is blocked on `cv_`.
+    Busy,     ///< Render in progress on the worker.
+    Done,     ///< Render finished; bitmap available in `result_`.
+    Shutdown  ///< Destructor requested shutdown; worker exits.
   };
 
   State state_ = State::Idle;
@@ -272,6 +280,12 @@ private:
   /// tests to verify that drag-frame mutations (which bump `frameVersion_`) do
   /// NOT fire a reset — only a true `documentGeneration` change does.
   std::atomic<std::uint64_t> compositorResetCount_{0};
+
+  /// Most recent snapshot of the compositor's fast-path counters, copied
+  /// under `mutex_` when the worker finishes each render. UI-thread reads
+  /// this via `compositorFastPathCountersForTesting`. Mutable because we
+  /// lock in a const method.
+  svg::compositor::CompositorController::FastPathCounters lastFastPathCounters_;
 
   /// Runtime kill-switch for tight-bounded segment rasterization. Pushed
   /// into `CompositorController` at the start of each worker iteration.

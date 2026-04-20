@@ -78,13 +78,8 @@ double LinearScale(const Transform2d& canvasFromDoc) {
 /// geometry element. The AABB is drawn separately by the caller —
 /// per the design doc, multi-select chrome shows one combined AABB
 /// across the whole selection, not one box per element.
-void DrawElementPathOutline(svg::Renderer& renderer, const svg::SVGElement& selected,
+void DrawElementPathOutline(svg::Renderer& renderer, const svg::SVGGeometryElement& geometry,
                             const Transform2d& canvasFromDoc, const svg::PaintParams& paint) {
-  if (!selected.isa<svg::SVGGeometryElement>()) {
-    return;
-  }
-  const auto geometry = selected.cast<svg::SVGGeometryElement>();
-
   // The spline is in the element's local coordinate space. To draw
   // it at the right on-screen position we chain local → world →
   // canvas. Per Donner's row-vector `A * B = apply A first, then B`
@@ -178,13 +173,17 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
   const svg::PaintParams selectionStrokePaint = MakeSelectionStrokePaint(selectionStrokeWidth);
 
   // Per-element path outlines first — the user sees the exact shape of
-  // every selected element regardless of how many are picked. All
-  // outlines share the same cyan stroke, so we set the paint once and
-  // reuse it across the loop.
+  // every selected element regardless of how many are picked. Group-like
+  // selections (e.g. `<g filter>`) are expanded into their renderable
+  // geometry descendants so the user still sees the leaf shapes that
+  // make up the group, not just its AABB. All outlines share the same
+  // cyan stroke, so we set the paint once and reuse it across the loop.
   if (!selection.empty()) {
     renderer.setPaint(selectionStrokePaint);
     for (const auto& element : selection) {
-      DrawElementPathOutline(renderer, element, canvasFromDoc, selectionStrokePaint);
+      for (const auto& geometry : CollectRenderableGeometry(element)) {
+        DrawElementPathOutline(renderer, geometry, canvasFromDoc, selectionStrokePaint);
+      }
     }
   }
 

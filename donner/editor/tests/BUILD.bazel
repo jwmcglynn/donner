@@ -122,6 +122,28 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "filter_drag_repro_tests",
+    srcs = ["FilterDragRepro_tests.cc"],
+    data = [
+        ":filter_drag_repro.rnr",
+        "//:donner_splash.svg",
+    ],
+    deps = [
+        "//donner/editor:async_renderer",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:editor_app",
+        "//donner/editor:render_coordinator",
+        "//donner/editor:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/editor/repro:repro_file",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "async_renderer_tests",
     srcs = ["AsyncRenderer_tests.cc"],
     data = [
@@ -133,6 +155,7 @@ donner_cc_test(
         "//donner/editor:command_queue",
         "//donner/editor:editor_app",
         "//donner/editor:overlay_renderer",
+        "//donner/editor:render_coordinator",
         "//donner/editor:tracy_wrapper",
         "//donner/svg/compositor",
         "//donner/svg/renderer",

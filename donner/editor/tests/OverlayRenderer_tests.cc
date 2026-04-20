@@ -461,6 +461,134 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
 
 // Marquee chrome also moved to the ImGui draw list. The path overlay
 // should stay transparent when there is no selected geometry.
+// Selecting a `<g filter="…">` elevates picker-wise to the group, but
+// the group itself isn't a geometry element — pre-fix, the overlay
+// drew nothing. Users expect selection chrome to show the outlines of
+// every visible shape inside the group (matches Figma / Illustrator /
+// Inkscape). The AABB must also envelope the full group, not come back
+// empty.
+TEST(OverlayRendererTest, SelectingFilterGroupDrawsOutlinesOfAllGeometryDescendants) {
+  constexpr std::string_view kFilterGroupSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <defs>
+                <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+              </defs>
+              <g id="grp" filter="url(#blur)">
+                <rect id="child_a" x="20"  y="20"  width="40" height="40" fill="red"/>
+                <rect id="child_b" x="140" y="140" width="30" height="30" fill="blue"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kFilterGroupSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto group = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(group.has_value());
+  app.setSelection(*group);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(
+      overlayRenderer, std::span<const svg::SVGElement>(app.selectedElements()), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  const auto alphaAt = [&](int x, int y) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + 3];
+  };
+  const auto anyNonZeroNear = [&](int cx, int cy, int radius) {
+    for (int y = cy - radius; y <= cy + radius; ++y) {
+      for (int x = cx - radius; x <= cx + radius; ++x) {
+        if (x >= 0 && y >= 0 && x < bitmap.dimensions.x && y < bitmap.dimensions.y &&
+            alphaAt(x, y) > 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Outlines of both child rects must appear. Each corner is OUTSIDE
+  // the *other* rect's AABB envelope, so a missing per-child outline
+  // would leave it empty even with an all-encompassing group AABB.
+  EXPECT_TRUE(anyNonZeroNear(20, 20, 2)) << "child_a top-left outline missing";
+  EXPECT_TRUE(anyNonZeroNear(60, 60, 2)) << "child_a bottom-right outline missing";
+  EXPECT_TRUE(anyNonZeroNear(140, 140, 2)) << "child_b top-left outline missing";
+  EXPECT_TRUE(anyNonZeroNear(170, 170, 2)) << "child_b bottom-right outline missing";
+}
+
+// When a group has `<defs>` / `<clipPath>` / `<filter>` children, the
+// shapes inside those containers are paint-server or clip definitions,
+// not part of the visual tree. Selecting the group must NOT decorate
+// them — only the sibling geometry that actually paints.
+TEST(OverlayRendererTest, SelectingGroupSkipsNonRenderedContainerChildren) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <g id="grp">
+                <defs>
+                  <clipPath id="clip">
+                    <rect id="hidden" x="5" y="5" width="10" height="10"/>
+                  </clipPath>
+                </defs>
+                <rect id="visible" x="80" y="80" width="40" height="40" fill="green"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto group = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(group.has_value());
+  app.setSelection(*group);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(
+      overlayRenderer, std::span<const svg::SVGElement>(app.selectedElements()), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  const auto alphaAt = [&](int x, int y) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + 3];
+  };
+
+  // The clipPath's internal rect at (5,5)-(15,15) must NOT produce
+  // chrome. The visible rect at (80,80)-(120,120) must. Probe well
+  // inside the hidden rect — if the recursion leaked into <defs> we'd
+  // find cyan stroke here.
+  for (int y = 6; y <= 14; ++y) {
+    for (int x = 6; x <= 14; ++x) {
+      ASSERT_EQ(alphaAt(x, y), 0) << "chrome appeared inside a <defs><clipPath> subtree at (" << x
+                                  << ", " << y << ")";
+    }
+  }
+  bool foundVisibleOutline = false;
+  for (int x = 78; x <= 82 && !foundVisibleOutline; ++x) {
+    for (int y = 78; y <= 82 && !foundVisibleOutline; ++y) {
+      if (alphaAt(x, y) > 0) {
+        foundVisibleOutline = true;
+      }
+    }
+  }
+  EXPECT_TRUE(foundVisibleOutline) << "visible rect's outline is missing from the overlay";
+}
+
 TEST(OverlayRendererTest, EmptySelectionSpanProducesTransparentOverlay) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));

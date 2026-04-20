@@ -168,8 +168,7 @@ void AsyncRenderer::workerLoop() {
           compositor_->demoteEntity(compositorEntity_);
         }
         compositorEntity_ = entt::null;
-        if (desiredEntity != entt::null &&
-            compositor_->promoteEntity(desiredEntity, desiredKind)) {
+        if (desiredEntity != entt::null && compositor_->promoteEntity(desiredEntity, desiredKind)) {
           compositorEntity_ = desiredEntity;
         }
       }
@@ -248,6 +247,7 @@ void AsyncRenderer::workerLoop() {
           result_.compositedPreview = std::move(compositedPreview);
           result_.version = request.version;
           result_.workerMs = workerMs;
+          lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
           state_ = State::Done;
           // Snapshot the callback under the lock so a concurrent
           // `setWakeCallback` swap can't tear the invocation. Fire it

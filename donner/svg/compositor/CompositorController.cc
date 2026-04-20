@@ -17,6 +17,7 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -89,6 +90,39 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
 /// Fully-opaque pixels (alpha = 255) are unchanged; this step is only
 /// meaningful for semi-transparent content, which is why single-element
 /// drag of fully-opaque elements worked without the fix.
+/// True if @p maybeDescendant is a (non-strict) descendant of @p root in the
+/// DOM tree. Used by the translation-only fast path to check, defensively,
+/// that a subtree layer's cache-range doesn't overlap any other layer — if it
+/// did, those child layers would still be composed at their stale
+/// `canvasFromBitmap` while the parent bitmap shifted, producing visible
+/// ghosting during drag.
+///
+/// This case *should* already be unreachable: `CompositorController::
+/// promoteEntity` refuses promotion when any descendant has a non-zero
+/// `ComputedLayerAssignmentComponent::layerId`, and `MandatoryHintDetector`
+/// refuses descendants of a compositing-breaking ancestor (which is what a
+/// `<g filter>`-style subtree layer *is*). But the invariant is not otherwise
+/// enforced in the fast path, and this check is cheap, so we treat it as a
+/// belt-and-suspenders guard for future regressions rather than relying on
+/// the tree-walk invariants alone.
+bool IsDomDescendantOf(Registry& registry, Entity maybeDescendant, Entity root) {
+  if (maybeDescendant == root || !registry.valid(maybeDescendant)) {
+    return false;
+  }
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(maybeDescendant);
+  while (tree != nullptr) {
+    const Entity parent = tree->parent();
+    if (parent == root) {
+      return true;
+    }
+    if (parent == entt::null) {
+      return false;
+    }
+    tree = registry.try_get<donner::components::TreeComponent>(parent);
+  }
+  return false;
+}
+
 ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   ImageResource img;
   img.width = bitmap.dimensions.x;
@@ -183,8 +217,7 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
     while (!stack.empty()) {
       const Entity descendant = stack.back();
       stack.pop_back();
-      const auto* assignment =
-          registry.try_get<ComputedLayerAssignmentComponent>(descendant);
+      const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(descendant);
       if (assignment != nullptr && assignment->layerId != 0) {
         return false;
       }
@@ -270,7 +303,7 @@ bool CompositorController::isPromoted(Entity entity) const {
 
 Transform2d CompositorController::layerComposeOffset(Entity entity) const {
   const CompositorLayer* layer = findLayer(entity);
-  return layer ? layer->compositionTransform() : Transform2d();
+  return layer ? layer->canvasFromBitmap() : Transform2d();
 }
 
 FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
@@ -284,8 +317,7 @@ bool CompositorController::hasSplitStaticLayers() const {
   // `ComplexityBucketer`) stay static during a drag, so they don't invalidate the split as long
   // as there's exactly one active-hint (drag/explicit) entry. Check `activeHints_`, not
   // `layers_.size()`, so bucketing and drag coexist cleanly.
-  return activeHints_.size() == 1 &&
-         (!backgroundBitmap_.empty() || !foregroundBitmap_.empty());
+  return activeHints_.size() == 1 && (!backgroundBitmap_.empty() || !foregroundBitmap_.empty());
 }
 
 const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
@@ -545,9 +577,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
   }
   const bool anyEntityDirty = !dirtyEntitySnapshot.empty();
-  const bool needsFullRebuild =
-      registry.ctx().contains<components::RenderTreeState>() &&
-      registry.ctx().get<components::RenderTreeState>().needsFullRebuild;
+  const bool needsFullRebuild = registry.ctx().contains<components::RenderTreeState>() &&
+                                registry.ctx().get<components::RenderTreeState>().needsFullRebuild;
   slowFrameNeedsFullRebuildAtStart = needsFullRebuild;
   for (bool d : staticSegmentDirty_) {
     if (d) ++slowFrameSegmentDirtyCountAtStart;
@@ -574,13 +605,29 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // in place by `LayoutSystem::setTransform`) and mark the layer dirty.
   // Everything else — filter layer bitmaps, bg/fg split, style cascade —
   // stays untouched across the mutation.
-  if (documentPrepared_ && !needsFullRebuild && !dirtyEntitySnapshot.empty() &&
-      hintsScanned_) {
-    constexpr uint16_t kTransformOnlyMask =
-        components::DirtyFlagsComponent::Layout |
-        components::DirtyFlagsComponent::Transform |
-        components::DirtyFlagsComponent::WorldTransform |
-        components::DirtyFlagsComponent::RenderInstance;
+  if (dirtyEntitySnapshot.empty() && !needsFullRebuild) {
+    ++fastPathCounters_.noDirtyFrames;
+  }
+  bool fastPathTakenThisFrame = false;
+  if (documentPrepared_ && !needsFullRebuild && !dirtyEntitySnapshot.empty() && hintsScanned_) {
+    constexpr uint16_t kTransformOnlyMask = components::DirtyFlagsComponent::Layout |
+                                            components::DirtyFlagsComponent::Transform |
+                                            components::DirtyFlagsComponent::WorldTransform |
+                                            components::DirtyFlagsComponent::RenderInstance;
+
+    // Pre-compute per-entity resolution so we can validate ALL dirty
+    // entities before mutating any RIC or layer state. If any check fails
+    // the whole block bails out cleanly and the slow path
+    // (`prepareDocumentForRendering`) takes over.
+    struct FastPathResolution {
+      Entity entity = entt::null;
+      CompositorLayer* layer = nullptr;
+      Transform2d newWorldFromEntity;
+      Transform2d delta;
+      bool isSubtree = false;
+    };
+    std::vector<FastPathResolution> resolutions;
+    resolutions.reserve(dirtyEntitySnapshot.size());
 
     bool eligible = true;
     for (Entity e : dirtyEntitySnapshot) {
@@ -590,84 +637,130 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         eligible = false;
         break;
       }
-      // The entity must be a single-element promoted layer root — if the
-      // layer has a subtree, descendants' `worldFromEntityTransform`
-      // would also need refreshing, and we punt that to the slow path.
-      bool matchedSingleEntityLayer = false;
-      for (auto& layer : layers_) {
-        if (layer.entity() == e && layer.firstEntity() == e && layer.lastEntity() == e) {
-          matchedSingleEntityLayer = true;
-          break;
-        }
-      }
-      if (!matchedSingleEntityLayer) {
+      if (!registry.all_of<components::RenderingInstanceComponent>(e)) {
         eligible = false;
         break;
       }
+
+      // Dirty entity must be a promoted layer's root (so its RIC owns the
+      // layer's `bitmapEntityFromWorldTransform` anchor). The old check
+      // additionally required `firstEntity == lastEntity == e` —
+      // rejecting every subtree layer and forcing a full
+      // `prepareDocumentForRendering` on every drag frame. For filter
+      // groups and other subtree-promoted roots on the splash that cost
+      // ~40 ms/frame; the relaxation below brings it back under 5 ms by
+      // running the same compose-offset update and lifting the
+      // translation into descendants via `propagateFastPathTranslation
+      // ToSubtree`.
+      CompositorLayer* matchedLayer = nullptr;
+      for (auto& layer : layers_) {
+        if (layer.entity() == e) {
+          matchedLayer = &layer;
+          break;
+        }
+      }
+      if (matchedLayer == nullptr || !matchedLayer->hasValidBitmap() ||
+          !matchedLayer->bitmapEntityFromWorldTransform().has_value()) {
+        eligible = false;
+        break;
+      }
+
+      const auto& abs =
+          components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, e));
+      const Transform2d canvasFromDocument =
+          components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+      const Transform2d newWorldFromEntity =
+          abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+      const Transform2d delta =
+          newWorldFromEntity * matchedLayer->bitmapEntityFromWorldTransform()->inverse();
+
+      const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
+      // Subtree layers require a pure-translation delta: only then can we
+      // cheaply propagate the same offset to descendant RICs without
+      // walking the layout system. Non-translation subtree mutations
+      // (scale, rotate, transform-list change) stay on the slow path.
+      // Single-entity layers can tolerate non-translation deltas via a
+      // targeted re-rasterize later in `renderFrame`.
+      if (isSubtree && !delta.isTranslation()) {
+        eligible = false;
+        break;
+      }
+
+      // Defensive guard (see `IsDomDescendantOf`): if another promoted
+      // layer's entity is a descendant of our subtree root, translating
+      // only this layer's `canvasFromBitmap` while leaving the child
+      // layer's anchored to its rasterize-time transform would produce
+      // ghosting. The invariants in `promoteEntity` and `MandatoryHint
+      // Detector` should already prevent this, but bail to the slow path
+      // rather than trust the invariant — the slow path will re-rasterize
+      // correctly.
+      if (isSubtree) {
+        bool hasDescendantLayer = false;
+        for (const auto& other : layers_) {
+          if (&other == matchedLayer) continue;
+          if (IsDomDescendantOf(registry, other.entity(), e)) {
+            hasDescendantLayer = true;
+            break;
+          }
+        }
+        if (hasDescendantLayer) {
+          eligible = false;
+          break;
+        }
+      }
+
+      resolutions.push_back(FastPathResolution{
+          .entity = e,
+          .layer = matchedLayer,
+          .newWorldFromEntity = newWorldFromEntity,
+          .delta = delta,
+          .isSubtree = isSubtree,
+      });
     }
 
     if (eligible) {
       std::vector<Entity> unhandledDirtyEntities;
-      unhandledDirtyEntities.reserve(dirtyEntitySnapshot.size());
-      for (Entity e : dirtyEntitySnapshot) {
-        if (!registry.all_of<components::RenderingInstanceComponent>(e)) {
-          unhandledDirtyEntities.push_back(e);
-          continue;
-        }
-        auto& instance = registry.get<components::RenderingInstanceComponent>(e);
-        // `LayoutSystem::setTransform` already removed the stale
-        // `ComputedAbsoluteTransformComponent`, so this recomputes.
-        const auto& abs = components::LayoutSystem().getAbsoluteTransformComponent(
-            EntityHandle(registry, e));
-        // Canvas-space transform, matching the original computation in
-        // `RenderingContext::traverseTree`.
-        const Transform2d canvasFromDocument =
-            components::LayoutSystem().getCanvasFromDocumentTransform(registry);
-        const Transform2d newEntityFromWorld =
-            abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
-        instance.worldFromEntityTransform = newEntityFromWorld;
+      unhandledDirtyEntities.reserve(resolutions.size());
+      for (const auto& res : resolutions) {
+        auto& instance = registry.get<components::RenderingInstanceComponent>(res.entity);
+        instance.worldFromEntityTransform = res.newWorldFromEntity;
 
-        // Bitmap-reuse fast path. If the entity has a valid cached
-        // bitmap and the delta between the current DOM transform and
-        // the bitmap's rasterize-time transform is a pure translation,
-        // we can reuse the bitmap by updating `compositionTransform_`
-        // instead of re-rasterizing. This is what makes DOM-per-frame
-        // drag mutations stay cheap — every mouse-move flips the
-        // entity's transform attribute, but the compositor just
-        // updates a ~single-matrix compose offset rather than going
-        // back to the renderer.
-        bool fastPathHandled = false;
-        for (auto& layer : layers_) {
-          if (layer.entity() != e) continue;
-          if (layer.hasValidBitmap() && layer.bitmapEntityFromWorldTransform().has_value()) {
-            const Transform2d delta =
-                newEntityFromWorld * layer.bitmapEntityFromWorldTransform()->inverse();
-            if (delta.isTranslation()) {
-              layer.setCompositionTransform(delta);
-              fastPathHandled = true;
-              break;
-            }
+        if (res.delta.isTranslation()) {
+          // Bitmap-reuse fast path: the delta between the current DOM
+          // transform and the bitmap's rasterize-time transform is a
+          // pure translation, so reuse the bitmap by updating
+          // `canvasFromBitmap_` instead of re-rasterizing. Every
+          // mouse-move flips the entity's transform attribute, but the
+          // compositor just writes a ~single-matrix compose offset
+          // rather than going back to the renderer.
+          res.layer->setCanvasFromBitmap(res.delta);
+          if (res.isSubtree) {
+            propagateFastPathTranslationToSubtree(registry, res.entity, res.delta);
           }
-          layer.markDirty();
-        }
-
-        // If the fast path didn't handle the entity, leave it in the dirty
-        // list so `consumeDirtyFlags` below can flag the containing layer
-        // (and escalate to `rootDirty_` if the entity isn't in any layer).
-        // Entities handled by the fast path are intentionally removed so
-        // `consumeDirtyFlags` doesn't redundantly re-rasterize the layer
-        // we just updated via `compositionTransform_`.
-        if (!fastPathHandled) {
-          unhandledDirtyEntities.push_back(e);
+        } else {
+          // Single-entity layer with non-translation delta (scale,
+          // rotate, etc.). Fall through to `consumeDirtyFlags` + the
+          // per-layer re-rasterize — correctness over optimization
+          // since the single entity has no descendants to worry about.
+          res.layer->markDirty();
+          unhandledDirtyEntities.push_back(res.entity);
         }
       }
-      // Clear the dirty flags ourselves since we skipped prepare.
-      registry.clear<components::DirtyFlagsComponent>();
-      // Tell the rest of renderFrame that the dirty state is fully resolved
+      // Clear the dirty flags ourselves since we skipped prepare. Tell
+      // the rest of renderFrame that the dirty state is fully resolved
       // — no need to re-run detectors, re-prepare, or re-resolve.
+      registry.clear<components::DirtyFlagsComponent>();
       documentDirty = false;
+      if (unhandledDirtyEntities.empty()) {
+        fastPathTakenThisFrame = true;
+      }
       dirtyEntitySnapshot = std::move(unhandledDirtyEntities);
     }
+  }
+  if (fastPathTakenThisFrame) {
+    ++fastPathCounters_.fastPathFrames;
+  } else if (!dirtyEntitySnapshot.empty() || needsFullRebuild) {
+    ++fastPathCounters_.slowPathFramesWithDirty;
   }
   // On first renderFrame the `RenderingInstanceComponent` view is empty (it
   // gets built by `prepareDocumentForRendering` below), so the mandatory /
@@ -791,8 +884,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       // rasterize cost on the critical path. Also pre-rasterize static
       // segments against the new layer set. None of this writes to the
       // main renderer — all offscreen work.
-      if (offscreenSupported_ || (!offscreenSupportKnown_ &&
-                                  renderer_->createOffscreenInstance() != nullptr)) {
+      if (offscreenSupported_ ||
+          (!offscreenSupportKnown_ && renderer_->createOffscreenInstance() != nullptr)) {
         offscreenSupported_ = true;
         offscreenSupportKnown_ = true;
         {
@@ -889,7 +982,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     const Transform2d& bitmapStamp = *layer.bitmapEntityFromWorldTransform();
     const Transform2d delta = instance.worldFromEntityTransform * bitmapStamp.inverse();
     if (delta.isTranslation()) {
-      layer.setCompositionTransform(delta);
+      layer.setCanvasFromBitmap(delta);
     }
     // Non-translation deltas (scale / rotate of an ancestor) require a
     // re-rasterize; `consumeDirtyFlags` / the rasterize loop handle
@@ -1016,15 +1109,13 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // (mandatory filter / bucket layers live alongside the drag target)
   // recomposite into offscreen bitmaps so non-drag promoted content
   // paints in its correct paint-order slot within bg/fg.
-  const bool splitPathActive =
-      activeHints_.size() == 1 && findLayer(activeHints_.begin()->first);
+  const bool splitPathActive = activeHints_.size() == 1 && findLayer(activeHints_.begin()->first);
   if (splitPathActive) {
     const Entity dragEntity = activeHints_.begin()->first;
     const CompositorLayer* dragLayer = findLayer(dragEntity);
-    const bool splitCacheValid =
-        !backgroundBitmap_.empty() && !foregroundBitmap_.empty() &&
-        splitStaticLayersEntity_ == dragEntity &&
-        splitStaticLayersViewport_ == currentCanvasSize;
+    const bool splitCacheValid = !backgroundBitmap_.empty() && !foregroundBitmap_.empty() &&
+                                 splitStaticLayersEntity_ == dragEntity &&
+                                 splitStaticLayersViewport_ == currentCanvasSize;
     if (dragLayer != nullptr && !splitCacheValid) {
       ZoneScopedN("Compositor::splitBitmapsBuild");
       // Always route through `recomposeSplitBitmaps` — it produces
@@ -1071,8 +1162,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         !compositedSnapshot.empty() && !referenceSnapshot.empty()) {
       size_t mismatch = 0;
       uint8_t maxDiff = 0;
-      const size_t size = std::min(compositedSnapshot.pixels.size(),
-                                   referenceSnapshot.pixels.size());
+      const size_t size =
+          std::min(compositedSnapshot.pixels.size(), referenceSnapshot.pixels.size());
       for (size_t i = 0; i < size; ++i) {
         const uint8_t a = compositedSnapshot.pixels[i];
         const uint8_t b = referenceSnapshot.pixels[i];
@@ -1096,8 +1187,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // the editor user (or a test harness running live) can reconstruct a
   // faithful repro. Kept behind a wall-clock check so the print cost
   // doesn't bleed into fast frames.
-  const auto slowFrameElapsed = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - slowFrameStart).count();
+  const auto slowFrameElapsed =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slowFrameStart)
+          .count();
   constexpr double kSlowFrameThresholdMs = 1000.0;
   if (slowFrameElapsed >= kSlowFrameThresholdMs) {
     const Vector2i canvasSize = document_->canvasSize();
@@ -1105,17 +1197,16 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
                  "[CompositorSlowFrame] renderFrame %.1f ms | canvas=%dx%d | layers=%zu | "
                  "activeHints=%zu | segments=%zu (dirtyAtStart=%zu) | "
                  "rootDirtyAtStart=%d needsFullRebuildAtStart=%d | rasterizeLayerCalls=%zu\n",
-                 slowFrameElapsed, canvasSize.x, canvasSize.y, layers_.size(),
-                 activeHints_.size(), staticSegments_.size(), slowFrameSegmentDirtyCountAtStart,
-                 slowFrameRootDirtyAtStart ? 1 : 0,
-                 slowFrameNeedsFullRebuildAtStart ? 1 : 0, slowFrameRasterLog.size());
+                 slowFrameElapsed, canvasSize.x, canvasSize.y, layers_.size(), activeHints_.size(),
+                 staticSegments_.size(), slowFrameSegmentDirtyCountAtStart,
+                 slowFrameRootDirtyAtStart ? 1 : 0, slowFrameNeedsFullRebuildAtStart ? 1 : 0,
+                 slowFrameRasterLog.size());
     for (const auto& reason : slowFrameRasterLog) {
       std::fprintf(stderr,
                    "[CompositorSlowFrame]   rasterizeLayer idx=%zu entity=%u dirty=%d "
                    "validBitmap=%d rootDirtyOnly=%d\n",
-                   reason.layerIndex, static_cast<unsigned>(reason.entity),
-                   reason.isDirty ? 1 : 0, reason.hasValidBitmap ? 1 : 0,
-                   reason.rootDirtyTrigger ? 1 : 0);
+                   reason.layerIndex, static_cast<unsigned>(reason.entity), reason.isDirty ? 1 : 0,
+                   reason.hasValidBitmap ? 1 : 0, reason.rootDirtyTrigger ? 1 : 0);
     }
   }
 }
@@ -1162,7 +1253,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
 
   // Stamp the bitmap with the entity's current absolute transform so the
   // fast path in `renderFrame` can later tell whether a DOM transform
-  // mutation is a pure translation (reuse bitmap via `compositionTransform_`
+  // mutation is a pure translation (reuse bitmap via `canvasFromBitmap_`
   // delta) or a shape-changing transform (force re-rasterize). A missing
   // `RenderingInstanceComponent` means the entity was promoted before
   // the tree was prepared — treat it as transform identity, which makes
@@ -1170,17 +1261,16 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // correct for the "bitmap was drawn at origin" case.
   Transform2d worldFromEntity;
   if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
-    worldFromEntity =
-        registry.get<components::RenderingInstanceComponent>(layer.entity()).worldFromEntityTransform;
+    worldFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
+                          .worldFromEntityTransform;
   }
   layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
-  // Don't reset `compositionTransform_` here — a caller may have set it
+  // Don't reset `canvasFromBitmap_` here — a caller may have set it
   // explicitly (tests, editor drag hand-off paths) and expect that
   // additional offset to apply on top of the freshly-rasterized bitmap.
-  // The fast path in `renderFrame` is what updates
-  // `compositionTransform_` for DOM-driven deltas; rasterization itself
-  // just refreshes the bitmap's content and the stamped
-  // `bitmapEntityFromWorldTransform`.
+  // The fast path in `renderFrame` is what updates `canvasFromBitmap_`
+  // for DOM-driven deltas; rasterization itself just refreshes the
+  // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
 }
 
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport) {
@@ -1261,12 +1351,10 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // at the document's first paint-ordered entity; segment N ends at
     // the last. If the computed range is empty (two layers back-to-
     // back in paint order), produce an empty canvas-sized bitmap.
-    const size_t startIdx =
-        (i == 0) ? 0u : (layerRanges[i - 1].lastIdx + 1u);
-    const size_t endIdx =
-        (i == layerCount)
-            ? (paintOrder.empty() ? 0u : paintOrder.size() - 1u)
-            : (layerRanges[i].firstIdx == 0u ? 0u : layerRanges[i].firstIdx - 1u);
+    const size_t startIdx = (i == 0) ? 0u : (layerRanges[i - 1].lastIdx + 1u);
+    const size_t endIdx = (i == layerCount)
+                              ? (paintOrder.empty() ? 0u : paintOrder.size() - 1u)
+                              : (layerRanges[i].firstIdx == 0u ? 0u : layerRanges[i].firstIdx - 1u);
 
     const bool segmentIsEmpty =
         paintOrder.empty() || startIdx > endIdx || startIdx >= paintOrder.size();
@@ -1354,14 +1442,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         tightViewport.devicePixelRatio = viewport.devicePixelRatio;
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
-                                Transform2d::Translate(-tightBoundsSnapped.topLeft));
+                               Transform2d::Translate(-tightBoundsSnapped.topLeft));
         staticSegments_[i] = offscreen->takeSnapshot();
         staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
-                                Transform2d());
+                               Transform2d());
         staticSegments_[i] = offscreen->takeSnapshot();
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
@@ -1500,30 +1588,27 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
     const auto& boundary = (i < staticSegmentBoundaries_.size())
                                ? staticSegmentBoundaries_[i]
                                : std::pair<Entity, Entity>{entt::null, entt::null};
-    const uint64_t segGen =
-        (i < staticSegmentGeneration_.size()) ? staticSegmentGeneration_[i] : 0;
+    const uint64_t segGen = (i < staticSegmentGeneration_.size()) ? staticSegmentGeneration_[i] : 0;
     const RendererBitmap* segBitmap =
-        (i < staticSegments_.size() && !staticSegments_[i].empty()) ? &staticSegments_[i]
-                                                                    : nullptr;
+        (i < staticSegments_.size() && !staticSegments_[i].empty()) ? &staticSegments_[i] : nullptr;
     tiles.push_back(CompositorTile{
         .tileId = SegmentTileId(boundary.first, boundary.second),
         .generation = segGen,
         .paintOrderIndex = paintIdx++,
         .bitmap = segBitmap,
         .layerEntity = entt::null,
-        .compositionTransform = Transform2d(),
+        .canvasFromBitmap = Transform2d(),
     });
     // Layer tile.
     const auto& layer = layers_[i];
     const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
     tiles.push_back(CompositorTile{
-        .tileId = kLayerTileBit |
-                  static_cast<uint64_t>(entt::to_integral(layer.entity())),
+        .tileId = kLayerTileBit | static_cast<uint64_t>(entt::to_integral(layer.entity())),
         .generation = layer.generation(),
         .paintOrderIndex = paintIdx++,
         .bitmap = layerBitmap,
         .layerEntity = layer.entity(),
-        .compositionTransform = layer.compositionTransform(),
+        .canvasFromBitmap = layer.canvasFromBitmap(),
     });
   }
   // Trailing segment after the last layer.
@@ -1543,15 +1628,14 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
       .paintOrderIndex = paintIdx,
       .bitmap = tailBitmap,
       .layerEntity = entt::null,
-      .compositionTransform = Transform2d(),
+      .canvasFromBitmap = Transform2d(),
   });
   return tiles;
 }
 
 size_t CompositorController::findSegmentForEntity(Entity entity) const {
   Registry& registry = document_->registry();
-  if (!registry.valid(entity) ||
-      !registry.all_of<components::RenderingInstanceComponent>(entity)) {
+  if (!registry.valid(entity) || !registry.all_of<components::RenderingInstanceComponent>(entity)) {
     return layers_.size();
   }
   const int entityDrawOrder =
@@ -1618,9 +1702,9 @@ void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLaye
           ZoneScopedN("Compositor::composeRange::drawSegment");
           ImageResource image = BuildImageResource(segment);
           ImageParams params;
-          params.targetRect = Box2d(Vector2d::Zero(),
-                                    Vector2d(static_cast<double>(segment.dimensions.x),
-                                             static_cast<double>(segment.dimensions.y)));
+          params.targetRect =
+              Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(segment.dimensions.x),
+                                               static_cast<double>(segment.dimensions.y)));
           // Tight-bounded segments live at a non-origin offset on the
           // canvas; full-canvas-fallback segments use `Zero()`. Same
           // API shape either way.
@@ -1634,17 +1718,17 @@ void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLaye
           if (promoted.hasValidBitmap()) {
             ZoneScopedN("Compositor::composeRange::drawPromoted");
             const RendererBitmap& bitmap = promoted.bitmap();
-            Transform2d composition = promoted.compositionTransform();
-            if (composition.isTranslation()) {
-              Vector2d t = composition.translation();
-              composition = Transform2d::Translate(std::round(t.x), std::round(t.y));
+            Transform2d canvasFromBitmap = promoted.canvasFromBitmap();
+            if (canvasFromBitmap.isTranslation()) {
+              Vector2d t = canvasFromBitmap.translation();
+              canvasFromBitmap = Transform2d::Translate(std::round(t.x), std::round(t.y));
             }
             ImageResource image = BuildImageResource(bitmap);
             ImageParams params;
-            params.targetRect = Box2d(Vector2d::Zero(),
-                                      Vector2d(static_cast<double>(bitmap.dimensions.x),
-                                               static_cast<double>(bitmap.dimensions.y)));
-            offscreen->setTransform(composition);
+            params.targetRect =
+                Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
+                                                 static_cast<double>(bitmap.dimensions.y)));
+            offscreen->setTransform(canvasFromBitmap);
             offscreen->drawImage(image, params);
           }
         }
@@ -1747,9 +1831,8 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     }
     ImageResource image = BuildImageResource(bitmap);
     ImageParams params;
-    params.targetRect =
-        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
-                                         static_cast<double>(bitmap.dimensions.y)));
+    params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
+                                                         static_cast<double>(bitmap.dimensions.y)));
     renderer_->setTransform(transform);
     renderer_->drawImage(image, params);
   };
@@ -1758,13 +1841,13 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     if (!layer.hasValidBitmap()) {
       return;
     }
-    // Apply composition transform with integer-pixel snap for translations.
-    Transform2d compositionTransform = layer.compositionTransform();
-    if (compositionTransform.isTranslation()) {
-      Vector2d t = compositionTransform.translation();
-      compositionTransform = Transform2d::Translate(std::round(t.x), std::round(t.y));
+    // Apply canvasFromBitmap with integer-pixel snap for translations.
+    Transform2d canvasFromBitmap = layer.canvasFromBitmap();
+    if (canvasFromBitmap.isTranslation()) {
+      Vector2d t = canvasFromBitmap.translation();
+      canvasFromBitmap = Transform2d::Translate(std::round(t.x), std::round(t.y));
     }
-    drawBitmap(layer.bitmap(), compositionTransform);
+    drawBitmap(layer.bitmap(), canvasFromBitmap);
   };
 
   if (hasSplitStaticLayers()) {
@@ -1809,7 +1892,22 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
     // we're here the entity had a transform flag and re-rasterizing its
     // own segment is needed when the entity is in a layer that doesn't
     // re-raster (composition-transform path).
-    if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    //
+    // EXCEPTION: if the entity is a promoted layer ROOT (non-zero
+    // `ComputedLayerAssignmentComponent::layerId` and the layer is
+    // rooted at this entity), its content lives in the layer's cached
+    // bitmap — NOT in any segment. The layer's bitmap is either reused
+    // via a compose-transform (fast path) or re-rasterized via
+    // `rasterizeLayer` (slow path); the segment carries zero pixels
+    // that belong to this entity. Marking `findSegmentForEntity(entity)`
+    // dirty just forces an unnecessary canvas-sized re-rasterize of an
+    // adjacent segment on every drag frame — on the splash that's the
+    // tail segment (100+ paths), costing ~40 ms/frame. Skip it.
+    const auto* selfAssignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
+    const bool entityIsPromotedLayerRoot =
+        selfAssignment != nullptr && selfAssignment->layerId != 0;
+    if (!entityIsPromotedLayerRoot &&
+        registry.all_of<components::RenderingInstanceComponent>(entity)) {
       const size_t selfSegIdx = findSegmentForEntity(entity);
       if (selfSegIdx < staticSegmentDirty_.size()) {
         staticSegmentDirty_[selfSegIdx] = true;
@@ -1825,10 +1923,9 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
     while (!stack.empty()) {
       const Entity descendant = stack.back();
       stack.pop_back();
-      const auto* assignment =
-          registry.try_get<ComputedLayerAssignmentComponent>(descendant);
+      const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(descendant);
       if (assignment != nullptr && assignment->layerId != 0) {
-        continue;  // sub-layer: handled by its own compositionTransform.
+        continue;  // sub-layer: handled by its own canvasFromBitmap.
       }
       if (registry.all_of<components::RenderingInstanceComponent>(descendant)) {
         const size_t segIdx = findSegmentForEntity(descendant);
@@ -1918,14 +2015,12 @@ void CompositorController::refreshLayerMetadata() {
 
 void CompositorController::reconcileLayers(Registry& registry) {
   // Step 1: drop layers whose entity no longer has a non-zero assignment.
-  const auto removeIt = std::remove_if(
-      layers_.begin(), layers_.end(),
-      [&registry](const CompositorLayer& layer) {
+  const auto removeIt =
+      std::remove_if(layers_.begin(), layers_.end(), [&registry](const CompositorLayer& layer) {
         if (!registry.valid(layer.entity())) {
           return true;
         }
-        const auto* assignment =
-            registry.try_get<ComputedLayerAssignmentComponent>(layer.entity());
+        const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(layer.entity());
         if (assignment == nullptr || assignment->layerId == 0) {
           return true;
         }
@@ -2045,7 +2140,7 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   // the drag-start frame. That's the correct behavior: the full
   // RIC rebuild cascades transforms to descendants. Subsequent
   // same-entity drag frames (steady state) hit the bitmap-reuse fast
-  // path via `compositionTransform`, so interactivity is preserved.
+  // path via `canvasFromBitmap`, so interactivity is preserved.
   //
   // Known limitation: when the subtree contains mandatory-promoted
   // sublayers (filter groups, clip-path groups), those entities are
@@ -2072,6 +2167,46 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   };
   const Entity lastPainting = findLastPaintingDescendant(findLastPaintingDescendant, entity);
   return {entity, lastPainting != entt::null ? lastPainting : entity};
+}
+
+void CompositorController::propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
+                                                                 const Transform2d& delta) {
+  using TreeComponent = donner::components::TreeComponent;
+  std::vector<Entity> stack;
+  if (const auto* tree = registry.try_get<TreeComponent>(root)) {
+    for (Entity child = tree->firstChild(); child != entt::null;
+         child = registry.get<TreeComponent>(child).nextSibling()) {
+      stack.push_back(child);
+    }
+  }
+  while (!stack.empty()) {
+    const Entity descendant = stack.back();
+    stack.pop_back();
+
+    if (auto* instance = registry.try_get<components::RenderingInstanceComponent>(descendant)) {
+      // `worldFromEntity` maps entity-local points to world space. Since
+      // only the root's local transform changed — by a pure world-space
+      // translation — every descendant's world transform pre-multiplies
+      // by that same delta (root-from-descendant is unchanged, world-
+      // from-root shifts by delta, so world-from-descendant shifts too).
+      instance->worldFromEntityTransform = delta * instance->worldFromEntityTransform;
+      // Invalidate the cached absolute-transform so any later
+      // `LayoutSystem::getAbsoluteTransformComponent` query recomputes
+      // from the authoritative DOM instead of returning the pre-drag
+      // cache. Without this, a subsequent fast-path frame rooted at a
+      // descendant (e.g. user clicks inside the dragged group after
+      // dropping it) would compute a delta against the stale cached
+      // transform and pick the wrong branch.
+      registry.remove<components::ComputedAbsoluteTransformComponent>(descendant);
+    }
+
+    if (const auto* dtree = registry.try_get<TreeComponent>(descendant)) {
+      for (Entity grandchild = dtree->firstChild(); grandchild != entt::null;
+           grandchild = registry.get<TreeComponent>(grandchild).nextSibling()) {
+        stack.push_back(grandchild);
+      }
+    }
+  }
 }
 
 FallbackReason CompositorController::detectFallbackReasons(

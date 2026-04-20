@@ -61,10 +61,11 @@ struct CompositorTile {
   /// for a static segment tile.
   Entity layerEntity = entt::null;
 
-  /// Compose transform the tile should be drawn with. Identity for
-  /// segments and for non-drag layers; pure translation for the drag
-  /// layer when the fast path has updated its offset.
-  Transform2d compositionTransform;
+  /// `canvasFromBitmap` transform the tile should be drawn with:
+  /// maps the bitmap's local pixel grid into canvas pixels. Identity
+  /// for segments and for non-drag layers; pure translation for the
+  /// drag layer when the fast path has updated its offset.
+  Transform2d canvasFromBitmap;
 };
 
 /**
@@ -211,8 +212,7 @@ public:
    *   user drag. Defaults to `ActiveDrag` for callers that only use this API during drag.
    * @return true if promotion succeeded, false if the layer limit or memory budget was reached.
    */
-  bool promoteEntity(Entity entity,
-                     InteractionHint interactionKind = InteractionHint::ActiveDrag);
+  bool promoteEntity(Entity entity, InteractionHint interactionKind = InteractionHint::ActiveDrag);
 
   /**
    * Demote a previously promoted entity back to the root layer.
@@ -293,6 +293,26 @@ public:
   /// Cached bitmap for the promoted entity, or an empty bitmap if unavailable.
   [[nodiscard]] const RendererBitmap& layerBitmapOf(Entity entity) const;
 
+  /// Diagnostic counters for the translation-only fast path. Tests read
+  /// these to assert that a drag is taking the fast path every frame,
+  /// not falling through to `prepareDocumentForRendering`.
+  struct FastPathCounters {
+    /// Incremented every frame that takes the fast path and successfully
+    /// handled every dirty entity via a compose-transform update.
+    uint64_t fastPathFrames = 0;
+    /// Incremented every frame whose dirty-entity set disqualified the
+    /// fast path (transform+other flags, subtree with non-translation
+    /// delta, missing layer, etc.) and fell through to the slow path.
+    uint64_t slowPathFramesWithDirty = 0;
+    /// Incremented every frame where the fast-path eligibility check
+    /// wasn't reached because no entities were dirty (e.g. page-load,
+    /// selection-change-only frames).
+    uint64_t noDirtyFrames = 0;
+  };
+  [[nodiscard]] const FastPathCounters& fastPathCountersForTesting() const {
+    return fastPathCounters_;
+  }
+
   /**
    * Clear all layers and cached state.
    *
@@ -343,8 +363,7 @@ public:
    *   indeterminate state — the caller MUST follow up with
    *   `resetAllLayers(documentReplaced=true)` to recover.
    */
-  [[nodiscard]] bool remapAfterStructuralReplace(
-      const std::unordered_map<Entity, Entity>& remap);
+  [[nodiscard]] bool remapAfterStructuralReplace(const std::unordered_map<Entity, Entity>& remap);
 
   /// Flip tight-bounded segment rasterization on or off at runtime.
   /// See `CompositorConfig::tightBoundedSegments` for semantics. Marks
@@ -362,9 +381,7 @@ public:
 
   /// Returns the current tight-bounded-segments setting. Mirrors
   /// `config().tightBoundedSegments` for convenience.
-  [[nodiscard]] bool tightBoundedSegmentsEnabled() const {
-    return config_.tightBoundedSegments;
-  }
+  [[nodiscard]] bool tightBoundedSegmentsEnabled() const { return config_.tightBoundedSegments; }
 
   /// When true, `renderFrame()` skips the main-renderer compose step while
   /// the split-static-layers cache (`bg`/`drag`/`fg` triple) is populated.
@@ -426,7 +443,7 @@ private:
   /// walk its DOM subtree and mark every static segment that contains
   /// an RIC-bearing descendant as dirty. Stops descent at subtrees
   /// rooted in another promoted layer (those are composed via their
-  /// layer's `compositionTransform`, not re-rasterize). Called AFTER
+  /// layer's `canvasFromBitmap`, not re-rasterize). Called AFTER
   /// `resyncSegmentsToLayerSet` so the dirty flags aren't overwritten
   /// by the resync's default-per-bitmap-validity logic.
   ///
@@ -483,6 +500,16 @@ private:
   /// Inspect a RenderingInstanceComponent and return which fallback reasons apply.
   static FallbackReason detectFallbackReasons(
       const components::RenderingInstanceComponent& instance);
+
+  /// Fast-path helper: a promoted subtree layer's root just shifted by a pure
+  /// world-space translation. Descendants' local transforms are unchanged, so
+  /// their world transforms shift by the same delta. Pre-multiply every
+  /// descendant RIC's `worldFromEntityTransform` by @p delta so subsequent
+  /// reads (e.g. a forced re-rasterize later in the session, or the next
+  /// frame's fast-path delta computation against a descendant-rooted layer)
+  /// see up-to-date world positions.
+  static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
+                                                    const Transform2d& delta);
 
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;
@@ -589,6 +616,8 @@ private:
   /// subsequent drag frames, preserving the cached non-split frame as
   /// the flat fallback without ever producing a transparent bitmap.
   bool mainRendererHasCachedFrame_ = false;
+
+  FastPathCounters fastPathCounters_;
 };
 
 }  // namespace donner::svg::compositor

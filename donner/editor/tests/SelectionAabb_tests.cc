@@ -61,5 +61,59 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
   EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 20.0, 40.0, 40.0));
 }
 
+TEST(SelectionAabbTest, SnapshotUnionsGeometryDescendantsForGroupSelection) {
+  constexpr std::string_view kGroupedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <defs>
+                <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+              </defs>
+              <g id="grp" filter="url(#blur)">
+                <rect id="child_a" x="20"  y="30"  width="40" height="40" fill="red"/>
+                <rect id="child_b" x="140" y="150" width="20" height="30" fill="blue"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+  auto group = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(group.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*group};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  // Union of (20,30,40,40) ∪ (140,150,20,30) → (20,30)-(160,180).
+  EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 30.0, 140.0, 150.0));
+}
+
+TEST(SelectionAabbTest, SnapshotSkipsNonRenderedContainerDescendants) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <g id="grp">
+                <defs>
+                  <clipPath id="clip">
+                    <rect id="hidden" x="5" y="5" width="5" height="5"/>
+                  </clipPath>
+                </defs>
+                <rect id="visible" x="80" y="80" width="40" height="40" fill="green"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto group = app.document().document().querySelector("#grp");
+  ASSERT_TRUE(group.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*group};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  // Hidden rect inside <defs><clipPath> must not contribute; the
+  // bounds are just the visible child.
+  EXPECT_EQ(bounds[0], Box2d::FromXYWH(80.0, 80.0, 40.0, 40.0));
+}
+
 }  // namespace
 }  // namespace donner::editor
