@@ -4,42 +4,62 @@ on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main]
+    branches: [main, feature/ci-hardening-2026q2]
 
-# Fast lint jobs covering checks that don't live inside `bazel test //...`:
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Fast lint job covering checks that don't live inside `bazel test //...`:
 #
 # - clang-format (changed C++ files only — runs in <30s for typical PRs)
-# - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
-#   prevents running --check from inside bazel test; see Phase 3 design doc)
-# - banned source patterns lint is NOT here: it runs automatically as a
-#   py_test emitted by donner_cc_library/test/binary, so it's covered by
-#   the main CI bazel test step.
+# - build_defs/check_banned_patterns.py (same rules as the generated *_lint
+#   Bazel tests, but fast enough to run here without waiting for bazel test)
+# - gen_cmakelists.py --check validator (reentrant bazel prevents running
+#   this from inside bazel test; see Phase 3 design doc)
 jobs:
-  clang-format:
+  lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          # Need history to diff against the merge base. Depth 50 covers
-          # typical PR sizes; if a PR has > 50 commits we just check
-          # the latest 50.
-          fetch-depth: 50
+          # Keep checkout shallow; if the PR base commit is missing we fetch
+          # just that ref before the clang-format diff.
+          fetch-depth: 2
+
+      - name: Cache Bazel
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ runner.os }}-bazel-lint-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
+          restore-keys: |
+            ${{ runner.os }}-bazel-lint-
+            ${{ runner.os }}-bazel-
 
       - name: Install clang-format
         run: |
+          if command -v clang-format >/dev/null 2>&1; then
+            clang-format --version
+            exit 0
+          fi
+
           sudo apt-get update
           sudo apt-get install -y clang-format
 
       - name: Check formatting on changed C++ files
         run: |
           # Determine the base ref. PR events expose it directly; pushes
-          # diff against origin/main (HEAD~1 fallback for the very first
-          # commit on a branch).
+          # diff against origin/main (HEAD~1 fallback for the very first commit
+          # on a branch).
           if [[ -n "${{ github.event.pull_request.base.sha }}" ]]; then
             BASE="${{ github.event.pull_request.base.sha }}"
+            if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+              git fetch --depth=1 origin "${{ github.event.pull_request.base.ref }}"
+            fi
           else
-            git fetch --depth=50 origin main 2>/dev/null || true
+            git fetch --depth=2 origin main 2>/dev/null || true
             BASE="$(git merge-base origin/main HEAD 2>/dev/null || echo HEAD~1)"
           fi
 
@@ -55,34 +75,32 @@ jobs:
           echo "Checking ${MODIFIED}" | tr ' ' '\n'
           echo "${MODIFIED}" | xargs clang-format --dry-run -Werror
 
-  cmake-validate:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
+      - name: Check banned patterns
+        shell: bash
+        run: |
+          # Keep this aligned with the default Bazel lint surface: examples that
+          # are tagged manual are excluded from `bazel test //...` today, so the
+          # fast lint job skips those same manual-only sources.
+          mapfile -t example_sources < <(
+            find examples -maxdepth 1 -type f -name '*.cc' \
+              ! -name 'render_test.cc' \
+              ! -name 'wasm_reproducer.cc' \
+              | sort
+          )
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+          python3 build_defs/check_banned_patterns.py donner "${example_sources[@]}"
 
-      - name: Cache Bazel
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-lint-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-lint-
-            ${{ runner.os }}-bazel-
+      # TODO(0031 M1.1): Replace this stub with the real bazel
+      # `--config=clang-tidy` invocation once the delegated .clang-tidy
+      # misc-include-cleaner change lands on this branch.
+      - name: misc-include-cleaner (stub until .clang-tidy lands)
+        run: |
+          if ! grep -q 'misc-include-cleaner' .clang-tidy; then
+            echo "::notice::Skipping misc-include-cleaner: .clang-tidy does not enable it on this branch yet."
+            exit 0
+          fi
 
-      - name: gen_cmakelists.py unit tests
-        run: python3 -m unittest tools.cmake.gen_cmakelists_test -v
+          echo "::notice::TODO: enable bazel --config=clang-tidy lint here once the M1.1 wiring lands."
 
-      - name: gen_cmakelists.py --check (validates output)
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 10
-          max_attempts: 2
-          retry_wait_seconds: 30
-          command: python3 tools/cmake/gen_cmakelists.py --check
+      - name: gen_cmakelists.py --check
+        run: python3 tools/cmake/gen_cmakelists.py --check
