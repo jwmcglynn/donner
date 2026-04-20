@@ -305,20 +305,34 @@ algorithm.
   - [x] Counter delta: Moderate (1 `<g opacity>` layer) drops from
     `submits=4` → `submits=2` (frame + readback). Ceiling tightened
     in `GeodePerf_tests.cc`.
-- [ ] Milestone 4: Transient render-target pool (Tier 2 findings).
+- [x] Milestone 4: Transient render-target pool (Tier 2 findings).
+  _Landed 2026-04-20 (M4.2)._
   - [x] M4.1: Reuse `impl_->target` and `impl_->msaaTarget` across frames
     when `pixelWidth`/`pixelHeight` are unchanged. _Landed 2026-04-19._
     Tracks `impl_->targetWidth`/`impl_->targetHeight` in Impl; beginFrame
     only recreates when the new viewport size differs. The
     `CountersResetBetweenFrames` test gates this with
     `EXPECT_LT(secondCounters.textureCreates, firstCounters.textureCreates)`.
-  - [ ] Size-bucketed free list for layer/filter/mask scratch textures:
-    round (w,h) up to the next power of two per axis, key on
-    `(bucket_w, bucket_h, format, sampleCount)`, recycle on pop/endFrame.
-    Covers `pushIsolatedLayer` (`:1328`), `pushFilterLayer` (`:1506`),
-    `pushMask` (`:1611`), `pushClip` mask layers (`:1255`).
-  - [ ] Counter ceiling: `texture_creates == 0` on a repeat-render of the
-    same document at the same size.
+  - [x] M4.2: exact-size `(width, height, format, sampleCount, usage)`
+    pool on `RendererGeode::Impl` covering `pushIsolatedLayer` /
+    `popIsolatedLayer` (including the mix-blend-mode `dstSnapshot`),
+    `pushFilterLayer` / `popFilterLayer`, `pushMask` / `popMask`, and
+    the clip-mask layers allocated by `pushClip`. Release is deferred
+    to `endFrame` (after `queue.submit`) so recorded GPU work
+    completes before a subsequent acquire hands the texture back out.
+    Observed frame-2 `textureCreates` deltas:
+    SimpleShapes 2→0, Moderate (with isolated layer) 8→0,
+    Lion 2→0, Ghostscript_Tiger 2→0. Power-of-two size bucketing
+    (for viewport-resize scenarios) remains a follow-up.
+  - [x] Prerequisite to M4.2: share the two GeoEncoder bind-group
+    dummy resources (1×1 RGBA8 pattern + 1×1 R8Unorm clip mask, plus
+    views and samplers) on `GeodeDevice`. Prior to this, every
+    push/pop encoder allocated its own pair; this alone dropped
+    per-frame `textureCreates` by 2 on simple fixtures and by 6+ on
+    layered ones.
+  - [x] Counter ceiling: `texture_creates == 0` on a repeat-render of
+    the same document at the same size. Asserted by
+    `{SimpleShapes,Moderate,Lion,GhostscriptTiger}_NoDirtyPath_ZeroTextures`.
 - [ ] Milestone 5: Filter engine caching (Tier 5 findings).
   - [ ] Swap `std::unordered_map<std::string, wgpu::Texture> namedBuffers`
     in `GeodeFilterEngine::execute` (`GeodeFilterEngine.cc:964`) for an

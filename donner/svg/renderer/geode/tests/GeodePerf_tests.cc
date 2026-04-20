@@ -153,10 +153,13 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   //   M1.f.1 (uniforms):  bufferCreates=5 (4 arenas + 1 readback,
   //                       arenas lazily grown — some frames only
   //                       touch 3 arenas)
+  //   M4.2 (device dummies + pool): textureCreates=2 (target + MSAA
+  //                       pair, fresh on first frame; repeat-render
+  //                       is 0, see `*_ZeroTextures` tests below).
   EXPECT_LE(c.pathEncodes, 5u);       // M2: target = 0 on unchanged-geometry frames.
   EXPECT_LE(c.bufferCreates, 8u);     // M1.f.2: target = 1 (readback only).
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines (3 today).
-  EXPECT_LE(c.textureCreates, 6u);    // M4: target = 0 on unchanged-size repeat.
+  EXPECT_LE(c.textureCreates, 3u);    // Target + MSAA pair on frame 1; 0 on repeat.
   EXPECT_LE(c.submits, 3u);           // M3: target = 1.
 }
 
@@ -184,10 +187,12 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   //                   their own arenas — 3×3 + 1 readback.)
   //   M3 (shared CE): bufferCreates=10 submits=2 textureCreates=10
   //                   (push/pop no longer forces a queue submit)
+  //   M4.2 (device dummies + pool): textureCreates=4 on frame 1
+  //                   (target+MSAA + layer+MSAA), 0 on repeat.
   EXPECT_LE(c.pathEncodes, 4u);       // M2: target = 0.
   EXPECT_LE(c.bufferCreates, 12u);    // M1.f.2 + future arena-share: target ~= 5.
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 12u);   // M4: target = 0 on repeat same-size.
+  EXPECT_LE(c.textureCreates, 6u);    // Target+MSAA + layer+MSAA on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);           // M3: target = 2 steady-state (frame + readback).
 }
 
@@ -224,10 +229,12 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //   M1.f.1 (uniforms):  bufferCreates=6 (4 arenas + 2 dummies +
   //                       readback; 98.9% total drop from M0)
   //   bindgroupCreates=132 (one per draw; M1.f.2 collapses to ~1).
+  //   M4.2 (device dummies + pool): textureCreates=2 on frame 1
+  //                       (target + MSAA); 0 on repeat.
   EXPECT_LE(c.pathEncodes, 200u);       // M2: target = 0.
   EXPECT_LE(c.bufferCreates, 10u);      // M1.f.2: target ~= 5 steady-state.
   EXPECT_LE(c.bindgroupCreates, 200u);  // M1.f.2: target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 6u);      // M4: target = 0.
+  EXPECT_LE(c.textureCreates, 3u);      // Target + MSAA on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);             // M3: target = 1.
 }
 
