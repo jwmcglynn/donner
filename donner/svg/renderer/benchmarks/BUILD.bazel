@@ -1,0 +1,24 @@
+"""Geode renderer benchmarks — per-phase timing for the WebGPU/Slug backend."""
+
+load("//build_defs:rules.bzl", "donner_cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+donner_cc_binary(
+    name = "renderer_bench",
+    srcs = ["RendererBench.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+    ],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+)

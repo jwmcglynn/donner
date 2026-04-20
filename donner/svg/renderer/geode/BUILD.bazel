@@ -49,6 +49,13 @@ donner_cc_library(
     ],
 )
 
+# Header-only perf-counters struct. See design doc 0030.
+donner_cc_library(
+    name = "geode_counters",
+    hdrs = ["GeodeCounters.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_test(
     name = "geode_path_encoder_tests",
     srcs = ["tests/GeodePathEncoder_tests.cc"],
@@ -90,6 +97,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":geode_counters",
         ":geode_wgpu_util",
         "//donner/base",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -475,6 +483,35 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "geo_encoder_tests",
     dep = ":geo_encoder_tests_impl",
+    renderer_backend = "geode",
+    testonly = 1,
+)
+
+# Geode perf-counter assertions. See design doc 0030 (geode_performance).
+# Each later milestone tightens the ceilings in this suite; M0 ceilings
+# match current observed behaviour so the baseline is stable.
+donner_cc_test(
+    name = "geode_perf_tests_impl",
+    srcs = ["tests/GeodePerf_tests.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+    ],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_counters",
+        ":geode_device",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_perf_tests",
+    dep = ":geode_perf_tests_impl",
     renderer_backend = "geode",
     testonly = 1,
 )
