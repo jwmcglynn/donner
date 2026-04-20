@@ -449,9 +449,20 @@ INSTANTIATE_TEST_SUITE_P(
             // with the same rationale (see `in=BackgroundAlpha` / `=BackgroundImage`
             // skips elsewhere in this file). See
             // docs/unsupported_svg1_features.md.
+            // The 4 entries below (accumulate + new-with-invalid-region-{1,2,3})
+            // used to pass incidentally — their `in=BackgroundImage` produces
+            // empty output that matches the golden. But that empty-output path
+            // runs an empty compute dispatch against a zero-sized source on
+            // Geode, which hangs Mesa llvmpipe (CI) and Intel Arc Xe-KMD. Skip
+            // with the rest of the category until real `enable-background`
+            // plumbing lands (or is explicitly dropped — SVG 2 replaced it).
+            {"accumulate.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
             {"accumulate-with-new.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
             {"filter-on-shape.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
             {"inherit.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
+            {"new-with-invalid-region-1.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
+            {"new-with-invalid-region-2.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
+            {"new-with-invalid-region-3.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
             {"new-with-region.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
             {"new.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
             {"shapes-after-filter.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
