@@ -7,106 +7,139 @@
 ## Summary
 
 Donner's GitHub Actions CI is the slowest part of the merge cycle: cold-cache
-macOS runs land in the **20–25 minute range** for the Build step alone, and
-PRs trigger both Linux and macOS jobs, so PR feedback is gated on the macOS
-critical path. This doc plans a sequence of changes that should bring PR
-feedback under **10 minutes** (warm) / **15 minutes** (cold) without losing
-test coverage.
+macOS runs landed in the **20–25 minute range** for the Build step alone
+(pre-Skia-removal). PRs trigger both Linux and macOS jobs, so PR feedback is
+gated on the macOS critical path. This doc plans a sequence of changes that
+should bring PR feedback under **10 minutes** (warm) / **15 minutes** (cold)
+without losing test coverage and without dropping macOS coverage.
 
-The biggest single drop is already in flight: PR #546 removes the full-Skia
-backend, which is the dominant contributor to cold-cache build time. After
-that lands, the remaining wins come from infrastructure (remote cache,
-matrix splitting) and policy (which jobs gate PRs vs. main).
+The biggest single drop already landed in PR #546 (Skia removal, merged
+2026-04-20). The remaining wins come from cache hygiene, runner sizing,
+parallelism, and moving non-blocking work off the PR critical path.
+
+## Constraints
+
+These are hard constraints that bound the solution space:
+
+1. **macOS must stay on every PR.** The Donner editor is a P0 product and
+   ships on macOS; macOS-only regressions must be caught at PR time, not
+   24h later in nightly.
+2. **No public Bazel remote execution / remote cache.** We cannot give
+   anonymous PR contributors access to a shared cache. A private cache that
+   only authenticated runs (our own PRs, main pushes) can read is still
+   on the table, but its impact is limited to our own merge cycle.
+3. **No reduction in test coverage on main.**
+4. **Measurement-driven.** Every milestone records before/after step
+   timings; rollback if a change regresses anything by > 10% without a
+   compensating win.
 
 ## Goals
 
 - PR median wall-clock feedback ≤ 10 minutes (warm cache).
 - PR worst-case feedback (cold cache) ≤ 15 minutes.
 - main-branch full pipeline (including fuzzers) ≤ 20 minutes.
-- No reduction in test coverage on main.
-- No regression in the ability to catch macOS-specific bugs before release.
+- macOS still gates every PR.
 
 ## Non-Goals
 
 - Switching CI provider away from GitHub Actions.
-- Adding a self-hosted GitHub runner pool (the existing `bazel-re1` worker is
-  for remote execution, not for hosting GHA jobs).
+- Adding a self-hosted GHA runner pool.
 - Rewriting tests to be faster — this doc is purely about pipeline
   orchestration and caching.
-- Removing any test target (other than what PR #546 already removes with the
-  Skia backend).
+- Removing test targets.
+- Public RBE / public remote cache (out of scope per constraint 2).
 
 ## Next Steps
 
-1. Land PR #546 (Skia removal) — biggest single drop, no further design work.
-2. Measure post-Skia baseline by triggering a fresh CI run on `main` after
-   #546 merges; record cold + warm timings into this doc as the new baseline.
-3. Pick the highest-leverage Phase 1 item from the implementation plan below
-   and start a follow-up PR. Recommended start: enable bazel-remote disk
-   cache via the existing `bazel-re1` worker (low risk, large win for
-   incremental builds).
+1. **Wait for the first post-#546 main run to complete** (in flight as of
+   this writing, run id 24648369948). Record its per-step seconds in the
+   "Post-Skia baseline" table below.
+2. Pick the highest-leverage Phase 1 item and start a follow-up PR.
+   Recommended start: **per-config cache slots** (M1) — small, low-risk,
+   removes the asan-fuzzer-evicts-main collision that's been costing main
+   pushes 5–7 min on cache misses.
 
 ## Implementation Plan
 
-- [ ] Milestone 0: Establish baseline and re-measure
-  - [ ] Wait for PR #546 to merge
-  - [ ] Force a cold-cache CI run on main (push a cache-busting comment) and
-        record per-step seconds for both Linux and macOS in this doc
-  - [ ] Diff against current numbers (table below); confirm the predicted
-        drop materialised
-- [ ] Milestone 1: Wire CI to the existing bazel-re1 cache (build-cache only,
-      not full RBE — lower-risk first cut)
-  - [ ] Add `build:ci-remote-cache` config in `.bazelrc` that points at the
-        bazel-re1 instance, sets `--remote_cache=...` and
-        `--remote_upload_local_results=true` only on main pushes
-  - [ ] Add an `actions/setup-bazel` GitHub action input (or env var) that
-        injects credentials from a repo secret
-  - [ ] Update `.github/workflows/main.yml` so PR jobs read the cache and
-        main pushes write it (mirrors current `cache-save: refs/heads/main`
-        policy)
-  - [ ] Validate locally: `bazel build --config=ci-remote-cache //...` from
-        a clean cache should populate bazel-re1 and a second build should
-        hit it
-  - [ ] Roll out to Linux first (lower variance), then macOS
-- [ ] Milestone 2: Move macOS off the PR critical path
-  - [ ] Decide policy: macOS runs on `main` only, OR macOS runs on PRs only
-        if they touch macos-flavored files (workflow path filter), OR macOS
-        is a non-blocking informational job that posts a status without
-        gating merge
-  - [ ] Implement chosen policy in `.github/workflows/main.yml`
-  - [ ] Add a nightly cron job that runs full `bazel test //...` on macOS so
-        Apple-specific regressions are caught within 24h
+- [ ] Milestone 0: Establish post-Skia baseline
+  - [ ] Wait for run 24648369948 to finish
+  - [ ] Record per-step seconds (Linux + macOS, cold + warm) into the
+        baseline table below
+  - [ ] Compare against the pre-Skia table (also below); confirm the
+        predicted drop materialised
+  - [ ] If macOS cold Build is now under 8 min, the urgency of the rest of
+        this plan drops dramatically — re-prioritize accordingly
+- [ ] Milestone 1: Per-config cache slots
+  - [ ] Change `disk-cache` key from `${{ workflow }}-${{ runner.os }}` to
+        also include a config tag (`-default`, `-asan-fuzzer`,
+        `-skia-ref` if any reference variants survive). Each step that
+        uses a non-default config gets its own slot.
+  - [ ] Verify bazel-contrib/setup-bazel respects the longer key (it does
+        — the value is opaque)
+  - [ ] Roll out: change the key, force a cold run, then a warm run, then
+        confirm the asan-fuzzer step no longer triggers a full rebuild of
+        the main targets on the next merge
+  - [ ] Risk: GHA per-repo cache quota is 10 GB. With cache-save still
+        gated on `refs/heads/main`, the eviction policy will keep us in
+        budget, but watch for quota errors after rollout.
+- [ ] Milestone 2: Lint as a separate fast-fail job
+  - [ ] Move banned-patterns lint, clang-format check, and CMake mirror
+        sync check into a `lint` job that runs in parallel with `build`
+  - [ ] Lint job should finish in ≤ 60s — gives near-instant feedback for
+        the most common PR failure mode (formatting / banned pattern)
+  - [ ] No timing impact on the macOS critical path, but reduces the
+        PR-author iteration time on lint failures from ~5 min to ~1 min
 - [ ] Milestone 3: Move asan-fuzzer to a dedicated workflow
   - [ ] Extract the macOS `Test fuzzers` step into
         `.github/workflows/fuzz.yml` (cron + workflow_dispatch + label-gated
         manual trigger)
   - [ ] Drop `|| true` once the fuzzer corpus is reliably green; the
         comment in `main.yml:99` notes this is overdue
-- [ ] Milestone 4: Per-config cache slots
-  - [ ] Change `disk-cache` key from `${{ workflow }}-${{ runner.os }}` to
-        also include a config hash (e.g. `text-full` vs `default` vs
-        `geode` vs `asan-fuzzer`) so different configs don't evict each
-        other's outputs
-  - [ ] Confirm bazel-contrib/setup-bazel respects the longer key
-- [ ] Milestone 5: Matrix-parallelize the heavy variants
-  - [ ] Split the `linux` job into `linux-default` (fast, gates merge) and
-        `linux-text-full` / `linux-geode` (parallel matrix entries)
-  - [ ] Each matrix entry uses its own cache slot (relies on Milestone 4)
-  - [ ] Linux runners are ~$0.008/min on GHA — the parallelism is essentially
-        free; the constraint is concurrent-job quota
-- [ ] Milestone 6: Lint as a separate fast-fail job
-  - [ ] Move banned-patterns lint, clang-format check, and CMake mirror sync
-        check into a `lint` job that runs in parallel with `build`
-  - [ ] Lint job should finish in ≤ 60s — gives near-instant feedback for
-        the most common PR failure mode
+  - [ ] Removes 5–7 min from main pushes
+- [ ] Milestone 4: macOS runner sizing
+  - [ ] Try `macos-15-large` (6 cores vs 3 on default `macos-15`)
+  - [ ] Cost: ~2x per-minute, but builds should be roughly 2x faster on
+        the parallelisable steps (compilation), so wall-clock per-PR
+        approximately halves with neutral compute cost
+  - [ ] Validate by switching macOS in a feature branch, force one cold
+        run + one warm run, compare timings
+  - [ ] Roll forward only if wall-clock improvement is > 30% and quota
+        budget allows
+- [ ] Milestone 5: Cross-PR cache writes (PR jobs save cache, scoped per branch)
+  - [ ] Change `cache-save` from `refs/heads/main` to also save on PR
+        pushes, but keyed per-PR (so PR-A's cache doesn't collide with
+        PR-B's)
+  - [ ] Within a single PR, the second push hits its own incremental cache
+        and should drop to "warm" timings even on first attempt
+  - [ ] Watch GHA cache quota — this multiplies cache footprint by the
+        number of active PRs. Set a TTL via cache key suffix
+        (`-${{ github.run_id }}` is too aggressive; per-PR + per-week
+        rotation is better)
+- [ ] Milestone 6: Internal remote cache for authenticated runs
+  - [ ] Wire `--config=ci-remote-cache` to the existing `bazel-re1` worker
+        (the sysroots from PR #545 already make the toolchain hermetic
+        enough for this)
+  - [ ] Available only to runs with repo secrets — i.e. our own branches
+        and main pushes; fork PRs continue using GHA disk cache only
+  - [ ] Most Donner PRs come from the `jwmcglynn` account on branches in
+        the same repo, so this still benefits the majority of merge cycles
+  - [ ] Risk: bazel-re1 outage tanks our own CI. Use
+        `--remote_local_fallback=true` so Bazel falls back to local on
+        cache miss/timeout
+- [ ] Milestone 7 (stretch): Matrix-parallelize the heavy variants
+  - [ ] Split the `linux` job into `linux-default` and `linux-text-full`
+        and `linux-geode` matrix entries
+  - [ ] Each entry uses its own cache slot (relies on Milestone 1)
+  - [ ] Linux runners are cheap; the constraint is concurrent-job quota
+  - [ ] Only worth doing if Milestone 1+5 don't get us under target
 
 ## Background
 
-### Current state (sampled 2026-04-19, last 7 main runs)
+### Pre-Skia state (sampled 2026-04-19, last 7 main runs)
 
-Per-step seconds, taken from `gh run view` for the most recent successful
-runs on main. "Cold" = first run after a dep bump or long quiet period;
-"warm" = subsequent runs hitting `cache-save: refs/heads/main`.
+Per-step seconds, taken from `gh run view`. "Cold" = first run after a dep
+bump or long quiet period; "warm" = subsequent runs hitting `cache-save:
+refs/heads/main`.
 
 | Run | macOS Build | macOS Test | macOS Fuzz | Linux Build | Linux Test |
 |---:|---:|---:|---:|---:|---:|
@@ -118,137 +151,106 @@ runs on main. "Cold" = first run after a dep bump or long quiet period;
 | 24613404030 (cold)          | 605s  | 141s | 170s | 1391s | 173s |
 | 24597636830 (warm)          | 314s  | 173s |  13s | 330s  | 129s |
 
-Observations:
-1. **macOS Build is the bottleneck**: cold runs spend 20–25 min compiling.
-   Skia (the full Google Skia tree, ~7,500 deletions in PR #546) is the
-   dominant contributor. After removal, macOS cold should fall to ~5–8 min.
-2. **macOS runs on every PR** (`if: github.ref == 'refs/heads/main' ||
-   github.event_name == 'pull_request'`), so PR feedback is ≥ macOS cold
-   time when the PR-side cache is empty.
+### Post-Skia baseline (TBD)
+
+Run 24648369948 (PR #546 merge) is in flight at the time of writing.
+Expected to drop macOS cold Build by ~70-80% based on Skia's contribution to
+total source volume.
+
+| Run | macOS Build | macOS Test | macOS Fuzz | Linux Build | Linux Test |
+|---:|---:|---:|---:|---:|---:|
+| 24648369948 (PR #546, cold) | TBD | TBD | TBD | TBD | TBD |
+
+### Observations from pre-Skia data
+
+1. **macOS Build was the bottleneck**: cold runs spent 20–25 min compiling.
+   Skia (~250K LOC of C++ with template-heavy code) was the dominant
+   contributor. PR #546 removes it.
+2. **macOS runs on every PR** — this is unchanged and intentional (editor
+   is P0).
 3. **Cache slot collisions**: `disk-cache: ${{ workflow }}-${{ runner.os }}`
-   means `--config=ci`, `--config=asan-fuzzer`, and the future
-   `--config=re` all share the same slot. The fuzzer step
-   (`--config=asan-fuzzer` → `--config=latest_llvm`) compiles with a
-   different toolchain and evicts the main-build cache.
+   means `--config=ci` and `--config=asan-fuzzer` (which activates
+   `--config=latest_llvm` and a different toolchain) share the same slot.
+   The fuzzer step evicts the main-build cache on every main push.
 4. **PR cache is read-only** (`cache-save: refs/heads/main`). Long-lived
    PR branches don't accumulate their own incremental cache across pushes.
-5. **No remote build cache yet**: the `--config=re` infrastructure (sysroots,
+5. **No remote build cache**: the `--config=re` infrastructure (sysroots,
    hermetic toolchain) was added in PR #545 but the actual
    `--remote_cache` / `--remote_executor` flags aren't wired into `.bazelrc`
-   or CI yet.
-
-### Why Skia removal is so impactful
-
-Skia is ~250K LOC of C++ that pulls in pathops, fontmgr, color management,
-and platform-specific font managers (CoreText on macOS, fontconfig on
-Linux). Even with `cache-save` to populate the cache between main runs, any
-PR touching anything `skia_deps` reaches transitively triggers a partial
-rebuild. The macOS toolchain happens to be slowest at compiling Skia's
-template-heavy code.
-
-### Why bazel-remote is the next big lever
-
-After Skia, the remaining slow paths on macOS are tracy, harfbuzz, woff2,
-and Geode's `wgpu-native` integration. These aren't individually huge, but
-they re-build every time the GHA disk cache misses (which is whenever a PR
-runs against a fresh runner). A persistent remote disk cache backed by
-bazel-re1 means every action's output is keyed by content hash and shared
-across all CI runs, including PRs.
+   or CI yet. Per the constraints above, this remains private-only and is
+   demoted to Milestone 6.
 
 ## Proposed Architecture
 
 ```mermaid
 flowchart TD
-    PR[PR push] --> PRJobs{PR jobs}
-    Push[Push to main] --> MainJobs{main jobs}
+    PR[PR push] --> Lint[lint job — 60s]
+    PR --> LinuxFull[linux: build+test+geode — 5min warm / 8min cold]
+    PR --> MacOS[macos: build+test — 8min warm / 15min cold]
 
-    PRJobs -->|always| Lint[lint job — 60s]
-    PRJobs -->|always| LinuxFast[linux-default — 5min]
-    PRJobs -->|path filter| LinuxTextFull[linux-text-full — 5min]
-    PRJobs -->|path filter| LinuxGeode[linux-geode — 5min]
-    PRJobs -->|opt-in label| MacosCheck[macos — 10min]
+    MainPush[Push to main] --> Lint2[lint]
+    MainPush --> LinuxFull2[linux full]
+    MainPush --> MacOS2[macos full]
+    MainPush --> SkiaRef[skia_ref tests — REMOVED in #546]
 
-    MainJobs --> Lint2[lint]
-    MainJobs --> LinuxFast2[linux-default]
-    MainJobs --> LinuxTextFull2[linux-text-full]
-    MainJobs --> LinuxGeode2[linux-geode]
-    MainJobs --> MacosFull[macos — full coverage]
-    MainJobs --> Fuzz[fuzzers, separate workflow]
+    Nightly[nightly cron] --> Fuzz[fuzzers — moved off main pushes]
+    Nightly --> ExtraSanity[full --config=text-full + --config=geode matrix]
 
-    LinuxFast -.shared cache.-> RemoteCache[(bazel-re1 remote cache)]
-    LinuxTextFull -.-> RemoteCache
-    LinuxGeode -.-> RemoteCache
-    MacosCheck -.-> RemoteCache
-    LinuxFast2 -.-> RemoteCache
-    LinuxTextFull2 -.-> RemoteCache
-    LinuxGeode2 -.-> RemoteCache
-    MacosFull -.-> RemoteCache
+    LinuxFull -.GHA disk cache, per-config slot.-> CacheLinux[(GHA cache: CI-Linux-default)]
+    MacOS -.GHA disk cache, per-config slot.-> CacheMacos[(GHA cache: CI-macOS-default)]
+    Fuzz -.dedicated cache slot.-> FuzzCache[(GHA cache: CI-macOS-asan-fuzzer)]
 
-    Nightly[nightly cron] --> MacosFull2[macos full]
-    Nightly --> Fuzz2[fuzzers]
+    LinuxFull -.our PRs only.-> RemoteCache[(internal bazel-re1 remote cache)]
+    MacOS -.our PRs only.-> RemoteCache
+    LinuxFull2 -.write-through.-> RemoteCache
+    MacOS2 -.write-through.-> RemoteCache
 ```
 
-PR fast path (lint + linux-default) gates merge in ~5–10 min. Heavier
-variants run in parallel and provide additional signal but don't gate.
-macOS gates only main pushes (and PRs that opt in). The remote cache
-collapses incremental work across all jobs.
-
-## Requirements and Constraints
-
-- **No regression in coverage**: every test currently in the matrix must
-  still run somewhere — even if it moves to nightly, every commit eventually
-  gets the full suite.
-- **Macos-specific bugs caught within 24h**: nightly cron must alert on
-  failure (existing GHA email-on-failure suffices).
-- **No new mandatory infrastructure**: bazel-re1 already exists; we're not
-  taking on new ops burden.
-- **Cache invalidation must be deterministic**: a content-addressed remote
-  cache satisfies this; per-config disk-cache keys help on the GHA side.
-- **PR throughput >= 1 PR / 10 min during peak**: don't blow GHA concurrency
-  budget with too many parallel matrix entries.
+PR-time gates: lint (~60s, parallel) + linux (~5–8 min) + macOS (~8–15
+min). macOS remains the critical path on cold cache; the goal is to make
+it ≤ 15 min by sizing it up (M4) and giving it an exclusive cache slot
+that isn't evicted by the fuzzer step (M1).
 
 ## Risks and Mitigations
 
-- **bazel-re1 outage tanks all CI**: mitigate with `--remote_local_fallback`
-  so Bazel falls back to local execution on cache miss/timeout.
-- **PR contributors can't read the remote cache** (auth): the cache must be
-  read-public, write-authenticated. Most bazel-remote installations support
-  this. Verify before rollout.
-- **macOS-only regression slips into main**: if macOS is moved off PR gating,
-  the nightly cron job is the safety net. Risk window is ≤ 24h. If this is
-  unacceptable, alternative is "macOS as informational, not gating" —
-  visible status, no merge block.
-- **Per-config cache key proliferation blows GHA cache quota**: GHA's
-  per-repo cache budget is 10 GB. Per-config slots could push us over. Plan
-  is to evict aggressively via `cache-save: refs/heads/main` only, plus
-  shorter retention for non-default configs.
+- **GHA cache quota exhaustion** (per-config + per-PR slots): GHA gives
+  10 GB per repo. Per-config + per-PR + per-week TTL keeps us in budget;
+  monitor `actions/cache` quota warnings after M5 rollout.
+- **macos-15-large cost overrun** (M4): macos-15-large is ~5x the per-minute
+  rate of macos-15. If wall-clock improvement is < 5x, we're paying more
+  for the same throughput. Validate before rolling forward.
+- **bazel-re1 outage tanks our own CI** (M6): `--remote_local_fallback=true`
+  means a cache miss falls back to local execution; outage degrades to
+  current behavior.
+- **Per-PR cache write doubles every PR** (M5): same active PRs that today
+  read a stale cache will tomorrow each carry their own cache. Trade-off
+  is faster iteration vs. cache pressure. Mitigate with shorter retention.
 
 ## Testing and Validation
 
 For each milestone:
 
-1. Measure baseline (current step seconds) before the change.
+1. Record baseline (current step seconds for the affected job) before the
+   change.
 2. Apply the change in a feature branch.
 3. Force at least one cold-cache run (push a comment-only commit, or use
    workflow_dispatch with cache cleared).
 4. Force at least one warm-cache run on top.
-5. Compare per-step seconds against baseline; record in a follow-up PR
+5. Compare per-step seconds against baseline; record in the milestone PR
    description.
 6. Roll back if any step regresses by > 10% without a justifying win
    elsewhere.
 
 A small `tools/ci_timing_report.py` script that ingests
 `gh run view ... --json jobs` output and emits a markdown table would make
-this measurement repeatable. Optional but recommended for Milestone 1.
+this measurement repeatable. Optional but recommended before starting M1.
 
 ## Open Questions
 
-1. Does bazel-re1 have spare capacity to serve as a public read cache for
-   anonymous PR contributors? If not, fall back to GHA-native caching.
-2. Should the nightly macOS job also run `--config=text-full` and
-   `--config=geode` matrix entries, or rely on the Linux matrix to cover
-   those?
-3. Is there appetite to drop macOS from CI entirely, given Donner is
-   primarily a library shipped via BCR (Linux-first ecosystem) and the
-   editor/sandbox is the only macOS-leaning consumer? This would cut PR
-   feedback dramatically but is a policy call beyond this doc.
+1. Is the post-#546 macOS cold Build actually under 8 min? If yes, we may
+   be able to declare victory after just M1+M2 (per-config cache + lint).
+2. What's the current GHA cache quota usage for the repo? If we're already
+   close to 10 GB, M5 (cross-PR cache writes) may need a tighter retention
+   policy than the default 7 days.
+3. Is there a budget for `macos-15-large` (M4)? If not, skip and rely on
+   the other levers.
