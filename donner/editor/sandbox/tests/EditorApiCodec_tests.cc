@@ -1,0 +1,540 @@
+/// @file
+///
+/// Round-trip and malformed-input tests for EditorApiCodec.
+
+#include "donner/editor/sandbox/EditorApiCodec.h"
+
+#include <gtest/gtest.h>
+
+#include <cstring>
+
+namespace donner::editor::sandbox {
+namespace {
+
+// ===========================================================================
+// Handshake round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, HandshakeRoundTrip) {
+  HandshakePayload in;
+  in.protocolVersion = 42;
+  in.buildId = "test-build-abc123";
+
+  auto encoded = EncodeHandshake(in);
+  ASSERT_FALSE(encoded.empty());
+
+  HandshakePayload out;
+  ASSERT_TRUE(DecodeHandshake(encoded, out));
+  EXPECT_EQ(out.protocolVersion, 42u);
+  EXPECT_EQ(out.buildId, "test-build-abc123");
+}
+
+TEST(EditorApiCodecTest, HandshakeAckRoundTrip) {
+  HandshakeAckPayload in;
+  in.protocolVersion = kSessionProtocolVersion;
+  in.pid = 12345;
+  in.capabilities = "render,text";
+
+  auto encoded = EncodeHandshakeAck(in);
+  HandshakeAckPayload out;
+  ASSERT_TRUE(DecodeHandshakeAck(encoded, out));
+  EXPECT_EQ(out.protocolVersion, kSessionProtocolVersion);
+  EXPECT_EQ(out.pid, 12345u);
+  EXPECT_EQ(out.capabilities, "render,text");
+}
+
+// ===========================================================================
+// SetViewport round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, SetViewportRoundTrip) {
+  SetViewportPayload in;
+  in.width = 1920;
+  in.height = 1080;
+
+  auto encoded = EncodeSetViewport(in);
+  SetViewportPayload out;
+  ASSERT_TRUE(DecodeSetViewport(encoded, out));
+  EXPECT_EQ(out.width, 1920);
+  EXPECT_EQ(out.height, 1080);
+}
+
+// ===========================================================================
+// LoadBytes round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, LoadBytesRoundTripWithUri) {
+  LoadBytesPayload in;
+  in.bytes = "<svg></svg>";
+  in.originUri = "file:///tmp/test.svg";
+
+  auto encoded = EncodeLoadBytes(in);
+  LoadBytesPayload out;
+  ASSERT_TRUE(DecodeLoadBytes(encoded, out));
+  EXPECT_EQ(out.bytes, "<svg></svg>");
+  ASSERT_TRUE(out.originUri.has_value());
+  EXPECT_EQ(*out.originUri, "file:///tmp/test.svg");
+}
+
+TEST(EditorApiCodecTest, LoadBytesRoundTripWithoutUri) {
+  LoadBytesPayload in;
+  in.bytes = "<svg><rect/></svg>";
+  in.originUri = std::nullopt;
+
+  auto encoded = EncodeLoadBytes(in);
+  LoadBytesPayload out;
+  ASSERT_TRUE(DecodeLoadBytes(encoded, out));
+  EXPECT_EQ(out.bytes, "<svg><rect/></svg>");
+  EXPECT_FALSE(out.originUri.has_value());
+}
+
+// ===========================================================================
+// ReplaceSource round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, ReplaceSourceRoundTrip) {
+  ReplaceSourcePayload in;
+  in.bytes = "<svg><circle r='10'/></svg>";
+  in.preserveUndoOnReparse = true;
+
+  auto encoded = EncodeReplaceSource(in);
+  ReplaceSourcePayload out;
+  ASSERT_TRUE(DecodeReplaceSource(encoded, out));
+  EXPECT_EQ(out.bytes, in.bytes);
+  EXPECT_TRUE(out.preserveUndoOnReparse);
+}
+
+// ===========================================================================
+// ApplySourcePatch round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, ApplySourcePatchRoundTrip) {
+  ApplySourcePatchPayload in;
+  in.start = 10;
+  in.end = 20;
+  in.newText = "fill=\"red\"";
+
+  auto encoded = EncodeApplySourcePatch(in);
+  ApplySourcePatchPayload out;
+  ASSERT_TRUE(DecodeApplySourcePatch(encoded, out));
+  EXPECT_EQ(out.start, 10u);
+  EXPECT_EQ(out.end, 20u);
+  EXPECT_EQ(out.newText, "fill=\"red\"");
+}
+
+// ===========================================================================
+// PointerEvent round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, PointerEventRoundTrip) {
+  PointerEventPayload in;
+  in.phase = PointerPhase::kDown;
+  in.documentX = 123.456;
+  in.documentY = 789.012;
+  in.buttons = 1;
+  in.modifiers = 2;
+
+  auto encoded = EncodePointerEvent(in);
+  PointerEventPayload out;
+  ASSERT_TRUE(DecodePointerEvent(encoded, out));
+  EXPECT_EQ(out.phase, PointerPhase::kDown);
+  EXPECT_DOUBLE_EQ(out.documentX, 123.456);
+  EXPECT_DOUBLE_EQ(out.documentY, 789.012);
+  EXPECT_EQ(out.buttons, 1u);
+  EXPECT_EQ(out.modifiers, 2u);
+}
+
+TEST(EditorApiCodecTest, PointerEventAllPhases) {
+  for (uint32_t p = 0; p <= static_cast<uint32_t>(PointerPhase::kCancel); ++p) {
+    PointerEventPayload in;
+    in.phase = static_cast<PointerPhase>(p);
+    in.documentX = static_cast<double>(p);
+    in.documentY = static_cast<double>(p) + 1.0;
+
+    auto encoded = EncodePointerEvent(in);
+    PointerEventPayload out;
+    ASSERT_TRUE(DecodePointerEvent(encoded, out)) << "phase=" << p;
+    EXPECT_EQ(out.phase, in.phase);
+  }
+}
+
+// ===========================================================================
+// KeyEvent round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, KeyEventRoundTrip) {
+  KeyEventPayload in;
+  in.phase = KeyPhase::kChar;
+  in.keyCode = 65;  // 'A'
+  in.modifiers = 4;
+  in.textInput = "A";
+
+  auto encoded = EncodeKeyEvent(in);
+  KeyEventPayload out;
+  ASSERT_TRUE(DecodeKeyEvent(encoded, out));
+  EXPECT_EQ(out.phase, KeyPhase::kChar);
+  EXPECT_EQ(out.keyCode, 65);
+  EXPECT_EQ(out.modifiers, 4u);
+  EXPECT_EQ(out.textInput, "A");
+}
+
+// ===========================================================================
+// WheelEvent round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, WheelEventRoundTrip) {
+  WheelEventPayload in;
+  in.documentX = 400.0;
+  in.documentY = 300.0;
+  in.deltaX = -1.5;
+  in.deltaY = 3.0;
+  in.modifiers = 1;
+
+  auto encoded = EncodeWheelEvent(in);
+  WheelEventPayload out;
+  ASSERT_TRUE(DecodeWheelEvent(encoded, out));
+  EXPECT_DOUBLE_EQ(out.documentX, 400.0);
+  EXPECT_DOUBLE_EQ(out.documentY, 300.0);
+  EXPECT_DOUBLE_EQ(out.deltaX, -1.5);
+  EXPECT_DOUBLE_EQ(out.deltaY, 3.0);
+  EXPECT_EQ(out.modifiers, 1u);
+}
+
+// ===========================================================================
+// SetTool round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, SetToolRoundTrip) {
+  SetToolPayload in;
+  in.toolKind = ToolKind::kRect;
+
+  auto encoded = EncodeSetTool(in);
+  SetToolPayload out;
+  ASSERT_TRUE(DecodeSetTool(encoded, out));
+  EXPECT_EQ(out.toolKind, ToolKind::kRect);
+}
+
+// ===========================================================================
+// Empty-payload opcodes
+// ===========================================================================
+
+TEST(EditorApiCodecTest, UndoRedoShutdownEmpty) {
+  EXPECT_TRUE(EncodeUndo().empty());
+  EXPECT_TRUE(EncodeRedo().empty());
+  EXPECT_TRUE(EncodeShutdown().empty());
+  EXPECT_TRUE(EncodeShutdownAck().empty());
+
+  EXPECT_TRUE(DecodeUndo({}));
+  EXPECT_TRUE(DecodeRedo({}));
+  EXPECT_TRUE(DecodeShutdown({}));
+  EXPECT_TRUE(DecodeShutdownAck({}));
+}
+
+// ===========================================================================
+// Export round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, ExportRoundTrip) {
+  ExportRequestPayload in;
+  in.format = ExportFormat::kPng;
+
+  auto encoded = EncodeExport(in);
+  ExportRequestPayload out;
+  ASSERT_TRUE(DecodeExport(encoded, out));
+  EXPECT_EQ(out.format, ExportFormat::kPng);
+}
+
+TEST(EditorApiCodecTest, ExportResponseRoundTrip) {
+  ExportResponsePayload in;
+  in.format = ExportFormat::kSvgText;
+  in.bytes = {0x3C, 0x73, 0x76, 0x67, 0x3E};  // "<svg>"
+
+  auto encoded = EncodeExportResponse(in);
+  ExportResponsePayload out;
+  ASSERT_TRUE(DecodeExportResponse(encoded, out));
+  EXPECT_EQ(out.format, ExportFormat::kSvgText);
+  EXPECT_EQ(out.bytes, in.bytes);
+}
+
+// ===========================================================================
+// Frame round-trip
+// ===========================================================================
+
+TEST(EditorApiCodecTest, FrameRoundTripMinimal) {
+  FramePayload in;
+  in.frameId = 99;
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+  EXPECT_EQ(out.frameId, 99u);
+  EXPECT_TRUE(out.renderWire.empty());
+  EXPECT_TRUE(out.selections.empty());
+  EXPECT_FALSE(out.hasMarquee);
+  EXPECT_FALSE(out.hasHoverRect);
+  EXPECT_TRUE(out.writebacks.empty());
+  EXPECT_FALSE(out.hasSourceReplaceAll);
+  EXPECT_EQ(out.statusKind, FrameStatusKind::kNone);
+  EXPECT_TRUE(out.statusMessage.empty());
+  EXPECT_TRUE(out.diagnostics.empty());
+  EXPECT_FALSE(out.hasCursorHint);
+}
+
+TEST(EditorApiCodecTest, FrameRoundTripFull) {
+  FramePayload in;
+  in.frameId = 42;
+  in.renderWire = {0xDE, 0xAD, 0xBE, 0xEF};
+
+  FrameSelectionEntry sel;
+  sel.bbox[0] = 10.0;
+  sel.bbox[1] = 20.0;
+  sel.bbox[2] = 100.0;
+  sel.bbox[3] = 200.0;
+  sel.hasTransform = true;
+  sel.transform[0] = 1.0;
+  sel.transform[1] = 0.0;
+  sel.transform[2] = 0.0;
+  sel.transform[3] = 1.0;
+  sel.transform[4] = 5.0;
+  sel.transform[5] = 10.0;
+  sel.handleMask = 0xFF;
+  in.selections.push_back(sel);
+
+  in.hasMarquee = true;
+  in.marquee[0] = 0.0;
+  in.marquee[1] = 0.0;
+  in.marquee[2] = 50.0;
+  in.marquee[3] = 50.0;
+
+  in.hasHoverRect = true;
+  in.hoverRect[0] = 5.0;
+  in.hoverRect[1] = 5.0;
+  in.hoverRect[2] = 25.0;
+  in.hoverRect[3] = 25.0;
+
+  FrameWritebackEntry wb;
+  wb.start = 10;
+  wb.end = 20;
+  wb.newText = "transform=\"translate(5,10)\"";
+  wb.reason = WritebackReason::kAttributeEdit;
+  in.writebacks.push_back(wb);
+
+  in.hasSourceReplaceAll = true;
+  in.sourceReplaceAll = "<svg><rect transform=\"translate(5,10)\"/></svg>";
+
+  in.statusKind = FrameStatusKind::kRendered;
+  in.statusMessage = "OK";
+
+  FrameDiagnosticEntry diag;
+  diag.line = 1;
+  diag.column = 5;
+  diag.message = "unexpected attribute";
+  in.diagnostics.push_back(diag);
+
+  in.hasCursorHint = true;
+  in.cursorHintSourceOffset = 42;
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+
+  EXPECT_EQ(out.frameId, 42u);
+  EXPECT_EQ(out.renderWire, in.renderWire);
+  ASSERT_EQ(out.selections.size(), 1u);
+  EXPECT_DOUBLE_EQ(out.selections[0].bbox[0], 10.0);
+  EXPECT_DOUBLE_EQ(out.selections[0].bbox[3], 200.0);
+  EXPECT_TRUE(out.selections[0].hasTransform);
+  EXPECT_DOUBLE_EQ(out.selections[0].transform[4], 5.0);
+  EXPECT_EQ(out.selections[0].handleMask, 0xFFu);
+  EXPECT_TRUE(out.hasMarquee);
+  EXPECT_DOUBLE_EQ(out.marquee[2], 50.0);
+  EXPECT_TRUE(out.hasHoverRect);
+  EXPECT_DOUBLE_EQ(out.hoverRect[2], 25.0);
+  ASSERT_EQ(out.writebacks.size(), 1u);
+  EXPECT_EQ(out.writebacks[0].start, 10u);
+  EXPECT_EQ(out.writebacks[0].end, 20u);
+  EXPECT_EQ(out.writebacks[0].newText, wb.newText);
+  EXPECT_EQ(out.writebacks[0].reason, WritebackReason::kAttributeEdit);
+  EXPECT_TRUE(out.hasSourceReplaceAll);
+  EXPECT_EQ(out.sourceReplaceAll, in.sourceReplaceAll);
+  EXPECT_EQ(out.statusKind, FrameStatusKind::kRendered);
+  EXPECT_EQ(out.statusMessage, "OK");
+  ASSERT_EQ(out.diagnostics.size(), 1u);
+  EXPECT_EQ(out.diagnostics[0].line, 1u);
+  EXPECT_EQ(out.diagnostics[0].column, 5u);
+  EXPECT_EQ(out.diagnostics[0].message, "unexpected attribute");
+  EXPECT_TRUE(out.hasCursorHint);
+  EXPECT_EQ(out.cursorHintSourceOffset, 42u);
+}
+
+// ===========================================================================
+// SourceReplaceAll, Toast, DialogRequest, Diagnostic, Error
+// ===========================================================================
+
+TEST(EditorApiCodecTest, SourceReplaceAllRoundTrip) {
+  SourceReplaceAllPayload in;
+  in.bytes = "<svg><g/></svg>";
+
+  auto encoded = EncodeSourceReplaceAll(in);
+  SourceReplaceAllPayload out;
+  ASSERT_TRUE(DecodeSourceReplaceAll(encoded, out));
+  EXPECT_EQ(out.bytes, in.bytes);
+}
+
+TEST(EditorApiCodecTest, ToastRoundTrip) {
+  ToastResponsePayload in;
+  in.severity = ToastSeverity::kWarning;
+  in.message = "something happened";
+
+  auto encoded = EncodeToast(in);
+  ToastResponsePayload out;
+  ASSERT_TRUE(DecodeToast(encoded, out));
+  EXPECT_EQ(out.severity, ToastSeverity::kWarning);
+  EXPECT_EQ(out.message, "something happened");
+}
+
+TEST(EditorApiCodecTest, DialogRequestRoundTrip) {
+  DialogRequestPayload in;
+  in.kind = 1;
+  in.fileName = "output.svg";
+  in.message = "Confirm overwrite?";
+
+  auto encoded = EncodeDialogRequest(in);
+  DialogRequestPayload out;
+  ASSERT_TRUE(DecodeDialogRequest(encoded, out));
+  EXPECT_EQ(out.kind, 1u);
+  EXPECT_EQ(out.fileName, "output.svg");
+  EXPECT_EQ(out.message, "Confirm overwrite?");
+}
+
+TEST(EditorApiCodecTest, DiagnosticRoundTrip) {
+  DiagnosticPayload in;
+  in.message = "debug: parse took 3ms";
+
+  auto encoded = EncodeDiagnostic(in);
+  DiagnosticPayload out;
+  ASSERT_TRUE(DecodeDiagnostic(encoded, out));
+  EXPECT_EQ(out.message, "debug: parse took 3ms");
+}
+
+TEST(EditorApiCodecTest, ErrorRoundTrip) {
+  ErrorPayload in;
+  in.errorKind = SessionErrorKind::kPayloadMalformed;
+  in.message = "invalid pointer phase";
+
+  auto encoded = EncodeError(in);
+  ErrorPayload out;
+  ASSERT_TRUE(DecodeError(encoded, out));
+  EXPECT_EQ(out.errorKind, SessionErrorKind::kPayloadMalformed);
+  EXPECT_EQ(out.message, "invalid pointer phase");
+}
+
+// ===========================================================================
+// Malformed input tests
+// ===========================================================================
+
+TEST(EditorApiCodecTest, TruncatedSetViewport) {
+  auto encoded = EncodeSetViewport({800, 600});
+  // Remove last byte.
+  encoded.pop_back();
+  SetViewportPayload out;
+  EXPECT_FALSE(DecodeSetViewport(encoded, out));
+}
+
+TEST(EditorApiCodecTest, TruncatedLoadBytes) {
+  auto encoded = EncodeLoadBytes({"<svg/>", "file:///x"});
+  // Truncate in the middle of the bytes field.
+  encoded.resize(6);
+  LoadBytesPayload out;
+  EXPECT_FALSE(DecodeLoadBytes(encoded, out));
+}
+
+TEST(EditorApiCodecTest, InvalidPointerPhase) {
+  PointerEventPayload in;
+  in.phase = PointerPhase::kDown;
+  auto encoded = EncodePointerEvent(in);
+  // Overwrite phase with invalid value.
+  uint32_t badPhase = 99;
+  std::memcpy(encoded.data(), &badPhase, 4);
+  PointerEventPayload out;
+  EXPECT_FALSE(DecodePointerEvent(encoded, out));
+}
+
+TEST(EditorApiCodecTest, InvalidKeyPhase) {
+  KeyEventPayload in;
+  in.phase = KeyPhase::kDown;
+  auto encoded = EncodeKeyEvent(in);
+  uint32_t badPhase = 99;
+  std::memcpy(encoded.data(), &badPhase, 4);
+  KeyEventPayload out;
+  EXPECT_FALSE(DecodeKeyEvent(encoded, out));
+}
+
+TEST(EditorApiCodecTest, InvalidToolKind) {
+  SetToolPayload in;
+  in.toolKind = ToolKind::kSelect;
+  auto encoded = EncodeSetTool(in);
+  uint32_t badKind = 99;
+  std::memcpy(encoded.data(), &badKind, 4);
+  SetToolPayload out;
+  EXPECT_FALSE(DecodeSetTool(encoded, out));
+}
+
+TEST(EditorApiCodecTest, InvalidExportFormat) {
+  auto encoded = EncodeExport({ExportFormat::kSvgText});
+  uint32_t badFormat = 99;
+  std::memcpy(encoded.data(), &badFormat, 4);
+  ExportRequestPayload out;
+  EXPECT_FALSE(DecodeExport(encoded, out));
+}
+
+TEST(EditorApiCodecTest, TruncatedFramePayload) {
+  FramePayload in;
+  in.frameId = 1;
+  in.renderWire = {1, 2, 3};
+  auto encoded = EncodeFrame(in);
+  // Truncate.
+  encoded.resize(10);
+  FramePayload out;
+  EXPECT_FALSE(DecodeFrame(encoded, out));
+}
+
+TEST(EditorApiCodecTest, EmptyDataForHandshake) {
+  HandshakePayload out;
+  EXPECT_FALSE(DecodeHandshake({}, out));
+}
+
+TEST(EditorApiCodecTest, EmptyDataForPointerEvent) {
+  PointerEventPayload out;
+  EXPECT_FALSE(DecodePointerEvent({}, out));
+}
+
+TEST(EditorApiCodecTest, EmptyDataForFrame) {
+  FramePayload out;
+  EXPECT_FALSE(DecodeFrame({}, out));
+}
+
+TEST(EditorApiCodecTest, InvalidToastSeverity) {
+  ToastResponsePayload in;
+  in.severity = ToastSeverity::kInfo;
+  in.message = "hi";
+  auto encoded = EncodeToast(in);
+  uint32_t badSev = 99;
+  std::memcpy(encoded.data(), &badSev, 4);
+  ToastResponsePayload out;
+  EXPECT_FALSE(DecodeToast(encoded, out));
+}
+
+TEST(EditorApiCodecTest, InvalidErrorKind) {
+  ErrorPayload in;
+  in.errorKind = SessionErrorKind::kUnknown;
+  in.message = "x";
+  auto encoded = EncodeError(in);
+  uint32_t badKind = 99;
+  std::memcpy(encoded.data(), &badKind, 4);
+  ErrorPayload out;
+  EXPECT_FALSE(DecodeError(encoded, out));
+}
+
+}  // namespace
+}  // namespace donner::editor::sandbox

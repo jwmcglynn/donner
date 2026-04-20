@@ -11,7 +11,7 @@
 #endif
 
 #include "donner/base/Vector2.h"
-#include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/backend_lib/AsyncRenderer.h"
 
 namespace donner::editor {
 

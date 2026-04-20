@@ -5,7 +5,7 @@
 
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
-#include "donner/editor/EditorApp.h"
+#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"

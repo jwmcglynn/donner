@@ -99,6 +99,30 @@ _RULES: List[_Rule] = [
         # non-core consumer must go through the SVG public API surface.
         exempt_path_prefixes=("donner/svg/", "donner/base/"),
     ),
+    _Rule(
+        pattern=re.compile(r"\bSVGParser::ParseSVG\b"),
+        description="SVGParser::ParseSVG call outside allowed hosts",
+        remediation=(
+            "Desktop editor host code must route every parse through EditorBackendClient. "
+            "Only the backend library, parser/engine code, the EditorBackendClient_InProcess "
+            "path (WASM), and tests may call SVGParser::ParseSVG directly."
+        ),
+        exempt_path_prefixes=(
+            "donner/svg/",
+            "donner/benchmarks/",
+            "donner/editor/sandbox/parser_child_main.cc",
+            "donner/editor/sandbox/editor_backend_main.cc",
+            "donner/editor/sandbox/EditorBackendCore.",
+            "donner/editor/backend_lib/",
+            "donner/editor/EditorBackendClient_InProcess.cc",
+            "donner/editor/sandbox/tests/",
+            "donner/editor/tests/",
+            "donner/editor/backend_lib/tests/",
+            "donner/editor/repro/tests/",
+            "examples/",
+            "tools/",
+        ),
+    ),
 ]
 
 

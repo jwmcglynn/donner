@@ -9,7 +9,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
-#include "donner/editor/EditorApp.h"
+#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/ViewportState.h"
 
 namespace donner::editor {

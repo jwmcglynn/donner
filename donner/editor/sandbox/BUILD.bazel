@@ -119,21 +119,6 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "pipelined_renderer",
-    srcs = ["PipelinedRenderer.cc"],
-    hdrs = ["PipelinedRenderer.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
-    visibility = ["//donner/editor:__subpackages__"],
-    deps = [
-        ":replaying_renderer",
-        ":serializing_renderer",
-        "//donner/svg",
-        "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer",
-    ],
-)
-
-donner_cc_library(
     name = "sandbox_host",
     srcs = ["SandboxHost.cc"],
     hdrs = ["SandboxHost.h"],
@@ -224,5 +209,82 @@ donner_cc_binary(
         ":frame_inspector",
         ":rnr_file",
         ":sandbox_diff_lib",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_api_codec",
+    srcs = ["EditorApiCodec.cc"],
+    hdrs = ["EditorApiCodec.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":session_protocol",
+        ":wire",
+    ],
+)
+
+donner_cc_library(
+    name = "session_codec",
+    srcs = ["SessionCodec.cc"],
+    hdrs = ["SessionCodec.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":session_protocol",
+    ],
+)
+
+donner_cc_library(
+    name = "session_protocol",
+    hdrs = ["SessionProtocol.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "session",
+    srcs = ["SandboxSession.cc"],
+    hdrs = ["SandboxSession.h"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":sandbox_host",
+        ":session_codec",
+        ":session_protocol",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_backend_core",
+    srcs = ["EditorBackendCore.cc"],
+    hdrs = ["EditorBackendCore.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":editor_api_codec",
+        ":serializing_renderer",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_binary(
+    name = "donner_editor_backend",
+    srcs = ["editor_backend_main.cc"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":editor_api_codec",
+        ":editor_backend_core",
+        ":sandbox_hardening",
+        ":session_codec",
+        ":session_protocol",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/svg",
+        "//donner/svg/parser",
     ],
 )

@@ -1,7 +1,7 @@
 #include "donner/editor/DocumentSyncController.h"
 
-#include "donner/editor/SelectTool.h"
-#include "donner/editor/SourceSync.h"
+#include "donner/editor/backend_lib/SelectTool.h"
+#include "donner/editor/backend_lib/SourceSync.h"
 #include "donner/editor/TextPatch.h"
 
 namespace donner::editor {

@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "donner/editor/RenderPaneGesture.h"
+#include "donner/editor/backend_lib/RenderPaneGesture.h"
 #include "donner/editor/gui/EditorWindow.h"
 
 namespace donner::editor {

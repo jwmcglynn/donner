@@ -1,7 +1,7 @@
 #include "donner/editor/RenderCoordinator.h"
 
-#include "donner/editor/EditorApp.h"
-#include "donner/editor/SelectTool.h"
+#include "donner/editor/backend_lib/EditorApp.h"
+#include "donner/editor/backend_lib/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 
 namespace donner::editor {

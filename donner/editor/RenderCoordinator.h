@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
-#include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/backend_lib/AsyncRenderer.h"
 #include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"

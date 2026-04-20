@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGElement.h"
 
 namespace donner::editor {
@@ -36,5 +37,14 @@ void RefreshSelectionBoundsCache(SelectionBoundsCache& cache,
                                  std::span<const svg::SVGElement> selection,
                                  std::uint64_t currentDocVersion,
                                  std::uint64_t displayedDocVersion);
+
+/// Compute screen-space rectangles for each document-space AABB.  When more
+/// than one AABB is provided, an additional bounding rect is appended.
+///
+/// @param viewport Current viewport state.
+/// @param selectionBoundsDoc Document-space AABBs.
+/// @return Screen-space rects (per-element + optional combined).
+[[nodiscard]] std::vector<Box2d> ComputeSelectionAabbScreenRects(
+    const ViewportState& viewport, std::span<const Box2d> selectionBoundsDoc);
 
 }  // namespace donner::editor

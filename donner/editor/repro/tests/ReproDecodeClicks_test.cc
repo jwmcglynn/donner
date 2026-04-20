@@ -31,7 +31,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
-#include "donner/editor/EditorApp.h"
+#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/SVGDocument.h"

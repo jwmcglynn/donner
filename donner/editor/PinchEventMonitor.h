@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "donner/editor/RenderPaneGesture.h"
+#include "donner/editor/backend_lib/RenderPaneGesture.h"
 
 struct GLFWwindow;
 

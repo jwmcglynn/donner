@@ -1,0 +1,128 @@
+load("//build_defs:rules.bzl", "donner_cc_test")
+
+donner_cc_test(
+    name = "command_queue_tests",
+    srcs = ["CommandQueue_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:command_queue",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "async_svg_document_tests",
+    srcs = ["AsyncSVGDocument_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:async_svg_document",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_app_tests",
+    srcs = ["EditorApp_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor:viewport_geometry",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_sync_tests",
+    srcs = ["EditorSync_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:attribute_writeback",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/editor/backend_lib:source_sync",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "select_tool_tests",
+    srcs = ["SelectTool_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "overlay_renderer_tests",
+    srcs = ["OverlayRenderer_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor:overlay_renderer",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "undo_timeline_tests",
+    srcs = ["UndoTimeline_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:undo_timeline",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "change_classifier_tests",
+    srcs = ["ChangeClassifier_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:change_classifier",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "attribute_writeback_tests",
+    srcs = ["AttributeWriteback_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:attribute_writeback",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_gesture_tests",
+    srcs = ["RenderPaneGesture_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:render_pane_gesture",
+        "//donner/editor:pinch_event_monitor",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_click_tests",
+    srcs = ["RenderPaneClick_tests.cc"],
+    deps = [
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

@@ -19,7 +19,7 @@ donner_cc_library(
     ],
     deps = [
         ":repro_file",
-        "//donner/editor:imgui_headers",
+        "//donner/editor:imgui_includes",
         "@imgui",
     ],
 )

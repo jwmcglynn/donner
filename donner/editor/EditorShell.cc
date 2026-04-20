@@ -13,7 +13,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
-#include "donner/editor/SourceSync.h"
+#include "donner/editor/backend_lib/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"

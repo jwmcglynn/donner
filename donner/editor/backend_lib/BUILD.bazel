@@ -1,0 +1,145 @@
+"""Backend library for the Donner editor.
+
+This package contains the backend-owned logic that was previously in
+`//donner/editor`. After the thin-client refactor (S9), the desktop
+editor binary no longer links these targets directly — only the
+sandbox backend binary and the in-process WASM client do.
+"""
+
+load("//build_defs:rules.bzl", "donner_cc_library")
+
+package(default_visibility = ["//donner/editor:__subpackages__"])
+
+donner_cc_library(
+    name = "command_queue",
+    srcs = ["CommandQueue.cc"],
+    hdrs = [
+        "CommandQueue.h",
+        "EditorCommand.h",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "async_svg_document",
+    srcs = ["AsyncSVGDocument.cc"],
+    hdrs = ["AsyncSVGDocument.h"],
+    deps = [
+        ":command_queue",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "attribute_writeback",
+    srcs = ["AttributeWriteback.cc"],
+    hdrs = ["AttributeWriteback.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "async_renderer",
+    srcs = ["AsyncRenderer.cc"],
+    hdrs = ["AsyncRenderer.h"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:tracy_wrapper",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_library(
+    name = "change_classifier",
+    srcs = ["ChangeClassifier.cc"],
+    hdrs = ["ChangeClassifier.h"],
+    deps = [
+        ":command_queue",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "undo_timeline",
+    srcs = ["UndoTimeline.cc"],
+    hdrs = ["UndoTimeline.h"],
+    deps = [
+        ":attribute_writeback",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_app",
+    srcs = ["EditorApp.cc"],
+    hdrs = ["EditorApp.h"],
+    deps = [
+        ":async_svg_document",
+        ":attribute_writeback",
+        ":command_queue",
+        ":undo_timeline",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "source_sync",
+    srcs = ["SourceSync.cc"],
+    hdrs = ["SourceSync.h"],
+    deps = [
+        ":change_classifier",
+        ":editor_app",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "tool",
+    hdrs = ["Tool.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "select_tool",
+    srcs = ["SelectTool.cc"],
+    hdrs = ["SelectTool.h"],
+    deps = [
+        ":attribute_writeback",
+        ":command_queue",
+        ":editor_app",
+        ":tool",
+        ":undo_timeline",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "render_pane_gesture",
+    srcs = ["RenderPaneGesture.cc"],
+    hdrs = ["RenderPaneGesture.h"],
+    deps = [
+        "//donner/editor:viewport_state",
+        "//donner/base",
+    ],
+)
