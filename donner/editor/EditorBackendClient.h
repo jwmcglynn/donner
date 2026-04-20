@@ -34,6 +34,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AddressBar.h"       // AddressBarStatusChip
 #include "donner/editor/SelectionOverlay.h"
+#include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -103,6 +104,8 @@ struct FrameResult {
   std::optional<AddressBarStatusChip> statusChip;
   /// Parse diagnostics from the most recent load / patch.
   std::vector<ParseDiagnostic> parseDiagnostics;
+  /// Document tree summary from the backend.
+  sandbox::FrameTreeSummary tree;
 };
 
 struct ExportResult {
@@ -174,6 +177,12 @@ public:
   [[nodiscard]] virtual std::future<FrameResult> undo() = 0;
   [[nodiscard]] virtual std::future<FrameResult> redo() = 0;
 
+  // ------------ tree selection ------------
+
+  [[nodiscard]] virtual std::future<FrameResult> selectElement(uint64_t entityId,
+                                                                uint64_t entityGeneration,
+                                                                uint8_t mode) = 0;
+
   // ------------ export ------------
 
   [[nodiscard]] virtual std::future<ExportResult> exportDocument(
@@ -195,6 +204,7 @@ public:
   [[nodiscard]] virtual const SelectionOverlay& selection() const = 0;
   [[nodiscard]] virtual const svg::RendererBitmap& latestBitmap() const = 0;
   [[nodiscard]] virtual std::optional<ParseDiagnostic> lastParseError() const = 0;
+  [[nodiscard]] virtual const sandbox::FrameTreeSummary& tree() const = 0;
 
 protected:
   EditorBackendClient() = default;

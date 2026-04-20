@@ -108,6 +108,9 @@ FrameResult MakeFrameResult(const sandbox::FramePayload& frame, svg::Renderer& r
     result.parseDiagnostics.push_back(std::move(pd));
   }
 
+  // Tree summary.
+  result.tree = frame.tree;
+
   return result;
 }
 
@@ -196,6 +199,17 @@ public:
 
   std::future<FrameResult> redo() override { return makeReadyFuture(core_.handleRedo()); }
 
+  // ------------ tree selection ------------
+
+  std::future<FrameResult> selectElement(uint64_t entityId, uint64_t entityGeneration,
+                                         uint8_t mode) override {
+    sandbox::SelectElementPayload payload;
+    payload.entityId = entityId;
+    payload.entityGeneration = entityGeneration;
+    payload.mode = mode;
+    return makeReadyFuture(core_.handleSelectElement(payload));
+  }
+
   // ------------ export ------------
 
   std::future<ExportResult> exportDocument(const ExportPayload& payload) override {
@@ -229,6 +243,7 @@ public:
   const SelectionOverlay& selection() const override { return selection_; }
   const svg::RendererBitmap& latestBitmap() const override { return latestBitmap_; }
   std::optional<ParseDiagnostic> lastParseError() const override { return lastParseError_; }
+  const sandbox::FrameTreeSummary& tree() const override { return tree_; }
 
 private:
   /// Processes a FramePayload synchronously and returns an already-ready future.
@@ -245,6 +260,7 @@ private:
     lastFrameId_ = result.frameId;
     selection_ = result.selection;
     latestBitmap_ = result.bitmap;
+    tree_ = result.tree;
     if (!result.parseDiagnostics.empty()) {
       lastParseError_ = result.parseDiagnostics.front();
     } else {
@@ -258,6 +274,7 @@ private:
   uint64_t lastFrameId_ = 0;
   SelectionOverlay selection_;
   svg::RendererBitmap latestBitmap_;
+  sandbox::FrameTreeSummary tree_;
   std::optional<ParseDiagnostic> lastParseError_;
 
   ToastCallback toastCallback_;

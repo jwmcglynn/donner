@@ -9,11 +9,14 @@
 /// See docs/design_docs/0023-editor_sandbox.md §S8–S9.
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/svg/SVGElement.h"
 
 namespace donner::editor::sandbox {
 
@@ -61,6 +64,10 @@ public:
   /// Handles kSetTool. Placeholder — returns current state.
   [[nodiscard]] FramePayload handleSetTool(const SetToolPayload& tool);
 
+  /// Handles kSelectElement. Resolves an entity from the wire handle, applies
+  /// the requested selection mode, and returns a frame.
+  [[nodiscard]] FramePayload handleSelectElement(const SelectElementPayload& sel);
+
   /// Handles kUndo.
   [[nodiscard]] FramePayload handleUndo();
 
@@ -78,10 +85,30 @@ public:
   [[nodiscard]] int viewportHeight() const { return viewportHeight_; }
 
 private:
+  /// Bump entity-handle generation, invalidating all outstanding wire handles.
+  void bumpEntityGeneration();
+
+  /// Walk the document tree and populate \p tree.
+  void populateTreeSummary(FrameTreeSummary& tree);
+
+  /// Get or assign a stable wire id for the given entity. Also records the
+  /// SVGElement so it can be resolved later.
+  uint64_t entityIdFor(entt::entity entity, const svg::SVGElement& element);
+
+  /// Resolve a wire handle back to an SVGElement, or nullopt if stale.
+  [[nodiscard]] std::optional<svg::SVGElement> resolveElement(uint64_t entityId,
+                                                              uint64_t entityGeneration) const;
+
   EditorApp editor_;
   int viewportWidth_ = 512;
   int viewportHeight_ = 384;
   uint64_t frameIdCounter_ = 1;
+
+  /// Entity handle bimap state.
+  uint64_t entityGeneration_ = 1;
+  uint64_t nextEntityId_ = 1;
+  std::unordered_map<entt::entity, uint64_t> entityToId_;
+  std::unordered_map<uint64_t, svg::SVGElement> idToElement_;
 };
 
 }  // namespace donner::editor::sandbox

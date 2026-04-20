@@ -84,6 +84,11 @@ enum class SessionOpcode : uint32_t {
   kUndo = 31,
   kRedo = 32,
 
+  /// Select a tree-view element by entity handle. The backend resolves
+  /// the `{entityId, entityGeneration}` pair from its bimap, applies the
+  /// requested selection mode, and responds with a `kFrame`.
+  kSelectElement = 33,
+
   /// Request the current source bytes (or a rendered raster) back.
   kExport = 40,
 

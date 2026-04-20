@@ -366,6 +366,7 @@ donner_cc_library(
     deps = [
         ":address_bar",
         "//donner/base",
+        "//donner/editor/sandbox:editor_api_codec",
         "//donner/editor/sandbox:session_protocol",
         "//donner/svg/renderer:renderer_interface",
     ],
