@@ -1,0 +1,20 @@
+--- a/emscripten_toolchain/env.sh
++++ b/emscripten_toolchain/env.sh
+@@ -4,3 +4,17 @@ export ROOT_DIR=${EXT_BUILD_ROOT:-$(pwd -P)}
+ export EMSCRIPTEN=$ROOT_DIR/$EM_BIN_PATH/emscripten
+ export EM_CONFIG=$ROOT_DIR/$EM_CONFIG_PATH
+ export EMSDK_PYTHON=$ROOT_DIR/$BAZEL_PYTHON_RELPATH
++
++# On macOS, rules_python's hermetic Python interpreter links libpython via
++# `@executable_path/../lib/libpython3.XX.dylib`. That relative lookup fails
++# on remote-execution workers that store action inputs in a flat,
++# content-addressable layout (notably NativeLink's `worker-fast` mode used by
++# bazel-re2 on deep-thought): the Python binary ends up at
++# `content/d/<hash>`, so dyld tries `content/../lib/libpython3.XX.dylib`
++# which does not exist. Setting DYLD_LIBRARY_PATH to the execroot-relative
++# Python lib dir makes dyld find the dylib there first, bypassing the
++# broken `@executable_path/..` rpath. Harmless on Linux and on macOS when
++# the rpath already resolves (dyld just finds the dylib at the first
++# search directory either way).
++PYTHON_LIB_DIR=$ROOT_DIR/$(dirname $(dirname $BAZEL_PYTHON_RELPATH))/lib
++export DYLD_LIBRARY_PATH="$PYTHON_LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"

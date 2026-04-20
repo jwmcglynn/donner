@@ -301,6 +301,18 @@ git_override(
 
 bazel_dep(name = "emsdk", version = "5.0.5", dev_dependency = True)
 
+# Patch emsdk's env.sh to set DYLD_LIBRARY_PATH so dyld can find
+# libpython3.XX.dylib when emcc runs on macOS remote-execution workers that
+# expose action inputs through a content-addressable-flat layout (the
+# hermetic Python's `@executable_path/../lib/` relative rpath otherwise
+# fails there). See the patch for the full explanation.
+single_version_override(
+    module_name = "emsdk",
+    version = "5.0.5",
+    patches = ["//third_party/patches:emsdk_env_sh_dyld_library_path.patch"],
+    patch_strip = 1,
+)
+
 #
 # SVG Viewer
 #
