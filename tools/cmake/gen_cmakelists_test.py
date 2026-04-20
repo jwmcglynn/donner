@@ -1,13 +1,17 @@
 """Unit tests for gen_cmakelists.py.
 
-These tests cover the offline/pure-Python helpers that don't require
-running bazel query. The full generation + validation flow is exercised
-by the --check mode (run from CI and presubmit.sh), not from here.
+These tests cover the offline helpers that don't require running bazel
+query. That includes the parser/validator helpers plus the opt-in CMake
+build-validation helper exercised against synthetic source trees.
 """
 
 import os
+import shutil
 import sys
+import tempfile
+import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 # Allow running as either a standalone script or a bazel py_test
@@ -200,6 +204,63 @@ class ExtractTargetsAndRefsTest(unittest.TestCase):
             defined, _, _ = g._extract_cmake_targets_and_refs(root)
             self.assertIn("real", defined)
             self.assertNotIn("fake", defined)
+
+
+@unittest.skipUnless(shutil.which("cmake"), "cmake is required for build validation tests")
+class CmakeBuildValidationTest(unittest.TestCase):
+    def test_reports_missing_cmake_command(self):
+        with tempfile.TemporaryDirectory() as source_dir_str:
+            source_dir = Path(source_dir_str)
+            build_dir = source_dir / "build"
+
+            with mock.patch.object(g.subprocess, "run", side_effect=FileNotFoundError):
+                error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
+
+            self.assertIsNotNone(error)
+            self.assertIn("cmake command not found", error)
+
+    def test_build_succeeds_for_valid_tree(self):
+        with tempfile.TemporaryDirectory() as source_dir_str:
+            source_dir = Path(source_dir_str)
+            build_dir = source_dir / "build"
+            (source_dir / "CMakeLists.txt").write_text(
+                textwrap.dedent(
+                    """\
+                    cmake_minimum_required(VERSION 3.20)
+                    project(cmake_build_validation_ok LANGUAGES C)
+                    add_library(smoke STATIC smoke.c)
+                    """
+                )
+            )
+            (source_dir / "smoke.c").write_text("int Smoke(void) { return 42; }\n")
+
+            error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
+
+            self.assertIsNone(error)
+
+    def test_build_reports_compile_failure(self):
+        with tempfile.TemporaryDirectory() as source_dir_str:
+            source_dir = Path(source_dir_str)
+            build_dir = source_dir / "build"
+            (source_dir / "CMakeLists.txt").write_text(
+                textwrap.dedent(
+                    """\
+                    cmake_minimum_required(VERSION 3.20)
+                    project(cmake_build_validation_fail LANGUAGES C)
+                    add_library(smoke STATIC smoke.c)
+                    """
+                )
+            )
+            (source_dir / "smoke.c").write_text(
+                '#include "missing_header_for_build_validation.h"\n'
+                "int Smoke(void) { return 42; }\n"
+            )
+
+            error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
+
+            self.assertIsNotNone(error)
+            self.assertIn("CMake build failed:", error)
+            self.assertIn("missing_header_for_build_validation.h", error)
 
 
 if __name__ == "__main__":

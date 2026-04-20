@@ -1393,6 +1393,73 @@ def _validate_generated_output(gen_root: Path, workspace: Path, generated_files:
     return errors
 
 
+def _format_command_error(prefix: str, command: List[str], output: str) -> str:
+    """Format a subprocess failure for human-readable diagnostics."""
+    rendered_output = output.strip() if output.strip() else "(no output captured)"
+    return f"{prefix}\n  {' '.join(command)}\n\n{rendered_output}"
+
+
+def _run_cmake_build_validation(
+    source_dir: Path,
+    build_dir: Path,
+    *,
+    jobs: Optional[int] = None,
+) -> Optional[str]:
+    """Configure and build a generated CMake tree.
+
+    Returns ``None`` on success, or a human-readable error string on failure.
+    """
+    parallel_jobs = max(1, jobs or os.cpu_count() or 1)
+
+    configure_cmd = ["cmake", "-S", ".", "-B", str(build_dir)]
+    try:
+        configure_result = subprocess.run(
+            configure_cmd,
+            cwd=source_dir,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    except FileNotFoundError:
+        return (
+            "CMake configure failed:\n"
+            f"  {' '.join(configure_cmd)}\n\n"
+            "cmake command not found. Install cmake to use --build validation."
+        )
+    if configure_result.returncode != 0:
+        return _format_command_error(
+            "CMake configure failed:",
+            configure_cmd,
+            configure_result.stdout,
+        )
+
+    build_cmd = ["cmake", "--build", str(build_dir), "--parallel", str(parallel_jobs)]
+    try:
+        build_result = subprocess.run(
+            build_cmd,
+            cwd=source_dir,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    except FileNotFoundError:
+        return (
+            "CMake build failed:\n"
+            f"  {' '.join(build_cmd)}\n\n"
+            "cmake command not found. Install cmake to use --build validation."
+        )
+    if build_result.returncode != 0:
+        return _format_command_error(
+            "CMake build failed:",
+            build_cmd,
+            build_result.stdout,
+        )
+
+    return None
+
+
 def main() -> None:
     """Main entry point to generate all CMakeLists.txt files."""
     global _check_mode
@@ -1408,12 +1475,21 @@ def main() -> None:
               "or any external dep is unmapped. Does not modify the workspace."),
     )
     parser.add_argument(
+        "--build",
+        action="store_true",
+        help=("With --check, also run 'cmake -S . -B <temp build dir>' followed by "
+              "'cmake --build' on the generated tree. This is slower than the "
+              "default static validation and is intended as an opt-in deep check."),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
         help="Write generated files to this directory instead of the workspace.",
     )
     args = parser.parse_args()
+    if args.build and not args.check:
+        parser.error("--build requires --check")
     _check_mode = args.check
 
     if args.check:
@@ -1452,6 +1528,7 @@ def main() -> None:
 
         print("Generating and validating CMakeLists.txt files...")
         errors: List[str] = []
+        build_error: Optional[str] = None
         try:
             generate_root()
             generate_all_packages()
@@ -1466,6 +1543,13 @@ def main() -> None:
 
             # Statically validate the generated output
             errors = _validate_generated_output(workspace, workspace, generated_set)
+            if args.build and not errors and not _unmapped_deps:
+                print("Static validation passed; configuring and building generated tree...")
+                with tempfile.TemporaryDirectory(prefix="donner-cmake-check-") as temp_dir:
+                    build_error = _run_cmake_build_validation(
+                        workspace,
+                        Path(temp_dir) / "build",
+                    )
         finally:
             # Remove anything newly created then restore originals
             for p in list(workspace.rglob("CMakeLists.txt")):
@@ -1476,13 +1560,18 @@ def main() -> None:
                 p = workspace / rel
                 p.write_bytes(content)
 
-        had_errors = bool(errors) or bool(_unmapped_deps)
+        had_errors = bool(errors) or bool(_unmapped_deps) or build_error is not None
         if errors:
             print(f"\n{'='*60}")
             print(f"CMakeLists.txt VALIDATION FAILED ({len(errors)} error(s))")
             print(f"{'='*60}")
             for e in errors:
                 print(f"  {e}")
+        if build_error:
+            print(f"\n{'='*60}")
+            print("CMakeLists.txt BUILD VALIDATION FAILED")
+            print(f"{'='*60}")
+            print(build_error)
         if _unmapped_deps:
             print(f"\nUnmapped external dependencies ({len(_unmapped_deps)}):")
             for msg in _unmapped_deps:
@@ -1494,7 +1583,10 @@ def main() -> None:
 
         if had_errors:
             sys.exit(1)
-        print("CMakeLists.txt validation passed.")
+        if args.build:
+            print("CMakeLists.txt validation and build passed.")
+        else:
+            print("CMakeLists.txt validation passed.")
         sys.exit(0)
     else:
         output_dir = args.output_dir

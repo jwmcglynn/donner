@@ -7,7 +7,8 @@
 # `bazel test //...` catches banned source patterns automatically. This
 # script adds the two checks that can't live inside bazel test today:
 #
-#   - `gen_cmakelists.py --check` (can't run bazel query inside bazel test)
+#   - `gen_cmakelists.py --check` (can't run bazel query inside bazel test;
+#     use `--check --build` separately when touching the CMake mirror)
 #   - clang-format on modified files (needs the local `clang-format` binary)
 #
 # Run before opening a PR. Designed to be fast (<2 min for lints) and
