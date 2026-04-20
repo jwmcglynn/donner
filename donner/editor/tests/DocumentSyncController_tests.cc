@@ -2,10 +2,10 @@
 
 #include <gtest/gtest.h>
 
-#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
-#include "donner/editor/backend_lib/SelectTool.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/backend_lib/EditorApp.h"
+#include "donner/editor/backend_lib/SelectTool.h"
 
 namespace donner::editor {
 namespace {

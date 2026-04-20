@@ -9,11 +9,11 @@
 #include <thread>
 
 #include "donner/base/Transform.h"
-#include "donner/editor/backend_lib/AsyncSVGDocument.h"
-#include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/backend_lib/AsyncSVGDocument.h"
+#include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
