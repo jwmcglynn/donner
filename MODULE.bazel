@@ -171,6 +171,10 @@ bazel_dep(name = "toolchains_llvm", version = "1.7.0", dev_dependency = True)
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm", dev_dependency = True)
 
+# Default toolchain: auto-detects exec platform from the client's host. Used
+# for local (non-RE) builds on klein (macOS aarch64) and dev1 (Linux aarch64).
+# Also keeps the repo name `@llvm_toolchain` / `@llvm_toolchain_llvm` stable
+# for references from build_defs/rules.bzl and elsewhere.
 llvm.toolchain(
     name = "llvm_toolchain",
     llvm_version = "21.1.6",
@@ -189,10 +193,77 @@ llvm.sysroot(
     targets = ["linux-x86_64"],
     label = "@sysroot_linux_x86_64//:sysroot",
 )
-use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 
-# NOTE: This to use this toolchain specify --config=latest_llvm
-# This is enabled by default on Linux, disabled by default on macOS
+# Per-exec-platform toolchain variants used for cross-target remote
+# execution. Each declares an explicit `exec_os` / `exec_arch`, which makes
+# `toolchains_llvm` (1) download the matching clang tarball for that exec
+# platform and (2) stamp the generated `toolchain(...)` entries with
+# `exec_compatible_with = [<that os/arch>]` so Bazel's resolver picks them
+# only when the RE worker matches. Without this, the client's host-resolved
+# clang (e.g. Mach-O on klein) gets uploaded as an input to a Linux RE
+# worker and fails with "Exec format error". See event-horizon design
+# 0002 / 0004 for the cross-RE routing rationale.
+
+# bazel-re1 (NixOS aarch64): Linux client → Linux worker, or macOS client →
+# Linux worker via --config=re-linux.
+llvm.toolchain(
+    name = "llvm_toolchain_linux_aarch64",
+    llvm_version = "21.1.6",
+    exec_os = "linux",
+    exec_arch = "aarch64",
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_aarch64",
+    targets = ["linux-aarch64"],
+    label = "@sysroot_linux_aarch64//:sysroot",
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_aarch64",
+    targets = ["linux-x86_64"],
+    label = "@sysroot_linux_x86_64//:sysroot",
+)
+
+# Reserved for future Linux x86_64 RE workers (none today, but keeps the
+# module symmetric and avoids a future MODULE.bazel churn).
+llvm.toolchain(
+    name = "llvm_toolchain_linux_x86_64",
+    llvm_version = "21.1.6",
+    exec_os = "linux",
+    exec_arch = "x86_64",
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_x86_64",
+    targets = ["linux-aarch64"],
+    label = "@sysroot_linux_aarch64//:sysroot",
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_x86_64",
+    targets = ["linux-x86_64"],
+    label = "@sysroot_linux_x86_64//:sysroot",
+)
+
+# bazel-re2 (macOS aarch64): Linux client → macOS worker via
+# --config=re-macos. No sysroot — macOS uses the Xcode SDK present on the
+# RE worker.
+llvm.toolchain(
+    name = "llvm_toolchain_macos_aarch64",
+    llvm_version = "21.1.6",
+    exec_os = "darwin",
+    exec_arch = "aarch64",
+)
+
+use_repo(
+    llvm,
+    "llvm_toolchain",
+    "llvm_toolchain_llvm",
+    "llvm_toolchain_linux_aarch64",
+    "llvm_toolchain_linux_x86_64",
+    "llvm_toolchain_macos_aarch64",
+)
+
+# NOTE: To use any of these toolchains specify --config=latest_llvm (which
+# registers them via --extra_toolchains in .bazelrc). This is enabled by
+# default on Linux, disabled by default on macOS.
 # register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
 
 bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)
