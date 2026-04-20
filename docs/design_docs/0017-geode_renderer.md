@@ -1429,12 +1429,22 @@ cleanup.
 
 ### Phase 4: Text Rendering
 
-- [ ] Implement `GeodeTextRenderer`: glyph outline extraction from font data → Slug encoding.
-- [ ] Implement `GeodeGlyphCacheComponent`: per-glyph band data cache in ECS.
-- [ ] Implement instanced glyph rendering: per-character position/transform/color.
-- [ ] Integrate with `TextShaper` (text-full config) and `TextLayout` (base config).
-- [ ] Implement `drawText` on `RendererGeode`.
-- [ ] Run text-related renderer tests across base, text-full, and Geode configs.
+- [x] Implement glyph outline extraction: `RendererGeode::drawText` extracts
+  per-glyph outlines via `TextEngine::glyphOutline` and routes them through
+  the existing `Path` → `GeoEncoder` pipeline (no separate `GeodeTextRenderer`
+  class — glyph outlines reuse the fill pipeline).
+- [x] Integrate with `TextShaper` (text-full config) and `TextLayout` (base config).
+- [x] Implement `drawText` on `RendererGeode` (landed in #543).
+- [x] Run text-related renderer tests across base, text-full, and Geode configs —
+  the resvg suite's `text/*` category is gated off Geode builds without
+  `--config=text` / `--config=text-full`, and runs live on the text builds.
+- [ ] Optimize: `GeodeGlyphCacheComponent` for per-glyph band data cache in ECS.
+  Today every character re-encodes from the outline every frame; caching the
+  encoded bands keyed by (font, glyph-id, pixel-height) would amortize that
+  cost. Deferred as a Phase 5-style perf optimization once the Phase 5b
+  parity push finishes.
+- [ ] Optimize: instanced glyph rendering (per-character position/transform/color).
+  Complementary to the cache above; requires the Phase 5 batch-draw refactor.
 
 ### Phase 5: ECS Cache Integration and Performance
 
@@ -1472,10 +1482,12 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   exceptions live in `geodeOverrides()` with TODO comments describing the
   root cause to investigate. Filter-dependent tests (e.g., `feImage`)
   auto-skip via `requireFeature(FilterEffects)` until Phase 7 lands.
-- [ ] **Root-cause the current `geodeOverrides()` entries and shrink the
-  table.** Each TODO in the override map corresponds to a real Geode
-  divergence that should be fixed (thin-stroke AA, conical radial solver,
-  nested-SVG clip). The long-term goal is an empty `geodeOverrides()` map.
+- [x] **Root-cause the current `geodeOverrides()` entries and shrink the
+  table.** The Phase 5b parity push deleted 7 of 8 `geodeOverrides()` entries
+  after root-causing and fixing the underlying divergences; the lone
+  remaining entry is `Ghostscript_Tiger.png` with a narrowed 4500-px
+  threshold (was 6000 — actual diff is ~3944 px on 4× MSAA stroke edges).
+  The long-term goal of an empty map is essentially reached.
 - [x] **Unblock the resvg test suite for Geode.** A `geode` variant is
   now live on `donner/svg/renderer/tests:resvg_test_suite`. The category
   auto-gate in `resvg_test_suite.cc::geodeCategoryGate` cleanly skips
@@ -1515,14 +1527,39 @@ pattern as the resvg suite's `getTestsWithPrefix` map.
   max — a follow-up, not a functional gap) and
   `painting/stroke-linejoin/miter` (bevel-fallback corner drift).
 - [x] **Track the pass-rate delta between Geode and the full-Skia renderer.**
-  After #504, `resvg_test_suite_geode_text` is **596 passing / 0
+  After #504, `resvg_test_suite_geode_text` was **596 passing / 0
   failing / 765 skipped via feature gates** on top of the category
-  auto-gate infrastructure. Skia and tiny-skia backends run the same
-  set of categories at strict thresholds and are unchanged. The
-  remaining Geode-specific skips are the four per-test TODOs listed
-  above plus the whole-category gates for features not yet
-  implemented (filters, text, clipping, markers, mix-blend-mode,
-  isolation).
+  auto-gate infrastructure.
+
+  The Phase 5b parity push that followed took the unskipped-failure
+  count from 153 down to roughly 35 (−77%). Notable fixes that landed:
+    * Per-primitive subregion clipping in compute dispatches
+      (`filter_subregion_clip.wgsl`) — unlocked `filters/feFlood/*`,
+      `filters/feTile/*`, `filter/multiple-primitives-{1,2,3}`,
+      `filter/negative-subregion`, etc.
+    * Ancestor-CTM projection through the filter graph — unlocked
+      `feGaussianBlur/complex-transform`, `feMerge/complex-transform`,
+      the `filters/filter/*transform*` suite.
+    * feOffset layer-expansion + feImage fragment-ref round-trip
+      (previously every same-document-ref feImage test was silently
+      failing because `createOffscreenInstance()` returned null).
+    * feColorMatrix/feConvolveMatrix/feComponentTransfer input
+      colorspace (`filter_color_space_convert.wgsl` now actually
+      dispatched from the primary loop).
+    * feTurbulence Perlin tables matching tiny-skia's librsvg port;
+      negative-`baseFrequency` spec compliance.
+    * feConvolveMatrix `edgeMode="none"` + oversized kernels.
+    * 30-second per-test-case SIGALRM watchdog via
+      `//donner/base:gtest_timeout_main` so a GPU-driver hang can't
+      chew a 900 s Bazel timeout.
+
+  The remaining Geode-specific skips are a short list of narrower
+  bugs (feComponentTransfer gradient+mixed-types, feTurbulence
+  complex-transform CTM cluster, F7b/c marker cusp tangent in
+  `Path.cc`, 4× MSAA thin-stroke fringe on nested `<image>` data
+  URLs) plus the `painting/marker/*`, `painting/mix-blend-mode`,
+  `painting/isolation` whole-category CI-runtime-budget gates which
+  are there for llvmpipe perf, not correctness.
 
 ### Phase 6: Embeddability
 
