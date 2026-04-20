@@ -16,7 +16,7 @@ constexpr std::string_view kTrivialSvg =
        </svg>)";
 
 // OverlayRenderer is hard to unit-test in isolation because the canvas
-// primitives end up in a Skia/TinySkia frame buffer that we don't read
+// primitives end up in a TinySkia frame buffer that we don't read
 // back at the unit-test layer. The test plan in `editor.md` calls these
 // out as belonging to the framebuffer-golden tier (M4).
 //
@@ -390,10 +390,10 @@ TEST(OverlayRendererTest, MultiElementSpanDrawsPathOutlinesForEachSelectedElemen
   EXPECT_TRUE(anyNonZero(98, 98, 102, 102)) << "no chrome around r2 top-left corner";
 }
 
-// The selection AABB moved to the ImGui draw list. The Skia overlay
-// must stay path-only or the editor will double-draw the combined
-// rect on top of the immediate-mode chrome.
-TEST(OverlayRendererTest, MultiSelectDoesNotDrawCombinedAabbInSkiaOverlay) {
+// The selection AABB moved to the ImGui draw list. The overlay must
+// stay path-only or the editor will double-draw the combined rect on
+// top of the immediate-mode chrome.
+TEST(OverlayRendererTest, MultiSelectDoesNotDrawCombinedAabbInOverlay) {
   constexpr std::string_view kTwoRectsSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
               <rect id="r1" x="20"  y="20"  width="20" height="20" fill="red"/>
@@ -445,9 +445,9 @@ TEST(OverlayRendererTest, MultiSelectDoesNotDrawCombinedAabbInSkiaOverlay) {
     return false;
   };
   EXPECT_FALSE(anyNonZeroNear(180, 20, 2))
-      << "combined-AABB top-right corner still appears in the Skia overlay";
+      << "combined-AABB top-right corner still appears in the overlay";
   EXPECT_FALSE(anyNonZeroNear(20, 180, 2))
-      << "combined-AABB bottom-left corner still appears in the Skia overlay";
+      << "combined-AABB bottom-left corner still appears in the overlay";
 }
 
 // Marquee chrome also moved to the ImGui draw list. The path overlay

@@ -11,7 +11,6 @@ const char* BackendHintName(BackendHint hint) {
   switch (hint) {
     case BackendHint::kUnspecified: return "unspecified";
     case BackendHint::kTinySkia:   return "tiny_skia";
-    case BackendHint::kSkia:       return "skia";
     case BackendHint::kGeode:      return "geode";
   }
   return "unknown";

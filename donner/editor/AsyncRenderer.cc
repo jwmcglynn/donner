@@ -45,8 +45,8 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
 
 void AsyncRenderer::workerLoop() {
   // Construct the Renderer on the worker thread so all its backend-owned
-  // resources (WebGPU device/queue/textures under Geode, Skia surfaces
-  // under Skia, etc.) are created and used from a single thread. Under
+  // resources (WebGPU device/queue/textures under Geode, etc.) are
+  // created and used from a single thread. Under
   // Emscripten pthreads this is load-bearing: `WebGPU.Internals.jsObjects`
   // is per-worker, and crossing thread boundaries triggers a
   // `getJsObject` assert on the first `wgpuDeviceCreateTexture`.

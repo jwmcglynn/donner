@@ -65,7 +65,7 @@ public:
   /// element using `canvasFromDoc`. Selection AABBs and marquee chrome
   /// are drawn directly via the ImGui draw list in `main.cc` so clicks
   /// and marquee drags can update in the same frame without waiting for
-  /// a Skia overlay re-rasterize.
+  /// an overlay re-rasterize.
   static void drawChromeWithTransform(svg::Renderer& renderer,
                                       std::span<const svg::SVGElement> selection,
                                       const Transform2d& canvasFromDoc);

@@ -807,7 +807,7 @@ int main(int argc, char** argv) {
   // *second* renderer instance, layered on top of the document
   // texture at display time. The AABB and marquee moved to the ImGui
   // draw list so click / drag feedback shows up in the same frame
-  // without waiting for a Skia re-rasterize.
+  // without waiting for a CPU re-rasterize.
   donner::svg::Renderer overlayRenderer;
   GLuint overlayTexture = 0;
   glGenTextures(1, &overlayTexture);
@@ -960,7 +960,7 @@ int main(int argc, char** argv) {
         app.document().currentFrameVersion(), displayedDocVersion);
   };
 
-  // Rasterize the Skia path-outline overlay for the current selection
+  // Rasterize the path-outline overlay for the current selection
   // and upload it to `overlayTexture`. Must be called only when the
   // worker thread is idle (caller's responsibility). When the current
   // document version matches the displayed doc version (the click /
@@ -1917,7 +1917,7 @@ int main(int argc, char** argv) {
       if (pendingClick.has_value() && !asyncRenderer.isBusy()) {
         selectTool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
         refreshPendingSelectionBoundsCache();
-        // Re-rasterize the Skia overlay texture NOW (same frame, before
+        // Re-rasterize the overlay texture NOW (same frame, before
         // `AddImage` is consumed at end-of-frame) so the path outline
         // updates together with the AABB. The overlay block earlier in
         // this frame ran with the pre-click selection; without this
