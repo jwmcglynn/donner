@@ -346,11 +346,42 @@ algorithm.
     `:1664`, `:1735`, `:1890`, `:1973`) into the outer frame encoder.
 - [ ] Milestone 6: Batch draws sharing pipeline state (0017 Phase 5
   bullet 6).
-  - [ ] Sort the per-frame draw list by `(pipeline, bind-group prefix,
-    scissor/clip)` and collapse contiguous same-pipeline draws into a
-    single `RenderPass` segment.
-  - [ ] Instanced path draws for repeated `<use>` of the same encoded
-    path (leverages Milestone 2 cache identity).
+  - [x] **M6-A: instrumentation.** `drawCalls` + `pipelineSwitches`
+    counters added to `GeodeCounters`, wired into every
+    `pass.draw(...)` and pipeline-tracker switch site in
+    `GeoEncoder` / `GeodeTextureEncoder`. Baseline ceilings
+    asserted in `GeodePerf_tests.cc`. _Landed 2026-04-20._
+
+    Key finding: Lion (132 paths) fires `drawCalls=132` /
+    `pipelineSwitches=1`. The state tracker already collapses
+    contiguous same-pipeline draws onto a single `setPipeline` —
+    M6's Bullet 1 ("sort + collapse contiguous same-pipeline
+    draws") has zero headroom on solid-fill fixtures, and
+    reordering across paint order would break SVG semantics
+    anyway. The only lever that moves `drawCalls` on unchanged
+    input is Bullet 2 (`<use>` instancing).
+
+  - [ ] Bullet 1 (sort / collapse contiguous same-pipeline draws):
+    **deprioritised.** The state tracker already delivers this
+    within a single render pass; the only residual win requires
+    reordering across paint order, which SVG forbids. Unlikely
+    to ship without M1.f.2 (dynamic-offset bind groups) first
+    exposing a different bind-group amortization regime.
+  - [ ] Bullet 2 (instanced `<use>` draws): **next milestone.**
+    Motivating fixture: `docs/img/arch_container.svg` with 1028
+    `<use>` elements — today that's 1028 `drawCalls`; target is
+    O(distinct-source-entity × distinct-paint) per render pass.
+    Scope for the first cut: consecutive `<use>` siblings that
+    share the same `dataEntity` AND same resolved solid paint
+    AND no stroke/mask/filter/clip → one instanced GPU draw with
+    per-instance transforms via a new storage-buffer binding.
+    Shader changes in `slug_fill.wgsl` + alpha-coverage variant;
+    new `GeoEncoder::fillPathInstanced` entry point. One attempt
+    via a delegated agent stalled without committing code; the
+    next attempt should pin the agent to a driver-side
+    detection-only commit first (counter: `instancedGroupsDetected`)
+    so the instrumentation + fixture land before the shader
+    rewrite risk.
 - [ ] Milestone 7: Opportunistic cleanups.
   - [ ] GPU-side `takeSnapshot` unpremultiply (`RendererGeode.cc:2322-2353`)
     via a one-dispatch compute kernel writing into a CopySrc buffer;
