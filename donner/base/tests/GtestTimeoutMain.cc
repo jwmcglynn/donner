@@ -17,6 +17,7 @@
  * the culprit is obvious.
  */
 
+#include <gtest/gtest.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -27,8 +28,6 @@
 #include <cstring>
 #include <string>
 #include <string_view>
-
-#include <gtest/gtest.h>
 
 namespace {
 
@@ -91,7 +90,7 @@ unsigned int ResolveTimeoutSeconds(int argc, char** argv) {
 }
 
 class TimeoutListener : public ::testing::EmptyTestEventListener {
- public:
+public:
   explicit TimeoutListener(unsigned int seconds) : seconds_(seconds) {}
 
   void OnTestStart(const ::testing::TestInfo& info) override {
@@ -99,11 +98,9 @@ class TimeoutListener : public ::testing::EmptyTestEventListener {
     alarm(seconds_);
   }
 
-  void OnTestEnd(const ::testing::TestInfo& /*info*/) override {
-    alarm(0);
-  }
+  void OnTestEnd(const ::testing::TestInfo& /*info*/) override { alarm(0); }
 
- private:
+private:
   unsigned int seconds_;
 };
 

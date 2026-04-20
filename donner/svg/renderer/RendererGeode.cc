@@ -788,9 +788,9 @@ struct RendererGeode::Impl {
     wgpu::TextureDescriptor layerMsaaDesc = {};
     components::FilterGraph filterGraph;
     Box2d filterRegion;
-    Transform2d deviceFromFilter;    // Full CTM at push time.
-    int filterBufferOffsetX = 0;     // Expansion into negative device X.
-    int filterBufferOffsetY = 0;     // Expansion into negative device Y.
+    Transform2d deviceFromFilter;  // Full CTM at push time.
+    int filterBufferOffsetX = 0;   // Expansion into negative device X.
+    int filterBufferOffsetY = 0;   // Expansion into negative device Y.
   };
   std::vector<FilterStackFrame> filterStack;
 
@@ -2365,7 +2365,7 @@ void RendererGeode::popFilterLayer() {
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
     filteredTexture = impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture,
-                                                    frame.filterRegion, bufferDeviceFromFilter);
+                                                   frame.filterRegion, bufferDeviceFromFilter);
   }
 
   // Restore outer target and create a fresh encoder that preserves its

@@ -1,13 +1,12 @@
 /// @file
 /// Tests for the Geode embedded-device code path (Phase 6).
 
-#include "donner/svg/renderer/RendererGeode.h"
-
 #include <gtest/gtest.h>
 
 #include <cstdint>
 
 #include "donner/base/Vector2.h"
+#include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"

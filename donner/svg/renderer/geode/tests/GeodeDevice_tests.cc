@@ -12,9 +12,8 @@ namespace donner::geode {
 /// If this fails, the entire Geode backend is non-functional.
 TEST(GeodeDevice, CreateHeadlessSucceeds) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr)
-      << "Failed to create headless Dawn device. Check driver availability "
-         "(Metal on macOS, Vulkan/SwiftShader on Linux).";
+  ASSERT_NE(device, nullptr) << "Failed to create headless Dawn device. Check driver availability "
+                                "(Metal on macOS, Vulkan/SwiftShader on Linux).";
 
   EXPECT_TRUE(static_cast<bool>(device->device()));
   EXPECT_TRUE(static_cast<bool>(device->queue()));
@@ -93,7 +92,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   colorAttachment.view = target.createView();
   colorAttachment.loadOp = wgpu::LoadOp::Clear;
   colorAttachment.storeOp = wgpu::StoreOp::Store;
-  colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};  // Red.
+  colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};        // Red.
   colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // Dawn requires this on 2D views.
 
   wgpu::RenderPassDescriptor passDesc = {};
@@ -128,8 +127,8 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
     bool ok = false;
   } mapState;
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message,
-                      void* userdata1, void* /*userdata2*/) {
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1,
+                      void* /*userdata2*/) {
     auto* s = static_cast<MapState*>(userdata1);
     s->ok = (status == WGPUMapAsyncStatus_Success);
     s->done = true;
@@ -146,8 +145,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   }
   EXPECT_TRUE(mapState.ok) << "buffer map failed";
 
-  const uint8_t* pixels =
-      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
+  const uint8_t* pixels = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
   ASSERT_NE(pixels, nullptr);
 
   // First pixel should be red (255, 0, 0, 255).

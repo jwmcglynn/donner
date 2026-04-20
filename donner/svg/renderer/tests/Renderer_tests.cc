@@ -153,8 +153,7 @@ protected:
     renderAndCompare(document, svgFilename, goldenFilename, params);
   }
 
-  SVGDocument loadSVGWithResources(const char* filename,
-                                   parser::SVGParser::Options options = {}) {
+  SVGDocument loadSVGWithResources(const char* filename, parser::SVGParser::Options options = {}) {
     std::ifstream file(filename);
     EXPECT_TRUE(file) << "Failed to open file: " << filename;
     if (!file) {
@@ -173,8 +172,7 @@ protected:
     const std::filesystem::path resourceDir = filePath.parent_path();
 
     SVGDocument::Settings settings;
-    settings.resourceLoader =
-        std::make_unique<SandboxedFileResourceLoader>(resourceDir, filePath);
+    settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(resourceDir, filePath);
 
     ParseWarningSink disabled = ParseWarningSink::Disabled();
     auto maybeResult =
@@ -394,11 +392,11 @@ TEST_F(RendererTests, DonnerIcon) {
 }
 
 TEST_F(RendererTests, DonnerSplash) {
-  this->compareWithGolden(
-      "donner_splash.svg", "donner/svg/renderer/testdata/golden/donner_splash.png",
-      parser::SVGParser::Options(),
-      ImageComparisonParams::WithThreshold(0.1f).requireFeature(
-          RendererBackendFeature::FilterEffects, "filter effects"));
+  this->compareWithGolden("donner_splash.svg",
+                          "donner/svg/renderer/testdata/golden/donner_splash.png",
+                          parser::SVGParser::Options(),
+                          ImageComparisonParams::WithThreshold(0.1f).requireFeature(
+                              RendererBackendFeature::FilterEffects, "filter effects"));
 }
 
 TEST_F(RendererTests, SVG2_e_use_001) {
@@ -477,7 +475,6 @@ TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
                           "donner/svg/renderer/testdata/golden/z0rly_test6.png",
                           parser::SVGParser::Options());
 }
-
 
 }  // namespace
 }  // namespace donner::svg

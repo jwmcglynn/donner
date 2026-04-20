@@ -158,10 +158,9 @@ private:
   /// @param currentBuffer The "previous" output buffer.
   /// @param sourceGraphic The original source-graphic texture.
   /// @return The composited texture.
-  wgpu::Texture applyMerge(
-      const svg::components::FilterNode& node,
-      const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-      const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic);
+  wgpu::Texture applyMerge(const svg::components::FilterNode& node,
+                           const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
+                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.
