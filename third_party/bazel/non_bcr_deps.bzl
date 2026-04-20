@@ -8,7 +8,6 @@ Bazel Central Registry. The extension is imported from //MODULE.bazel with
 Each dep listed here is load-bearing for a feature that is opt-in and NOT
 shipped over BCR:
 
-- skia            : Skia renderer backend       (--config=skia)
 - harfbuzz        : Text shaping                (--config=text-full)
 - woff2           : WOFF2 font format           (--config=text-full)
 - wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_dawn=true)
@@ -39,13 +38,6 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository", "new_git_r
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 def _non_bcr_deps_impl(_mctx):
-    # Skia renderer backend. Gated on //donner/svg/renderer:renderer_backend_skia.
-    git_repository(
-        name = "skia",
-        commit = "d945cbcbbb5834245256e883803c2704f3a32e18",
-        remote = "https://github.com/google/skia",
-    )
-
     # WOFF2 text support. Gated on //donner/svg/renderer:text_full_enabled.
     new_git_repository(
         name = "woff2",

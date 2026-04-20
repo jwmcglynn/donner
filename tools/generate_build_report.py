@@ -247,7 +247,6 @@ def _normalize_external_dependency_repo(label: str) -> typing.Optional[str]:
             "bazel",
             "rules_",
             "platforms",
-            "skia_user_config",
             "local_config_",
             "apple_support",
             "xcode_",
