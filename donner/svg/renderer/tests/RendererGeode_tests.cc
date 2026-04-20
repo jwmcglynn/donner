@@ -735,6 +735,66 @@ TEST_F(RendererGeodeTest, FilterColorMatrixLuminanceToAlpha) {
   EXPECT_EQ(outside[3], 0u) << "Outside should be transparent";
 }
 
+TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode offsetNode;
+  components::filter_primitive::Offset offset;
+  offset.dx = 0.0;
+  offset.dy = 0.0;
+  offsetNode.primitive = offset;
+  offsetNode.inputs.push_back(components::FilterStandardInput::SourceAlpha);
+  graph.nodes.push_back(offsetNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(200, 100, 50, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  const auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 0u);
+  EXPECT_EQ(center[1], 0u);
+  EXPECT_EQ(center[2], 0u);
+  EXPECT_EQ(center[3], 255u);
+}
+
+TEST_F(RendererGeodeTest, FilterEmptyMergeProducesTransparentBlack) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode mergeNode;
+  mergeNode.primitive = components::filter_primitive::Merge{};
+  graph.nodes.push_back(mergeNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  const auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 0u);
+  EXPECT_EQ(center[1], 0u);
+  EXPECT_EQ(center[2], 0u);
+  EXPECT_EQ(center[3], 0u);
+}
+
 /// feFlood: fill the filter region with a constant color.
 TEST_F(RendererGeodeTest, FilterFloodFillsSubregion) {
   RendererGeode renderer = createRenderer();

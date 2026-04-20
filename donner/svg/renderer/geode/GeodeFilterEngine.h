@@ -144,6 +144,11 @@ private:
   wgpu::Texture applyColorMatrix(const wgpu::Texture& input,
                                  const svg::components::filter_primitive::ColorMatrix& primitive);
 
+  /// Extract SourceAlpha (0,0,0,A) from a SourceGraphic texture.
+  /// @param input The source-graphic texture.
+  /// @return A texture whose RGB are zero and alpha matches the input alpha.
+  wgpu::Texture applySourceAlpha(const wgpu::Texture& input);
+
   /// Fill the output with a constant flood color via compute shader.
   /// @param width Output texture width.
   /// @param height Output texture height.
@@ -160,7 +165,8 @@ private:
   /// @return The composited texture.
   wgpu::Texture applyMerge(const svg::components::FilterNode& node,
                            const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic);
+                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
+                           const wgpu::Texture* sourceAlpha);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.
@@ -242,8 +248,8 @@ private:
   /// @return The lit texture.
   wgpu::Texture applyDiffuseLighting(
       const wgpu::Texture& input,
-      const svg::components::filter_primitive::DiffuseLighting& primitive, double scaleX,
-      double scaleY);
+      const svg::components::filter_primitive::DiffuseLighting& primitive,
+      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter);
 
   /// Phong specular lighting (feSpecularLighting).
   /// @param input The input texture (alpha = height map).
@@ -253,8 +259,8 @@ private:
   /// @return The lit texture.
   wgpu::Texture applySpecularLighting(
       const wgpu::Texture& input,
-      const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
-      double scaleY);
+      const svg::components::filter_primitive::SpecularLighting& primitive,
+      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter);
 
   /// Drop-shadow composite (feDropShadow): blur alpha, offset, flood, source-over.
   /// @param input The input texture.

@@ -773,27 +773,6 @@ struct RendererGeode::Impl {
   };
   std::vector<LayerStackFrame> layerStack;
 
-  /// Phase 7: state for an in-progress filter layer. Captures all draws
-  /// between `pushFilterLayer` / `popFilterLayer` into an offscreen texture,
-  /// then runs the stored `FilterGraph` through `GeodeFilterEngine` and
-  /// composites the result back onto the outer target.
-  struct FilterStackFrame {
-    std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
-    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
-    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
-    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
-    /// Descriptors captured at push for M4.2 pool release.
-    wgpu::TextureDescriptor layerDesc = {};
-    wgpu::TextureDescriptor layerMsaaDesc = {};
-    components::FilterGraph filterGraph;
-    Box2d filterRegion;
-    Transform2d deviceFromFilter;  // Full CTM at push time.
-    int filterBufferOffsetX = 0;   // Expansion into negative device X.
-    int filterBufferOffsetY = 0;   // Expansion into negative device Y.
-  };
-  std::vector<FilterStackFrame> filterStack;
-
   /// Phase 7: GPU filter-graph executor (owns compute pipelines).
   std::unique_ptr<geode::GeodeFilterEngine> filterEngine;
 
@@ -896,7 +875,29 @@ struct RendererGeode::Impl {
     /// until `popClip` hands them back to the M4.2 texture pool.
     std::vector<PendingRelease> maskLayerTextures;
   };
+
+  /// Phase 7: state for an in-progress filter layer. Captures all draws
+  /// between `pushFilterLayer` / `popFilterLayer` into an offscreen texture,
+  /// then runs the stored `FilterGraph` through `GeodeFilterEngine` and
+  /// composites the result back onto the outer target.
+  struct FilterStackFrame {
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
+    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
+    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
+    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    /// Descriptors captured at push for M4.2 pool release.
+    wgpu::TextureDescriptor layerDesc = {};
+    wgpu::TextureDescriptor layerMsaaDesc = {};
+    components::FilterGraph filterGraph;
+    Box2d filterRegion;
+    Transform2d deviceFromFilter;  // Full CTM at push time.
+    int filterBufferOffsetX = 0;   // Expansion into negative device X.
+    int filterBufferOffsetY = 0;   // Expansion into negative device Y.
+    std::vector<ClipStackEntry> savedClipStack;
+  };
   std::vector<ClipStackEntry> clipStack;
+  std::vector<FilterStackFrame> filterStack;
 
   /// Recompute the intersection of every rectangular clip entry on
   /// `clipStack` and apply it to the active encoder as a scissor,
@@ -2328,6 +2329,12 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.deviceFromFilter = impl_->deviceFromLocalTransform;
   frame.filterBufferOffsetX = filterBufferOffsetX;
   frame.filterBufferOffsetY = filterBufferOffsetY;
+  frame.savedClipStack = std::move(impl_->clipStack);
+
+  // SVG paints into SourceGraphic first, then filters, then applies clip-path/mask.
+  // Capture the filter input without the outer clip stack and reapply those clips
+  // when compositing the filtered result back to the parent target.
+  impl_->clipStack.clear();
 
   impl_->target = layerTexture;
   impl_->msaaTarget = layerMsaaTexture;
@@ -2336,9 +2343,6 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
       layerMsaaTexture, layerTexture, impl_->frameCommandEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
-  impl_->filterStack.push_back(std::move(frame));
-  // The filter layer inherits the outer clip stack.
-  impl_->updateEncoderScissor();
 
   // Apply the buffer offset to the current transform so content at negative device coordinates
   // renders into the expanded region. Subsequent setTransform calls will also pick up the offset.
@@ -2346,6 +2350,19 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->deviceFromLocalTransform =
         impl_->deviceFromLocalTransform * Transform2d::Translate(filterBufferOffsetX, filterBufferOffsetY);
   }
+
+  // Per SVG Filter Effects § filter region: pixels outside the filter region are
+  // transparent black for filter-primitive purposes. Scissor source draws to the
+  // filter region's device-space AABB so the SourceGraphic fed into filter
+  // primitives (e.g. feGaussianBlur) respects that boundary.
+  Impl::ClipStackEntry filterClipEntry;
+  filterClipEntry.pixelRect = impl_->currentTransform.transformBox(region);
+  filterClipEntry.valid = true;
+  impl_->clipStack.push_back(std::move(filterClipEntry));
+
+  impl_->filterStack.push_back(std::move(frame));
+  // Refresh scissor to the intersection of the outer clip stack and the filter region.
+  impl_->updateEncoderScissor();
 }
 
 void RendererGeode::popFilterLayer() {
@@ -2355,6 +2372,7 @@ void RendererGeode::popFilterLayer() {
   }
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
+  impl_->clipStack = std::move(frame.savedClipStack);
 
   if (!frame.layerTexture) {
     return;  // Placeholder frame from the headless/error path.
