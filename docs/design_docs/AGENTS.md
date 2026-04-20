@@ -5,10 +5,11 @@ All design documents live under `docs/design_docs/`.
 ## Numbering
 
 - New docs take the next free `NNNN-short_name.md` number.
-- If two docs land on the same number from parallel branches, the later
-  one adds a `-2` suffix (`NNNN-2-short_name.md`). Do not renumber either
-  doc — external references stay stable and the suffix makes the
-  collision visible. Third collider: `-3`, and so on.
+- **Pre-merge collision** (both docs unmerged): the second doc renumbers
+  to the next free slot. Do this before landing.
+- **Post-merge collision** (one doc already on `main`): the new doc
+  adopts a `-2` suffix (`NNNN-2-short_name.md`, third `-3`, etc.). Do
+  not renumber the landed doc — external references stay stable.
 - Update the Document Index in [README.md](README.md) when adding a doc.
 
 ## Workflow

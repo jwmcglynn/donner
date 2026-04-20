@@ -1,12 +1,12 @@
 # Design: CI Runtime Reduction
 
-**Status:** Superseded by [0030-2: CI Hardening 2026-Q2](0030-2-ci_hardening_2026q2.md) (2026-04-20)
+**Status:** Superseded by [0031: CI Hardening 2026-Q2](0031-ci_hardening_2026q2.md) (2026-04-20)
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-20
 
 > **Note:** The milestones in this doc are preserved for history. The active
 > plan (combining this runtime-reduction scope with the escape-prevention
-> scope from doc 0016) lives in [0030-2](0030-2-ci_hardening_2026q2.md).
+> scope from doc 0016) lives in [0030-2](0031-ci_hardening_2026q2.md).
 > New work should reference the milestones there.
 
 ## Summary

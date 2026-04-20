@@ -5,12 +5,16 @@ ADR-style in the order they were first written. New docs append the next
 free number — `NNNN-short_name.md` — and existing numbers never change once
 assigned, so external references stay stable.
 
-**On number collisions.** When two docs are drafted in parallel branches
-and both claim the next free number, the first to land on `main` keeps
-the bare `NNNN-` form. The second adds a `-2` suffix:
-`NNNN-2-short_name.md` (third would be `-3`, etc.). No renumbering, no
-history rewrite — the short name disambiguates and the collision marker
-stays visible.
+**On number collisions.**
+
+- **Pre-merge (both docs unmerged):** the second doc simply renumbers to
+  the next free slot. Cheap — nothing external references an unmerged
+  doc yet.
+- **Post-merge (one doc is already on `main`):** if a parallel branch
+  assigned the same number, the *new* doc adopts a `-2` suffix:
+  `NNNN-2-short_name.md` (third collider `-3`, etc.). The already-landed
+  doc keeps its bare `NNNN-` form so external links stay stable. No
+  renumbering, no history rewrite.
 
 For how Donner's runtime is organized and documented, start with the
 [Developer Docs](../developer_docs.md). Design docs capture *why* a piece
@@ -68,9 +72,9 @@ conventions automated agents should follow when editing design docs.
 | 0026 | [svg_conformance_testing](0026-svg_conformance_testing.md)                             | Draft                                                                      | Manifest-driven SVG 1.1 filter + WPT + scripted conformance program. |
 | 0027 | [scripting](0027-scripting.md)                                                         | Draft                                                                      | `donner::script`: QuickJS-NG + IDL codegen that projects the ECS as the DOM. |
 | 0028 | [v1_0_release](0028-v1_0_release.md)                                                   | Draft                                                                      | Release checklist and implementation plan for shipping v1.0 (full ProjectRoadmap scope). |
-| 0029 | [ci_runtime](0029-ci_runtime.md)                                                       | Superseded by [0030-2](0030-2-ci_hardening_2026q2.md)                       | CI runtime reduction plan (post-Skia baseline, per-config cache slots, runner sizing). Scope folded into 0030-2. |
+| 0029 | [ci_runtime](0029-ci_runtime.md)                                                       | Superseded by [0031](0031-ci_hardening_2026q2.md)                          | CI runtime reduction plan (post-Skia baseline, per-config cache slots, runner sizing). Scope folded into 0031. |
 | 0030 | [geode_performance](0030-geode_performance.md)                                         | In Progress                                                                | Geode GPU-backend performance milestones (counters, arenas, shared command encoder, target reuse). |
-| 0030-2 | [ci_hardening_2026q2](0030-2-ci_hardening_2026q2.md)                                 | Design                                                                     | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029). |
+| 0031 | [ci_hardening_2026q2](0031-ci_hardening_2026q2.md)                                     | Design                                                                     | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029). |
 
 ## Cross-reference: developer docs
 
