@@ -367,7 +367,7 @@ algorithm.
     reordering across paint order, which SVG forbids. Unlikely
     to ship without M1.f.2 (dynamic-offset bind groups) first
     exposing a different bind-group amortization regime.
-  - [ ] Bullet 2 (instanced `<use>` draws): **next milestone.**
+  - [ ] Bullet 2 (instanced `<use>` draws): **partially landed.**
     Motivating fixture: `docs/img/arch_container.svg` with 1028
     `<use>` elements — today that's 1028 `drawCalls`; target is
     O(distinct-source-entity × distinct-paint) per render pass.
@@ -375,13 +375,42 @@ algorithm.
     share the same `dataEntity` AND same resolved solid paint
     AND no stroke/mask/filter/clip → one instanced GPU draw with
     per-instance transforms via a new storage-buffer binding.
-    Shader changes in `slug_fill.wgsl` + alpha-coverage variant;
-    new `GeoEncoder::fillPathInstanced` entry point. One attempt
-    via a delegated agent stalled without committing code; the
-    next attempt should pin the agent to a driver-side
-    detection-only commit first (counter: `instancedGroupsDetected`)
-    so the instrumentation + fixture land before the shader
-    rewrite risk.
+
+    - [x] **M6-B step 1 — detection counter.** Added
+      `sameSourceDrawPairs` to `GeodeCounters`. `RendererGeode::Impl`
+      tracks `lastDrawSourceEntity`; `drawPath` bumps the counter
+      on consecutive same-source calls. Zero on fixtures without
+      `<use>`; reports `N − 1` on a run of `N` consecutive
+      batchable `<use>` instances (verified by
+      `UseHeavy_BaselineCeilings` with 8 `<use>` → 7). Lands
+      separately from any actual batching so the signal is
+      observable even before the shader/driver pass ships.
+    - [x] **M6-B step 2 — shader + bind-group plumbing.** Added
+      binding 7 on the Slug-fill pipeline: a per-instance affine
+      transforms SSBO (`slug_fill.wgsl` + alpha-coverage variant).
+      `vs_main` now takes `@builtin(instance_index)`, fetches the
+      instance transform, and composes `effective_mvp = mvp *
+      instance_mat`. For non-instanced draws `GeodeDevice` owns
+      a 1-element identity buffer — existing draws are no-op
+      identity composes, goldens and the resvg suite unchanged.
+      Unlocks `fillPathInstanced`, next.
+    - [ ] **M6-B step 3 — batching.** Still to write:
+      - `GeoEncoder::fillPathInstanced(path, color, rule,
+        std::span<Transform2d>, precomputedEncoded)` — uploads
+        transforms into an arena slice, sets up the bind group
+        with binding 7 pointing at the slice, issues
+        `pass.draw(vertexCount, instanceCount=N, 0, 0)`.
+      - `RendererInterface::drawPathInstanced(...)` — virtual
+        with a default loop fallback for non-Geode backends.
+      - Driver lookahead in `RendererDriver::traverseRange`:
+        peek ahead from the current entity, accumulate
+        consecutive entities with same `dataEntity` / same
+        solid paint / no subtree / compatible clip. On the
+        accumulator, emit one `drawPathInstanced`; advance
+        the view past the group.
+      - Update `UseHeavy_BaselineCeilings` to assert
+        `drawCalls == 1` + `sameSourceDrawPairs == 0` (the
+        batcher eliminates the consecutive same-source runs).
 - [ ] Milestone 7: Opportunistic cleanups.
   - [ ] GPU-side `takeSnapshot` unpremultiply (`RendererGeode.cc:2322-2353`)
     via a one-dispatch compute kernel writing into a CopySrc buffer;
