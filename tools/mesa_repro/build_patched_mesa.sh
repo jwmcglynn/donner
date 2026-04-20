@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build a local Mesa 25.2.8 with debug symbols, installed into
-# `./mesa-prefix/`. Used for bisecting and patching the two driver bugs
+# `${MESA_REPRO_ROOT:-~/Projects/donner-mesa-repro}/mesa-prefix/`
+# (kept outside the donner repo so Bazel doesn't stat its ~2 GB tree
+# on every build). Used for bisecting and patching the two driver bugs
 # that force us to skip Geode tests on Linux CI (see
 # docs/design_docs/0031-mesa_vulkan_repro_and_patch.md):
 #
@@ -57,13 +59,16 @@ for arg in "$@"; do
   esac
 done
 
-# Anchor to the directory holding this script so relative paths stay stable
-# regardless of where the user invoked it from.
+# Anchor to the directory holding this script so log messages look right,
+# but keep the Mesa checkout / build / install OUTSIDE the donner repo so
+# Bazel doesn't see a big `mesa-work/` tree and try to stat every file on
+# every build. Override with `MESA_REPRO_ROOT=...` for a custom location.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK_DIR="${SCRIPT_DIR}/mesa-work"
+MESA_REPRO_ROOT="${MESA_REPRO_ROOT:-${HOME}/Projects/donner-mesa-repro}"
+WORK_DIR="${MESA_REPRO_ROOT}/mesa-work"
 SRC_DIR="${WORK_DIR}/src"
 BUILD_DIR="${WORK_DIR}/build"
-PREFIX_DIR="${SCRIPT_DIR}/mesa-prefix"
+PREFIX_DIR="${MESA_REPRO_ROOT}/mesa-prefix"
 
 if [[ "$CLEAN" == "1" ]]; then
   echo "==> Cleaning ${WORK_DIR} and ${PREFIX_DIR}"

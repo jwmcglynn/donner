@@ -23,7 +23,7 @@ arbitrary binaries against that patched Mesa.
 
 | File | Purpose |
 |------|---------|
-| `build_patched_mesa.sh` | Fetches Mesa from `mesa/mesa`, applies anything in `patches/`, builds a debug `meson` out-of-tree build, installs into `mesa-prefix/`. |
+| `build_patched_mesa.sh` | Fetches Mesa from `mesa/mesa`, applies anything in `patches/`, builds a debug `meson` out-of-tree build, installs into `${MESA_REPRO_ROOT:-~/Projects/donner-mesa-repro}/mesa-prefix/`. Keeps the checkout outside the donner repo so Bazel doesn't stat it on every build. |
 | `run_with_patched_mesa.sh` | Wraps an arbitrary command with `LD_LIBRARY_PATH` + `VK_ICD_FILENAMES` pointing at the local build. |
 | `lvp_compute_churn.cc` | Standalone wgpu-native repro attempt for #551. As of this writing, 1 200 compute dispatches in a filter-chain shape run cleanly on system Mesa 25.2.8 — the Donner test suite is still the only reliable repro. See §Status. |
 | `BUILD.bazel` | Builds `lvp_compute_churn` as `donner_cc_binary`. |
@@ -108,9 +108,12 @@ arbitrary binaries against that patched Mesa.
 
 ## Developer notes
 
-- The patched Mesa lives entirely under `tools/mesa_repro/mesa-prefix/`
-  (`.gitignore`'d via the repo's `.bazel*` / build-output patterns).
-  Nuke via `build_patched_mesa.sh --clean` to start over.
+- The patched Mesa lives OUTSIDE the donner repo at
+  `${HOME}/Projects/donner-mesa-repro/` (override with
+  `MESA_REPRO_ROOT=...`). Keeping it out of the tree means Bazel doesn't
+  have to stat the ~2 GB Mesa checkout on every build, and a stray
+  `git clean -fdx` in the donner repo won't nuke hours of Mesa compile
+  time. Nuke via `build_patched_mesa.sh --clean` to start over.
 - `build_patched_mesa.sh --asan` adds `-Db_sanitize=address`; the
   resulting binaries need `LD_PRELOAD=libasan.so.*` or to be launched
   without a preload shim. `run_with_patched_mesa.sh` handles the

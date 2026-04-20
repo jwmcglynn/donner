@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run any command against the locally-built Mesa in ./mesa-prefix/.
+# Run any command against the locally-built Mesa in
+# ${MESA_REPRO_ROOT:-~/Projects/donner-mesa-repro}/mesa-prefix/ (outside
+# the donner repo).
 #
 # Must be run AFTER `./build_patched_mesa.sh`.
 #
@@ -41,8 +43,10 @@ for arg in "$@"; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PREFIX_DIR="${SCRIPT_DIR}/mesa-prefix"
+# Keep the patched-Mesa install OUTSIDE the donner repo so Bazel doesn't
+# stat it on every build. Override with `MESA_REPRO_ROOT=...` when needed.
+MESA_REPRO_ROOT="${MESA_REPRO_ROOT:-${HOME}/Projects/donner-mesa-repro}"
+PREFIX_DIR="${MESA_REPRO_ROOT}/mesa-prefix"
 
 if [[ ! -d "${PREFIX_DIR}" ]]; then
   echo "!! ${PREFIX_DIR} not found — did you run build_patched_mesa.sh?" >&2
