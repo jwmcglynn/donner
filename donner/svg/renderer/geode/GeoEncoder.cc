@@ -450,6 +450,7 @@ struct GeoEncoder::Impl {
   void bindSolidPipeline() {
     if (currentPipeline != BoundPipeline::kSolid) {
       pass.setPipeline(pipeline->pipeline());
+      device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kSolid;
       currentPipelineIsGradient = false;
     }
@@ -457,6 +458,7 @@ struct GeoEncoder::Impl {
   void bindGradientPipeline() {
     if (currentPipeline != BoundPipeline::kGradient) {
       pass.setPipeline(gradientPipeline->pipeline());
+      device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kGradient;
       currentPipelineIsGradient = true;
     }
@@ -464,6 +466,7 @@ struct GeoEncoder::Impl {
   void bindImagePipeline(const wgpu::RenderPipeline& imageRenderPipeline) {
     if (currentPipeline != BoundPipeline::kImage) {
       pass.setPipeline(imageRenderPipeline);
+      device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kImage;
       currentPipelineIsGradient = false;
     }
@@ -755,6 +758,7 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
   desc.label = wgpuLabel("GeoEncoderMaskPass");
   impl_->maskPass = impl_->commandEncoder.beginRenderPass(desc);
   impl_->maskPass.setPipeline(impl_->maskPipelineOwned->pipeline());
+  impl_->device->countPipelineSwitch();
   // Full-target scissor so clip-path fills aren't clipped by any
   // outer scissor still cached in the encoder state.
   impl_->maskPass.setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
@@ -850,6 +854,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   impl_->maskPass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->maskPass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::endMaskPass() {
@@ -1081,6 +1086,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 namespace {
@@ -1227,6 +1233,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientParams& params,
@@ -1323,6 +1330,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {

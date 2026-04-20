@@ -109,6 +109,12 @@ public:
   void countPathEncode() const {
     if (counters_) ++counters_->pathEncodes;
   }
+  void countDraw() const {
+    if (counters_) ++counters_->drawCalls;
+  }
+  void countPipelineSwitch() const {
+    if (counters_) ++counters_->pipelineSwitches;
+  }
 
   /**
    * Whether the driver supports GPU timestamp queries. Always false
