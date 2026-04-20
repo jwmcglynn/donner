@@ -7,6 +7,9 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry_fwd.h"
+#include "donner/base/FillRule.h"
+#include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/SmallVector.h"
@@ -18,10 +21,8 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/base/FillRule.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MixBlendMode.h"
-#include "donner/base/Path.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/WritingMode.h"
@@ -80,6 +81,12 @@ struct PathShape {
   /// Layer index for boolean combination: paths on the same layer are unioned, layers are
   /// intersected.
   int layer = 0;
+  /// Source entity this path was derived from. Set by the driver at the `drawPath` call
+  /// site (`RendererDriver::traverseRange`). Backends that cache per-entity state key
+  /// off this (see `GeodePathCacheComponent`). A null `EntityHandle` (the default) means
+  /// "no associated entity" — non-driver callers (overlay drawing, test harnesses) leave
+  /// it null and backends fall back to the un-cached path.
+  EntityHandle sourceEntity;
 };
 
 /**
@@ -103,7 +110,7 @@ struct PaintParams {
  * Clip stack entry combining rectangles, paths, and optional masks.
  */
 struct ResolvedClip {
-  std::optional<Box2d> clipRect;  ///< Optional axis-aligned clip rectangle.
+  std::optional<Box2d> clipRect;     ///< Optional axis-aligned clip rectangle.
   std::vector<PathShape> clipPaths;  ///< Ordered list of clip path shapes to intersect.
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
   Transform2d clipPathUnitsTransform;  ///< Transform applied to the clip path coordinate system.

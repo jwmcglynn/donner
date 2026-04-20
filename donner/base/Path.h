@@ -50,10 +50,10 @@ inline std::ostream& operator<<(std::ostream& os, LineJoin join) {
 
 /// Parameters for converting a stroked path to a filled outline.
 struct StrokeStyle {
-  double width = 1.0;          ///< Stroke width.
-  LineCap cap = LineCap::Butt;     ///< Line cap style for open subpath endpoints.
+  double width = 1.0;               ///< Stroke width.
+  LineCap cap = LineCap::Butt;      ///< Line cap style for open subpath endpoints.
   LineJoin join = LineJoin::Miter;  ///< Line join style for corners between segments.
-  double miterLimit = 4.0;     ///< Maximum miter length ratio (as per SVG stroke-miterlimit).
+  double miterLimit = 4.0;          ///< Maximum miter length ratio (as per SVG stroke-miterlimit).
 
   /// Dash pattern lengths alternating on/off segments (SVG `stroke-dasharray`).
   /// Empty vector means solid stroke. If the vector has an odd number of
@@ -70,6 +70,12 @@ struct StrokeStyle {
   /// length, so all dash distances are scaled by `actualLength / pathLength`.
   /// Zero (the default) means use the actual path length unchanged.
   double pathLength = 0.0;
+
+  /// Defaulted memberwise equality. Used as a cache key by the Geode
+  /// stroke-encode cache (design doc 0030 Milestone 2): a cached
+  /// `Path::strokeToFill` result is reused only when the source
+  /// `StrokeStyle` still compares equal.
+  bool operator==(const StrokeStyle& other) const = default;
 };
 
 class PathBuilder;
@@ -98,10 +104,10 @@ public:
 
   /// A command in the path, pairing a verb with the index of its first point.
   struct Command {
-    Verb verb;              ///< The verb type.
-    uint32_t pointIndex;    ///< Index of the first point for this command in the points array.
-    bool isInternal = false; ///< True for intermediate segments of arc decomposition. These are
-                             ///< skipped when computing vertices for marker placement.
+    Verb verb;                ///< The verb type.
+    uint32_t pointIndex;      ///< Index of the first point for this command in the points array.
+    bool isInternal = false;  ///< True for intermediate segments of arc decomposition. These are
+                              ///< skipped when computing vertices for marker placement.
 
     /// Equality operator.
     bool operator==(const Command& other) const {
@@ -382,6 +388,15 @@ public:
 
   /// Ostream output operator.
   friend std::ostream& operator<<(std::ostream& os, const Path& path);
+
+  /// Value equality. Two paths compare equal iff their command verb /
+  /// point-index sequences and point arrays are bitwise-equal. Used as an
+  /// invalidation edge by `ShapeSystem` to suppress redundant
+  /// `ComputedPathComponent` rewrites when shape attributes recompute to
+  /// the same geometry (design doc 0030 Milestone 2).
+  bool operator==(const Path& other) const {
+    return commands_ == other.commands_ && points_ == other.points_;
+  }
 
 private:
   friend class PathBuilder;

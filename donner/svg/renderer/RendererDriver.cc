@@ -13,12 +13,12 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
-#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -28,7 +28,6 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
@@ -113,8 +112,7 @@ bool ShouldCullDeviceBox(const Box2d& deviceBox, const Vector2i& renderingSize) 
 
   // Viewport culling: entire box is beyond one of the four edges, with a
   // one-device-pixel slack to tolerate floating-point drift at the boundary.
-  if (maxX < -kViewportCullSlackDevicePx ||
-      maxY < -kViewportCullSlackDevicePx ||
+  if (maxX < -kViewportCullSlackDevicePx || maxY < -kViewportCullSlackDevicePx ||
       minX > renderingSize.x + kViewportCullSlackDevicePx ||
       minY > renderingSize.y + kViewportCullSlackDevicePx) {
     return true;
@@ -270,11 +268,12 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
-PathShape toPathShape(const components::ComputedPathComponent& path,
+PathShape toPathShape(EntityHandle sourceEntity, const components::ComputedPathComponent& path,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
   shape.path = path.spline;
   shape.fillRule = style.properties->fillRule.getRequired();
+  shape.sourceEntity = sourceEntity;
   return shape;
 }
 
@@ -590,8 +589,8 @@ std::optional<components::FilterGraph> resolveFilterGraph(
 
 /// Compute the filter region bounds in entity-local coordinates from a resolved filter reference.
 std::optional<Box2d> computeFilterRegion(Registry& registry,
-                                        const components::ResolvedFilterEffect& filter,
-                                        const components::RenderingInstanceComponent& instance) {
+                                         const components::ResolvedFilterEffect& filter,
+                                         const components::RenderingInstanceComponent& instance) {
   const auto* reference = std::get_if<ResolvedReference>(&filter);
   if (!reference) {
     // For CSS filter function lists, check if any entry is a url() reference.
@@ -850,7 +849,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Box2d filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Box2d filterViewBox =
+        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -925,7 +925,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
+                           paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
@@ -1020,8 +1021,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 }
 
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
-    Registry& registry, Entity firstEntity, Entity lastEntity,
-    const RenderViewport& viewport, const Transform2d& surfaceFromCanvas) {
+    Registry& registry, Entity firstEntity, Entity lastEntity, const RenderViewport& viewport,
+    const Transform2d& surfaceFromCanvas) {
   const Vector2d canvasSize = viewport.size;
   if (canvasSize.x <= 0.0 || canvasSize.y <= 0.0) {
     return std::nullopt;
@@ -1050,10 +1051,9 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
   };
   const auto traceEntity = [&](Entity e, const char* kind, const Box2d& box) {
     if (kTrace) {
-      std::fprintf(stderr,
-                   "[bounds] entity=%u %s box=(%.1f,%.1f → %.1f,%.1f)\n",
-                   static_cast<unsigned>(e), kind, box.topLeft.x, box.topLeft.y,
-                   box.bottomRight.x, box.bottomRight.y);
+      std::fprintf(stderr, "[bounds] entity=%u %s box=(%.1f,%.1f → %.1f,%.1f)\n",
+                   static_cast<unsigned>(e), kind, box.topLeft.x, box.topLeft.y, box.bottomRight.x,
+                   box.bottomRight.y);
     }
   };
 
@@ -1154,8 +1154,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
       // further — use `miterLimit * strokeWidth / 2` as the worst-case
       // bound per spec.
       const PaintParams paint = toPaintParams(registry, instance, style);
-      const bool hasStroke =
-          !std::holds_alternative<PaintServer::None>(paint.stroke);
+      const bool hasStroke = !std::holds_alternative<PaintServer::None>(paint.stroke);
       if (hasStroke && paint.strokeParams.strokeWidth > 0.0) {
         double padding = paint.strokeParams.strokeWidth / 2.0;
         if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
@@ -1199,18 +1198,16 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
   // Clamp to canvas — content partially off-canvas shouldn't
   // over-allocate the offscreen.
   const Box2d canvasRect(Vector2d::Zero(), canvasSize);
-  const Vector2d clampedTL(
-      std::max(accumulated->topLeft.x, canvasRect.topLeft.x),
-      std::max(accumulated->topLeft.y, canvasRect.topLeft.y));
-  const Vector2d clampedBR(
-      std::min(accumulated->bottomRight.x, canvasRect.bottomRight.x),
-      std::min(accumulated->bottomRight.y, canvasRect.bottomRight.y));
+  const Vector2d clampedTL(std::max(accumulated->topLeft.x, canvasRect.topLeft.x),
+                           std::max(accumulated->topLeft.y, canvasRect.topLeft.y));
+  const Vector2d clampedBR(std::min(accumulated->bottomRight.x, canvasRect.bottomRight.x),
+                           std::min(accumulated->bottomRight.y, canvasRect.bottomRight.y));
   if (clampedTL.x >= clampedBR.x || clampedTL.y >= clampedBR.y) {
     return std::nullopt;  // Fully off-canvas.
   }
   if (kTrace) {
-    std::fprintf(stderr, "[bounds] ---> final: (%.1f,%.1f → %.1f,%.1f)\n", clampedTL.x,
-                 clampedTL.y, clampedBR.x, clampedBR.y);
+    std::fprintf(stderr, "[bounds] ---> final: (%.1f,%.1f → %.1f,%.1f)\n", clampedTL.x, clampedTL.y,
+                 clampedBR.x, clampedBR.y);
   }
   return Box2d(clampedTL, clampedBR);
 }
@@ -1262,7 +1259,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Box2d filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Box2d filterViewBox =
+        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -1370,7 +1368,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
+                           paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
@@ -1455,8 +1454,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
           }
         }
       } else if (auto* text =
-                     instance.dataHandle(registry)
-                         .try_get<components::ComputedTextComponent>()) {
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
@@ -1554,7 +1552,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (verbose_) {
       const Transform2d combined = instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
       std::cout << "[traverseRange] entity=" << entt::to_integral(entity)
-                << " visible=" << instance.visible << "\n  surfaceFromCanvas=" << surfaceFromCanvasTransform_
+                << " visible=" << instance.visible
+                << "\n  surfaceFromCanvas=" << surfaceFromCanvasTransform_
                 << "\n  worldFromEntity=" << instance.worldFromEntityTransform
                 << "\n  combined=" << combined << "\n";
     }
@@ -1569,7 +1568,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Box2d filterViewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+    const Box2d filterViewBox =
+        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
@@ -1664,7 +1664,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
+                           paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
@@ -1719,8 +1720,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
           }
         }
       } else if (auto* text =
-                     instance.dataHandle(registry)
-                         .try_get<components::ComputedTextComponent>()) {
+                     instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
         resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
@@ -1853,7 +1853,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
 
     if (mc->maskContentUnits == MaskContentUnits::ObjectBoundingBox) {
       const Transform2d userSpaceFromMaskContent = Transform2d::Scale(shapeLocalBounds.size()) *
-                                                  Transform2d::Translate(shapeLocalBounds.topLeft);
+                                                   Transform2d::Translate(shapeLocalBounds.topLeft);
       surfaceFromCanvasTransform_ = userSpaceFromMaskContent * surfaceFromCanvasTransform_;
     }
 
@@ -2046,11 +2046,11 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
 
   const Transform2d markerOffsetFromVertex =
       Transform2d::Translate(-markerComponent->refX * markerUnitsFromViewBox.data[0],
-                            -markerComponent->refY * markerUnitsFromViewBox.data[3]);
+                             -markerComponent->refY * markerUnitsFromViewBox.data[3]);
 
   const Transform2d vertexFromEntity = Transform2d::Scale(markerScale) *
-                                      Transform2d::Rotate(angleRadians) *
-                                      Transform2d::Translate(vertexPosition);
+                                       Transform2d::Rotate(angleRadians) *
+                                       Transform2d::Translate(vertexPosition);
 
   const Transform2d vertexFromWorld =
       vertexFromEntity * surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
@@ -2353,9 +2353,8 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
       lastEntity = shadowResult->lastEntity;
     } else if (targetInstance) {
       firstEntity = targetEntity;
-      lastEntity = targetInstance->subtreeInfo
-                       ? targetInstance->subtreeInfo->lastRenderedEntity
-                       : targetEntity;
+      lastEntity = targetInstance->subtreeInfo ? targetInstance->subtreeInfo->lastRenderedEntity
+                                               : targetEntity;
     } else {
       feImageFragmentGuard_->erase(entityId);
       imageNode->fragmentId = RcString();
@@ -2374,13 +2373,12 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
 
     // The fragment is rendered at its natural position in the document coordinate system
-    // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space post-translation
-    // via SkImageFilters::Offset to position the content at the filter region origin. This is
-    // correct for all transforms (skew, rotation, etc.) because the offset doesn't interact with
-    // the element's transform — it's applied after the element is fully rendered.
+    // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space
+    // post-translation via SkImageFilters::Offset to position the content at the filter region
+    // origin. This is correct for all transforms (skew, rotation, etc.) because the offset doesn't
+    // interact with the element's transform — it's applied after the element is fully rendered.
     if (filterRegion.has_value()) {
-      imageNode->fragmentRegionTopLeft =
-          Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
+      imageNode->fragmentRegionTopLeft = Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
     }
 
     {
