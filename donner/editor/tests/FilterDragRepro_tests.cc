@@ -38,12 +38,12 @@
 
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
-#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -134,8 +134,7 @@ std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer
   }
   asyncRenderer.requestRender(request);
 
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   while (std::chrono::steady_clock::now() < deadline) {
     auto result = asyncRenderer.pollResult();
     if (result.has_value()) {
@@ -312,8 +311,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
     // shell's gate is "request new render IF idle", but here we block
     // on the current one and then immediately issue a new one to
     // measure steady-state frame cost.
-    auto workerMs = DrainOneRender(renderCoordinator.asyncRenderer(),
-                                   renderCoordinator.renderer(),
+    auto workerMs = DrainOneRender(renderCoordinator.asyncRenderer(), renderCoordinator.renderer(),
                                    app.document().document(), app, selectTool, version);
     ++version;
     timing.workerMs = workerMs.value_or(-1.0);
@@ -322,8 +320,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
             .count();
 
     const Entity sel =
-        app.selectedElement().has_value() &&
-                app.selectedElement()->isa<svg::SVGGraphicsElement>()
+        app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()
             ? app.selectedElement()->entityHandle().entity()
             : entt::null;
     results.selectedEntityAtFrame.push_back(sel);
@@ -402,17 +399,23 @@ TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
       if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
         continue;
       }
-      if (f.workerMs < 5) buckets[0]++;
-      else if (f.workerMs < 15) buckets[1]++;
-      else if (f.workerMs < 30) buckets[2]++;
-      else if (f.workerMs < 60) buckets[3]++;
-      else if (f.workerMs < 120) buckets[4]++;
-      else buckets[5]++;
+      if (f.workerMs < 5)
+        buckets[0]++;
+      else if (f.workerMs < 15)
+        buckets[1]++;
+      else if (f.workerMs < 30)
+        buckets[2]++;
+      else if (f.workerMs < 60)
+        buckets[3]++;
+      else if (f.workerMs < 120)
+        buckets[4]++;
+      else
+        buckets[5]++;
     }
     std::cerr << "[FilterDragRepro] " << label << " worker-ms histogram: "
-              << " <5=" << buckets[0] << " 5-15=" << buckets[1]
-              << " 15-30=" << buckets[2] << " 30-60=" << buckets[3]
-              << " 60-120=" << buckets[4] << " >=120=" << buckets[5] << "\n";
+              << " <5=" << buckets[0] << " 5-15=" << buckets[1] << " 15-30=" << buckets[2]
+              << " 30-60=" << buckets[3] << " 60-120=" << buckets[4] << " >=120=" << buckets[5]
+              << "\n";
   };
   dumpHistogram(firstDown, firstUp, "first-drag");
   dumpHistogram(secondDown, secondUp, "second-drag");
@@ -433,10 +436,9 @@ TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
   };
   dumpFirstN(firstDown, firstUp, "first-drag");
   dumpFirstN(secondDown, secondUp, "second-drag");
-  std::cerr << "[FilterDragRepro] fast-path counters at end: fast="
-            << r.fastPathFrames
-            << " slowWithDirty=" << r.slowPathFramesWithDirty
-            << " noDirty=" << r.noDirtyFrames << "\n";
+  std::cerr << "[FilterDragRepro] fast-path counters at end: fast=" << r.fastPathFrames
+            << " slowWithDirty=" << r.slowPathFramesWithDirty << " noDirty=" << r.noDirtyFrames
+            << "\n";
   ASSERT_EQ(r.selectionElementIds.size(), 2u);
   std::cerr << "[FilterDragRepro] firstSel id=" << r.selectionElementIds[0]
             << " filterAncestor=" << r.selectionFilterAncestorIds[0] << "\n";

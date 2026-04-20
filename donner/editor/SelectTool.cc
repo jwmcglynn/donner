@@ -271,26 +271,23 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     UndoSnapshot after{.element = dragState_->primary.element,
                        .transform = dragState_->primary.currentTransform,
                        .writebackTarget = dragState_->primary.writebackTarget};
-    editor.undoTimeline().record(
-        dragState_->extras.empty() ? "Move element" : "Move elements",
-        std::move(before), std::move(after));
+    editor.undoTimeline().record(dragState_->extras.empty() ? "Move element" : "Move elements",
+                                 std::move(before), std::move(after));
 
     // Record undo for each extra element so a single Ctrl+Z reverts the
     // whole multi-element drag — one timeline entry per element keeps the
     // existing timeline plumbing intact; the user sees them collapsed by
     // the shared "Move elements" label if the timeline groups by label.
     for (const auto& extra : dragState_->extras) {
-      UndoSnapshot extraBefore{
-          .element = extra.element,
-          .transform = extra.startTransform,
-          .writebackTarget = extra.writebackTarget,
-          .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
-          .restoreSourceTransformAttributeValue = true};
+      UndoSnapshot extraBefore{.element = extra.element,
+                               .transform = extra.startTransform,
+                               .writebackTarget = extra.writebackTarget,
+                               .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
+                               .restoreSourceTransformAttributeValue = true};
       UndoSnapshot extraAfter{.element = extra.element,
                               .transform = extra.currentTransform,
                               .writebackTarget = extra.writebackTarget};
-      editor.undoTimeline().record("Move elements", std::move(extraBefore),
-                                   std::move(extraAfter));
+      editor.undoTimeline().record("Move elements", std::move(extraBefore), std::move(extraAfter));
     }
 
     if (dragState_->primary.writebackTarget.has_value()) {

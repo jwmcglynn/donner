@@ -211,8 +211,7 @@ public:
    *   user drag. Defaults to `ActiveDrag` for callers that only use this API during drag.
    * @return true if promotion succeeded, false if the layer limit or memory budget was reached.
    */
-  bool promoteEntity(Entity entity,
-                     InteractionHint interactionKind = InteractionHint::ActiveDrag);
+  bool promoteEntity(Entity entity, InteractionHint interactionKind = InteractionHint::ActiveDrag);
 
   /**
    * Demote a previously promoted entity back to the root layer.
@@ -363,8 +362,7 @@ public:
    *   indeterminate state — the caller MUST follow up with
    *   `resetAllLayers(documentReplaced=true)` to recover.
    */
-  [[nodiscard]] bool remapAfterStructuralReplace(
-      const std::unordered_map<Entity, Entity>& remap);
+  [[nodiscard]] bool remapAfterStructuralReplace(const std::unordered_map<Entity, Entity>& remap);
 
   /// Flip tight-bounded segment rasterization on or off at runtime.
   /// See `CompositorConfig::tightBoundedSegments` for semantics. Marks
@@ -382,9 +380,7 @@ public:
 
   /// Returns the current tight-bounded-segments setting. Mirrors
   /// `config().tightBoundedSegments` for convenience.
-  [[nodiscard]] bool tightBoundedSegmentsEnabled() const {
-    return config_.tightBoundedSegments;
-  }
+  [[nodiscard]] bool tightBoundedSegmentsEnabled() const { return config_.tightBoundedSegments; }
 
   /// When true, `renderFrame()` skips the main-renderer compose step while
   /// the split-static-layers cache (`bg`/`drag`/`fg` triple) is populated.

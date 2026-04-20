@@ -574,8 +574,8 @@ TEST(OverlayRendererTest, SelectingGroupSkipsNonRenderedContainerChildren) {
   // find cyan stroke here.
   for (int y = 6; y <= 14; ++y) {
     for (int x = 6; x <= 14; ++x) {
-      ASSERT_EQ(alphaAt(x, y), 0)
-          << "chrome appeared inside a <defs><clipPath> subtree at (" << x << ", " << y << ")";
+      ASSERT_EQ(alphaAt(x, y), 0) << "chrome appeared inside a <defs><clipPath> subtree at (" << x
+                                  << ", " << y << ")";
     }
   }
   bool foundVisibleOutline = false;

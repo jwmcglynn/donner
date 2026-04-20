@@ -24,10 +24,8 @@ bool IsNonRenderedContainer(svg::ElementType type) {
     case svg::ElementType::RadialGradient:
     case svg::ElementType::Symbol:
     case svg::ElementType::Marker:
-    case svg::ElementType::Style:
-      return true;
-    default:
-      return false;
+    case svg::ElementType::Style: return true;
+    default: return false;
   }
 }
 

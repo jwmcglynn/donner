@@ -15,10 +15,10 @@
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/compositor/CompositorController.h"
-#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -258,8 +258,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag1 = waitForResult();
   ASSERT_TRUE(drag1.has_value());
   ASSERT_TRUE(drag1->compositedPreview.has_value());
-  const std::vector<uint8_t> promotedPixelsDrag1 =
-      drag1->compositedPreview->promotedBitmap.pixels;
+  const std::vector<uint8_t> promotedPixelsDrag1 = drag1->compositedPreview->promotedBitmap.pixels;
   ASSERT_FALSE(promotedPixelsDrag1.empty());
 
   // Release: selection held but no drag.
@@ -548,10 +547,8 @@ struct EndToEndDragStats {
 // No phantom prewarm — the editor's RenderCoordinator doesn't fire
 // one on click-drag (see `activeDragPreview()` returning non-null
 // immediately after mouse-down sets `dragState_`).
-EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc,
-                                           svg::Renderer& renderer,
-                                           Entity targetEntity,
-                                           svg::SVGElement target,
+EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Renderer& renderer,
+                                           Entity targetEntity, svg::SVGElement target,
                                            int steadyFrames = 20) {
   using Clock = std::chrono::steady_clock;
   const auto elapsedMs = [](Clock::time_point start) {
@@ -608,8 +605,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc,
   // move's SetTransformCommand. THIS is the "click → first pixel with
   // moved shape" latency the user directly feels.
   {
-    target.cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(4.0, 0.0)));
+    target.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
     const auto t = Clock::now();
     postRequest(/*version=*/2, /*hasSelection=*/true, /*hasDrag=*/true);
     auto result = waitForResult();
@@ -724,8 +720,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
       ZoneScopedN("Harness::overlayBeginFrame");
       overlayRenderer.beginFrame(vp);
     }
-    const Transform2d canvasFromDoc =
-        asyncDoc.document().canvasFromDocumentTransform();
+    const Transform2d canvasFromDoc = asyncDoc.document().canvasFromDocumentTransform();
     std::array<svg::SVGElement, 1> selection{target};
     OverlayRenderer::drawChromeWithTransform(
         overlayRenderer, std::span<const svg::SVGElement>(selection), canvasFromDoc);
@@ -762,8 +757,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   //   (b) main-thread overlay rasterize
   //   (c) combined click → first-pixel-with-overlay wall-clock
   {
-    target.cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(4.0, 0.0)));
+    target.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
     const auto tTotal = Clock::now();
 
     const auto tWorker = Clock::now();
@@ -793,13 +787,11 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
             static_cast<std::size_t>(cp.foregroundBitmap.dimensions.x) *
                 static_cast<std::size_t>(cp.foregroundBitmap.dimensions.y) * 4u;
       }
-      stats.flatUploadBytesPerFrame =
-          static_cast<std::size_t>(result->bitmap.dimensions.x) *
-          static_cast<std::size_t>(result->bitmap.dimensions.y) * 4u;
+      stats.flatUploadBytesPerFrame = static_cast<std::size_t>(result->bitmap.dimensions.x) *
+                                      static_cast<std::size_t>(result->bitmap.dimensions.y) * 4u;
     }
-    stats.overlayUploadBytesPerFrame =
-        static_cast<std::size_t>(overlayBitmap.dimensions.x) *
-        static_cast<std::size_t>(overlayBitmap.dimensions.y) * 4u;
+    stats.overlayUploadBytesPerFrame = static_cast<std::size_t>(overlayBitmap.dimensions.x) *
+                                       static_cast<std::size_t>(overlayBitmap.dimensions.y) * 4u;
   }
 
   // Phase 2 — steady-state drag frames. Each frame does the same
@@ -921,8 +913,8 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   svg::Renderer referenceRenderer;
   {
     svg::compositor::CompositorController refCompositor(asyncDoc.document(), referenceRenderer);
-    refCompositor.renderFrame(svg::RenderViewport{
-        .size = Vector2d(892, 512), .devicePixelRatio = 1.0});
+    refCompositor.renderFrame(
+        svg::RenderViewport{.size = Vector2d(892, 512), .devicePixelRatio = 1.0});
   }
   const auto referenceBitmap = referenceRenderer.takeSnapshot();
   ASSERT_FALSE(referenceBitmap.empty()) << "reference render produced empty bitmap";
@@ -1054,16 +1046,14 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
 
   std::cerr << "[PERF] FaithfulFrameDragOnRealSplash:\n"
             << "  cold=" << stats.coldRenderMs << " ms\n"
-            << "  click->firstPixel (incl. first overlay)=" << stats.clickToFirstPixelMs
-            << " ms\n"
+            << "  click->firstPixel (incl. first overlay)=" << stats.clickToFirstPixelMs << " ms\n"
             << "  steady: avg=" << stats.steadyAvgMs << " ms, max=" << stats.steadyMaxMs
             << " ms over " << stats.steadyFrames << " frames\n"
             << "  worker (compositor renderFrame): avg=" << stats.workerAvgMs
             << " ms, max=" << stats.workerMaxMs << " ms\n"
             << "  overlay rasterize (main-thread): avg=" << stats.overlayAvgMs
             << " ms, max=" << stats.overlayMaxMs << " ms\n"
-            << "  composited upload bytes/frame: " << stats.compositedUploadBytesPerFrame
-            << " (~"
+            << "  composited upload bytes/frame: " << stats.compositedUploadBytesPerFrame << " (~"
             << (stats.compositedUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
             << "  flat upload bytes/frame: " << stats.flatUploadBytesPerFrame << " (~"
             << (stats.flatUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
@@ -1175,7 +1165,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   std::vector<PhaseTiming> timings;
 
   const auto runPhase = [&](std::string_view label, Entity selected, Entity drag,
-                             uint64_t version) {
+                            uint64_t version) {
     const auto t = Clock::now();
     post(version, selected, drag);
     auto result = waitForResult();
@@ -1224,8 +1214,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   for (int i = 0; i < 3; ++i) {
     alternatePath->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
-    runPhase("drag-O", alternateEntity, alternateEntity,
-             static_cast<uint64_t>(8 + i));
+    runPhase("drag-O", alternateEntity, alternateEntity, static_cast<uint64_t>(8 + i));
   }
 
   std::cerr << "[PERF] MultiShapeClickDragHiDpiRepro (canvas 1784x1024):\n";
@@ -1256,7 +1245,8 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   for (const auto& t : timings) {
     if (t.label == "click-D (first promote)" || t.label == "click-O (second promote)") {
       EXPECT_LT(t.wallMs, 2500.0)
-          << t.label << " — slow-frame diagnostic should have fired to stderr. "
+          << t.label
+          << " — slow-frame diagnostic should have fired to stderr. "
              "If this trips, the most common regression is re-introducing the "
              "eager `rootDirty_ = true` / segment-cache wipe in `CompositorController"
              "::demoteEntity`. Check the `[CompositorSlowFrame]` stderr log above: "
@@ -1351,8 +1341,8 @@ TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
     // Count non-zero-alpha pixels. If ≥1% of pixels have any alpha, the
     // bitmap contains real content (the splash has a navy background
     // fill that covers the whole canvas, so at rest this is ~100%).
-    const std::size_t pixelCount =
-        static_cast<std::size_t>(bitmap.dimensions.x) * static_cast<std::size_t>(bitmap.dimensions.y);
+    const std::size_t pixelCount = static_cast<std::size_t>(bitmap.dimensions.x) *
+                                   static_cast<std::size_t>(bitmap.dimensions.y);
     std::size_t nonTransparent = 0;
     for (std::size_t i = 0; i < pixelCount; ++i) {
       if (bitmap.pixels[i * 4u + 3u] != 0u) {
@@ -1367,10 +1357,11 @@ TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
     ASSERT_TRUE(result.has_value()) << "no result for " << phase;
     EXPECT_FALSE(result->bitmap.empty()) << phase << ": flat bitmap empty";
     EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
-        << phase << ": flat bitmap is ≥99% transparent — the fallback "
-                    "texture the editor uploads would show as a "
-                    "transparent flash to the user when the presenter "
-                    "switches display modes.";
+        << phase
+        << ": flat bitmap is ≥99% transparent — the fallback "
+           "texture the editor uploads would show as a "
+           "transparent flash to the user when the presenter "
+           "switches display modes.";
   };
 
   // Phase 0 — cold render. Flat must contain real document content.
@@ -1626,8 +1617,8 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   // all `ReplaceDocumentCommand`s with structurally-equivalent bytes
   // skip the reset. Today the assertion fails loudly at the reset
   // counter check — that's the regression surface we want gated.
-  asyncDoc.applyMutation(EditorCommand::ReplaceDocumentCommand(
-      kSvgStructurallyEquivalentEdit, /*preserveUndoOnReparse=*/false));
+  asyncDoc.applyMutation(EditorCommand::ReplaceDocumentCommand(kSvgStructurallyEquivalentEdit,
+                                                               /*preserveUndoOnReparse=*/false));
   asyncDoc.flushFrame();
 
   auto targetAfterEdit = asyncDoc.document().querySelector("#target");
@@ -1721,9 +1712,8 @@ TEST(AsyncRendererE2ETest, DraggingFilterGroupSubtreeHitsTranslationFastPath) {
     request.selectedEntity = targetEntity;
     request.dragPreview = RenderRequest::DragPreview{
         .entity = targetEntity,
-        .interactionKind = activeDrag
-                               ? svg::compositor::InteractionHint::ActiveDrag
-                               : svg::compositor::InteractionHint::Selection,
+        .interactionKind = activeDrag ? svg::compositor::InteractionHint::ActiveDrag
+                                      : svg::compositor::InteractionHint::Selection,
     };
     asyncRenderer.requestRender(request);
   };

@@ -168,8 +168,7 @@ void AsyncRenderer::workerLoop() {
           compositor_->demoteEntity(compositorEntity_);
         }
         compositorEntity_ = entt::null;
-        if (desiredEntity != entt::null &&
-            compositor_->promoteEntity(desiredEntity, desiredKind)) {
+        if (desiredEntity != entt::null && compositor_->promoteEntity(desiredEntity, desiredKind)) {
           compositorEntity_ = desiredEntity;
         }
       }

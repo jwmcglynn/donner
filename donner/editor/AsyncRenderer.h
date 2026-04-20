@@ -58,7 +58,7 @@ class SVGDocument;
 namespace compositor {
 class CompositorController;
 }
-}
+}  // namespace donner::svg
 
 namespace donner::editor {
 
@@ -74,8 +74,7 @@ struct RenderRequest {
     /// extra translation is passed here. The compositor stamps the correct
     /// `InteractionHint` on the entity based on this field so downstream
     /// introspection stays accurate.
-    svg::compositor::InteractionHint interactionKind =
-        svg::compositor::InteractionHint::ActiveDrag;
+    svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
   };
 
   svg::Renderer* renderer = nullptr;
@@ -131,9 +130,7 @@ struct RenderResult {
     /// hidden).
     Vector2d promotedTranslationDoc = Vector2d::Zero();
 
-    [[nodiscard]] bool valid() const {
-      return entity != entt::null && !promotedBitmap.empty();
-    }
+    [[nodiscard]] bool valid() const { return entity != entt::null && !promotedBitmap.empty(); }
   };
 
   svg::RendererBitmap bitmap;
@@ -241,10 +238,10 @@ private:
   std::condition_variable cv_;
 
   enum class State : std::uint8_t {
-    Idle,    ///< No work. Worker is blocked on `cv_`.
-    Busy,    ///< Render in progress on the worker.
-    Done,    ///< Render finished; bitmap available in `result_`.
-    Shutdown ///< Destructor requested shutdown; worker exits.
+    Idle,     ///< No work. Worker is blocked on `cv_`.
+    Busy,     ///< Render in progress on the worker.
+    Done,     ///< Render finished; bitmap available in `result_`.
+    Shutdown  ///< Destructor requested shutdown; worker exits.
   };
 
   State state_ = State::Idle;
