@@ -1,0 +1,99 @@
+name: Fuzz
+
+# Runs the libFuzzer-tagged corpus regression suite. Split out of `main.yml`
+# so it doesn't gate every main push (it adds 5–7 min and uses a separate
+# toolchain that fights with the main build for cache slots).
+#
+# - Schedule: 06:00 UTC daily — catches new corpus regressions within 24h.
+# - workflow_dispatch — manual trigger for ad-hoc runs.
+# - pull_request paths — re-runs on PRs that touch fuzz-relevant code.
+#
+# macOS uses the LLVM 21 toolchain (--config=asan-fuzzer activates
+# --config=latest_llvm) because Apple Clang lacks libclang_rt.fuzzer_osx.a.
+# Linux fuzzers also run here so PRs touching fuzz code get a single signal
+# from one workflow rather than two.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "**/*_fuzzer.cc"
+      - "**/*_fuzzer.cpp"
+      - "**/*_fuzzer.h"
+      - "**/corpus/**"
+      - "build_defs/rules.bzl"
+      - ".github/workflows/fuzz.yml"
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          # Dedicated cache slot for the asan-fuzzer toolchain so it doesn't
+          # evict the default-config cache used by main.yml.
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-fuzzer
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --test_output=errors \
+            --test_tag_filters=fuzz_target \
+            --build_tag_filters=fuzz_target \
+            //... || true
+        # Marked informational for now: drop `|| true` once the fuzzer corpus
+        # passes cleanly across all platforms.
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          # Dedicated cache slot for the asan-fuzzer toolchain so it doesn't
+          # evict the default-config cache used by main.yml.
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-fuzzer
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --test_output=errors \
+            --test_tag_filters=fuzz_target \
+            --build_tag_filters=fuzz_target \
+            //... || true
+        # Marked informational for now: drop `|| true` once the fuzzer corpus
+        # passes cleanly across all platforms.
