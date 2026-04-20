@@ -10,6 +10,12 @@
 - **Always prefix AI-generated GitHub comments with 🤖.** This applies to all PR comments, review comments, and issue comments posted by any AI agent (Claude, Codex, Copilot, etc.).
 - This distinguishes human comments from AI comments, since all AI activity goes through `jwmcglynn`'s GitHub account.
 
+## Always-Green Main
+
+- **`main` is always green.** There is no such thing as a "preexisting test failure" — any red test blocks merge, full stop. If something on `main` breaks, the next PR is fixing it, not routing around it.
+- **Run `bazel test //...` before pushing any PR.** This is the single source of truth for local validation. Our goal is that `bazel test //...` catches every regression that CI would — if CI catches something local didn't, that's a gap to fix in the test surface, not a reason to skip the local check.
+- `tools/presubmit.sh` is a transitional wrapper and will be retired once `bazel test //...` covers every variant (`--config=tiny`, `--config=text-full`, `--config=geode`) by default. Prefer `bazel test //...` today; do not add new logic to `presubmit.sh` that couldn't live in Bazel directly.
+
 ## Debugging Discipline
 
 When debugging bugs — **especially performance or UI bugs** — write an automated test that reproduces the bug BEFORE attempting a fix. No fixes without repros.

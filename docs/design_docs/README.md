@@ -5,6 +5,13 @@ ADR-style in the order they were first written. New docs append the next
 free number — `NNNN-short_name.md` — and existing numbers never change once
 assigned, so external references stay stable.
 
+**On number collisions.** When two docs are drafted in parallel branches
+and both claim the next free number, the first to land on `main` keeps
+the bare `NNNN-` form. The second adds a `-2` suffix:
+`NNNN-2-short_name.md` (third would be `-3`, etc.). No renumbering, no
+history rewrite — the short name disambiguates and the collision marker
+stays visible.
+
 For how Donner's runtime is organized and documented, start with the
 [Developer Docs](../developer_docs.md). Design docs capture *why* a piece
 of the system looks the way it does (or will look). Developer docs describe
@@ -61,6 +68,9 @@ conventions automated agents should follow when editing design docs.
 | 0026 | [svg_conformance_testing](0026-svg_conformance_testing.md)                             | Draft                                                                      | Manifest-driven SVG 1.1 filter + WPT + scripted conformance program. |
 | 0027 | [scripting](0027-scripting.md)                                                         | Draft                                                                      | `donner::script`: QuickJS-NG + IDL codegen that projects the ECS as the DOM. |
 | 0028 | [v1_0_release](0028-v1_0_release.md)                                                   | Draft                                                                      | Release checklist and implementation plan for shipping v1.0 (full ProjectRoadmap scope). |
+| 0029 | [ci_runtime](0029-ci_runtime.md)                                                       | Superseded by [0030-2](0030-2-ci_hardening_2026q2.md)                       | CI runtime reduction plan (post-Skia baseline, per-config cache slots, runner sizing). Scope folded into 0030-2. |
+| 0030 | [geode_performance](0030-geode_performance.md)                                         | In Progress                                                                | Geode GPU-backend performance milestones (counters, arenas, shared command encoder, target reuse). |
+| 0030-2 | [ci_hardening_2026q2](0030-2-ci_hardening_2026q2.md)                                 | Design                                                                     | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029). |
 
 ## Cross-reference: developer docs
 

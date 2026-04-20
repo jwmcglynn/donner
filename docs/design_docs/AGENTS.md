@@ -2,6 +2,15 @@
 
 All design documents live under `docs/design_docs/`.
 
+## Numbering
+
+- New docs take the next free `NNNN-short_name.md` number.
+- If two docs land on the same number from parallel branches, the later
+  one adds a `-2` suffix (`NNNN-2-short_name.md`). Do not renumber either
+  doc — external references stay stable and the suffix makes the
+  collision visible. Third collider: `-3`, and so on.
+- Update the Document Index in [README.md](README.md) when adding a doc.
+
 ## Workflow
 
 1. **Goals first.** Write a design doc driven by user/requester goals. Capture scope, constraints, open questions. **Non-goals matter as much as goals** — explicitly state what's out of scope to prevent scope creep, anchor review discussions, and give future readers a clear boundary. Iterate until user confirms ready before planning implementation.
