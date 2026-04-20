@@ -34,7 +34,7 @@ Since [doc 0016](0016-ci_escape_prevention.md) landed Phase 1 (CMake `--check`, 
   - [ ] Enable `misc-include-cleaner` in `.clang-tidy`; wire `--config=clang-tidy` into `.github/workflows/lint.yml` as a required check. Fix the existing violations surfaced.
   - [ ] Add `asan-geode` job to `main.yml` scoped via `paths:` to `donner/svg/renderer/geode/**` and `donner/svg/renderer/RendererDriver.*`, running `bazel test --config=asan --config=geode //donner/svg/renderer/...:resvg_test_suite_geode`.
   - [ ] Extend `tools/presubmit.sh` with `--variants` flag that runs `tiny` / `text-full` / `geode` tiers; document in `CONTRIBUTING.md`.
-  - [ ] Update 0016 with Category 8 (sanitizer-only); link #552 comment thread with the repro command (`ASAN_OPTIONS=abort_on_error=1:halt_on_error=1`).
+  - [x] Update 0016 with Category 8 (wall-clock perf) + Category 9 (sanitizer-only); link #552 comment thread with the repro command (`ASAN_OPTIONS=abort_on_error=1:halt_on_error=1`). _(Landed in this branch, commit 1dd1b49d.)_
 - [ ] **Milestone 2 — Generator + perf hardening (M effort)**
   - [ ] Extend `tools/cmake/gen_cmakelists.py --check` to invoke `cmake --build` in a sandbox for Linux + macOS tiers (catches drift the static validator misses).
   - [ ] Introduce `donner_perf_cc_test` macro in `build_defs/rules.bzl` splitting correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged `perf`).
