@@ -24,6 +24,7 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
+#include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -86,43 +87,7 @@ MATCHER_P2(TransformNear, expected, tolerance, "transform near") {
   return true;
 }
 
-class MockRendererInterface : public RendererInterface {
-public:
-  MOCK_METHOD(void, draw, (SVGDocument & document), (override));
-  MOCK_METHOD(int, width, (), (const, override));
-  MOCK_METHOD(int, height, (), (const, override));
-  MOCK_METHOD(void, beginFrame, (const RenderViewport& viewport), (override));
-  MOCK_METHOD(void, endFrame, (), (override));
-  MOCK_METHOD(void, setTransform, (const Transform2d& transform), (override));
-  MOCK_METHOD(void, pushTransform, (const Transform2d& transform), (override));
-  MOCK_METHOD(void, popTransform, (), (override));
-  MOCK_METHOD(void, pushClip, (const ResolvedClip& clip), (override));
-  MOCK_METHOD(void, popClip, (), (override));
-  MOCK_METHOD(void, pushIsolatedLayer, (double opacity, MixBlendMode blendMode), (override));
-  MOCK_METHOD(void, popIsolatedLayer, (), (override));
-  MOCK_METHOD(void, pushFilterLayer,
-              (const components::FilterGraph& filterGraph,
-               const std::optional<Box2d>& filterRegion),
-              (override));
-  MOCK_METHOD(void, popFilterLayer, (), (override));
-  MOCK_METHOD(void, pushMask, (const std::optional<Box2d>& maskBounds), (override));
-  MOCK_METHOD(void, transitionMaskToContent, (), (override));
-  MOCK_METHOD(void, popMask, (), (override));
-  MOCK_METHOD(void, beginPatternTile, (const Box2d& tileRect, const Transform2d& targetFromPattern),
-              (override));
-  MOCK_METHOD(void, endPatternTile, (bool forStroke), (override));
-  MOCK_METHOD(void, setPaint, (const PaintParams& paint), (override));
-  MOCK_METHOD(void, drawPath, (const PathShape& path, const StrokeParams& stroke), (override));
-  MOCK_METHOD(void, drawRect, (const Box2d& rect, const StrokeParams& stroke), (override));
-  MOCK_METHOD(void, drawEllipse, (const Box2d& bounds, const StrokeParams& stroke), (override));
-  MOCK_METHOD(void, drawImage, (const ImageResource& image, const ImageParams& params), (override));
-  MOCK_METHOD(void, drawText,
-              (Registry & registry, const components::ComputedTextComponent& text,
-               const TextParams& params),
-              (override));
-  MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
-  MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
-};
+using MockRendererInterface = tests::MockRendererInterface;
 
 class RendererDriverTest : public ::testing::Test {
 protected:

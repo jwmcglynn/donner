@@ -46,6 +46,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -246,7 +247,17 @@ private:
   /// are impossible.
   std::function<void()> wakeCallback_;
   std::unique_ptr<svg::compositor::CompositorController> compositor_;
-  svg::SVGDocument* compositorDocument_ = nullptr;
+  /// The `SVGDocument` this compositor is currently configured for. Stored by
+  /// value — `SVGDocument` is a thin value-facade over a `std::shared_ptr<Registry>`
+  /// (see `SVGDocumentHandle`), so copying is a refcount bump, not a deep copy
+  /// of the document state. `nullopt` before the first render request; set to
+  /// a copy of `request.document` on the first iteration and any time the
+  /// underlying document handle changes.
+  ///
+  /// Identity comparison uses `handle().get()` against the incoming request's
+  /// document — two `SVGDocument` values wrapping the same `std::shared_ptr<
+  /// Registry>` compare equal, which is the right "same document" semantic.
+  std::optional<svg::SVGDocument> compositorDocument_;
   svg::Renderer* compositorRenderer_ = nullptr;
   Entity compositorEntity_ = entt::null;
   /// Document generation at the time the compositor was last configured.

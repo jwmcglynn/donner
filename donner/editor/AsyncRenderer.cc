@@ -86,12 +86,18 @@ void AsyncRenderer::workerLoop() {
       // editor session / backend). This preserves mandatory-filter / bucket
       // layer bitmap caches and the pre-warmed bg/fg pair between the
       // selection pre-warm and the first drag frame that follows.
-      if (!compositor_ || compositorDocument_ != request.document ||
-          compositorRenderer_ != request.renderer) {
+      // Identity check uses the underlying `SVGDocumentHandle` (a shared_ptr
+      // to the Registry), not the `SVGDocument` pointer — SVGDocument is a
+      // value facade and two facades wrapping the same handle are the same
+      // document.
+      const bool documentChanged =
+          !compositorDocument_.has_value() ||
+          compositorDocument_->handle().get() != request.document->handle().get();
+      if (!compositor_ || documentChanged || compositorRenderer_ != request.renderer) {
         compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
                                                                               *request.renderer);
         compositor_->setSkipMainComposeDuringSplit(true);
-        compositorDocument_ = request.document;
+        compositorDocument_ = *request.document;  // cheap: refcount bump on the Registry handle.
         compositorRenderer_ = request.renderer;
         compositorEntity_ = entt::null;
         compositorDocumentGeneration_ = request.documentGeneration;

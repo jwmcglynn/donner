@@ -25,6 +25,19 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "mock_renderer_interface",
+    testonly = 1,
+    hdrs = [
+        "MockRendererInterface.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_test_utils",
     testonly = 1,
     hdrs = [
@@ -303,6 +316,7 @@ donner_cc_test(
         "RenderingContext_tests.cc",
     ],
     deps = [
+        ":mock_renderer_interface",
         "//donner/base:base_test_utils",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_utils",
