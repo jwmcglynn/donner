@@ -109,13 +109,13 @@ fi
 # ---- Step 2: configure ----
 #
 # `-Dvulkan-drivers=${DRIVERS}` builds the requested Vulkan ICDs.
-# `-Dgallium-drivers=` disables the OpenGL / gallium drivers (we don't
-# need them for WebGPU). Mesa's build system still requires the
-# `swrast` gallium driver for some lavapipe internals, so we enable
-# that conditionally if swrast is in the Vulkan driver list.
+# `-Dgallium-drivers=` disables the OpenGL / gallium drivers — we only
+# need Vulkan for wgpu-native. One exception: lavapipe (the swrast
+# Vulkan driver) depends on Mesa's `llvmpipe` gallium backend for its
+# rasterizer, so enable that when lavapipe is requested.
 GALLIUM_DRIVERS=""
 if [[ "$DRIVERS" == *"swrast"* ]]; then
-  GALLIUM_DRIVERS="swrast"
+  GALLIUM_DRIVERS="llvmpipe"
 fi
 
 MESON_ARGS=(
@@ -123,8 +123,17 @@ MESON_ARGS=(
   "-Dprefix=${PREFIX_DIR}"
   "-Dvulkan-drivers=${DRIVERS}"
   "-Dgallium-drivers=${GALLIUM_DRIVERS}"
-  "-Dplatforms=x11,wayland"
+  # Headless build: no X / Wayland. wgpu-native uses offscreen rendering
+  # only; skipping display-platform deps keeps apt surface small.
+  "-Dplatforms="
   "-Dglx=disabled"
+  "-Degl=disabled"
+  "-Dgbm=disabled"
+  "-Dgles1=disabled"
+  "-Dgles2=disabled"
+  "-Dopengl=false"
+  "-Dshared-glapi=disabled"
+  "-Dllvm=enabled"
   "-Dvideo-codecs="
   "-Dvulkan-layers="
 )
