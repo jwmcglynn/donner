@@ -1,4 +1,37 @@
 ##
+## Platform definitions
+##
+## Used by Bazel Remote Execution (event-horizon design 0002 / 0004) to
+## target a specific OS/ISA. --platforms=//:linux_aarch64 routes builds
+## to the bazel-re1 Linux worker pool; --platforms=//:macos_aarch64
+## routes to bazel-re2 macOS workers. See ~/.bazelrc on klein / dev1
+## for the --config=re-linux and --config=re-macos presets.
+
+platform(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "macos_aarch64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+##
 ## Main library
 ##
 load("//build_defs:rules.bzl", "donner_cc_library")
