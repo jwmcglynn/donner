@@ -10,6 +10,8 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::ElementsAre;
@@ -225,6 +227,35 @@ TEST_F(RenderingContextTest, UseElement) {
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, DirtyUseRebuildRecomputesShadowTreeStyles) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <rect id="template" width="20" height="20" fill="green"/>
+      </defs>
+      <use id="u" href="#template" x="50" y="50"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  auto useElement = document.querySelector("#u");
+  ASSERT_TRUE(useElement.has_value());
+  useElement->setAttribute("transform", "translate(10 0)");
+
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  for (auto view =
+           document.registry().view<donner::components::TreeComponent, ComputedStyleComponent>();
+       auto entity : view) {
+    const auto& computedStyle = view.get<ComputedStyleComponent>(entity);
+    EXPECT_TRUE(computedStyle.properties.has_value())
+        << "entity " << int(entt::to_integral(entity))
+        << " kept an uncomputed style after dirty shadow-tree rebuild";
+  }
 }
 
 TEST_F(RenderingContextTest, FilterElement) {

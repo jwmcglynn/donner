@@ -1,9 +1,9 @@
 #include "donner/editor/ImGuiClipboard.h"
 
-#include "imgui.h"
-
 #include <string>
 #include <string_view>
+
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 

@@ -196,9 +196,10 @@ Transform2d resolveGradientTransform(
     return Transform2d();
   }
   const Vector2d origin = maybeTransformComponent->transformOrigin;
-  const Transform2d entityFromParent =
+  const Transform2d parentFromEntity =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transform2d::Translate(origin) * entityFromParent * Transform2d::Translate(-origin);
+  return Transform2d::Translate(origin) * parentFromEntity *
+         Transform2d::Translate(-origin);
 }
 
 /// Resolved frame for either kind of gradient: the bounds against which
@@ -1269,7 +1270,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       for (size_t s = it->begin; s < it->end; ++s) {
         const PathShape& shape = clip.clipPaths[s];
         const Transform2d composed =
-            clip.clipPathUnitsTransform * shape.entityFromParent * savedTransform;
+            clip.clipPathUnitsTransform * shape.parentFromEntity * savedTransform;
         impl_->encoder->setTransform(composed);
         impl_->encoder->fillPathIntoMask(shape.path, shape.fillRule);
       }

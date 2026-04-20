@@ -1,6 +1,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/svg/compositor/CompositorController.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -13,7 +14,43 @@ void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
   queue_.clear();
   lastParseError_.reset();
+  pendingStructuralRemap_.clear();
   frameVersion_.fetch_add(1, std::memory_order_release);
+  documentGeneration_.fetch_add(1, std::memory_order_release);
+}
+
+AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
+    svg::SVGDocument newDocument) {
+  // If there's no current document, a structural remap isn't meaningful —
+  // just install the new one like a regular `setDocument`.
+  if (!document_.has_value()) {
+    setDocument(std::move(newDocument));
+    return ReplaceKind::FullReplace;
+  }
+
+  // Build the remap BEFORE the swap. The walker needs both documents'
+  // XML trees live; once we move `newDocument` into `document_`, the
+  // old document is gone. Note this runs on the UI thread with no
+  // locking — consistent with the existing `setDocument` contract that
+  // only the UI thread touches the document outside a render.
+  auto remap = svg::compositor::BuildStructuralEntityRemap(*document_, newDocument);
+  const bool structural = !remap.empty();
+
+  // Swap the document. We can't call `setDocument` directly because it
+  // clears `pendingStructuralRemap_` — we want to populate it right
+  // after.
+  document_ = std::move(newDocument);
+  queue_.clear();
+  lastParseError_.reset();
+  frameVersion_.fetch_add(1, std::memory_order_release);
+  documentGeneration_.fetch_add(1, std::memory_order_release);
+
+  if (structural) {
+    pendingStructuralRemap_ = std::move(remap);
+    return ReplaceKind::Structural;
+  }
+  pendingStructuralRemap_.clear();
+  return ReplaceKind::FullReplace;
 }
 
 bool AsyncSVGDocument::flushFrame() {
@@ -76,7 +113,32 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // produces a fresh document via the parser, so we re-enter the
       // setDocument path which clears the queue (already drained) and bumps
       // the version (which `flushFrame` will bump again, harmlessly).
-      (void)loadFromString(command.bytes);
+      //
+      // `preserveUndoOnReparse` commands are self-generated writebacks —
+      // drag-end transforms, delete-element text patches — that mutate
+      // only attribute values or delete whole subtrees. In the common
+      // drag-end case the tree shape is identical, so try the structural
+      // remap path: on success the worker's next tick will preserve the
+      // compositor's cached layer bitmaps + segments instead of paying
+      // the full-reset cost. On failure (tree shape changed, e.g. delete-
+      // element), the structural check returns an empty remap and the
+      // replacement falls back to the standard `FullReplace` semantics.
+      //
+      // Non-writeback `ReplaceDocument`s (file open, user text edit that
+      // made the whole thing unparseable until now) aren't tagged
+      // `preserveUndoOnReparse`, and go through the straight
+      // `loadFromString` path — they genuinely replace the entity space.
+      if (command.preserveUndoOnReparse) {
+        ParseWarningSink sink;
+        auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
+        if (result.hasError()) {
+          lastParseError_ = std::move(result.error());
+          return;
+        }
+        (void)setDocumentMaybeStructural(std::move(result).result());
+      } else {
+        (void)loadFromString(command.bytes);
+      }
       break;
     }
 

@@ -22,15 +22,34 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
+#include "donner/base/Vector2.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 struct GLFWwindow;
+using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
 
 namespace donner::editor::gui {
 
+/// HiDPI settings derived from the native window/display scale.
+struct UiScaleConfig {
+  double displayScale = 1.0;
+
+  [[nodiscard]] float scaledPixels(double basePixels) const {
+    return static_cast<float>(basePixels * displayScale);
+  }
+
+  [[nodiscard]] float fontGlobalScale() const { return static_cast<float>(1.0 / displayScale); }
+};
+
+/// Derive the editor's UI scaling from logical window size, framebuffer size, and the platform's
+/// content scale hint. Prefers the framebuffer/logical ratio when available.
+[[nodiscard]] UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
+                                                 double contentScaleX);
+
 struct EditorWindowOptions {
-  std::string title = "Donner Editor";
+  std::string title = "Donner SVG Editor";
   int initialWidth = 1280;
   int initialHeight = 720;
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
@@ -57,8 +76,29 @@ public:
   /// the OS's "close" shortcut.
   [[nodiscard]] bool shouldClose() const;
 
-  /// Pumps the OS event queue. Must be called once per frame.
+  /// Pumps the OS event queue without blocking. Use on Emscripten
+  /// (where `waitEvents` is unimplemented) or when a continuous render
+  /// loop is required (e.g. when an active animation is driving a
+  /// fresh frame every tick).
   void pollEvents();
+
+  /// Blocks until an OS or user-posted event arrives, then pumps the
+  /// event queue once. This is the on-demand render path: the UI thread
+  /// sleeps when the editor is idle and wakes on user input, window
+  /// resize, or an explicit `wakeEventLoop()` from another thread.
+  ///
+  /// No-op on Emscripten, where the browser's requestAnimationFrame
+  /// drives the main loop instead (`glfwWaitEvents` is unimplemented
+  /// upstream).
+  void waitEvents();
+
+  /// Post an empty event into the window's queue, waking a concurrent
+  /// `waitEvents()` call. Safe to call from any thread. Used by the
+  /// async renderer worker to wake the UI thread when a render result
+  /// becomes available.
+  ///
+  /// No-op on Emscripten.
+  void wakeEventLoop();
 
   /// Starts a new ImGui frame. Caller issues `ImGui::*` widget calls
   /// after this returns.
@@ -83,6 +123,24 @@ public:
   [[nodiscard]] int textureWidth() const { return textureWidth_; }
   [[nodiscard]] int textureHeight() const { return textureHeight_; }
 
+  /// Update the native window title.
+  void setTitle(std::string_view title);
+
+  /// Logical window size in screen coordinates.
+  [[nodiscard]] Vector2i windowSize() const;
+
+  /// Backing display content scale (for example 2.0 on a Retina display).
+  [[nodiscard]] Vector2d contentScale() const;
+
+  /// Effective UI display scale used for ImGui fonts and framebuffer coordinates.
+  [[nodiscard]] double displayScale() const { return uiScaleConfig_.displayScale; }
+
+  /// Install a GLFW user pointer on the wrapped window.
+  void setUserPointer(void* pointer);
+
+  /// Replace the GLFW scroll callback, returning the previous callback.
+  [[nodiscard]] GLFWscrollfun setScrollCallback(GLFWscrollfun callback);
+
   /// Raw GLFW window handle. Exposed for advanced use cases (custom key
   /// bindings, drag-and-drop setup). The main MVP binary doesn't need it.
   [[nodiscard]] GLFWwindow* rawHandle() const { return window_; }
@@ -93,6 +151,7 @@ private:
   uint32_t textureId_ = 0;
   int textureWidth_ = 0;
   int textureHeight_ = 0;
+  UiScaleConfig uiScaleConfig_;
   bool valid_ = false;
   bool imguiInitialized_ = false;
 };

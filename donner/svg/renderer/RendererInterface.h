@@ -43,6 +43,14 @@ struct RenderViewport {
 };
 
 /**
+ * Alpha channel interpretation for pixel data.
+ */
+enum class AlphaType : uint8_t {
+  Premultiplied,    //!< RGB channels are pre-multiplied by alpha.
+  Unpremultiplied,  //!< RGB channels are independent of alpha (straight alpha).
+};
+
+/**
  * CPU-readable bitmap produced by a renderer snapshot.
  */
 struct RendererBitmap {
@@ -52,6 +60,8 @@ struct RendererBitmap {
   std::vector<uint8_t> pixels;
   /// Bytes between rows; allows alignment/padding differences between renderers.
   std::size_t rowBytes = 0;
+  /// Alpha channel interpretation. Backends produce premultiplied data by default.
+  AlphaType alphaType = AlphaType::Premultiplied;
 
   /// Returns true if this bitmap has no pixel data.
   [[nodiscard]] bool empty() const {
@@ -66,7 +76,7 @@ struct PathShape {
   Path path;
   FillRule fillRule = FillRule::NonZero;
   /// Transform from clip path child to the clip path's coordinate system.
-  Transform2d entityFromParent;
+  Transform2d parentFromEntity;
   /// Layer index for boolean combination: paths on the same layer are unioned, layers are
   /// intersected.
   int layer = 0;

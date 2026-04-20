@@ -239,6 +239,8 @@ public:
   struct CompletedTransformWriteback {
     AttributeWritebackTarget target;
     Transform2d transform;
+    std::optional<RcString> sourceTransformAttributeValue;
+    bool restoreSourceTransformAttributeValue = false;
   };
 
   struct CompletedElementRemoveWriteback {

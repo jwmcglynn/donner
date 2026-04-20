@@ -168,12 +168,24 @@ donner_perf_sensitive_cc_library(
 )
 
 donner_perf_sensitive_cc_library(
+    name = "pixel_format_utils",
+    srcs = ["PixelFormatUtils.cc"],
+    hdrs = ["PixelFormatUtils.h"],
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [],
+)
+
+donner_perf_sensitive_cc_library(
     name = "filter_graph_executor",
     srcs = ["FilterGraphExecutor.cc"],
     hdrs = ["FilterGraphExecutor.h"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":pixel_format_utils",
         "//donner/base",
         "//donner/svg",
         ":tiny_skia_deps",
@@ -318,6 +330,7 @@ donner_perf_sensitive_cc_library(
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//visibility:public"],
     deps = [
+        ":pixel_format_utils",
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",

@@ -10,13 +10,51 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "editor_window_tests",
+    srcs = ["EditorWindow_tests.cc"],
+    deps = [
+        "//donner/editor/gui:editor_window",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "keyboard_shortcut_policy_tests",
+    srcs = ["KeyboardShortcutPolicy_tests.cc"],
+    deps = [
+        "//donner/editor:keyboard_shortcut_policy",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "document_sync_controller_tests",
+    srcs = ["DocumentSyncController_tests.cc"],
+    deps = [
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:text_editor",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
+    name = "viewport_interaction_controller_tests",
+    srcs = ["ViewportInteractionController_tests.cc"],
+    deps = [
+        "//donner/editor:viewport_interaction_controller",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "selection_aabb_tests",
     srcs = ["SelectionAabb_tests.cc"],
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
-        "//donner/editor:viewport_state",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
@@ -54,6 +92,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "experimental_drag_presentation_tests",
+    srcs = ["ExperimentalDragPresentation_tests.cc"],
+    deps = [
+        "//donner/editor:experimental_drag_presentation",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "command_queue_tests",
     srcs = ["CommandQueue_tests.cc"],
     deps = [
@@ -70,6 +117,26 @@ donner_cc_test(
     deps = [
         "//donner/editor:async_svg_document",
         "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "async_renderer_tests",
+    srcs = ["AsyncRenderer_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+    ],
+    deps = [
+        "//donner/editor:async_renderer",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:command_queue",
+        "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:tracy_wrapper",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+        "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -192,6 +259,20 @@ donner_cc_test(
         "//donner/editor:text_editor",
         "@com_google_gtest//:gtest_main",
         "@imgui",
+    ],
+)
+
+donner_cc_test(
+    name = "drag_release_pop_back_tests",
+    srcs = ["DragReleasePopBack_tests.cc"],
+    deps = [
+        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:select_tool",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 

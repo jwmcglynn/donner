@@ -1,48 +1,26 @@
-"""GLFW + ImGui + OpenGL frontend for the Donner Editor MVP.
+"""Shared GLFW + ImGui + OpenGL host for the advanced Donner editor."""
 
-Builds the `donner_editor_gui` binary — a real window that exercises the
-entire S1-S6 sandbox stack plus the M1 editor infrastructure. The window
-layer is tagged `manual` so it doesn't run under headless CI; the binary
-still builds as part of `bazel test //...`, though.
-"""
+load("//build_defs:rules.bzl", "donner_cc_library")
 
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "renderer_backend_compatible_with")
-
-package(default_visibility = ["//donner/editor:__subpackages__"])
+package(default_visibility = ["//visibility:public"])
 
 donner_cc_library(
     name = "editor_window",
     srcs = ["EditorWindow.cc"],
     hdrs = ["EditorWindow.h"],
-    # The GUI requires a display server (X11/Wayland/Cocoa) at both compile
-    # and run time. Tagged manual so `bazel build //...` on headless CI
-    # doesn't pull in GLFW (which fails without X11 dev headers).
-    tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
-    visibility = ["//donner/editor:__subpackages__"],
     deps = [
+        "//donner/base",
+        "//donner/editor:imgui_headers",
+        "//donner/editor:tracy_wrapper",
         "//donner/svg/renderer:renderer_interface",
-        "//third_party/glad",
         "@imgui",
-    ],
-)
-
-donner_cc_binary(
-    name = "donner_editor_gui",
-    srcs = ["donner_editor_gui_main.cc"],
-    # The binary requires a display to actually run, so we tag it manual
-    # to keep it out of `bazel test //...` wildcards. It still builds.
-    tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
-    visibility = ["//donner/editor:__subpackages__"],
-    deps = [
-        ":editor_window",
-        "//donner/editor/app:editor_app",
-        "//donner/editor/sandbox:frame_inspector",
-        "//donner/editor/sandbox:rnr_file",
-        "//donner/svg/renderer:renderer_image_io",
-        "//donner/svg/renderer",
-        "//third_party/glad",
-        "@imgui",
-    ],
+    ] + select({
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "//third_party/glad",
+            "@glfw",
+        ],
+    }),
 )

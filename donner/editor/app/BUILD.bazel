@@ -1,14 +1,13 @@
-"""Donner Editor MVP — the headless core, REPL shell, and binary.
+"""Sandbox render-session tooling: the headless session, REPL shell, and binary.
 
-The `app` package is the first concrete `donner/editor/` code outside
-`sandbox/`. It builds on top of every sandbox primitive:
+The `app` package is the non-GUI tooling surface on top of the sandbox primitives:
 
   - `SvgSource` for URI → bytes
   - `PipelinedRenderer` for multi-threaded wire-based rasterization
   - `FrameInspector` + `RnrFile` for "inspect" / "record" commands
   - `TerminalImageViewer` for the `show` command
 
-The `:editor_app` library is fully UI-free and exhaustively testable; the
+The `:render_session` library is fully UI-free and exhaustively testable; the
 binary target layers a stdin/stdout REPL on top.
 """
 
@@ -17,7 +16,7 @@ load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "rendere
 package(default_visibility = ["//donner/editor:__subpackages__"])
 
 donner_cc_library(
-    name = "editor_app",
+    name = "render_session",
     srcs = ["EditorApp.cc"],
     hdrs = ["EditorApp.h"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
@@ -34,13 +33,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "editor_repl",
+    name = "render_session_repl",
     srcs = ["EditorRepl.cc"],
     hdrs = ["EditorRepl.h"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
-        ":editor_app",
+        ":render_session",
         "//donner/editor/sandbox:frame_inspector",
         "//donner/editor/sandbox:rnr_file",
         "//donner/svg/renderer:renderer_image_io",
@@ -50,12 +49,12 @@ donner_cc_library(
 )
 
 donner_cc_binary(
-    name = "donner_editor",
+    name = "render_repl",
     srcs = ["donner_editor_main.cc"],
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
-        ":editor_app",
-        ":editor_repl",
+        ":render_session",
+        ":render_session_repl",
     ],
 )

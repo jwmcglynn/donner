@@ -1370,7 +1370,7 @@ cleanup.
   (value 0xFF) is bound when no clip is active so the bind group
   layout stays stable. `RendererGeode::pushClip` allocates mask
   texture(s) per clip, walks `clip.clipPaths` applying the
-  `clipPathUnitsTransform × entityFromParent × currentTransform`
+  `clipPathUnitsTransform × parentFromEntity × currentTransform`
   chain (matches `RendererTinySkia`), and stashes the outermost
   resolve view on the clip stack entry so `updateEncoderScissor`
   can bind the topmost mask. Multiple clip paths within a single

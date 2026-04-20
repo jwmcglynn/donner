@@ -273,13 +273,13 @@ Transform2d userSpaceFromMaskContent = Transform2d::Translate(contentUnitsBounds
                                     * Transform2d::Scale(contentUnitsBounds.size());
 
 // Update the layer base transform
-layerBaseTransform_ = userSpaceFromMaskContent * layerBaseTransform_;
+surfaceFromCanvasTransform_ = userSpaceFromMaskContent * surfaceFromCanvasTransform_;
 ```
 
 **Explanation:**
 
 - `userSpaceFromMaskContent` transforms coordinates from the mask content coordinate system to user space.
-- The `layerBaseTransform_` is updated by pre-multiplying it with `userSpaceFromMaskContent`, ensuring that subsequent rendering operations are in the correct coordinate system.
+- The `surfaceFromCanvasTransform_` is updated by pre-multiplying it with `userSpaceFromMaskContent`, ensuring that subsequent rendering operations are in the correct coordinate system.
 
 **Another Example in Gradient Instantiation:**
 

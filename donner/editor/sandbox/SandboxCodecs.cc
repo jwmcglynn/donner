@@ -308,14 +308,14 @@ bool DecodeStrokeParams(WireReader& r, svg::StrokeParams& out) {
 void EncodePathShape(WireWriter& w, const svg::PathShape& p) {
   EncodePath(w, p.path);
   EncodeFillRule(w, p.fillRule);
-  EncodeTransform2d(w, p.entityFromParent);
+  EncodeTransform2d(w, p.parentFromEntity);
   w.writeI32(p.layer);
 }
 
 bool DecodePathShape(WireReader& r, svg::PathShape& out) {
   if (!DecodePath(r, out.path)) return false;
   if (!DecodeFillRule(r, out.fillRule)) return false;
-  if (!DecodeTransform2d(r, out.entityFromParent)) return false;
+  if (!DecodeTransform2d(r, out.parentFromEntity)) return false;
   if (!r.readI32(out.layer)) return false;
   return true;
 }

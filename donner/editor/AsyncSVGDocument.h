@@ -16,6 +16,9 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
+
+#include "donner/base/EcsRegistry.h"
 
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/CommandQueue.h"
@@ -48,6 +51,35 @@ public:
   /// reference now-invalid entities. Bumps the frame version.
   void setDocument(svg::SVGDocument document);
 
+  /// Outcome of `setDocumentMaybeStructural`. `FullReplace` means the new
+  /// doc differs structurally from the current one (or there was no
+  /// current one) and every consumer of the old entity space must treat
+  /// their state as invalid — identical to `setDocument`'s contract.
+  /// `Structural` means the new doc has the same XML shape and element
+  /// ids, and the entity remap carried via the next `RenderRequest`
+  /// lets downstream consumers (the compositor) preserve their caches.
+  enum class ReplaceKind : uint8_t { FullReplace, Structural };
+
+  /// Like `setDocument`, but builds a structural entity remap against
+  /// the current document first. If the remap is non-empty (trees match
+  /// by tag name + id at every step), the replacement is tagged as
+  /// `Structural` — the next `RenderRequest` carries the remap so the
+  /// compositor can call `remapAfterStructuralReplace` instead of
+  /// `resetAllLayers(documentReplaced=true)`, preserving cached layer
+  /// bitmaps and segments across the swap. If the trees differ (user
+  /// edited the source pane to change shape, etc.) the remap is empty
+  /// and we fall back to the standard `setDocument` path.
+  ReplaceKind setDocumentMaybeStructural(svg::SVGDocument newDocument);
+
+  /// Take ownership of the pending structural remap produced by the
+  /// most recent `setDocumentMaybeStructural(Structural)` call. Returns
+  /// an empty map if the last replacement was a `FullReplace` or nothing
+  /// has been replaced since the last consumption. Called by
+  /// `RenderCoordinator` when assembling the next `RenderRequest`.
+  std::unordered_map<Entity, Entity> consumePendingStructuralRemap() {
+    return std::move(pendingStructuralRemap_);
+  }
+
   /// Whether a document has been loaded yet.
   [[nodiscard]] bool hasDocument() const { return document_.has_value(); }
 
@@ -73,6 +105,21 @@ public:
 
   /// Metadata from the most recent `flushFrame()` call.
   [[nodiscard]] const FlushResult& lastFlushResult() const { return lastFlushResult_; }
+
+  /// Generation counter bumped only when `setDocument` replaces the inner
+  /// SVGDocument (e.g. `ReplaceDocumentCommand` on source-pane edits). The
+  /// inner document's storage address is stable across a replacement (the
+  /// optional lives inside this object), so pointer-identity is NOT a
+  /// reliable "is this the same document" check — consumers that cache
+  /// per-document state (like the compositor's `activeHints_` backing an
+  /// entity space) need this counter to know when to tear that state down.
+  ///
+  /// Distinct from `frameVersion_`: the frame counter bumps on every
+  /// mutation (including every drag frame's `SetTransformCommand`), which
+  /// would be catastrophic to treat as a document replacement.
+  [[nodiscard]] std::uint64_t documentGeneration() const {
+    return documentGeneration_.load(std::memory_order_acquire);
+  }
 
   /// Monotonic frame version counter. Bumped on every state change visible
   /// to the renderer (mutation flush or document replacement). The render
@@ -105,6 +152,15 @@ private:
   std::optional<svg::SVGDocument> document_;
   CommandQueue queue_;
   std::atomic<std::uint64_t> frameVersion_{0};
+  std::atomic<std::uint64_t> documentGeneration_{0};
+
+  /// Remap from the previous document's entity ids to the current
+  /// document's entity ids, populated by `setDocumentMaybeStructural`
+  /// when the replacement was structurally equivalent. Consumed and
+  /// cleared by `consumePendingStructuralRemap`. Empty when the most
+  /// recent replacement was a `FullReplace` or there has been no
+  /// replacement since the last consumption.
+  std::unordered_map<Entity, Entity> pendingStructuralRemap_;
   std::optional<ParseDiagnostic> lastParseError_;
   FlushResult lastFlushResult_;
 };

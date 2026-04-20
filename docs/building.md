@@ -175,7 +175,11 @@ The full native editor lives at `//donner/editor:editor`:
 
 ```sh
 bazel run //donner/editor -- donner_splash.svg
+bazel run //donner/editor -- --experimental path/to/file.svg
 ```
+
+`--experimental` enables editor-only experimental behavior such as the in-progress composited drag
+path. Without the flag, the editor uses the default non-experimental interaction path.
 
 The browser build lives at `//donner/editor/wasm` and is toolchain-gated behind
 `--config=editor-wasm`:

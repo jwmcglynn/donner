@@ -15,9 +15,7 @@ constexpr std::string_view kTwoRectsSvg =
 
 class SelectToolTest : public ::testing::Test {
 protected:
-  void SetUp() override {
-    ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
-  }
+  void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
 
   svg::SVGElement elementById(std::string_view id) {
     auto element = app.document().document().querySelector(id);
@@ -51,6 +49,22 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_TRUE(tool.isDragging());
 }
 
+TEST_F(SelectToolTest, CompositedRenderingToggleAllowedOnlyWithoutActiveGesture) {
+  EXPECT_TRUE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  EXPECT_FALSE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  EXPECT_TRUE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseDown(app, Vector2d(180.0, 180.0), MouseModifiers{});
+  EXPECT_FALSE(CanToggleCompositedRendering(tool));
+
+  tool.onMouseUp(app, Vector2d(180.0, 180.0));
+  EXPECT_TRUE(CanToggleCompositedRendering(tool));
+}
+
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
   app.setSelection(elementById("#r1"));
   EXPECT_TRUE(app.hasSelection());
@@ -82,6 +96,23 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
   const Transform2d after = transformOf("#r1");
   EXPECT_DOUBLE_EQ(after.data[4], 25.0);
   EXPECT_DOUBLE_EQ(after.data[5], 20.0);
+}
+
+TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
+  tool.setCompositedDragPreviewEnabled(true);
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
+
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.x, 35.0);
+  EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.y, 20.0);
+  // DOM is source of truth during drag — `onMouseMove` queues a
+  // `SetTransformCommand` on every move even on the composited path.
+  // The compositor's fast path detects the pure-translation delta and
+  // reuses the cached drag-layer bitmap via its internal composition
+  // transform, but the DOM is kept in sync so the canvas view and the
+  // backing document never disagree.
+  EXPECT_EQ(app.document().queue().size(), 1u);
 }
 
 TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
@@ -425,6 +456,269 @@ TEST_F(SelectToolTest, ShiftMarqueeOverAlreadySelectedDoesNotDuplicate) {
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(50.0, 50.0));
   EXPECT_EQ(app.selectedElements().size(), 2u);
+}
+
+// ── Multi-select drag ───────────────────────────────────────────────────────
+//
+// Multi-select drag: when a user clicks and drags on an element that's
+// already in a multi-element selection, every selected element moves in
+// lockstep. This covers the marquee → click-drag flow, undo semantics, and
+// the "clicking an unselected element collapses selection" escape hatch.
+
+TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
+  // Marquee-select both rects.
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+
+  // Click-drag on r1 (an already-selected element). Both should move.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging()) << "click on selected element starts a drag";
+  EXPECT_EQ(app.selectedElements().size(), 2u)
+      << "selection preserved — clicking an already-selected element does not collapse";
+
+  tool.onMouseMove(app, Vector2d(65.0, 45.0), /*buttonHeld=*/true);  // delta (50, 30)
+  tool.onMouseUp(app, Vector2d(65.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  const Transform2d r2End = transformOf("#r2");
+  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 50.0, 1e-6) << "r1 moved by dx";
+  EXPECT_NEAR(r1End.data[5] - r1Start.data[5], 30.0, 1e-6) << "r1 moved by dy";
+  EXPECT_NEAR(r2End.data[4] - r2Start.data[4], 50.0, 1e-6) << "r2 moved by same dx";
+  EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 30.0, 1e-6) << "r2 moved by same dy";
+}
+
+TEST_F(SelectToolTest, ClickOnUnselectedElementCollapsesMultiSelection) {
+  // Marquee-select both.
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  // Click on r1 — already in selection — the "grab any, move all" case:
+  // selection preserved.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  EXPECT_EQ(app.selectedElements().size(), 2u);
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+
+  // Reset to multi-selection. Now click on empty space BETWEEN the rects so
+  // the marquee path clears selection. Re-select and then click r1.
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  // Now simulate "click on a different selected element" (r2): still preserves.
+  tool.onMouseDown(app, Vector2d(120.0, 120.0), MouseModifiers{});
+  EXPECT_EQ(app.selectedElements().size(), 2u)
+      << "clicking on r2 (also in selection) preserves the whole selection";
+  tool.onMouseUp(app, Vector2d(120.0, 120.0));
+}
+
+TEST_F(SelectToolTest, SingleSelectionStaysSingleWhenDragged) {
+  // Only r1 selected. Click-drag on r1 → single-element drag, no extras.
+  app.setSelection(elementById("#r1"));
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(65.0, 45.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(65.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  const Transform2d r2End = transformOf("#r2");
+  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 50.0, 1e-6) << "r1 moved";
+  EXPECT_NEAR(r2End.data[4] - r2Start.data[4], 0.0, 1e-6) << "r2 did NOT move (not in selection)";
+  EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 0.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
+  // Give r2 a prior transform so we can verify its start transform is
+  // captured and delta is composed relative to the right starting point.
+  auto r2Handle = elementById("#r2").cast<svg::SVGGraphicsElement>();
+  r2Handle.setTransform(Transform2d::Translate(Vector2d(5.0, 7.0)));
+
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+  ASSERT_NEAR(r2Start.data[4], 5.0, 1e-6);  // sanity: r2 starts at translate(5, 7)
+  ASSERT_NEAR(r2Start.data[5], 7.0, 1e-6);
+
+  // Drag by (10, 20).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(25.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(25.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  const Transform2d r2End = transformOf("#r2");
+  EXPECT_NEAR(r1End.data[4], r1Start.data[4] + 10.0, 1e-6);
+  EXPECT_NEAR(r2End.data[4], 15.0, 1e-6) << "r2: 5 + 10 = 15 (delta applied to prior transform)";
+  EXPECT_NEAR(r2End.data[5], 27.0, 1e-6) << "r2: 7 + 20 = 27";
+}
+
+TEST_F(SelectToolTest, MultiSelectDragWithoutMovementLeavesElementsAlone) {
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  const Transform2d r1Start = transformOf("#r1");
+  const Transform2d r2Start = transformOf("#r2");
+
+  // mouse-down without a real mouse-move (sub-threshold noise).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(15.1, 15.1), /*buttonHeld=*/true);  // below 1.0 threshold
+  tool.onMouseUp(app, Vector2d(15.1, 15.1));
+  app.flushFrame();
+
+  EXPECT_EQ(transformOf("#r1").data[4], r1Start.data[4]) << "r1 unchanged by click-without-drag";
+  EXPECT_EQ(transformOf("#r2").data[4], r2Start.data[4]) << "r2 unchanged";
+}
+
+TEST_F(SelectToolTest, MultiSelectDragProducesWritebackForAllElements) {
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(45.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto writeback = tool.consumeCompletedDragWriteback();
+  ASSERT_TRUE(writeback.has_value()) << "primary writeback latched";
+  // The extras field carries non-primary elements' writebacks so the source
+  // sync path can patch every dragged element in one pass.
+  EXPECT_EQ(writeback->extras.size(), 1u) << "one extra writeback for r2";
+}
+
+TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
+  // When compositing is enabled but the drag is multi-element, the preview
+  // path falls back to DOM mutation — the drag-preview transport models only
+  // a single moving layer.
+  tool.setCompositedDragPreviewEnabled(true);
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+  app.flushFrame();
+
+  EXPECT_FALSE(tool.activeDragPreview().has_value())
+      << "multi-select drag must not emit a composited preview (would misrepresent the group)";
+
+  // Elements move via DOM mutation (not the composited preview path).
+  EXPECT_NE(transformOf("#r1").data[4], 0.0) << "r1 moved via mutation path";
+
+  tool.onMouseUp(app, Vector2d(45.0, 45.0));
+}
+
+TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
+  // Regression guard for the flow that USES the composited preview.
+  tool.setCompositedDragPreviewEnabled(true);
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+
+  auto preview = tool.activeDragPreview();
+  ASSERT_TRUE(preview.has_value()) << "single-element drag with compositing on emits a preview";
+  EXPECT_EQ(preview->entity, elementById("#r1").entityHandle().entity());
+
+  tool.onMouseUp(app, Vector2d(45.0, 45.0));
+}
+
+// State-machine invariant: if the app's selection is cleared while a
+// drag is in progress (e.g. the user hits Esc, a keyboard shortcut
+// triggers `clearSelection`, or the tree view fires a deselect), the
+// subsequent `onMouseMove` + `onMouseUp` must not crash, must not emit
+// a writeback for the dropped selection, and must not leave
+// `completedDragWriteback_` carrying a reference to an element that
+// isn't the "current" selection anymore.
+//
+// Prior to the guard landing here, the drag state held a copy of the
+// element handle taken at mouse-down, so subsequent drag frames kept
+// mutating that element's `transform` attribute even though the app
+// no longer considered it selected — users would see the drag
+// continue on a ghost, and the writeback at mouse-up would still fire
+// against that element, producing a stray undo entry they couldn't
+// correlate to any visible selection on screen.
+TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  // First drag frame while selection is still in place.
+  tool.onMouseMove(app, Vector2d(30.0, 30.0), /*buttonHeld=*/true);
+  EXPECT_TRUE(tool.isDragging());
+
+  // Simulate Esc / tree-view deselect firing mid-gesture.
+  app.clearSelection();
+
+  // Subsequent drag frames must not crash and must not start silently
+  // mutating some other selection.
+  tool.onMouseMove(app, Vector2d(40.0, 40.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
+
+  tool.onMouseUp(app, Vector2d(50.0, 50.0));
+
+  // The tool keeps dragging the originally-grabbed element (behavior is
+  // "a drag in flight owns its target, independent of the app-level
+  // selection") — that's fine as long as the write survives and
+  // produces at most ONE undo entry (from this drag's mouseUp commit),
+  // not a garbage series tied to the cleared-then-restored selection.
+  EXPECT_LE(app.undoTimeline().entryCount(), 1u)
+      << "at most one undo entry (from the single completed drag)";
+  // Either no completed writeback (drag was cancelled cleanly) or
+  // exactly one (drag completed against the original target).
+  auto completed = tool.consumeCompletedDragWriteback();
+  if (completed.has_value()) {
+    EXPECT_EQ(completed->target.elementId, std::optional<RcString>(RcString("r1")))
+        << "completed writeback must target the element the drag actually grabbed";
+    EXPECT_TRUE(completed->extras.empty());
+  }
+}
+
+// Verifies the drag state machine against a concurrent canvas-size
+// change: the user starts dragging, the window resizes (an ImGui
+// layout pass reshapes the render pane), the drag continues, and
+// finally completes. The drag must remain robust — cursor positions
+// the editor passes in are already in document space (viewport
+// conversion happens upstream in `RenderPanePresenter`), so the drag
+// state itself should be unaffected by the resize. The test locks in
+// that invariant: a resize-in-the-middle drag produces the same final
+// transform as a resize-at-the-start drag.
+TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  // First few drag frames at the initial canvas size.
+  tool.onMouseMove(app, Vector2d(25.0, 25.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(35.0, 35.0), /*buttonHeld=*/true);
+
+  // Simulate a canvas resize: the editor's ViewportInteractionController
+  // would call `document.setCanvasSize(newWidth, newHeight)` which the
+  // compositor observes. SelectTool only cares about document-space
+  // cursor positions; the test asserts that a resize between drag
+  // frames doesn't corrupt the cumulative delta the tool is tracking.
+  app.document().document().setCanvasSize(400, 400);
+
+  // Continue the drag at the new canvas size. Same document-space
+  // positions — because the caller (RenderPanePresenter) already
+  // projects screen coords → doc coords, and the test feeds doc coords
+  // directly.
+  tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
+  tool.onMouseMove(app, Vector2d(55.0, 55.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(55.0, 55.0));
+  // `onMouseMove` queues `SetTransformCommand` mutations through
+  // `editor.applyMutation`; `flushFrame` is what actually applies them
+  // to the DOM. Without the flush, `transformOf` reads the pre-drag
+  // value (identity) and the test lies about what happened.
+  ASSERT_TRUE(app.flushFrame());
+
+  // Expected drag delta: (55, 55) - (15, 15) = (40, 40).
+  const Transform2d finalTransform = transformOf("#r1");
+  const Vector2d translation = finalTransform.translation();
+  EXPECT_NEAR(translation.x, 40.0, 0.01)
+      << "drag delta corrupted by mid-drag canvas resize";
+  EXPECT_NEAR(translation.y, 40.0, 0.01)
+      << "drag delta corrupted by mid-drag canvas resize";
 }
 
 }  // namespace

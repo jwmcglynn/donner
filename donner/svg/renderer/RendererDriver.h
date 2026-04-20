@@ -39,10 +39,46 @@ public:
    * @param firstEntity First entity in the range to render (inclusive).
    * @param lastEntity Last entity in the range to render (inclusive).
    * @param viewport Viewport for the render pass.
-   * @param baseTransform Transform applied to all entities (e.g., layer-local offset).
+   * @param surfaceFromCanvas Transform that maps canvas coords to the render
+   *     surface (`Translate(-topLeft)` for tight-bounded compositor segments,
+   *     identity for full-canvas layers/segments). Named with `destFromSource`
+   *     convention; composed with each entity's `worldFromEntityTransform` as
+   *     `worldFromEntityTransform * surfaceFromCanvas` (donner's left-first
+   *     `operator*`: "apply entity-to-canvas, then canvas-to-surface").
    */
   void drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
-                       const RenderViewport& viewport, const Transform2d& baseTransform);
+                       const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
+
+  /**
+   * Compute the canvas-space bounding box of every pixel a subsequent
+   * `drawEntityRange(registry, firstEntity, lastEntity, viewport,
+   * baseTransform)` call would write to. Runs the same entity traversal
+   * as `drawEntityRange` but with a bounds-accumulating visitor; no
+   * side effects on the renderer or registry.
+   *
+   * The bounds include the effect of:
+   *   - Per-entity transforms (including the base transform).
+   *   - Filter regions (via `computeFilterRegion`; the filter's output
+   *     rectangle is taken as the entity subtree's contribution).
+   *   - Stroke widths on stroked paths (expanded by `strokeWidth / 2`
+   *     plus a miter margin).
+   *   - Isolated layers — child bounds accumulate into the parent.
+   *   - Clip-rects (intersect, shrink only).
+   *
+   * Returns `std::nullopt` when:
+   *   - The range is empty / renders nothing.
+   *   - Any entity uses a bound-expander the visitor doesn't yet model
+   *     precisely (text, markers, masks, patterns). Callers must treat
+   *     `nullopt` as "fall back to full-canvas render", NOT as "empty
+   *     segment". The design doc at `docs/design_docs/0027-tight_bounded_
+   *     segments.md` tracks which cases are pending.
+   *
+   * Safe to call on a `RendererDriver` whose renderer holds persistent
+   * state — the traversal never invokes renderer methods.
+   */
+  [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(
+      Registry& registry, Entity firstEntity, Entity lastEntity,
+      const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /**
    * Capture a snapshot from the underlying backend after rendering.
@@ -94,7 +130,24 @@ private:
   RendererInterface& renderer_;
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;
-  Transform2d layerBaseTransform_;
+  /// Post-entity transform composed onto the CTM for every entity drawn via
+  /// `drawEntityRange`/`traverse`. Named with `destFromSource` convention: it
+  /// maps canvas coords to the render surface we're drawing into. For the
+  /// compositor's tight-bounded segment path this is `Translate(-topLeft)`
+  /// (canvas → tight-bitmap). For sub-document rendering it's a compound
+  /// `subDocFromLocal * parentAbsoluteTransform * canvasFromDoc` that, when
+  /// post-composed with the sub-doc entity's own `worldFromEntity` (named
+  /// `worldFromEntityTransform` for historical reasons — see
+  /// `RenderingInstanceComponent.h`), yields the correct device CTM.
+  ///
+  /// Composition order matters. `Transform2d::operator*` is left-first
+  /// (`A * B` means "apply A, then B"), so the correct CTM is
+  /// `worldFromEntityTransform * surfaceFromCanvasTransform_`: first map
+  /// entity-local to canvas via `worldFromEntityTransform`, then canvas to
+  /// surface via this. Swapping the two silently mis-renders rotated
+  /// paths (translations commute, rotations don't) — see
+  /// `TightBoundsRotatedEllipseWithRotatingGradient`.
+  Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered

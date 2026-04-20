@@ -9,6 +9,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/UndoTimeline.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
@@ -109,11 +110,13 @@ std::string SourceSlice(std::string_view source, const SourceRange& range) {
 bool QueueDragWritebackReparse(EditorApp& app, std::string* source, std::string* previousSourceText,
                                std::optional<std::string>* lastWritebackSourceText,
                                const SelectTool::CompletedDragWriteback& writeback) {
+  const std::string prePatch = *source;
   if (!ApplyCompletedDragWriteback(source, writeback)) {
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText,
+                              lastWritebackSourceText);
   return true;
 }
 
@@ -121,11 +124,13 @@ bool QueueTransformWritebackReparse(EditorApp& app, std::string* source,
                                     std::string* previousSourceText,
                                     std::optional<std::string>* lastWritebackSourceText,
                                     const EditorApp::CompletedTransformWriteback& writeback) {
+  const std::string prePatch = *source;
   if (!ApplyCompletedDragWriteback(source, writeback)) {
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText,
+                              lastWritebackSourceText);
   return true;
 }
 
@@ -143,11 +148,13 @@ bool QueueElementRemoveWritebackReparse(EditorApp& app, std::string* source,
                                         std::string* previousSourceText,
                                         std::optional<std::string>* lastWritebackSourceText,
                                         const AttributeWritebackTarget& target) {
+  const std::string prePatch = *source;
   if (!ApplyElementRemoveWriteback(source, target)) {
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText,
+                              lastWritebackSourceText);
   return true;
 }
 
@@ -521,6 +528,7 @@ TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocume
   ASSERT_TRUE(app.loadFromString(kCircleSvg));
 
   std::string source(kCircleSvg);
+  const std::string sourcePrePatch = source;
   auto circle = app.document().document().querySelector("#c");
   ASSERT_TRUE(circle.has_value());
 
@@ -531,7 +539,8 @@ TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocume
 
   std::string previousSourceText(kCircleSvg);
   std::optional<std::string> lastWritebackSourceText;
-  QueueSourceWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText,
+                              &lastWritebackSourceText);
 
   const auto dispatch =
       DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);
@@ -609,6 +618,90 @@ TEST(EditorSyncTest, SelectionClearsAndDisplayedBoundsClearWhenElementDisappears
   RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
                               app.document().currentFrameVersion(), initialVersion);
   EXPECT_TRUE(cache.displayedBoundsDoc.empty());
+}
+
+// Interleave of drag + source-pane edit + undo. The user:
+//   1. Drags a shape (mutates DOM directly each frame).
+//   2. The drag-release writeback fires, patching the source text.
+//   3. The user types a character in the source pane — triggers a
+//      full reparse that destroys every entity id the undo timeline's
+//      `UndoSnapshot` references.
+//   4. User hits Cmd+Z expecting their drag to undo.
+//
+// The undo path in `EditorApp::undo` re-applies the pre-drag
+// `transform` via a `SetTransformCommand`. The snapshot holds the
+// element's HANDLE (a post-reparse dangling reference). Without
+// rehydration (matching the snapshot's `writebackTarget` against the
+// current DOM), the undo silently does nothing or crashes.
+//
+// This test documents the invariant. If undo can't rehydrate across
+// a reparse, either the test skips with a clear explanation (known
+// gap) OR — ideally — the undo replays against a freshly-queried
+// element by id/path.
+TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElement) {
+  // Known gap (documented before we even start the test body, because
+  // the failing path triggers a hard EnTT assertion in `fast_mod` —
+  // the undo snapshot holds an `SVGElement` whose `EntityHandle` points
+  // into the pre-reparse registry, and any access after the reparse
+  // trips the "power of two" assertion deep inside EnTT's storage.
+  // That crash isn't skippable mid-flow, so document the gap up front
+  // and have the fix flip the `if (true)` below to `if (false)` once
+  // `UndoSnapshot` rehydration across `ReplaceDocumentCommand` lands.
+  //
+  // The fix belongs in `EditorApp::undo`: when an `UndoSnapshot` has
+  // a `writebackTarget`, resolve that against the live document and
+  // rebind `snapshot.element` before calling `applySnapshot`. This is
+  // the same rehydration story as `SelectionRemapsByIdAcrossStructuralSourceEdit`,
+  // but for the undo timeline instead of the selection.
+  if (true) {
+    GTEST_SKIP() << "Known gap: `EditorApp::undo` dereferences a stale `SVGElement` "
+                    "handle after `ReplaceDocumentCommand` reparse. Needs snapshot "
+                    "rehydration via `writebackTarget` before apply. Design 0026 B3.";
+  }
+
+  constexpr std::string_view kSvg = R"svg(<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect id="r" x="10" y="10" width="20" height="20" fill="red"/>
+</svg>
+)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCleanSourceText(kSvg);
+
+  auto rect = app.document().document().querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+
+  const Transform2d before = Transform2d();
+  const Transform2d after = Transform2d::Translate(Vector2d(25.0, 0.0));
+  rect->cast<svg::SVGGraphicsElement>().setTransform(after);
+  UndoSnapshot beforeSnapshot{.element = *rect, .transform = before,
+                              .writebackTarget = captureAttributeWritebackTarget(*rect)};
+  UndoSnapshot afterSnapshot{.element = *rect, .transform = after,
+                             .writebackTarget = captureAttributeWritebackTarget(*rect)};
+  app.undoTimeline().record("Drag r", std::move(beforeSnapshot), std::move(afterSnapshot));
+
+  ASSERT_TRUE(app.canUndo());
+
+  constexpr std::string_view kSvgAfterEdit = R"svg(<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <rect id="r" x="10" y="10" width="20" height="20" fill="blue" transform="translate(25,0)"/>
+</svg>
+)svg";
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kSvgAfterEdit),
+                                                          /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(app.document().lastFlushResult().preserveUndoOnReparse);
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+
+  auto rectAfterUndo = app.document().document().querySelector("#r");
+  ASSERT_TRUE(rectAfterUndo.has_value());
+  const Transform2d finalTransform =
+      rectAfterUndo->cast<svg::SVGGraphicsElement>().transform();
+  EXPECT_TRUE(finalTransform.isIdentity())
+      << "undo after source-pane reparse failed to roll back the drag — snapshot dangled";
 }
 
 }  // namespace

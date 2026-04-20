@@ -13,33 +13,42 @@ namespace donner::svg::components {
  * can be sourced from the `transform="..."` XML attribute, or from the `transform` CSS property.
  */
 struct TransformComponent {
-  /// Value of the transform, if it is set. Defaults to `std::nullopt`. Represents the
-  /// entity-from-parent transform.
+  /// Parsed value of the `transform="…"` presentation attribute / CSS
+  /// `transform` property. Applied to entity-local coords, returns
+  /// parent-space coords (i.e. `parentFromEntity`).
   Property<CssTransform> transform{"transform",
                                    []() -> std::optional<CssTransform> { return std::nullopt; }};
 };
 
 /**
- * Stores the computed transform value for an entity, relative to the parent. This resolves
- * presentation attributes and the CSS cascade and stores the resulting value for the current
- * entity.
+ * Stores the computed local transform for an entity (after CSS cascade +
+ * percentage/viewport resolution).
  */
 struct ComputedLocalTransformComponent {
-  Transform2d entityFromParent;   //!< Transform from the entity from its parent.
-  CssTransform rawCssTransform;  //!< Raw CSS transform value, before resolving percentages relative
-                                 //!< to the viewport.
-  Vector2d transformOrigin;      //!< Resolved transform origin in pixels.
+  /// Local transform that maps entity coords to the parent's coord system.
+  /// Applying `parentFromEntity` to a point expressed in the entity's own
+  /// coord system yields its position in the parent coord system. For
+  /// `<rect x=0 y=0 … transform="translate(100, 0)"/>`, this matrix is
+  /// `Translate(100, 0)`, and the rect ends up at x=100 in the parent.
+  Transform2d parentFromEntity;
+  /// Raw CSS transform value, before resolving percentages relative to the viewport.
+  CssTransform rawCssTransform;
+  /// Resolved transform origin in pixels.
+  Vector2d transformOrigin;
 };
 
 /**
- * Stores the computed transform value for an entity, relative to the world. This applies the
- * transform from the from all parent entities, and represents the transform of the entity from the
- * root.
+ * Stores the computed absolute transform for an entity — the full cascade of
+ * ancestor transforms composed together.
  */
 struct ComputedAbsoluteTransformComponent {
-  Transform2d entityFromWorld;  //!< Transform from the entity from the world.
-  bool worldIsCanvas =
-      true;  //<!< Set to false if this entity rebases the coordinate system and is not relative to the canvas.
+  /// Transform that maps entity-local coords through every ancestor's local
+  /// transform to world (canvas) coords. This is the cascade of every
+  /// `parentFromEntity` up the tree, composed together.
+  Transform2d worldFromEntity;
+  /// Set to false if this entity rebases the coordinate system and is not
+  /// relative to the canvas (e.g. sub-document boundaries).
+  bool worldIsCanvas = true;
 };
 
 }  // namespace donner::svg::components

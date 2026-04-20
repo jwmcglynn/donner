@@ -196,6 +196,9 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
+  /// Creates an offscreen renderer of the active backend type.
+  [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
+
   /**
    * Saves the last rendered frame to a PNG file.
    *

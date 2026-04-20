@@ -17,8 +17,10 @@
 /// `EditorCommand::SetTransform` — never directly.
 
 #include <optional>
+#include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -29,16 +31,32 @@ namespace donner::editor {
 
 class SelectTool final : public Tool {
 public:
+  /// Preview state for an in-progress drag, consumed by the async renderer.
+  struct ActiveDragPreview {
+    Entity entity = entt::null;
+    Vector2d translation = Vector2d::Zero();
+  };
+
   /// Payload needed to write a completed drag back into the source pane.
+  /// For multi-element drags this is the primary; additional writeback
+  /// entries are latched in `extras`.
   struct CompletedDragWriteback {
     AttributeWritebackTarget target;
     Transform2d transform;
+
+    /// Additional writeback entries for extra elements in a multi-element
+    /// drag. One per non-primary element that had a capturable writeback
+    /// target. Empty for single-element drags.
+    std::vector<CompletedDragWriteback> extras;
   };
 
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
+
+  /// Enable the experimental compositor-backed drag preview path.
+  void setCompositedDragPreviewEnabled(bool enabled) { compositedDragPreviewEnabled_ = enabled; }
 
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
@@ -63,19 +81,45 @@ public:
     return result;
   }
 
+  /// Returns the current drag preview, if a drag is in progress.
+  [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
+
 private:
-  struct DragState {
+  /// Per-element bookkeeping for one participant in a drag. Carries the
+  /// start transform (for computing `startTransform * translate(delta)`
+  /// on each mouse move), the current preview transform, and the stable
+  /// locator for later canvas→text writeback.
+  struct PerElementDrag {
     svg::SVGElement element;
-    Vector2d startDocumentPoint;
     Transform2d startTransform;
-    /// The most recent transform SelectTool has pushed through the
-    /// command queue during this drag. Tracked so `onMouseUp` can
-    /// record an undo entry with the final drag state without having
-    /// to read the element back (the queued commands may not have
-    /// been flushed yet).
     Transform2d currentTransform;
-    /// Stable locator used for the later canvas→text writeback.
     std::optional<AttributeWritebackTarget> writebackTarget;
+    /// Original `transform` attribute value captured at drag start. Used
+    /// for `UndoSnapshot::sourceTransformAttributeValue` on release.
+    /// Captured eagerly in `onMouseDown` (which runs only when the async
+    /// renderer is idle) so `onMouseUp` never needs to touch the entt
+    /// registry itself — reads here racing with a concurrent background
+    /// render would hit `entt::fast_mod` assertions when the worker is
+    /// resizing a dense-map bucket array.
+    std::optional<RcString> sourceTransformAttributeValue;
+  };
+
+  struct DragState {
+    /// Primary drag participant — the element that was under the cursor on
+    /// mouse-down. Always populated. The compositor-preview fast path
+    /// (when a single-element drag is composited) runs against this one.
+    PerElementDrag primary;
+
+    /// Additional elements that move in lockstep with the primary. Empty
+    /// for a single-element drag. Populated when mouse-down hits an
+    /// already-selected element and the current selection has more than
+    /// one entry — classic "grab an item in the current selection, move
+    /// them all" design-tool behavior.
+    std::vector<PerElementDrag> extras;
+
+    Vector2d startDocumentPoint;
+    /// Current drag delta in document coordinates, used for compositor preview.
+    Vector2d currentDocumentDelta = Vector2d::Zero();
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;
@@ -95,6 +139,12 @@ private:
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
+  bool compositedDragPreviewEnabled_ = false;
 };
+
+/// Render-mode toggles are safe whenever there is no in-progress drag or marquee gesture.
+[[nodiscard]] inline bool CanToggleCompositedRendering(const SelectTool& tool) {
+  return !tool.isDragging() && !tool.isMarqueeing();
+}
 
 }  // namespace donner::editor

@@ -2,22 +2,22 @@ Subject: [PATCH] Add bazel build files
 Base-commit: 126569ad5b3a2c5329cc8ee914dd5b2075f4dd50
 
 ---
- BUILD.bazel  | 54 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ BUILD.bazel  | 56 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  MODULE.bazel | 14 ++++++++++++++
- 2 files changed, 68 insertions(+)
+ 2 files changed, 70 insertions(+)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 
 diff --git a/BUILD.bazel b/BUILD.bazel
 new file mode 100644
-index 00000000..80ef632a
+index 00000000..12345678
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,56 @@
 +""" Builds imgui.
 +"""
 +
-+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_binary")
++load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 +
 +package(default_visibility = ["//visibility:public"])
 +
@@ -43,6 +43,10 @@ index 00000000..80ef632a
 +        "imgui.h",
 +        "imgui_internal.h",
 +        "misc/cpp/imgui_stdlib.h",
++    ],
++    copts = [
++        "-Wno-nontrivial-memcall",
++        "-Wno-uninitialized-const-pointer",
 +    ],
 +    defines = ["IMGUI_ENABLE_OSX_DEFAULT_CLIPBOARD_FUNCTIONS"],
 +    includes = ["backends"],

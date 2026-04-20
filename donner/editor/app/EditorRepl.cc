@@ -37,11 +37,11 @@ std::vector<std::string> Tokenize(const std::string& line) {
 
 }  // namespace
 
-EditorRepl::EditorRepl(EditorApp& app, std::istream& in, std::ostream& out,
-                       EditorReplOptions options)
+RenderSessionRepl::RenderSessionRepl(RenderSession& app, std::istream& in, std::ostream& out,
+                                     RenderSessionReplOptions options)
     : app_(app), in_(in), out_(out), options_(std::move(options)) {}
 
-int EditorRepl::run() {
+int RenderSessionRepl::run() {
   if (options_.printBanner) {
     out_ << "Donner Editor MVP — type 'help' for commands, 'quit' to exit.\n";
   }
@@ -94,7 +94,7 @@ int EditorRepl::run() {
   return count;
 }
 
-bool EditorRepl::dispatch(const std::string& line) {
+bool RenderSessionRepl::dispatch(const std::string& line) {
   const auto tokens = Tokenize(line);
   if (tokens.empty()) return false;
   const auto& cmd = tokens.front();
@@ -180,7 +180,7 @@ bool EditorRepl::dispatch(const std::string& line) {
   return false;
 }
 
-void EditorRepl::printHelp() {
+void RenderSessionRepl::printHelp() {
   out_ << "Commands:\n"
        << "  help                    show this help\n"
        << "  load <uri>              fetch + render a new SVG (file:// or path)\n"
@@ -195,7 +195,7 @@ void EditorRepl::printHelp() {
        << "  quit | exit             leave the editor\n";
 }
 
-void EditorRepl::printStatus() {
+void RenderSessionRepl::printStatus() {
   const auto& snap = app_.current();
   out_ << "[" << snap.message << "]";
   if (!snap.uri.empty()) {
@@ -204,22 +204,22 @@ void EditorRepl::printStatus() {
   out_ << "\n";
 }
 
-void EditorRepl::cmdLoad(const std::string& uri) {
+void RenderSessionRepl::cmdLoad(const std::string& uri) {
   app_.navigate(uri);
   printStatus();
 }
 
-void EditorRepl::cmdReload() {
+void RenderSessionRepl::cmdReload() {
   app_.reload();
   printStatus();
 }
 
-void EditorRepl::cmdResize(int width, int height) {
+void RenderSessionRepl::cmdResize(int width, int height) {
   app_.resize(width, height);
   printStatus();
 }
 
-void EditorRepl::cmdShow() {
+void RenderSessionRepl::cmdShow() {
   const auto& bitmap = app_.lastGoodBitmap();
   if (bitmap.pixels.empty()) {
     out_ << "show: no frame available (try 'load <uri>' first)\n";
@@ -241,26 +241,24 @@ void EditorRepl::cmdShow() {
   svg::TerminalImageViewer{}.render(view, out_, config);
 }
 
-void EditorRepl::cmdSave(const std::string& path) {
+void RenderSessionRepl::cmdSave(const std::string& path) {
   const auto& bitmap = app_.lastGoodBitmap();
   if (bitmap.pixels.empty() || bitmap.dimensions.x <= 0) {
     out_ << "save: no frame available\n";
     return;
   }
   const auto png = svg::RendererImageIO::writeRgbaPixelsToPngMemory(
-      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4);
+      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y, bitmap.rowBytes / 4);
   std::ofstream out(path, std::ios::binary);
   if (!out) {
     out_ << "save: cannot open " << path << "\n";
     return;
   }
-  out.write(reinterpret_cast<const char*>(png.data()),
-            static_cast<std::streamsize>(png.size()));
+  out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
   out_ << "save: wrote " << path << " (" << png.size() << " bytes)\n";
 }
 
-void EditorRepl::cmdInspect() {
+void RenderSessionRepl::cmdInspect() {
   const auto& wire = app_.lastGoodWire();
   if (wire.empty()) {
     out_ << "inspect: no frame available\n";
@@ -269,7 +267,7 @@ void EditorRepl::cmdInspect() {
   out_ << sandbox::FrameInspector::Dump(wire);
 }
 
-void EditorRepl::cmdRecord(const std::string& path) {
+void RenderSessionRepl::cmdRecord(const std::string& path) {
   const auto& wire = app_.lastGoodWire();
   if (wire.empty()) {
     out_ << "record: no frame available\n";
@@ -288,7 +286,7 @@ void EditorRepl::cmdRecord(const std::string& path) {
   out_ << "record: wrote " << path << " (" << wire.size() << " wire bytes)\n";
 }
 
-void EditorRepl::cmdWatch(const std::string& arg) {
+void RenderSessionRepl::cmdWatch(const std::string& arg) {
   if (arg == "on") {
     app_.setWatchEnabled(true);
     out_ << "watch: enabled\n";

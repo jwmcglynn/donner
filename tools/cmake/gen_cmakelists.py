@@ -87,6 +87,9 @@ _IGNORED_EXTERNAL_DEPS: Set[str] = {
     # ImGui and GLFW are used by the SVG viewer (Bazel-only WASM target).
     "@glfw//:glfw",
     "@imgui//:imgui",
+    # Tracy is editor-only profiling; the CMake mirror doesn't fetch it and
+    # `donner_editor_tracy_wrapper` is whitelisted as a no-op external target.
+    "@tracy//:tracy_client",
 }
 
 # Packages whose CMake build is provided manually or by FetchContent and must
@@ -103,6 +106,8 @@ SKIPPED_PACKAGES = {
     "donner/editor/app",
     "donner/editor/app/tests",
     "donner/editor/gui",
+    "donner/editor/repro",
+    "donner/editor/repro/tests",
     "donner/editor/resources",
     "donner/editor/sandbox",
     "donner/editor/sandbox/tests",
@@ -235,6 +240,13 @@ SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
     "donner_svg_renderer_geode_geode_shaders",
     "donner_svg_renderer_geode_geode_texture_encoder",
     "donner_svg_renderer_geode_geode_wgpu_util",
+    # `//donner/editor:tracy_wrapper` is depended on by the compositor for
+    # `ZoneScopedN` profiling. In Bazel it resolves to a real Tracy client;
+    # in CMake the editor package is skipped (SKIPPED_PACKAGES), so the
+    # link edge has nowhere to go. Drop the dep entirely — Tracy's headers
+    # compile to no-ops when `TRACY_ENABLE` is undefined (the CMake default),
+    # so the zones on the compositor hot path are silently elided.
+    "donner_editor_tracy_wrapper",
 }
 
 

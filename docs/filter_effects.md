@@ -87,7 +87,7 @@ FilterNode {
    Elements in `<defs>` get shadow rendering instances via
    `RenderingContext::createFeImageShadowTree`. A recursion guard (`feImageFragmentGuard_`)
    prevents infinite loops.
-2. The fragment is rendered at its natural document position (no layerBaseTransform_ offset).
+2. The fragment is rendered at its natural document position (no surfaceFromCanvasTransform_ offset).
 3. The filter pipeline positions the content at the filter region origin:
    - **No host shear:** Device-space offset via `targetRect` (TinySkia) or
      `SkImageFilters::Offset` (Skia).

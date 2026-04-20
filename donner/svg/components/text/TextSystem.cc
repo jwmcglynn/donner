@@ -138,8 +138,8 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   // Per SVG §10.12.2, textPath uses the path in the referenced element's user coordinate space.
   const auto* localTransform =
       registry.try_get<ComputedLocalTransformComponent>(resolved->handle.entity());
-  if (localTransform && !localTransform->entityFromParent.isIdentity()) {
-    const Transform2d& parentFromEntity = localTransform->entityFromParent;
+  if (localTransform && !localTransform->parentFromEntity.isIdentity()) {
+    const Transform2d& parentFromEntity = localTransform->parentFromEntity;
     const auto& srcPoints = computedPath->spline.points();
     const auto& srcCommands = computedPath->spline.commands();
     PathBuilder builder;

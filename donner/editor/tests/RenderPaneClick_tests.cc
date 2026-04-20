@@ -170,6 +170,7 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
   v.zoomAround(2.0, v.paneCenter());
 
   SelectTool tool;
+  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d startScreen = v.documentToScreen(Vector2d(40.0, 40.0));
   tool.onMouseDown(app, v.screenToDocument(startScreen), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());
@@ -181,7 +182,13 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
   // doc delta = 100 / zoom = 50 doc units. DPR must not factor in.
   const Vector2d targetScreen = startScreen + Vector2d(100.0, 0.0);
   tool.onMouseMove(app, v.screenToDocument(targetScreen), /*buttonHeld=*/true);
-  app.flushFrame();
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+
+  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 50.0, 1e-6);
+  EXPECT_NEAR(tool.activeDragPreview()->translation.y, 0.0, 1e-6);
+
+  tool.onMouseUp(app, v.screenToDocument(targetScreen));
+  ASSERT_TRUE(app.flushFrame());
 
   const Transform2d after = rect.transform();
   EXPECT_NEAR(after.data[4] - startTransform.data[4], 50.0, 1e-6);
@@ -200,6 +207,7 @@ TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
 
   // Click on r1's center to start the drag.
   SelectTool tool;
+  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d startScreen = v.documentToScreen(Vector2d(40.0, 40.0));
   tool.onMouseDown(app, v.screenToDocument(startScreen), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());
@@ -220,23 +228,22 @@ TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
     const Vector2d screenAtStep =
         startScreen + totalScreenDelta * (static_cast<double>(i) / kSteps);
     tool.onMouseMove(app, v.screenToDocument(screenAtStep), /*buttonHeld=*/true);
-    // Drain the queued SetTransformCommand so the element's transform
-    // reflects the move.
-    app.flushFrame();
-
-    const Transform2d nowTransform = rect.transform();
+    ASSERT_TRUE(tool.activeDragPreview().has_value());
     // The applied translation should be the cumulative document-space
-    // cursor delta. At zoom=1 dpr=1, doc and screen scales agree, so
-    // this is just the cursor delta divided by 1.
+    // cursor delta.
     const Vector2d expectedDocDelta =
         v.screenToDocument(screenAtStep) - v.screenToDocument(startScreen);
-    EXPECT_NEAR(nowTransform.data[4] - startTransform.data[4], expectedDocDelta.x, 1e-6)
+    EXPECT_NEAR(tool.activeDragPreview()->translation.x, expectedDocDelta.x, 1e-6)
         << "  step=" << i << " of " << kSteps;
-    EXPECT_NEAR(nowTransform.data[5] - startTransform.data[5], expectedDocDelta.y, 1e-6)
+    EXPECT_NEAR(tool.activeDragPreview()->translation.y, expectedDocDelta.y, 1e-6)
         << "  step=" << i << " of " << kSteps;
   }
 
   tool.onMouseUp(app, v.screenToDocument(startScreen + totalScreenDelta));
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d finalTransform = rect.transform();
+  EXPECT_NEAR(finalTransform.data[4] - startTransform.data[4], 100.0, 1e-6);
+  EXPECT_NEAR(finalTransform.data[5] - startTransform.data[5], 50.0, 1e-6);
 }
 
 // Regression for "clicks dropped during initial render" reported on
@@ -295,6 +302,7 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
 
   SelectTool tool;
+  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d r1ScreenStart = v.documentToScreen(Vector2d(40.0, 40.0));
 
   // ---- Frame N: IsMouseClicked = true, IsMouseDown = true ----
@@ -306,7 +314,7 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   ASSERT_TRUE(tool.isDragging());
   tool.onMouseMove(app, v.screenToDocument(r1ScreenStart), /*buttonHeld=*/true);
 
-  // Next frame top: flushFrame applies the queued (no-op) command.
+  // Next frame top: flushFrame is a no-op because drag preview stays off-DOM until mouse-up.
   app.flushFrame();
   auto rect = app.selectedElement()->cast<svg::SVGGraphicsElement>();
   const Transform2d startTransform = rect.transform();
@@ -315,19 +323,22 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   // mouse moves by (40, 0).
   const Vector2d screenAt1 = r1ScreenStart + Vector2d(40.0, 0.0);
   tool.onMouseMove(app, v.screenToDocument(screenAt1), /*buttonHeld=*/true);
-  app.flushFrame();
-  EXPECT_NEAR(rect.transform().data[4] - startTransform.data[4], 40.0, 1e-6)
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 40.0, 1e-6)
       << "Element didn't move on the first post-click drag frame";
 
   // ---- Frame N+2: another move, this time by (40, 30). ----
   const Vector2d screenAt2 = r1ScreenStart + Vector2d(40.0, 30.0);
   tool.onMouseMove(app, v.screenToDocument(screenAt2), /*buttonHeld=*/true);
-  app.flushFrame();
-  EXPECT_NEAR(rect.transform().data[4] - startTransform.data[4], 40.0, 1e-6);
-  EXPECT_NEAR(rect.transform().data[5] - startTransform.data[5], 30.0, 1e-6);
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 40.0, 1e-6);
+  EXPECT_NEAR(tool.activeDragPreview()->translation.y, 30.0, 1e-6);
 
   // ---- Frame N+3: IsMouseReleased = true ----
   tool.onMouseUp(app, v.screenToDocument(screenAt2));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_NEAR(rect.transform().data[4] - startTransform.data[4], 40.0, 1e-6);
+  EXPECT_NEAR(rect.transform().data[5] - startTransform.data[5], 30.0, 1e-6);
   EXPECT_FALSE(tool.isDragging());
   EXPECT_TRUE(tool.consumeCompletedDragWriteback().has_value())
       << "drag-completed writeback should be latched so the source sync path runs";
@@ -382,6 +393,7 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderZoom) {
   v.zoomAround(2.0, v.paneCenter());
 
   SelectTool tool;
+  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d startScreen = v.documentToScreen(Vector2d(40.0, 40.0));
   tool.onMouseDown(app, v.screenToDocument(startScreen), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());
@@ -392,7 +404,13 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderZoom) {
   // Drag 100 screen pixels right at zoom=2 → 50 doc units right.
   const Vector2d targetScreen = startScreen + Vector2d(100.0, 0.0);
   tool.onMouseMove(app, v.screenToDocument(targetScreen), /*buttonHeld=*/true);
-  app.flushFrame();
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+
+  EXPECT_NEAR(tool.activeDragPreview()->translation.x, 50.0, 1e-6);
+  EXPECT_NEAR(tool.activeDragPreview()->translation.y, 0.0, 1e-6);
+
+  tool.onMouseUp(app, v.screenToDocument(targetScreen));
+  ASSERT_TRUE(app.flushFrame());
 
   const Transform2d after = rect.transform();
   EXPECT_NEAR(after.data[4] - startTransform.data[4], 50.0, 1e-6);

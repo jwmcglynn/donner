@@ -200,14 +200,14 @@ style data. Backends translate these to their own representations.
 Located at `donner/svg/renderer/RendererDriver.h`. Backend-agnostic traversal of the flat render
 tree:
 
-- Uses `setTransform()` for absolute entity transforms (from `entityFromWorldTransform`) and
+- Uses `setTransform()` for absolute entity transforms (from `worldFromEntityTransform`) and
   `pushTransform()`/`popTransform()` only for local relative transforms (e.g., image
   `preserveAspectRatio`).
 - Manages deferred layer pops via `DeferredPop` tracking: viewport clips, isolated layers, filter
   layers, entity clips, and masks are saved at subtree entry and restored when
   `subtreeInfo.lastRenderedEntity` is reached.
 - Handles markers by re-traversing subtrees at each path vertex via `drawMarkers()`/
-  `traverseRange()`, composing a per-vertex `layerBaseTransform_`.
+  `traverseRange()`, composing a per-vertex `surfaceFromCanvasTransform_`.
 - Handles masks via `renderMask()`, traversing the mask shadow subtree between
   `pushMask()`/`transitionMaskToContent()`/`popMask()` calls.
 - Handles patterns via `renderPattern()`, traversing pattern shadow subtrees between
@@ -225,7 +225,7 @@ implementation details:
 - Stacked `PatternState` for nested pattern recording (each level owns its own
   `SkPictureRecorder`).
 - Clip path boolean operations via Skia `Op()` with layered intersection/union and
-  `entityFromParent` transform on layer pop.
+  `parentFromEntity` transform on layer pop.
 
 ### RendererTinySkia (shipped, parity incomplete)
 

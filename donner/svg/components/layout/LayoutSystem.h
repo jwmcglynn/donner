@@ -79,14 +79,14 @@ public:
                                              InvalidSizeBehavior behavior) const;
 
   /**
-   * Returns the entityFromParent transform without modifiers (e.g. not including transform-origin)
+   * Returns the parentFromEntity transform without modifiers (e.g. not including transform-origin)
    *
    * @param entity Current entity.
    */
   Transform2d getRawEntityFromParentTransform(EntityHandle entity);
 
   /**
-   * Returns the entityFromParent transform with modifiers.
+   * Returns the parentFromEntity transform with modifiers.
    *
    * @param entity Current entity.
    */
@@ -125,13 +125,13 @@ public:
   Transform2d getEntityContentFromEntityTransform(EntityHandle entity);
 
   /**
-   * Set the entityFromParent transform for the current entity. This will be transformed with
+   * Set the parentFromEntity transform for the current entity. This will be transformed with
    * modifiers such as transform-origin before being applied to the entity.
    *
    * @param entity Current entity.
-   * @param entityFromParent New transform.
+   * @param parentFromEntity New transform.
    */
-  void setRawEntityFromParentTransform(EntityHandle entity, const Transform2d& entityFromParent);
+  void setRawEntityFromParentTransform(EntityHandle entity, const Transform2d& parentFromEntity);
 
   /**
    * Get the computed absolute transform for the current entity. This is the same as \ref

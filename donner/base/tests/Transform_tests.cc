@@ -93,6 +93,56 @@ TEST(Transform, IsIdentity) {
   EXPECT_TRUE(noTranslation.isIdentity());
 }
 
+TEST(Transform, IsTranslation) {
+  // Identity is a translation by (0, 0).
+  EXPECT_TRUE(Transform2d().isTranslation());
+  EXPECT_TRUE(Transform2d::Translate(0, 0).isTranslation());
+
+  // Pure translations — non-zero tx/ty shouldn't disqualify.
+  EXPECT_TRUE(Transform2d::Translate(5, 0).isTranslation());
+  EXPECT_TRUE(Transform2d::Translate(0, 7).isTranslation());
+  EXPECT_TRUE(Transform2d::Translate(-3.5, 12.25).isTranslation());
+
+  // Anything that scales, rotates, or skews the linear block is not a pure translation.
+  EXPECT_FALSE(Transform2d::Scale({2, 2}).isTranslation());
+  EXPECT_FALSE(Transform2d::Scale({1, 2}).isTranslation());
+  EXPECT_FALSE(Transform2d::Rotate(MathConstants<double>::kHalfPi).isTranslation());
+  EXPECT_FALSE(Transform2d::SkewX(0.1).isTranslation());
+  EXPECT_FALSE(Transform2d::SkewY(0.1).isTranslation());
+
+  // A rotation composed with a translation is still not a pure translation.
+  EXPECT_FALSE((Transform2d::Translate(5, 5) *
+                Transform2d::Rotate(MathConstants<double>::kHalfPi))
+                   .isTranslation());
+
+  // A tiny jitter within the comparison tolerance should still be recognized
+  // as a pure translation — floating-point composition produces these when
+  // `Translate * Translate` rounds the identity 2×2 block.
+  {
+    Transform2d composed = Transform2d::Translate(1, 2) * Transform2d::Translate(3, 4);
+    EXPECT_TRUE(composed.isTranslation());
+    EXPECT_EQ(composed.translation(), Vector2d(4, 6));
+  }
+}
+
+TEST(Transform, Translation) {
+  EXPECT_EQ(Transform2d().translation(), Vector2d(0, 0));
+  EXPECT_EQ(Transform2d::Translate(5, 7).translation(), Vector2d(5, 7));
+  EXPECT_EQ(Transform2d::Translate(-3.5, 12.25).translation(), Vector2d(-3.5, 12.25));
+
+  // Non-translation transforms still have a translation *component*; the
+  // accessor returns `(e, f)` from the matrix even when the linear block is
+  // non-identity. Callers pairing it with `isTranslation()` get the full
+  // "is this a pure shift" semantics.
+  Transform2d rotateThenTranslate =
+      Transform2d::Translate(10, 20) * Transform2d::Rotate(MathConstants<double>::kHalfPi);
+  EXPECT_FALSE(rotateThenTranslate.isTranslation());
+  // Rotate(pi/2) composed with Translate(10, 20) (left-first: translate, then
+  // rotate) gives tx/ty = rotate(10, 20) = (-20, 10).
+  EXPECT_THAT(rotateThenTranslate.translation().x, testing::DoubleNear(-20.0, 1e-9));
+  EXPECT_THAT(rotateThenTranslate.translation().y, testing::DoubleNear(10.0, 1e-9));
+}
+
 TEST(Transform, Determinant) {
   {
     Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);

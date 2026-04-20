@@ -10,20 +10,7 @@
 
 namespace donner::svg {
 
-std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
-  std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
-  for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
-    const unsigned alpha = result[i + 3];
-    result[i + 0] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 0]) * alpha + 127u) / 255u);
-    result[i + 1] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 1]) * alpha + 127u) / 255u);
-    result[i + 2] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 2]) * alpha + 127u) / 255u);
-  }
-
-  return result;
-}
+// PremultiplyRgba: now shared across backends in PixelFormatUtils.{h,cc}.
 
 std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
     std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
