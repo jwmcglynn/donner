@@ -185,8 +185,10 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   // next fill call. `GeoEncoder` handles that by always calling
   // `SetPipeline` at the start of each draw helper.
   pass.setPipeline(pipeline.pipeline());
+  device.countPipelineSwitch();
   pass.setBindGroup(0, bindGroup, 0, nullptr);
   pass.draw(6, 1, 0, 0);
+  device.countDraw();
 }
 
 }  // namespace donner::geode

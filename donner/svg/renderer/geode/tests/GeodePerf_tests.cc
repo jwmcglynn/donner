@@ -68,11 +68,12 @@ constexpr std::string_view kModerateSvg = R"SVG(
 /// test output (RecordProperty only surfaces in XML). Format keeps each
 /// counter on its own column for easy diffing across milestones.
 void printCounters(const char* label, const geode::GeodeCounters& c) {
-  std::fprintf(
-      stderr,
-      "[GeodePerf] %-32s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
-      "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64 "\n",
-      label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates, c.submits);
+  std::fprintf(stderr,
+               "[GeodePerf] %-32s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
+               "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64
+               "  drawCalls=%4" PRIu64 "  pipelineSwitches=%3" PRIu64 "\n",
+               label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates,
+               c.submits, c.drawCalls, c.pipelineSwitches);
 }
 
 /// Read a file from disk. Returns the empty string on any I/O error —
@@ -145,6 +146,8 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   RecordProperty("textureCreates", std::to_string(c.textureCreates));
   RecordProperty("submits", std::to_string(c.submits));
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
+  RecordProperty("drawCalls", std::to_string(c.drawCalls));
+  RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19 on macOS/Metal, M4 Pro:
@@ -156,11 +159,15 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   //   M4.2 (device dummies + pool): textureCreates=2 (target + MSAA
   //                       pair, fresh on first frame; repeat-render
   //                       is 0, see `*_ZeroTextures` tests below).
+  //   M6 instrumentation: drawCalls=3 (one per solid fill),
+  //                       pipelineSwitches=1 (solid pipeline only).
   EXPECT_LE(c.pathEncodes, 5u);       // M2: target = 0 on unchanged-geometry frames.
   EXPECT_LE(c.bufferCreates, 8u);     // M1.f.2: target = 1 (readback only).
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines (3 today).
   EXPECT_LE(c.textureCreates, 3u);    // Target + MSAA pair on frame 1; 0 on repeat.
   EXPECT_LE(c.submits, 3u);           // M3: target = 1.
+  EXPECT_LE(c.drawCalls, 4u);         // 3 shapes, one draw each.
+  EXPECT_LE(c.pipelineSwitches, 2u);  // Solid pipeline bound once.
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +185,8 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   RecordProperty("textureCreates", std::to_string(c.textureCreates));
   RecordProperty("submits", std::to_string(c.submits));
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
+  RecordProperty("drawCalls", std::to_string(c.drawCalls));
+  RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
@@ -189,11 +198,16 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   //                   (push/pop no longer forces a queue submit)
   //   M4.2 (device dummies + pool): textureCreates=4 on frame 1
   //                   (target+MSAA + layer+MSAA), 0 on repeat.
+  //   M6 instrumentation: drawCalls=2 (solid fill + gradient fill),
+  //                   pipelineSwitches=~3 (solid for layer, image
+  //                   blit on layer composite, gradient for rect).
   EXPECT_LE(c.pathEncodes, 4u);       // M2: target = 0.
   EXPECT_LE(c.bufferCreates, 12u);    // M1.f.2 + future arena-share: target ~= 5.
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines.
   EXPECT_LE(c.textureCreates, 6u);    // Target+MSAA + layer+MSAA on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);           // M3: target = 2 steady-state (frame + readback).
+  EXPECT_LE(c.drawCalls, 6u);         // 2 fills + blit composites.
+  EXPECT_LE(c.pipelineSwitches, 6u);  // Solid / gradient / image pipelines + mask if any.
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +234,8 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   RecordProperty("textureCreates", std::to_string(c.textureCreates));
   RecordProperty("submits", std::to_string(c.submits));
   RecordProperty("pathEncodes", std::to_string(c.pathEncodes));
+  RecordProperty("drawCalls", std::to_string(c.drawCalls));
+  RecordProperty("pipelineSwitches", std::to_string(c.pipelineSwitches));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
@@ -231,11 +247,19 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //   bindgroupCreates=132 (one per draw; M1.f.2 collapses to ~1).
   //   M4.2 (device dummies + pool): textureCreates=2 on frame 1
   //                       (target + MSAA); 0 on repeat.
+  //   M6 instrumentation: drawCalls=132 (one per path),
+  //                       pipelineSwitches=1 (solid pipeline only —
+  //                       all of Lion is solid-fill). M6 Bullet 2
+  //                       (`<use>` instancing) is the knob that moves
+  //                       drawCalls for `<use>`-heavy fixtures; Lion
+  //                       has no `<use>` so this ceiling stays at 132.
   EXPECT_LE(c.pathEncodes, 200u);       // M2: target = 0.
   EXPECT_LE(c.bufferCreates, 10u);      // M1.f.2: target ~= 5 steady-state.
   EXPECT_LE(c.bindgroupCreates, 200u);  // M1.f.2: target <= #pipelines.
   EXPECT_LE(c.textureCreates, 3u);      // Target + MSAA on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);             // M3: target = 1.
+  EXPECT_LE(c.drawCalls, 200u);         // 132 paths, one draw each (no <use>).
+  EXPECT_LE(c.pipelineSwitches, 2u);    // All-solid fixture: tracker binds solid once.
 }
 
 // ---------------------------------------------------------------------------

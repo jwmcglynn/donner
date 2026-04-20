@@ -50,6 +50,22 @@ struct GeodeCounters {
   /// frame (the `GeodePathCacheComponent` serves all paths).
   uint64_t pathEncodes = 0;
 
+  /// `wgpu::RenderPassEncoder::draw` / `drawIndexed` calls. One per
+  /// submitted draw call, regardless of instance count. Used to gate
+  /// Milestone 6: same-source-entity `<use>` draws collapse to a
+  /// single instanced call, so heavy `<use>` fixtures should drop
+  /// proportionally.
+  uint64_t drawCalls = 0;
+
+  /// `wgpu::RenderPassEncoder::setPipeline` calls that actually
+  /// switched the bound pipeline (the GeoEncoder state tracker
+  /// deduplicates no-op binds). Gates M6's "sort / collapse
+  /// contiguous same-pipeline draws" bullet: on a pure-solid fixture
+  /// the steady-state value should converge toward the number of
+  /// distinct pipelines the frame touches (typically 1 for Lion-
+  /// style many-solid-fill input).
+  uint64_t pipelineSwitches = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };
