@@ -267,10 +267,12 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
   const auto secondCounters = renderer.lastFrameTimings().counters;
 
   // Second-frame counters are strictly this-frame only (beginFrame
-  // resets). They should be no greater than the first frame's — same
-  // work, and render targets are reused across same-size frames
-  // (design doc 0030 Milestone 4.1).
-  EXPECT_GT(secondCounters.pathEncodes, 0u);
+  // resets). Since M2 (`GeodePathCacheComponent`) landed, an unchanged
+  // second render does zero path encodes — the explicit assertion on
+  // that invariant lives in `SimpleShapes_NoDirtyPath_ZeroEncodes`;
+  // here we just confirm the reset path preserves the invariant across
+  // counters and that render targets get reused (Milestone 4.1).
+  EXPECT_EQ(secondCounters.pathEncodes, 0u);
   EXPECT_LE(secondCounters.pathEncodes, firstCounters.pathEncodes);
   EXPECT_LT(secondCounters.textureCreates, firstCounters.textureCreates)
       << "Second frame should create STRICTLY FEWER textures than the first "
@@ -323,9 +325,8 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
 
   // M2 target: second frame does zero path encodes — three shapes hit the
   // cache. countPathEncode() is only called on cache miss.
-  EXPECT_EQ(c.pathEncodes, 0u)
-      << "Cache miss on an unchanged second render: one or more paths "
-         "re-encoded despite zero geometry changes.";
+  EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on an unchanged second render: one or more paths "
+                                  "re-encoded despite zero geometry changes.";
 }
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
@@ -338,9 +339,8 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   // M2 target: zero encodes across both fill paths — confirms the cache
   // covers both `submitFillDraw` (opacity-layer path) and
   // `fillPathLinearGradient` (rounded-rect path).
-  EXPECT_EQ(c.pathEncodes, 0u)
-      << "Cache miss on unchanged second render: fill or gradient path "
-         "re-encoded despite zero geometry changes.";
+  EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render: fill or gradient path "
+                                  "re-encoded despite zero geometry changes.";
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
@@ -361,9 +361,8 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   // assertion: the lion is our standard "many paths" stress fixture and
   // the M0 baseline showed 132 pathEncodes per frame. Driving that to 0
   // is the whole point of the cache.
-  EXPECT_EQ(c.pathEncodes, 0u)
-      << "Cache miss on unchanged second render of lion.svg: "
-         "re-encoded paths despite zero geometry changes.";
+  EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render of lion.svg: "
+                                  "re-encoded paths despite zero geometry changes.";
 }
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {

@@ -23,6 +23,8 @@ struct ImageResource;
 
 namespace donner::geode {
 
+struct EncodedPath;
+
 class GeodeDevice;
 class GeodeImagePipeline;
 class GeodePipeline;
@@ -268,7 +270,12 @@ public:
    * The current encoder transform applies (so clip paths use the same
    * device-pixel mapping as the content being clipped).
    */
-  void fillPathIntoMask(const Path& path, FillRule rule);
+  /// @param precomputedEncoded Optional M2 cache-hit payload. When
+  ///   non-null, the encoder skips `GeodePathEncoder::encode` and the
+  ///   `pathEncodes` counter bump. Used by `RendererGeode` to plumb a
+  ///   cached `GeodePathCacheComponent::strokeSlot` result.
+  void fillPathIntoMask(const Path& path, FillRule rule,
+                        const EncodedPath* precomputedEncoded = nullptr);
 
   /// Close the mask render pass opened by `beginMaskPass`.
   void endMaskPass();
@@ -379,7 +386,11 @@ public:
    *   premultiplication for the blend pipeline).
    * @param rule Fill rule (NonZero or EvenOdd).
    */
-  void fillPath(const Path& path, const css::RGBA& color, FillRule rule);
+  /// @param precomputedEncoded Optional M2 cache-hit payload — see
+  ///   `GeodePathCacheComponent`. When non-null, skips encode +
+  ///   counter bump.
+  void fillPath(const Path& path, const css::RGBA& color, FillRule rule,
+                const EncodedPath* precomputedEncoded = nullptr);
 
   /**
    * Fill a path with a linear gradient.
@@ -400,7 +411,8 @@ public:
    *   verbose warning at the call site in `RendererGeode`.
    * @param rule Fill rule (NonZero or EvenOdd).
    */
-  void fillPathLinearGradient(const Path& path, const LinearGradientParams& params, FillRule rule);
+  void fillPathLinearGradient(const Path& path, const LinearGradientParams& params, FillRule rule,
+                              const EncodedPath* precomputedEncoded = nullptr);
 
   /**
    * Fill a path with a radial gradient.
@@ -418,7 +430,8 @@ public:
    *   focal point + radius, shared transform and stops).
    * @param rule Fill rule (NonZero or EvenOdd).
    */
-  void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule);
+  void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule,
+                              const EncodedPath* precomputedEncoded = nullptr);
 
   /**
    * Describes a pattern tile used as a paint source for `fillPathPattern`.
@@ -451,7 +464,8 @@ public:
    * test identically to `fillPath`, and samples the tile for pixels inside
    * the path.
    */
-  void fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint);
+  void fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
+                       const EncodedPath* precomputedEncoded = nullptr);
 
   /**
    * Submit all encoded commands to the GPU queue.

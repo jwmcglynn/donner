@@ -851,7 +851,8 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
   impl_->maskPassOpen = true;
 }
 
-void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule) {
+void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
+                                  const EncodedPath* precomputedEncoded) {
   if (!impl_->maskPassOpen) {
     return;
   }
@@ -859,8 +860,14 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule) {
   // Dummy resources are pre-created in the encoder constructor so
   // the bind group is always complete, even if `beginMaskPass` fires
   // before any main draw.
-  impl_->device->countPathEncode();
-  EncodedPath encoded = GeodePathEncoder::encode(path, rule);
+  EncodedPath ownedEncoded;
+  const EncodedPath* encodedPtr = precomputedEncoded;
+  if (!encodedPtr) {
+    impl_->device->countPathEncode();
+    ownedEncoded = GeodePathEncoder::encode(path, rule);
+    encodedPtr = &ownedEncoded;
+  }
+  const EncodedPath& encoded = *encodedPtr;
   if (encoded.empty()) {
     return;
   }
@@ -976,6 +983,13 @@ struct GeoEncoder::FillDrawArgs {
   const Path* path;
   FillRule rule;
 
+  /// Optional precomputed encode. When non-null, `submitFillDraw`
+  /// uses this directly and skips `GeodePathEncoder::encode` +
+  /// `countPathEncode`. Used by the M2 `GeodePathCacheComponent`
+  /// cache-hit path (design doc 0030). When null, the encode runs
+  /// inline (legacy behavior).
+  const EncodedPath* precomputedEncoded = nullptr;
+
   // Paint mode selector. 0 = solid, 1 = pattern.
   uint32_t paintMode;
 
@@ -990,10 +1004,12 @@ struct GeoEncoder::FillDrawArgs {
   float patternOpacity;
 };
 
-void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rule) {
+void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rule,
+                          const EncodedPath* precomputedEncoded) {
   FillDrawArgs args = {};
   args.path = &path;
   args.rule = rule;
+  args.precomputedEncoded = precomputedEncoded;
   args.paintMode = 0u;
   const float alpha = color.a / 255.0f;
   args.solidColor[0] = (color.r / 255.0f) * alpha;
@@ -1013,7 +1029,8 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   submitFillDraw(args);
 }
 
-void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint) {
+void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
+                                 const EncodedPath* precomputedEncoded) {
   if (!paint.tile || paint.tileSize.x <= 0.0 || paint.tileSize.y <= 0.0) {
     return;
   }
@@ -1035,6 +1052,7 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   FillDrawArgs args = {};
   args.path = &path;
   args.rule = rule;
+  args.precomputedEncoded = precomputedEncoded;
   args.paintMode = 1u;
   args.patternView = paint.tile.createView();
   args.patternSampler = sampler;
@@ -1056,9 +1074,18 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   // draw; see design doc 0030, Tier 4.
   impl_->bindSolidPipeline();
 
-  // 1. CPU encode the path into Slug band data.
-  impl_->device->countPathEncode();
-  EncodedPath encoded = GeodePathEncoder::encode(*args.path, args.rule);
+  // 1. CPU encode the path into Slug band data — unless the caller
+  // already supplied a precomputed encode via the M2 cache
+  // (`GeodePathCacheComponent`). Cache hits skip both the encode
+  // work and the `pathEncodes` counter bump.
+  EncodedPath ownedEncoded;
+  const EncodedPath* encodedPtr = args.precomputedEncoded;
+  if (!encodedPtr) {
+    impl_->device->countPathEncode();
+    ownedEncoded = GeodePathEncoder::encode(*args.path, args.rule);
+    encodedPtr = &ownedEncoded;
+  }
+  const EncodedPath& encoded = *encodedPtr;
   if (encoded.empty()) {
     return;  // Nothing to draw.
   }
@@ -1198,7 +1225,7 @@ void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& grad
 }  // namespace
 
 void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientParams& params,
-                                        FillRule rule) {
+                                        FillRule rule, const EncodedPath* precomputedEncoded) {
   if (params.stops.empty()) {
     return;
   }
@@ -1209,9 +1236,16 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
-  // 1. CPU encode the path into Slug band data (same as fillPath).
-  impl_->device->countPathEncode();
-  EncodedPath encoded = GeodePathEncoder::encode(path, rule);
+  // 1. CPU encode the path into Slug band data (same as fillPath) —
+  // unless the M2 cache already has a precomputed encode.
+  EncodedPath ownedEncoded;
+  const EncodedPath* encodedPtr = precomputedEncoded;
+  if (!encodedPtr) {
+    impl_->device->countPathEncode();
+    ownedEncoded = GeodePathEncoder::encode(path, rule);
+    encodedPtr = &ownedEncoded;
+  }
+  const EncodedPath& encoded = *encodedPtr;
   if (encoded.empty()) {
     return;
   }
@@ -1286,7 +1320,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
 }
 
 void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientParams& params,
-                                        FillRule rule) {
+                                        FillRule rule, const EncodedPath* precomputedEncoded) {
   if (params.stops.empty()) {
     return;
   }
@@ -1302,8 +1336,14 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
-  impl_->device->countPathEncode();
-  EncodedPath encoded = GeodePathEncoder::encode(path, rule);
+  EncodedPath ownedEncoded;
+  const EncodedPath* encodedPtr = precomputedEncoded;
+  if (!encodedPtr) {
+    impl_->device->countPathEncode();
+    ownedEncoded = GeodePathEncoder::encode(path, rule);
+    encodedPtr = &ownedEncoded;
+  }
+  const EncodedPath& encoded = *encodedPtr;
   if (encoded.empty()) {
     return;
   }

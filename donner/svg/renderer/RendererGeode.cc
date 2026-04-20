@@ -9,16 +9,19 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Path.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -27,6 +30,8 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
+#include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -854,10 +859,138 @@ struct RendererGeode::Impl {
     }
   }
 
+  // --------------------------------------------------------------------
+  // M2 path-encode cache (design doc 0030 §Milestone 2).
+  //
+  // `cacheInvalidationRegistry` tracks the registry our entt
+  // `on_update<ComputedPathComponent>` / `on_destroy<ComputedPathComponent>`
+  // listener is connected to. When `draw()` comes in with a different
+  // registry (e.g. a test fixture reusing one renderer across documents),
+  // we disconnect from the old and reconnect to the new.
+  // --------------------------------------------------------------------
+
+  Registry* cacheInvalidationRegistry = nullptr;
+
+  /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
+  /// `on_destroy<ComputedPathComponent>` listener onto `registry`.
+  /// Called at the start of each `draw()`. Idempotent for the same
+  /// registry. When switching registries (test fixtures reusing one
+  /// renderer), disconnects from the old first.
+  void ensureCacheInvalidationWired(Registry& registry);
+
+  /// Wipe the cache component from an entity when its source
+  /// `ComputedPathComponent` is rewritten by `ShapeSystem` or destroyed.
+  /// Connected to entt's `on_update` / `on_destroy` signals.
+  /// File-scope free function with this signature is the only shape
+  /// entt's `.connect<&fn>()` accepts that doesn't couple lifetime to
+  /// `this` — see M2 notes in design doc 0030.
+  static void onComputedPathChanged(Registry& registry, Entity entity);
+
+  /// Scratch buffer for the no-source-entity stroke path. `getStrokeDerived`
+  /// uses this as stable storage when there's no `GeodePathCacheComponent`
+  /// to live on (e.g. `drawRect` / `drawEllipse` convenience draws). Only
+  /// one active draw at a time, so a single slot is safe.
+  Path strokeScratchPath;
+
+  /// Value returned by `getFillEncode` / `getStrokeDerived` describing
+  /// which encode the caller should pass down to `GeoEncoder`.
+  struct StrokeDerived {
+    /// Path to draw. Null means "no stroke geometry — skip the draw".
+    /// Points into the entity's cache slot on hit, or into
+    /// `strokeScratchPath` on the no-entity fallback.
+    const Path* strokedPath = nullptr;
+    /// Precomputed encode pointer for `GeoEncoder`. Non-null only when
+    /// the stroke came from a cache slot — the no-entity fallback
+    /// leaves this null and lets `GeoEncoder` encode inline.
+    const geode::EncodedPath* encoded = nullptr;
+    /// Fill rule to use. For open-path strokes, `strokeToFill` emits one
+    /// subpath → NonZero; for closed-path strokes, two → EvenOdd.
+    FillRule fillRule = FillRule::NonZero;
+  };
+
+  /// Encode-side of the cache. If `source` holds a valid entity handle,
+  /// installs / reuses a `GeodePathCacheComponent::fillEncode` on it and
+  /// returns a stable pointer into that component. If `source` is null
+  /// (non-driver callers), returns null and `GeoEncoder` will encode
+  /// inline — the old pre-M2 code path.
+  const geode::EncodedPath* getFillEncode(EntityHandle source, const Path& path, FillRule rule) {
+    if (!source) {
+      return nullptr;
+    }
+    auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
+    if (!cache.fillEncode) {
+      device->countPathEncode();
+      cache.fillEncode = geode::GeodePathEncoder::encode(path, rule);
+    }
+    return &*cache.fillEncode;
+  }
+
+  /// Determine the fill rule for a stroked outline per the subpath-count
+  /// rule documented in `RendererGeode::drawPath`. Open-path strokes
+  /// produce one subpath (NonZero); closed-path strokes produce two
+  /// same-winding subpaths (EvenOdd hollow-ring semantics).
+  static FillRule strokeFillRuleFor(const Path& strokedOutline) {
+    size_t subpathCount = 0;
+    for (const auto& cmd : strokedOutline.commands()) {
+      if (cmd.verb == Path::Verb::MoveTo) {
+        ++subpathCount;
+      }
+    }
+    return (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
+  }
+
+  /// Stroke-side of the cache. Builds (or reuses) the `strokeToFill`
+  /// output and its encode on `source`'s `GeodePathCacheComponent`.
+  /// Returns a `StrokeDerived` pointing into the cache (entity path) or
+  /// into `strokeScratchPath` (no-entity fallback). The caller must
+  /// check `strokedPath == nullptr` for the "zero-stroke" case.
+  StrokeDerived getStrokeDerived(EntityHandle source, const Path& geometry,
+                                 const StrokeStyle& strokeStyle) {
+    StrokeDerived result;
+    if (source) {
+      auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
+      if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle) {
+        // Miss (or stroke-params changed) — rebuild.
+        Path stroked = geometry.strokeToFill(strokeStyle);
+        if (stroked.empty()) {
+          cache.strokeSlot.reset();
+          return result;  // strokedPath stays null.
+        }
+        const FillRule fillRule = strokeFillRuleFor(stroked);
+        device->countPathEncode();
+        geode::EncodedPath encoded = geode::GeodePathEncoder::encode(stroked, fillRule);
+        cache.strokeSlot.emplace();
+        cache.strokeSlot->strokeKey = strokeStyle;
+        cache.strokeSlot->strokedPath = std::move(stroked);
+        cache.strokeSlot->strokedEncode = std::move(encoded);
+        cache.strokeSlot->strokeFillRule = fillRule;
+      }
+      result.strokedPath = &cache.strokeSlot->strokedPath;
+      result.encoded = &cache.strokeSlot->strokedEncode;
+      result.fillRule = cache.strokeSlot->strokeFillRule;
+      return result;
+    }
+    // No-entity fallback: compute into the Impl-local scratch buffer.
+    // GeoEncoder will encode inline when `encoded` is left null.
+    strokeScratchPath = geometry.strokeToFill(strokeStyle);
+    if (strokeScratchPath.empty()) {
+      return result;
+    }
+    result.strokedPath = &strokeScratchPath;
+    result.fillRule = strokeFillRuleFor(strokeScratchPath);
+    return result;
+  }
+
   /// Issue a fill of the given path using the current `paint.fill`. Handles
   /// solid colors, linear and radial gradients, and pattern tiles. None and
   /// unsupported types are ignored or fall back to their fallback color.
-  void fillResolved(const Path& path, FillRule rule) {
+  ///
+  /// `precomputedEncoded` is the M2 cache-hit payload (see
+  /// `getFillEncode`). When non-null, the encoder skips the
+  /// `GeodePathEncoder::encode` + `countPathEncode()` pair; otherwise
+  /// `GeoEncoder` runs the inline encode path.
+  void fillResolved(const Path& path, FillRule rule,
+                    const geode::EncodedPath* precomputedEncoded = nullptr) {
     if (!encoder) {
       return;
     }
@@ -867,19 +1000,21 @@ struct RendererGeode::Impl {
     if (patternFillPaint.has_value()) {
       syncTransform();
       const double opacity = paint.fillOpacity;
-      encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity));
+      encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity),
+                               precomputedEncoded);
       patternFillPaint.reset();
       return;
     }
     const double effectiveOpacity = paint.fillOpacity;
-    drawPaintedPath(path, paint.fill, effectiveOpacity, rule);
+    drawPaintedPath(path, paint.fill, effectiveOpacity, rule, precomputedEncoded);
   }
 
   /// Core dispatch: given a path and a resolved paint server, emit the
   /// appropriate fill call (solid color or gradient).
   void drawPaintedPath(const Path& path, const components::ResolvedPaintServer& server,
-                       double effectiveOpacity, FillRule rule) {
-    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule);
+                       double effectiveOpacity, FillRule rule,
+                       const geode::EncodedPath* precomputedEncoded = nullptr) {
+    drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule, precomputedEncoded);
   }
 
   /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
@@ -890,7 +1025,8 @@ struct RendererGeode::Impl {
   /// would warp the gradient direction relative to the underlying shape.
   void drawPaintedPathAgainst(const Path& geometryPath, const Path& drawPath,
                               const components::ResolvedPaintServer& server,
-                              double effectiveOpacity, FillRule rule) {
+                              double effectiveOpacity, FillRule rule,
+                              const geode::EncodedPath* precomputedEncoded = nullptr) {
     if (!encoder || drawPath.empty()) {
       return;
     }
@@ -904,7 +1040,8 @@ struct RendererGeode::Impl {
     // Solid color: straight through the flat fill pipeline.
     if (const auto* solid = std::get_if<PaintServer::Solid>(&server)) {
       syncTransform();
-      encoder->fillPath(drawPath, solid->color.resolve(currentColor, opacity), rule);
+      encoder->fillPath(drawPath, solid->color.resolve(currentColor, opacity), rule,
+                        precomputedEncoded);
       return;
     }
 
@@ -923,7 +1060,7 @@ struct RendererGeode::Impl {
           warnedGradient = true;
         }
         syncTransform();
-        encoder->fillPathLinearGradient(drawPath, *linear, rule);
+        encoder->fillPathLinearGradient(drawPath, *linear, rule, precomputedEncoded);
         return;
       }
 
@@ -937,14 +1074,14 @@ struct RendererGeode::Impl {
         }
         if (radial->gradient.has_value()) {
           syncTransform();
-          encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule);
+          encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule, precomputedEncoded);
           return;
         }
         if (radial->solidFallback.has_value()) {
           // SVG2 degenerate radial (r=0): paint the last stop color as a
           // solid fill so the element remains visible.
           syncTransform();
-          encoder->fillPath(drawPath, *radial->solidFallback, rule);
+          encoder->fillPath(drawPath, *radial->solidFallback, rule, precomputedEncoded);
           return;
         }
         // Recognized as radial but otherwise unusable (empty stops, focal
@@ -963,7 +1100,8 @@ struct RendererGeode::Impl {
       // solid fallback color if one was declared, otherwise drop the draw.
       if (ref->fallback.has_value()) {
         syncTransform();
-        encoder->fillPath(drawPath, ref->fallback->resolve(currentColor, opacity), rule);
+        encoder->fillPath(drawPath, ref->fallback->resolve(currentColor, opacity), rule,
+                          precomputedEncoded);
         return;
       }
 
@@ -976,7 +1114,50 @@ struct RendererGeode::Impl {
       }
     }
   }
+
+  ~Impl() {
+    // Disconnect the M2 cache-invalidation listener before the Impl is
+    // gone. Connection + disconnection are both no-ops when no registry
+    // was ever seen (e.g., a headless renderer that never drew anything).
+    //
+    // We rely on the normal lifecycle — SVGDocument outlives the
+    // renderer that drew it. In the reverse case (registry destroyed
+    // first) this disconnect would UB on a freed registry; tests that
+    // invert the lifetime don't exist today and would need to handle
+    // their own cleanup.
+    if (cacheInvalidationRegistry) {
+      cacheInvalidationRegistry->on_update<components::ComputedPathComponent>()
+          .disconnect<&Impl::onComputedPathChanged>();
+      cacheInvalidationRegistry->on_destroy<components::ComputedPathComponent>()
+          .disconnect<&Impl::onComputedPathChanged>();
+      cacheInvalidationRegistry = nullptr;
+    }
+  }
 };
+
+void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
+  if (&registry == cacheInvalidationRegistry) {
+    return;
+  }
+  if (cacheInvalidationRegistry) {
+    cacheInvalidationRegistry->on_update<components::ComputedPathComponent>()
+        .disconnect<&Impl::onComputedPathChanged>();
+    cacheInvalidationRegistry->on_destroy<components::ComputedPathComponent>()
+        .disconnect<&Impl::onComputedPathChanged>();
+    // Reconnecting to a fresh registry: leave the old one's cache
+    // components in place (they die with the old registry) and start
+    // fresh on the new one.
+  }
+  registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
+  registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
+  cacheInvalidationRegistry = &registry;
+}
+
+void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entity) {
+  // entt allows `remove` on a component the entity doesn't hold — it's a
+  // cheap no-op in that case. We don't need an `all_of` guard.
+  registry.remove<geode::GeodePathCacheComponent>(entity);
+}
 
 RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
   impl_->verbose = verbose;
@@ -1038,6 +1219,14 @@ RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
 
 void RendererGeode::draw(SVGDocument& document) {
+  // Wire the M2 cache-invalidation listener onto this document's
+  // registry BEFORE the driver runs `RenderingContext::instantiateRenderTree`.
+  // The listener must be connected when `ShapeSystem` fires its
+  // `on_update<ComputedPathComponent>` signals; otherwise a geometry
+  // change between draws would silently leave a stale encode in
+  // `GeodePathCacheComponent`.
+  impl_->ensureCacheInvalidationWired(document.registry());
+
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);
 }
@@ -2099,7 +2288,12 @@ void RendererGeode::setPaint(const PaintParams& paint) {
 }
 
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
-  impl_->fillResolved(path.path, path.fillRule);
+  // M2 cache lookup for the fill encode. Null `sourceEntity` (editor
+  // overlay, test-harness direct draws) returns nullptr and `GeoEncoder`
+  // falls back to the inline encode path.
+  const geode::EncodedPath* fillEncoded =
+      impl_->getFillEncode(path.sourceEntity, path.path, path.fillRule);
+  impl_->fillResolved(path.path, path.fillRule, fillEncoded);
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
   // device init failed, zero-pixel viewport, or draw-before-beginFrame),
@@ -2135,29 +2329,25 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // segment rectangle drops out). NonZero handles that case correctly
   // because the overlapping winding still sums to non-zero.
   //
-  // Pick per-source: count the subpaths produced by `strokeToFill`.
-  // A 1-subpath result means the source was open, use NonZero. A
-  // 2-subpath result means the source was closed and we need EvenOdd.
-  const Path strokedOutline = path.path.strokeToFill(toStrokeStyle(stroke));
-  if (strokedOutline.empty()) {
+  // The M2 cache (`GeodePathCacheComponent::strokeSlot`) memoizes the
+  // `strokeToFill` output + its encode + the derived fill rule, keyed
+  // by `StrokeStyle` equality. A cache hit skips all three computations.
+  const StrokeStyle strokeStyle = toStrokeStyle(stroke);
+  const Impl::StrokeDerived strokeDerived =
+      impl_->getStrokeDerived(path.sourceEntity, path.path, strokeStyle);
+  if (!strokeDerived.strokedPath) {
     return;
   }
-
-  size_t subpathCount = 0;
-  for (const auto& cmd : strokedOutline.commands()) {
-    if (cmd.verb == Path::Verb::MoveTo) {
-      ++subpathCount;
-    }
-  }
-  const FillRule strokeFillRule = (subpathCount <= 1) ? FillRule::NonZero : FillRule::EvenOdd;
+  const Path& strokedOutline = *strokeDerived.strokedPath;
 
   // Pattern dispatch comes first: a stroke pattern slot was populated by the
   // driver via `endPatternTile(forStroke=true)` and consumed here.
   if (impl_->patternStrokePaint.has_value()) {
     impl_->syncTransform();
     const double opacity = impl_->paint.strokeOpacity;
-    impl_->encoder->fillPathPattern(strokedOutline, strokeFillRule,
-                                    impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity));
+    impl_->encoder->fillPathPattern(strokedOutline, strokeDerived.fillRule,
+                                    impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity),
+                                    strokeDerived.encoded);
     impl_->patternStrokePaint.reset();
     return;
   }
@@ -2170,7 +2360,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const double effectiveOpacity = impl_->paint.strokeOpacity;
   auto strokeServer = impl_->paint.stroke;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
-                                strokeFillRule);
+                                strokeDerived.fillRule, strokeDerived.encoded);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
