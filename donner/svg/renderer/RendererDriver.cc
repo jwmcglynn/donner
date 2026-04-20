@@ -270,11 +270,13 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
-PathShape toPathShape(const components::ComputedPathComponent& path,
+PathShape toPathShape(EntityHandle sourceEntity,
+                      const components::ComputedPathComponent& path,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
   shape.path = path.spline;
   shape.fillRule = style.properties->fillRule.getRequired();
+  shape.sourceEntity = sourceEntity;
   return shape;
 }
 
@@ -925,7 +927,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
+                           paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
@@ -1370,7 +1373,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
+                           paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
@@ -1664,7 +1668,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(*path, style), paint.strokeParams);
+        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
+                           paint.strokeParams);
         drawMarkers(view, registry, instance, *path, style);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
