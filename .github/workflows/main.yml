@@ -117,25 +117,7 @@ jobs:
           fi
 
           eval "$(
-            python3 - <<'PY'
-            import json
-            import os
-            import shlex
-
-            with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
-                event = json.load(f)
-
-            pr = event.get("pull_request", {})
-            labels = [label.get("name", "") for label in pr.get("labels", [])]
-            values = {
-                "BASE_SHA": pr.get("base", {}).get("sha", ""),
-                "HEAD_SHA": pr.get("head", {}).get("sha", ""),
-                "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false",
-            }
-
-            for key, value in values.items():
-                print(f"{key}={shlex.quote(value)}")
-            PY
+            python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
           )"
 
           if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
@@ -210,14 +192,7 @@ jobs:
             -o "$work_dir/affected.txt"
 
           affected="$(
-            python3 - "$work_dir/affected.txt" <<'PY'
-            import pathlib
-            import sys
-
-            path = pathlib.Path(sys.argv[1])
-            labels = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            print(" ".join(labels))
-            PY
+            python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$work_dir/affected.txt"
           )"
 
           if [[ -z "$affected" ]]; then
