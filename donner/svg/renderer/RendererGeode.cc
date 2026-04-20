@@ -475,6 +475,11 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
 struct RendererGeode::Impl {
   bool verbose = false;
 
+  // Per-frame perf counters. See design doc 0030 (geode_performance) for
+  // the tracked sites and the optimization milestones these drive.
+  // Reset at `beginFrame`, read via `lastFrameTimings()`.
+  geode::GeodeCounters counters;
+
   // GPU resources. Created in the constructor; if device creation fails,
   // `device` is null and the renderer enters a no-op state.
   //
@@ -489,8 +494,42 @@ struct RendererGeode::Impl {
   RenderViewport viewport;
   int pixelWidth = 0;
   int pixelHeight = 0;
+  // Dimensions of the `target` / `msaaTarget` textures as they were
+  // created. When the next `beginFrame` comes in at the same size,
+  // the textures are reused (design doc 0030 Milestone 4.1); otherwise
+  // they're reallocated.
+  int targetWidth = 0;
+  int targetHeight = 0;
   wgpu::Texture target;      // 1-sample resolve: RenderAttachment | CopySrc | TextureBinding.
   wgpu::Texture msaaTarget;  // 4× MSAA color attachment companion to `target`.
+
+  // Single CommandEncoder owned by RendererGeode for the whole frame
+  // (design doc 0030 Milestone 3). All `GeoEncoder` instances created
+  // during the frame (base + push/pop layer / filter / mask) share
+  // this CommandEncoder, so push/pop boundaries no longer force a
+  // `queue().submit()`. Finalised + submitted exactly once in
+  // `endFrame`.
+  wgpu::CommandEncoder frameCommandEncoder;
+
+  /// Finish + submit the current `frameCommandEncoder` and open a fresh
+  /// one. Callers must have ended any open render pass (via
+  /// `encoder->finish()`) before invoking this.
+  ///
+  /// Used when we need prior GPU work to be visible to a subsystem that
+  /// uses its own CommandEncoder + submit (the filter engine). Incurs
+  /// one extra submit per flush; most frames don't need it.
+  void flushFrameCommandEncoder() {
+    if (!frameCommandEncoder) {
+      return;
+    }
+    wgpu::CommandBuffer cb = frameCommandEncoder.finish();
+    device->queue().submit(1, &cb);
+    device->countSubmit();
+    wgpu::CommandEncoderDescriptor desc = {};
+    desc.label = wgpuLabel("RendererGeodeFrameCE");
+    frameCommandEncoder = device->device().createCommandEncoder(desc);
+  }
+
   std::unique_ptr<geode::GeoEncoder> encoder;
 
   // Reusable scratch storage for gradient stop vectors — keeps the
@@ -951,6 +990,7 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     }
     return;
   }
+  impl_->device->setCounters(&impl_->counters);
   impl_->pipeline = std::make_unique<geode::GeodePipeline>(
       impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
       impl_->device->sampleCount());
@@ -972,6 +1012,7 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
     }
     return;
   }
+  impl_->device->setCounters(&impl_->counters);
   impl_->pipeline = std::make_unique<geode::GeodePipeline>(
       impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
       impl_->device->sampleCount());
@@ -981,6 +1022,18 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
   impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
       impl_->device->device(), kFormat, impl_->device->sampleCount());
   impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
+}
+
+void RendererGeode::enableTimestamps(bool /*enabled*/) {
+  // Reserved for future work (design doc 0030, "Future Work"). Counters
+  // are the durable regression signal and are always enabled.
+}
+
+FrameTimings RendererGeode::lastFrameTimings() const {
+  FrameTimings timings;
+  timings.counters = impl_->counters;
+  // `renderPassNs` / `totalGpuNs` stay zero until timestamp support lands.
+  return timings;
 }
 
 RendererGeode::~RendererGeode() = default;
@@ -1007,48 +1060,79 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->transformStack.clear();
   impl_->paint = PaintParams();
   impl_->encoder.reset();
-  impl_->target = wgpu::Texture();
-  impl_->msaaTarget = wgpu::Texture();
+
+  // Reset perf counters for this frame. Re-establish the device's
+  // counter pointer because a shared GeodeDevice may have been handed
+  // to another renderer between frames — the last caller wins, which
+  // is exactly the serial per-frame access pattern we want.
+  impl_->counters.reset();
+  impl_->device->setCounters(&impl_->counters);
 
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    impl_->target = wgpu::Texture();
+    impl_->msaaTarget = wgpu::Texture();
+    impl_->targetWidth = 0;
+    impl_->targetHeight = 0;
     return;
   }
 
-  // 1-sample resolve target: what `takeSnapshot()` copies back and what
-  // pattern / layer blits sample from.
-  wgpu::TextureDescriptor td = {};
-  td.label = wgpuLabel("RendererGeodeTarget");
-  td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-             1};
-  td.format = kFormat;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
-             wgpu::TextureUsage::TextureBinding;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  impl_->target = impl_->device->device().createTexture(td);
+  // Reuse the render targets across same-size frames (design doc 0030
+  // Milestone 4.1). Content is cleared by the encoder's first
+  // render-pass `LoadOp::Clear`, so lingering pixels from the previous
+  // frame don't leak into this one.
+  const bool canReuseTargets = impl_->target && impl_->targetWidth == impl_->pixelWidth &&
+                               impl_->targetHeight == impl_->pixelHeight;
 
-  // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
-  // hardware resolves to `target` at pass end. Skipped on the
-  // alpha-coverage path (sampleCount == 1) where draws go directly
-  // into `target` with no intermediate MSAA texture.
-  const uint32_t sc = impl_->device->sampleCount();
-  if (sc > 1) {
-    wgpu::TextureDescriptor msaaDesc = {};
-    msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
-    msaaDesc.size = td.size;
-    msaaDesc.format = kFormat;
-    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-    msaaDesc.mipLevelCount = 1;
-    msaaDesc.sampleCount = sc;
-    msaaDesc.dimension = wgpu::TextureDimension::_2D;
-    impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+  if (!canReuseTargets) {
+    // 1-sample resolve target: what `takeSnapshot()` copies back and what
+    // pattern / layer blits sample from.
+    wgpu::TextureDescriptor td = {};
+    td.label = wgpuLabel("RendererGeodeTarget");
+    td.size = {static_cast<uint32_t>(impl_->pixelWidth),
+               static_cast<uint32_t>(impl_->pixelHeight), 1};
+    td.format = kFormat;
+    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
+               wgpu::TextureUsage::TextureBinding;
+    td.mipLevelCount = 1;
+    td.sampleCount = 1;
+    td.dimension = wgpu::TextureDimension::_2D;
+    impl_->target = impl_->device->device().createTexture(td);
+    impl_->device->countTexture();
+
+    // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
+    // hardware resolves to `target` at pass end. Skipped on the
+    // alpha-coverage path (sampleCount == 1) where draws go directly
+    // into `target` with no intermediate MSAA texture.
+    const uint32_t sc = impl_->device->sampleCount();
+    if (sc > 1) {
+      wgpu::TextureDescriptor msaaDesc = {};
+      msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
+      msaaDesc.size = td.size;
+      msaaDesc.format = kFormat;
+      msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      msaaDesc.mipLevelCount = 1;
+      msaaDesc.sampleCount = sc;
+      msaaDesc.dimension = wgpu::TextureDimension::_2D;
+      impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+      impl_->device->countTexture();
+    } else {
+      impl_->msaaTarget = wgpu::Texture();
+    }
+    impl_->targetWidth = impl_->pixelWidth;
+    impl_->targetHeight = impl_->pixelHeight;
   }
+
+  // Single CommandEncoder for the entire frame — shared across the
+  // base encoder and every push/pop layer/filter/mask helper. One
+  // queue submit at `endFrame`. Design doc 0030 Milestone 3.
+  wgpu::CommandEncoderDescriptor cedesc = {};
+  cedesc.label = wgpuLabel("RendererGeodeFrameCE");
+  impl_->frameCommandEncoder = impl_->device->device().createCommandEncoder(cedesc);
 
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->msaaTarget, impl_->target);
+      impl_->msaaTarget, impl_->target, impl_->frameCommandEncoder);
   // Default to a transparent clear so an empty frame matches the other
   // backends' "no document content" appearance.
   impl_->encoder->clear(css::RGBA(0, 0, 0, 0));
@@ -1056,9 +1140,21 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 
 void RendererGeode::endFrame() {
   if (impl_->encoder) {
+    // Ends the open render pass without submitting — shared-mode.
     impl_->encoder->finish();
     impl_->encoder.reset();
   }
+
+  // Finalise and submit the single frame-wide CommandEncoder. After
+  // this one submit, all recorded render passes (base + every pushed
+  // layer / filter / mask) execute on the GPU in program order.
+  if (impl_->frameCommandEncoder) {
+    wgpu::CommandBuffer cmdBuf = impl_->frameCommandEncoder.finish();
+    impl_->device->queue().submit(1, &cmdBuf);
+    impl_->device->countSubmit();
+    impl_->frameCommandEncoder = wgpu::CommandEncoder();
+  }
+
   impl_->currentTransform = Transform2d();
   impl_->transformStack.clear();
 }
@@ -1187,7 +1283,9 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       desc.mipLevelCount = 1;
       desc.sampleCount = 1;
       desc.dimension = wgpu::TextureDimension::_2D;
-      return dev.createTexture(desc);
+      auto t = dev.createTexture(desc);
+      impl_->device->countTexture();
+      return t;
     };
     const auto makeMsaaTexture = [&](const char* label) -> wgpu::Texture {
       if (impl_->device->sampleCount() == 1) {
@@ -1203,7 +1301,9 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       desc.mipLevelCount = 1;
       desc.sampleCount = 4;
       desc.dimension = wgpu::TextureDimension::_2D;
-      return dev.createTexture(desc);
+      auto t = dev.createTexture(desc);
+      impl_->device->countTexture();
+      return t;
     };
 
     // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
@@ -1336,6 +1436,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
+  impl_->device->countTexture();
   if (!layerTexture) {
     impl_->layerStack.push_back({});
     return;
@@ -1352,6 +1453,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
     msaaDesc.sampleCount = 4;
     msaaDesc.dimension = wgpu::TextureDimension::_2D;
     layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
+    impl_->device->countTexture();
     if (!layerMsaaTexture) {
       impl_->layerStack.push_back({});
       return;
@@ -1377,7 +1479,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   impl_->msaaTarget = layerMsaaTexture;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerMsaaTexture, layerTexture);
+      layerMsaaTexture, layerTexture, impl_->frameCommandEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
   impl_->layerStack.push_back(std::move(frame));
@@ -1426,20 +1528,21 @@ void RendererGeode::popIsolatedLayer() {
     snapDesc.sampleCount = 1;
     snapDesc.dimension = wgpu::TextureDimension::_2D;
     wgpu::Texture snapshot = impl_->device->device().createTexture(snapDesc);
+    impl_->device->countTexture();
 
     if (snapshot) {
-      wgpu::CommandEncoder copyEncoder =
-          impl_->device->device().createCommandEncoder();
-
+      // Record the snapshot copy into the shared frame CommandEncoder
+      // (design doc 0030 M3). `impl_->encoder->finish()` above already
+      // ended the layer's render pass, so it's safe to record a
+      // CommandEncoder-level copyTextureToTexture here — no separate
+      // CommandEncoder + submit required.
       wgpu::TexelCopyTextureInfo src = {};
       src.texture = frame.savedTarget;
       wgpu::TexelCopyTextureInfo dst = {};
       dst.texture = snapshot;
       const wgpu::Extent3D extent = {static_cast<uint32_t>(impl_->pixelWidth),
                                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      copyEncoder.copyTextureToTexture(src, dst, extent);
-      wgpu::CommandBuffer copyCmd = copyEncoder.finish();
-      impl_->device->queue().submit(1, &copyCmd);
+      impl_->frameCommandEncoder.copyTextureToTexture(src, dst, extent);
 
       // Open a fresh parent encoder that PRESERVES the target's existing
       // contents (the backdrop pre-push — identical to `snapshot` at
@@ -1457,7 +1560,7 @@ void RendererGeode::popIsolatedLayer() {
       // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          frame.savedMsaaTarget, frame.savedTarget);
+          frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder);
       newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
@@ -1478,7 +1581,7 @@ void RendererGeode::popIsolatedLayer() {
   // compositing alpha.
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedMsaaTarget, frame.savedTarget);
+      frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -1514,6 +1617,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture layerTexture = impl_->device->device().createTexture(td);
+  impl_->device->countTexture();
   if (!layerTexture) {
     impl_->filterStack.push_back({});
     return;
@@ -1528,6 +1632,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   msaaDesc.sampleCount = 4;
   msaaDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture layerMsaaTexture = impl_->device->device().createTexture(msaaDesc);
+  impl_->device->countTexture();
   if (!layerMsaaTexture) {
     impl_->filterStack.push_back({});
     return;
@@ -1550,7 +1655,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   impl_->msaaTarget = layerMsaaTexture;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerMsaaTexture, layerTexture);
+      layerMsaaTexture, layerTexture, impl_->frameCommandEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
   impl_->filterStack.push_back(std::move(frame));
@@ -1574,6 +1679,13 @@ void RendererGeode::popFilterLayer() {
     impl_->encoder->finish();
   }
 
+  // The filter engine runs on its own CommandEncoder + submit, so the
+  // layer-texture writes we just recorded into `frameCommandEncoder`
+  // must be submitted to the GPU BEFORE the filter engine tries to
+  // sample from `layerTexture`. Flush the shared encoder (1 extra
+  // submit, paid only on frames that use a filter).
+  impl_->flushFrameCommandEncoder();
+
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
@@ -1588,7 +1700,7 @@ void RendererGeode::popFilterLayer() {
   impl_->msaaTarget = frame.savedMsaaTarget;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedMsaaTarget, frame.savedTarget);
+      frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -1621,6 +1733,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     td.sampleCount = 1;
     td.dimension = wgpu::TextureDimension::_2D;
     outResolve = impl_->device->device().createTexture(td);
+    impl_->device->countTexture();
 
     if (impl_->device->sampleCount() > 1) {
       wgpu::TextureDescriptor msaaDesc = {};
@@ -1632,6 +1745,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
       msaaDesc.sampleCount = 4;
       msaaDesc.dimension = wgpu::TextureDimension::_2D;
       outMsaa = impl_->device->device().createTexture(msaaDesc);
+      impl_->device->countTexture();
     }
   };
 
@@ -1662,7 +1776,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->msaaTarget = frame.maskMsaaTexture;
   auto captureEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.maskMsaaTexture, frame.maskTexture);
+      frame.maskMsaaTexture, frame.maskTexture, impl_->frameCommandEncoder);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(captureEncoder);
   impl_->maskStack.push_back(std::move(frame));
@@ -1692,7 +1806,7 @@ void RendererGeode::transitionMaskToContent() {
   impl_->msaaTarget = frame.contentMsaaTexture;
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.contentMsaaTexture, frame.contentTexture);
+      frame.contentMsaaTexture, frame.contentTexture, impl_->frameCommandEncoder);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(contentEncoder);
   frame.phase = Impl::MaskStackFrame::Phase::Content;
@@ -1722,7 +1836,7 @@ void RendererGeode::popMask() {
   impl_->msaaTarget = frame.savedMsaaTarget;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedMsaaTarget, frame.savedTarget);
+      frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
@@ -1788,6 +1902,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture tileTexture = impl_->device->device().createTexture(td);
+  impl_->device->countTexture();
   if (!tileTexture) {
     return;
   }
@@ -1806,6 +1921,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     tileMsaaDesc.sampleCount = 4;
     tileMsaaDesc.dimension = wgpu::TextureDimension::_2D;
     tileMsaaTexture = impl_->device->device().createTexture(tileMsaaDesc);
+    impl_->device->countTexture();
     if (!tileMsaaTexture) {
       return;
     }
@@ -1873,7 +1989,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      tileMsaaTexture, tileTexture);
+      tileMsaaTexture, tileTexture, impl_->frameCommandEncoder);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -1937,7 +2053,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
       frame.savedTarget && (!needsMsaa || frame.savedMsaaTarget)) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-        frame.savedMsaaTarget, frame.savedTarget);
+        frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
     // (via the finish() in beginPatternTile), so we must not clear it
@@ -2249,6 +2365,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
   bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
   wgpu::Buffer readback = impl_->device->device().createBuffer(bd);
+  impl_->device->countBuffer();
 
   // Copy texture → readback buffer.
   wgpu::CommandEncoder enc = impl_->device->device().createCommandEncoder();
@@ -2265,6 +2382,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
 
   wgpu::CommandBuffer cmd = enc.finish();
   impl_->device->queue().submit(1, &cmd);
+  impl_->device->countSubmit();
 
   // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
   // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function

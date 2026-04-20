@@ -66,6 +66,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
   if (!texture) {
     return wgpu::Texture();
   }
+  device.countTexture();
 
   const uint32_t unpaddedBytesPerRow = width * 4u;
   const uint32_t paddedBytesPerRow = alignUp(unpaddedBytesPerRow, kBytesPerRowAlignment);
@@ -143,6 +144,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   uniDesc.size = sizeof(Uniforms);
   uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
+  device.countBuffer();
   queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
 
   // Pick sampler based on requested filter mode.
@@ -177,6 +179,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  device.countBindGroup();
 
   // Switch to the image pipeline and record the draw call.
   // The caller is expected to restore the Slug-fill pipeline if it needs

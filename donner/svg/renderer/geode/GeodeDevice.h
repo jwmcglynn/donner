@@ -5,6 +5,8 @@
 #include <memory>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/svg/renderer/geode/GeodeCounters.h"
+
 namespace donner::geode {
 
 /**
@@ -77,6 +79,43 @@ public:
    */
   uint32_t sampleCount() const { return useAlphaCoverageAA_ ? 1u : 4u; }
 
+  /**
+   * Install a `GeodeCounters` struct for this device. Non-owning; the
+   * caller must keep the struct alive for as long as the device might
+   * increment it. Pass `nullptr` to disable instrumentation.
+   *
+   * See design doc 0030 (geode_performance). All Geode components that
+   * hold a `GeodeDevice&` route their per-frame hot-path allocation and
+   * submission sites through this hook.
+   */
+  void setCounters(GeodeCounters* counters) { counters_ = counters; }
+
+  /// Non-owning pointer to the installed counters, or null.
+  GeodeCounters* counters() const { return counters_; }
+
+  // Counter increment helpers. Cheap no-op when counters are disabled.
+  void countBuffer() const {
+    if (counters_) ++counters_->bufferCreates;
+  }
+  void countBindGroup() const {
+    if (counters_) ++counters_->bindgroupCreates;
+  }
+  void countTexture() const {
+    if (counters_) ++counters_->textureCreates;
+  }
+  void countSubmit() const {
+    if (counters_) ++counters_->submits;
+  }
+  void countPathEncode() const {
+    if (counters_) ++counters_->pathEncodes;
+  }
+
+  /**
+   * Whether the driver supports GPU timestamp queries. Always false
+   * today — reserved for future work (design doc 0030, "Future Work").
+   */
+  bool supportsTimestamps() const { return false; }
+
 private:
   GeodeDevice();
 
@@ -90,6 +129,7 @@ private:
   wgpu::Queue queue_;
 
   bool useAlphaCoverageAA_ = false;
+  GeodeCounters* counters_ = nullptr;
 };
 
 }  // namespace donner::geode

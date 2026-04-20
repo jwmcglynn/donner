@@ -20,6 +20,22 @@ namespace {
 /// multiples of 4 for COPY_SRC/COPY_DST operations).
 constexpr uint64_t roundUp4(uint64_t size) { return (size + 3u) & ~uint64_t{3u}; }
 
+// WebGPU binding offset alignment requirements for the per-draw arenas
+// (design doc 0030 Milestone 1).
+//
+// Vertex buffer: `setVertexBuffer(slot, buffer, offset, size)` requires
+// `offset` be a multiple of 4 (WebGPU spec §23.8).
+constexpr uint64_t kVertexOffsetAlignment = 4u;
+// Storage buffer bind-group offset: defaults to 256 across wgpu-native
+// backends (the spec-mandated floor for portability). Querying the
+// device's `minStorageBufferOffsetAlignment` would let us tighten this
+// to 16 or 32 on modern adapters, but 256 is safe everywhere and the
+// wasted-tail memory is negligible at typical path sizes.
+constexpr uint64_t kStorageOffsetAlignment = 256u;
+// Uniform buffer bind-group offset: same 256-byte default across
+// wgpu-native backends (`minUniformBufferOffsetAlignment`).
+constexpr uint64_t kUniformOffsetAlignment = 256u;
+
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
 /// WGSL struct layout requires the total size to be a multiple of the largest
@@ -162,6 +178,79 @@ struct GeoEncoder::Impl {
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
+
+  /// Per-encoder growable GPU buffer used as a bump-allocation arena
+  /// for per-draw data (vertex / band / curve). Design doc 0030
+  /// Milestone 1 — replaces the per-fill `dev.createBuffer` pattern
+  /// with a single long-lived buffer that each draw writes into at the
+  /// current `offset`, then advances.
+  ///
+  /// Alignment: callers pass the required alignment for the binding.
+  /// Vertex buffers need 4-byte offset alignment (WebGPU spec §23.8);
+  /// storage buffers need `minStorageBufferOffsetAlignment` which
+  /// defaults to 256 on the wgpu-native backends Geode supports.
+  ///
+  /// Lifetime: when the arena grows, the previous buffer is moved into
+  /// `retired` and kept alive for the encoder's lifetime. Commands
+  /// already recorded into the command encoder that reference the
+  /// old buffer remain valid because the `wgpu::Buffer` RAII wrapper
+  /// holds the handle until the `Arena` itself is destroyed (at
+  /// encoder destruction, after `finish()` has submitted all work).
+  struct Arena {
+    wgpu::Buffer buffer;
+    uint64_t capacity = 0;
+    uint64_t offset = 0;  // Next unused byte within `buffer`.
+    std::vector<wgpu::Buffer> retired;
+    wgpu::BufferUsage usage = wgpu::BufferUsage::CopyDst;
+    const char* label = "GeodeArena";
+  };
+  Arena vertexArena;
+  Arena bandArena;
+  Arena curveArena;
+  Arena uniformArena;
+
+  // When true, this encoder owns its `commandEncoder` and `finish()`
+  // calls `commandEncoder.finish()` + `queue().submit()`. When false
+  // (design doc 0030 Milestone 3), the encoder is borrowed from the
+  // caller (`RendererGeode`) and `finish()` only ends any open pass.
+  bool ownsCommandEncoder = true;
+
+  /// Allocate `size` bytes in `arena` at an offset aligned to
+  /// `alignment`, growing if necessary. Writes `size` bytes of `data`
+  /// into the buffer via `queue.writeBuffer`. Returns the
+  /// (buffer, offset) pair the draw should bind.
+  struct Allocation {
+    const wgpu::Buffer* buffer;
+    uint64_t offset;
+    uint64_t size;
+  };
+  Allocation allocInArena(Arena& arena, const void* data, uint64_t size,
+                          uint64_t alignment) {
+    uint64_t alignedOffset = (arena.offset + alignment - 1) & ~(alignment - 1);
+    if (alignedOffset + size > arena.capacity) {
+      // Retire the current buffer (if any) so already-recorded commands
+      // can still reference it through encoder submission time, then
+      // allocate a new, larger buffer.
+      if (arena.buffer) {
+        arena.retired.push_back(std::move(arena.buffer));
+      }
+      constexpr uint64_t kMinGrow = uint64_t{64} * 1024;
+      uint64_t newCap = std::max(arena.capacity * 2u, kMinGrow);
+      while (newCap < size) newCap *= 2;
+      wgpu::BufferDescriptor desc = {};
+      desc.label = wgpuLabel(arena.label);
+      desc.size = newCap;
+      desc.usage = arena.usage;
+      arena.buffer = device->device().createBuffer(desc);
+      device->countBuffer();
+      arena.capacity = newCap;
+      arena.offset = 0;
+      alignedOffset = 0;
+    }
+    device->queue().writeBuffer(arena.buffer, alignedOffset, data, size);
+    arena.offset = alignedOffset + size;
+    return {&arena.buffer, alignedOffset, size};
+  }
   // When sampleCount == 4: multisampled color attachment. All draws land
   // here and the hardware resolves into `target` at the end of each pass.
   // When sampleCount == 1: unused (null) — draws go directly to `target`.
@@ -319,6 +408,7 @@ struct GeoEncoder::Impl {
     td.sampleCount = 1;
     td.dimension = wgpu::TextureDimension::_2D;
     dummyTexture = dev.createTexture(td);
+    device->countTexture();
 
     // Write a single opaque-black pixel so sampling returns a defined value
     // even though the shader never reads it in solid mode. WriteTexture
@@ -355,6 +445,7 @@ struct GeoEncoder::Impl {
     maskDummyDesc.sampleCount = 1;
     maskDummyDesc.dimension = wgpu::TextureDimension::_2D;
     dummyClipMaskTexture = dev.createTexture(maskDummyDesc);
+    device->countTexture();
 
     const uint8_t maskPixel[1] = {0xFF};
     wgpu::TexelCopyTextureInfo maskDst = {};
@@ -521,31 +612,85 @@ struct GeoEncoder::Impl {
   }
 };
 
+// Shared initialisation used by both constructors of GeoEncoder. Fills
+// in everything on Impl except `commandEncoder` (which differs between
+// the owning and shared-CommandEncoder flavours).
+void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
+                          const GeodePipeline& fillPipeline,
+                          const GeodeGradientPipeline& gradientPipeline,
+                          const GeodeImagePipeline& imagePipeline,
+                          const wgpu::Texture& msaaTarget,
+                          const wgpu::Texture& resolveTarget) {
+  impl.device = &device;
+  impl.pipeline = &fillPipeline;
+  impl.gradientPipeline = &gradientPipeline;
+  impl.imagePipeline = &imagePipeline;
+  impl.sampleCount = device.sampleCount();
+  impl.target = resolveTarget;
+  impl.targetView = resolveTarget.createView();
+  impl.targetWidth = resolveTarget.getWidth();
+  impl.targetHeight = resolveTarget.getHeight();
+
+  if (impl.sampleCount > 1) {
+    impl.msaaTarget = msaaTarget;
+    impl.msaaTargetView = msaaTarget.createView();
+  }
+  // When sampleCount == 1 the msaaTarget / msaaTargetView stay null —
+  // ensurePassOpen renders directly into targetView with no resolve.
+}
+
+// Post-init: pre-create dummies + configure per-draw arenas. Runs once
+// `commandEncoder` has been installed. Called by both constructors.
+void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
+  // Pre-create the solid-fill / clip-mask dummy texture + sampler + view
+  // resources once per encoder; avoids a per-draw ensure call.
+  impl.ensureDummyResources();
+
+  // Configure per-draw arenas (bump-allocated GPU buffers, design
+  // doc 0030 Milestone 1). They stay empty here; the first draw
+  // triggers lazy growth to 64 KiB and doubles from there.
+  impl.vertexArena.usage =
+      wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
+  impl.vertexArena.label = "GeodeVertexArena";
+  impl.bandArena.usage =
+      wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.bandArena.label = "GeodeBandArena";
+  impl.curveArena.usage =
+      wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.curveArena.label = "GeodeCurveArena";
+  impl.uniformArena.usage =
+      wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  impl.uniformArena.label = "GeodeUniformArena";
+}
+
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
                        const GeodeImagePipeline& imagePipeline,
                        const wgpu::Texture& msaaTarget, const wgpu::Texture& resolveTarget)
     : impl_(std::make_unique<Impl>()) {
-  impl_->device = &device;
-  impl_->pipeline = &fillPipeline;
-  impl_->gradientPipeline = &gradientPipeline;
-  impl_->imagePipeline = &imagePipeline;
-  impl_->sampleCount = device.sampleCount();
-  impl_->target = resolveTarget;
-  impl_->targetView = resolveTarget.createView();
-  impl_->targetWidth = resolveTarget.getWidth();
-  impl_->targetHeight = resolveTarget.getHeight();
-
-  if (impl_->sampleCount > 1) {
-    impl_->msaaTarget = msaaTarget;
-    impl_->msaaTargetView = msaaTarget.createView();
-  }
-  // When sampleCount == 1 the msaaTarget / msaaTargetView stay null —
-  // ensurePassOpen renders directly into targetView with no resolve.
+  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline,
+           msaaTarget, resolveTarget);
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = wgpuLabel("GeoEncoder");
   impl_->commandEncoder = device.device().createCommandEncoder(desc);
+  impl_->ownsCommandEncoder = true;
+
+  finalizeImpl(*impl_);
+}
+
+GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
+                       const GeodeGradientPipeline& gradientPipeline,
+                       const GeodeImagePipeline& imagePipeline,
+                       const wgpu::Texture& msaaTarget,
+                       const wgpu::Texture& resolveTarget,
+                       wgpu::CommandEncoder sharedCommandEncoder)
+    : impl_(std::make_unique<Impl>()) {
+  initImpl(*impl_, device, fillPipeline, gradientPipeline, imagePipeline,
+           msaaTarget, resolveTarget);
+  impl_->commandEncoder = std::move(sharedCommandEncoder);
+  impl_->ownsCommandEncoder = false;
+  finalizeImpl(*impl_);
 }
 
 GeoEncoder::~GeoEncoder() = default;
@@ -721,46 +866,30 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule) {
     return;
   }
   // The mask pipeline now samples a nested clip mask via bindings
-  // 3/4, so it needs the dummy mask texture + sampler bound when
-  // no deeper layer is active. `ensureDummyResources` is idempotent
-  // and normally runs during the main draw path, but `beginMaskPass`
-  // can be called BEFORE any main draw on a fresh encoder.
-  impl_->ensureDummyResources();
+  // Dummy resources are pre-created in the encoder constructor so
+  // the bind group is always complete, even if `beginMaskPass` fires
+  // before any main draw.
+  impl_->device->countPathEncode();
   EncodedPath encoded = GeodePathEncoder::encode(path, rule);
   if (encoded.empty()) {
     return;
   }
 
   const wgpu::Device& dev = impl_->device->device();
-  const wgpu::Queue& queue = impl_->device->queue();
 
+  // Arena-allocated per-draw buffers (design doc 0030 M1).
   const uint64_t vbSize = roundUp4(encoded.vertices.size() * sizeof(EncodedPath::Vertex));
-  wgpu::BufferDescriptor vbDesc = {};
-  vbDesc.label = wgpuLabel("GeodeMaskVB");
-  vbDesc.size = vbSize;
-  vbDesc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer vb = dev.createBuffer(vbDesc);
-  queue.writeBuffer(vb, 0, encoded.vertices.data(),
-                    encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+  const auto vbAlloc = impl_->allocInArena(impl_->vertexArena, encoded.vertices.data(),
+                                           vbSize, kVertexOffsetAlignment);
 
   const uint64_t bandsSize = roundUp4(encoded.bands.size() * sizeof(EncodedPath::Band));
-  wgpu::BufferDescriptor bandsDesc = {};
-  bandsDesc.label = wgpuLabel("GeodeMaskBandsSSBO");
-  bandsDesc.size = bandsSize;
-  bandsDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer bandsBuf = dev.createBuffer(bandsDesc);
-  queue.writeBuffer(bandsBuf, 0, encoded.bands.data(),
-                    encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto bandsAlloc = impl_->allocInArena(impl_->bandArena, encoded.bands.data(),
+                                              bandsSize, kStorageOffsetAlignment);
 
   const uint64_t curveFloats = encoded.curves.size() * 6u;
   const uint64_t curvesSize = roundUp4(curveFloats * sizeof(float));
-  wgpu::BufferDescriptor curvesDesc = {};
-  curvesDesc.label = wgpuLabel("GeodeMaskCurvesSSBO");
-  curvesDesc.size = curvesSize;
-  curvesDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer curvesBuf = dev.createBuffer(curvesDesc);
-  queue.writeBuffer(curvesBuf, 0, encoded.curves.data(),
-                    encoded.curves.size() * sizeof(EncodedPath::Curve));
+  const auto curvesAlloc = impl_->allocInArena(impl_->curveArena, encoded.curves.data(),
+                                               curvesSize, kStorageOffsetAlignment);
 
   // Mask uniforms — mvp, viewport, fillRule, hasClipMask. The last
   // field gates whether the fragment shader samples the nested clip
@@ -782,23 +911,22 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule) {
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
   u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
 
-  wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = wgpuLabel("GeodeMaskUniforms");
-  uniDesc.size = sizeof(MaskUniforms);
-  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
-  queue.writeBuffer(uniBuf, 0, &u, sizeof(MaskUniforms));
+  const auto uniAlloc = impl_->allocInArena(impl_->uniformArena, &u, sizeof(MaskUniforms),
+                                             kUniformOffsetAlignment);
 
   wgpu::BindGroupEntry entries[5] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniBuf;
-  entries[0].size = sizeof(MaskUniforms);
+  entries[0].buffer = *uniAlloc.buffer;
+  entries[0].offset = uniAlloc.offset;
+  entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = bandsBuf;
-  entries[1].size = bandsSize;
+  entries[1].buffer = *bandsAlloc.buffer;
+  entries[1].offset = bandsAlloc.offset;
+  entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = curvesBuf;
-  entries[2].size = curvesSize;
+  entries[2].buffer = *curvesAlloc.buffer;
+  entries[2].offset = curvesAlloc.offset;
+  entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
   entries[3].textureView = impl_->currentClipMaskView();
   entries[4].binding = 4;
@@ -810,8 +938,9 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule) {
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  impl_->device->countBindGroup();
 
-  impl_->maskPass.setVertexBuffer(0, vb, 0, vbSize);
+  impl_->maskPass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->maskPass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
 }
@@ -883,9 +1012,9 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   args.solidColor[3] = alpha;
   args.patternOpacity = 1.0f;
 
-  // Use dummy texture/sampler in solid mode so the bind group is always
-  // complete. These are lazily initialised.
-  impl_->ensureDummyResources();
+  // Solid-mode binds the pre-created dummy texture + sampler so the
+  // bind group layout (which always includes pattern bindings) is
+  // complete. Both are built once in the encoder constructor.
   args.patternView = impl_->dummyTextureView;
   args.patternSampler = impl_->dummySampler;
   args.tileSize = Vector2d(1.0, 1.0);
@@ -928,59 +1057,45 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule,
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
-  // Always prepare the clip-mask dummy texture + sampler; the bind
-  // group layout requires a valid texture view at binding 5 and a
-  // valid sampler at binding 6 regardless of whether a clip is
-  // active.
-  impl_->ensureDummyResources();
+  // Dummy resources are pre-created in the encoder constructor; no
+  // per-draw ensure call is needed.
   impl_->ensurePassOpen();
+  // `bindSolidPipeline` is the single source of truth for the current
+  // pipeline — it issues `setPipeline` only when the tracker reports a
+  // change (from image / gradient / None). Calling `setPipeline`
+  // unconditionally here used to defeat the tracker on every solid
+  // draw; see design doc 0030, Tier 4.
   impl_->bindSolidPipeline();
 
-  // The pass shares the Slug fill pipeline and the image-blit pipeline;
-  // always set this path's pipeline before issuing the draw so a preceding
-  // `drawImage` (or any future pipeline-switching helper) doesn't leak state.
-  impl_->pass.setPipeline(impl_->pipeline->pipeline());
-
   // 1. CPU encode the path into Slug band data.
+  impl_->device->countPathEncode();
   EncodedPath encoded = GeodePathEncoder::encode(*args.path, args.rule);
   if (encoded.empty()) {
     return;  // Nothing to draw.
   }
 
   const wgpu::Device& dev = impl_->device->device();
-  const wgpu::Queue& queue = impl_->device->queue();
 
-  // 2. Allocate and upload GPU buffers.
-  const uint64_t vbSize =
-      roundUp4(encoded.vertices.size() * sizeof(EncodedPath::Vertex));
-  wgpu::BufferDescriptor vbDesc = {};
-  vbDesc.label = wgpuLabel("GeodeVB");
-  vbDesc.size = vbSize;
-  vbDesc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer vb = dev.createBuffer(vbDesc);
-  queue.writeBuffer(vb, 0, encoded.vertices.data(),
-                    encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+  // 2. Allocate and upload GPU buffers via the per-encoder arenas
+  // (design doc 0030 Milestone 1). Each arena is a single persistent
+  // buffer; draws write at the current offset and advance, so all
+  // paths in an encoder's lifetime share three buffers instead of
+  // creating three fresh ones per draw.
+  const uint64_t vbSize = roundUp4(encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+  const auto vbAlloc = impl_->allocInArena(impl_->vertexArena, encoded.vertices.data(),
+                                           vbSize, /*alignment=*/kVertexOffsetAlignment);
 
   const uint64_t bandsSize = roundUp4(encoded.bands.size() * sizeof(EncodedPath::Band));
-  wgpu::BufferDescriptor bandsDesc = {};
-  bandsDesc.label = wgpuLabel("GeodeBandsSSBO");
-  bandsDesc.size = bandsSize;
-  bandsDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer bandsBuf = dev.createBuffer(bandsDesc);
-  queue.writeBuffer(bandsBuf, 0, encoded.bands.data(),
-                    encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto bandsAlloc = impl_->allocInArena(impl_->bandArena, encoded.bands.data(),
+                                              bandsSize, /*alignment=*/kStorageOffsetAlignment);
 
   const uint64_t curveFloats = encoded.curves.size() * 6u;
   const uint64_t curvesSize = roundUp4(curveFloats * sizeof(float));
-  wgpu::BufferDescriptor curvesDesc = {};
-  curvesDesc.label = wgpuLabel("GeodeCurvesSSBO");
-  curvesDesc.size = curvesSize;
-  curvesDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer curvesBuf = dev.createBuffer(curvesDesc);
-  queue.writeBuffer(curvesBuf, 0, encoded.curves.data(),
-                    encoded.curves.size() * sizeof(EncodedPath::Curve));
+  const auto curvesAlloc = impl_->allocInArena(impl_->curveArena, encoded.curves.data(),
+                                               curvesSize, /*alignment=*/kStorageOffsetAlignment);
 
-  // Uniform buffer.
+  // Uniform buffer — still per-draw today; Milestone 1.f lifts it into
+  // a ring buffer with dynamic offsets.
   Uniforms u = {};
   impl_->buildMvp(u.mvp);
   affineToMat4(args.patternFromPath, u.patternFromPath);
@@ -998,28 +1113,27 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
 
-  wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = wgpuLabel("GeodeUniforms");
-  uniDesc.size = sizeof(Uniforms);
-  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
-  queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
+  const auto uniAlloc = impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms),
+                                             kUniformOffsetAlignment);
 
   // 3. Bind group — seven entries: uniforms, bands SSBO, curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask
-  // sampler. Solid-fill draws bind dummies for the pattern slot and
-  // the clip-mask slot binds either the dummy (hasClipMask == 0) or
-  // the active mask from `setClipMask`.
+  // sampler. SSBO + uniform entries reference the arena buffers at
+  // per-draw offsets; the draws are unpacked from shared buffers by
+  // the bind group's `offset` + `size` fields.
   wgpu::BindGroupEntry entries[7] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniBuf;
-  entries[0].size = sizeof(Uniforms);
+  entries[0].buffer = *uniAlloc.buffer;
+  entries[0].offset = uniAlloc.offset;
+  entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = bandsBuf;
-  entries[1].size = bandsSize;
+  entries[1].buffer = *bandsAlloc.buffer;
+  entries[1].offset = bandsAlloc.offset;
+  entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = curvesBuf;
-  entries[2].size = curvesSize;
+  entries[2].buffer = *curvesAlloc.buffer;
+  entries[2].offset = curvesAlloc.offset;
+  entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
   entries[3].textureView = args.patternView;
   entries[4].binding = 4;
@@ -1035,9 +1149,10 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   bgDesc.entryCount = 7;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  impl_->device->countBindGroup();
 
   // 4. Record the draw call.
-  impl_->pass.setVertexBuffer(0, vb, 0, vbSize);
+  impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
 }
@@ -1099,50 +1214,35 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
     return;
   }
 
-  // The gradient bind group now has a clip-mask texture binding (see
-  // Phase 3b); we need a dummy bound when no clip is active.
-  impl_->ensureDummyResources();
+  // Gradient bind group includes a clip-mask binding (Phase 3b); the
+  // dummy that stands in when no clip is active is pre-created in the
+  // encoder constructor.
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
   // 1. CPU encode the path into Slug band data (same as fillPath).
+  impl_->device->countPathEncode();
   EncodedPath encoded = GeodePathEncoder::encode(path, rule);
   if (encoded.empty()) {
     return;
   }
 
   const wgpu::Device& dev = impl_->device->device();
-  const wgpu::Queue& queue = impl_->device->queue();
 
-  // 2. Allocate and upload GPU buffers.
+  // Arena-allocated per-draw buffers (design doc 0030 M1).
   const uint64_t vbSize =
       roundUp4(encoded.vertices.size() * sizeof(EncodedPath::Vertex));
-  wgpu::BufferDescriptor vbDesc = {};
-  vbDesc.label = wgpuLabel("GeodeGradientVB");
-  vbDesc.size = vbSize;
-  vbDesc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer vb = dev.createBuffer(vbDesc);
-  queue.writeBuffer(vb, 0, encoded.vertices.data(),
-                    encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+  const auto vbAlloc = impl_->allocInArena(impl_->vertexArena, encoded.vertices.data(),
+                                           vbSize, kVertexOffsetAlignment);
 
   const uint64_t bandsSize = roundUp4(encoded.bands.size() * sizeof(EncodedPath::Band));
-  wgpu::BufferDescriptor bandsDesc = {};
-  bandsDesc.label = wgpuLabel("GeodeGradientBandsSSBO");
-  bandsDesc.size = bandsSize;
-  bandsDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer bandsBuf = dev.createBuffer(bandsDesc);
-  queue.writeBuffer(bandsBuf, 0, encoded.bands.data(),
-                    encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto bandsAlloc = impl_->allocInArena(impl_->bandArena, encoded.bands.data(),
+                                              bandsSize, kStorageOffsetAlignment);
 
   const uint64_t curveFloats = encoded.curves.size() * 6u;
   const uint64_t curvesSize = roundUp4(curveFloats * sizeof(float));
-  wgpu::BufferDescriptor curvesDesc = {};
-  curvesDesc.label = wgpuLabel("GeodeGradientCurvesSSBO");
-  curvesDesc.size = curvesSize;
-  curvesDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer curvesBuf = dev.createBuffer(curvesDesc);
-  queue.writeBuffer(curvesBuf, 0, encoded.curves.data(),
-                    encoded.curves.size() * sizeof(EncodedPath::Curve));
+  const auto curvesAlloc = impl_->allocInArena(impl_->curveArena, encoded.curves.data(),
+                                               curvesSize, kStorageOffsetAlignment);
 
   // 3. Build gradient uniforms.
   GradientUniforms u = {};
@@ -1160,25 +1260,26 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   u.endGrad[0] = static_cast<float>(params.endGrad.x);
   u.endGrad[1] = static_cast<float>(params.endGrad.y);
 
-  wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = wgpuLabel("GeodeGradientUniforms");
-  uniDesc.size = sizeof(GradientUniforms);
-  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
-  queue.writeBuffer(uniBuf, 0, &u, sizeof(GradientUniforms));
+  const auto uniAlloc = impl_->allocInArena(impl_->uniformArena, &u,
+                                             sizeof(GradientUniforms),
+                                             kUniformOffsetAlignment);
 
   // 4. Bind group — five entries: uniforms, bands SSBO, curves SSBO,
-  // clip-mask texture, clip-mask sampler.
+  // clip-mask texture, clip-mask sampler. All three buffer bindings
+  // read from shared arenas with per-draw offsets.
   wgpu::BindGroupEntry entries[5] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniBuf;
-  entries[0].size = sizeof(GradientUniforms);
+  entries[0].buffer = *uniAlloc.buffer;
+  entries[0].offset = uniAlloc.offset;
+  entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = bandsBuf;
-  entries[1].size = bandsSize;
+  entries[1].buffer = *bandsAlloc.buffer;
+  entries[1].offset = bandsAlloc.offset;
+  entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = curvesBuf;
-  entries[2].size = curvesSize;
+  entries[2].buffer = *curvesAlloc.buffer;
+  entries[2].offset = curvesAlloc.offset;
+  entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
   entries[3].textureView = impl_->currentClipMaskView();
   entries[4].binding = 4;
@@ -1190,8 +1291,9 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  impl_->device->countBindGroup();
 
-  impl_->pass.setVertexBuffer(0, vb, 0, vbSize);
+  impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
 }
@@ -1208,47 +1310,33 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
     return;
   }
 
-  // Dummy texture for the clip-mask slot, see fillPathLinearGradient.
-  impl_->ensureDummyResources();
+  // Dummy texture for the clip-mask slot is pre-created in the encoder
+  // constructor (see fillPathLinearGradient note).
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
+  impl_->device->countPathEncode();
   EncodedPath encoded = GeodePathEncoder::encode(path, rule);
   if (encoded.empty()) {
     return;
   }
 
   const wgpu::Device& dev = impl_->device->device();
-  const wgpu::Queue& queue = impl_->device->queue();
 
+  // Arena-allocated per-draw buffers (design doc 0030 M1).
   const uint64_t vbSize =
       roundUp4(encoded.vertices.size() * sizeof(EncodedPath::Vertex));
-  wgpu::BufferDescriptor vbDesc = {};
-  vbDesc.label = wgpuLabel("GeodeRadialGradientVB");
-  vbDesc.size = vbSize;
-  vbDesc.usage = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer vb = dev.createBuffer(vbDesc);
-  queue.writeBuffer(vb, 0, encoded.vertices.data(),
-                    encoded.vertices.size() * sizeof(EncodedPath::Vertex));
+  const auto vbAlloc = impl_->allocInArena(impl_->vertexArena, encoded.vertices.data(),
+                                           vbSize, kVertexOffsetAlignment);
 
   const uint64_t bandsSize = roundUp4(encoded.bands.size() * sizeof(EncodedPath::Band));
-  wgpu::BufferDescriptor bandsDesc = {};
-  bandsDesc.label = wgpuLabel("GeodeRadialGradientBandsSSBO");
-  bandsDesc.size = bandsSize;
-  bandsDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer bandsBuf = dev.createBuffer(bandsDesc);
-  queue.writeBuffer(bandsBuf, 0, encoded.bands.data(),
-                    encoded.bands.size() * sizeof(EncodedPath::Band));
+  const auto bandsAlloc = impl_->allocInArena(impl_->bandArena, encoded.bands.data(),
+                                              bandsSize, kStorageOffsetAlignment);
 
   const uint64_t curveFloats = encoded.curves.size() * 6u;
   const uint64_t curvesSize = roundUp4(curveFloats * sizeof(float));
-  wgpu::BufferDescriptor curvesDesc = {};
-  curvesDesc.label = wgpuLabel("GeodeRadialGradientCurvesSSBO");
-  curvesDesc.size = curvesSize;
-  curvesDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer curvesBuf = dev.createBuffer(curvesDesc);
-  queue.writeBuffer(curvesBuf, 0, encoded.curves.data(),
-                    encoded.curves.size() * sizeof(EncodedPath::Curve));
+  const auto curvesAlloc = impl_->allocInArena(impl_->curveArena, encoded.curves.data(),
+                                               curvesSize, kStorageOffsetAlignment);
 
   GradientUniforms u = {};
   impl_->buildMvp(u.mvp);
@@ -1267,23 +1355,23 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   u.radialRadius = static_cast<float>(params.radius);
   u.radialFocalRadius = static_cast<float>(params.focalRadius);
 
-  wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = wgpuLabel("GeodeRadialGradientUniforms");
-  uniDesc.size = sizeof(GradientUniforms);
-  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
-  queue.writeBuffer(uniBuf, 0, &u, sizeof(GradientUniforms));
+  const auto uniAlloc = impl_->allocInArena(impl_->uniformArena, &u,
+                                             sizeof(GradientUniforms),
+                                             kUniformOffsetAlignment);
 
   wgpu::BindGroupEntry entries[5] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniBuf;
-  entries[0].size = sizeof(GradientUniforms);
+  entries[0].buffer = *uniAlloc.buffer;
+  entries[0].offset = uniAlloc.offset;
+  entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = bandsBuf;
-  entries[1].size = bandsSize;
+  entries[1].buffer = *bandsAlloc.buffer;
+  entries[1].offset = bandsAlloc.offset;
+  entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = curvesBuf;
-  entries[2].size = curvesSize;
+  entries[2].buffer = *curvesAlloc.buffer;
+  entries[2].offset = curvesAlloc.offset;
+  entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
   entries[3].textureView = impl_->currentClipMaskView();
   entries[4].binding = 4;
@@ -1295,8 +1383,9 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  impl_->device->countBindGroup();
 
-  impl_->pass.setVertexBuffer(0, vb, 0, vbSize);
+  impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
 }
@@ -1487,8 +1576,16 @@ void GeoEncoder::finish() {
     impl_->passOpen = false;
   }
 
+  // In shared-CommandEncoder mode (design doc 0030 Milestone 3), the
+  // caller owns the CommandEncoder and is responsible for finishing +
+  // submitting it. We only ended the open pass above.
+  if (!impl_->ownsCommandEncoder) {
+    return;
+  }
+
   wgpu::CommandBuffer cmdBuf = impl_->commandEncoder.finish();
   impl_->device->queue().submit(1, &cmdBuf);
+  impl_->device->countSubmit();
 }
 
 }  // namespace donner::geode

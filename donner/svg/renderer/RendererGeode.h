@@ -16,6 +16,7 @@
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/geode/GeodeCounters.h"
 
 namespace donner::geode {
 class GeodeDevice;
@@ -27,6 +28,34 @@ class GeoEncoder;
 // into every includer — <memory> is already included above.
 
 namespace donner::svg {
+
+/**
+ * Per-frame performance instrumentation for RendererGeode.
+ *
+ * Returned by `RendererGeode::lastFrameTimings()`. Each field reports the
+ * cost of the most recent `beginFrame`→`endFrame` window. Counters are the
+ * durable CI signal; the GPU-timestamp fields are advisory and require
+ * `enableTimestamps(true)` + driver support (see `GeodeDevice`).
+ *
+ * See `docs/design_docs/0030-geode_performance.md` for the target ceilings
+ * each optimization milestone drives these toward.
+ */
+struct FrameTimings {
+  /// Counters for resource creation and command submission in the last
+  /// frame. Available regardless of timestamp support.
+  geode::GeodeCounters counters;
+
+  /// GPU render-pass duration in nanoseconds. Zero if timestamps are
+  /// disabled or unsupported by the driver. Reserved for future work —
+  /// currently always zero.
+  uint64_t renderPassNs = 0;
+
+  /// Total GPU work duration in nanoseconds (end of beginFrame's first
+  /// submit to completion of endFrame's final submit). Zero if timestamps
+  /// are disabled or unsupported. Reserved for future work — currently
+  /// always zero.
+  uint64_t totalGpuNs = 0;
+};
 
 /**
  * Geode rendering backend — GPU-native via WebGPU + the Slug algorithm.
@@ -127,6 +156,22 @@ public:
                 const TextParams& params) override;
 
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+
+  /**
+   * Enable or disable GPU timestamp capture. No-op today; reserved for
+   * future work (design doc 0030, "Future Work"). When wired up, this
+   * will drive the `renderPassNs` / `totalGpuNs` fields of
+   * `lastFrameTimings()`. Counters (the primary regression signal) are
+   * always on regardless of this flag.
+   */
+  void enableTimestamps(bool enabled);
+
+  /**
+   * Returns per-frame instrumentation for the most recently completed
+   * `beginFrame`→`endFrame` window. Valid after the first `endFrame()`;
+   * before then all fields are zero.
+   */
+  [[nodiscard]] FrameTimings lastFrameTimings() const;
 
 private:
   struct Impl;
