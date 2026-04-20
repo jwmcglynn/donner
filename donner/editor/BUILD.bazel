@@ -342,12 +342,18 @@ donner_cc_library(
 
 donner_cc_library(
     name = "svg_fetcher",
-    srcs = ["SvgFetcher.cc"],
+    srcs = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): ["SvgFetcherWasm.cc"],
+        "//conditions:default": ["SvgFetcher.cc"],
+    }),
     hdrs = ["SvgFetcher.h"],
-    deps = [
-        ":resource_policy",
-        "//donner/editor/sandbox:svg_source",
-    ],
+    deps = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
+        "//conditions:default": [
+            ":resource_policy",
+            "//donner/editor/sandbox:svg_source",
+        ],
+    }),
 )
 
 # Header-only target for the EditorBackendClient abstract interface.

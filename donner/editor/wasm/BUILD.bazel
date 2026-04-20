@@ -58,6 +58,7 @@ _COMMON_LINKOPTS = [
     "-pthread",
     "-sASYNCIFY",
     "-sALLOW_MEMORY_GROWTH=1",
+    "-sFETCH=1",
     "-sMAXIMUM_MEMORY=512MB",
     "-sEXIT_RUNTIME=0",
     "-sPTHREAD_POOL_SIZE=2",
