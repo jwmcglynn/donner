@@ -46,6 +46,13 @@ struct GeodeDevice::Impl {
   wgpu::Texture dummyClipMaskTexture;
   wgpu::TextureView dummyClipMaskTextureView;
   wgpu::Sampler dummyClipMaskSampler;
+
+  // M6 Bullet 2: 1-element instance-transform buffer bound by every
+  // non-instanced solid fill. Uploaded once at CreateHeadless time,
+  // never modified. Layout matches the WGSL `InstanceTransform`
+  // struct: two vec4f rows carrying the identity affine
+  // `{(1,0,0,0), (0,1,0,0)}`.
+  wgpu::Buffer identityInstanceTransformBuffer;
 };
 
 GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
@@ -243,6 +250,22 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
     result->impl_->dummyClipMaskSampler = result->device_.createSampler(msd);
   }
 
+  // M6 Bullet 2: identity instance-transform buffer for non-instanced
+  // solid fills. Two vec4f rows = 32 bytes, uploaded once.
+  {
+    const float identity[8] = {
+        1.0f, 0.0f, 0.0f, 0.0f,  // row0 = (a, c, e, _pad) = identity X
+        0.0f, 1.0f, 0.0f, 0.0f,  // row1 = (b, d, f, _pad) = identity Y
+    };
+    wgpu::BufferDescriptor bd = {};
+    bd.label = wgpu::StringView{std::string_view{"GeodeDeviceIdentityInstanceTransform"}};
+    bd.size = sizeof(identity);
+    bd.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    result->impl_->identityInstanceTransformBuffer = result->device_.createBuffer(bd);
+    result->queue_.writeBuffer(result->impl_->identityInstanceTransformBuffer, 0, identity,
+                               sizeof(identity));
+  }
+
   return result;
 }
 
@@ -263,6 +286,9 @@ const wgpu::TextureView& GeodeDevice::dummyClipMaskTextureView() const {
 }
 const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
   return impl_->dummyClipMaskSampler;
+}
+const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
+  return impl_->identityInstanceTransformBuffer;
 }
 
 }  // namespace donner::geode

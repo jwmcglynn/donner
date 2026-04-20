@@ -16,72 +16,85 @@
 // ============================================================================
 
 struct Uniforms {
-  mvp: mat4x4f,
-  patternFromPath: mat4x4f,
-  viewport: vec2f,
-  tileSize: vec2f,
-  color: vec4f,
-  fillRule: u32,
-  paintMode: u32,
-  patternOpacity: f32,
-  hasClipPolygon: u32,
-  hasClipMask: u32,
-  _pad0: u32,
-  _pad1: u32,
-  clipPolygonPlanes: array<vec4f, 4>,
+  mvp : mat4x4f,
+        patternFromPath : mat4x4f,
+                          viewport : vec2f,
+                                     tileSize : vec2f,
+                                                color : vec4f,
+                                                        fillRule : u32,
+                                                                   paintMode : u32,
+                                                                               patternOpacity
+      : f32,
+        hasClipPolygon : u32,
+                         hasClipMask : u32,
+                                       _pad0 : u32,
+                                               _pad1 : u32,
+                                                       clipPolygonPlanes : array<vec4f, 4>,
 };
 
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms : Uniforms;
 
 // ============================================================================
 // Storage buffers
 // ============================================================================
 
 struct Band {
-  curveStart: u32,
-  curveCount: u32,
-  yMin: f32,
-  yMax: f32,
-  xMin: f32,
-  xMax: f32,
-  _pad0: f32,
-  _pad1: f32,
+  curveStart : u32,
+               curveCount : u32,
+                            yMin : f32,
+                                   yMax : f32,
+                                          xMin : f32,
+                                                 xMax : f32,
+                                                        _pad0 : f32,
+                                                                _pad1 : f32,
 };
 
-@group(0) @binding(1) var<storage, read> bands: array<Band>;
-@group(0) @binding(2) var<storage, read> curveData: array<f32>;
-@group(0) @binding(3) var patternTexture: texture_2d<f32>;
-@group(0) @binding(4) var patternSampler: sampler;
-@group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
-@group(0) @binding(6) var clipMaskSampler: sampler;
+@group(0) @binding(1) var<storage, read> bands : array<Band>;
+@group(0) @binding(2) var<storage, read> curveData : array<f32>;
+@group(0) @binding(3) var patternTexture : texture_2d<f32>;
+@group(0) @binding(4) var patternSampler : sampler;
+@group(0) @binding(5) var clipMaskTexture : texture_2d<f32>;
+@group(0) @binding(6) var clipMaskSampler : sampler;
+
+// Per-instance affine transform (Milestone 6 Bullet 2). See slug_fill.wgsl
+// for the full comment — this binding/struct mirror that shader.
+struct InstanceTransform {
+  row0 : vec4f, row1 : vec4f,
+};
+@group(0) @binding(7) var<storage, read> instanceTransforms : array<InstanceTransform>;
 
 // ============================================================================
 // Vertex stage (identical to slug_fill.wgsl)
 // ============================================================================
 
 struct VertexInput {
-  @location(0) pos: vec2f,
-  @location(1) normal: vec2f,
-  @location(2) bandIndex: u32,
+  @location(0) pos : vec2f, @location(1) normal : vec2f, @location(2) bandIndex : u32,
 };
 
 struct VertexOutput {
-  @builtin(position) clip_pos: vec4f,
-  @location(0) sample_pos: vec2f,
-  @location(1) @interpolate(flat) bandIndex: u32,
+  @builtin(position) clip_pos : vec4f,
+                                @location(0) sample_pos : vec2f,
+                                                          @location(1) @interpolate(flat) bandIndex
+      : u32,
 };
 
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-  let world_normal = (uniforms.mvp * vec4f(in.normal, 0.0, 0.0)).xy;
+@vertex fn vs_main(@builtin(instance_index) instance_index : u32, in : VertexInput)
+    -> VertexOutput {
+  let xf = instanceTransforms[instance_index];
+  let instance_mat =
+      mat4x4f(vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0), vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
+              vec4f(0.0, 0.0, 1.0, 0.0), vec4f(xf.row0.z, xf.row1.z, 0.0, 1.0), );
+  let effective_mvp = uniforms.mvp * instance_mat;
+
+  let world_normal = (effective_mvp * vec4f(in.normal, 0.0, 0.0)).xy;
   let viewport_normal = world_normal * uniforms.viewport * 0.5;
   let viewport_len = length(viewport_normal);
   let d = 1.0 / max(viewport_len, 0.001);
 
   let dilated = in.pos + in.normal * d;
 
-  var out: VertexOutput;
-  out.clip_pos = uniforms.mvp * vec4f(dilated, 0.0, 1.0);
+  var out : VertexOutput;
+  out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
   out.bandIndex = in.bandIndex;
   return out;
@@ -92,21 +105,19 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 // ============================================================================
 
 struct Quadratic {
-  p0: vec2f,
-  p1: vec2f,
-  p2: vec2f,
+  p0 : vec2f, p1 : vec2f, p2 : vec2f,
 };
 
-fn load_curve(index: u32) -> Quadratic {
+fn load_curve(index : u32) -> Quadratic {
   let base = index * 6u;
-  var q: Quadratic;
+  var q : Quadratic;
   q.p0 = vec2f(curveData[base + 0u], curveData[base + 1u]);
   q.p1 = vec2f(curveData[base + 2u], curveData[base + 3u]);
   q.p2 = vec2f(curveData[base + 4u], curveData[base + 5u]);
   return q;
 }
 
-fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
+fn solve_quadratic(a : f32, b : f32, c : f32) -> vec2f {
   var roots = vec2f(-1.0, -1.0);
 
   if (abs(a) < 1e-4) {
@@ -138,14 +149,14 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
   return roots;
 }
 
-fn curve_winding(curve: Quadratic, sample: vec2f) -> i32 {
+fn curve_winding(curve : Quadratic, sample : vec2f) -> i32 {
   let a = curve.p0.y - 2.0 * curve.p1.y + curve.p2.y;
   let b = 2.0 * (curve.p1.y - curve.p0.y);
   let c = curve.p0.y - sample.y;
 
   let roots = solve_quadratic(a, b, c);
 
-  var winding: i32 = 0;
+  var winding : i32 = 0;
   for (var i = 0; i < 2; i = i + 1) {
     let t = select(roots.y, roots.x, i == 0);
     if (t < 0.0) {
@@ -172,7 +183,7 @@ fn curve_winding(curve: Quadratic, sample: vec2f) -> i32 {
 // Fragment stage
 // ============================================================================
 
-fn sample_in_clip_polygon(pixel_pos: vec2f) -> bool {
+fn sample_in_clip_polygon(pixel_pos : vec2f) -> bool {
   if (uniforms.hasClipPolygon == 0u) {
     return true;
   }
@@ -185,8 +196,8 @@ fn sample_in_clip_polygon(pixel_pos: vec2f) -> bool {
   return true;
 }
 
-fn sample_is_inside(band: Band, sample_pos: vec2f) -> bool {
-  var winding: i32 = 0;
+fn sample_is_inside(band : Band, sample_pos : vec2f) -> bool {
+  var winding : i32 = 0;
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_curve(band.curveStart + i);
     winding = winding + curve_winding(curve, sample_pos);
@@ -200,26 +211,21 @@ fn sample_is_inside(band: Band, sample_pos: vec2f) -> bool {
 /// Alpha-coverage fragment output: no @builtin(sample_mask).
 /// Coverage is folded into color.a instead.
 struct FragOutput {
-  @location(0) color: vec4f,
+  @location(0) color : vec4f,
 };
 
-@fragment
-fn fs_main(in: VertexOutput) -> FragOutput {
+@fragment fn fs_main(in : VertexOutput) -> FragOutput {
   let band = bands[in.bandIndex];
   let pixel_center = in.clip_pos.xy;
 
   let dx = dpdx(in.sample_pos);
   let dy = dpdy(in.sample_pos);
 
-  var offsets = array<vec2f, 4>(
-    vec2f(-0.125, -0.375),
-    vec2f( 0.375, -0.125),
-    vec2f(-0.375,  0.125),
-    vec2f( 0.125,  0.375),
-  );
+  var offsets = array<vec2f, 4>(vec2f(-0.125, -0.375), vec2f(0.375, -0.125), vec2f(-0.375, 0.125),
+                                vec2f(0.125, 0.375), );
 
-  var mask: u32 = 0u;
-  for (var s: u32 = 0u; s < 4u; s = s + 1u) {
+  var mask : u32 = 0u;
+  for (var s : u32 = 0u; s < 4u; s = s + 1u) {
     let sp = in.sample_pos + offsets[s].x * dx + offsets[s].y * dy;
     if (sp.y < band.yMin || sp.y >= band.yMax) {
       continue;
@@ -240,17 +246,16 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // Convert the 4-bit sample mask into a fractional coverage value.
   let coverage = f32(countOneBits(mask)) / 4.0;
 
-  var clipCoverage: f32 = 1.0;
+  var clipCoverage : f32 = 1.0;
   if (uniforms.hasClipMask != 0u) {
     let mask_uv = pixel_center / uniforms.viewport;
-    clipCoverage = clamp(textureSample(clipMaskTexture, clipMaskSampler, mask_uv).r,
-                         0.0, 1.0);
+    clipCoverage = clamp(textureSample(clipMaskTexture, clipMaskSampler, mask_uv).r, 0.0, 1.0);
     if (clipCoverage <= 0.0) {
       discard;
     }
   }
 
-  var out: FragOutput;
+  var out : FragOutput;
 
   if (uniforms.paintMode == 0u) {
     // Scale premultiplied color by coverage (all 4 channels since premultiplied).
@@ -260,10 +265,8 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 
   // Pattern mode: sample the tile and scale by coverage.
   let patternPos = (uniforms.patternFromPath * vec4f(in.sample_pos, 0.0, 1.0)).xy;
-  let wrapped = vec2f(
-    fract(patternPos.x / uniforms.tileSize.x) * uniforms.tileSize.x,
-    fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y,
-  );
+  let wrapped = vec2f(fract(patternPos.x / uniforms.tileSize.x) * uniforms.tileSize.x,
+                      fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y, );
   let uv = wrapped / uniforms.tileSize;
   var sampled = textureSample(patternTexture, patternSampler, uv);
   sampled = sampled * uniforms.patternOpacity * clipCoverage * coverage;

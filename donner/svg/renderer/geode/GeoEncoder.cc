@@ -917,6 +917,17 @@ struct GeoEncoder::FillDrawArgs {
   Transform2d patternFromPath;
   Vector2d tileSize;
   float patternOpacity;
+
+  /// M6 Bullet 2: optional per-instance transform buffer. When null,
+  /// `submitFillDraw` binds `GeodeDevice::identityInstanceTransformBuffer`
+  /// (single-instance draws). When set, the caller has uploaded N
+  /// copies of the 2-vec4f `InstanceTransform` struct at
+  /// `instanceTransformsOffset`, and `submitFillDraw` issues a draw
+  /// with `instanceCount == N`.
+  const wgpu::Buffer* instanceTransformsBuffer = nullptr;
+  uint64_t instanceTransformsOffset = 0;
+  uint64_t instanceTransformsSize = 0;
+  uint32_t instanceCount = 1;
 };
 
 void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rule,
@@ -1047,12 +1058,14 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
-  // 3. Bind group — seven entries: uniforms, bands SSBO, curves SSBO,
+  // 3. Bind group — eight entries: uniforms, bands SSBO, curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask
-  // sampler. SSBO + uniform entries reference the arena buffers at
-  // per-draw offsets; the draws are unpacked from shared buffers by
-  // the bind group's `offset` + `size` fields.
-  wgpu::BindGroupEntry entries[7] = {};
+  // sampler, and (M6 Bullet 2) per-instance transforms SSBO. SSBO +
+  // uniform entries reference the arena buffers at per-draw offsets;
+  // the instance-transforms entry is either a caller-supplied arena
+  // slice (`fillPathInstanced`) or the device's 1-element identity
+  // buffer (single-instance fills).
+  wgpu::BindGroupEntry entries[8] = {};
   entries[0].binding = 0;
   entries[0].buffer = *uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -1073,11 +1086,24 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   entries[5].textureView = impl_->currentClipMaskView();
   entries[6].binding = 6;
   entries[6].sampler = impl_->device->dummyClipMaskSampler();
+  entries[7].binding = 7;
+  if (args.instanceTransformsBuffer != nullptr) {
+    entries[7].buffer = *args.instanceTransformsBuffer;
+    entries[7].offset = args.instanceTransformsOffset;
+    entries[7].size = args.instanceTransformsSize;
+  } else {
+    // One-element identity buffer owned by GeodeDevice. Layout is two
+    // vec4f rows = 32 bytes; kept in sync with the WGSL
+    // `InstanceTransform` struct in `shaders/slug_fill.wgsl`.
+    entries[7].buffer = impl_->device->identityInstanceTransformBuffer();
+    entries[7].offset = 0;
+    entries[7].size = 32u;
+  }
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeBindGroup");
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 7;
+  bgDesc.entryCount = 8;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
   impl_->device->countBindGroup();
@@ -1085,7 +1111,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   // 4. Record the draw call.
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), args.instanceCount, 0, 0);
   impl_->device->countDraw();
 }
 
