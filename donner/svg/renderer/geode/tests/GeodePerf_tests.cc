@@ -277,5 +277,116 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
       << "because render targets are reused at the same size.";
 }
 
+// ---------------------------------------------------------------------------
+// Milestone 2: GeodePathCacheComponent — no-geometry-change ⇒ zero encodes.
+//
+// The promise: once a document has been rendered once, rendering it again
+// with no geometry or style mutation must perform zero CPU-side path
+// encodes. `GeodePathCacheComponent` holds the `EncodedPath` across frames;
+// `ComputedPathComponent` equality gating in `ShapeSystem` means its entt
+// `on_update` signal only fires when geometry actually changes, so the
+// cache survives idle re-renders.
+//
+// These tests use one `RendererGeode` across two `draw()` calls so the
+// cache component on the document's registry is live on frame 2.
+// ---------------------------------------------------------------------------
+
+/// Helper: two consecutive renders of the same document, returning only
+/// the SECOND frame's counters. Used by the M2 zero-encode assertions.
+geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
+                                             const std::shared_ptr<geode::GeodeDevice>& device) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svgSource, sink);
+  if (parsed.hasError()) {
+    ADD_FAILURE() << "ParseSVG failed: " << parsed.error().reason;
+    return {};
+  }
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  (void)renderer.takeSnapshot();
+  // First-frame counters intentionally discarded — we only care about the
+  // steady-state second frame.
+
+  renderer.draw(document);
+  (void)renderer.takeSnapshot();
+  return renderer.lastFrameTimings().counters;
+}
+
+TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
+  printCounters("SimpleShapes_NoDirtyPath_ZeroEncodes (frame2)", c);
+
+  // M2 target: second frame does zero path encodes — three shapes hit the
+  // cache. countPathEncode() is only called on cache miss.
+  EXPECT_EQ(c.pathEncodes, 0u)
+      << "Cache miss on an unchanged second render: one or more paths "
+         "re-encoded despite zero geometry changes.";
+}
+
+TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = countersForSecondRender(kModerateSvg, device);
+  printCounters("Moderate_NoDirtyPath_ZeroEncodes (frame2)", c);
+
+  // M2 target: zero encodes across both fill paths — confirms the cache
+  // covers both `submitFillDraw` (opacity-layer path) and
+  // `fillPathLinearGradient` (rounded-rect path).
+  EXPECT_EQ(c.pathEncodes, 0u)
+      << "Cache miss on unchanged second render: fill or gradient path "
+         "re-encoded despite zero geometry changes.";
+}
+
+TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
+  if (svg.empty()) {
+    GTEST_SKIP() << "testdata/lion.svg not readable — ensure the test target "
+                 << "has testdata as a data dep.";
+    return;
+  }
+
+  const geode::GeodeCounters c = countersForSecondRender(svg, device);
+  printCounters("Lion_NoDirtyPath_ZeroEncodes (frame2)", c);
+
+  // M2 target: 132 cached paths → zero re-encodes. This is the headline
+  // assertion: the lion is our standard "many paths" stress fixture and
+  // the M0 baseline showed 132 pathEncodes per frame. Driving that to 0
+  // is the whole point of the cache.
+  EXPECT_EQ(c.pathEncodes, 0u)
+      << "Cache miss on unchanged second render of lion.svg: "
+         "re-encoded paths despite zero geometry changes.";
+}
+
+TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  if (svg.empty()) {
+    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable — ensure the "
+                 << "test target has testdata as a data dep.";
+    return;
+  }
+
+  const geode::GeodeCounters c = countersForSecondRender(svg, device);
+  printCounters("GhostscriptTiger_NoDirtyPath_ZeroEncodes (frame2)", c);
+
+  // M2 target: Tiger has strokes too, so this test also exercises the
+  // stroke slot of `GeodePathCacheComponent` — a second render must not
+  // re-run `Path::strokeToFill` nor re-encode the stroked outline.
+  EXPECT_EQ(c.pathEncodes, 0u)
+      << "Cache miss on unchanged second render of Ghostscript_Tiger.svg: "
+         "fill- or stroke-slot cache missed despite zero geometry changes.";
+}
+
 }  // namespace
 }  // namespace donner::svg

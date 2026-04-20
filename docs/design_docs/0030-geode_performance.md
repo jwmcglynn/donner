@@ -172,21 +172,114 @@ algorithm.
     `bindgroupCreates` ceiling stays 200 pending M1.f.2.
 - [ ] Milestone 2: `GeodePathCacheComponent` — cache the CPU encode
   (Tier 3 findings, maps to 0017 Phase 5 bullet 1).
-  - [ ] Define `GeodePathCacheComponent` carrying `EncodedPath` +
-    `quadPath` + `monotonicPath` (or just the final encode; decide based on
-    whether stroke/dash parameters change more than geometry).
-  - [ ] Install on path entities at `RenderingContext`-instantiation time;
-    invalidate from `IncrementalInvalidationSystem` dirty flags (see
-    `docs/design_docs/0005-incremental_invalidation.md`) — fall back to
-    re-encode when the dirty bit is set.
-  - [ ] Extend the cache to also own the GPU-resident handles into the
-    vertex/band/curve arenas from Milestone 1 so cached paths re-use
-    their upload, not just the CPU bytes.
-  - [ ] Cache `strokeToFill` output on stroked paths (keyed by stroke
-    parameters) — the call at `RendererGeode.cc:2028` is as expensive
-    as encode and currently runs every frame.
-  - [ ] Counter ceiling: `path_encodes == 0` on a frame where no path
-    dirty flag is set, for `lion.svg` and `Ghostscript_Tiger.svg`.
+  - Cache only the final `EncodedPath`, not the intermediate
+    `quadPath` / `monotonicPath`. The intermediate stages are fused
+    inside `GeodePathEncoder::encode` and retaining them buys
+    nothing on a pure re-render (geometry didn't change) while
+    costing extra memory per path. The stroke slot caches the
+    `strokeToFill` output path alongside its encode, since both are
+    derived from the same stroke-key inputs.
+  - **Entity plumbing.** Widen `RendererInterface::drawPath` to
+    carry an `EntityHandle` so the encode sites can look up the
+    cache component on the source entity. Touches three
+    implementations (`RendererGeode`, `RendererTinySkia`,
+    `MockRendererInterface`) and the three `renderer_.drawPath()`
+    call sites in `RendererDriver::traverseRange()` (lines 928,
+    1373, 1667). Entity is already in scope at those call sites
+    (`view.currentEntity()` at `RendererDriver.cc:818`). Non-Geode
+    implementations ignore the new parameter.
+  - **ShapeSystem content-equality gate (prerequisite).**
+    Today, `ShapeSystem::instantiateAllComputedPaths`
+    (`ShapeSystem.cc:191-204`) iterates every shape in the
+    registry and calls `emplace_or_replace<ComputedPathComponent>`
+    unconditionally — it does not per-entity-gate on the
+    `DirtyFlags::Shape` bit. That means if any single entity is
+    dirty, every shape's `ComputedPathComponent` is rewritten,
+    which would invalidate every cached encode. Fix before M2
+    caches anything: at each of the 8 write sites under
+    `createComputedShapeWithStyle(...)` overloads
+    (`ShapeSystem.cc:294,317,334,355,365,391,423,429`), compare
+    the newly built `Path` to the existing `ComputedPathComponent::spline`
+    (via `try_get`). If equal, return the existing component
+    without calling `emplace_or_replace`. Requires a new
+    `Path::operator==` in `donner/base/Path.h` (members:
+    `commands_`, `points_`). This is a standalone CPU-side perf
+    win (skips downstream work keyed on the write) and — most
+    importantly — makes entt's `on_update<ComputedPathComponent>`
+    signal a precise "geometry actually changed" edge.
+  - **Invalidation via entt `on_update` signal.** In
+    `RendererGeode::Impl`, connect listeners on
+    `registry.on_update<ComputedPathComponent>()` and
+    `on_destroy<ComputedPathComponent>()`. Listener:
+    `registry.remove<GeodePathCacheComponent>(entity)`. entt
+    signals are synchronous, so the wipe happens in-band with the
+    write. No polling, no dirty-flag cascade reasoning. Ctor
+    connects; dtor disconnects via stored
+    `entt::scoped_connection`s.
+  - **Component layout.** Under
+    `donner/svg/renderer/geode/GeodePathCacheComponent.h`:
+
+    ```cpp
+    struct GeodePathCacheComponent {
+      std::optional<EncodedPath> fillEncode;
+      struct StrokeSlot {
+        StrokeStyle strokeKey;               // equality-keyed on stroke inputs
+        Path strokedPath;                    // strokeToFill output
+        EncodedPath strokedEncode;
+      };
+      std::optional<StrokeSlot> strokeSlot;
+    };
+    ```
+
+    Installed lazily via `registry.get_or_emplace` at the Geode
+    encode call sites — keeps the component Geode-local, so
+    `RendererTinySkia` pays no storage cost.
+  - **Cache hit path.** At each encode site
+    (`GeoEncoder::submitFillDraw`, `fillPathLinearGradient`,
+    `fillPathRadialGradient`, `fillPathIntoMask`) the encoder
+    receives the entity handle and takes the fast path:
+
+    ```
+    if (auto* cache = registry.try_get<GeodePathCacheComponent>(entity);
+        cache && cache->fillEncode.has_value()) {
+      // hit — reuse cached EncodedPath, skip encode + countPathEncode.
+    } else {
+      encode(); store into cache->fillEncode;
+    }
+    ```
+
+    `countPathEncode()` is *only* called on miss, so the counter
+    gates the test assertion directly.
+  - **Stroke slot.** Keyed by `StrokeStyle ==`. Geometry changes
+    wipe the whole `GeodePathCacheComponent` via the entt signal
+    above, so the stroke slot is implicitly invalidated too.
+    Stroke-only changes (stroke width/dash/cap/join via CSS)
+    don't fire the signal — but they do change `StrokeStyle`, so
+    the equality check on the existing stroke slot misses and
+    causes a regenerate. Decoupled storage means fill changes
+    don't pay for re-strokeToFill and vice versa.
+  - **Deferred to a follow-up PR:**
+    - GPU-resident arena handle retention (original M2 bullet 3):
+      caching the vertex/band/curve offsets from M1's persistent
+      arenas so cached paths also skip re-upload. Requires arena
+      generation-stamping so cached offsets invalidate when the
+      arena grows or recycles. Separate PR.
+    - Batching duplicate `<use>` instances onto a single cached
+      encode via instanced draws — tracked in M6.
+  - **Test plan (repro-first per `CLAUDE.md` debugging discipline).**
+    Added to `donner/svg/renderer/geode/tests/GeodePerf_tests.cc`:
+    - `Lion_NoDirtyPath_ZeroEncodes` — render twice, assert
+      `counters.pathEncodes == 0` on frame 2.
+    - `GhostscriptTiger_NoDirtyPath_ZeroEncodes` — same shape on
+      Ghostscript_Tiger.svg.
+    - `Lion_OneGeometryChange_OneEncode` — mutate one path's `d`,
+      assert exactly one re-encode (stretch: only the changed
+      path's encode fires).
+    Tests land red (pathEncodes > 0 on frame 2) before any
+    implementation.
+  - **Counter ceiling after M2:** `pathEncodes == 0` on a no-change
+    frame for `lion.svg` and `Ghostscript_Tiger.svg`, tightened
+    from the M0 observed baselines (Lion frame-1 pathEncodes=132).
 - [x] Milestone 3: Single-encoder-per-frame (Tier 2 findings).
   _Landed 2026-04-19._
   - [x] `GeoEncoder` gained a shared-CommandEncoder constructor
