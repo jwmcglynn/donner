@@ -68,12 +68,11 @@ constexpr std::string_view kModerateSvg = R"SVG(
 /// test output (RecordProperty only surfaces in XML). Format keeps each
 /// counter on its own column for easy diffing across milestones.
 void printCounters(const char* label, const geode::GeodeCounters& c) {
-  std::fprintf(stderr,
-               "[GeodePerf] %-32s  pathEncodes=%4" PRIu64
-               "  bufferCreates=%5" PRIu64 "  bindgroupCreates=%5" PRIu64
-               "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64 "\n",
-               label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates,
-               c.textureCreates, c.submits);
+  std::fprintf(
+      stderr,
+      "[GeodePerf] %-32s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
+      "  bindgroupCreates=%5" PRIu64 "  textureCreates=%3" PRIu64 "  submits=%3" PRIu64 "\n",
+      label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates, c.submits);
 }
 
 /// Read a file from disk. Returns the empty string on any I/O error —
@@ -154,11 +153,11 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   //   M1.f.1 (uniforms):  bufferCreates=5 (4 arenas + 1 readback,
   //                       arenas lazily grown — some frames only
   //                       touch 3 arenas)
-  EXPECT_LE(c.pathEncodes, 5u);        // M2: target = 0 on unchanged-geometry frames.
-  EXPECT_LE(c.bufferCreates, 8u);      // M1.f.2: target = 1 (readback only).
-  EXPECT_LE(c.bindgroupCreates, 6u);   // M1.f.2: target <= #pipelines (3 today).
-  EXPECT_LE(c.textureCreates, 6u);     // M4: target = 0 on unchanged-size repeat.
-  EXPECT_LE(c.submits, 3u);            // M3: target = 1.
+  EXPECT_LE(c.pathEncodes, 5u);       // M2: target = 0 on unchanged-geometry frames.
+  EXPECT_LE(c.bufferCreates, 8u);     // M1.f.2: target = 1 (readback only).
+  EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines (3 today).
+  EXPECT_LE(c.textureCreates, 6u);    // M4: target = 0 on unchanged-size repeat.
+  EXPECT_LE(c.submits, 3u);           // M3: target = 1.
 }
 
 // ---------------------------------------------------------------------------
@@ -185,11 +184,11 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   //                   their own arenas — 3×3 + 1 readback.)
   //   M3 (shared CE): bufferCreates=10 submits=2 textureCreates=10
   //                   (push/pop no longer forces a queue submit)
-  EXPECT_LE(c.pathEncodes, 4u);        // M2: target = 0.
-  EXPECT_LE(c.bufferCreates, 12u);     // M1.f.2 + future arena-share: target ~= 5.
-  EXPECT_LE(c.bindgroupCreates, 6u);   // M1.f.2: target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 12u);    // M4: target = 0 on repeat same-size.
-  EXPECT_LE(c.submits, 3u);            // M3: target = 2 steady-state (frame + readback).
+  EXPECT_LE(c.pathEncodes, 4u);       // M2: target = 0.
+  EXPECT_LE(c.bufferCreates, 12u);    // M1.f.2 + future arena-share: target ~= 5.
+  EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines.
+  EXPECT_LE(c.textureCreates, 12u);   // M4: target = 0 on repeat same-size.
+  EXPECT_LE(c.submits, 3u);           // M3: target = 2 steady-state (frame + readback).
 }
 
 // ---------------------------------------------------------------------------

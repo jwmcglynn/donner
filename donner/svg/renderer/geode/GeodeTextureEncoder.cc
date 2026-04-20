@@ -27,18 +27,18 @@ constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
 /// explicitly padded so the size is a multiple of the largest member's
 /// alignment (mat4x4 = 16 bytes).
 struct alignas(16) Uniforms {
-  float mvp[16];            //   0 ..  64
-  float destRect[4];        //  64 ..  80
-  float srcRect[4];         //  80 ..  96
-  float opacity;            //  96 .. 100
-  uint32_t sourceIsPremult; // 100 .. 104
-  uint32_t maskMode;        // 104 .. 108 — Phase 3c <mask> luminance blit
-  uint32_t applyMaskBounds; // 108 .. 112 — clip output to `maskBounds`
-  float maskBounds[4];      // 112 .. 128 — (x0, y0, x1, y1) in target-pixel space
-  uint32_t blendMode;       // 128 .. 132 — Phase 3d mix-blend-mode selector
-  uint32_t _blendPad0;      // 132 .. 136
-  uint32_t _blendPad1;      // 136 .. 140
-  uint32_t _blendPad2;      // 140 .. 144
+  float mvp[16];             //   0 ..  64
+  float destRect[4];         //  64 ..  80
+  float srcRect[4];          //  80 ..  96
+  float opacity;             //  96 .. 100
+  uint32_t sourceIsPremult;  // 100 .. 104
+  uint32_t maskMode;         // 104 .. 108 — Phase 3c <mask> luminance blit
+  uint32_t applyMaskBounds;  // 108 .. 112 — clip output to `maskBounds`
+  float maskBounds[4];       // 112 .. 128 — (x0, y0, x1, y1) in target-pixel space
+  uint32_t blendMode;        // 128 .. 132 — Phase 3d mix-blend-mode selector
+  uint32_t _blendPad0;       // 132 .. 136
+  uint32_t _blendPad1;       // 136 .. 140
+  uint32_t _blendPad2;       // 140 .. 144
 };
 static_assert(sizeof(Uniforms) == 144, "Image-blit Uniforms layout mismatch");
 
@@ -96,8 +96,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
     std::vector<uint8_t> staging(static_cast<size_t>(paddedBytesPerRow) * height, 0u);
     for (uint32_t y = 0; y < height; ++y) {
       std::memcpy(staging.data() + static_cast<size_t>(y) * paddedBytesPerRow,
-                  rgbaPixels + static_cast<size_t>(y) * unpaddedBytesPerRow,
-                  unpaddedBytesPerRow);
+                  rgbaPixels + static_cast<size_t>(y) * unpaddedBytesPerRow, unpaddedBytesPerRow);
     }
     queue.writeTexture(dst, staging.data(), staging.size(), layout, writeSize);
   }
@@ -105,8 +104,7 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
   return texture;
 }
 
-void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
-                                           const GeodeImagePipeline& pipeline,
+void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
                                            const wgpu::RenderPassEncoder& pass,
                                            const wgpu::Texture& texture, const float mvp[16],
                                            uint32_t /*targetWidth*/, uint32_t /*targetHeight*/,
@@ -156,8 +154,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device,
   // off, we bind the source content texture view as a cheap dummy
   // (the shader never samples it because the mode guard is 0).
   wgpu::TextureView view = texture.createView();
-  wgpu::TextureView maskView =
-      params.maskTexture ? params.maskTexture.createView() : view;
+  wgpu::TextureView maskView = params.maskTexture ? params.maskTexture.createView() : view;
   wgpu::TextureView dstView =
       params.dstSnapshotTexture ? params.dstSnapshotTexture.createView() : view;
   wgpu::BindGroupEntry entries[5] = {};
