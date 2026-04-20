@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "donner/editor/ImGuiIncludes.h"
-#include "donner/editor/RenderPaneGesture.h"
-#include "donner/editor/Tool.h"
+#include "donner/editor/backend_lib/RenderPaneGesture.h"
+#include "donner/editor/backend_lib/Tool.h"
 #include "donner/editor/ViewportState.h"
 
 namespace donner::editor {

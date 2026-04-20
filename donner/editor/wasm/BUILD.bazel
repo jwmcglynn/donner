@@ -19,10 +19,29 @@ config_setting(
     },
 )
 
-_EDITOR_WASM_BINARY_DEPS = [
-    "//donner/editor:editor_shell",
+_EDITOR_WASM_RUNTIME_DEPS = [
+    "//donner/base",
+    "//donner/editor:address_bar",
+    "//donner/editor:editor_backend_client",
+    "//donner/editor:editor_backend_client_inprocess",
     "//donner/editor:editor_icon",
-    "//donner/editor/gui:editor_window",
+    "//donner/editor:editor_splash",
+    "//donner/editor:pinch_event_monitor",
+    "//donner/editor:resource_policy",
+    "//donner/editor:selection_aabb",
+    "//donner/editor:selection_overlay",
+    "//donner/editor:svg_fetcher",
+    "//donner/editor:text_editor",
+    "//donner/editor:text_patch",
+    "//donner/editor:tracy_wrapper",
+    "//donner/editor:viewport_state",
+    "//donner/svg",
+    "//donner/svg/renderer",
+    "//third_party/emscripten-glfw",
+    "//third_party/fira-code",
+    "//third_party/roboto",
+    "@glfw",
+    "@imgui",
 ]
 
 # emdawnwebgpu JS library files required by the Geode (WebGPU) backend.
@@ -49,10 +68,7 @@ _COMMON_LINKOPTS = [
 
 cc_library(
     name = "notice_inputs",
-    deps = [
-        "//donner/editor:editor_icon",
-        "//donner/editor:editor_shell",
-    ],
+    deps = _EDITOR_WASM_RUNTIME_DEPS,
     target_compatible_with = select({
         ":wasm_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -69,18 +85,21 @@ cc_binary(
     copts = [
         "-pthread",
     ],
-    linkopts = [
-        "-pthread",
-        "-sASYNCIFY",
-        "-sALLOW_MEMORY_GROWTH=1",
-        "-sMAXIMUM_MEMORY=512MB",
-        "-sEXIT_RUNTIME=0",
-        "-sEXPORTED_RUNTIME_METHODS=ccall",
-        "-sPTHREAD_POOL_SIZE=2",
-        "-sSTACK_SIZE=1048576",
-        "-sUSE_PTHREADS=1",
-        "-sENVIRONMENT=web,worker",
-    ],
+    linkopts = _COMMON_LINKOPTS + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "-sASYNCIFY_STACK_SIZE=131072",
+            "-sEXPORTED_FUNCTIONS=_main,_OnBrowserFileReadyPath,_malloc,_free",
+            "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js)",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js)",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js)",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
+        ],
+        "//conditions:default": [
+            "-sEXPORTED_FUNCTIONS=_main,_OnBrowserFileReadyPath",
+            "-sEXPORTED_RUNTIME_METHODS=ccall",
+        ],
+    }),
     tags = [
         "manual",
         "wasm",
@@ -89,7 +108,7 @@ cc_binary(
         ":wasm_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = _EDITOR_WASM_BINARY_DEPS + ["//donner/editor:notice"],
+    deps = _EDITOR_WASM_RUNTIME_DEPS + ["//donner/editor:notice"],
 )
 
 wasm_cc_binary(

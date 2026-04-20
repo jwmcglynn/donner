@@ -98,21 +98,6 @@ donner_cc_test(
     ],
 )
 
-donner_cc_test(
-    name = "pipelined_renderer_tests",
-    srcs = ["PipelinedRenderer_tests.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
-    deps = [
-        "//donner/base",
-        "//donner/editor/sandbox:pipelined_renderer",
-        "//donner/svg",
-        "//donner/svg/parser",
-        "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
 donner_cc_fuzzer(
     name = "sandbox_wire_fuzzer",
     srcs = ["SandboxWire_fuzzer.cc"],
@@ -156,6 +141,67 @@ donner_cc_test(
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "session_codec_tests",
+    srcs = ["SessionCodec_tests.cc"],
+    deps = [
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "sandbox_session_tests",
+    srcs = ["SandboxSession_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_editor_backend",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:session",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_api_codec_tests",
+    srcs = ["EditorApiCodec_tests.cc"],
+    deps = [
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_backend_integration_tests",
+    srcs = ["EditorBackendIntegration_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_editor_backend",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
         "@com_google_gtest//:gtest_main",
     ],
 )

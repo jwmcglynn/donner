@@ -4,7 +4,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/editor/ExperimentalDragPresentation.h"
-#include "donner/editor/SelectTool.h"
+#include "donner/editor/backend_lib/SelectTool.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"

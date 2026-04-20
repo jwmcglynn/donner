@@ -13,8 +13,8 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
-#include "donner/editor/AsyncRenderer.h"
-#include "donner/editor/AsyncSVGDocument.h"
+#include "donner/editor/backend_lib/AsyncRenderer.h"
+#include "donner/editor/backend_lib/AsyncSVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"

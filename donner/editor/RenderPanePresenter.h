@@ -5,7 +5,7 @@
 
 #include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/GlTextureCache.h"
-#include "donner/editor/SelectTool.h"
+#include "donner/editor/backend_lib/SelectTool.h"
 #include "donner/editor/ViewportInteractionController.h"
 
 namespace donner::editor {

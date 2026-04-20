@@ -1,4 +1,4 @@
-#include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/backend_lib/AsyncRenderer.h"
 
 #include <algorithm>
 #include <chrono>
@@ -9,8 +9,8 @@
 #include <thread>
 
 #include "donner/base/Transform.h"
-#include "donner/editor/AsyncSVGDocument.h"
-#include "donner/editor/EditorCommand.h"
+#include "donner/editor/backend_lib/AsyncSVGDocument.h"
+#include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/TracyWrapper.h"

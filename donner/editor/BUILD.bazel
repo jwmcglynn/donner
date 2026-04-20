@@ -53,20 +53,13 @@ donner_cc_library(
     srcs = ["SelectionAabb.cc"],
     hdrs = ["SelectionAabb.h"],
     deps = [
+        ":viewport_state",
         "//donner/base",
         "//donner/svg",
     ],
 )
 
-donner_cc_library(
-    name = "render_pane_gesture",
-    srcs = ["RenderPaneGesture.cc"],
-    hdrs = ["RenderPaneGesture.h"],
-    deps = [
-        ":viewport_state",
-        "//donner/base",
-    ],
-)
+# render_pane_gesture moved to //donner/editor/backend_lib
 
 donner_cc_library(
     name = "pinch_event_monitor",
@@ -76,7 +69,7 @@ donner_cc_library(
     }),
     hdrs = ["PinchEventMonitor.h"],
     deps = [
-        ":render_pane_gesture",
+        "//donner/editor/backend_lib:render_pane_gesture",
     ],
 )
 
@@ -95,31 +88,7 @@ objc_library(
     ],
 )
 
-donner_cc_library(
-    name = "command_queue",
-    srcs = ["CommandQueue.cc"],
-    hdrs = [
-        "CommandQueue.h",
-        "EditorCommand.h",
-    ],
-    deps = [
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "async_svg_document",
-    srcs = ["AsyncSVGDocument.cc"],
-    hdrs = ["AsyncSVGDocument.h"],
-    deps = [
-        ":command_queue",
-        "//donner/base",
-        "//donner/svg",
-        "//donner/svg/compositor",
-        "//donner/svg/parser",
-    ],
-)
+# command_queue, async_svg_document moved to //donner/editor/backend_lib
 
 donner_cc_library(
     name = "text_patch",
@@ -130,306 +99,26 @@ donner_cc_library(
     ],
 )
 
-donner_cc_library(
-    name = "attribute_writeback",
-    srcs = ["AttributeWriteback.cc"],
-    hdrs = ["AttributeWriteback.h"],
-    deps = [
-        ":text_patch",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/svg",
-    ],
-)
+# attribute_writeback moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "async_renderer",
-    srcs = ["AsyncRenderer.cc"],
-    hdrs = ["AsyncRenderer.h"],
-    deps = [
-        ":overlay_renderer",
-        ":tracy_wrapper",
-        "//donner/base",
-        "//donner/svg",
-        "//donner/svg/compositor:compositor",
-        "//donner/svg/renderer",
-    ],
-)
+# async_renderer moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "gl_texture_cache",
-    srcs = ["GlTextureCache.cc"],
-    hdrs = ["GlTextureCache.h"],
-    deps = [
-        ":async_renderer",
-        ":tracy_wrapper",
-        "//donner/base",
-        "//donner/svg",
-    ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "//conditions:default": [
-            "//third_party/glad",
-        ],
-    }),
-)
+# change_classifier moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "editor_input_bridge",
-    srcs = ["EditorInputBridge.cc"],
-    hdrs = ["EditorInputBridge.h"],
-    deps = [
-        ":pinch_event_monitor",
-        ":render_pane_gesture",
-        "//donner/editor/gui:editor_window",
-    ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "@platforms//os:macos": [
-            ":pinch_event_monitor_macos",
-            "@glfw",
-        ],
-        "@platforms//os:linux": [
-            "@glfw",
-        ],
-        "//conditions:default": [],
-    }),
-)
+# source_sync moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "change_classifier",
-    srcs = ["ChangeClassifier.cc"],
-    hdrs = ["ChangeClassifier.h"],
-    deps = [
-        ":command_queue",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/svg",
-    ],
-)
+# editor_app moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "imgui_headers",
-    hdrs = [
-        "ImGuiBackendIncludes.h",
-        "ImGuiIncludes.h",
-        "ImGuiInternalIncludes.h",
-    ],
-    deps = [
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "keyboard_shortcut_policy",
-    hdrs = ["KeyboardShortcutPolicy.h"],
-    deps = [],
-)
-
-donner_cc_library(
-    name = "document_sync_controller",
-    srcs = ["DocumentSyncController.cc"],
-    hdrs = ["DocumentSyncController.h"],
-    deps = [
-        ":attribute_writeback",
-        ":editor_app",
-        ":imgui_headers",
-        ":select_tool",
-        ":source_sync",
-        ":text_editor",
-        ":text_patch",
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "viewport_interaction_controller",
-    srcs = ["ViewportInteractionController.cc"],
-    hdrs = ["ViewportInteractionController.h"],
-    deps = [
-        ":imgui_headers",
-        ":render_pane_gesture",
-        ":viewport_state",
-        ":tool",
-        "//donner/base",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "menu_bar_presenter",
-    srcs = ["MenuBarPresenter.cc"],
-    hdrs = ["MenuBarPresenter.h"],
-    deps = [
-        ":imgui_headers",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "sidebar_presenter",
-    srcs = ["SidebarPresenter.cc"],
-    hdrs = ["SidebarPresenter.h"],
-    deps = [
-        ":editor_app",
-        ":imgui_headers",
-        ":viewport_state",
-        "//donner/base",
-        "//donner/svg",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "dialog_presenter",
-    srcs = ["DialogPresenter.cc"],
-    hdrs = ["DialogPresenter.h"],
-    deps = [
-        ":imgui_headers",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "render_pane_presenter",
-    srcs = ["RenderPanePresenter.cc"],
-    hdrs = ["RenderPanePresenter.h"],
-    deps = [
-        ":experimental_drag_presentation",
-        ":gl_texture_cache",
-        ":imgui_headers",
-        ":selection_aabb",
-        ":viewport_interaction_controller",
-        "//donner/base",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "render_coordinator",
-    srcs = ["RenderCoordinator.cc"],
-    hdrs = ["RenderCoordinator.h"],
-    deps = [
-        ":async_renderer",
-        ":experimental_drag_presentation",
-        ":gl_texture_cache",
-        ":overlay_renderer",
-        ":select_tool",
-        ":selection_aabb",
-        ":tracy_wrapper",
-        ":viewport_interaction_controller",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "editor_shell",
-    srcs = ["EditorShell.cc"],
-    hdrs = ["EditorShell.h"],
-    deps = [
-        ":dialog_presenter",
-        ":document_sync_controller",
-        ":editor_app",
-        ":editor_input_bridge",
-        ":gl_texture_cache",
-        ":keyboard_shortcut_policy",
-        ":imgui_headers",
-        ":menu_bar_presenter",
-        ":render_coordinator",
-        ":render_pane_presenter",
-        ":select_tool",
-        ":sidebar_presenter",
-        ":text_editor",
-        ":tracy_wrapper",
-        ":viewport_interaction_controller",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/editor/gui:editor_window",
-        "//donner/editor/repro:repro_recorder",
-        "//donner/svg",
-        "//third_party/fira-code",
-        "//third_party/roboto",
-        "@imgui",
-    ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "//conditions:default": [
-            "@glfw",
-        ],
-    }),
-)
-
-donner_cc_library(
-    name = "source_sync",
-    srcs = ["SourceSync.cc"],
-    hdrs = ["SourceSync.h"],
-    deps = [
-        ":change_classifier",
-        ":editor_app",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "editor_app",
-    srcs = ["EditorApp.cc"],
-    hdrs = ["EditorApp.h"],
-    deps = [
-        ":async_svg_document",
-        ":attribute_writeback",
-        ":command_queue",
-        ":undo_timeline",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "tool",
-    hdrs = ["Tool.h"],
-    deps = [
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "experimental_drag_presentation",
-    hdrs = ["ExperimentalDragPresentation.h"],
-    deps = [
-        ":select_tool",
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "select_tool",
-    srcs = ["SelectTool.cc"],
-    hdrs = ["SelectTool.h"],
-    deps = [
-        ":attribute_writeback",
-        ":command_queue",
-        ":editor_app",
-        ":imgui_headers",
-        ":tool",
-        ":undo_timeline",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
+# tool, select_tool moved to //donner/editor/backend_lib
 
 donner_cc_library(
     name = "overlay_renderer",
     srcs = ["OverlayRenderer.cc"],
     hdrs = ["OverlayRenderer.h"],
     deps = [
-        ":editor_app",
         ":selection_aabb",
         ":tracy_wrapper",
+        "//donner/editor/backend_lib:editor_app",
         "//donner/base",
         "//donner/css",
         "//donner/svg",
@@ -474,6 +163,36 @@ embed_resources(
     },
 )
 
+_EDITOR_RUNTIME_DEPS = [
+    ":editor_backend_client",
+    ":editor_icon",
+    ":editor_splash",
+    ":pinch_event_monitor",
+    ":viewport_state",
+] + select({
+    "@platforms//os:macos": [":pinch_event_monitor_macos"],
+    "//conditions:default": [],
+}) + [
+    ":text_editor",
+    ":text_patch",
+    ":tracy_wrapper",
+    "//donner/base",
+    "//donner/svg/renderer:renderer_interface",
+    "//third_party/fira-code",
+    "//third_party/glad",
+    "//third_party/roboto",
+    "@glfw",
+    "@imgui",
+] + select({
+    "@platforms//os:linux": [
+        ":editor_backend_client_session",
+        "//donner/editor/sandbox:session",
+    ],
+    "//conditions:default": [
+        ":editor_backend_client_inprocess",
+    ],
+})
+
 donner_cc_library(
     name = "editor_notice_inputs",
     target_compatible_with = select({
@@ -481,10 +200,7 @@ donner_cc_library(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
-        ":editor_icon",
-        ":editor_shell",
-    ],
+    deps = _EDITOR_RUNTIME_DEPS,
 )
 
 # The full Donner editor binary. Wires EditorApp + SelectTool +
@@ -501,15 +217,7 @@ donner_cc_binary(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
-        ":editor_icon",
-        ":notice",
-        ":editor_shell",
-        ":tracy_wrapper",
-        "//donner/editor/gui:editor_window",
-        "//donner/base",
-        "//donner/base:failure_signal_handler",
-    ],
+    deps = _EDITOR_RUNTIME_DEPS + [":notice"],
 )
 
 donner_cc_library(
@@ -541,7 +249,7 @@ donner_cc_library(
     hdrs = ["ImGuiClipboard.h"],
     deps = [
         ":clipboard_interface",
-        ":imgui_headers",
+        ":imgui_includes",
         "@imgui",
     ],
 )
@@ -580,7 +288,7 @@ donner_cc_library(
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
-        ":imgui_headers",
+        ":imgui_includes",
         ":text_buffer",
         ":text_editor_core",
         "//donner/base",
@@ -588,13 +296,223 @@ donner_cc_library(
     ],
 )
 
+# undo_timeline moved to //donner/editor/backend_lib
+
 donner_cc_library(
-    name = "undo_timeline",
-    srcs = ["UndoTimeline.cc"],
-    hdrs = ["UndoTimeline.h"],
+    name = "resource_policy",
+    srcs = [
+        "CurlAvailability.cc",
+        "ResourcePolicy.cc",
+    ],
+    hdrs = ["ResourcePolicy.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "address_bar",
+    srcs = ["AddressBar.cc"],
+    hdrs = ["AddressBar.h"],
     deps = [
-        ":attribute_writeback",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "svg_fetcher",
+    srcs = ["SvgFetcher.cc"],
+    hdrs = ["SvgFetcher.h"],
+    deps = [
+        ":resource_policy",
+        "//donner/editor/sandbox:svg_source",
+    ],
+)
+
+# Header-only target for the EditorBackendClient abstract interface.
+donner_cc_library(
+    name = "editor_backend_client",
+    hdrs = [
+        "EditorBackendClient.h",
+        "SelectionOverlay.h",
+    ],
+    deps = [
+        ":address_bar",
         "//donner/base",
-        "//donner/svg",
+        "//donner/editor/sandbox:session_protocol",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+# Desktop (session-backed) implementation of EditorBackendClient.
+donner_cc_library(
+    name = "editor_backend_client_session",
+    srcs = ["EditorBackendClient_Session.cc"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":editor_backend_client",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/sandbox:session",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/svg/renderer",
+    ],
+)
+
+# In-process implementation of EditorBackendClient (WASM + desktop tests).
+donner_cc_library(
+    name = "editor_backend_client_inprocess",
+    srcs = ["EditorBackendClient_InProcess.cc"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":editor_backend_client",
+        "//donner/editor/sandbox:editor_backend_core",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/svg/renderer",
+    ],
+)
+
+# --- New composited-rendering presenter/controller targets (from #531) ---
+# These are library targets NOT linked into the thin-client main.cc.
+# They build and test against backend_lib deps and will be integrated
+# into the sandbox architecture in a follow-up.
+
+donner_cc_library(
+    name = "imgui_includes",
+    hdrs = [
+        "ImGuiBackendIncludes.h",
+        "ImGuiIncludes.h",
+        "ImGuiInternalIncludes.h",
+    ],
+    deps = ["@imgui"],
+)
+
+donner_cc_library(
+    name = "keyboard_shortcut_policy",
+    hdrs = ["KeyboardShortcutPolicy.h"],
+    deps = ["@imgui"],
+)
+
+donner_cc_library(
+    name = "experimental_drag_presentation",
+    hdrs = ["ExperimentalDragPresentation.h"],
+    deps = [
+        "//donner/base",
+        "//donner/editor/backend_lib:select_tool",
+    ],
+)
+
+donner_cc_library(
+    name = "viewport_interaction_controller",
+    srcs = ["ViewportInteractionController.cc"],
+    hdrs = ["ViewportInteractionController.h"],
+    deps = [
+        ":imgui_includes",
+        ":viewport_state",
+        "//donner/editor/backend_lib:render_pane_gesture",
+        "//donner/editor/backend_lib:tool",
+    ],
+)
+
+donner_cc_library(
+    name = "gl_texture_cache",
+    srcs = ["GlTextureCache.cc"],
+    hdrs = ["GlTextureCache.h"],
+    deps = [
+        "//donner/base",
+        "//donner/editor/backend_lib:async_renderer",
+        "//third_party/glad",
+    ],
+)
+
+donner_cc_library(
+    name = "render_coordinator",
+    srcs = ["RenderCoordinator.cc"],
+    hdrs = ["RenderCoordinator.h"],
+    deps = [
+        ":experimental_drag_presentation",
+        ":gl_texture_cache",
+        ":overlay_renderer",
+        ":selection_aabb",
+        ":tracy_wrapper",
+        ":viewport_interaction_controller",
+        ":viewport_state",
+        "//donner/editor/backend_lib:async_renderer",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_library(
+    name = "document_sync_controller",
+    srcs = ["DocumentSyncController.cc"],
+    hdrs = ["DocumentSyncController.h"],
+    deps = [
+        ":text_editor",
+        ":text_patch",
+        "//donner/base",
+        "//donner/editor/backend_lib:attribute_writeback",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/editor/backend_lib:source_sync",
+    ],
+)
+
+donner_cc_library(
+    name = "dialog_presenter",
+    srcs = ["DialogPresenter.cc"],
+    hdrs = ["DialogPresenter.h"],
+    deps = [
+        ":imgui_includes",
+    ],
+)
+
+donner_cc_library(
+    name = "menu_bar_presenter",
+    srcs = ["MenuBarPresenter.cc"],
+    hdrs = ["MenuBarPresenter.h"],
+    deps = [
+        ":imgui_includes",
+    ],
+)
+
+donner_cc_library(
+    name = "render_pane_presenter",
+    srcs = ["RenderPanePresenter.cc"],
+    hdrs = ["RenderPanePresenter.h"],
+    deps = [
+        ":experimental_drag_presentation",
+        ":gl_texture_cache",
+        ":imgui_includes",
+        ":overlay_renderer",
+        ":viewport_interaction_controller",
+        "//donner/editor/backend_lib:select_tool",
+    ],
+)
+
+donner_cc_library(
+    name = "sidebar_presenter",
+    srcs = ["SidebarPresenter.cc"],
+    hdrs = ["SidebarPresenter.h"],
+    deps = [
+        ":imgui_includes",
+        ":viewport_state",
+        "//donner/base",
+        "//donner/editor/backend_lib:editor_app",
+    ],
+)
+
+donner_cc_library(
+    name = "selection_overlay",
+    hdrs = ["SelectionOverlay.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
     ],
 )

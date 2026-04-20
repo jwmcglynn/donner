@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "donner/base/ParseDiagnostic.h"
-#include "donner/editor/AttributeWriteback.h"
-#include "donner/editor/EditorApp.h"
+#include "donner/editor/backend_lib/AttributeWriteback.h"
+#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/TextEditor.h"
 
 namespace donner::editor {
