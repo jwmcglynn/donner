@@ -1552,7 +1552,18 @@ void RendererGeode::clearTargetTexture() {
   impl_->hostTarget = wgpu::Texture();
 }
 
-RendererGeode::~RendererGeode() = default;
+RendererGeode::~RendererGeode() {
+  // GeodeDevice holds a raw `counters_` pointer into our Impl (see `Impl::initPipelines` →
+  // `device->setCounters(&counters)`). If this renderer's counters are still the ones the
+  // (shared) device refers to, clear the pointer before our Impl (and its `counters` member) is
+  // freed. Otherwise the next `countBuffer`/`countTexture` call by any peer renderer sharing this
+  // device will dereference freed memory — which is exactly how chained feImage rendering
+  // crashes: multiple offscreen renderers share one device, each one overrides `counters_` in
+  // `initPipelines`, and the first one destroyed leaves `counters_` dangling for the others.
+  if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
+    impl_->device->setCounters(nullptr);
+  }
+}
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
 

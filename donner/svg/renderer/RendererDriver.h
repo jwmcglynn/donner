@@ -1,9 +1,13 @@
 #pragma once
 /// @file
 
+#include <optional>
+#include <span>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/core/MarkerOrient.h"
@@ -86,6 +90,26 @@ public:
   [[nodiscard]] RendererBitmap takeSnapshot() const;
 
 private:
+  /**
+   * Resolve and pre-render the filter graph for every entity with a resolved filter in `entities`,
+   * caching each result in \ref preparedFilterGraphs_. Must be called BEFORE any `traverse` pass
+   * so that `traverse` does not mutate \ref components::RenderingInstanceComponent storage while
+   * iterating it (which would invalidate iterators and references held by the traverse loop).
+   *
+   * `entities` is the ordered snapshot of main-tree entities that will be rendered. The pre-pass
+   * iterates this list rather than a live view so it is robust against storage mutation caused by
+   * `preRenderFeImageFragments` (which creates offscreen shadow trees and globally sorts the
+   * `RenderingInstanceComponent` pool).
+   */
+  void prepareFilterGraphs(Registry& registry, std::span<const Entity> entities);
+
+  /// Fetch a prepared filter graph for an entity, if any. Returns nullptr if the entity has no
+  /// filter or if the pre-pass didn't record one for it.
+  const components::FilterGraph* preparedFilterGraphFor(Entity entity) const;
+
+  /// Fetch the prepared filter region for an entity, if any.
+  std::optional<Box2d> preparedFilterRegionFor(Entity entity) const;
+
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);
@@ -154,6 +178,16 @@ private:
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
   /// instances via pointer.
   std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
+
+  /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity
+  /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main
+  /// traversal never mutates \ref components::RenderingInstanceComponent storage mid-iteration.
+  std::unordered_map<Entity, components::FilterGraph> preparedFilterGraphs_;
+
+  /// Filter regions resolved alongside \ref preparedFilterGraphs_. Stored separately because
+  /// `computeFilterRegion` needs the (live) `RenderingInstanceComponent` reference, and the region
+  /// is otherwise just an `std::optional<Box2d>` value pulled back out per-entity in traverse.
+  std::unordered_map<Entity, std::optional<Box2d>> preparedFilterRegions_;
 };
 
 }  // namespace donner::svg
