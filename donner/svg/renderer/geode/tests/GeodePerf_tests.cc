@@ -317,13 +317,19 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   // its encoded path is cached once and reused for all eight draws
   // on frame 1 (first draw encodes, next seven hit the cache).
   EXPECT_LE(c.pathEncodes, 2u);
-  // Current state: eight separate GPU draws, one per `<use>`.
-  // Target after M6 Bullet 2: `drawCalls == 1` (single instanced).
-  EXPECT_LE(c.drawCalls, 10u);
-  // Seven adjacent-same-source pairs = the exact count an instancing
-  // pass would collapse. Pinning this value so a regression in the
-  // detection path (e.g. `<use>` stops resolving to a shared
-  // `dataEntity`) trips immediately.
+  // M6-B step 3: the batcher collapses all eight consecutive
+  // same-source `<use>` draws into a single instanced GPU call.
+  EXPECT_EQ(c.drawCalls, 1u);
+  // And a single bind group covers all eight — per-instance
+  // transforms ride in a storage-buffer binding (binding 7), while
+  // the other seven entries are stable across the batch.
+  EXPECT_EQ(c.bindgroupCreates, 1u);
+  // Seven adjacent-same-source pairs detected at `drawPath` entry
+  // (BEFORE batching collapses them). This is the "opportunity"
+  // counter — kept as a separate signal from `drawCalls` (the
+  // "realized" counter) so a regression in the detection path
+  // (e.g. `<use>` stops resolving to a shared `dataEntity`) or
+  // in the batcher trips independently.
   EXPECT_EQ(c.sameSourceDrawPairs, 7u);
 }
 

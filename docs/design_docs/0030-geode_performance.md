@@ -394,23 +394,35 @@ algorithm.
       a 1-element identity buffer — existing draws are no-op
       identity composes, goldens and the resvg suite unchanged.
       Unlocks `fillPathInstanced`, next.
-    - [ ] **M6-B step 3 — batching.** Still to write:
-      - `GeoEncoder::fillPathInstanced(path, color, rule,
-        std::span<Transform2d>, precomputedEncoded)` — uploads
-        transforms into an arena slice, sets up the bind group
-        with binding 7 pointing at the slice, issues
-        `pass.draw(vertexCount, instanceCount=N, 0, 0)`.
-      - `RendererInterface::drawPathInstanced(...)` — virtual
-        with a default loop fallback for non-Geode backends.
-      - Driver lookahead in `RendererDriver::traverseRange`:
-        peek ahead from the current entity, accumulate
-        consecutive entities with same `dataEntity` / same
-        solid paint / no subtree / compatible clip. On the
-        accumulator, emit one `drawPathInstanced`; advance
-        the view past the group.
-      - Update `UseHeavy_BaselineCeilings` to assert
-        `drawCalls == 1` + `sameSourceDrawPairs == 0` (the
-        batcher eliminates the consecutive same-source runs).
+    - [x] **M6-B step 3 — batching.** _Landed 2026-04-20._
+      - `GeoEncoder::fillPathInstanced(encoded, color, rule,
+        std::span<const float>)`: packs transforms into the new
+        `instanceTransformArena`, sets up `FillDrawArgs` with the
+        instance-buffer slice + `instanceCount = N`, issues one
+        `pass.draw(vertexCount, N, 0, 0)`.
+      - Batching is **backend-internal** on `RendererGeode::Impl`
+        — no driver changes, no new
+        `RendererInterface::drawPathInstanced` virtual. `drawPath`
+        attempts to append to a pending batch keyed on
+        `(sourceEntity, color, rule)`; state-change APIs
+        (`pushClip` / `popClip`, the three layer types,
+        `drawImage` / `drawText`, `endFrame`, …) flush the
+        pending batch. Paint-key mismatches flush via the
+        `tryAppendOrStartBatch` key check.
+      - Flush machinery saves + restores `currentTransform`
+        around the emit so a mid-`drawPath` flush (between fill
+        and stroke siblings) doesn't leak the batched transform
+        back into the caller's state. Without the save/restore
+        this broke `rect2.svg` (10k px diff) and
+        `stroking_pathlength.svg` (1.7k px diff) — caught by the
+        regression sweep.
+      - `UseHeavy_BaselineCeilings` tightened to
+        `drawCalls == 1`, `bindgroupCreates == 1`,
+        `sameSourceDrawPairs == 7`. The detection counter stays
+        at `N − 1` because it fires at `drawPath` entry (before
+        the batcher's emit decision) — kept distinct from
+        `drawCalls` so regressions in detection vs. batching can
+        be triaged independently.
 - [ ] Milestone 7: Opportunistic cleanups.
   - [ ] GPU-side `takeSnapshot` unpremultiply (`RendererGeode.cc:2322-2353`)
     via a one-dispatch compute kernel writing into a CopySrc buffer;
