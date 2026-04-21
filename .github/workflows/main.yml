@@ -262,6 +262,114 @@ jobs:
             $TARGETS
 
 
+  pr-coverage:
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper, determine-targets]
+    # Only run on PRs (main branch coverage continues to live in
+    # coverage.yml). Skip docs-only PRs and infra-fallback PRs --
+    # Codecov's server-side patch-coverage signal still works against
+    # main's stored baseline in those cases. See M2.10 in
+    # docs/design_docs/0031-ci_hardening_2026q2.md.
+    if: ${{ github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Skip note (infra fallback)
+        if: ${{ needs.determine-targets.outputs.fallback == 'true' }}
+        shell: bash
+        run: |
+          echo "Skipping PR coverage: infra change triggered //... fallback."
+          echo "Codecov patch-coverage still annotates this PR using main's baseline."
+
+      - name: Set up JDK 11
+        if: ${{ needs.determine-targets.outputs.fallback != 'true' }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: 11
+          distribution: "microsoft"
+
+      - name: Setup Bazel
+        if: ${{ needs.determine-targets.outputs.fallback != 'true' }}
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          # Distinct slot from coverage.yml's `coverage-${{ runner.os }}-coverage`
+          # so PR coverage does not evict main's coverage cache (M2.1 per-config
+          # cache-slot discipline).
+          disk-cache: coverage-${{ runner.os }}-coverage-pr
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Install system dependencies
+        if: ${{ needs.determine-targets.outputs.fallback != 'true' }}
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev
+
+      - id: scope
+        name: Filter affected targets to coverage scope
+        if: ${{ needs.determine-targets.outputs.fallback != 'true' }}
+        shell: bash
+        env:
+          AFFECTED: ${{ needs.determine-targets.outputs.affected }}
+        run: |
+          set -euo pipefail
+
+          # Same scope as coverage.yml: //donner/editor/gui/** and
+          # //donner/editor:* are excluded because they pull GLFW/imgui,
+          # which need X11/GL headers absent from the hermetic LLVM
+          # sysroot used by --config=latest_llvm in tools/coverage.sh.
+          if [[ -z "$AFFECTED" ]]; then
+            echo "No affected targets; skipping."
+            echo "targets=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          affected_set="set($AFFECTED)"
+          scope="(//donner/base/... union //donner/css/... union //donner/svg/... union //donner/editor/sandbox/...)"
+          exclude="(//donner/editor/gui/... union //donner/editor:all)"
+
+          in_scope="$(bazelisk query "($scope intersect $affected_set) except $exclude" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+
+          if [[ -z "$in_scope" ]]; then
+            echo "No affected coverage targets; skipping."
+            echo "targets=" >> "$GITHUB_OUTPUT"
+          else
+            echo "In-scope coverage targets:"
+            echo "$in_scope" | tr ' ' '\n'
+            echo "targets=$in_scope" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate coverage
+        if: ${{ needs.determine-targets.outputs.fallback != 'true' && steps.scope.outputs.targets != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools/coverage.sh --quiet --no-html ${{ steps.scope.outputs.targets }}
+
+      - name: Upload coverage to Codecov
+        if: ${{ needs.determine-targets.outputs.fallback != 'true' && steps.scope.outputs.targets != '' }}
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage-report/filtered_report.dat
+          # Must match the flag used by coverage.yml so Codecov's
+          # carryforward (codecov.yml flag_management) can reuse main's
+          # baseline for files not exercised by this partial upload.
+          flags: unittests
+          # Do NOT fail the PR on Codecov upload errors -- this is a new
+          # gate and upload flakes shouldn't block merges.
+          fail_ci_if_error: false
+          verbose: true
+
+
   macos:
     runs-on: macos-15
     needs: [gatekeeper, determine-targets]

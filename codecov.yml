@@ -1,6 +1,18 @@
 ignore:
   - "third_party/**"
 
+# Carryforward lets PRs upload partial coverage (only the files exercised
+# by bazel-diff's affected-target set, see M2.10 in
+# docs/design_docs/0031-ci_hardening_2026q2.md) without files outside that
+# set reporting as 0% — Codecov reuses the most recent coverage from main
+# for any flag/file missing in the upload.
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: unittests
+      carryforward: true
+
 coverage:
   status:
     project:
