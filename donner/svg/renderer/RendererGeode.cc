@@ -2331,6 +2331,14 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.filterBufferOffsetY = filterBufferOffsetY;
   frame.savedClipStack = impl_->clipStack;
 
+  // SVG 2 §15.5: the SourceGraphic that feeds the filter graph must be
+  // UNCLIPPED (paint → filter → clip → mask → opacity). Clear the outer
+  // clip stack so inner draws into the filter layer aren't gated by the
+  // outer clip-path. The outer mask textures stay alive in
+  // frame.savedClipStack (copy preserves refcounts), and popFilterLayer
+  // restores the stack and re-binds the mask before the composite blit.
+  impl_->clipStack.clear();
+
   impl_->target = layerTexture;
   impl_->msaaTarget = layerMsaaTexture;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(

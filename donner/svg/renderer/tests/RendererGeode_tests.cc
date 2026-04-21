@@ -1860,5 +1860,100 @@ TEST_F(RendererGeodeTest, FilterConvolveMatrixEdgeDetect) {
   EXPECT_LT(interior[0], 20u) << "Interior should be near-black (Laplacian=0)";
 }
 
+/// SVG 2 §15.5: when an element has BOTH a `clip-path` and a `filter`, the
+/// SourceGraphic for the filter must be the UNCLIPPED element content. The
+/// clip is then applied to the FILTERED result, not to the input.
+///
+/// Repro: outer left-half clip + Gaussian blur of stdDev≈3 over a solid blue
+/// rect that fully covers the viewport. Correct §15.5 behaviour produces:
+///   - Pixels well inside the left half are uniform opaque blue (the blur of
+///     a constant region is the same constant).
+///   - Pixels well to the right of the clip boundary are transparent (the
+///     filtered result is clipped after blurring).
+///
+/// The buggy path applies the clip BEFORE the filter, so the blur of the
+/// already-clipped half-rect leaks energy inward and the interior pixels
+/// near the clip edge end up dimmer/translucent.
+TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  // Outer clip: left half of the viewport, defined as a path so it goes
+  // through the path-clip-mask code path (the same one resvg with-clip-path
+  // exercises).
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(0.0, 0.0))
+                       .lineTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(32.0, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+  renderer.pushClip(clip);
+
+  components::FilterGraph graph;
+  {
+    components::FilterNode node;
+    components::filter_primitive::GaussianBlur blur;
+    blur.stdDeviationX = 3.0;
+    blur.stdDeviationY = 3.0;
+    node.primitive = blur;
+    graph.nodes.push_back(node);
+  }
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.popClip();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // (30, 32): inside the clipped region (clip is x<32) but only 2 pixels
+  // from the right edge. The blur kernel (stdDev=3) at this x-coordinate
+  // straddles the boundary heavily. Per §15.5, the SourceGraphic is the
+  // UNCLIPPED full-viewport blue rect so the blur is uniform blue and this
+  // pixel — being inside the clip — must remain near-opaque blue. The buggy
+  // path captures only the left-half blue and the blur averages with
+  // transparent-black, so the alpha drops to ~50% (~177) here.
+  auto nearEdgeInside = pixelAt(snap, 30, 32);
+  EXPECT_GT(nearEdgeInside[3], 240u)
+      << "Near-edge inside-clip alpha should remain near-opaque (≥240). The "
+         "buggy path blurs the already-clipped half-rect and pulls alpha "
+         "toward ~50% here. Got "
+      << static_cast<int>(nearEdgeInside[3]);
+
+  // (34, 32): just OUTSIDE the clip rect. Per §15.5 the clip is applied to
+  // the FILTERED result, so this pixel must be fully transparent regardless
+  // of the blur radius. The buggy path leaks blur energy outside the clip
+  // boundary because the composite isn't gated by the clip mask, leaving
+  // alpha around 50.
+  auto justOutside = pixelAt(snap, 34, 32);
+  EXPECT_EQ(justOutside[3], 0u)
+      << "Just-outside-clip alpha must be 0 — clip-path is applied to the "
+         "filtered result. Got "
+      << static_cast<int>(justOutside[3]);
+
+  // (8, 32): well inside the clipped region, far from the boundary. Both
+  // correct and buggy paths produce near-opaque blue here, but check anyway
+  // as a sanity gate.
+  auto deepInside = pixelAt(snap, 8, 32);
+  EXPECT_GT(deepInside[2], 230u) << "Deep-inside B should be ~255 (blue)";
+  EXPECT_GT(deepInside[3], 230u) << "Deep-inside A should be near-opaque";
+
+  // (48, 32): well outside the clip rect, far from the boundary. The clip is
+  // applied AFTER the filter, so this pixel must be fully transparent.
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_EQ(outside[3], 0u) << "Outside the clip must be transparent — the "
+                               "filter result is clipped on composite";
+}
+
 }  // namespace
 }  // namespace donner::svg

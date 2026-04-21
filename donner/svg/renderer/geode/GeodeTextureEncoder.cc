@@ -23,23 +23,28 @@ constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
 
 /// Layout of the per-draw uniform buffer (must match shaders/image_blit.wgsl).
 ///
-/// Same 128-byte layout as the Slug-fill uniforms — the struct is
-/// explicitly padded so the size is a multiple of the largest member's
-/// alignment (mat4x4 = 16 bytes).
+/// 160 bytes total. `vec4f` members in WGSL require 16-byte alignment, so
+/// `maskBounds` lands at offset 128 (not 120). The explicit 8-byte pad
+/// before `maskBounds` mirrors that alignment so `blendMode` /
+/// `hasClipMask` end up at the offsets the fragment shader reads from
+/// (verified via `spirv-dis` on the naga-emitted SPIR-V — see
+/// OpMemberDecorate offsets 128/144/148).
 struct alignas(16) Uniforms {
-  float mvp[16];             //   0 ..  64
-  float destRect[4];         //  64 ..  80
-  float srcRect[4];          //  80 ..  96
-  float targetSize[2];       //  96 .. 104 — target size for clip-mask UVs
-  float opacity;             // 104 .. 108
-  uint32_t sourceIsPremult;  // 108 .. 112
-  uint32_t maskMode;         // 112 .. 116 — Phase 3c <mask> luminance blit
-  uint32_t applyMaskBounds;  // 116 .. 120 — clip output to `maskBounds`
-  float maskBounds[4];       // 120 .. 136 — (x0, y0, x1, y1) in target-pixel space
-  uint32_t blendMode;        // 136 .. 140 — Phase 3d mix-blend-mode selector
-  uint32_t hasClipMask;      // 140 .. 144 — Phase 3b path-clip mask blit
-  uint32_t _pad0;            // 144 .. 148
-  uint32_t _pad1;            // 148 .. 152
+  float mvp[16];                   //   0 ..  64
+  float destRect[4];               //  64 ..  80
+  float srcRect[4];                //  80 ..  96
+  float targetSize[2];             //  96 .. 104 — target size for clip-mask UVs
+  float opacity;                   // 104 .. 108
+  uint32_t sourceIsPremult;        // 108 .. 112
+  uint32_t maskMode;               // 112 .. 116 — Phase 3c <mask> luminance blit
+  uint32_t applyMaskBounds;        // 116 .. 120 — clip output to `maskBounds`
+  uint32_t _padBeforeMaskBounds0;  // 120 .. 124 — align maskBounds to vec4f (16B) boundary
+  uint32_t _padBeforeMaskBounds1;  // 124 .. 128
+  float maskBounds[4];             // 128 .. 144 — (x0, y0, x1, y1) in target-pixel space
+  uint32_t blendMode;              // 144 .. 148 — Phase 3d mix-blend-mode selector
+  uint32_t hasClipMask;            // 148 .. 152 — Phase 3b path-clip mask blit
+  uint32_t _pad0;                  // 152 .. 156
+  uint32_t _pad1;                  // 156 .. 160
 };
 static_assert(sizeof(Uniforms) == 160, "Image-blit Uniforms layout mismatch");
 
@@ -106,10 +111,10 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
 }
 
 void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
-                                            const wgpu::RenderPassEncoder& pass,
-                                            const wgpu::Texture& texture, const float mvp[16],
-                                            uint32_t targetWidth, uint32_t targetHeight,
-                                            const QuadParams& params) {
+                                           const wgpu::RenderPassEncoder& pass,
+                                           const wgpu::Texture& texture, const float mvp[16],
+                                           uint32_t targetWidth, uint32_t targetHeight,
+                                           const QuadParams& params) {
   if (!texture) {
     return;
   }
