@@ -1409,7 +1409,20 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
                               sourceAlpha ? &*sourceAlpha : nullptr);
       }
-      outputTex = applyBlend(inputTex, in2Tex, *blend);
+      // Per SVG spec, feBlend operates in the filter's color-interpolation-filters
+      // space (linearRGB by default). Match tiny-skia by wrapping the blend with
+      // sRGB↔linear conversion when the node resolves to linearRGB.
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        wgpu::Texture linearIn1 = applyColorSpaceConversion(inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearIn2 = applyColorSpaceConversion(in2Tex, /*srgbToLinear=*/true);
+        wgpu::Texture linearOutput = applyBlend(linearIn1, linearIn2, *blend);
+        outputTex = applyColorSpaceConversion(linearOutput, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyBlend(inputTex, in2Tex, *blend);
+      }
     } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
       const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
       const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
