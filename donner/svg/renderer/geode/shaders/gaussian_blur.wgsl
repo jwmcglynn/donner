@@ -1,18 +1,26 @@
-// Geode Gaussian-blur compute pipeline: two-pass separable Gaussian.
+// Geode Gaussian-blur compute pipeline: two-pass separable Gaussian, with an
+// optional box-blur mode used to build a 3-pass box approximation for larger
+// sigma (matching tiny-skia's GaussianBlur for parity).
 //
 // Pass 1 blurs horizontally (axis=0), pass 2 blurs vertically (axis=1).
 // Each pass reads from a texture_2d and writes to a texture_storage_2d.
 //
-// Kernel radius per pass = ceil(3 * stdDeviation). For stdDev >= 4 the
-// kernel width exceeds 25 — a future optimisation can swap in a three-box
-// approximation, but for the initial Phase 7 scaffolding the plain Gaussian
-// is sufficient and simpler to validate.
+// kernel_type == 0: discrete Gaussian, radius = ceil(3 * std_deviation).
+// kernel_type == 1: box blur, taps span [-box_left, box_right] inclusive.
+//                   Three sequential box passes per axis are mathematically
+//                   equivalent (within ~0.1 sigma) to a Gaussian for sigma>=2,
+//                   matching tiny-skia's effective extent (~2.82*sigma) instead
+//                   of the wider 3*sigma cutoff used by the pure Gaussian path.
 
 struct BlurParams {
   std_deviation: f32,
   axis: u32,       // 0 = horizontal, 1 = vertical
   edge_mode: u32,  // 0 = None (transparent), 1 = Duplicate (clamp), 2 = Wrap
-  _pad: u32,
+  kernel_type: u32,// 0 = Gaussian, 1 = Box
+  box_left: i32,   // box mode: number of samples to the negative side
+  box_right: i32,  // box mode: number of samples to the positive side
+  _pad0: u32,
+  _pad1: u32,
 }
 
 @group(0) @binding(0) var input_tex: texture_2d<f32>;
@@ -48,6 +56,20 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   let sigma = params.std_deviation;
+
+  // Box-blur mode: average samples in [-box_left, box_right].
+  if (params.kernel_type == 1u) {
+    var bsum = vec4f(0.0);
+    let bl = params.box_left;
+    let br = params.box_right;
+    for (var i: i32 = -bl; i <= br; i = i + 1) {
+      let off = select(vec2i(0, i), vec2i(i, 0), params.axis == 0u);
+      bsum = bsum + sampleEdge(coord + off, size);
+    }
+    let count = f32(bl + br + 1);
+    textureStore(output_tex, coord, bsum / count);
+    return;
+  }
 
   // stdDeviation == 0 → passthrough (no blur).
   if (sigma <= 0.0) {

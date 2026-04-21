@@ -281,8 +281,8 @@ donner_cc_test(
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base",
+        "//donner/base:gtest_timeout_main",
         "//donner/svg/parser",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 
@@ -291,8 +291,11 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "renderer_geode_golden_tests",
     # Software WebGPU (llvmpipe) rendering is slow in fastbuild; the Lion
-    # golden alone can exceed 300 s on aarch64 runners.
+    # golden alone can exceed 300 s on aarch64 runners. Cap explicitly at
+    # 900 s so a driver hang (e.g., Intel Arc + Mesa 25.2.8 Xe-KMD) gets
+    # killed in 15 min instead of rolling up to the default 3600 s.
     size = "large",
+    timeout = "long",
     dep = ":renderer_geode_golden_tests_impl",
     renderer_backend = "geode",
     testonly = 1,
@@ -309,15 +312,18 @@ donner_cc_test(
     }),
     deps = [
         "//donner/base",
+        "//donner/base:gtest_timeout_main",
         "//donner/css:core",
         "//donner/svg",
         "//donner/svg/components/filter:components",
+        "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/resources:image_resource",
-        "@com_google_gtest//:gtest_main",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ],
 )
 
@@ -326,8 +332,11 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "renderer_geode_tests",
     # Software WebGPU (llvmpipe) rendering is slow in fastbuild; give extra
-    # headroom for the full RendererGeode unit-test suite.
+    # headroom for the full RendererGeode unit-test suite. Cap explicitly
+    # at 900 s so a driver hang gets killed in 15 min instead of rolling
+    # up to the default 3600 s.
     size = "large",
+    timeout = "long",
     dep = ":renderer_geode_tests_impl",
     renderer_backend = "geode",
     testonly = 1,
@@ -377,7 +386,7 @@ donner_cc_test(
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
-        "@com_google_gtest//:gtest_main",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
@@ -392,6 +401,12 @@ donner_variant_cc_test(
     # actual pass-path runtime is still ~15 min, so a hang would still
     # show up.
     #
+    # An explicit `timeout = "long"` caps the effective per-variant
+    # wall-clock at 900 s so a GPU-driver hang on the Geode variant
+    # (Intel Arc + Mesa 25.2.8 Xe-KMD has a known WebGPU regression)
+    # is killed in 15 min instead of running out the 3600 s "enormous"
+    # default. 900 s still comfortably fits every legitimate run.
+    #
     # Product tiers (run on every PR):
     #   default_text - tiny-skia, filters, simple text (donner default)
     #   max          - tiny-skia, filters, full text   (donner-max)
@@ -401,6 +416,7 @@ donner_variant_cc_test(
     # feature-gated test selection to skip those categories. TODO: add
     # once the test harness supports config-aware test skipping.
     size = "enormous",
+    timeout = "long",
     dep = ":resvg_test_suite_impl",
     named_variants = [
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},

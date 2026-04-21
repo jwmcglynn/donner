@@ -9,6 +9,10 @@
 
 #include <cstdio>
 
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePipeline.h"
+
 namespace donner::geode {
 
 namespace {
@@ -32,7 +36,8 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
 
 /// PIMPL struct: holds the wgpu::Instance so its lifetime is tied to
 /// the GeodeDevice wrapper. Adapter/device/queue handles are stored
-/// directly on the outer class.
+/// directly on the outer class. In embedded mode, `instance` is null
+/// because the host owns the instance.
 struct GeodeDevice::Impl {
   wgpu::Instance instance;
 
@@ -53,12 +58,22 @@ struct GeodeDevice::Impl {
   // struct: two vec4f rows carrying the identity affine
   // `{(1,0,0,0), (0,1,0,0)}`.
   wgpu::Buffer identityInstanceTransformBuffer;
+
+  // Shared render / compute pipelines. Constructed once per GeodeDevice
+  // in `initSharedPipelines` — see the public `pipeline()` / … / `filterEngine()`
+  // accessors on GeodeDevice for the "why" behind sharing. These fields
+  // are at the bottom of Impl so they destruct before the wgpu::Device
+  // at the top of GeodeDevice (reverse-declaration order).
+  std::unique_ptr<GeodePipeline> pipeline;
+  std::unique_ptr<GeodeGradientPipeline> gradientPipeline;
+  std::unique_ptr<GeodeImagePipeline> imagePipeline;
+  /// Built lazily on first `maskPipeline()` access — see the header.
+  std::unique_ptr<GeodeMaskPipeline> maskPipeline;
+  std::unique_ptr<GeodeFilterEngine> filterEngine;
 };
 
 GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
 GeodeDevice::~GeodeDevice() = default;
-GeodeDevice::GeodeDevice(GeodeDevice&&) noexcept = default;
-GeodeDevice& GeodeDevice::operator=(GeodeDevice&&) noexcept = default;
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
@@ -219,22 +234,24 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   }
 
   {
-    // Clip-mask dummy: 1×1 R8Unorm with value 0xFF (= 1.0 coverage).
+    // Clip-mask dummy: 1×1 RGBA8Unorm with all channels 0xFF (= 1.0 coverage per
+    // sample lane in the alpha-coverage packed-mask path introduced by the
+    // Phase 3b clip-mask fix).
     wgpu::TextureDescriptor md = {};
     md.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMask"}};
     md.size = {1u, 1u, 1u};
-    md.format = wgpu::TextureFormat::R8Unorm;
+    md.format = wgpu::TextureFormat::RGBA8Unorm;
     md.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
     md.mipLevelCount = 1;
     md.sampleCount = 1;
     md.dimension = wgpu::TextureDimension::_2D;
     result->impl_->dummyClipMaskTexture = result->device_.createTexture(md);
 
-    const uint8_t mpixel[1] = {0xFF};
+    const uint8_t mpixel[4] = {0xFF, 0xFF, 0xFF, 0xFF};
     wgpu::TexelCopyTextureInfo mdst = {};
     mdst.texture = result->impl_->dummyClipMaskTexture;
     wgpu::TexelCopyBufferLayout mlayout = {};
-    mlayout.bytesPerRow = 1;
+    mlayout.bytesPerRow = 4;
     mlayout.rowsPerImage = 1;
     wgpu::Extent3D mextent = {1u, 1u, 1u};
     result->queue_.writeTexture(mdst, mpixel, sizeof(mpixel), mlayout, mextent);
@@ -266,6 +283,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
                                sizeof(identity));
   }
 
+  result->initSharedPipelines();
+
   return result;
 }
 
@@ -289,6 +308,98 @@ const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
 }
 const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
   return impl_->identityInstanceTransformBuffer;
+}
+
+GeodePipeline& GeodeDevice::pipeline() const {
+  return *impl_->pipeline;
+}
+GeodeGradientPipeline& GeodeDevice::gradientPipeline() const {
+  return *impl_->gradientPipeline;
+}
+GeodeImagePipeline& GeodeDevice::imagePipeline() const {
+  return *impl_->imagePipeline;
+}
+GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
+  if (!impl_->maskPipeline) {
+    // Lazy: most documents never hit the clip-path mask pass, and
+    // production WASM callers that never need it should not pay the
+    // pipeline-compile cost at startup.
+    impl_->maskPipeline =
+        std::make_unique<GeodeMaskPipeline>(device_, useAlphaCoverageAA_, sampleCount());
+  }
+  return *impl_->maskPipeline;
+}
+GeodeFilterEngine& GeodeDevice::filterEngine() const {
+  return *impl_->filterEngine;
+}
+
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
+  if (!config.device || !config.queue) {
+    std::fprintf(stderr, "[Geode] CreateFromExternal: null device or queue in config\n");
+    return nullptr;
+  }
+
+  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
+  result->external_ = true;
+  result->device_ = config.device;
+  result->queue_ = config.queue;
+  result->textureFormat_ = config.textureFormat;
+  // impl_->instance stays null — host owns the instance.
+
+  // Use the host-provided adapter for hardware workaround detection. When no
+  // adapter is supplied, skip detection — the host controls its own device.
+  if (config.adapter) {
+    result->adapter_ = config.adapter;
+    WGPUAdapterInfo info = {};
+    if (wgpuAdapterGetInfo(result->adapter_, &info) == WGPUStatus_Success) {
+      if (info.vendorID == 0x8086 && info.backendType == WGPUBackendType_Vulkan) {
+        result->useAlphaCoverageAA_ = true;
+        std::fprintf(stderr,
+                     "[Geode] Intel Arc + Vulkan detected (embedded); "
+                     "using alpha-coverage AA\n");
+      }
+      wgpuAdapterInfoFreeMembers(info);
+    }
+  }
+
+  result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
+
+  result->initSharedPipelines();
+
+  return result;
+}
+
+void GeodeDevice::initSharedPipelines() {
+  // Requires device_ / queue_ / textureFormat_ / useAlphaCoverageAA_ to
+  // be fully populated — `CreateHeadless` and `CreateFromExternal` both
+  // call this as the final step.
+  const wgpu::TextureFormat fmt = textureFormat_;
+  const uint32_t samples = sampleCount();
+  const bool alphaCoverage = useAlphaCoverageAA_;
+
+  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt, alphaCoverage, samples);
+  impl_->gradientPipeline =
+      std::make_unique<GeodeGradientPipeline>(device_, fmt, alphaCoverage, samples);
+  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt, samples);
+  // Mask pipeline is built on first `maskPipeline()` access — see header.
+  impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
+}
+
+void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {
+  if (buffer) {
+    pendingBuffers_.push_back(std::move(buffer));
+  }
+}
+
+void GeodeDevice::deferDestroy(wgpu::Texture texture) {
+  if (texture) {
+    pendingTextures_.push_back(std::move(texture));
+  }
+}
+
+void GeodeDevice::drainDeferredDestroys() {
+  pendingBuffers_.clear();
+  pendingTextures_.clear();
 }
 
 }  // namespace donner::geode

@@ -82,6 +82,23 @@ donner_cc_library(
     ],
 )
 
+# `gtest_main` replacement that aborts any single test case exceeding
+# `--donner_test_timeout_seconds=N` (or the `DONNER_TEST_TIMEOUT_SECONDS`
+# env var, default 30 s). Use in place of `@com_google_gtest//:gtest_main`
+# for test targets where a single hung test case could otherwise chew
+# through a 15-minute Bazel `test_timeout` (e.g., GPU-driver hangs on
+# the Geode backend under Intel Arc + Mesa 25.2.8 Xe-KMD).
+donner_cc_library(
+    name = "gtest_timeout_main",
+    testonly = 1,
+    srcs = ["tests/GtestTimeoutMain.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = 1,
+)
+
 filegroup(
     name = "base_tests_testdata",
     srcs = [

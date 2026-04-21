@@ -25,22 +25,35 @@ struct LightingParams {
   // feDistantLight
   azimuth_rad: f32,
   elevation_rad: f32,
-
   // fePointLight / feSpotLight position (pixel space)
   light_x: f32,
   light_y: f32,
   light_z: f32,
+  user_light_x: f32,
+  user_light_y: f32,
+  user_light_z: f32,
 
   // feSpotLight
   points_at_x: f32,
   points_at_y: f32,
   points_at_z: f32,
   spot_exponent: f32,
-  cos_cone_angle: f32,
-
-  _pad1: f32,
-  _pad2: f32,
-  _pad3: f32,
+  user_points_at_x: f32,
+  user_points_at_y: f32,
+  user_points_at_z: f32,
+  cone_angle_rad: f32,
+  pixel_to_user_0: f32,
+  pixel_to_user_1: f32,
+  pixel_to_user_2: f32,
+  pixel_to_user_3: f32,
+  pixel_to_user_4: f32,
+  pixel_to_user_5: f32,
+  has_shear: u32,
+  has_cone_angle: u32,
+  sample_min_x: i32,
+  sample_min_y: i32,
+  sample_max_x: i32,
+  sample_max_y: i32,
 }
 
 @group(0) @binding(0) var input_tex: texture_2d<f32>;
@@ -48,83 +61,123 @@ struct LightingParams {
 @group(0) @binding(2) var<storage, read> params: LightingParams;
 
 fn heightAt(p: vec2i, size: vec2i) -> f32 {
-  let clamped = clamp(p, vec2i(0), size - vec2i(1));
+  let clamped = clamp(p, vec2i(params.sample_min_x, params.sample_min_y),
+                      vec2i(params.sample_max_x, params.sample_max_y));
   return textureLoad(input_tex, clamped, 0).a;
+}
+
+fn safeNormalize(v: vec3f) -> vec3f {
+  let len_sq = dot(v, v);
+  if (len_sq <= 0.0) {
+    return vec3f(0.0);
+  }
+  return normalize(v);
+}
+
+fn svgPow(base: f32, exponent: f32) -> f32 {
+  if (exponent == 0.0) {
+    return 1.0;
+  }
+  return pow(base, exponent);
 }
 
 // Same normal computation as diffuse lighting — shared algorithm per the spec.
 fn computeNormal(coord: vec2i, size: vec2i) -> vec3f {
   let x = coord.x;
   let y = coord.y;
-  let w = size.x - 1;
-  let h = size.y - 1;
+  let minX = params.sample_min_x;
+  let minY = params.sample_min_y;
+  let maxX = params.sample_max_x;
+  let maxY = params.sample_max_y;
   let ss = params.surface_scale;
 
   var nx: f32;
   var ny: f32;
 
-  if (x == 0) {
-    if (y == 0) {
-      nx = ss * (-2.0 * heightAt(vec2i(0, 0), size) + 2.0 * heightAt(vec2i(1, 0), size)
-                 - heightAt(vec2i(0, 1), size) + heightAt(vec2i(1, 1), size)) / 3.0;
-      ny = ss * (-2.0 * heightAt(vec2i(0, 0), size) - heightAt(vec2i(1, 0), size)
-                 + 2.0 * heightAt(vec2i(0, 1), size) + heightAt(vec2i(1, 1), size)) / 3.0;
-    } else if (y == h) {
-      nx = ss * (-heightAt(vec2i(0, y-1), size) + heightAt(vec2i(1, y-1), size)
-                 - 2.0 * heightAt(vec2i(0, y), size) + 2.0 * heightAt(vec2i(1, y), size)) / 3.0;
-      ny = ss * (heightAt(vec2i(0, y-1), size) + heightAt(vec2i(1, y-1), size)
-                 - 2.0 * heightAt(vec2i(0, y), size) - 2.0 * heightAt(vec2i(1, y), size)) / 3.0;
+  if (x == minX) {
+    if (y == minY) {
+      let center = heightAt(vec2i(0, 0), size);
+      let right = heightAt(vec2i(1, 0), size);
+      let bottom = heightAt(vec2i(0, 1), size);
+      let bottomRight = heightAt(vec2i(1, 1), size);
+      nx = -ss * (2.0 * (right - center) + (bottomRight - bottom)) / 3.0;
+      ny = -ss * (2.0 * (bottom - center) + (bottomRight - right)) / 3.0;
+    } else if (y == maxY) {
+      let top = heightAt(vec2i(0, y - 1), size);
+      let topRight = heightAt(vec2i(1, y - 1), size);
+      let center = heightAt(vec2i(0, y), size);
+      let right = heightAt(vec2i(1, y), size);
+      nx = -ss * (2.0 * (right - center) + (topRight - top)) / 3.0;
+      ny = -ss * (2.0 * (center - top) + (right - topRight)) / 3.0;
     } else {
-      nx = ss * (-heightAt(vec2i(0, y-1), size) + heightAt(vec2i(1, y-1), size)
-                 - 2.0 * heightAt(vec2i(0, y), size) + 2.0 * heightAt(vec2i(1, y), size)
-                 - heightAt(vec2i(0, y+1), size) + heightAt(vec2i(1, y+1), size)) / 4.0;
-      ny = ss * (-heightAt(vec2i(0, y-1), size) - heightAt(vec2i(1, y-1), size)
-                 + heightAt(vec2i(0, y+1), size) + heightAt(vec2i(1, y+1), size)) / 4.0;
+      let top = heightAt(vec2i(0, y - 1), size);
+      let topRight = heightAt(vec2i(1, y - 1), size);
+      let center = heightAt(vec2i(0, y), size);
+      let right = heightAt(vec2i(1, y), size);
+      let bottom = heightAt(vec2i(0, y + 1), size);
+      let bottomRight = heightAt(vec2i(1, y + 1), size);
+      nx = -ss * (2.0 * (right - center) + (topRight - top) + (bottomRight - bottom)) / 4.0;
+      ny = -ss * (2.0 * (bottom - top) + (bottomRight - topRight)) / 4.0;
     }
-  } else if (x == w) {
-    if (y == 0) {
-      nx = ss * (-2.0 * heightAt(vec2i(x-1, 0), size) + 2.0 * heightAt(vec2i(x, 0), size)
-                 - heightAt(vec2i(x-1, 1), size) + heightAt(vec2i(x, 1), size)) / 3.0;
-      ny = ss * (-heightAt(vec2i(x-1, 0), size) - 2.0 * heightAt(vec2i(x, 0), size)
-                 + heightAt(vec2i(x-1, 1), size) + 2.0 * heightAt(vec2i(x, 1), size)) / 3.0;
-    } else if (y == h) {
-      nx = ss * (-heightAt(vec2i(x-1, y-1), size) + heightAt(vec2i(x, y-1), size)
-                 - 2.0 * heightAt(vec2i(x-1, y), size) + 2.0 * heightAt(vec2i(x, y), size)) / 3.0;
-      ny = ss * (heightAt(vec2i(x-1, y-1), size) + heightAt(vec2i(x, y-1), size)
-                 - 2.0 * heightAt(vec2i(x-1, y), size) - 2.0 * heightAt(vec2i(x, y), size)) / 3.0;
+  } else if (x == maxX) {
+    if (y == minY) {
+      let left = heightAt(vec2i(x - 1, 0), size);
+      let center = heightAt(vec2i(x, 0), size);
+      let bottomLeft = heightAt(vec2i(x - 1, 1), size);
+      let bottom = heightAt(vec2i(x, 1), size);
+      nx = -ss * (2.0 * (center - left) + (bottom - bottomLeft)) / 3.0;
+      ny = -ss * (2.0 * (bottom - center) + (bottomLeft - left)) / 3.0;
+    } else if (y == maxY) {
+      let topLeft = heightAt(vec2i(x - 1, y - 1), size);
+      let top = heightAt(vec2i(x, y - 1), size);
+      let left = heightAt(vec2i(x - 1, y), size);
+      let center = heightAt(vec2i(x, y), size);
+      nx = -ss * (2.0 * (center - left) + (top - topLeft)) / 3.0;
+      ny = -ss * (2.0 * (center - top) + (left - topLeft)) / 3.0;
     } else {
-      nx = ss * (-heightAt(vec2i(x-1, y-1), size) + heightAt(vec2i(x, y-1), size)
-                 - 2.0 * heightAt(vec2i(x-1, y), size) + 2.0 * heightAt(vec2i(x, y), size)
-                 - heightAt(vec2i(x-1, y+1), size) + heightAt(vec2i(x, y+1), size)) / 4.0;
-      ny = ss * (heightAt(vec2i(x-1, y-1), size) - heightAt(vec2i(x, y-1), size)
-                 + heightAt(vec2i(x-1, y+1), size) - heightAt(vec2i(x, y+1), size)) / 4.0;
+      let topLeft = heightAt(vec2i(x - 1, y - 1), size);
+      let top = heightAt(vec2i(x, y - 1), size);
+      let left = heightAt(vec2i(x - 1, y), size);
+      let center = heightAt(vec2i(x, y), size);
+      let bottomLeft = heightAt(vec2i(x - 1, y + 1), size);
+      let bottom = heightAt(vec2i(x, y + 1), size);
+      nx = -ss * (2.0 * (center - left) + (top - topLeft) + (bottom - bottomLeft)) / 4.0;
+      ny = -ss * (2.0 * (bottom - top) + (bottomLeft - topLeft)) / 4.0;
     }
   } else {
-    if (y == 0) {
-      nx = ss * (-heightAt(vec2i(x-1, 0), size) + heightAt(vec2i(x+1, 0), size)
-                 - heightAt(vec2i(x-1, 1), size) + heightAt(vec2i(x+1, 1), size)) / 4.0;
-      ny = ss * (-2.0 * heightAt(vec2i(x-1, 0), size) - 2.0 * heightAt(vec2i(x+1, 0), size)
-                 + heightAt(vec2i(x-1, 1), size)
-                 + 2.0 * heightAt(vec2i(x, 1), size)
-                 + heightAt(vec2i(x+1, 1), size)) / 4.0;
-    } else if (y == h) {
-      nx = ss * (-heightAt(vec2i(x-1, y-1), size) + heightAt(vec2i(x+1, y-1), size)
-                 - heightAt(vec2i(x-1, y), size) + heightAt(vec2i(x+1, y), size)) / 4.0;
-      ny = ss * (-heightAt(vec2i(x-1, y-1), size)
-                 - 2.0 * heightAt(vec2i(x, y-1), size)
-                 - heightAt(vec2i(x+1, y-1), size)
-                 + 2.0 * heightAt(vec2i(x-1, y), size)
-                 + 2.0 * heightAt(vec2i(x+1, y), size)) / 4.0;
+    if (y == minY) {
+      let left = heightAt(vec2i(x - 1, 0), size);
+      let center = heightAt(vec2i(x, 0), size);
+      let right = heightAt(vec2i(x + 1, 0), size);
+      let bottomLeft = heightAt(vec2i(x - 1, 1), size);
+      let bottom = heightAt(vec2i(x, 1), size);
+      let bottomRight = heightAt(vec2i(x + 1, 1), size);
+      nx = -ss * (2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
+      ny = -ss * (2.0 * (bottom - center) + (bottomRight - right) + (bottomLeft - left)) / 4.0;
+    } else if (y == maxY) {
+      let topLeft = heightAt(vec2i(x - 1, y - 1), size);
+      let top = heightAt(vec2i(x, y - 1), size);
+      let topRight = heightAt(vec2i(x + 1, y - 1), size);
+      let left = heightAt(vec2i(x - 1, y), size);
+      let center = heightAt(vec2i(x, y), size);
+      let right = heightAt(vec2i(x + 1, y), size);
+      nx = -ss * (2.0 * (right - left) + (topRight - topLeft)) / 4.0;
+      ny = -ss * (2.0 * (center - top) + (right - topRight) + (left - topLeft)) / 4.0;
     } else {
-      nx = ss * (-heightAt(vec2i(x-1, y-1), size) + heightAt(vec2i(x+1, y-1), size)
-                 - 2.0 * heightAt(vec2i(x-1, y), size) + 2.0 * heightAt(vec2i(x+1, y), size)
-                 - heightAt(vec2i(x-1, y+1), size) + heightAt(vec2i(x+1, y+1), size)) / 4.0;
-      ny = ss * (-heightAt(vec2i(x-1, y-1), size) - 2.0 * heightAt(vec2i(x, y-1), size) - heightAt(vec2i(x+1, y-1), size)
-                 + heightAt(vec2i(x-1, y+1), size) + 2.0 * heightAt(vec2i(x, y+1), size) + heightAt(vec2i(x+1, y+1), size)) / 4.0;
+      let topLeft = heightAt(vec2i(x - 1, y - 1), size);
+      let top = heightAt(vec2i(x, y - 1), size);
+      let topRight = heightAt(vec2i(x + 1, y - 1), size);
+      let left = heightAt(vec2i(x - 1, y), size);
+      let right = heightAt(vec2i(x + 1, y), size);
+      let bottomLeft = heightAt(vec2i(x - 1, y + 1), size);
+      let bottom = heightAt(vec2i(x, y + 1), size);
+      let bottomRight = heightAt(vec2i(x + 1, y + 1), size);
+      nx = -ss * ((topRight - topLeft) + 2.0 * (right - left) + (bottomRight - bottomLeft)) / 4.0;
+      ny = -ss * ((bottomLeft - topLeft) + 2.0 * (bottom - top) + (bottomRight - topRight)) / 4.0;
     }
   }
 
-  return normalize(vec3f(-nx, -ny, 1.0));
+  return safeNormalize(vec3f(nx, ny, 1.0));
 }
 
 fn computeLightDirection(coord: vec2i, surfaceZ: f32) -> vec3f {
@@ -133,32 +186,60 @@ fn computeLightDirection(coord: vec2i, surfaceZ: f32) -> vec3f {
     let sinAz = sin(params.azimuth_rad);
     let cosEl = cos(params.elevation_rad);
     let sinEl = sin(params.elevation_rad);
-    return normalize(vec3f(cosAz * cosEl, sinAz * cosEl, sinEl));
+    return safeNormalize(vec3f(cosAz * cosEl, sinAz * cosEl, sinEl));
   }
 
   let pos = vec3f(f32(coord.x), f32(coord.y), surfaceZ);
   let lightPos = vec3f(params.light_x, params.light_y, params.light_z);
-  return normalize(lightPos - pos);
+  return safeNormalize(lightPos - pos);
 }
 
-fn spotLightFactor(lightDir: vec3f) -> f32 {
+fn spotLightFactor(coord: vec2i, alpha: f32, lightDir: vec3f) -> f32 {
   if (params.light_type != 2u) {
     return 1.0;
   }
 
-  let spotTarget = vec3f(params.points_at_x, params.points_at_y, params.points_at_z);
-  let lightPos = vec3f(params.light_x, params.light_y, params.light_z);
-  let spotDir = normalize(spotTarget - lightPos);
-  let cosAngle = dot(-lightDir, spotDir);
-
-  if (params.cos_cone_angle > -1.5 && cosAngle < params.cos_cone_angle) {
+  let deviceSpotDir = safeNormalize(vec3f(params.points_at_x - params.light_x,
+                                          params.points_at_y - params.light_y,
+                                          params.points_at_z - params.light_z));
+  let cosAngleDevice = dot(-lightDir, deviceSpotDir);
+  if (cosAngleDevice <= 0.0) {
     return 0.0;
   }
 
-  if (cosAngle <= 0.0) {
-    return 0.0;
+  var cosAngle = cosAngleDevice;
+  if (params.has_shear != 0u) {
+    let ux = params.pixel_to_user_0 * f32(coord.x) + params.pixel_to_user_1 * f32(coord.y) +
+             params.pixel_to_user_2;
+    let uy = params.pixel_to_user_3 * f32(coord.x) + params.pixel_to_user_4 * f32(coord.y) +
+             params.pixel_to_user_5;
+    let uz = params.surface_scale * alpha;
+
+    let userLightToSurface = safeNormalize(vec3f(ux - params.user_light_x, uy - params.user_light_y,
+                                                 uz - params.user_light_z));
+    let userSpotDir = safeNormalize(vec3f(params.user_points_at_x - params.user_light_x,
+                                          params.user_points_at_y - params.user_light_y,
+                                          params.user_points_at_z - params.user_light_z));
+    cosAngle = dot(userLightToSurface, userSpotDir);
+    if (cosAngle <= 0.0) {
+      return 0.0;
+    }
   }
-  return pow(cosAngle, params.spot_exponent);
+
+  var coneFactor = 1.0;
+  if (params.has_cone_angle != 0u) {
+    let cosOuter = cos(params.cone_angle_rad);
+    let cosInner = cosOuter + 0.016;
+    if (cosAngle < cosOuter) {
+      return 0.0;
+    }
+    if (cosAngle < cosInner) {
+      coneFactor = (cosAngle - cosOuter) / 0.016;
+    }
+  }
+
+  let exponent = select(1.0, params.spot_exponent, params.spot_exponent > 0.0);
+  return pow(cosAngle, exponent) * coneFactor;
 }
 
 @compute @workgroup_size(8, 8)
@@ -169,20 +250,26 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (any(coord >= size)) {
     return;
   }
+  if (coord.x < params.sample_min_x || coord.x > params.sample_max_x ||
+      coord.y < params.sample_min_y || coord.y > params.sample_max_y) {
+    textureStore(output_tex, coord, vec4f(0.0));
+    return;
+  }
 
   let normal = computeNormal(coord, size);
-  let surfaceZ = params.surface_scale * heightAt(coord, size);
+  let alpha = heightAt(coord, size);
+  let surfaceZ = params.surface_scale * alpha;
   let L = computeLightDirection(coord, surfaceZ);
 
-  let spot = spotLightFactor(L);
+  let spot = spotLightFactor(coord, alpha, L);
 
   // Eye vector is (0,0,1) per the spec.
   let eye = vec3f(0.0, 0.0, 1.0);
-  let H = normalize(L + eye);
+  let H = safeNormalize(L + eye);
 
   let NdotH = max(dot(normal, H), 0.0);
   let ks = params.specular_constant;
-  let intensity = ks * pow(NdotH, params.specular_exponent) * spot;
+  let intensity = ks * svgPow(NdotH, params.specular_exponent) * spot;
 
   let r = clamp(intensity * params.light_r, 0.0, 1.0);
   let g = clamp(intensity * params.light_g, 0.0, 1.0);

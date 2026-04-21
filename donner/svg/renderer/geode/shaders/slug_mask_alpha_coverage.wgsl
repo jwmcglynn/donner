@@ -44,6 +44,13 @@ struct Band {
 @group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(4) var clipMaskSampler: sampler;
 
+fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
+  let dims = vec2i(textureDimensions(clipMaskTexture));
+  let texel = clamp(vec2i(round(pixel_center - vec2f(0.5))), vec2i(0), dims - vec2i(1));
+  let sample = textureLoad(clipMaskTexture, texel, 0);
+  return clamp((sample.r + sample.g + sample.b + sample.a) * 0.25, 0.0, 1.0);
+}
+
 // ============================================================================
 // Vertex stage (identical to slug_mask.wgsl)
 // ============================================================================
@@ -208,21 +215,22 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     discard;
   }
 
-  // Convert the 4-bit sample mask into a fractional coverage value.
-  let coverage = f32(countOneBits(mask)) / 4.0;
-
   var clipCoverage: f32 = 1.0;
   if (uniforms.hasClipMask != 0u) {
-    let mask_uv = pixel_center / uniforms.viewport;
-    clipCoverage = clamp(textureSample(clipMaskTexture, clipMaskSampler, mask_uv).r,
-                         0.0, 1.0);
+    clipCoverage = clip_mask_coverage(pixel_center);
     if (clipCoverage <= 0.0) {
       discard;
     }
   }
 
   var out: FragOutput;
-  // Red-channel coverage, scaled by nested clip mask and sample coverage.
-  out.color = vec4f(clipCoverage * coverage, 0.0, 0.0, 1.0);
+  // Pack one subpixel sample per channel so Max blending unions them
+  // independently across overlapping band quads.
+  out.color = vec4f(
+    select(0.0, clipCoverage, (mask & 0x1u) != 0u),
+    select(0.0, clipCoverage, (mask & 0x2u) != 0u),
+    select(0.0, clipCoverage, (mask & 0x4u) != 0u),
+    select(0.0, clipCoverage, (mask & 0x8u) != 0u),
+  );
   return out;
 }

@@ -201,6 +201,15 @@ codebase consistent and portable.
 - **Avoid `long long`**: use fixed-width integers such as `std::int64_t` or `std::uint64_t`.
 - **Avoid `std::aligned_storage`/`std::aligned_union`**: prefer `alignas(T)` on a byte buffer for
   inline storage.
+- **No new `wgpu::Device::createRenderPipeline` / `createComputePipeline` calls**: wgpu-native
+  retains every pipeline it ever constructs internally — `wgpuDevicePoll(wait=true)` does not
+  drain the pending-destroy queue for pipelines. Per-frame or per-renderer construction silently
+  leaks ~100 KB each until the driver's `maxMemoryAllocationCount` trips (Mesa lavapipe panics on
+  the next texture allocation) or the process hangs progressively (Mesa llvmpipe). See issue #575
+  for the incident history. All Geode pipelines must be owned by `GeodeDevice` and shared across
+  renderers; `GeodePipeline.cc`, `GeodeImagePipeline.cc`, and `GeodeFilterEngine.cc` are the only
+  files that may call these APIs. If you need a new pipeline class, add ownership to
+  `GeodeDevice::Impl` and expose it via a `GeodeDevice` accessor.
 
 ## Tests
 

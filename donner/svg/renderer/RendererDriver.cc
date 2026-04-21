@@ -4,6 +4,8 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Length.h"
@@ -39,6 +41,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
@@ -788,9 +791,31 @@ void RendererDriver::draw(SVGDocument& document) {
   viewport.devicePixelRatio = 1.0;
 
   renderer_.beginFrame(viewport);
-  RenderingInstanceView view(document.registry());
+
+  // Snapshot the entities we intend to traverse BEFORE the filter-graph pre-pass, so that shadow
+  // entities created by feImage pre-rendering don't get picked up by the main traversal view.
+  // `beginFrame` must come first — some callers (notably the RendererDriver unit tests) populate
+  // the render tree inside a `beginFrame` hook.
+  std::vector<Entity> mainEntities;
+  {
+    RenderingInstanceView snapshot(document.registry());
+    while (!snapshot.done()) {
+      mainEntities.push_back(snapshot.currentEntity());
+      snapshot.advance();
+    }
+  }
+
+  // Pre-pass: resolve + pre-render feImage fragments, caching per-entity. Must run before the
+  // main traverse so the main view doesn't observe the storage mutation that
+  // `createFeImageShadowTree` performs (it emplaces new rendering instances and sorts the global
+  // pool).
+  prepareFilterGraphs(document.registry(), mainEntities);
+
+  RenderingInstanceView view(document.registry(), mainEntities);
   traverse(view, document.registry());
   renderer_.endFrame();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
 }
 
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
@@ -801,7 +826,27 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
   renderer_.beginFrame(viewport);
 
-  RenderingInstanceView view(registry);
+  // Snapshot the entity slice [firstEntity, lastEntity] and pre-resolve filter graphs before the
+  // main traversal, for the same reason as `draw()`: `preRenderFeImageFragments` mutates
+  // `RenderingInstanceComponent` storage (emplace + sort inside `createFeImageShadowTree`), which
+  // would invalidate a live-iterating view.
+  std::vector<Entity> rangeEntities;
+  {
+    RenderingInstanceView scanView(registry);
+    while (!scanView.done() && scanView.currentEntity() != firstEntity) {
+      scanView.advance();
+    }
+    bool reachedLast = false;
+    while (!scanView.done() && !reachedLast) {
+      reachedLast = (scanView.currentEntity() == lastEntity);
+      rangeEntities.push_back(scanView.currentEntity());
+      scanView.advance();
+    }
+  }
+
+  prepareFilterGraphs(registry, rangeEntities);
+
+  RenderingInstanceView view(registry, rangeEntities);
 
   // Advance to the first entity.
   while (!view.done() && view.currentEntity() != firstEntity) {
@@ -849,35 +894,10 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Box2d filterViewBox =
-        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
-    const double filterFontSizePx =
-        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
-    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
-
-    std::optional<components::FilterGraph> filterGraph =
-        instance.resolvedFilter.has_value()
-            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
-                                 style.properties->color.getRequired().rgba(), filterViewBox,
-                                 filterFontMetrics)
-            : std::nullopt;
-    const std::optional<Box2d> filterRegion =
-        instance.resolvedFilter.has_value()
-            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
-            : std::nullopt;
-    if (filterGraph.has_value()) {
-      filterGraph->filterRegion = filterRegion;
-      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-        filterGraph->elementBoundingBox =
-            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
-      }
-      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
-        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
-                                                 renderingSize_.y / filterViewBox.height());
-      }
-    }
-    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    // Filter graph / region already resolved in `prepareFilterGraphs` above.
+    const components::FilterGraph* preparedGraph = preparedFilterGraphFor(entity);
+    const std::optional<Box2d> filterRegion = preparedFilterRegionFor(entity);
+    const bool hasFilterLayer = preparedGraph != nullptr && !preparedGraph->empty();
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
@@ -897,9 +917,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     }
 
     if (hasFilterLayer) {
-      preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
-      renderer_.pushFilterLayer(*filterGraph, filterRegion);
+      renderer_.pushFilterLayer(*preparedGraph, filterRegion);
     }
 
     if (const auto* fillRef =
@@ -1018,6 +1036,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
 
   renderer_.endFrame();
   surfaceFromCanvasTransform_ = Transform2d();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
 }
 
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
@@ -1216,6 +1236,76 @@ RendererBitmap RendererDriver::takeSnapshot() const {
   return renderer_.takeSnapshot();
 }
 
+const components::FilterGraph* RendererDriver::preparedFilterGraphFor(Entity entity) const {
+  if (const auto it = preparedFilterGraphs_.find(entity); it != preparedFilterGraphs_.end()) {
+    return &it->second;
+  }
+  return nullptr;
+}
+
+std::optional<Box2d> RendererDriver::preparedFilterRegionFor(Entity entity) const {
+  if (const auto it = preparedFilterRegions_.find(entity); it != preparedFilterRegions_.end()) {
+    return it->second;
+  }
+  return std::nullopt;
+}
+
+void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
+  // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
+  // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
+  // Each iteration re-reads the component from storage via `storage.get(entity)`, so references
+  // are re-bound after any previous iteration's mutation.
+  auto& storage = registry.storage<components::RenderingInstanceComponent>();
+  for (const Entity entity : entities) {
+    const auto* instance = storage.contains(entity) ? &storage.get(entity) : nullptr;
+    if (!instance || !instance->resolvedFilter.has_value()) {
+      continue;
+    }
+    const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
+    if (!style.properties.has_value()) {
+      continue;
+    }
+
+    const Box2d filterViewBox =
+        components::LayoutSystem().getViewBox(instance->dataHandle(registry));
+    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
+    const double filterFontSizePx =
+        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
+
+    std::optional<components::FilterGraph> filterGraph = resolveFilterGraph(
+        registry, instance->resolvedFilter.value(), style.properties->color.getRequired().rgba(),
+        filterViewBox, filterFontMetrics);
+    const std::optional<Box2d> filterRegion =
+        computeFilterRegion(registry, instance->resolvedFilter.value(), *instance);
+
+    if (filterGraph.has_value()) {
+      filterGraph->filterRegion = filterRegion;
+      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+        filterGraph->elementBoundingBox =
+            components::ShapeSystem().getShapeBounds(instance->dataHandle(registry));
+      }
+      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
+        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
+                                                 renderingSize_.y / filterViewBox.height());
+      }
+
+      if (!filterGraph->empty()) {
+        // These calls may mutate `RenderingInstanceComponent` storage (shadow-tree creation +
+        // global sort inside `createFeImageShadowTree`). We do NOT hold the `instance` reference
+        // across them — the next iteration of this loop re-fetches via `storage.get(entity)`.
+        preRenderSvgFeImages(*filterGraph);
+        preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
+      }
+    }
+
+    preparedFilterRegions_[entity] = filterRegion;
+    if (filterGraph.has_value()) {
+      preparedFilterGraphs_[entity] = std::move(*filterGraph);
+    }
+  }
+}
+
 void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
   while (!view.done()) {
     const components::RenderingInstanceComponent& instance = view.get();
@@ -1259,38 +1349,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Box2d filterViewBox =
-        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
-    const double filterFontSizePx =
-        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
-    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
-
-    std::optional<components::FilterGraph> filterGraph =
-        instance.resolvedFilter.has_value()
-            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
-                                 style.properties->color.getRequired().rgba(), filterViewBox,
-                                 filterFontMetrics)
-            : std::nullopt;
-    const std::optional<Box2d> filterRegion =
-        instance.resolvedFilter.has_value()
-            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
-            : std::nullopt;
-    if (filterGraph.has_value()) {
-      filterGraph->filterRegion = filterRegion;
-      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-        filterGraph->elementBoundingBox =
-            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
-      }
-      // Compute the user-space to pixel-space scale factor from the viewBox and canvas dimensions.
-      // Lighting filters need this to transform light positions from SVG attribute values to the
-      // pixel-space pixmap coordinates.
-      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
-        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
-                                                 renderingSize_.y / filterViewBox.height());
-      }
-    }
-    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    // Filter graph and region were resolved (and any feImage fragments pre-rendered) by
+    // `prepareFilterGraphs` before the traverse started. Look them up from the cache rather than
+    // mutating storage mid-iteration.
+    const components::FilterGraph* preparedGraph = preparedFilterGraphFor(entity);
+    const std::optional<Box2d> filterRegion = preparedFilterRegionFor(entity);
+    const bool hasFilterLayer = preparedGraph != nullptr && !preparedGraph->empty();
     // Per SVG spec, an empty or invalid filter reference makes the element invisible.
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
@@ -1315,9 +1379,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
 
     if (hasFilterLayer) {
-      preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
-      renderer_.pushFilterLayer(*filterGraph, filterRegion);
+      renderer_.pushFilterLayer(*preparedGraph, filterRegion);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -1568,35 +1630,11 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       renderer_.pushIsolatedLayer(opacity, blendMode);
     }
 
-    const Box2d filterViewBox =
-        components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-    const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
-    const double filterFontSizePx =
-        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
-    const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
-
-    std::optional<components::FilterGraph> filterGraph =
-        instance.resolvedFilter.has_value()
-            ? resolveFilterGraph(registry, instance.resolvedFilter.value(),
-                                 style.properties->color.getRequired().rgba(), filterViewBox,
-                                 filterFontMetrics)
-            : std::nullopt;
-    const std::optional<Box2d> filterRegion =
-        instance.resolvedFilter.has_value()
-            ? computeFilterRegion(registry, instance.resolvedFilter.value(), instance)
-            : std::nullopt;
-    if (filterGraph.has_value()) {
-      filterGraph->filterRegion = filterRegion;
-      if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
-        filterGraph->elementBoundingBox =
-            components::ShapeSystem().getShapeBounds(instance.dataHandle(registry));
-      }
-      if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
-        filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
-                                                 renderingSize_.y / filterViewBox.height());
-      }
-    }
-    const bool hasFilterLayer = filterGraph.has_value() && !filterGraph->empty();
+    // Filter graph / region are cached by `prepareFilterGraphs` before traversal. See the
+    // matching comment in `traverse()`.
+    const components::FilterGraph* preparedGraph = preparedFilterGraphFor(entity);
+    const std::optional<Box2d> filterRegion = preparedFilterRegionFor(entity);
+    const bool hasFilterLayer = preparedGraph != nullptr && !preparedGraph->empty();
     const bool filterHidesElement = instance.resolvedFilter.has_value() && !hasFilterLayer;
 
     int maskDepth = 0;
@@ -1613,9 +1651,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     if (hasFilterLayer) {
-      preRenderSvgFeImages(*filterGraph);
-      preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
-      renderer_.pushFilterLayer(*filterGraph, filterRegion);
+      renderer_.pushFilterLayer(*preparedGraph, filterRegion);
     }
 
     // Render pattern subtrees before drawing so the pattern shader is available.
@@ -2381,8 +2417,29 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
       imageNode->fragmentRegionTopLeft = Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
     }
 
+    // Snapshot the entity slice [firstEntity, lastEntity] that the sub-driver is about to render,
+    // then pre-resolve + pre-render any nested filter graphs on those entities before handing the
+    // slice to traverseRange. This prevents the sub-driver from mutating storage mid-iteration
+    // (which could happen for chained feImage references — a shadow entity whose own filter also
+    // references another fragment).
+    std::vector<Entity> subEntities;
     {
-      RenderingInstanceView subView(registry);
+      RenderingInstanceView scanView(registry);
+      while (!scanView.done() && scanView.currentEntity() != firstEntity) {
+        scanView.advance();
+      }
+      bool reachedLast = false;
+      while (!scanView.done() && !reachedLast) {
+        reachedLast = (scanView.currentEntity() == lastEntity);
+        subEntities.push_back(scanView.currentEntity());
+        scanView.advance();
+      }
+    }
+
+    subDriver.prepareFilterGraphs(registry, subEntities);
+
+    {
+      RenderingInstanceView subView(registry, subEntities);
       subDriver.traverseRange(subView, registry, firstEntity, lastEntity);
     }
 

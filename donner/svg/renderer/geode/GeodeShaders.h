@@ -46,7 +46,7 @@ wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
  * Compile the path-clip mask shader for the given device.
  *
  * Same band/curve encoding as @ref createSlugFillShader but the fragment
- * stage writes a single-channel coverage value into an R8Unorm target.
+ * stage writes clip coverage into an RGBA8Unorm target.
  * The uniform layout is reduced to just the mvp matrix, viewport size,
  * and fill rule — no paint mode, no pattern, no clip polygon. Used by
  * the Phase 3b path-clipping pipeline to materialise a per-pixel clip
@@ -341,5 +341,103 @@ wgpu::ShaderModule createFilterDiffuseLightingShader(const wgpu::Device& device)
  *   failed (errors go to the device's uncaptured error callback).
  */
 wgpu::ShaderModule createFilterSpecularLightingShader(const wgpu::Device& device);
+
+/**
+ * Compile the feDropShadow compose compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_drop_shadow.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader takes the original source and its pre-blurred counterpart and
+ * produces `source over flood-tinted-offset-blur`, implementing the
+ * compose-step of feDropShadow. The blur itself is run through the existing
+ * Gaussian blur pipeline before this shader executes.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var in1_tex: texture_2d<f32>;`   // Source
+ * - `@group(0) @binding(1) var in2_tex: texture_2d<f32>;`   // Blurred source
+ * - `@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(3) var<uniform> params: DropShadowParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterDropShadowShader(const wgpu::Device& device);
+
+/**
+ * Compile the feImage compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_image.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader bilinearly samples a premultiplied-alpha image through a 2×3
+ * image-from-output transform, producing transparent black outside the
+ * image bounds. Covers the external-raster and simple in-document fragment
+ * reference cases where the caller supplies the image pixels and the
+ * placement transform.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var image_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: ImageParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device);
+
+/**
+ * Compile the feTile compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_tile.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader tiles an input subregion across the entire output texture
+ * with modular (wraparound) sampling.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: TileParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterTileShader(const wgpu::Device& device);
+
+/**
+ * Compile the per-primitive subregion clipping compute shader.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_subregion_clip.wgsl` via the `embed_resources()` Bazel rule.
+ * The shader transforms each pixel center to user space via an inverse CTM
+ * and zeroes pixels outside the user-space subregion rectangle. Used after
+ * each filter primitive dispatch when the node has x/y/width/height overrides
+ * or when a non-axis-aligned ancestor transform requires rotation-aware clipping.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: SubregionClipParams;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterSubregionClipShader(const wgpu::Device& device);
+
+/**
+ * Compile the sRGB↔linearRGB color space conversion compute shader.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/filter_color_space_convert.wgsl` via the `embed_resources()` Bazel
+ * rule. The shader converts premultiplied sRGB textures to premultiplied linear
+ * (or vice-versa) to implement `color-interpolation-filters: linearRGB`.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ * - `@group(0) @binding(2) var<uniform> params: Params;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createFilterColorSpaceConvertShader(const wgpu::Device& device);
 
 }  // namespace donner::geode

@@ -81,6 +81,38 @@ donner_cc_binary(
     ],
 )
 
+# --- Geode embedded-mode demo (linux/macos, --config=geode only) ---
+#
+# Minimal GLFW host app that wraps Geode's embedding API and renders an SVG
+# into the window's swap-chain texture every frame. Gated behind the
+# `geode_enabled` flag (see //donner/svg/renderer/geode:BUILD.bazel) so the
+# default build does not pull in wgpu-native.
+donner_cc_binary(
+    name = "geode_embed",
+    srcs = [
+        "geode_embed.cc",
+        "geode_embed_surface.h",
+    ] + select({
+        "@platforms//os:macos": ["geode_embed_surface_macos.mm"],
+        "//conditions:default": ["geode_embed_surface_linux.cc"],
+    }),
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//:donner",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "@glfw",
+    ],
+)
+
 # --- Render test ---
 donner_cc_binary(
     name = "render_test",

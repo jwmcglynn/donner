@@ -2,8 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
@@ -13,15 +16,28 @@
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep — provides UnpremultiplyRgba
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/resources/ImageResource.h"
+#include "tiny_skia/Pixmap.h"
+#include "tiny_skia/filter/Lighting.h"
 
 namespace donner::svg {
 namespace {
 
 constexpr double kViewportSize = 64.0;
+
+struct BitmapDiffStats {
+  int differingChannels = 0;
+  int maxChannelDiff = 0;
+  int firstDiffX = -1;
+  int firstDiffY = -1;
+  int firstDiffChannel = -1;
+  uint8_t actualValue = 0;
+  uint8_t expectedValue = 0;
+};
 
 /// Build a `PaintParams` whose fill is the given solid color.
 PaintParams solidFill(const css::RGBA& rgba) {
@@ -60,6 +76,165 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
           bitmap.pixels[off + 3]};
 }
 
+BitmapDiffStats DiffBitmapAgainstStraightRgba(const RendererBitmap& actual,
+                                              std::span<const uint8_t> expected, int tolerance = 1,
+                                              int inset = 0) {
+  BitmapDiffStats stats;
+  const int width = actual.dimensions.x;
+  const int height = actual.dimensions.y;
+  for (int y = inset; y < height - inset; ++y) {
+    for (int x = inset; x < width - inset; ++x) {
+      const size_t actualOffset =
+          static_cast<size_t>(y) * actual.rowBytes + static_cast<size_t>(x) * 4u;
+      const size_t expectedOffset =
+          (static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4u;
+      for (int channel = 0; channel < 4; ++channel) {
+        const int diff = std::abs(static_cast<int>(actual.pixels[actualOffset + channel]) -
+                                  static_cast<int>(expected[expectedOffset + channel]));
+        stats.maxChannelDiff = std::max(stats.maxChannelDiff, diff);
+        if (diff > tolerance) {
+          ++stats.differingChannels;
+          if (stats.firstDiffX < 0) {
+            stats.firstDiffX = x;
+            stats.firstDiffY = y;
+            stats.firstDiffChannel = channel;
+            stats.actualValue = actual.pixels[actualOffset + channel];
+            stats.expectedValue = expected[expectedOffset + channel];
+          }
+        }
+      }
+    }
+  }
+
+  return stats;
+}
+
+double PixelScaleForLighting(const Transform2d& deviceFromFilter) {
+  const Vector2d sx = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
+                      deviceFromFilter.transformPosition(Vector2d(0, 0));
+  const Vector2d sy = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
+                      deviceFromFilter.transformPosition(Vector2d(0, 0));
+  return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
+}
+
+std::array<double, 6> PixelToUserForLighting(const Transform2d& deviceFromFilter) {
+  const Transform2d inv = deviceFromFilter.inverse();
+  return {inv.data[0], inv.data[2], inv.data[4], inv.data[1], inv.data[3], inv.data[5]};
+}
+
+bool HasShearForLighting(const Transform2d& deviceFromFilter) {
+  const double a = deviceFromFilter.data[0];
+  const double b = deviceFromFilter.data[1];
+  const double c = deviceFromFilter.data[2];
+  const double d = deviceFromFilter.data[3];
+  const double dot = a * c + b * d;
+  const double lenSq1 = a * a + b * b;
+  const double lenSq2 = c * c + d * d;
+  return dot * dot > 0.0003 * lenSq1 * lenSq2;
+}
+
+tiny_skia::filter::LightSourceParams ToTinySkiaLightParams(
+    const components::filter_primitive::LightSource& light, const Transform2d& deviceFromFilter) {
+  using DonnerLight = components::filter_primitive::LightSource;
+  using TinyLight = tiny_skia::filter::LightType;
+
+  tiny_skia::filter::LightSourceParams params;
+  switch (light.type) {
+    case DonnerLight::Type::Distant: params.type = TinyLight::Distant; break;
+    case DonnerLight::Type::Point: params.type = TinyLight::Point; break;
+    case DonnerLight::Type::Spot: params.type = TinyLight::Spot; break;
+  }
+
+  params.azimuth = light.azimuth;
+  params.elevation = light.elevation;
+
+  const Vector2d lightPixel = deviceFromFilter.transformPosition(Vector2d(light.x, light.y));
+  const Vector2d pointsAtPixel =
+      deviceFromFilter.transformPosition(Vector2d(light.pointsAtX, light.pointsAtY));
+  const double pixelScale = PixelScaleForLighting(deviceFromFilter);
+
+  params.x = lightPixel.x;
+  params.y = lightPixel.y;
+  params.z = light.z * pixelScale;
+  params.pointsAtX = pointsAtPixel.x;
+  params.pointsAtY = pointsAtPixel.y;
+  params.pointsAtZ = light.pointsAtZ * pixelScale;
+  params.spotExponent = light.spotExponent;
+  params.limitingConeAngle = light.limitingConeAngle;
+  params.userX = light.x;
+  params.userY = light.y;
+  params.userZ = light.z;
+  params.userPointsAtX = light.pointsAtX;
+  params.userPointsAtY = light.pointsAtY;
+  params.userPointsAtZ = light.pointsAtZ;
+  return params;
+}
+
+std::vector<uint8_t> CpuDiffuseLightingReferenceForFlatSource(
+    const components::filter_primitive::DiffuseLighting& primitive,
+    const Transform2d& deviceFromFilter) {
+  auto src = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  auto dst = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  EXPECT_TRUE(src.has_value());
+  EXPECT_TRUE(dst.has_value());
+  if (!src.has_value() || !dst.has_value()) {
+    return {};
+  }
+
+  std::fill(src->data().begin(), src->data().end(), 255u);
+
+  tiny_skia::filter::DiffuseLightingParams params;
+  params.surfaceScale = primitive.surfaceScale;
+  params.diffuseConstant = primitive.diffuseConstant;
+  const css::RGBA rgba = primitive.lightingColor.asRGBA();
+  params.lightR = static_cast<double>(rgba.r) / 255.0;
+  params.lightG = static_cast<double>(rgba.g) / 255.0;
+  params.lightB = static_cast<double>(rgba.b) / 255.0;
+  params.pixelToUser = PixelToUserForLighting(deviceFromFilter);
+  params.hasShear = HasShearForLighting(deviceFromFilter);
+  if (primitive.light.has_value()) {
+    params.light = ToTinySkiaLightParams(*primitive.light, deviceFromFilter);
+  }
+
+  tiny_skia::filter::diffuseLighting(*src, *dst, params);
+  return UnpremultiplyRgba(dst->data());
+}
+
+std::vector<uint8_t> CpuSpecularLightingReferenceForFlatSource(
+    const components::filter_primitive::SpecularLighting& primitive,
+    const Transform2d& deviceFromFilter) {
+  auto src = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  auto dst = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
+                                         static_cast<uint32_t>(kViewportSize));
+  EXPECT_TRUE(src.has_value());
+  EXPECT_TRUE(dst.has_value());
+  if (!src.has_value() || !dst.has_value()) {
+    return {};
+  }
+
+  std::fill(src->data().begin(), src->data().end(), 255u);
+
+  tiny_skia::filter::SpecularLightingParams params;
+  params.surfaceScale = primitive.surfaceScale;
+  params.specularConstant = primitive.specularConstant;
+  params.specularExponent = primitive.specularExponent;
+  const css::RGBA rgba = primitive.lightingColor.asRGBA();
+  params.lightR = static_cast<double>(rgba.r) / 255.0;
+  params.lightG = static_cast<double>(rgba.g) / 255.0;
+  params.lightB = static_cast<double>(rgba.b) / 255.0;
+  params.pixelToUser = PixelToUserForLighting(deviceFromFilter);
+  params.hasShear = HasShearForLighting(deviceFromFilter);
+  if (primitive.light.has_value()) {
+    params.light = ToTinySkiaLightParams(*primitive.light, deviceFromFilter);
+  }
+
+  tiny_skia::filter::specularLighting(*src, *dst, params);
+  return UnpremultiplyRgba(dst->data());
+}
+
 class RendererGeodeTest : public ::testing::Test {
 protected:
   /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
@@ -78,6 +253,22 @@ protected:
     viewport.size = Vector2d(kViewportSize, kViewportSize);
     viewport.devicePixelRatio = 1.0;
     renderer.beginFrame(viewport);
+  }
+
+  RendererBitmap renderFlatSourceThroughFilter(const components::FilterGraph& graph,
+                                               const Transform2d& deviceFromFilter) {
+    RendererGeode renderer = createRenderer();
+    beginFrame(renderer);
+    renderer.setTransform(deviceFromFilter);
+    renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+    renderer.setTransform(Transform2d());
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+
+    renderer.popFilterLayer();
+    renderer.endFrame();
+    return renderer.takeSnapshot();
   }
 };
 
@@ -548,6 +739,169 @@ TEST_F(RendererGeodeTest, BlendedLayerPopPreservesBackdropOutsideClip) {
   EXPECT_EQ(inside[3], 255u) << "Multiply result A";
 }
 
+/// Phase 3b repro: an arbitrary path clip should gate color draws to the mask.
+/// A full-viewport blue rect clipped by a left-half rect encoded as a PATH
+/// must render blue only on the left half.
+TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(0.0, 0.0))
+                       .lineTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(32.0, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 16, 32);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
+TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(0.0, 0.0))
+                       .lineTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(32.0, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 16, 32);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
+TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerCompositeForTriangle) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(kViewportSize, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popIsolatedLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 32, 40);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 8, 8);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
+TEST_F(RendererGeodeTest, PathClipMaskClipsFilterLayerCompositeForTriangle) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(kViewportSize, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+
+  renderer.pushClip(clip);
+  renderer.pushFilterLayer(components::FilterGraph{}, std::nullopt);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.popClip();
+
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  auto inside = pixelAt(snap, 32, 40);
+  EXPECT_EQ(inside[0], 0u) << "Inside clip R";
+  EXPECT_EQ(inside[1], 0u) << "Inside clip G";
+  EXPECT_EQ(inside[2], 255u) << "Inside clip B";
+  EXPECT_EQ(inside[3], 255u) << "Inside clip A";
+
+  auto outside = pixelAt(snap, 8, 8);
+  EXPECT_EQ(outside[0], 0u) << "Outside clip R";
+  EXPECT_EQ(outside[1], 0u) << "Outside clip G";
+  EXPECT_EQ(outside[2], 0u) << "Outside clip B";
+  EXPECT_EQ(outside[3], 0u) << "Outside clip A";
+}
+
 /// Stubbed methods (clip/mask/layer/filter/pattern/image/text) should be
 /// safe no-ops that don't crash, and balanced push/pop pairs should keep
 /// drawing functional.
@@ -733,6 +1087,140 @@ TEST_F(RendererGeodeTest, FilterColorMatrixLuminanceToAlpha) {
   // Outside the rect: transparent.
   auto outside = pixelAt(snap, 4, 4);
   EXPECT_EQ(outside[3], 0u) << "Outside should be transparent";
+}
+
+TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode offsetNode;
+  components::filter_primitive::Offset offset;
+  offset.dx = 0.0;
+  offset.dy = 0.0;
+  offsetNode.primitive = offset;
+  offsetNode.inputs.push_back(components::FilterStandardInput::SourceAlpha);
+  graph.nodes.push_back(offsetNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(200, 100, 50, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  const auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 0u);
+  EXPECT_EQ(center[1], 0u);
+  EXPECT_EQ(center[2], 0u);
+  EXPECT_EQ(center[3], 255u);
+}
+
+TEST_F(RendererGeodeTest, FilterSpecularLightingPointLightExponentZeroMatchesCpuReference) {
+  components::FilterGraph graph;
+  components::FilterNode specularNode;
+  components::filter_primitive::SpecularLighting specular;
+  specular.surfaceScale = 3.0;
+  specular.specularConstant = 1.0;
+  specular.specularExponent = 0.0;
+  specular.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
+
+  components::filter_primitive::LightSource light;
+  light.type = components::filter_primitive::LightSource::Type::Point;
+  light.x = 48.0;
+  light.y = 16.0;
+  light.z = 24.0;
+  specular.light = light;
+
+  specularNode.primitive = specular;
+  specularNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(specularNode);
+
+  const Transform2d deviceFromFilter = Transform2d();
+  const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
+  ASSERT_FALSE(actual.empty());
+  const std::vector<uint8_t> expected =
+      CpuSpecularLightingReferenceForFlatSource(specular, deviceFromFilter);
+  ASSERT_FALSE(expected.empty());
+
+  const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected);
+  EXPECT_EQ(diff.differingChannels, 0)
+      << "maxDiff=" << diff.maxChannelDiff << " first=(" << diff.firstDiffX << ", "
+      << diff.firstDiffY << ") channel=" << diff.firstDiffChannel
+      << " actual=" << static_cast<int>(diff.actualValue)
+      << " expected=" << static_cast<int>(diff.expectedValue);
+}
+
+TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {
+  components::FilterGraph graph;
+  components::FilterNode diffuseNode;
+  components::filter_primitive::DiffuseLighting diffuse;
+  diffuse.surfaceScale = 2.0;
+  diffuse.diffuseConstant = 1.0;
+  diffuse.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
+
+  components::filter_primitive::LightSource light;
+  light.type = components::filter_primitive::LightSource::Type::Spot;
+  light.x = 12.0;
+  light.y = 20.0;
+  light.z = 20.0;
+  light.pointsAtX = 56.0;
+  light.pointsAtY = 36.0;
+  light.pointsAtZ = 0.0;
+  light.spotExponent = 4.0;
+  light.limitingConeAngle = 30.0;
+  diffuse.light = light;
+
+  diffuseNode.primitive = diffuse;
+  diffuseNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(diffuseNode);
+
+  const Transform2d deviceFromFilter = Transform2d();
+  const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
+  ASSERT_FALSE(actual.empty());
+  const std::vector<uint8_t> expected =
+      CpuDiffuseLightingReferenceForFlatSource(diffuse, deviceFromFilter);
+  ASSERT_FALSE(expected.empty());
+
+  const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected, 1, 1);
+  EXPECT_EQ(diff.differingChannels, 0)
+      << "maxDiff=" << diff.maxChannelDiff << " first=(" << diff.firstDiffX << ", "
+      << diff.firstDiffY << ") channel=" << diff.firstDiffChannel
+      << " actual=" << static_cast<int>(diff.actualValue)
+      << " expected=" << static_cast<int>(diff.expectedValue);
+}
+
+TEST_F(RendererGeodeTest, FilterEmptyMergeProducesTransparentBlack) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode mergeNode;
+  mergeNode.primitive = components::filter_primitive::Merge{};
+  graph.nodes.push_back(mergeNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  const auto center = pixelAt(snap, 32, 32);
+  EXPECT_EQ(center[0], 0u);
+  EXPECT_EQ(center[1], 0u);
+  EXPECT_EQ(center[2], 0u);
+  EXPECT_EQ(center[3], 0u);
 }
 
 /// feFlood: fill the filter region with a constant color.
@@ -1370,6 +1858,101 @@ TEST_F(RendererGeodeTest, FilterConvolveMatrixEdgeDetect) {
   // Laplacian = 4*1 - 4*1 = 0. Output should be near-black/transparent.
   auto interior = pixelAt(snap, 32, 32);
   EXPECT_LT(interior[0], 20u) << "Interior should be near-black (Laplacian=0)";
+}
+
+/// SVG 2 §15.5: when an element has BOTH a `clip-path` and a `filter`, the
+/// SourceGraphic for the filter must be the UNCLIPPED element content. The
+/// clip is then applied to the FILTERED result, not to the input.
+///
+/// Repro: outer left-half clip + Gaussian blur of stdDev≈3 over a solid blue
+/// rect that fully covers the viewport. Correct §15.5 behaviour produces:
+///   - Pixels well inside the left half are uniform opaque blue (the blur of
+///     a constant region is the same constant).
+///   - Pixels well to the right of the clip boundary are transparent (the
+///     filtered result is clipped after blurring).
+///
+/// The buggy path applies the clip BEFORE the filter, so the blur of the
+/// already-clipped half-rect leaks energy inward and the interior pixels
+/// near the clip edge end up dimmer/translucent.
+TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  // Outer clip: left half of the viewport, defined as a path so it goes
+  // through the path-clip-mask code path (the same one resvg with-clip-path
+  // exercises).
+  ResolvedClip clip;
+  PathShape clipShape;
+  clipShape.fillRule = FillRule::NonZero;
+  clipShape.path = PathBuilder()
+                       .moveTo(Vector2d(0.0, 0.0))
+                       .lineTo(Vector2d(32.0, 0.0))
+                       .lineTo(Vector2d(32.0, kViewportSize))
+                       .lineTo(Vector2d(0.0, kViewportSize))
+                       .closePath()
+                       .build();
+  clip.clipPaths.push_back(std::move(clipShape));
+  renderer.pushClip(clip);
+
+  components::FilterGraph graph;
+  {
+    components::FilterNode node;
+    components::filter_primitive::GaussianBlur blur;
+    blur.stdDeviationX = 3.0;
+    blur.stdDeviationY = 3.0;
+    node.primitive = blur;
+    graph.nodes.push_back(node);
+  }
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.popClip();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // (30, 32): inside the clipped region (clip is x<32) but only 2 pixels
+  // from the right edge. The blur kernel (stdDev=3) at this x-coordinate
+  // straddles the boundary heavily. Per §15.5, the SourceGraphic is the
+  // UNCLIPPED full-viewport blue rect so the blur is uniform blue and this
+  // pixel — being inside the clip — must remain near-opaque blue. The buggy
+  // path captures only the left-half blue and the blur averages with
+  // transparent-black, so the alpha drops to ~50% (~177) here.
+  auto nearEdgeInside = pixelAt(snap, 30, 32);
+  EXPECT_GT(nearEdgeInside[3], 240u)
+      << "Near-edge inside-clip alpha should remain near-opaque (≥240). The "
+         "buggy path blurs the already-clipped half-rect and pulls alpha "
+         "toward ~50% here. Got "
+      << static_cast<int>(nearEdgeInside[3]);
+
+  // (34, 32): just OUTSIDE the clip rect. Per §15.5 the clip is applied to
+  // the FILTERED result, so this pixel must be fully transparent regardless
+  // of the blur radius. The buggy path leaks blur energy outside the clip
+  // boundary because the composite isn't gated by the clip mask, leaving
+  // alpha around 50.
+  auto justOutside = pixelAt(snap, 34, 32);
+  EXPECT_EQ(justOutside[3], 0u)
+      << "Just-outside-clip alpha must be 0 — clip-path is applied to the "
+         "filtered result. Got "
+      << static_cast<int>(justOutside[3]);
+
+  // (8, 32): well inside the clipped region, far from the boundary. Both
+  // correct and buggy paths produce near-opaque blue here, but check anyway
+  // as a sanity gate.
+  auto deepInside = pixelAt(snap, 8, 32);
+  EXPECT_GT(deepInside[2], 230u) << "Deep-inside B should be ~255 (blue)";
+  EXPECT_GT(deepInside[3], 230u) << "Deep-inside A should be near-opaque";
+
+  // (48, 32): well outside the clip rect, far from the boundary. The clip is
+  // applied AFTER the filter, so this pixel must be fully transparent.
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_EQ(outside[3], 0u) << "Outside the clip must be transparent — the "
+                               "filter result is clipped on composite";
 }
 
 }  // namespace

@@ -2,8 +2,12 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <string_view>
 
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -12,9 +16,8 @@ namespace donner::geode {
 /// If this fails, the entire Geode backend is non-functional.
 TEST(GeodeDevice, CreateHeadlessSucceeds) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr)
-      << "Failed to create headless Dawn device. Check driver availability "
-         "(Metal on macOS, Vulkan/SwiftShader on Linux).";
+  ASSERT_NE(device, nullptr) << "Failed to create headless Dawn device. Check driver availability "
+                                "(Metal on macOS, Vulkan/SwiftShader on Linux).";
 
   EXPECT_TRUE(static_cast<bool>(device->device()));
   EXPECT_TRUE(static_cast<bool>(device->queue()));
@@ -93,7 +96,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   colorAttachment.view = target.createView();
   colorAttachment.loadOp = wgpu::LoadOp::Clear;
   colorAttachment.storeOp = wgpu::StoreOp::Store;
-  colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};  // Red.
+  colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};        // Red.
   colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // Dawn requires this on 2D views.
 
   wgpu::RenderPassDescriptor passDesc = {};
@@ -128,8 +131,8 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
     bool ok = false;
   } mapState;
   wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message,
-                      void* userdata1, void* /*userdata2*/) {
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1,
+                      void* /*userdata2*/) {
     auto* s = static_cast<MapState*>(userdata1);
     s->ok = (status == WGPUMapAsyncStatus_Success);
     s->done = true;
@@ -146,8 +149,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   }
   EXPECT_TRUE(mapState.ok) << "buffer map failed";
 
-  const uint8_t* pixels =
-      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
+  const uint8_t* pixels = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
   ASSERT_NE(pixels, nullptr);
 
   // First pixel should be red (255, 0, 0, 255).
@@ -157,6 +159,139 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   EXPECT_EQ(pixels[3], 255u) << "Alpha channel";
 
   readback.unmap();
+}
+
+/// Deferred-destroy queue: resources enqueued via deferDestroy() survive until
+/// drainDeferredDestroys() is called, so an in-flight command buffer that
+/// references them doesn't trigger a use-after-free.
+TEST(GeodeDevice, DeferredDestroyBufferSurvivesUntilDrain) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  const wgpu::Device& device = geodeDevice->device();
+  const wgpu::Queue& queue = geodeDevice->queue();
+
+  // Create a buffer and write data to it, then defer its destruction.
+  constexpr uint64_t kBufSize = 256;
+  wgpu::BufferDescriptor desc = {};
+  desc.label = wgpuLabel("DeferredDestroyTest");
+  desc.size = kBufSize;
+  desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer buffer = device.createBuffer(desc);
+  ASSERT_TRUE(static_cast<bool>(buffer));
+
+  // Write some data so the buffer is "in use".
+  const uint32_t data[4] = {1, 2, 3, 4};
+  queue.writeBuffer(buffer, 0, data, sizeof(data));
+
+  // Move the buffer into the deferred-destroy queue. The wgpu handle is
+  // internally reference-counted, so our local variable may still appear
+  // "valid" after the move — what matters is that the deferred queue now
+  // holds its own reference.
+  geodeDevice->deferDestroy(std::move(buffer));
+
+  // Submit an empty command buffer to create a GPU submission boundary.
+  wgpu::CommandEncoder encoder = device.createCommandEncoder();
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  queue.submit(1, &cmdBuf);
+
+  // Drain: the buffer is now released. No wgpu validation errors should fire.
+  geodeDevice->drainDeferredDestroys();
+
+  // Submit another empty command buffer after drain to confirm no validation
+  // errors from the destruction.
+  wgpu::CommandEncoder encoder2 = device.createCommandEncoder();
+  wgpu::CommandBuffer cmdBuf2 = encoder2.finish();
+  queue.submit(1, &cmdBuf2);
+}
+
+/// Deferred-destroy queue: textures survive until drain.
+TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  const wgpu::Device& device = geodeDevice->device();
+  const wgpu::Queue& queue = geodeDevice->queue();
+
+  wgpu::TextureDescriptor desc = {};
+  desc.label = wgpuLabel("DeferredDestroyTexTest");
+  desc.size = {4, 4, 1};
+  desc.format = wgpu::TextureFormat::RGBA8Unorm;
+  desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+  desc.mipLevelCount = 1;
+  desc.sampleCount = 1;
+  desc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture texture = device.createTexture(desc);
+  ASSERT_TRUE(static_cast<bool>(texture));
+
+  // Use the texture as a render target, then defer destruction.
+  wgpu::TextureView view = texture.createView();
+  wgpu::CommandEncoder encoder = device.createCommandEncoder();
+  wgpu::RenderPassColorAttachment color = {};
+  color.view = view;
+  color.loadOp = wgpu::LoadOp::Clear;
+  color.storeOp = wgpu::StoreOp::Store;
+  color.clearValue = {0.0, 1.0, 0.0, 1.0};
+  wgpu::RenderPassDescriptor passDesc = {};
+  passDesc.colorAttachmentCount = 1;
+  passDesc.colorAttachments = &color;
+  auto pass = encoder.beginRenderPass(passDesc);
+  pass.end();
+  wgpu::CommandBuffer cmdBuf = encoder.finish();
+  queue.submit(1, &cmdBuf);
+
+  geodeDevice->deferDestroy(std::move(texture));
+
+  // Drain after submission — safe because wgpu internally refs submitted resources.
+  geodeDevice->drainDeferredDestroys();
+
+  // Verify no validation errors by submitting more work.
+  wgpu::CommandEncoder encoder2 = device.createCommandEncoder();
+  wgpu::CommandBuffer cmdBuf2 = encoder2.finish();
+  queue.submit(1, &cmdBuf2);
+}
+
+/// Regression test for issue #575 (pipeline leak through wgpu-native):
+/// `GeodeDevice::pipeline()` / `gradientPipeline()` / `imagePipeline()` /
+/// `filterEngine()` must return the same object on every call — the
+/// expensive wgpu pipelines live on the device, not on per-renderer
+/// state. If someone moves pipeline construction back into
+/// `RendererGeode::Impl::initPipelines`, the ~1.6 MB/renderer leak that
+/// exhausted Mesa lavapipe's allocation budget comes back. Asserting
+/// reference identity is a cheap way to pin the sharing contract.
+TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  // Every accessor must return the same reference each time.
+  EXPECT_EQ(&device->pipeline(), &device->pipeline());
+  EXPECT_EQ(&device->gradientPipeline(), &device->gradientPipeline());
+  EXPECT_EQ(&device->imagePipeline(), &device->imagePipeline());
+  EXPECT_EQ(&device->filterEngine(), &device->filterEngine());
+  // `maskPipeline()` is lazy — two calls must still return the same
+  // instance (first call constructs, second call returns cached).
+  EXPECT_EQ(&device->maskPipeline(), &device->maskPipeline());
+}
+
+/// Regression test for issue #575: texture / buffer allocation
+/// must not grow unboundedly under a busy-idle pattern that hits the
+/// device's shared pipelines. Ten `countTexture` / `countBuffer`
+/// ticks with no actual wgpu work between them must show exactly the
+/// reported growth in `lifetimeTextureCreates()` / `lifetimeBufferCreates()`
+/// — this locks the accessor contract so a leak-hunt regression
+/// test written against it can't lie to itself.
+TEST(GeodeDevice, LifetimeCountersReflectCountHelpers) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  const uint64_t beforeTex = device->lifetimeTextureCreates();
+  const uint64_t beforeBuf = device->lifetimeBufferCreates();
+  for (int i = 0; i < 10; ++i) {
+    device->countTexture();
+    device->countBuffer();
+  }
+  EXPECT_EQ(device->lifetimeTextureCreates(), beforeTex + 10);
+  EXPECT_EQ(device->lifetimeBufferCreates(), beforeBuf + 10);
 }
 
 }  // namespace donner::geode

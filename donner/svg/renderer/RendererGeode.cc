@@ -52,7 +52,10 @@ using ::donner::geode::wgpuLabel;
 
 namespace {
 
-constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
+// Render-target texture format stored per-instance in Impl::textureFormat (initialized from
+// GeodeDevice). Filter-engine intermediate textures always use RGBA8Unorm for compute-shader
+// compatibility regardless of the host format.
+constexpr wgpu::TextureFormat kFilterIntermediateFormat = wgpu::TextureFormat::RGBA8Unorm;
 
 /// The unit path bounds used by `objectBoundingBox` gradient coordinates,
 /// matching the CPU-renderer helper.
@@ -114,6 +117,18 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
 /// with a one-shot warning; the follow-up is a texture-based stop lookup
 /// (see `GeodeGradientCacheComponent` in the Geode design doc).
 constexpr size_t kMaxGradientStopsClient = 16;
+
+/// Returns true when the filter graph contains spatial-shift primitives (feOffset) that can bring
+/// content from outside the viewport into view, requiring the filter layer buffer to be expanded.
+bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
+  using namespace components::filter_primitive;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    if (std::holds_alternative<Offset>(node.primitive)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
 /// buffers. This rounds the unpadded row width up to the next 256 boundary.
@@ -489,9 +504,24 @@ struct RendererGeode::Impl {
   // Held via shared_ptr so that test fixtures can share a single GeodeDevice
   // across many short-lived renderer instances (see RendererTestBackendGeode).
   std::shared_ptr<geode::GeodeDevice> device;
-  std::unique_ptr<geode::GeodePipeline> pipeline;
-  std::unique_ptr<geode::GeodeGradientPipeline> gradientPipeline;
-  std::unique_ptr<geode::GeodeImagePipeline> imagePipeline;
+  // Non-owning: the pipelines live on `device`. Shared across all
+  // RendererGeode instances pointing at the same GeodeDevice (issue
+  // #575 — per-renderer pipeline construction leaked ~1.6 MB/renderer
+  // through wgpu-native's internal cache; not released even after
+  // `wgpuDevicePoll(wait=true)`).
+  geode::GeodePipeline* pipeline = nullptr;
+  geode::GeodeGradientPipeline* gradientPipeline = nullptr;
+  geode::GeodeImagePipeline* imagePipeline = nullptr;
+
+  // --- Host-provided target texture (Phase 6 embedding) ---
+  //
+  // When non-null, `beginFrame()` renders into this texture instead of
+  // creating its own offscreen target. The host retains ownership.
+  wgpu::Texture hostTarget;
+
+  // Texture format for all render targets. Matches the GeodeDevice's configured
+  // format (RGBA8Unorm for headless, host-specified for embedded mode).
+  wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
 
   // Per-frame resources, recreated in `beginFrame`.
   RenderViewport viewport;
@@ -748,26 +778,9 @@ struct RendererGeode::Impl {
   };
   std::vector<LayerStackFrame> layerStack;
 
-  /// Phase 7: state for an in-progress filter layer. Captures all draws
-  /// between `pushFilterLayer` / `popFilterLayer` into an offscreen texture,
-  /// then runs the stored `FilterGraph` through `GeodeFilterEngine` and
-  /// composites the result back onto the outer target.
-  struct FilterStackFrame {
-    std::unique_ptr<geode::GeoEncoder> savedEncoder;
-    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
-    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
-    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
-    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
-    /// Descriptors captured at push for M4.2 pool release.
-    wgpu::TextureDescriptor layerDesc = {};
-    wgpu::TextureDescriptor layerMsaaDesc = {};
-    components::FilterGraph filterGraph;
-    Box2d filterRegion;
-  };
-  std::vector<FilterStackFrame> filterStack;
-
-  /// Phase 7: GPU filter-graph executor (owns compute pipelines).
-  std::unique_ptr<geode::GeodeFilterEngine> filterEngine;
+  /// Phase 7: GPU filter-graph executor. Non-owning pointer into the
+  /// shared GeodeDevice — see pipeline field comment above for why.
+  geode::GeodeFilterEngine* filterEngine = nullptr;
 
   /// Phase 3c: state for an in-progress `<mask>` element. Two offscreen
   /// texture pairs, one capturing the mask element's content and one
@@ -868,7 +881,29 @@ struct RendererGeode::Impl {
     /// until `popClip` hands them back to the M4.2 texture pool.
     std::vector<PendingRelease> maskLayerTextures;
   };
+
+  /// Phase 7: state for an in-progress filter layer. Captures all draws
+  /// between `pushFilterLayer` / `popFilterLayer` into an offscreen texture,
+  /// then runs the stored `FilterGraph` through `GeodeFilterEngine` and
+  /// composites the result back onto the outer target.
+  struct FilterStackFrame {
+    std::unique_ptr<geode::GeoEncoder> savedEncoder;
+    wgpu::Texture savedTarget;       // Outer 1-sample resolve target.
+    wgpu::Texture savedMsaaTarget;   // Outer 4× MSAA color attachment.
+    wgpu::Texture layerTexture;      // Inner layer 1-sample resolve.
+    wgpu::Texture layerMsaaTexture;  // Inner layer 4× MSAA color attachment.
+    /// Descriptors captured at push for M4.2 pool release.
+    wgpu::TextureDescriptor layerDesc = {};
+    wgpu::TextureDescriptor layerMsaaDesc = {};
+    components::FilterGraph filterGraph;
+    Box2d filterRegion;
+    Transform2d deviceFromFilter;  // Full CTM at push time.
+    int filterBufferOffsetX = 0;   // Expansion into negative device X.
+    int filterBufferOffsetY = 0;   // Expansion into negative device Y.
+    std::vector<ClipStackEntry> savedClipStack;
+  };
   std::vector<ClipStackEntry> clipStack;
+  std::vector<FilterStackFrame> filterStack;
 
   /// Recompute the intersection of every rectangular clip entry on
   /// `clipStack` and apply it to the active encoder as a scissor,
@@ -915,7 +950,12 @@ struct RendererGeode::Impl {
     }
 
     if (maskEntry != nullptr) {
-      encoder->setClipMask(maskEntry->maskResolveView);
+      // Pass the parent texture alongside the view so the encoder keeps
+      // the Vulkan resource alive even after this clip-stack entry is
+      // destroyed. The 1-arg setClipMask overload accidentally left the
+      // view dangling across `popClip`→`pop_back`→destructor →
+      // `updateEncoderScissor` sequences; see issue #551.
+      encoder->setClipMask(maskEntry->maskResolveTexture, maskEntry->maskResolveView);
     } else {
       encoder->clearClipMask();
     }
@@ -1432,6 +1472,23 @@ struct RendererGeode::Impl {
   // and a subsequent geometry change fires `remove<GeodePathCacheComponent>`
   // (which is a no-op if the component isn't present), or the
   // registry is gone and no signal will ever fire again.
+
+  /// Wire up per-renderer state against the shared GeodeDevice. Before
+  /// issue #575's fix each renderer constructed its own pipelines
+  /// here — that leaked ~1.6 MB/renderer through wgpu-native's internal
+  /// pipeline cache (see `GeodeDevice::pipeline()` header comment).
+  /// Now we just point at the device's shared copies. The `verboseFlag`
+  /// parameter is kept on the method signature for API continuity but
+  /// no longer toggles filter-engine logging — the shared filter engine
+  /// is always constructed with `verbose=false`.
+  void initPipelines(bool /*verboseFlag*/) {
+    textureFormat = device->textureFormat();
+    device->setCounters(&counters);
+    pipeline = &device->pipeline();
+    gradientPipeline = &device->gradientPipeline();
+    imagePipeline = &device->imagePipeline();
+    filterEngine = &device->filterEngine();
+  }
 };
 
 void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
@@ -1468,16 +1525,7 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
     }
     return;
   }
-  impl_->device->setCounters(&impl_->counters);
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat,
-                                                           impl_->device->useAlphaCoverageAA(),
-                                                           impl_->device->sampleCount());
-  impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
-      impl_->device->sampleCount());
-  impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
-      impl_->device->device(), kFormat, impl_->device->sampleCount());
-  impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
+  impl_->initPipelines(verbose);
 }
 
 RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
@@ -1490,16 +1538,7 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
     }
     return;
   }
-  impl_->device->setCounters(&impl_->counters);
-  impl_->pipeline = std::make_unique<geode::GeodePipeline>(impl_->device->device(), kFormat,
-                                                           impl_->device->useAlphaCoverageAA(),
-                                                           impl_->device->sampleCount());
-  impl_->gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
-      impl_->device->device(), kFormat, impl_->device->useAlphaCoverageAA(),
-      impl_->device->sampleCount());
-  impl_->imagePipeline = std::make_unique<geode::GeodeImagePipeline>(
-      impl_->device->device(), kFormat, impl_->device->sampleCount());
-  impl_->filterEngine = std::make_unique<geode::GeodeFilterEngine>(*impl_->device, verbose);
+  impl_->initPipelines(verbose);
 }
 
 void RendererGeode::enableTimestamps(bool /*enabled*/) {
@@ -1514,7 +1553,26 @@ FrameTimings RendererGeode::lastFrameTimings() const {
   return timings;
 }
 
-RendererGeode::~RendererGeode() = default;
+void RendererGeode::setTargetTexture(wgpu::Texture texture) {
+  impl_->hostTarget = std::move(texture);
+}
+
+void RendererGeode::clearTargetTexture() {
+  impl_->hostTarget = wgpu::Texture();
+}
+
+RendererGeode::~RendererGeode() {
+  // GeodeDevice holds a raw `counters_` pointer into our Impl (see `Impl::initPipelines` →
+  // `device->setCounters(&counters)`). If this renderer's counters are still the ones the
+  // (shared) device refers to, clear the pointer before our Impl (and its `counters` member) is
+  // freed. Otherwise the next `countBuffer`/`countTexture` call by any peer renderer sharing this
+  // device will dereference freed memory — which is exactly how chained feImage rendering
+  // crashes: multiple offscreen renderers share one device, each one overrides `counters_` in
+  // `initPipelines`, and the first one destroyed leaves `counters_` dangling for the others.
+  if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
+    impl_->device->setCounters(nullptr);
+  }
+}
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&&) noexcept = default;
 
@@ -1539,6 +1597,14 @@ int RendererGeode::height() const {
 }
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
+  // Drain deferred-destroy resources from the previous frame before allocating
+  // new ones. By this point any GPU submission from the prior frame has had a
+  // chance to finish, and WebGPU's internal ref-counting keeps resources alive
+  // for any still-in-flight command buffers.
+  if (impl_->device) {
+    impl_->device->drainDeferredDestroys();
+  }
+
   impl_->viewport = viewport;
   impl_->pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
   impl_->pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
@@ -1577,39 +1643,23 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   // don't null-ptr-crash in draw()→beginFrame().
   impl_->device->setCounters(&impl_->counters);
 
-  // Reuse the render targets across same-size frames (design doc 0030
-  // Milestone 4.1). Content is cleared by the encoder's first
-  // render-pass `LoadOp::Clear`, so lingering pixels from the previous
-  // frame don't leak into this one.
-  const bool canReuseTargets = impl_->target && impl_->targetWidth == impl_->pixelWidth &&
-                               impl_->targetHeight == impl_->pixelHeight;
+  if (impl_->hostTarget) {
+    // Embedded mode: render into the host-provided target texture.
+    // Override pixel dimensions from the texture itself.
+    impl_->pixelWidth = static_cast<int>(impl_->hostTarget.getWidth());
+    impl_->pixelHeight = static_cast<int>(impl_->hostTarget.getHeight());
+    impl_->target = impl_->hostTarget;
+    impl_->targetWidth = 0;
+    impl_->targetHeight = 0;
 
-  if (!canReuseTargets) {
-    // 1-sample resolve target: what `takeSnapshot()` copies back and what
-    // pattern / layer blits sample from.
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel("RendererGeodeTarget");
-    td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-               1};
-    td.format = kFormat;
-    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
-               wgpu::TextureUsage::TextureBinding;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    impl_->target = impl_->device->device().createTexture(td);
-    impl_->device->countTexture();
-
-    // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
-    // hardware resolves to `target` at pass end. Skipped on the
-    // alpha-coverage path (sampleCount == 1) where draws go directly
-    // into `target` with no intermediate MSAA texture.
+    // 4× MSAA color attachment (when sampleCount > 1).
     const uint32_t sc = impl_->device->sampleCount();
     if (sc > 1) {
       wgpu::TextureDescriptor msaaDesc = {};
       msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
-      msaaDesc.size = td.size;
-      msaaDesc.format = kFormat;
+      msaaDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                       static_cast<uint32_t>(impl_->pixelHeight), 1};
+      msaaDesc.format = impl_->textureFormat;
       msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
       msaaDesc.mipLevelCount = 1;
       msaaDesc.sampleCount = sc;
@@ -1619,8 +1669,52 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     } else {
       impl_->msaaTarget = wgpu::Texture();
     }
-    impl_->targetWidth = impl_->pixelWidth;
-    impl_->targetHeight = impl_->pixelHeight;
+  } else {
+    // Headless mode: reuse render targets across same-size frames (design doc
+    // 0030 Milestone 4.1). Content is cleared by the encoder's first
+    // render-pass `LoadOp::Clear`, so lingering pixels from the previous
+    // frame don't leak into this one.
+    const bool canReuseTargets = impl_->target && impl_->targetWidth == impl_->pixelWidth &&
+                                 impl_->targetHeight == impl_->pixelHeight;
+
+    if (!canReuseTargets) {
+      // 1-sample resolve target: what `takeSnapshot()` copies back and what
+      // pattern / layer blits sample from.
+      wgpu::TextureDescriptor td = {};
+      td.label = wgpuLabel("RendererGeodeTarget");
+      td.size = {static_cast<uint32_t>(impl_->pixelWidth),
+                 static_cast<uint32_t>(impl_->pixelHeight), 1};
+      td.format = impl_->textureFormat;
+      td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
+                 wgpu::TextureUsage::TextureBinding;
+      td.mipLevelCount = 1;
+      td.sampleCount = 1;
+      td.dimension = wgpu::TextureDimension::_2D;
+      impl_->target = impl_->device->device().createTexture(td);
+      impl_->device->countTexture();
+
+      // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
+      // hardware resolves to `target` at pass end. Skipped on the
+      // alpha-coverage path (sampleCount == 1) where draws go directly
+      // into `target` with no intermediate MSAA texture.
+      const uint32_t sc = impl_->device->sampleCount();
+      if (sc > 1) {
+        wgpu::TextureDescriptor msaaDesc = {};
+        msaaDesc.label = wgpuLabel("RendererGeodeTargetMSAA");
+        msaaDesc.size = td.size;
+        msaaDesc.format = impl_->textureFormat;
+        msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+        msaaDesc.mipLevelCount = 1;
+        msaaDesc.sampleCount = sc;
+        msaaDesc.dimension = wgpu::TextureDimension::_2D;
+        impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+        impl_->device->countTexture();
+      } else {
+        impl_->msaaTarget = wgpu::Texture();
+      }
+      impl_->targetWidth = impl_->pixelWidth;
+      impl_->targetHeight = impl_->pixelHeight;
+    }
   }
 
   // Single CommandEncoder for the entire frame — shared across the
@@ -1688,6 +1782,15 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     scaled.data[5] *= scale.y;
     impl_->deviceFromLocalTransform = scaled;
     return;
+  }
+  if (!impl_->filterStack.empty()) {
+    const auto& filterFrame = impl_->filterStack.back();
+    if (filterFrame.filterBufferOffsetX != 0 || filterFrame.filterBufferOffsetY != 0) {
+      impl_->deviceFromLocalTransform =
+          transform *
+          Transform2d::Translate(filterFrame.filterBufferOffsetX, filterFrame.filterBufferOffsetY);
+      return;
+    }
   }
   impl_->deviceFromLocalTransform = transform;
 }
@@ -1795,7 +1898,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       outDesc.label = wgpuLabel(label);
       outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                       static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.format = wgpu::TextureFormat::RGBA8Unorm;
       outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
       outDesc.mipLevelCount = 1;
       outDesc.sampleCount = 1;
@@ -1812,7 +1915,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       outDesc.label = wgpuLabel(label);
       outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                       static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      outDesc.format = wgpu::TextureFormat::R8Unorm;
+      outDesc.format = wgpu::TextureFormat::RGBA8Unorm;
       outDesc.usage = wgpu::TextureUsage::RenderAttachment;
       outDesc.mipLevelCount = 1;
       outDesc.sampleCount = 4;
@@ -1857,9 +1960,11 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // with it as it's being rendered. Without this seed the outer
     // ancestor clip would be lost the moment the inner clip lands
     // because `updateEncoderScissor` only binds the topmost entry.
+    wgpu::Texture nestedMaskTexture;
     wgpu::TextureView nestedMaskView;
     for (auto rit = impl_->clipStack.rbegin(); rit != impl_->clipStack.rend(); ++rit) {
       if (rit->maskResolveView) {
+        nestedMaskTexture = rit->maskResolveTexture;
         nestedMaskView = rit->maskResolveView;
         break;
       }
@@ -1883,7 +1988,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // Bind the previously-rendered nested mask (if any) so this
       // layer's fragment shader samples it and intersects.
       if (nestedMaskView) {
-        impl_->encoder->setClipMask(nestedMaskView);
+        impl_->encoder->setClipMask(nestedMaskTexture, nestedMaskView);
       } else {
         impl_->encoder->clearClipMask();
       }
@@ -1898,6 +2003,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
       impl_->encoder->endMaskPass();
 
+      nestedMaskTexture = resolveTexture;
       nestedMaskView = resolveTexture.createView();
 
       // Keep the intermediate textures alive until popClip, paired
@@ -1910,7 +2016,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // The outermost layer (the LAST one processed by this loop,
       // i.e. the FIRST run in `runs`) provides the resolve view the
       // main draws sample as their clip.
-      entry.maskResolveTexture = resolveTexture;
+      entry.maskResolveTexture = nestedMaskTexture;
       entry.maskResolveView = nestedMaskView;
     }
 
@@ -1970,7 +2076,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   td.label = wgpuLabel("RendererGeodeIsolatedLayer");
   td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
              1u};
-  td.format = kFormat;
+  td.format = impl_->textureFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
@@ -1987,7 +2093,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   if (impl_->device->sampleCount() > 1) {
     msaaDesc.label = wgpuLabel("RendererGeodeIsolatedLayerMSAA");
     msaaDesc.size = td.size;
-    msaaDesc.format = kFormat;
+    msaaDesc.format = impl_->textureFormat;
     msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
     msaaDesc.mipLevelCount = 1;
     msaaDesc.sampleCount = 4;
@@ -2064,7 +2170,7 @@ void RendererGeode::popIsolatedLayer() {
     snapDesc.label = wgpuLabel("RendererGeodeBlendDstSnapshot");
     snapDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
-    snapDesc.format = kFormat;
+    snapDesc.format = impl_->textureFormat;
     snapDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
     snapDesc.mipLevelCount = 1;
     snapDesc.sampleCount = 1;
@@ -2154,14 +2260,40 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   Box2d region = filterRegion.value_or(
       Box2d(Vector2d::Zero(), Vector2d(impl_->pixelWidth, impl_->pixelHeight)));
 
+  // Compute buffer expansion for spatial-shift primitives (feOffset). When the filter region's
+  // device-space AABB extends to negative coordinates (due to skew/rotation), expand the buffer
+  // so SourceGraphic captures all content that feOffset can shift into view.
+  int filterBufferOffsetX = 0;
+  int filterBufferOffsetY = 0;
+  const int viewportWidth = impl_->pixelWidth;
+  const int viewportHeight = impl_->pixelHeight;
+
+  if (filterRegion.has_value()) {
+    const Box2d deviceRegion = impl_->deviceFromLocalTransform.transformBox(*filterRegion);
+    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
+    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
+
+    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
+      constexpr int kMaxExpansion = 4096;
+      if (regionX0 < 0) {
+        filterBufferOffsetX = std::min(-regionX0, std::max(0, kMaxExpansion - viewportWidth));
+      }
+      if (regionY0 < 0) {
+        filterBufferOffsetY = std::min(-regionY0, std::max(0, kMaxExpansion - viewportHeight));
+      }
+    }
+  }
+
+  const int bufferWidth = viewportWidth + filterBufferOffsetX;
+  const int bufferHeight = viewportHeight + filterBufferOffsetY;
+
   // Allocate offscreen 1-sample resolve + 4× MSAA companion for the
   // filter layer capture. All draws between push/pop land here; pop runs
   // the filter graph on the resolved texture and composites back.
   wgpu::TextureDescriptor td{};
   td.label = wgpuLabel("RendererGeodeFilterLayer");
-  td.size = {static_cast<uint32_t>(impl_->pixelWidth), static_cast<uint32_t>(impl_->pixelHeight),
-             1u};
-  td.format = kFormat;
+  td.size = {static_cast<uint32_t>(bufferWidth), static_cast<uint32_t>(bufferHeight), 1u};
+  td.format = impl_->textureFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
@@ -2176,7 +2308,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   wgpu::TextureDescriptor msaaDesc{};
   msaaDesc.label = wgpuLabel("RendererGeodeFilterLayerMSAA");
   msaaDesc.size = td.size;
-  msaaDesc.format = kFormat;
+  msaaDesc.format = impl_->textureFormat;
   msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
   msaaDesc.mipLevelCount = 1;
   msaaDesc.sampleCount = 4;
@@ -2202,6 +2334,18 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.layerMsaaDesc = msaaDesc;
   frame.filterGraph = filterGraph;
   frame.filterRegion = region;
+  frame.deviceFromFilter = impl_->deviceFromLocalTransform;
+  frame.filterBufferOffsetX = filterBufferOffsetX;
+  frame.filterBufferOffsetY = filterBufferOffsetY;
+  frame.savedClipStack = impl_->clipStack;
+
+  // SVG 2 §15.5: the SourceGraphic that feeds the filter graph must be
+  // UNCLIPPED (paint → filter → clip → mask → opacity). Clear the outer
+  // clip stack so inner draws into the filter layer aren't gated by the
+  // outer clip-path. The outer mask textures stay alive in
+  // frame.savedClipStack (copy preserves refcounts), and popFilterLayer
+  // restores the stack and re-binds the mask before the composite blit.
+  impl_->clipStack.clear();
 
   impl_->target = layerTexture;
   impl_->msaaTarget = layerMsaaTexture;
@@ -2210,8 +2354,25 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
       layerMsaaTexture, layerTexture, impl_->frameCommandEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
+
+  // Apply the buffer offset to the current transform so content at negative device coordinates
+  // renders into the expanded region. Subsequent setTransform calls will also pick up the offset.
+  if (filterBufferOffsetX != 0 || filterBufferOffsetY != 0) {
+    impl_->deviceFromLocalTransform =
+        impl_->deviceFromLocalTransform * Transform2d::Translate(filterBufferOffsetX, filterBufferOffsetY);
+  }
+
+  // Per SVG Filter Effects § filter region: pixels outside the filter region are
+  // transparent black for filter-primitive purposes. Scissor source draws to the
+  // filter region's device-space AABB so the SourceGraphic fed into filter
+  // primitives (e.g. feGaussianBlur) respects that boundary.
+  Impl::ClipStackEntry filterClipEntry;
+  filterClipEntry.pixelRect = impl_->deviceFromLocalTransform.transformBox(region);
+  filterClipEntry.valid = true;
+  impl_->clipStack.push_back(std::move(filterClipEntry));
+
   impl_->filterStack.push_back(std::move(frame));
-  // The filter layer inherits the outer clip stack.
+  // Refresh scissor to the intersection of the outer clip stack and the filter region.
   impl_->updateEncoderScissor();
 }
 
@@ -2222,6 +2383,7 @@ void RendererGeode::popFilterLayer() {
   }
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
+  impl_->clipStack = frame.savedClipStack;
 
   if (!frame.layerTexture) {
     return;  // Placeholder frame from the headless/error path.
@@ -2239,11 +2401,19 @@ void RendererGeode::popFilterLayer() {
   // submit, paid only on frames that use a filter).
   impl_->flushFrameCommandEncoder();
 
+  // When the filter buffer was expanded to capture negative-coordinate content, adjust
+  // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
+  const Transform2d bufferDeviceFromFilter =
+      (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
+          ? frame.deviceFromFilter *
+                Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
+          : frame.deviceFromFilter;
+
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
-    filteredTexture =
-        impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.filterRegion);
+    filteredTexture = impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture,
+                                                   frame.filterRegion, bufferDeviceFromFilter);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
@@ -2257,12 +2427,45 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
-  // `frame.filterRegion` is passed in from the driver in user-space
-  // coordinates, not pixel-space; we'd need to transform by the current
-  // CTM snapshot before using it as a scissor. Skipping for this PR —
-  // all current feGaussianBlur resvg tests pass without the clip.
-  impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
+    // The filter result is in an expanded texture. Extract the viewport-sized region at the
+    // buffer offset using a GPU texture copy, then blit the viewport-sized result.
+    const uint32_t vpW = static_cast<uint32_t>(impl_->pixelWidth);
+    const uint32_t vpH = static_cast<uint32_t>(impl_->pixelHeight);
+
+    wgpu::TextureDescriptor vpDesc{};
+    vpDesc.label = wgpuLabel("RendererGeodeFilterViewport");
+    vpDesc.size = {vpW, vpH, 1u};
+    vpDesc.format = kFilterIntermediateFormat;
+    vpDesc.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding;
+    vpDesc.mipLevelCount = 1;
+    vpDesc.sampleCount = 1;
+    vpDesc.dimension = wgpu::TextureDimension::_2D;
+    wgpu::Texture viewportTexture = impl_->device->device().createTexture(vpDesc);
+
+    if (viewportTexture) {
+      wgpu::CommandEncoder copyEncoder = impl_->device->device().createCommandEncoder();
+      wgpu::TexelCopyTextureInfo src = {};
+      src.texture = filteredTexture;
+      src.origin = {static_cast<uint32_t>(frame.filterBufferOffsetX),
+                    static_cast<uint32_t>(frame.filterBufferOffsetY), 0u};
+      wgpu::TexelCopyTextureInfo dst = {};
+      dst.texture = viewportTexture;
+      const wgpu::Extent3D extent = {vpW, vpH, 1u};
+      copyEncoder.copyTextureToTexture(src, dst, extent);
+      wgpu::CommandBuffer copyCmd = copyEncoder.finish();
+      impl_->device->queue().submit(1, &copyCmd);
+
+      impl_->encoder->blitFullTarget(viewportTexture, 1.0);
+    }
+  } else {
+    // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
+    // `frame.filterRegion` is passed in from the driver in user-space
+    // coordinates, not pixel-space; we'd need to transform by the current
+    // CTM snapshot before using it as a scissor. Skipping for this PR —
+    // all current feGaussianBlur resvg tests pass without the clip.
+    impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  }
   // Defer release to endFrame: `blitFullTarget` recorded a sample from
   // `filteredTexture` (which is `frame.layerTexture` when the filter
   // graph is empty) into the frame encoder. Filter-engine-owned
@@ -2288,7 +2491,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     outDesc.label = wgpuLabel(label);
     outDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
                     static_cast<uint32_t>(impl_->pixelHeight), 1u};
-    outDesc.format = kFormat;
+    outDesc.format = impl_->textureFormat;
     outDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
                     wgpu::TextureUsage::CopySrc;
     outDesc.mipLevelCount = 1;
@@ -2300,7 +2503,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
       outMsaaDesc = wgpu::TextureDescriptor{};
       outMsaaDesc.label = wgpuLabel(msaaLabel);
       outMsaaDesc.size = outDesc.size;
-      outMsaaDesc.format = kFormat;
+      outMsaaDesc.format = impl_->textureFormat;
       outMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
       outMsaaDesc.mipLevelCount = 1;
       outMsaaDesc.sampleCount = 4;
@@ -2466,7 +2669,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   wgpu::TextureDescriptor td = {};
   td.label = wgpuLabel("RendererGeodePatternTile");
   td.size = {static_cast<uint32_t>(tilePixelWidth), static_cast<uint32_t>(tilePixelHeight), 1u};
-  td.format = kFormat;
+  td.format = impl_->textureFormat;
   td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
              wgpu::TextureUsage::CopySrc;
   td.mipLevelCount = 1;
@@ -2486,7 +2689,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     wgpu::TextureDescriptor tileMsaaDesc = {};
     tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
     tileMsaaDesc.size = td.size;
-    tileMsaaDesc.format = kFormat;
+    tileMsaaDesc.format = impl_->textureFormat;
     tileMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
     tileMsaaDesc.mipLevelCount = 1;
     tileMsaaDesc.sampleCount = 4;
@@ -2965,6 +3168,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     impl_->warnedText = true;
   }
 #endif
+}
+
+std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() const {
+  if (!impl_->device) {
+    return nullptr;
+  }
+  return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {

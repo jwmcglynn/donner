@@ -58,7 +58,7 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
     // frequently fully off, not partial). Revisit once Geode picks
     // up a finer sample pattern (8x or 16x MSAA) or analytic glyph
     // AA lands.
-    case RendererBackendFeature::FilterEffects: return false;
+    case RendererBackendFeature::FilterEffects: return true;
     case RendererBackendFeature::Text: return false;
     case RendererBackendFeature::TextFull: return false;
     case RendererBackendFeature::AsciiSnapshot: return false;
@@ -68,18 +68,41 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
 }
 
 std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
+  // Callers that want a renderer they own get a fresh one. Now that
+  // `GeodeDevice` owns the expensive pipelines (issue #575), this is
+  // ~free: the per-instance allocations are just small ECS-side
+  // bookkeeping and a handful of wgpu::Texture handles.
   return std::make_unique<RendererGeode>(SharedTestDevice(), verbose);
 }
 
+/// Returns a process-wide shared `RendererGeode`. Created on first call,
+/// reused for every subsequent `RenderDocumentWithActiveBackend` /
+/// `RenderDocumentWithActiveBackendForAscii`. Sharing eliminates the
+/// per-test `RendererGeode` allocation churn that would otherwise
+/// accumulate ~2 textures + ~8 buffers per test in wgpu-native's
+/// internal tracking — enough to trip the driver's
+/// `maxMemoryAllocationCount` on Mesa lavapipe / llvmpipe after a few
+/// hundred tests (issue #575). `beginFrame()` fully resets per-frame
+/// state, so a shared renderer behaves identically to a fresh one as
+/// long as each `draw()` call is self-contained (no carried layer /
+/// clip / filter stack), which the image-comparison fixture
+/// guarantees.
+RendererGeode& SharedTestRenderer(bool verbose = false) {
+  static auto* renderer = new RendererGeode(SharedTestDevice(), verbose);
+  return *renderer;
+}
+
 RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
-  RendererGeode renderer(SharedTestDevice(), verbose);
+  RendererGeode& renderer = SharedTestRenderer(verbose);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }
 
 RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
-  // Geode has no anti-aliasing toggle — ASCII snapshots aren't supported.
-  RendererGeode renderer(SharedTestDevice());
+  // Geode has no anti-aliasing toggle — ASCII snapshots aren't supported,
+  // but routing through the same shared renderer keeps the driver
+  // resource budget bounded.
+  RendererGeode& renderer = SharedTestRenderer();
   renderer.draw(document);
   return renderer.takeSnapshot();
 }

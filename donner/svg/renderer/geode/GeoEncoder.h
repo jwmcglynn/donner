@@ -248,7 +248,7 @@ public:
   /**
    * Phase 3b: open a new render pass that writes into the given mask
    * texture pair. Used by `RendererGeode::pushClip` to materialise a
-   * path-based clip into an R8Unorm coverage texture that subsequent
+   * path-based clip into an RGBA8Unorm coverage texture that subsequent
    * fill/gradient draws can sample.
    *
    * The main render pass, if open, is closed first. Subsequent
@@ -256,10 +256,11 @@ public:
    * pipeline. `endMaskPass` closes the mask pass and re-opens the
    * main pass (with `LoadOp::Load`) when the next draw lands.
    *
-   * @param msaaMask 4× MSAA R8Unorm render target. Must be the same
-   *   size as this encoder's target. Cleared to 0 at the start of
-   *   the pass.
-   * @param resolveMask 1-sample R8Unorm resolve target. Sampled by
+   * @param msaaMask 4× MSAA RGBA8Unorm render target. Must be the same
+   *   size as this encoder's target when `GeodeDevice::sampleCount() >
+   *   1`. On the alpha-coverage path (`sampleCount() == 1`) this may be
+   *   null and the pass draws directly into `resolveMask`.
+   * @param resolveMask 1-sample RGBA8Unorm resolve target. Sampled by
    *   `setClipMask` after `endMaskPass`.
    */
   void beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask);
@@ -282,7 +283,7 @@ public:
 
   /**
    * Bind `maskView` as the clip mask texture for subsequent fill /
-   * gradient draws. The view must reference a 1-sample R8Unorm
+   * gradient draws. The view must reference a 1-sample RGBA8Unorm
    * texture the same size as the encoder's target — typically the
    * resolve texture produced by `beginMaskPass` + `endMaskPass`.
    *
@@ -291,6 +292,19 @@ public:
    * clip region in [0, 1].
    */
   void setClipMask(const wgpu::TextureView& maskView);
+
+  /**
+   * Preferred overload: sets both the view AND the parent texture so the
+   * encoder keeps the underlying Vulkan resource alive for as long as it's
+   * bound. The 1-arg overload is kept only for call sites that guarantee
+   * the parent's lifetime by other means.
+   *
+   * See the `activeClipMaskTexture` field comment (and issue #551) for
+   * the bug this addresses — without the parent keepalive, popping the
+   * clip stack can free a VkImage while the encoder's
+   * `createBindGroup` still references its view.
+   */
+  void setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView);
 
   /// Remove any active clip mask, restoring unclipped rasterisation.
   void clearClipMask();

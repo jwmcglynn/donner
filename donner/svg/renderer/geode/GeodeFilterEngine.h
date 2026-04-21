@@ -9,13 +9,15 @@
 /// Implemented primitives: `feGaussianBlur`, `feOffset`, `feColorMatrix`,
 /// `feFlood`, `feMerge`, `feComposite`, `feBlend`, `feMorphology`,
 /// `feComponentTransfer`, `feConvolveMatrix`, `feTurbulence`,
-/// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`. Other
-/// primitives are passed through (the input texture is forwarded unchanged)
-/// with a one-shot warning.
+/// `feDisplacementMap`, `feDiffuseLighting`, `feSpecularLighting`,
+/// `feDropShadow`, `feImage`, `feTile`. Other primitives are passed
+/// through (the input texture is forwarded unchanged) with a one-shot
+/// warning.
 
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 
 namespace donner::svg::components {
 struct FilterGraph;
@@ -35,6 +37,9 @@ struct Turbulence;
 struct DisplacementMap;
 struct DiffuseLighting;
 struct SpecularLighting;
+struct DropShadow;
+struct Image;
+struct Tile;
 }  // namespace filter_primitive
 }  // namespace donner::svg::components
 
@@ -67,6 +72,9 @@ class GeodeDevice;
  * - `feDisplacementMap` (per-pixel channel-driven displacement via compute shader)
  * - `feDiffuseLighting` (Lambertian shading with distant/point/spot lights)
  * - `feSpecularLighting` (Phong shading with distant/point/spot lights)
+ * - `feDropShadow` (blur alpha + offset + flood-tint + source-over)
+ * - `feImage` (bilinear placement of external raster / in-document fragment)
+ * - `feTile` (wraparound tiling of input subregion across filter region)
  *
  * Unsupported primitives pass the current buffer through unchanged.
  */
@@ -90,11 +98,16 @@ public:
    *
    * @param graph The filter graph to execute.
    * @param sourceGraphic The input texture (layer snapshot).
-   * @param filterRegion The filter region in device-pixel coordinates.
+   * @param filterRegion The filter region in user-space coordinates.
+   * @param deviceFromFilter The combined transform from filter/user-space to
+   *   device-pixel coordinates, captured at `pushFilterLayer` time. Used to
+   *   derive per-axis scale factors and to project directional parameters
+   *   (e.g. feOffset dx/dy) through rotation/skew.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
-                        const wgpu::Texture& sourceGraphic, const Box2d& filterRegion);
+                        const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
+                        const Transform2d& deviceFromFilter);
 
 private:
   /// Two-pass separable Gaussian blur via compute shader.
@@ -117,6 +130,19 @@ private:
   wgpu::Texture runBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
                             float stdDeviation, uint32_t axis, uint32_t edgeMode);
 
+  /// One pass of a 3-pass box blur (used to approximate a Gaussian for sigma
+  /// >= 2.0, matching tiny-skia's behaviour).
+  /// @param input The input texture.
+  /// @param width Texture width.
+  /// @param height Texture height.
+  /// @param boxLeft Number of samples on the negative side of the centre tap.
+  /// @param boxRight Number of samples on the positive side of the centre tap.
+  /// @param axis 0 = horizontal, 1 = vertical.
+  /// @param edgeMode Edge handling mode.
+  /// @return Output texture for this pass.
+  wgpu::Texture runBoxBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
+                               int32_t boxLeft, int32_t boxRight, uint32_t axis, uint32_t edgeMode);
+
   /// Shift pixels by (dx, dy) via compute shader.
   /// @param input The input texture.
   /// @param primitive The feOffset parameters.
@@ -130,6 +156,11 @@ private:
   /// @return The transformed texture.
   wgpu::Texture applyColorMatrix(const wgpu::Texture& input,
                                  const svg::components::filter_primitive::ColorMatrix& primitive);
+
+  /// Extract SourceAlpha (0,0,0,A) from a SourceGraphic texture.
+  /// @param input The source-graphic texture.
+  /// @return A texture whose RGB are zero and alpha matches the input alpha.
+  wgpu::Texture applySourceAlpha(const wgpu::Texture& input);
 
   /// Fill the output with a constant flood color via compute shader.
   /// @param width Output texture width.
@@ -145,10 +176,10 @@ private:
   /// @param currentBuffer The "previous" output buffer.
   /// @param sourceGraphic The original source-graphic texture.
   /// @return The composited texture.
-  wgpu::Texture applyMerge(
-      const svg::components::FilterNode& node,
-      const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-      const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic);
+  wgpu::Texture applyMerge(const svg::components::FilterNode& node,
+                           const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
+                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
+                           const wgpu::Texture* sourceAlpha);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.
@@ -205,12 +236,11 @@ private:
   /// @param width Output texture width.
   /// @param height Output texture height.
   /// @param primitive The feTurbulence parameters.
-  /// @param scaleX User-to-pixel scale X.
-  /// @param scaleY User-to-pixel scale Y.
+  /// @param deviceFromFilter Transform from filter/user space into device space.
   /// @return The noise texture.
   wgpu::Texture applyTurbulence(uint32_t width, uint32_t height,
                                 const svg::components::filter_primitive::Turbulence& primitive,
-                                double scaleX, double scaleY);
+                                const Transform2d& deviceFromFilter);
 
   /// Per-pixel channel-driven displacement (feDisplacementMap).
   /// @param in1 Source image texture.
@@ -230,8 +260,9 @@ private:
   /// @return The lit texture.
   wgpu::Texture applyDiffuseLighting(
       const wgpu::Texture& input,
-      const svg::components::filter_primitive::DiffuseLighting& primitive, double scaleX,
-      double scaleY);
+      const svg::components::filter_primitive::DiffuseLighting& primitive,
+      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+      const Box2d& sampleSubregion);
 
   /// Phong specular lighting (feSpecularLighting).
   /// @param input The input texture (alpha = height map).
@@ -241,8 +272,66 @@ private:
   /// @return The lit texture.
   wgpu::Texture applySpecularLighting(
       const wgpu::Texture& input,
-      const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
-      double scaleY);
+      const svg::components::filter_primitive::SpecularLighting& primitive,
+      const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+      const Box2d& sampleSubregion);
+
+  /// Drop-shadow composite (feDropShadow): blur alpha, offset, flood, source-over.
+  /// @param input The input texture.
+  /// @param primitive The feDropShadow parameters.
+  /// @param pixelStdDevX Blur standard deviation in pixel units (X).
+  /// @param pixelStdDevY Blur standard deviation in pixel units (Y).
+  /// @param pixelDx Offset in pixel units (X).
+  /// @param pixelDy Offset in pixel units (Y).
+  /// @return The drop-shadowed texture.
+  wgpu::Texture applyDropShadow(const wgpu::Texture& input,
+                                const svg::components::filter_primitive::DropShadow& primitive,
+                                double pixelStdDevX, double pixelStdDevY, double pixelDx,
+                                double pixelDy);
+
+  /// Blit an external image into a freshly-allocated filter-sized texture (feImage).
+  /// @param primitive The feImage parameters (imageData, preserveAspectRatio, fragmentId, ...).
+  /// @param width Output texture width (filter-region pixels).
+  /// @param height Output texture height (filter-region pixels).
+  /// @param graph The enclosing filter graph (for bbox / scale / subregion resolution).
+  /// @param node The enclosing filter node (for primitive subregion overrides).
+  /// @param deviceFromFilter The combined CTM from filter/user-space to device pixels.
+  ///   Used by fragment references to project through rotation/skew.
+  /// @return The placed-image texture.
+  wgpu::Texture applyImage(const svg::components::filter_primitive::Image& primitive,
+                           uint32_t width, uint32_t height,
+                           const svg::components::FilterGraph& graph,
+                           const svg::components::FilterNode& node,
+                           const Transform2d& deviceFromFilter);
+
+  /// Wraparound tile of an input subregion across the full output (feTile).
+  /// @param input The input texture.
+  /// @param srcX Source rectangle X origin in pixels.
+  /// @param srcY Source rectangle Y origin in pixels.
+  /// @param srcW Source rectangle width in pixels.
+  /// @param srcH Source rectangle height in pixels.
+  /// @return The tiled texture.
+  wgpu::Texture applyTile(const wgpu::Texture& input, int32_t srcX, int32_t srcY, int32_t srcW,
+                          int32_t srcH);
+
+  /// Clip a primitive's output to its user-space subregion via the inverse CTM.
+  /// Pixels whose center maps outside the subregion are zeroed.
+  /// @param input The primitive's output texture.
+  /// @param filterFromDevice Inverse of the deviceFromFilter transform.
+  /// @param usrX0 User-space subregion left edge.
+  /// @param usrY0 User-space subregion top edge.
+  /// @param usrX1 User-space subregion right edge.
+  /// @param usrY1 User-space subregion bottom edge.
+  /// @return A new texture with out-of-subregion pixels cleared.
+  wgpu::Texture applySubregionClip(const wgpu::Texture& input, const Transform2d& filterFromDevice,
+                                   double usrX0, double usrY0, double usrX1, double usrY1);
+
+  /// Convert a texture between sRGB and linearRGB color spaces.
+  /// Used to implement `color-interpolation-filters: linearRGB` (the SVG default).
+  /// @param input The input texture in premultiplied sRGB (or linear, for the reverse).
+  /// @param srgbToLinear True to convert sRGB→linear, false for linear→sRGB.
+  /// @return A new texture in the target color space.
+  wgpu::Texture applyColorSpaceConversion(const wgpu::Texture& input, bool srgbToLinear);
 
   GeodeDevice& device_;
 
@@ -301,6 +390,26 @@ private:
   // feSpecularLighting pipeline (input + output + storage buffer).
   wgpu::ComputePipeline specularLightingPipeline_;
   wgpu::BindGroupLayout specularLightingBindGroupLayout_;
+
+  // feDropShadow compose pipeline (two inputs + output + uniform).
+  wgpu::ComputePipeline dropShadowPipeline_;
+  wgpu::BindGroupLayout dropShadowBindGroupLayout_;
+
+  // feImage placement pipeline (input texture + output + uniform).
+  wgpu::ComputePipeline imagePipeline_;
+  wgpu::BindGroupLayout imageBindGroupLayout_;
+
+  // feTile wraparound pipeline (input + output + uniform).
+  wgpu::ComputePipeline tilePipeline_;
+  wgpu::BindGroupLayout tileBindGroupLayout_;
+
+  // Per-primitive subregion clipping pipeline (input + output + uniform).
+  wgpu::ComputePipeline subregionClipPipeline_;
+  wgpu::BindGroupLayout subregionClipBindGroupLayout_;
+
+  // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
+  wgpu::ComputePipeline colorSpaceConvertPipeline_;
+  wgpu::BindGroupLayout colorSpaceConvertBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

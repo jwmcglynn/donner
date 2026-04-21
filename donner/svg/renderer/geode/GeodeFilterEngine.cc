@@ -21,9 +21,13 @@ constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 /// Uniform buffer layout matching the WGSL `BlurParams` struct.
 struct BlurParams {
   float stdDeviation;
-  uint32_t axis;      // 0 = horizontal, 1 = vertical.
-  uint32_t edgeMode;  // 0 = None, 1 = Duplicate, 2 = Wrap.
-  uint32_t pad;
+  uint32_t axis;        // 0 = horizontal, 1 = vertical.
+  uint32_t edgeMode;    // 0 = None, 1 = Duplicate, 2 = Wrap.
+  uint32_t kernelType;  // 0 = Gaussian, 1 = Box.
+  int32_t boxLeft;      // Box mode: samples on the negative side.
+  int32_t boxRight;     // Box mode: samples on the positive side.
+  uint32_t pad0;
+  uint32_t pad1;
 };
 
 /// Uniform buffer layout matching the WGSL `OffsetParams` struct.
@@ -52,14 +56,14 @@ struct FloodParams {
 
 /// Uniform buffer layout matching the WGSL `CompositeParams` struct.
 struct CompositeParams {
-  uint32_t op;    // Operator index (0..6).
+  uint32_t op;  // Operator index (0..6).
   uint32_t pad0;
   uint32_t pad1;
   uint32_t pad2;
-  float k1;       // Arithmetic coefficient k1.
-  float k2;       // Arithmetic coefficient k2.
-  float k3;       // Arithmetic coefficient k3.
-  float k4;       // Arithmetic coefficient k4.
+  float k1;  // Arithmetic coefficient k1.
+  float k2;  // Arithmetic coefficient k2.
+  float k3;  // Arithmetic coefficient k3.
+  float k4;  // Arithmetic coefficient k4.
 };
 
 /// Uniform buffer layout matching the WGSL `BlendParams` struct.
@@ -108,6 +112,98 @@ struct TurbulenceParams {
   float filterFromDeviceD;
 };
 
+/// Pre-computed permutation + gradient tables for feTurbulence.
+/// Matches the SVG spec's Perlin noise algorithm (Park-Miller LCG + Fisher-Yates shuffle).
+/// Layout matches the WGSL `TurbulenceTables` struct.
+constexpr int kTurbBLen = 256;
+constexpr int kTurbBLenPlus2 = kTurbBLen + 2;               // 258
+constexpr int kTurbTableSize = kTurbBLen + kTurbBLenPlus2;  // 514
+
+struct TurbulenceTables {
+  int32_t lattice[kTurbTableSize];  // Permutation table (514 entries).
+  float gradX[4 * kTurbTableSize];  // Gradient X: [channel * 514 + index].
+  float gradY[4 * kTurbTableSize];  // Gradient Y: [channel * 514 + index].
+};
+
+// Park-Miller LCG constants matching tiny-skia/resvg.
+constexpr long kRandM = 2147483647;  // 2^31 - 1  // NOLINT
+constexpr long kRandA = 16807;       // NOLINT
+constexpr long kRandQ = 127773;      // NOLINT
+constexpr long kRandR = 2836;        // NOLINT
+
+/// Park-Miller LCG step (Schrage's method to avoid overflow).
+long turbulenceRandom(long seed) {                                    // NOLINT
+  long result = kRandA * (seed % kRandQ) - kRandR * (seed / kRandQ);  // NOLINT
+  if (result <= 0) {
+    result += kRandM;
+  }
+  return result;
+}
+
+/// Generate permutation + gradient tables from seed, matching tiny-skia exactly.
+void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
+  // Seed clamping matching resvg.
+  long seed;  // NOLINT
+  if (seedVal <= 0) {
+    seed = -(static_cast<long>(seedVal)) % (kRandM - 1) + 1;  // NOLINT
+  } else if (seedVal > kRandM - 1) {
+    seed = kRandM - 1;
+  } else {
+    seed = static_cast<long>(seedVal);  // NOLINT
+  }
+
+  // Temporary double-precision gradient storage during generation.
+  double gradient[4][kTurbTableSize][2] = {};
+
+  // Generate gradient tables for all 4 channels.
+  for (int ch = 0; ch < 4; ch++) {
+    for (int k = 0; k < kTurbBLen; k++) {
+      if (ch == 0) {
+        tables.lattice[k] = k;
+      }
+
+      seed = turbulenceRandom(seed);
+      gradient[ch][k][0] =
+          static_cast<double>((seed % (kTurbBLen + kTurbBLen)) - kTurbBLen) / kTurbBLen;
+      seed = turbulenceRandom(seed);
+      gradient[ch][k][1] =
+          static_cast<double>((seed % (kTurbBLen + kTurbBLen)) - kTurbBLen) / kTurbBLen;
+
+      // Normalize to unit length.
+      const double mag = std::sqrt(gradient[ch][k][0] * gradient[ch][k][0] +
+                                   gradient[ch][k][1] * gradient[ch][k][1]);
+      if (mag > 1e-10) {
+        gradient[ch][k][0] /= mag;
+        gradient[ch][k][1] /= mag;
+      }
+    }
+  }
+
+  // Fisher-Yates shuffle of the lattice selector.
+  for (int i = kTurbBLen - 1; i > 0; i--) {
+    seed = turbulenceRandom(seed);
+    const int target = static_cast<int>(seed % kTurbBLen);
+    std::swap(tables.lattice[i], tables.lattice[target]);
+  }
+
+  // Duplicate entries for wrapping.
+  for (int i = 0; i < kTurbBLenPlus2; i++) {
+    tables.lattice[kTurbBLen + i] = tables.lattice[i];
+    for (int ch = 0; ch < 4; ch++) {
+      gradient[ch][kTurbBLen + i][0] = gradient[ch][i][0];
+      gradient[ch][kTurbBLen + i][1] = gradient[ch][i][1];
+    }
+  }
+
+  // Convert to float SOA layout matching WGSL struct.
+  for (int ch = 0; ch < 4; ch++) {
+    for (int idx = 0; idx < kTurbTableSize; idx++) {
+      tables.gradX[ch * kTurbTableSize + idx] = static_cast<float>(gradient[ch][idx][0]);
+      tables.gradY[ch * kTurbTableSize + idx] = static_cast<float>(gradient[ch][idx][1]);
+    }
+  }
+}
+
 /// Uniform buffer layout matching the WGSL `DisplacementParams` struct.
 struct DisplacementParams {
   float scale;
@@ -130,20 +226,90 @@ struct DiffuseLightingParams {
 
   float azimuthRad;
   float elevationRad;
-
   float lightX;
   float lightY;
   float lightZ;
+  float userLightX;
+  float userLightY;
+  float userLightZ;
 
   float pointsAtX;
   float pointsAtY;
   float pointsAtZ;
   float spotExponent;
-  float cosConeAngle;
 
-  float pad2;
-  float pad3;
-  float pad4;
+  float userPointsAtX;
+  float userPointsAtY;
+  float userPointsAtZ;
+  float coneAngleRad;
+
+  float pixelToUser0;
+  float pixelToUser1;
+  float pixelToUser2;
+  float pixelToUser3;
+
+  float pixelToUser4;
+  float pixelToUser5;
+  uint32_t hasShear;
+  uint32_t hasConeAngle;
+  int32_t sampleMinX;
+  int32_t sampleMinY;
+  int32_t sampleMaxX;
+  int32_t sampleMaxY;
+};
+
+/// Uniform buffer layout matching the WGSL `DropShadowParams` struct.
+struct DropShadowParams {
+  float color[4];  // Flood color, straight alpha.
+  float dx;
+  float dy;
+  uint32_t pad0;
+  uint32_t pad1;
+};
+
+/// Uniform buffer layout matching the WGSL `ImageParams` struct.
+/// Row-major 2×3 transform: src = M * (dst_pixel + 0.5, 1).
+struct ImageParams {
+  float m00;
+  float m01;
+  float m02;
+  float m10;
+  float m11;
+  float m12;
+  uint32_t pad0;
+  uint32_t pad1;
+};
+
+/// Uniform buffer layout matching the WGSL `TileParams` struct.
+struct TileParams {
+  int32_t srcX;
+  int32_t srcY;
+  int32_t srcW;
+  int32_t srcH;
+};
+
+/// Uniform buffer layout matching the WGSL `SubregionClipParams` struct.
+struct SubregionClipParams {
+  float invA;
+  float invB;
+  float invC;
+  float invD;
+  float invE;
+  float invF;
+  float usrX0;
+  float usrY0;
+  float usrX1;
+  float usrY1;
+  uint32_t pad0;
+  uint32_t pad1;
+};
+
+/// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
+struct ColorSpaceConvertParams {
+  uint32_t direction;  // 0 = sRGB→linear, 1 = linear→sRGB.
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
 };
 
 /// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
@@ -160,20 +326,36 @@ struct SpecularLightingParams {
 
   float azimuthRad;
   float elevationRad;
-
   float lightX;
   float lightY;
   float lightZ;
+  float userLightX;
+  float userLightY;
+  float userLightZ;
 
   float pointsAtX;
   float pointsAtY;
   float pointsAtZ;
   float spotExponent;
-  float cosConeAngle;
 
-  float pad1;
-  float pad2;
-  float pad3;
+  float userPointsAtX;
+  float userPointsAtY;
+  float userPointsAtZ;
+  float coneAngleRad;
+
+  float pixelToUser0;
+  float pixelToUser1;
+  float pixelToUser2;
+  float pixelToUser3;
+
+  float pixelToUser4;
+  float pixelToUser5;
+  uint32_t hasShear;
+  uint32_t hasConeAngle;
+  int32_t sampleMinX;
+  int32_t sampleMinY;
+  int32_t sampleMaxX;
+  int32_t sampleMaxY;
 };
 
 /// Map a FilterGraph EdgeMode to the shader's uint.
@@ -211,9 +393,9 @@ struct InputOutputUniformPipeline {
 };
 
 InputOutputUniformPipeline createInputOutputUniformPipeline(const wgpu::Device& dev,
-                                                           const char* label,
-                                                           wgpu::ShaderModule shaderModule,
-                                                           size_t uniformSize) {
+                                                            const char* label,
+                                                            wgpu::ShaderModule shaderModule,
+                                                            size_t uniformSize) {
   wgpu::BindGroupLayoutEntry entries[3]{};
 
   entries[0].binding = 0;
@@ -378,10 +560,9 @@ void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& b
 
 /// Dispatch a compute shader with a standard (input, output, uniform) bind group.
 void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& bgl,
-                                const wgpu::ComputePipeline& pipeline,
-                                const wgpu::Texture& input, const wgpu::Texture& output,
-                                const wgpu::Buffer& uniformBuffer, size_t uniformSize,
-                                const char* label) {
+                                const wgpu::ComputePipeline& pipeline, const wgpu::Texture& input,
+                                const wgpu::Texture& output, const wgpu::Buffer& uniformBuffer,
+                                size_t uniformSize, const char* label) {
   const wgpu::Device& dev = device.device();
   const uint32_t width = output.getWidth();
   const uint32_t height = output.getHeight();
@@ -442,8 +623,8 @@ wgpu::Buffer createUniformBuffer(GeodeDevice& device, const void* data, size_t s
 /// Resolve an input reference to a texture.
 wgpu::Texture resolveInput(const svg::components::FilterInput& input,
                            const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-                           const wgpu::Texture& currentBuffer,
-                           const wgpu::Texture& sourceGraphic) {
+                           const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
+                           const wgpu::Texture* sourceAlpha) {
   using namespace svg::components;
   if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
     auto it = namedBuffers.find(named->name.str());
@@ -453,13 +634,44 @@ wgpu::Texture resolveInput(const svg::components::FilterInput& input,
   } else if (std::holds_alternative<FilterInput::Previous>(input.value)) {
     return currentBuffer;
   } else if (const auto* stdIn = std::get_if<FilterStandardInput>(&input.value)) {
-    if (*stdIn == FilterStandardInput::SourceGraphic ||
-        *stdIn == FilterStandardInput::SourceAlpha) {
+    if (*stdIn == FilterStandardInput::SourceGraphic) {
       return sourceGraphic;
+    }
+    if (*stdIn == FilterStandardInput::SourceAlpha && sourceAlpha != nullptr) {
+      return *sourceAlpha;
     }
     return sourceGraphic;
   }
   return currentBuffer;
+}
+
+bool graphUsesStandardInput(const svg::components::FilterGraph& filterGraph,
+                            svg::components::FilterStandardInput input) {
+  for (const svg::components::FilterNode& node : filterGraph.nodes) {
+    for (const svg::components::FilterInput& nodeInput : node.inputs) {
+      const auto* standardInput =
+          std::get_if<svg::components::FilterStandardInput>(&nodeInput.value);
+      if (standardInput != nullptr && *standardInput == input) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/// Returns true if the ColorMatrixParams represents an identity transform
+/// (diagonal ones, zero offsets). Used to short-circuit the shader dispatch
+/// and avoid the unpremultiply/premultiply round-trip precision loss that
+/// tiny-skia also avoids (FilterGraph.cpp:462).
+bool isIdentityColorMatrix(const ColorMatrixParams& params) {
+  // clang-format off
+  return params.col0[0] == 1.0f && params.col0[1] == 0.0f && params.col0[2] == 0.0f && params.col0[3] == 0.0f
+      && params.col1[0] == 0.0f && params.col1[1] == 1.0f && params.col1[2] == 0.0f && params.col1[3] == 0.0f
+      && params.col2[0] == 0.0f && params.col2[1] == 0.0f && params.col2[2] == 1.0f && params.col2[3] == 0.0f
+      && params.col3[0] == 0.0f && params.col3[1] == 0.0f && params.col3[2] == 0.0f && params.col3[3] == 1.0f
+      && params.col4[0] == 0.0f && params.col4[1] == 0.0f && params.col4[2] == 0.0f && params.col4[3] == 0.0f;
+  // clang-format on
 }
 
 /// Build the 4x5 color matrix from feColorMatrix parameters.
@@ -481,7 +693,7 @@ ColorMatrixParams buildColorMatrix(
 
   switch (primitive.type) {
     case Type::Matrix: {
-      if (primitive.values.size() >= 20) {
+      if (primitive.values.size() == 20) {
         // Row-major 4x5 → column-major 5×4.
         for (int row = 0; row < 4; ++row) {
           params.col0[row] = static_cast<float>(primitive.values[row * 5 + 0]);
@@ -520,8 +732,7 @@ ColorMatrixParams buildColorMatrix(
     }
 
     case Type::HueRotate: {
-      const double angleDeg =
-          primitive.values.empty() ? 0.0 : primitive.values[0];
+      const double angleDeg = primitive.values.empty() ? 0.0 : primitive.values[0];
       const double rad = angleDeg * std::numbers::pi / 180.0;
       const float c = static_cast<float>(std::cos(rad));
       const float s = static_cast<float>(std::sin(rad));
@@ -597,9 +808,7 @@ void buildChannelLut(const svg::components::filter_primitive::ComponentTransfer:
         break;
       }
       case FT::Linear: result = func.slope * c + func.intercept; break;
-      case FT::Gamma:
-        result = func.amplitude * std::pow(c, func.exponent) + func.offset;
-        break;
+      case FT::Gamma: result = func.amplitude * std::pow(c, func.exponent) + func.offset; break;
     }
 
     result = std::clamp(result, 0.0, 1.0);
@@ -824,9 +1033,9 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     convolveMatrixPipeline_ = dev.createComputePipeline(cpDesc);
   }
 
-  // --- feTurbulence pipeline (output + storage buffer, no input texture) ---
+  // --- feTurbulence pipeline (output + params buffer + tables buffer) ---
   {
-    wgpu::BindGroupLayoutEntry entries[2]{};
+    wgpu::BindGroupLayoutEntry entries[3]{};
 
     entries[0].binding = 0;
     entries[0].visibility = wgpu::ShaderStage::Compute;
@@ -839,9 +1048,14 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
     entries[1].buffer.minBindingSize = sizeof(TurbulenceParams);
 
+    entries[2].binding = 2;
+    entries[2].visibility = wgpu::ShaderStage::Compute;
+    entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[2].buffer.minBindingSize = sizeof(TurbulenceTables);
+
     wgpu::BindGroupLayoutDescriptor bglDesc{};
     bglDesc.label = wgpuLabel("FilterTurbulenceBGL");
-    bglDesc.entryCount = 2;
+    bglDesc.entryCount = 3;
     bglDesc.entries = entries;
     turbulenceBindGroupLayout_ = dev.createBindGroupLayout(bglDesc);
 
@@ -862,9 +1076,9 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
   // --- feDisplacementMap pipeline (two inputs + output + uniform) ---
   {
-    auto [bgl, pipeline] = createTwoInputUniformPipeline(
-        dev, "FilterDisplacementMap", createFilterDisplacementMapShader(dev),
-        sizeof(DisplacementParams));
+    auto [bgl, pipeline] = createTwoInputUniformPipeline(dev, "FilterDisplacementMap",
+                                                         createFilterDisplacementMapShader(dev),
+                                                         sizeof(DisplacementParams));
     displacementMapBindGroupLayout_ = bgl;
     displacementMapPipeline_ = pipeline;
   }
@@ -952,27 +1166,77 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     cpDesc.compute.entryPoint = wgpuLabel("main");
     specularLightingPipeline_ = dev.createComputePipeline(cpDesc);
   }
+
+  // --- feDropShadow compose pipeline (two inputs + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createTwoInputUniformPipeline(
+        dev, "FilterDropShadow", createFilterDropShadowShader(dev), sizeof(DropShadowParams));
+    dropShadowBindGroupLayout_ = bgl;
+    dropShadowPipeline_ = pipeline;
+  }
+
+  // --- feImage placement pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterImage", createFilterImageShader(dev), sizeof(ImageParams));
+    imageBindGroupLayout_ = bgl;
+    imagePipeline_ = pipeline;
+  }
+
+  // --- feTile wraparound pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterTile", createFilterTileShader(dev), sizeof(TileParams));
+    tileBindGroupLayout_ = bgl;
+    tilePipeline_ = pipeline;
+  }
+
+  // --- Per-primitive subregion clipping pipeline (input + output + uniform) ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(dev, "FilterSubregionClip",
+                                                            createFilterSubregionClipShader(dev),
+                                                            sizeof(SubregionClipParams));
+    subregionClipBindGroupLayout_ = bgl;
+    subregionClipPipeline_ = pipeline;
+  }
+
+  // --- sRGB↔linearRGB color space conversion pipeline ---
+  {
+    auto [bgl, pipeline] = createInputOutputUniformPipeline(
+        dev, "FilterColorSpaceConvert", createFilterColorSpaceConvertShader(dev),
+        sizeof(ColorSpaceConvertParams));
+    colorSpaceConvertBindGroupLayout_ = bgl;
+    colorSpaceConvertPipeline_ = pipeline;
+  }
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
 
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
-                                         const Box2d& filterRegion) {
+                                         const Box2d& filterRegion,
+                                         const Transform2d& deviceFromFilter) {
   using namespace svg::components;
 
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   wgpu::Texture currentBuffer = sourceGraphic;
+  std::optional<wgpu::Texture> sourceAlpha;
+  if (graphUsesStandardInput(graph, svg::components::FilterStandardInput::SourceAlpha)) {
+    sourceAlpha = applySourceAlpha(sourceGraphic);
+  }
 
-  // Compute user-space → pixel-space scale factors so that primitive
-  // parameters (dx/dy, stdDeviation, etc.) are interpreted in pixels.
-  const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-  const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+  // Derive per-axis scale factors from the full CTM's basis vectors so
+  // that rotation/skew in the ancestor transform is accounted for.
+  // This matches the CPU FilterGraphExecutor's decomposition.
+  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const double scaleX = std::max(transformedXAxis.length(), 1e-12);
+  const double determinant = deviceFromFilter.determinant();
+  const double scaleY = NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3])
+                                                : std::max(std::abs(determinant) / scaleX, 1e-12);
 
   // For objectBoundingBox primitiveUnits, values are relative to the element
   // bounding box.  Scale through the bbox dimensions first, then to pixels.
-  const bool isOBB =
-      graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
+  const bool isOBB = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
   const double bboxW =
       graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width() : 1.0;
   const double bboxH =
@@ -984,11 +1248,98 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     return std::abs(isOBB ? val * bboxH : val) * scaleY;
   };
 
+  // Transform a user-space offset vector through the full CTM so that
+  // rotation/skew is preserved (used by feOffset, feDropShadow).
+  auto toPixelOffset = [&](double dx, double dy) -> Vector2d {
+    const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
+    return deviceFromFilter.transformVector(userOffset);
+  };
+
+  // Bounding-box origin for OBB position resolution.
+  const double bboxX =
+      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.x : 0.0;
+  const double bboxY =
+      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y : 0.0;
+
+  // Inverse CTM for rotation-aware subregion clipping.
+  const Transform2d filterFromDevice = deviceFromFilter.inverse();
+
+  // Reference bounds for Length::toPixels in the non-OBB case.
+  const Box2d primitiveUnitsBounds = [&]() -> Box2d {
+    if (isOBB) {
+      return graph.elementBoundingBox.value_or(Box2d(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
+    }
+    const double userW = NearZero(scaleX, 1e-12)
+                             ? static_cast<double>(sourceGraphic.getWidth())
+                             : static_cast<double>(sourceGraphic.getWidth()) / scaleX;
+    const double userH = NearZero(scaleY, 1e-12)
+                             ? static_cast<double>(sourceGraphic.getHeight())
+                             : static_cast<double>(sourceGraphic.getHeight()) / scaleY;
+    return Box2d::FromXYWH(0.0, 0.0, userW, userH);
+  }();
+
+  // Resolve a primitive subregion length to user-space position.
+  auto resolvePrimitivePosition = [&](const Lengthd& len, Lengthd::Extent extent, double origin,
+                                      double bboxDim) -> double {
+    if (isOBB && len.unit == Lengthd::Unit::None) {
+      return origin + len.value * bboxDim;
+    }
+    if (len.unit == Lengthd::Unit::Percent) {
+      const double refOrigin = isOBB ? (extent == Lengthd::Extent::X ? bboxX : bboxY) : 0.0;
+      const double refSize = isOBB ? bboxDim
+                                   : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                                   : primitiveUnitsBounds.height());
+      return refOrigin + refSize * len.value / 100.0;
+    }
+    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  };
+
+  // Resolve a primitive subregion length to user-space size.
+  auto resolvePrimitiveSize = [&](const Lengthd& len, Lengthd::Extent extent,
+                                  double bboxDim) -> double {
+    if (isOBB && len.unit == Lengthd::Unit::None) {
+      return len.value * bboxDim;
+    }
+    if (len.unit == Lengthd::Unit::Percent) {
+      const double refSize = isOBB ? bboxDim
+                                   : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                                   : primitiveUnitsBounds.height());
+      return refSize * len.value / 100.0;
+    }
+    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  };
+
+  // Per-node subregion tracking in user space, mirroring tiny-skia's
+  // defaultNodeSubregion / resolveInputSubregion / previousOutputSubregion.
+  // Used to propagate subregion bounds through the filter graph so that
+  // non-source-generator nodes (feOffset, feComposite, etc.) clip to their
+  // input bounds rather than the full filter region.
+  const Box2d filterRegionSubregion = filterRegion;
+  Box2d previousOutputSubregion = filterRegionSubregion;
+  std::unordered_map<std::string, Box2d> namedSubregions;
+
+  // Resolve the user-space subregion for a filter input reference.
+  auto resolveInputSubregion = [&](const FilterInput& input) -> Box2d {
+    if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
+      auto it = namedSubregions.find(named->name.str());
+      if (it != namedSubregions.end()) {
+        return it->second;
+      }
+      return previousOutputSubregion;
+    }
+    if (std::holds_alternative<FilterInput::Previous>(input.value)) {
+      return previousOutputSubregion;
+    }
+    // StandardInput (SourceGraphic, SourceAlpha, etc.) → full filter region.
+    return filterRegionSubregion;
+  };
+
   for (const FilterNode& node : graph.nodes) {
     // Resolve the primary input texture for this node.
     wgpu::Texture inputTex = currentBuffer;
     if (!node.inputs.empty()) {
-      inputTex = resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic);
+      inputTex = resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic,
+                              sourceAlpha ? &*sourceAlpha : nullptr);
     }
 
     // Dispatch based on primitive type.
@@ -997,56 +1348,94 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       const double sx = blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0;
       const double sy = blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0;
       const uint32_t em = toShaderEdgeMode(blur->edgeMode);
-      outputTex = applyGaussianBlur(inputTex, sx, sy, em);
-    } else if (const auto* offset = std::get_if<filter_primitive::Offset>(&node.primitive)) {
-      // Scale offset from user-space to pixel-space.  Unlike blur, offset
-      // preserves sign (negative shifts are valid), so do not take abs().
-      filter_primitive::Offset scaled = *offset;
-      if (isOBB) {
-        scaled.dx *= bboxW;
-        scaled.dy *= bboxH;
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        wgpu::Texture linearInput = applyColorSpaceConversion(inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearOutput = applyGaussianBlur(linearInput, sx, sy, em);
+        outputTex = applyColorSpaceConversion(linearOutput, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyGaussianBlur(inputTex, sx, sy, em);
       }
-      scaled.dx *= scaleX;
-      scaled.dy *= scaleY;
+    } else if (const auto* offset = std::get_if<filter_primitive::Offset>(&node.primitive)) {
+      // Project the offset vector through the full CTM so rotation/skew
+      // maps correctly to device pixels.
+      const Vector2d pixelOffset = toPixelOffset(offset->dx, offset->dy);
+      filter_primitive::Offset scaled = *offset;
+      scaled.dx = pixelOffset.x;
+      scaled.dy = pixelOffset.y;
       outputTex = applyOffset(inputTex, scaled);
     } else if (const auto* cm = std::get_if<filter_primitive::ColorMatrix>(&node.primitive)) {
-      outputTex = applyColorMatrix(inputTex, *cm);
+      // Per SVG spec, feColorMatrix operates in linearRGB by default (the
+      // `color-interpolation-filters` property). Match tiny-skia by
+      // wrapping the matrix operation with sRGB↔linear conversion, and
+      // short-circuiting identity matrices to avoid lossy round-trips.
+      ColorMatrixParams matrixParams = buildColorMatrix(*cm);
+      if (isIdentityColorMatrix(matrixParams)) {
+        outputTex = inputTex;
+      } else {
+        const bool nodeLinearRGB =
+            node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+            svg::ColorInterpolationFilters::SRGB;
+        if (nodeLinearRGB) {
+          wgpu::Texture linearInput = applyColorSpaceConversion(inputTex, /*srgbToLinear=*/true);
+          wgpu::Texture matrixOutput = applyColorMatrix(linearInput, *cm);
+          outputTex = applyColorSpaceConversion(matrixOutput, /*srgbToLinear=*/false);
+        } else {
+          outputTex = applyColorMatrix(inputTex, *cm);
+        }
+      }
     } else if (const auto* flood = std::get_if<filter_primitive::Flood>(&node.primitive)) {
       outputTex = applyFlood(inputTex.getWidth(), inputTex.getHeight(), *flood);
     } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
-      outputTex = applyMerge(node, namedBuffers, currentBuffer, sourceGraphic);
-    } else if (const auto* composite =
-                   std::get_if<filter_primitive::Composite>(&node.primitive)) {
+      outputTex = applyMerge(node, namedBuffers, currentBuffer, sourceGraphic,
+                             sourceAlpha ? &*sourceAlpha : nullptr);
+    } else if (const auto* composite = std::get_if<filter_primitive::Composite>(&node.primitive)) {
       // Resolve second input (in2/backdrop).
       wgpu::Texture in2Tex = inputTex;
       if (node.inputs.size() >= 2) {
-        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
+        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
+                              sourceAlpha ? &*sourceAlpha : nullptr);
       }
       outputTex = applyComposite(inputTex, in2Tex, *composite);
     } else if (const auto* blend = std::get_if<filter_primitive::Blend>(&node.primitive)) {
       // Resolve second input (in2/backdrop).
       wgpu::Texture in2Tex = inputTex;
       if (node.inputs.size() >= 2) {
-        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
+        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
+                              sourceAlpha ? &*sourceAlpha : nullptr);
       }
-      outputTex = applyBlend(inputTex, in2Tex, *blend);
+      // Per SVG spec, feBlend operates in the filter's color-interpolation-filters
+      // space (linearRGB by default). Match tiny-skia by wrapping the blend with
+      // sRGB↔linear conversion when the node resolves to linearRGB.
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        wgpu::Texture linearIn1 = applyColorSpaceConversion(inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearIn2 = applyColorSpaceConversion(in2Tex, /*srgbToLinear=*/true);
+        wgpu::Texture linearOutput = applyBlend(linearIn1, linearIn2, *blend);
+        outputTex = applyColorSpaceConversion(linearOutput, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyBlend(inputTex, in2Tex, *blend);
+      }
     } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
       const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
       const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
       outputTex = applyMorphology(inputTex, *morph, rx, ry);
-    } else if (const auto* ct =
-                   std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
+    } else if (const auto* ct = std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
       outputTex = applyComponentTransfer(inputTex, *ct);
-    } else if (const auto* conv =
-                   std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
+    } else if (const auto* conv = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
       outputTex = applyConvolveMatrix(inputTex, *conv);
     } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
-      outputTex = applyTurbulence(inputTex.getWidth(), inputTex.getHeight(), *turb, scaleX, scaleY);
-    } else if (const auto* disp =
-                   std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
+      outputTex =
+          applyTurbulence(inputTex.getWidth(), inputTex.getHeight(), *turb, deviceFromFilter);
+    } else if (const auto* disp = std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
       wgpu::Texture in2Tex = inputTex;
       if (node.inputs.size() >= 2) {
-        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic);
+        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
+                              sourceAlpha ? &*sourceAlpha : nullptr);
       }
       // For objectBoundingBox, scale through sqrt(bboxW * bboxH) per the spec.
       double pixelScale = std::abs(disp->scale);
@@ -1057,10 +1446,40 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       outputTex = applyDisplacementMap(inputTex, in2Tex, *disp, pixelScale);
     } else if (const auto* diffuse =
                    std::get_if<filter_primitive::DiffuseLighting>(&node.primitive)) {
-      outputTex = applyDiffuseLighting(inputTex, *diffuse, scaleX, scaleY);
+      const Box2d lightingInputSubregion =
+          node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      outputTex =
+          applyDiffuseLighting(inputTex, *diffuse, graph, deviceFromFilter, lightingInputSubregion);
     } else if (const auto* specular =
                    std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
-      outputTex = applySpecularLighting(inputTex, *specular, scaleX, scaleY);
+      const Box2d lightingInputSubregion =
+          node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      outputTex = applySpecularLighting(inputTex, *specular, graph, deviceFromFilter,
+                                        lightingInputSubregion);
+    } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+      // stdDeviation is magnitude only; dx/dy are directional and need
+      // the full CTM projection (matching feOffset).
+      double sx = drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0;
+      double sy = drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0;
+      const Vector2d pixelOffset = toPixelOffset(drop->dx, drop->dy);
+      outputTex = applyDropShadow(inputTex, *drop, sx, sy, pixelOffset.x, pixelOffset.y);
+    } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
+      outputTex = applyImage(*image, inputTex.getWidth(), inputTex.getHeight(), graph, node,
+                             deviceFromFilter);
+    } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
+      // FE1 §9.20: feTile repeats the INPUT primitive's subregion to fill
+      // feTile's own subregion. Default to the filter region only when there
+      // is no explicit input.
+      const Box2d tileSourceSubregion =
+          node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      const Box2d sourcePixels = deviceFromFilter.transformBox(tileSourceSubregion);
+      int32_t srcX = static_cast<int32_t>(std::floor(sourcePixels.topLeft.x));
+      int32_t srcY = static_cast<int32_t>(std::floor(sourcePixels.topLeft.y));
+      int32_t srcW =
+          static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.x - sourcePixels.topLeft.x));
+      int32_t srcH =
+          static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.y - sourcePixels.topLeft.y));
+      outputTex = applyTile(inputTex, srcX, srcY, srcW, srcH);
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -1071,6 +1490,130 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       outputTex = inputTex;
     }
 
+    // Per-primitive subregion clipping: compute the user-space subregion
+    // using input-bounds-based logic matching tiny-skia's defaultNodeSubregion.
+    // Source generators (Flood, Turbulence, Image, Tile) and nodes with no
+    // inputs default to the filter region.  Other nodes inherit the union of
+    // their input subregions, with primitive-specific expansion (e.g. blur).
+    // Explicit x/y/width/height attributes override the default and are
+    // intersected with the filter region.
+    {
+      const bool isSourceGenerator =
+          std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
+          std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
+          std::holds_alternative<filter_primitive::Image>(node.primitive) ||
+          std::holds_alternative<filter_primitive::Tile>(node.primitive);
+
+      const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
+                                        node.width.has_value() || node.height.has_value();
+
+      Box2d nodeSubregion = filterRegionSubregion;
+
+      // Helper: intersect two user-space boxes.
+      auto boxIntersect = [](const Box2d& a, const Box2d& b) -> Box2d {
+        return Box2d(
+            Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
+            Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
+                     std::min(a.bottomRight.y, b.bottomRight.y)));
+      };
+
+      if (hasExplicitSubregion) {
+        // Explicit subregion attributes — resolve and intersect with filter region.
+        const double ux = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
+                                                                        isOBB ? bboxX : 0.0, bboxW)
+                                             : filterRegion.topLeft.x;
+        const double uy = node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
+                                                                        isOBB ? bboxY : 0.0, bboxH)
+                                             : filterRegion.topLeft.y;
+        const double uw = node.width.has_value()
+                              ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
+                              : filterRegion.width();
+        const double uh = node.height.has_value()
+                              ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
+                              : filterRegion.height();
+        nodeSubregion = boxIntersect(Box2d(Vector2d(ux, uy), Vector2d(ux + uw, uy + uh)),
+                                     filterRegionSubregion);
+      } else if (!isSourceGenerator && !node.inputs.empty()) {
+        // Non-source node without explicit subregion: use union of input bounds.
+        Box2d inputBounds = resolveInputSubregion(node.inputs[0]);
+        for (size_t i = 1; i < node.inputs.size(); ++i) {
+          inputBounds = Box2d::Union(inputBounds, resolveInputSubregion(node.inputs[i]));
+        }
+
+        // Apply primitive-specific subregion expansion.
+        if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
+          const double expandX =
+              std::ceil((blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0) * 3.0);
+          const double expandY =
+              std::ceil((blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0) * 3.0);
+          inputBounds = Box2d(
+              Vector2d(inputBounds.topLeft.x - expandX, inputBounds.topLeft.y - expandY),
+              Vector2d(inputBounds.bottomRight.x + expandX, inputBounds.bottomRight.y + expandY));
+        } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+          const double expandX =
+              std::ceil((drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0) * 3.0);
+          const double expandY =
+              std::ceil((drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0) * 3.0);
+          const Vector2d pixOff = toPixelOffset(drop->dx, drop->dy);
+          Box2d shadowBounds = Box2d(Vector2d(inputBounds.topLeft.x + pixOff.x - expandX,
+                                              inputBounds.topLeft.y + pixOff.y - expandY),
+                                     Vector2d(inputBounds.bottomRight.x + pixOff.x + expandX,
+                                              inputBounds.bottomRight.y + pixOff.y + expandY));
+          inputBounds = Box2d::Union(inputBounds, shadowBounds);
+        } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
+          if (morph->op == filter_primitive::Morphology::Operator::Dilate) {
+            const double rx = toPixelX(morph->radiusX);
+            const double ry = toPixelY(morph->radiusY);
+            inputBounds =
+                Box2d(Vector2d(inputBounds.topLeft.x - rx, inputBounds.topLeft.y - ry),
+                      Vector2d(inputBounds.bottomRight.x + rx, inputBounds.bottomRight.y + ry));
+          }
+        }
+
+        nodeSubregion = boxIntersect(inputBounds, filterRegionSubregion);
+      }
+      // else: source generator or no inputs → nodeSubregion stays as filterRegionSubregion.
+
+      // Detect whether the CTM is axis-aligned.  When it is, the CPU
+      // path crops the primitive output with floor/ceil-rounded pixel
+      // bounds (tiny-skia's `applySubregionClipping` per-primitive crop).
+      // We mirror that behaviour by passing pixel-space bounds through
+      // the identity-transform shader path with the same round-out
+      // rounding.  When the CTM has rotation/skew we keep the existing
+      // per-pixel point-in-rect test against the user-space rect (the
+      // tightest representation that survives rotation).
+      const bool ctmAxisAligned =
+          NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
+
+      if (hasExplicitSubregion && !ctmAxisAligned) {
+        // Rotation-aware clip using inverse CTM and user-space bounds.
+        // Only needed when the node has explicit subregion attributes
+        // and the CTM has rotation/skew, matching the CPU path's
+        // per-pixel point-in-rect test.
+        outputTex = applySubregionClip(outputTex, filterFromDevice, nodeSubregion.topLeft.x,
+                                       nodeSubregion.topLeft.y, nodeSubregion.bottomRight.x,
+                                       nodeSubregion.bottomRight.y);
+      } else {
+        // AABB clip in pixel space — project the user-space subregion
+        // through the full CTM and clip to the axis-aligned bounding box.
+        // Round-out to integer pixel bounds to match the CPU path's
+        // floor/ceil cropping in tiny-skia's per-primitive clip; without
+        // this, half-pixel-aligned subregion edges drop a row/column of
+        // pixels relative to the CPU reference.
+        const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
+        static const Transform2d kIdentity;
+        outputTex = applySubregionClip(
+            outputTex, kIdentity, std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y),
+            std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y));
+      }
+
+      // Record the subregion for downstream nodes.
+      if (node.result.has_value()) {
+        namedSubregions[node.result->str()] = nodeSubregion;
+      }
+      previousOutputSubregion = nodeSubregion;
+    }
+
     if (node.result.has_value()) {
       namedBuffers[node.result->str()] = outputTex;
     }
@@ -1079,87 +1622,80 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   }
 
   // Clip the final output to the filter region.  The SVG filter model
-  // requires pixels outside the filter region to be transparent.  We
-  // clear a fresh texture via a render pass and then GPU-copy only the
-  // pixels inside the region from the result.
-  //
-  // The filter region is in user-space coordinates; transform to pixel
-  // coordinates using the graph's scale factor.
+  // requires pixels outside the filter region to be transparent.
+  // Use rotation-aware clipping (via the inverse CTM) so that skewed/rotated
+  // filter regions produce correctly-shaped parallelogram clips, matching the
+  // CPU path's per-pixel point-in-rect test in ClipFilterOutputToRegion.
+  // For axis-aligned CTMs we mirror the CPU's `floor/ceil` round-out so that
+  // half-pixel-aligned filter region edges keep the same row/column as
+  // tiny-skia's `clipFilterOutputToRegion`.
   {
-    const uint32_t width = currentBuffer.getWidth();
-    const uint32_t height = currentBuffer.getHeight();
-    const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-    const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
-    const int x0 =
-        std::max(0, static_cast<int>(std::floor(filterRegion.topLeft.x * scaleX)));
-    const int y0 =
-        std::max(0, static_cast<int>(std::floor(filterRegion.topLeft.y * scaleY)));
-    const int x1 =
-        std::clamp(static_cast<int>(std::ceil(filterRegion.bottomRight.x * scaleX)), 0,
-                   static_cast<int>(width));
-    const int y1 =
-        std::clamp(static_cast<int>(std::ceil(filterRegion.bottomRight.y * scaleY)), 0,
-                   static_cast<int>(height));
-
-    // Skip clipping if the region covers the entire texture.
-    if (x0 > 0 || y0 > 0 || x1 < static_cast<int>(width) || y1 < static_cast<int>(height)) {
-      const wgpu::Device& dev = device_.device();
-
-      // Allocate destination with RenderAttachment (for clear) + CopyDst.
-      wgpu::TextureDescriptor td{};
-      td.label = wgpuLabel("FilterClipOutput");
-      td.size = {width, height, 1};
-      td.format = kFormat;
-      td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-                 wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst;
-      td.mipLevelCount = 1;
-      td.sampleCount = 1;
-      td.dimension = wgpu::TextureDimension::_2D;
-      wgpu::Texture clipped = dev.createTexture(td);
-
-      // Clear the destination to transparent via a render pass.
-      wgpu::TextureView clippedView = clipped.createView();
-      wgpu::RenderPassColorAttachment colorAtt{};
-      colorAtt.view = clippedView;
-      colorAtt.loadOp = wgpu::LoadOp::Clear;
-      colorAtt.storeOp = wgpu::StoreOp::Store;
-      colorAtt.clearValue = {0.0, 0.0, 0.0, 0.0};
-
-      wgpu::RenderPassDescriptor rpDesc{};
-      rpDesc.label = wgpuLabel("FilterClipClear");
-      rpDesc.colorAttachmentCount = 1;
-      rpDesc.colorAttachments = &colorAtt;
-
-      wgpu::CommandEncoderDescriptor ceDesc{};
-      ceDesc.label = wgpuLabel("FilterClipEncoder");
-      wgpu::CommandEncoder encoder = dev.createCommandEncoder(ceDesc);
-
-      wgpu::RenderPassEncoder rp = encoder.beginRenderPass(rpDesc);
-      rp.end();
-
-      // Copy just the filter region from the result into the cleared texture.
-      if (x1 > x0 && y1 > y0) {
-        wgpu::TexelCopyTextureInfo srcCopy{};
-        srcCopy.texture = currentBuffer;
-        srcCopy.origin = {static_cast<uint32_t>(x0), static_cast<uint32_t>(y0), 0};
-
-        wgpu::TexelCopyTextureInfo dstCopy{};
-        dstCopy.texture = clipped;
-        dstCopy.origin = {static_cast<uint32_t>(x0), static_cast<uint32_t>(y0), 0};
-
-        wgpu::Extent3D extent = {static_cast<uint32_t>(x1 - x0),
-                                 static_cast<uint32_t>(y1 - y0), 1};
-        encoder.copyTextureToTexture(srcCopy, dstCopy, extent);
-      }
-
-      wgpu::CommandBuffer cmdBuf = encoder.finish();
-      device_.queue().submit(1, &cmdBuf);
-      currentBuffer = clipped;
+    const bool ctmAxisAligned =
+        NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
+    if (ctmAxisAligned) {
+      const Box2d pixelAABB = deviceFromFilter.transformBox(filterRegion);
+      static const Transform2d kIdentity;
+      currentBuffer =
+          applySubregionClip(currentBuffer, kIdentity, std::floor(pixelAABB.topLeft.x),
+                             std::floor(pixelAABB.topLeft.y), std::ceil(pixelAABB.bottomRight.x),
+                             std::ceil(pixelAABB.bottomRight.y));
+    } else {
+      currentBuffer = applySubregionClip(currentBuffer, filterFromDevice, filterRegion.topLeft.x,
+                                         filterRegion.topLeft.y, filterRegion.bottomRight.x,
+                                         filterRegion.bottomRight.y);
     }
   }
 
   return currentBuffer;
 }
+
+namespace {
+
+/// One pass of a 3-pass box-blur approximation of a Gaussian.
+/// Mirrors tiny-skia's `computeBoxPasses` (third_party/tiny-skia-cpp/src/
+/// tiny_skia/filter/GaussianBlur.cpp) so the Geode and software backends
+/// match in pixel coverage and effective sigma.
+struct BoxPass {
+  int32_t left;
+  int32_t right;
+};
+
+struct BoxBlurPlan {
+  std::array<BoxPass, 3> passes{};
+  int numPasses = 0;
+};
+
+BoxBlurPlan computeBoxPasses(double sigma) {
+  // Same window-size formula as tiny-skia: window = round(sigma * 3*sqrt(2π)/4).
+  constexpr double kMaxSigma = 10000.0;
+  if (!std::isfinite(sigma) || sigma > kMaxSigma) {
+    sigma = kMaxSigma;
+  }
+  const double kWindowScale = 3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
+  const int window = std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
+
+  BoxBlurPlan plan;
+  if (window <= 1) {
+    return plan;
+  }
+
+  if ((window & 1) != 0) {
+    const int radius = window / 2;
+    for (int i = 0; i < 3; ++i) {
+      plan.passes[i] = {radius, radius};
+    }
+    plan.numPasses = 3;
+  } else {
+    const int half = window / 2;
+    plan.passes[0] = {half, half - 1};
+    plan.passes[1] = {half - 1, half};
+    plan.passes[2] = {half, half};
+    plan.numPasses = 3;
+  }
+  return plan;
+}
+
+}  // namespace
 
 wgpu::Texture GeodeFilterEngine::applyGaussianBlur(const wgpu::Texture& input, double stdDeviationX,
                                                    double stdDeviationY, uint32_t edgeMode) {
@@ -1170,16 +1706,38 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(const wgpu::Texture& input, d
     return input;
   }
 
+  // For sigma >= 2.0 use a 3-pass box approximation matching tiny-skia,
+  // which extends ~2.82*sigma instead of the pure Gaussian's 3*sigma.
+  // This eliminates faint coloured fringes at the extreme tails of the
+  // kernel that the software backend never produces.
+  constexpr double kBoxBlurThreshold = 2.0;
+
   wgpu::Texture afterHorizontal = input;
   if (stdDeviationX > 0.0) {
-    afterHorizontal =
-        runBlurPass(input, width, height, static_cast<float>(stdDeviationX), /*axis=*/0, edgeMode);
+    if (stdDeviationX >= kBoxBlurThreshold) {
+      const BoxBlurPlan plan = computeBoxPasses(stdDeviationX);
+      for (int i = 0; i < plan.numPasses; ++i) {
+        afterHorizontal = runBoxBlurPass(afterHorizontal, width, height, plan.passes[i].left,
+                                         plan.passes[i].right, /*axis=*/0, edgeMode);
+      }
+    } else {
+      afterHorizontal = runBlurPass(input, width, height, static_cast<float>(stdDeviationX),
+                                    /*axis=*/0, edgeMode);
+    }
   }
 
   wgpu::Texture afterVertical = afterHorizontal;
   if (stdDeviationY > 0.0) {
-    afterVertical = runBlurPass(afterHorizontal, width, height, static_cast<float>(stdDeviationY),
-                                /*axis=*/1, edgeMode);
+    if (stdDeviationY >= kBoxBlurThreshold) {
+      const BoxBlurPlan plan = computeBoxPasses(stdDeviationY);
+      for (int i = 0; i < plan.numPasses; ++i) {
+        afterVertical = runBoxBlurPass(afterVertical, width, height, plan.passes[i].left,
+                                       plan.passes[i].right, /*axis=*/1, edgeMode);
+      }
+    } else {
+      afterVertical = runBlurPass(afterHorizontal, width, height, static_cast<float>(stdDeviationY),
+                                  /*axis=*/1, edgeMode);
+    }
   }
 
   return afterVertical;
@@ -1196,13 +1754,42 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(const wgpu::Texture& input, uint32_
   params.stdDeviation = stdDeviation;
   params.axis = axis;
   params.edgeMode = edgeMode;
-  params.pad = 0;
+  params.kernelType = 0;
+  params.boxLeft = 0;
+  params.boxRight = 0;
+  params.pad0 = 0;
+  params.pad1 = 0;
 
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(device_, &params, sizeof(params), "BlurParamsUniform");
 
   dispatchInputOutputUniform(device_, blurBindGroupLayout_, gaussianBlurPipeline_, input, output,
                              uniformBuffer, sizeof(BlurParams), "GaussianBlurPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::runBoxBlurPass(const wgpu::Texture& input, uint32_t width,
+                                                uint32_t height, int32_t boxLeft, int32_t boxRight,
+                                                uint32_t axis, uint32_t edgeMode) {
+  const wgpu::Device& dev = device_.device();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "BoxBlurPass");
+
+  BlurParams params{};
+  params.stdDeviation = 0.0f;
+  params.axis = axis;
+  params.edgeMode = edgeMode;
+  params.kernelType = 1;
+  params.boxLeft = boxLeft;
+  params.boxRight = boxRight;
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "BlurParamsUniform");
+
+  dispatchInputOutputUniform(device_, blurBindGroupLayout_, gaussianBlurPipeline_, input, output,
+                             uniformBuffer, sizeof(BlurParams), "BoxBlurPass");
   return output;
 }
 
@@ -1234,15 +1821,21 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 }
 
 wgpu::Texture GeodeFilterEngine::applyColorMatrix(
-    const wgpu::Texture& input,
-    const svg::components::filter_primitive::ColorMatrix& primitive) {
+    const wgpu::Texture& input, const svg::components::filter_primitive::ColorMatrix& primitive) {
+  ColorMatrixParams params = buildColorMatrix(primitive);
+
+  // Match tiny-skia's identity shortcut: skip the shader to avoid the
+  // unpremultiply→multiply→premultiply round-trip that introduces precision
+  // loss on semi-transparent pixels (e.g. gradient edges).
+  if (isIdentityColorMatrix(params)) {
+    return input;
+  }
+
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterColorMatrixOutput");
-
-  ColorMatrixParams params = buildColorMatrix(primitive);
 
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(device_, &params, sizeof(params), "ColorMatrixParamsUniform");
@@ -1253,9 +1846,27 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
   return output;
 }
 
+wgpu::Texture GeodeFilterEngine::applySourceAlpha(const wgpu::Texture& input) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterSourceAlphaOutput");
+
+  ColorMatrixParams params{};
+  params.col3[3] = 1.0f;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "SourceAlphaParamsUniform");
+
+  dispatchInputOutputUniform(device_, colorMatrixBindGroupLayout_, colorMatrixPipeline_, input,
+                             output, uniformBuffer, sizeof(ColorMatrixParams),
+                             "FilterSourceAlphaPass");
+  return output;
+}
+
 wgpu::Texture GeodeFilterEngine::applyFlood(
-    uint32_t width, uint32_t height,
-    const svg::components::filter_primitive::Flood& primitive) {
+    uint32_t width, uint32_t height, const svg::components::filter_primitive::Flood& primitive) {
   const wgpu::Device& dev = device_.device();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterFloodOutput");
@@ -1265,7 +1876,7 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   // Porter-Duff compositing in feMerge).
   const css::RGBA rgba = primitive.floodColor.asRGBA();
   const float alpha = (static_cast<float>(rgba.a) / 255.0f) *
-                       static_cast<float>(std::clamp(primitive.floodOpacity, 0.0, 1.0));
+                      static_cast<float>(std::clamp(primitive.floodOpacity, 0.0, 1.0));
 
   FloodParams params{};
   params.color[0] = (static_cast<float>(rgba.r) / 255.0f) * alpha;
@@ -1318,21 +1929,26 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
 wgpu::Texture GeodeFilterEngine::applyMerge(
     const svg::components::FilterNode& node,
     const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
-    const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic) {
+    const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
+    const wgpu::Texture* sourceAlpha) {
   const uint32_t width = currentBuffer.getWidth();
   const uint32_t height = currentBuffer.getHeight();
 
   if (node.inputs.empty()) {
-    return currentBuffer;
+    svg::components::filter_primitive::Flood transparent;
+    transparent.floodColor = css::Color(css::RGBA(0, 0, 0, 0));
+    transparent.floodOpacity = 0.0;
+    return applyFlood(width, height, transparent);
   }
 
   // Resolve first input as the initial accumulator.
   wgpu::Texture accumulator =
-      resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic);
+      resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha);
 
   // Alpha-over composite each subsequent input on top.
   for (size_t i = 1; i < node.inputs.size(); ++i) {
-    wgpu::Texture src = resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic);
+    wgpu::Texture src =
+        resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha);
     accumulator = runMergePass(src, accumulator, width, height);
   }
 
@@ -1449,9 +2065,8 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
 }
 
 wgpu::Texture GeodeFilterEngine::applyMorphology(
-    const wgpu::Texture& input,
-    const svg::components::filter_primitive::Morphology& primitive, int pixelRadiusX,
-    int pixelRadiusY) {
+    const wgpu::Texture& input, const svg::components::filter_primitive::Morphology& primitive,
+    int pixelRadiusX, int pixelRadiusY) {
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -1461,33 +2076,62 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     return input;
   }
 
-  // Cap total kernel samples at 63×63 = 3969.
+  // Morphology is separable: min/max over a 2D rectangle equals
+  // row-wise min/max followed by column-wise min/max. Decompose into
+  // horizontal (X-only) then vertical (Y-only) passes, each capped at
+  // kMaxRadius per pass to stay within the shader's loop limit.
   constexpr int kMaxRadius = 31;
-  if (pixelRadiusX > kMaxRadius || pixelRadiusY > kMaxRadius) {
-    // TODO(geode): Support larger morphology kernels via separable passes.
-    if (verbose_) {
-      std::cerr << "GeodeFilterEngine: feMorphology radius ("
-                << pixelRadiusX << "×" << pixelRadiusY
-                << ") exceeds cap (" << kMaxRadius << "); passthrough\n";
-    }
-    return input;
+  wgpu::Texture current = input;
+
+  // Horizontal passes (Y radius = 0).
+  int remainX = std::max(pixelRadiusX, 0);
+  while (remainX > 0) {
+    const int passX = std::min(remainX, kMaxRadius);
+
+    wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
+
+    using Op = svg::components::filter_primitive::Morphology::Operator;
+    MorphologyParams params{};
+    params.radiusX = passX;
+    params.radiusY = 0;
+    params.op = primitive.op == Op::Dilate ? 1u : 0u;
+    params.pad = 0;
+
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+
+    dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, current,
+                               output, uniformBuffer, sizeof(MorphologyParams),
+                               "FilterMorphologyPassX");
+    current = output;
+    remainX -= passX;
   }
 
-  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
+  // Vertical passes (X radius = 0).
+  int remainY = std::max(pixelRadiusY, 0);
+  while (remainY > 0) {
+    const int passY = std::min(remainY, kMaxRadius);
 
-  using Op = svg::components::filter_primitive::Morphology::Operator;
-  MorphologyParams params{};
-  params.radiusX = pixelRadiusX;
-  params.radiusY = pixelRadiusY;
-  params.op = primitive.op == Op::Dilate ? 1u : 0u;
-  params.pad = 0;
+    wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterMorphologyOutput");
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+    using Op = svg::components::filter_primitive::Morphology::Operator;
+    MorphologyParams params{};
+    params.radiusX = 0;
+    params.radiusY = passY;
+    params.op = primitive.op == Op::Dilate ? 1u : 0u;
+    params.pad = 0;
 
-  dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, input, output,
-                             uniformBuffer, sizeof(MorphologyParams), "FilterMorphologyPass");
-  return output;
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "MorphologyParamsUniform");
+
+    dispatchInputOutputUniform(device_, morphologyBindGroupLayout_, morphologyPipeline_, current,
+                               output, uniformBuffer, sizeof(MorphologyParams),
+                               "FilterMorphologyPassY");
+    current = output;
+    remainY -= passY;
+  }
+
+  return current;
 }
 
 wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
@@ -1564,38 +2208,43 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
-  // Cap kernel at 5×5.
-  if (primitive.orderX > 5 || primitive.orderY > 5 || primitive.orderX <= 0 ||
-      primitive.orderY <= 0) {
-    // TODO(geode): Support larger convolution kernels.
-    if (verbose_) {
-      std::cerr << "GeodeFilterEngine: feConvolveMatrix kernel ("
-                << primitive.orderX << "×" << primitive.orderY
-                << ") outside 1..5 range; passthrough\n";
-    }
-    return input;
-  }
+  const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
+  const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
+  const int requiredSize = primitive.orderX * primitive.orderY;
 
-  wgpu::Texture output =
-      createIntermediateTexture(dev, width, height, "FilterConvolveMatrixOutput");
-
-  // Compute effective divisor (default = sum of kernel values, or 1 if sum is 0).
+  // Compute effective divisor.
   double divisor = 1.0;
   if (primitive.divisor.has_value()) {
     divisor = primitive.divisor.value();
-    if (divisor == 0.0) {
-      divisor = 1.0;
-    }
   } else {
     double sum = 0.0;
     for (double v : primitive.kernelMatrix) {
       sum += v;
     }
-    divisor = (sum != 0.0) ? sum : 1.0;
+    divisor = (std::abs(sum) < 1e-10) ? 1.0 : sum;
   }
 
-  const int targetX = primitive.targetX.value_or(primitive.orderX / 2);
-  const int targetY = primitive.targetY.value_or(primitive.orderY / 2);
+  // SVG spec validation: invalid parameters produce transparent black.
+  // Matches the CPU reference's guard in FilterGraph.cpp.
+  // The shader kernel array holds 25 elements, so any orderX*orderY <= 25 is valid.
+  const bool invalid =
+      primitive.orderX <= 0 || primitive.orderY <= 0 || primitive.orderX * primitive.orderY > 25 ||
+      static_cast<int>(primitive.kernelMatrix.size()) != requiredSize || targetX < 0 ||
+      targetX >= primitive.orderX || targetY < 0 || targetY >= primitive.orderY ||
+      (primitive.divisor.has_value() && primitive.divisor.value() == 0.0);
+
+  if (invalid) {
+    if (verbose_) {
+      std::cerr << "GeodeFilterEngine: feConvolveMatrix invalid params (" << primitive.orderX << "×"
+                << primitive.orderY << ", targetX=" << targetX << ", targetY=" << targetY
+                << ", divisor=" << divisor << "); outputting transparent black\n";
+    }
+    // Return a transparent texture (matches CPU reference behavior).
+    return createIntermediateTexture(dev, width, height, "FilterConvolveMatrixTransparent");
+  }
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterConvolveMatrixOutput");
 
   ConvolveParams params{};
   params.orderX = primitive.orderX;
@@ -1666,11 +2315,17 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 }
 
 wgpu::Texture GeodeFilterEngine::applyTurbulence(
-    uint32_t width, uint32_t height,
-    const svg::components::filter_primitive::Turbulence& primitive, double scaleX, double scaleY) {
+    uint32_t width, uint32_t height, const svg::components::filter_primitive::Turbulence& primitive,
+    const Transform2d& deviceFromFilter) {
   const wgpu::Device& dev = device_.device();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterTurbulenceOutput");
+
+  // Negative baseFrequency is invalid per SVG Filter Effects §15.20.3; produce transparent black
+  // (matching resvg/tiny-skia behavior).
+  if (primitive.baseFrequencyX < 0.0 || primitive.baseFrequencyY < 0.0) {
+    return output;
+  }
 
   TurbulenceParams params{};
   params.baseFreqX = static_cast<float>(primitive.baseFrequencyX);
@@ -1681,16 +2336,28 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   params.typeFlag =
       primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
   // Tile dimensions in user space (for stitchTiles).
-  params.tileWidth = static_cast<float>(width / scaleX);
-  params.tileHeight = static_cast<float>(height / scaleY);
-  // Inverse device-to-filter transform: for now assume identity (no skew/rotation).
-  // The 2x2 matrix maps pixel coords back to filter (user) space.
-  params.filterFromDeviceA = static_cast<float>(1.0 / scaleX);
-  params.filterFromDeviceB = 0.0f;
-  params.filterFromDeviceC = 0.0f;
-  params.filterFromDeviceD = static_cast<float>(1.0 / scaleY);
+  params.tileWidth = static_cast<float>(width);
+  params.tileHeight = static_cast<float>(height);
 
-  // Upload as storage buffer (matches the shader's var<storage, read>).
+  const double determinant = deviceFromFilter.determinant();
+  if (NearZero(determinant, 1e-12)) {
+    params.filterFromDeviceA = 1.0f;
+    params.filterFromDeviceB = 0.0f;
+    params.filterFromDeviceC = 0.0f;
+    params.filterFromDeviceD = 1.0f;
+  } else {
+    const Transform2d filterFromDevice = deviceFromFilter.inverse();
+    params.filterFromDeviceA = static_cast<float>(filterFromDevice.data[0]);
+    params.filterFromDeviceB = static_cast<float>(filterFromDevice.data[2]);
+    params.filterFromDeviceC = static_cast<float>(filterFromDevice.data[1]);
+    params.filterFromDeviceD = static_cast<float>(filterFromDevice.data[3]);
+  }
+
+  // Generate permutation + gradient tables from the seed.
+  TurbulenceTables tables{};
+  generateTurbulenceTables(primitive.seed, tables);
+
+  // Upload params as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
   bufDesc.label = wgpuLabel("TurbulenceParamsStorage");
   bufDesc.size = sizeof(TurbulenceParams);
@@ -1699,20 +2366,33 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   wgpu::Buffer paramsBuffer = dev.createBuffer(bufDesc);
   device_.queue().writeBuffer(paramsBuffer, 0, &params, sizeof(params));
 
+  // Upload tables as storage buffer.
+  wgpu::BufferDescriptor tablesBufDesc{};
+  tablesBufDesc.label = wgpuLabel("TurbulenceTablesStorage");
+  tablesBufDesc.size = sizeof(TurbulenceTables);
+  tablesBufDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  tablesBufDesc.mappedAtCreation = false;
+  wgpu::Buffer tablesBuffer = dev.createBuffer(tablesBufDesc);
+  device_.queue().writeBuffer(tablesBuffer, 0, &tables, sizeof(tables));
+
   wgpu::TextureView outputView = output.createView();
 
-  wgpu::BindGroupEntry bgEntries[2]{};
+  wgpu::BindGroupEntry bgEntries[3]{};
   bgEntries[0].binding = 0;
   bgEntries[0].textureView = outputView;
   bgEntries[1].binding = 1;
   bgEntries[1].buffer = paramsBuffer;
   bgEntries[1].offset = 0;
   bgEntries[1].size = sizeof(TurbulenceParams);
+  bgEntries[2].binding = 2;
+  bgEntries[2].buffer = tablesBuffer;
+  bgEntries[2].offset = 0;
+  bgEntries[2].size = sizeof(TurbulenceTables);
 
   wgpu::BindGroupDescriptor bgDesc{};
   bgDesc.label = wgpuLabel("FilterTurbulenceBindGroup");
   bgDesc.layout = turbulenceBindGroupLayout_;
-  bgDesc.entryCount = 2;
+  bgDesc.entryCount = 3;
   bgDesc.entries = bgEntries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
 
@@ -1776,11 +2456,16 @@ namespace {
 
 /// Fill common light-source fields into the params struct fields starting at
 /// the given pointers. This avoids duplicating the logic between diffuse and specular.
-void fillLightParams(const svg::components::filter_primitive::LightSource& light, double scaleX,
-                     double scaleY, uint32_t* lightType, float* azimuthRad, float* elevationRad,
-                     float* lightX, float* lightY, float* lightZ, float* pointsAtX,
-                     float* pointsAtY, float* pointsAtZ, float* spotExponent,
-                     float* cosConeAngle) {
+void fillLightParams(const svg::components::filter_primitive::LightSource& light,
+                     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+                     uint32_t* lightType, float* azimuthRad, float* elevationRad, float* lightX,
+                     float* lightY, float* lightZ, float* userLightX, float* userLightY,
+                     float* userLightZ, float* pointsAtX, float* pointsAtY, float* pointsAtZ,
+                     float* userPointsAtX, float* userPointsAtY, float* userPointsAtZ,
+                     float* spotExponent, float* coneAngleRad, uint32_t* hasConeAngle,
+                     float* pixelToUser0, float* pixelToUser1, float* pixelToUser2,
+                     float* pixelToUser3, float* pixelToUser4, float* pixelToUser5,
+                     uint32_t* hasShear) {
   using LT = svg::components::filter_primitive::LightSource::Type;
   switch (light.type) {
     case LT::Distant: *lightType = 0; break;
@@ -1792,25 +2477,80 @@ void fillLightParams(const svg::components::filter_primitive::LightSource& light
   *azimuthRad = static_cast<float>(light.azimuth * kDegToRad);
   *elevationRad = static_cast<float>(light.elevation * kDegToRad);
 
-  // Point/Spot positions are in user space — convert to pixel space.
-  *lightX = static_cast<float>(light.x * scaleX);
-  *lightY = static_cast<float>(light.y * scaleY);
-  *lightZ = static_cast<float>(light.z * std::sqrt(scaleX * scaleY));
-  *pointsAtX = static_cast<float>(light.pointsAtX * scaleX);
-  *pointsAtY = static_cast<float>(light.pointsAtY * scaleY);
-  *pointsAtZ = static_cast<float>(light.pointsAtZ * std::sqrt(scaleX * scaleY));
+  const bool isOBB = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox &&
+                     graph.elementBoundingBox.has_value();
+  const double bboxW = isOBB ? graph.elementBoundingBox->width() : 1.0;
+  const double bboxH = isOBB ? graph.elementBoundingBox->height() : 1.0;
+  const double bboxX = isOBB ? graph.elementBoundingBox->topLeft.x : 0.0;
+  const double bboxY = isOBB ? graph.elementBoundingBox->topLeft.y : 0.0;
+
+  double userX = light.x;
+  double userY = light.y;
+  double userZ = light.z;
+  double userPointsAtXValue = light.pointsAtX;
+  double userPointsAtYValue = light.pointsAtY;
+  double userPointsAtZValue = light.pointsAtZ;
+  if (isOBB) {
+    userX = bboxX + light.x * bboxW;
+    userY = bboxY + light.y * bboxH;
+    userZ = light.z * bboxH;
+    userPointsAtXValue = bboxX + light.pointsAtX * bboxW;
+    userPointsAtYValue = bboxY + light.pointsAtY * bboxH;
+    userPointsAtZValue = light.pointsAtZ * bboxH;
+  }
+
+  const Vector2d lightPixel = deviceFromFilter.transformPosition(Vector2d(userX, userY));
+  const Vector2d pointsAtPixel =
+      deviceFromFilter.transformPosition(Vector2d(userPointsAtXValue, userPointsAtYValue));
+  const Vector2d sx = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
+                      deviceFromFilter.transformPosition(Vector2d(0, 0));
+  const Vector2d sy = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
+                      deviceFromFilter.transformPosition(Vector2d(0, 0));
+  const double pixelScale =
+      std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
+
+  *lightX = static_cast<float>(lightPixel.x);
+  *lightY = static_cast<float>(lightPixel.y);
+  *lightZ = static_cast<float>(userZ * pixelScale);
+  *userLightX = static_cast<float>(userX);
+  *userLightY = static_cast<float>(userY);
+  *userLightZ = static_cast<float>(userZ);
+  *pointsAtX = static_cast<float>(pointsAtPixel.x);
+  *pointsAtY = static_cast<float>(pointsAtPixel.y);
+  *pointsAtZ = static_cast<float>(userPointsAtZValue * pixelScale);
+  *userPointsAtX = static_cast<float>(userPointsAtXValue);
+  *userPointsAtY = static_cast<float>(userPointsAtYValue);
+  *userPointsAtZ = static_cast<float>(userPointsAtZValue);
   *spotExponent = static_cast<float>(light.spotExponent);
-  *cosConeAngle = light.limitingConeAngle.has_value()
-                      ? static_cast<float>(std::cos(light.limitingConeAngle.value() * kDegToRad))
-                      : -2.0f;
+  *coneAngleRad = light.limitingConeAngle.has_value()
+                      ? static_cast<float>(light.limitingConeAngle.value() * kDegToRad)
+                      : 0.0f;
+  *hasConeAngle = light.limitingConeAngle.has_value() ? 1u : 0u;
+
+  const Transform2d inv = deviceFromFilter.inverse();
+  *pixelToUser0 = static_cast<float>(inv.data[0]);
+  *pixelToUser1 = static_cast<float>(inv.data[2]);
+  *pixelToUser2 = static_cast<float>(inv.data[4]);
+  *pixelToUser3 = static_cast<float>(inv.data[1]);
+  *pixelToUser4 = static_cast<float>(inv.data[3]);
+  *pixelToUser5 = static_cast<float>(inv.data[5]);
+
+  const double a = deviceFromFilter.data[0];
+  const double b = deviceFromFilter.data[1];
+  const double c = deviceFromFilter.data[2];
+  const double d = deviceFromFilter.data[3];
+  const double dot = a * c + b * d;
+  const double lenSq1 = a * a + b * b;
+  const double lenSq2 = c * c + d * d;
+  *hasShear = dot * dot > 0.0003 * lenSq1 * lenSq2 ? 1u : 0u;
 }
 
 }  // namespace
 
 wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
-    const wgpu::Texture& input,
-    const svg::components::filter_primitive::DiffuseLighting& primitive, double scaleX,
-    double scaleY) {
+    const wgpu::Texture& input, const svg::components::filter_primitive::DiffuseLighting& primitive,
+    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+    const Box2d& sampleSubregion) {
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -1830,16 +2570,30 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   params.lightB = static_cast<float>(rgba.b) / 255.0f;
 
   if (primitive.light.has_value()) {
-    fillLightParams(primitive.light.value(), scaleX, scaleY, &params.lightType, &params.azimuthRad,
-                    &params.elevationRad, &params.lightX, &params.lightY, &params.lightZ,
-                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.spotExponent,
-                    &params.cosConeAngle);
+    fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
+                    &params.azimuthRad, &params.elevationRad, &params.lightX, &params.lightY,
+                    &params.lightZ, &params.userLightX, &params.userLightY, &params.userLightZ,
+                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.userPointsAtX,
+                    &params.userPointsAtY, &params.userPointsAtZ, &params.spotExponent,
+                    &params.coneAngleRad, &params.hasConeAngle, &params.pixelToUser0,
+                    &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
+                    &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
   } else {
     // Default: distant light with azimuth=0, elevation=0.
     params.lightType = 0;
     params.azimuthRad = 0.0f;
     params.elevationRad = 0.0f;
   }
+
+  const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
+  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)),
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
+  params.sampleMaxX = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1,
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMaxY = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1,
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
 
   // Upload as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
@@ -1893,8 +2647,9 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
 
 wgpu::Texture GeodeFilterEngine::applySpecularLighting(
     const wgpu::Texture& input,
-    const svg::components::filter_primitive::SpecularLighting& primitive, double scaleX,
-    double scaleY) {
+    const svg::components::filter_primitive::SpecularLighting& primitive,
+    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+    const Box2d& sampleSubregion) {
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -1905,7 +2660,7 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   SpecularLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
   params.specularConstant = static_cast<float>(primitive.specularConstant);
-  params.specularExponent = static_cast<float>(std::clamp(primitive.specularExponent, 1.0, 128.0));
+  params.specularExponent = static_cast<float>(primitive.specularExponent);
   params.pad0 = 0.0f;
 
   const css::RGBA rgba = primitive.lightingColor.asRGBA();
@@ -1914,15 +2669,29 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   params.lightB = static_cast<float>(rgba.b) / 255.0f;
 
   if (primitive.light.has_value()) {
-    fillLightParams(primitive.light.value(), scaleX, scaleY, &params.lightType, &params.azimuthRad,
-                    &params.elevationRad, &params.lightX, &params.lightY, &params.lightZ,
-                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.spotExponent,
-                    &params.cosConeAngle);
+    fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
+                    &params.azimuthRad, &params.elevationRad, &params.lightX, &params.lightY,
+                    &params.lightZ, &params.userLightX, &params.userLightY, &params.userLightZ,
+                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.userPointsAtX,
+                    &params.userPointsAtY, &params.userPointsAtZ, &params.spotExponent,
+                    &params.coneAngleRad, &params.hasConeAngle, &params.pixelToUser0,
+                    &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
+                    &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
   } else {
     params.lightType = 0;
     params.azimuthRad = 0.0f;
     params.elevationRad = 0.0f;
   }
+
+  const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
+  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)),
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
+  params.sampleMaxX = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1,
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMaxY = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1,
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
 
   // Upload as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
@@ -1971,6 +2740,396 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
 
   wgpu::CommandBuffer cmdBuf = encoder.finish();
   device_.queue().submit(1, &cmdBuf);
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyDropShadow(
+    const wgpu::Texture& input, const svg::components::filter_primitive::DropShadow& primitive,
+    double pixelStdDevX, double pixelStdDevY, double pixelDx, double pixelDy) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  // Blur the input first (if any deviation). The compose shader reads the
+  // blurred texture's alpha at (coord - offset); blurring RGB at the same
+  // time is free because we already have to walk the taps.
+  wgpu::Texture blurred = applyGaussianBlur(input, pixelStdDevX, pixelStdDevY, /*edgeMode=*/0);
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterDropShadowOutput");
+
+  const css::RGBA rgba = primitive.floodColor.asRGBA();
+  const float floodA = (static_cast<float>(rgba.a) / 255.0f) *
+                       static_cast<float>(std::clamp(primitive.floodOpacity, 0.0, 1.0));
+
+  DropShadowParams params{};
+  // Straight-alpha flood color; the shader premultiplies by the blurred
+  // source's alpha per-pixel rather than baking it in here.
+  params.color[0] = static_cast<float>(rgba.r) / 255.0f;
+  params.color[1] = static_cast<float>(rgba.g) / 255.0f;
+  params.color[2] = static_cast<float>(rgba.b) / 255.0f;
+  params.color[3] = floodA;
+  params.dx = static_cast<float>(pixelDx);
+  params.dy = static_cast<float>(pixelDy);
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "DropShadowParamsUniform");
+
+  dispatchTwoInputUniform(device_, dropShadowBindGroupLayout_, dropShadowPipeline_, input, blurred,
+                          output, uniformBuffer, sizeof(DropShadowParams), "FilterDropShadowPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyImage(
+    const svg::components::filter_primitive::Image& primitive, uint32_t width, uint32_t height,
+    const svg::components::FilterGraph& graph, const svg::components::FilterNode& node,
+    const Transform2d& deviceFromFilter) {
+  const wgpu::Device& dev = device_.device();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterImageOutput");
+
+  // Empty / degenerate source: feed the shader a 1×1 transparent texture
+  // with an out-of-bounds transform. The resulting output is transparent
+  // everywhere — which is also what the shader would emit for any real
+  // image whose sample coordinates fall outside the source bounds.
+  if (primitive.imageData.empty() || primitive.imageWidth <= 0 || primitive.imageHeight <= 0) {
+    wgpu::TextureDescriptor imgDesc{};
+    imgDesc.label = wgpuLabel("FilterImageEmptySource");
+    imgDesc.size = {1, 1, 1};
+    imgDesc.format = kFormat;
+    imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    imgDesc.mipLevelCount = 1;
+    imgDesc.sampleCount = 1;
+    imgDesc.dimension = wgpu::TextureDimension::_2D;
+    wgpu::Texture emptyTex = dev.createTexture(imgDesc);
+    const uint8_t zero[4] = {0, 0, 0, 0};
+    wgpu::TexelCopyTextureInfo dstInfo{};
+    dstInfo.texture = emptyTex;
+    wgpu::TexelCopyBufferLayout layout{};
+    layout.bytesPerRow = 4;
+    layout.rowsPerImage = 1;
+    wgpu::Extent3D extent = {1, 1, 1};
+    device_.queue().writeTexture(dstInfo, zero, 4, layout, extent);
+
+    ImageParams params{};
+    params.m02 = -1000.0f;
+    params.m12 = -1000.0f;
+    wgpu::Buffer ub = createUniformBuffer(device_, &params, sizeof(params), "ImageParamsEmpty");
+    dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, emptyTex, output, ub,
+                               sizeof(ImageParams), "FilterImageEmptyPass");
+    return output;
+  }
+
+  // Upload the image's straight-alpha RGBA pixels as a premultiplied
+  // texture — Geode operates in premultiplied throughout the filter graph
+  // (consistent with feFlood / feMerge).
+  const int imgW = primitive.imageWidth;
+  const int imgH = primitive.imageHeight;
+  std::vector<uint8_t> premul(primitive.imageData.size());
+  for (size_t i = 0; i + 3 < primitive.imageData.size(); i += 4) {
+    const unsigned a = primitive.imageData[i + 3];
+    premul[i + 0] =
+        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 0]) * a + 127u) / 255u);
+    premul[i + 1] =
+        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 1]) * a + 127u) / 255u);
+    premul[i + 2] =
+        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 2]) * a + 127u) / 255u);
+    premul[i + 3] = static_cast<uint8_t>(a);
+  }
+
+  wgpu::TextureDescriptor imgDesc{};
+  imgDesc.label = wgpuLabel("FilterImageSource");
+  imgDesc.size = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
+  imgDesc.format = kFormat;
+  imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+  imgDesc.mipLevelCount = 1;
+  imgDesc.sampleCount = 1;
+  imgDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture imgTex = dev.createTexture(imgDesc);
+
+  wgpu::TexelCopyTextureInfo dstInfo{};
+  dstInfo.texture = imgTex;
+  wgpu::TexelCopyBufferLayout layout{};
+  layout.bytesPerRow = static_cast<uint32_t>(imgW * 4);
+  layout.rowsPerImage = static_cast<uint32_t>(imgH);
+  wgpu::Extent3D extent = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
+  device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
+
+  // Fragment references with a non-axis-aligned ancestor transform: project the fragment image
+  // through the full CTM (rotation/skew) so placement matches the CPU path. The transform
+  // chain is:
+  //   fragment pixel → (÷ viewBoxScale) → document user space
+  //   → (+ filterRegion.topLeft) → host user space
+  //   → (× deviceFromFilter) → device pixels
+  // The shader receives the inverse: device pixel → fragment pixel.
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (primitive.isFragmentReference && hasRotation &&
+      !NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    const double uScaleX = graph.userToPixelScale.x;
+    const double uScaleY = graph.userToPixelScale.y;
+    const Transform2d viewBoxScaleInv =
+        Transform2d::Scale(NearZero(uScaleX, 1e-12) ? 1.0 : 1.0 / uScaleX,
+                           NearZero(uScaleY, 1e-12) ? 1.0 : 1.0 / uScaleY);
+    const Transform2d regionOffset = Transform2d::Translate(primitive.fragmentRegionTopLeft.x,
+                                                            primitive.fragmentRegionTopLeft.y);
+    const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
+    const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
+
+    ImageParams params{};
+    params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
+    params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
+    params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
+    params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
+    params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
+    params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
+    params.pad0 = 0;
+    params.pad1 = 0;
+
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "ImageParamsFragRef");
+    dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, imgTex, output,
+                               uniformBuffer, sizeof(ImageParams), "FilterImageFragRefPass");
+    return output;
+  }
+
+  // Fragment references without rotation: simple device-space post-translation to position
+  // content at the filter region origin, matching the CPU path's non-rotated fragment case.
+  if (primitive.isFragmentReference) {
+    const double uScaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
+    const double uScaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+    const double deviceOffsetX = primitive.fragmentRegionTopLeft.x * uScaleX;
+    const double deviceOffsetY = primitive.fragmentRegionTopLeft.y * uScaleY;
+
+    ImageParams params{};
+    params.m00 = 1.0f;
+    params.m01 = 0.0f;
+    params.m02 = static_cast<float>(-deviceOffsetX);
+    params.m10 = 0.0f;
+    params.m11 = 1.0f;
+    params.m12 = static_cast<float>(-deviceOffsetY);
+    params.pad0 = 0;
+    params.pad1 = 0;
+
+    wgpu::Buffer uniformBuffer =
+        createUniformBuffer(device_, &params, sizeof(params), "ImageParamsFragRef");
+    dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, imgTex, output,
+                               uniformBuffer, sizeof(ImageParams), "FilterImageFragRefPass");
+    return output;
+  }
+
+  // Work out the placement rectangle in output-pixel coordinates. Prefer
+  // the node's primitive subregion when given; fall back to the filter
+  // region so the image covers the full primitive area.
+  const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
+  const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+  const bool isOBB = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
+  const double bboxW =
+      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width() : 1.0;
+  const double bboxH =
+      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->height() : 1.0;
+
+  double regionX = 0.0;
+  double regionY = 0.0;
+  double regionW = static_cast<double>(width);
+  double regionH = static_cast<double>(height);
+  if (node.x.has_value() && node.y.has_value() && node.width.has_value() &&
+      node.height.has_value()) {
+    const double rx = isOBB ? node.x->value * bboxW : node.x->value;
+    const double ry = isOBB ? node.y->value * bboxH : node.y->value;
+    const double rw = isOBB ? node.width->value * bboxW : node.width->value;
+    const double rh = isOBB ? node.height->value * bboxH : node.height->value;
+    regionX = rx * scaleX;
+    regionY = ry * scaleY;
+    regionW = rw * scaleX;
+    regionH = rh * scaleY;
+  } else if (graph.filterRegion.has_value()) {
+    const auto& fr = graph.filterRegion.value();
+    regionX = fr.topLeft.x * scaleX;
+    regionY = fr.topLeft.y * scaleY;
+    regionW = (fr.bottomRight.x - fr.topLeft.x) * scaleX;
+    regionH = (fr.bottomRight.y - fr.topLeft.y) * scaleY;
+  }
+
+  if (regionW <= 0.0 || regionH <= 0.0) {
+    regionW = static_cast<double>(imgW);
+    regionH = static_cast<double>(imgH);
+  }
+
+  // Compute the src-from-dst transform (image-from-output). For a
+  // straight image placement at (regionX, regionY) with size (regionW,
+  // regionH) and source size (imgW, imgH), the transform is:
+  //   src.x = (dst.x - regionX) * imgW / regionW
+  //   src.y = (dst.y - regionY) * imgH / regionH
+  //
+  // preserveAspectRatio: meet / slice scales isotropically; 'none'
+  // scales independently as above. The simple non-preserveAR case covers
+  // the common resvg test cases — the preserveAspectRatio computation
+  // mirrors the CPU feImage path's convention (fit box to subregion).
+  double scaleImgX = regionW > 0.0 ? static_cast<double>(imgW) / regionW : 1.0;
+  double scaleImgY = regionH > 0.0 ? static_cast<double>(imgH) / regionH : 1.0;
+  double offsetX = -regionX * scaleImgX;
+  double offsetY = -regionY * scaleImgY;
+
+  using PAR = svg::PreserveAspectRatio;
+  if (primitive.preserveAspectRatio.align != PAR::Align::None) {
+    // Uniform scale per preserveAspectRatio semantics. Compute the
+    // meet/slice scale and the alignment offsets, then invert to build
+    // image-from-output.
+    const double scaleMeet =
+        std::min(regionW / static_cast<double>(imgW), regionH / static_cast<double>(imgH));
+    const double scaleSlice =
+        std::max(regionW / static_cast<double>(imgW), regionH / static_cast<double>(imgH));
+    const double s = primitive.preserveAspectRatio.meetOrSlice == PAR::MeetOrSlice::Slice
+                         ? scaleSlice
+                         : scaleMeet;
+    const double drawnW = static_cast<double>(imgW) * s;
+    const double drawnH = static_cast<double>(imgH) * s;
+
+    // Alignment within the subregion.
+    using Align = PAR::Align;
+    double alignX = 0.0;
+    double alignY = 0.0;
+    switch (primitive.preserveAspectRatio.align) {
+      case Align::None:
+      case Align::XMinYMin:
+        alignX = 0.0;
+        alignY = 0.0;
+        break;
+      case Align::XMidYMin:
+        alignX = 0.5;
+        alignY = 0.0;
+        break;
+      case Align::XMaxYMin:
+        alignX = 1.0;
+        alignY = 0.0;
+        break;
+      case Align::XMinYMid:
+        alignX = 0.0;
+        alignY = 0.5;
+        break;
+      case Align::XMidYMid:
+        alignX = 0.5;
+        alignY = 0.5;
+        break;
+      case Align::XMaxYMid:
+        alignX = 1.0;
+        alignY = 0.5;
+        break;
+      case Align::XMinYMax:
+        alignX = 0.0;
+        alignY = 1.0;
+        break;
+      case Align::XMidYMax:
+        alignX = 0.5;
+        alignY = 1.0;
+        break;
+      case Align::XMaxYMax:
+        alignX = 1.0;
+        alignY = 1.0;
+        break;
+    }
+    const double drawX = regionX + (regionW - drawnW) * alignX;
+    const double drawY = regionY + (regionH - drawnH) * alignY;
+
+    scaleImgX = 1.0 / s;
+    scaleImgY = 1.0 / s;
+    offsetX = -drawX / s;
+    offsetY = -drawY / s;
+  }
+
+  ImageParams params{};
+  params.m00 = static_cast<float>(scaleImgX);
+  params.m01 = 0.0f;
+  params.m02 = static_cast<float>(offsetX);
+  params.m10 = 0.0f;
+  params.m11 = static_cast<float>(scaleImgY);
+  params.m12 = static_cast<float>(offsetY);
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "ImageParamsUniform");
+
+  dispatchInputOutputUniform(device_, imageBindGroupLayout_, imagePipeline_, imgTex, output,
+                             uniformBuffer, sizeof(ImageParams), "FilterImagePass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyTile(const wgpu::Texture& input, int32_t srcX, int32_t srcY,
+                                           int32_t srcW, int32_t srcH) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterTileOutput");
+
+  TileParams params{};
+  params.srcX = srcX;
+  params.srcY = srcY;
+  params.srcW = srcW;
+  params.srcH = srcH;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "TileParamsUniform");
+
+  dispatchInputOutputUniform(device_, tileBindGroupLayout_, tilePipeline_, input, output,
+                             uniformBuffer, sizeof(TileParams), "FilterTilePass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applySubregionClip(const wgpu::Texture& input,
+                                                    const Transform2d& filterFromDevice,
+                                                    double usrX0, double usrY0, double usrX1,
+                                                    double usrY1) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterSubregionClipOutput");
+
+  SubregionClipParams params{};
+  params.invA = static_cast<float>(filterFromDevice.data[0]);
+  params.invB = static_cast<float>(filterFromDevice.data[1]);
+  params.invC = static_cast<float>(filterFromDevice.data[2]);
+  params.invD = static_cast<float>(filterFromDevice.data[3]);
+  params.invE = static_cast<float>(filterFromDevice.data[4]);
+  params.invF = static_cast<float>(filterFromDevice.data[5]);
+  params.usrX0 = static_cast<float>(usrX0);
+  params.usrY0 = static_cast<float>(usrY0);
+  params.usrX1 = static_cast<float>(usrX1);
+  params.usrY1 = static_cast<float>(usrY1);
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "SubregionClipParamsUniform");
+
+  dispatchInputOutputUniform(device_, subregionClipBindGroupLayout_, subregionClipPipeline_, input,
+                             output, uniformBuffer, sizeof(SubregionClipParams),
+                             "FilterSubregionClipPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(const wgpu::Texture& input,
+                                                           bool srgbToLinear) {
+  const wgpu::Device& dev = device_.device();
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+
+  wgpu::Texture output =
+      createIntermediateTexture(dev, width, height, "FilterColorSpaceConvertOutput");
+
+  ColorSpaceConvertParams params{};
+  params.direction = srgbToLinear ? 0u : 1u;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "ColorSpaceConvertParamsUniform");
+
+  dispatchInputOutputUniform(device_, colorSpaceConvertBindGroupLayout_, colorSpaceConvertPipeline_,
+                             input, output, uniformBuffer, sizeof(ColorSpaceConvertParams),
+                             "FilterColorSpaceConvertPass");
   return output;
 }
 

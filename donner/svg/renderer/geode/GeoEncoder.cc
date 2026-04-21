@@ -57,8 +57,8 @@ struct alignas(16) Uniforms {
   float patternOpacity;       // 168 .. 172
   uint32_t hasClipPolygon;    // 172 .. 176 — 0 = no clip, 1 = clipPolygon active
   // Phase 3b path-clip mask flag. When nonzero, the shader samples the
-  // clip mask texture at binding 5 (linear-filtered R8Unorm) and folds
-  // its red-channel coverage into the fragment colour. A 1x1 dummy
+  // clip mask texture at binding 5 (linear-filtered RGBA8Unorm) and folds
+  // its averaged coverage into the fragment colour. A 1x1 dummy
   // texture is always bound so the `textureSample` is always legal.
   uint32_t hasClipMask;  // 176 .. 180
   uint32_t _clipPad0;    // 180 .. 184 — std140 alignment for next vec4 array
@@ -283,13 +283,28 @@ struct GeoEncoder::Impl {
   // `activeClipMaskView` is non-null, `hasClipMask == 1` in the
   // uniforms and draws sample `activeClipMaskView` through the
   // clip-mask binding. When null, the device's shared dummy is bound.
+  //
+  // `activeClipMaskTexture` keeps the VIEW's parent texture alive for
+  // as long as the encoder holds the view. Without this keepalive,
+  // when the clip-stack entry that originated the view is destroyed
+  // (in `RendererGeode::popClip` — `clipStack.pop_back()` happens
+  // BEFORE the follow-up `updateEncoderScissor`), the underlying
+  // Vulkan `VkImage` / `VkImageView` are freed while our C++ handle
+  // still points at them. A subsequent `createBindGroup` then passes
+  // a stale `VkImageView` handle to the Vulkan driver, tripping
+  // lvp's `vk_object_base_assert_valid` on debug Mesa and corrupting
+  // the heap on release Mesa — see issue #551.
+  wgpu::Texture activeClipMaskTexture;
   wgpu::TextureView activeClipMaskView;
 
-  // Lazily-constructed mask-rendering pipeline. We build one when the
-  // first `beginMaskPass` call arrives so encoders that never touch
-  // clipping pay no construction cost. Shared across all mask passes
-  // within the lifetime of this encoder.
-  std::unique_ptr<GeodeMaskPipeline> maskPipelineOwned;
+  // Non-owning pointer to the device's shared `GeodeMaskPipeline`.
+  // Built on demand via `GeodeDevice::maskPipeline()` the first time
+  // `beginMaskPass` fires on any encoder in the process; encoders that
+  // never open a mask pass pay nothing. Sharing matters because
+  // wgpu-native's internal pipeline cache never drains — constructing
+  // `GeodeMaskPipeline` per-encoder used to leak alongside the main
+  // render pipelines (issue #575).
+  GeodeMaskPipeline* maskPipelineOwned = nullptr;
 
   // While a mask pass is open (`maskPassOpen == true`), the main
   // render pass is closed — draw calls that hit the mask pipeline go
@@ -717,7 +732,7 @@ void GeoEncoder::clearClipPolygon() {
 // ============================================================================
 
 void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Texture& resolveMask) {
-  if (!msaaMask || !resolveMask) {
+  if (!resolveMask || (impl_->sampleCount > 1 && !msaaMask)) {
     return;
   }
 
@@ -734,10 +749,10 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
     impl_->loadPreserve = true;
   }
 
-  // Lazily build the mask pipeline on first use.
+  // Fetch the device's shared mask pipeline — lazily built on first
+  // `maskPipeline()` call.
   if (!impl_->maskPipelineOwned) {
-    impl_->maskPipelineOwned = std::make_unique<GeodeMaskPipeline>(
-        impl_->device->device(), impl_->device->useAlphaCoverageAA(), impl_->device->sampleCount());
+    impl_->maskPipelineOwned = &impl_->device->maskPipeline();
   }
 
   impl_->maskPassSavedTransform = impl_->transform;
@@ -881,10 +896,23 @@ void GeoEncoder::endMaskPass() {
 
 void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
   impl_->activeClipMaskView = maskView;
+  // activeClipMaskTexture keepalive is left empty by this overload; the
+  // caller must guarantee the parent stays alive. The 2-arg overload
+  // is preferred for any path that doesn't own the texture's lifetime
+  // at the call site (e.g. `RendererGeode::updateEncoderScissor`
+  // pulling the view off a clip-stack entry that may be destroyed
+  // before the next draw).
+  impl_->activeClipMaskTexture = wgpu::Texture{};
+}
+
+void GeoEncoder::setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView) {
+  impl_->activeClipMaskTexture = maskTexture;
+  impl_->activeClipMaskView = maskView;
 }
 
 void GeoEncoder::clearClipMask() {
   impl_->activeClipMaskView = wgpu::TextureView{};
+  impl_->activeClipMaskTexture = wgpu::Texture{};
 }
 
 void GeoEncoder::setLoadPreserve() {
@@ -1446,6 +1474,7 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
   // structure/use/opacity-inheritance where a use opacity=0.5 wraps a
   // rect opacity=0.5 and should composite to 0.25).
   qp.sourceIsPremultiplied = true;
+  qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
@@ -1481,6 +1510,7 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
   // in premultiplied alpha.
   qp.sourceIsPremultiplied = true;
   qp.maskTexture = mask;
+  qp.clipMaskView = impl_->activeClipMaskView;
   if (maskBounds.has_value()) {
     qp.applyMaskBounds = true;
     qp.maskBounds = *maskBounds;
@@ -1526,6 +1556,7 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
   qp.sourceIsPremultiplied = true;
   qp.blendMode = blendMode;
   qp.dstSnapshotTexture = dstSnapshot;
+  qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, layer,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
@@ -1577,6 +1608,7 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   qp.opacity = opacity;
   qp.filter =
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);

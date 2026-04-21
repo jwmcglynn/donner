@@ -31,4 +31,28 @@ TEST(GeodeShaders, SlugMaskCompiles) {
   ASSERT_TRUE(static_cast<bool>(module)) << "Slug mask shader failed to compile";
 }
 
+TEST(GeodeShaders, FilterDropShadowCompiles) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  wgpu::ShaderModule module = createFilterDropShadowShader(geodeDevice->device());
+  ASSERT_TRUE(static_cast<bool>(module)) << "feDropShadow compose shader failed to compile";
+}
+
+TEST(GeodeShaders, FilterImageCompiles) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  wgpu::ShaderModule module = createFilterImageShader(geodeDevice->device());
+  ASSERT_TRUE(static_cast<bool>(module)) << "feImage shader failed to compile";
+}
+
+TEST(GeodeShaders, FilterTileCompiles) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  wgpu::ShaderModule module = createFilterTileShader(geodeDevice->device());
+  ASSERT_TRUE(static_cast<bool>(module)) << "feTile shader failed to compile";
+}
+
 }  // namespace donner::geode

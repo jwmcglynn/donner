@@ -1,52 +1,125 @@
 #pragma once
 /// @file
-/// RAII wrapper around a headless WebGPU (Dawn) device.
+/// RAII wrapper around a WebGPU device — headless or host-provided.
 
 #include <memory>
+#include <vector>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 
 namespace donner::geode {
 
+// Forward declarations — GeodeDevice exposes accessors for the pipeline
+// objects it owns (see "Shared render / compute pipelines" section below).
+// The full class definitions live in their own headers; including them
+// here would pull the entire Slug / filter compilation graph into every
+// translation unit that only needs a `GeodeDevice*`.
+class GeodePipeline;
+class GeodeGradientPipeline;
+class GeodeImagePipeline;
+class GeodeMaskPipeline;
+class GeodeFilterEngine;
+
 /**
- * Owns a headless WebGPU device/queue pair for GPU rendering.
+ * Configuration for embedding Geode into a host application that already owns a
+ * WebGPU device.
  *
- * GeodeDevice is the entry point to the Geode rendering backend. It creates a
- * Dawn instance, selects a default adapter, and creates a device — all without
- * any window system integration. All rendering happens into offscreen textures.
+ * The host is responsible for the lifetime of the device and queue — they must
+ * remain valid for the entire lifetime of any `GeodeDevice` or `RendererGeode`
+ * constructed from this config.
  *
- * Typical usage:
+ * Example:
+ * @code
+ *   GeodeEmbedConfig config;
+ *   config.device = myDevice;
+ *   config.queue = myQueue;
+ *   config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
+ *
+ *   auto geodeDevice = GeodeDevice::CreateFromExternal(config);
+ *   RendererGeode renderer(std::move(geodeDevice));
+ * @endcode
+ */
+struct GeodeEmbedConfig {
+  /// Host-provided WebGPU device. Must not be null.
+  wgpu::Device device;
+
+  /// Host-provided queue associated with `device`. Must not be null.
+  wgpu::Queue queue;
+
+  /// Texture format for render targets. Must match the format of any texture
+  /// passed to `RendererGeode::setTargetTexture()`.
+  wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
+
+  /// Optional adapter handle. When provided, Geode uses it for hardware
+  /// workaround detection (e.g., Intel Arc + Vulkan alpha-coverage fallback).
+  /// When null, workaround detection is skipped — the host is assumed to
+  /// know its own hardware characteristics.
+  wgpu::Adapter adapter;
+};
+
+/**
+ * Owns (or wraps) a WebGPU device/queue pair for GPU rendering.
+ *
+ * GeodeDevice is the entry point to the Geode rendering backend. In **headless
+ * mode** (`CreateHeadless`), it creates a WebGPU instance, selects a default
+ * adapter, and creates a device — all without any window system integration.
+ *
+ * In **embedded mode** (`CreateFromExternal`), it wraps a device and queue
+ * already created by the host application. The host retains ownership of the
+ * underlying WebGPU objects; GeodeDevice's destructor will not destroy them.
+ *
+ * Typical headless usage:
  *
  *     auto maybeDevice = GeodeDevice::CreateHeadless();
  *     if (!maybeDevice) {
- *       // Dawn initialization failed — likely no GPU available.
+ *       // No GPU available.
  *       return;
  *     }
- *     GeodeDevice& device = *maybeDevice;
- *     wgpu::Texture target = device.device().CreateTexture(...);
- *     // ... render ...
+ *
+ * Typical embedded usage:
+ *
+ *     GeodeEmbedConfig config;
+ *     config.device = hostDevice;
+ *     config.queue = hostQueue;
+ *     auto geodeDevice = GeodeDevice::CreateFromExternal(config);
  */
 class GeodeDevice {
 public:
   /**
    * Create a headless GeodeDevice.
    *
-   * @return A valid GeodeDevice on success, or an empty unique_ptr if Dawn
-   *   could not create an adapter/device (e.g., no GPU, no driver).
+   * @return A valid GeodeDevice on success, or an empty unique_ptr if the
+   *   runtime could not create an adapter/device (e.g., no GPU, no driver).
    */
   static std::unique_ptr<GeodeDevice> CreateHeadless();
+
+  /**
+   * Create a GeodeDevice wrapping a host-provided device and queue.
+   *
+   * The returned device does NOT own the underlying WebGPU instance, adapter,
+   * device, or queue — the host is responsible for keeping them alive.
+   *
+   * @param config Embedding configuration with valid device/queue handles.
+   * @return A valid GeodeDevice on success, or null if \p config.device or
+   *   \p config.queue is null.
+   */
+  static std::unique_ptr<GeodeDevice> CreateFromExternal(const GeodeEmbedConfig& config);
 
   /// Destructor releases the device and all GPU resources.
   ~GeodeDevice();
 
-  // Non-copyable, movable.
+  // Non-copyable, non-movable. The device owns pipelines and a filter
+  // engine that hold a `GeodeDevice&` internally (see `filterEngine()`),
+  // so moving the outer `GeodeDevice` would leave dangling references.
+  // All call sites hold `GeodeDevice` via `unique_ptr` / `shared_ptr`
+  // already, so deleting moves is a no-op in practice but rules out a
+  // latent bug where shared-pipeline ownership is moved out from under
+  // the filter engine.
   GeodeDevice(const GeodeDevice&) = delete;
   GeodeDevice& operator=(const GeodeDevice&) = delete;
-  /// Move constructor.
-  GeodeDevice(GeodeDevice&&) noexcept;
-  /// Move assignment operator.
-  GeodeDevice& operator=(GeodeDevice&&) noexcept;
+  GeodeDevice(GeodeDevice&&) = delete;
+  GeodeDevice& operator=(GeodeDevice&&) = delete;
 
   /// Returns the wgpu::Device. Guaranteed valid for the lifetime of this object.
   const wgpu::Device& device() const { return device_; }
@@ -54,8 +127,38 @@ public:
   /// Returns the default queue.
   const wgpu::Queue& queue() const { return queue_; }
 
-  /// Returns the adapter backing this device.
+  /// Returns the adapter backing this device. May be null in embedded mode if
+  /// the host did not provide an adapter.
   const wgpu::Adapter& adapter() const { return adapter_; }
+
+  /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;
+  /// set by the host via `GeodeEmbedConfig::textureFormat` in embedded mode.
+  wgpu::TextureFormat textureFormat() const { return textureFormat_; }
+
+  /**
+   * Enqueue a GPU buffer for deferred destruction. The buffer handle is kept
+   * alive until `drainDeferredDestroys()` is called, preventing the underlying
+   * GPU resource from being freed while an in-flight command buffer may still
+   * reference it.
+   */
+  void deferDestroy(wgpu::Buffer buffer);
+
+  /**
+   * Enqueue a GPU texture for deferred destruction. Same semantics as the
+   * buffer variant.
+   */
+  void deferDestroy(wgpu::Texture texture);
+
+  /**
+   * Drop all deferred-destroy handles, releasing their GPU resources.
+   *
+   * Called at the top of each frame (before new allocations) so resources
+   * from the previous frame's command buffer submission have had time to
+   * complete on the GPU. WebGPU internally reference-counts resources used
+   * by submitted command buffers, so dropping our handle here is safe even
+   * without an explicit `device.poll()`.
+   */
+  void drainDeferredDestroys();
 
   /**
    * Whether to use alpha-coverage AA instead of hardware 4× MSAA with
@@ -94,15 +197,31 @@ public:
   GeodeCounters* counters() const { return counters_; }
 
   // Counter increment helpers. Cheap no-op when counters are disabled.
+  // Also bump process-lifetime totals (`lifetimeBufferCreates_` /
+  // `lifetimeTextureCreates_`) that are visible regardless of which
+  // per-frame `GeodeCounters` instance is wired up — these exist so
+  // issue #575's leak hunt can measure unbounded growth across whole
+  // test-suite runs where each `RendererGeode` has its own scoped
+  // per-frame counters.
   void countBuffer() const {
+    ++lifetimeBufferCreates_;
     if (counters_) ++counters_->bufferCreates;
   }
   void countBindGroup() const {
     if (counters_) ++counters_->bindgroupCreates;
   }
   void countTexture() const {
+    ++lifetimeTextureCreates_;
     if (counters_) ++counters_->textureCreates;
   }
+
+  /// Cumulative number of `countTexture()` calls since this `GeodeDevice`
+  /// was created. Does not account for textures released back into a
+  /// pool — it is an allocation-site counter, not a live-count.
+  uint64_t lifetimeTextureCreates() const { return lifetimeTextureCreates_; }
+  /// Cumulative number of `countBuffer()` calls since this `GeodeDevice`
+  /// was created. Same caveat as `lifetimeTextureCreates()`.
+  uint64_t lifetimeBufferCreates() const { return lifetimeBufferCreates_; }
   void countSubmit() const {
     if (counters_) ++counters_->submits;
   }
@@ -166,8 +285,49 @@ public:
   const wgpu::Buffer& identityInstanceTransformBuffer() const;
   /// @}
 
+  /// @name Shared render / compute pipelines (issue #575 fix)
+  /// @{
+  ///
+  /// Every wgpu pipeline created by `createRenderPipeline` /
+  /// `createComputePipeline` is retained internally by wgpu-native even
+  /// after the public handle's refcount drops to zero — `wgpuDevicePoll`
+  /// does not drain it. Prior to this, `RendererGeode` constructed the
+  /// four pipeline objects below (~18 wgpu pipelines in total, most
+  /// inside `GeodeFilterEngine`) per-instance, so the image-comparison
+  /// suite leaked ~1.6 MB per test and ultimately exhausted the driver
+  /// memory budget (see issue #575). Moving ownership here — one copy
+  /// per `GeodeDevice` — caps the pipeline footprint at a fixed cost.
+  ///
+  /// Every renderer that talks to this device shares the same pipeline
+  /// objects; their state is intentionally immutable after construction
+  /// (no per-draw mutation), so concurrent use from sibling renderers
+  /// is safe as long as it is serialized at the `wgpu::Queue` level
+  /// (which Donner's render path already is).
+
+  /// Slug solid-fill render pipeline.
+  GeodePipeline& pipeline() const;
+  /// Slug gradient-fill render pipeline.
+  GeodeGradientPipeline& gradientPipeline() const;
+  /// Image-blit render pipeline (used by `GeoEncoder::drawImage` and the
+  /// pattern / layer composition path).
+  GeodeImagePipeline& imagePipeline() const;
+  /// Clip-path mask render pipeline. Built lazily on first access rather
+  /// than eagerly at device creation, matching the prior per-encoder
+  /// lazy path — most documents don't use `<clipPath>` and the
+  /// production WASM path avoids the cost.
+  GeodeMaskPipeline& maskPipeline() const;
+  /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
+  /// filter primitives.
+  GeodeFilterEngine& filterEngine() const;
+  /// @}
+
 private:
   GeodeDevice();
+
+  /// Allocate the shared pipelines and filter engine after `device_`,
+  /// `queue_`, and `textureFormat_` are finalised. Called from both
+  /// `CreateHeadless` and `CreateFromExternal`.
+  void initSharedPipelines();
 
   // Order matters: queue/device/adapter/instance destroy bottom-up.
   struct Impl;
@@ -177,9 +337,28 @@ private:
   wgpu::Adapter adapter_;
   wgpu::Device device_;
   wgpu::Queue queue_;
+  wgpu::TextureFormat textureFormat_ = wgpu::TextureFormat::RGBA8Unorm;
 
   bool useAlphaCoverageAA_ = false;
+  bool supportsTimestamps_ = false;
+
+  /// True when this device was created via CreateFromExternal(). The destructor
+  /// skips releasing the instance/adapter since the host owns them.
+  bool external_ = false;
+
   GeodeCounters* counters_ = nullptr;
+
+  // Process-lifetime cumulative totals — see `lifetimeTextureCreates()`
+  // for why these are separate from the scoped `counters_`. Mutable
+  // because `countTexture()` / `countBuffer()` are logically const
+  // (the caller is reporting, not mutating visible state).
+  mutable uint64_t lifetimeTextureCreates_ = 0;
+  mutable uint64_t lifetimeBufferCreates_ = 0;
+
+  // Deferred-destroy queues: resources enqueued via deferDestroy() are held
+  // alive until drainDeferredDestroys() drops them at the next frame boundary.
+  std::vector<wgpu::Buffer> pendingBuffers_;
+  std::vector<wgpu::Texture> pendingTextures_;
 };
 
 }  // namespace donner::geode
