@@ -130,6 +130,19 @@ private:
   wgpu::Texture runBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
                             float stdDeviation, uint32_t axis, uint32_t edgeMode);
 
+  /// One pass of a 3-pass box blur (used to approximate a Gaussian for sigma
+  /// >= 2.0, matching tiny-skia's behaviour).
+  /// @param input The input texture.
+  /// @param width Texture width.
+  /// @param height Texture height.
+  /// @param boxLeft Number of samples on the negative side of the centre tap.
+  /// @param boxRight Number of samples on the positive side of the centre tap.
+  /// @param axis 0 = horizontal, 1 = vertical.
+  /// @param edgeMode Edge handling mode.
+  /// @return Output texture for this pass.
+  wgpu::Texture runBoxBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
+                               int32_t boxLeft, int32_t boxRight, uint32_t axis, uint32_t edgeMode);
+
   /// Shift pixels by (dx, dy) via compute shader.
   /// @param input The input texture.
   /// @param primitive The feOffset parameters.

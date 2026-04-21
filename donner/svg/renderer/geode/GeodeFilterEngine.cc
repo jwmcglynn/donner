@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <numbers>
@@ -23,9 +24,13 @@ constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 /// Uniform buffer layout matching the WGSL `BlurParams` struct.
 struct BlurParams {
   float stdDeviation;
-  uint32_t axis;      // 0 = horizontal, 1 = vertical.
-  uint32_t edgeMode;  // 0 = None, 1 = Duplicate, 2 = Wrap.
-  uint32_t pad;
+  uint32_t axis;        // 0 = horizontal, 1 = vertical.
+  uint32_t edgeMode;    // 0 = None, 1 = Duplicate, 2 = Wrap.
+  uint32_t kernelType;  // 0 = Gaussian, 1 = Box.
+  int32_t boxLeft;      // Box mode: samples on the negative side.
+  int32_t boxRight;     // Box mode: samples on the positive side.
+  uint32_t pad0;
+  uint32_t pad1;
 };
 
 /// Uniform buffer layout matching the WGSL `OffsetParams` struct.
@@ -1634,6 +1639,54 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   return currentBuffer;
 }
 
+namespace {
+
+/// One pass of a 3-pass box-blur approximation of a Gaussian.
+/// Mirrors tiny-skia's `computeBoxPasses` (third_party/tiny-skia-cpp/src/
+/// tiny_skia/filter/GaussianBlur.cpp) so the Geode and software backends
+/// match in pixel coverage and effective sigma.
+struct BoxPass {
+  int32_t left;
+  int32_t right;
+};
+
+struct BoxBlurPlan {
+  std::array<BoxPass, 3> passes{};
+  int numPasses = 0;
+};
+
+BoxBlurPlan computeBoxPasses(double sigma) {
+  // Same window-size formula as tiny-skia: window = round(sigma * 3*sqrt(2π)/4).
+  constexpr double kMaxSigma = 10000.0;
+  if (!std::isfinite(sigma) || sigma > kMaxSigma) {
+    sigma = kMaxSigma;
+  }
+  const double kWindowScale = 3.0 * std::sqrt(2.0 * std::numbers::pi_v<double>) / 4.0;
+  const int window = std::max(1, static_cast<int>(std::floor(sigma * kWindowScale + 0.5)));
+
+  BoxBlurPlan plan;
+  if (window <= 1) {
+    return plan;
+  }
+
+  if ((window & 1) != 0) {
+    const int radius = window / 2;
+    for (int i = 0; i < 3; ++i) {
+      plan.passes[i] = {radius, radius};
+    }
+    plan.numPasses = 3;
+  } else {
+    const int half = window / 2;
+    plan.passes[0] = {half, half - 1};
+    plan.passes[1] = {half - 1, half};
+    plan.passes[2] = {half, half};
+    plan.numPasses = 3;
+  }
+  return plan;
+}
+
+}  // namespace
+
 wgpu::Texture GeodeFilterEngine::applyGaussianBlur(const wgpu::Texture& input, double stdDeviationX,
                                                    double stdDeviationY, uint32_t edgeMode) {
   const uint32_t width = input.getWidth();
@@ -1643,16 +1696,38 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(const wgpu::Texture& input, d
     return input;
   }
 
+  // For sigma >= 2.0 use a 3-pass box approximation matching tiny-skia,
+  // which extends ~2.82*sigma instead of the pure Gaussian's 3*sigma.
+  // This eliminates faint coloured fringes at the extreme tails of the
+  // kernel that the software backend never produces.
+  constexpr double kBoxBlurThreshold = 2.0;
+
   wgpu::Texture afterHorizontal = input;
   if (stdDeviationX > 0.0) {
-    afterHorizontal =
-        runBlurPass(input, width, height, static_cast<float>(stdDeviationX), /*axis=*/0, edgeMode);
+    if (stdDeviationX >= kBoxBlurThreshold) {
+      const BoxBlurPlan plan = computeBoxPasses(stdDeviationX);
+      for (int i = 0; i < plan.numPasses; ++i) {
+        afterHorizontal = runBoxBlurPass(afterHorizontal, width, height, plan.passes[i].left,
+                                         plan.passes[i].right, /*axis=*/0, edgeMode);
+      }
+    } else {
+      afterHorizontal = runBlurPass(input, width, height, static_cast<float>(stdDeviationX),
+                                    /*axis=*/0, edgeMode);
+    }
   }
 
   wgpu::Texture afterVertical = afterHorizontal;
   if (stdDeviationY > 0.0) {
-    afterVertical = runBlurPass(afterHorizontal, width, height, static_cast<float>(stdDeviationY),
-                                /*axis=*/1, edgeMode);
+    if (stdDeviationY >= kBoxBlurThreshold) {
+      const BoxBlurPlan plan = computeBoxPasses(stdDeviationY);
+      for (int i = 0; i < plan.numPasses; ++i) {
+        afterVertical = runBoxBlurPass(afterVertical, width, height, plan.passes[i].left,
+                                       plan.passes[i].right, /*axis=*/1, edgeMode);
+      }
+    } else {
+      afterVertical = runBlurPass(afterHorizontal, width, height, static_cast<float>(stdDeviationY),
+                                  /*axis=*/1, edgeMode);
+    }
   }
 
   return afterVertical;
@@ -1669,13 +1744,42 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(const wgpu::Texture& input, uint32_
   params.stdDeviation = stdDeviation;
   params.axis = axis;
   params.edgeMode = edgeMode;
-  params.pad = 0;
+  params.kernelType = 0;
+  params.boxLeft = 0;
+  params.boxRight = 0;
+  params.pad0 = 0;
+  params.pad1 = 0;
 
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(device_, &params, sizeof(params), "BlurParamsUniform");
 
   dispatchInputOutputUniform(device_, blurBindGroupLayout_, gaussianBlurPipeline_, input, output,
                              uniformBuffer, sizeof(BlurParams), "GaussianBlurPass");
+  return output;
+}
+
+wgpu::Texture GeodeFilterEngine::runBoxBlurPass(const wgpu::Texture& input, uint32_t width,
+                                                uint32_t height, int32_t boxLeft, int32_t boxRight,
+                                                uint32_t axis, uint32_t edgeMode) {
+  const wgpu::Device& dev = device_.device();
+
+  wgpu::Texture output = createIntermediateTexture(dev, width, height, "BoxBlurPass");
+
+  BlurParams params{};
+  params.stdDeviation = 0.0f;
+  params.axis = axis;
+  params.edgeMode = edgeMode;
+  params.kernelType = 1;
+  params.boxLeft = boxLeft;
+  params.boxRight = boxRight;
+  params.pad0 = 0;
+  params.pad1 = 0;
+
+  wgpu::Buffer uniformBuffer =
+      createUniformBuffer(device_, &params, sizeof(params), "BlurParamsUniform");
+
+  dispatchInputOutputUniform(device_, blurBindGroupLayout_, gaussianBlurPipeline_, input, output,
+                             uniformBuffer, sizeof(BlurParams), "BoxBlurPass");
   return output;
 }
 
