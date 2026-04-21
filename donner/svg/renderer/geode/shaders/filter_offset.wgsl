@@ -28,8 +28,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   }
 
   // Sample from (coord - offset). The offset is in pixel units, rounded to
-  // the nearest integer for texel-aligned sampling.
-  let src = coord - vec2i(i32(round(params.dx)), i32(round(params.dy)));
+  // the nearest integer for texel-aligned sampling. WGSL `round()` uses
+  // round-half-to-even (banker's rounding), so e.g. `round(12.5) == 12`,
+  // which diverges from `std::lround()` used on the CPU path. Use
+  // round-half-away-from-zero instead so feOffset matches tiny-skia
+  // pixel-for-pixel (visible in feTile tests where the offset shift
+  // determines the tile origin).
+  let dx_round = i32(sign(params.dx) * floor(abs(params.dx) + 0.5));
+  let dy_round = i32(sign(params.dy) * floor(abs(params.dy) + 0.5));
+  let src = coord - vec2i(dx_round, dy_round);
 
   var color: vec4f;
   if (params.edge_mode == 0u) {
