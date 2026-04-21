@@ -85,5 +85,5 @@ git diff --unified=0 "${BASE}" HEAD -- '*.cc' '*.h' '*.hpp' '*.cpp' ':!third_par
       -p1 \
       -path . \
       -iregex '.*\.(cc|h|hpp|cpp)$' \
-      -checks '-*,misc-include-cleaner' \
+      -checks='-*,misc-include-cleaner' \
       -clang-tidy-binary "${CLANG_TIDY}"
