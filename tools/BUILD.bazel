@@ -2,17 +2,7 @@ load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile
 
 refresh_compile_commands(
     name = "refresh_compile_commands",
-    # Pass `--config=geode` so target-gated Geode sources
-    # (//donner/svg/renderer:renderer_geode,
-    # //donner/svg/renderer/tests:renderer_test_backend, etc.) resolve their
-    # `target_compatible_with` constraint and get proper compile commands
-    # with webgpu-cpp / wgpu-native include paths. The dict form is the only
-    # way hedron_compile_commands propagates flags to the target-analysis
-    # phase — passing `--config=geode` to `bazel run` only affects how the
-    # refresh tool itself is built, not what it emits.
-    targets = {
-        "//donner/...": "--config=geode",
-    },
+    targets = "//donner/...",
 )
 
 py_binary(
