@@ -48,10 +48,16 @@ fi
 
 # Quick pre-check: if the diff touches zero C++ files, skip the expensive
 # compile_commands refresh and exit clean.
+#
+# `examples/` is excluded because `refresh_compile_commands` only covers
+# `//donner/...` — example binaries with third-party host-integration
+# deps (GLFW, wgpu-native) would otherwise be linted with default flags
+# and fail on headers those deps contribute to the include path.
 mapfile -t MODIFIED_FILES < <(
   git diff --name-only --diff-filter=ACMR "${BASE}" HEAD \
     | grep -E '\.(cc|h|hpp|cpp)$' \
-    | grep -v '^third_party/' || true
+    | grep -v '^third_party/' \
+    | grep -v '^examples/' || true
 )
 
 if [[ ${#MODIFIED_FILES[@]} -eq 0 ]]; then
@@ -80,7 +86,8 @@ printf '  %s\n' "${MODIFIED_FILES[@]}"
 # Trailing `-- <args>` is intentionally omitted: that path forwards flags
 # to the compiler, not clang-tidy, and clang-tidy-diff.py has no pass-
 # through for clang-tidy options except via `-checks` above.
-git diff --unified=0 "${BASE}" HEAD -- '*.cc' '*.h' '*.hpp' '*.cpp' ':!third_party/' \
+git diff --unified=0 "${BASE}" HEAD \
+    -- '*.cc' '*.h' '*.hpp' '*.cpp' ':!third_party/' ':!examples/' \
   | "${CLANG_TIDY_DIFF}" \
       -p1 \
       -path . \
