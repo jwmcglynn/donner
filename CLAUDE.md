@@ -17,6 +17,7 @@
 - **If `main.yml`'s bazel-diff target determinator looks wrong on a PR, add the `ci:full-test` label** to force the workflow back to full `bazel test //...` coverage for that PR.
 - **When touching the CMake mirror or `gen_cmakelists.py`, also run `python3 tools/cmake/gen_cmakelists.py --check --build`.** Plain `--check` is intentionally fast and static; `--build` is the opt-in local compile gate that catches real CMake drift before CI does.
 - The `tiny`, `text-full`, and `geode` variant lanes now run as `*_tiny` / `*_text_full` / `*_geode` wrappers under default `bazel test //...` (see `donner_cc_test(variants=…)` in `build_defs/rules.bzl`). The transitional `tools/presubmit.sh` wrapper has been retired — `bazel test //...` is the single command that gates a PR.
+- **`misc-include-cleaner` runs inside `bazel test //...` for opted-in libraries** via the `include_cleaner = "strict"` attribute on `donner_cc_library`/`_test`/`_binary` (see `build_defs/include_cleaner.bzl`). Default is off because of historical debt (issue [#559](https://github.com/jwmcglynn/donner/issues/559)); `tools/run_misc_include_cleaner_diff.sh` keeps the diff-only CI net for non-opted-in code. When you clean a directory's includes, flip the macro to `"strict"` so future regressions are caught locally, not in CI.
 
 ## Debugging Discipline
 
