@@ -168,6 +168,14 @@ build:binary-size --linkopt=-Wl,--gc-sections
 test --test_env=LLM
 test --test_env=DONNER_RENDERER_TEST_VERBOSE
 
+# Raise the per-case watchdog so Mesa llvmpipe (software Vulkan on CI)
+# has enough headroom to finish single complex shape/opacity/stroke
+# tests under the Geode backend. The default 60 s is tight enough that
+# llvmpipe-only slow paths (e.g. compositor re-rasterizations on
+# high-layer-count scenes) trip the watchdog on CI but finish in <1 s
+# on real GPUs. 300 s is generous without masking real driver hangs.
+test --test_env=DONNER_TEST_TIMEOUT_SECONDS=300
+
 # Coverage builds
 coverage --config=coverage
 coverage --combined_report=lcov
