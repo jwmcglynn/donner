@@ -19,6 +19,7 @@
 
 #include <gtest/gtest.h>
 #include <signal.h>
+#include <sys/types.h>  // IWYU pragma: keep — provides pid_t (clang-tidy-19 mapping)
 #include <unistd.h>
 
 #include <cstdio>

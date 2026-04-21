@@ -1273,10 +1273,9 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
-    std::optional<components::FilterGraph> filterGraph =
-        resolveFilterGraph(registry, instance->resolvedFilter.value(),
-                           style.properties->color.getRequired().rgba(), filterViewBox,
-                           filterFontMetrics);
+    std::optional<components::FilterGraph> filterGraph = resolveFilterGraph(
+        registry, instance->resolvedFilter.value(), style.properties->color.getRequired().rgba(),
+        filterViewBox, filterFontMetrics);
     const std::optional<Box2d> filterRegion =
         computeFilterRegion(registry, instance->resolvedFilter.value(), *instance);
 

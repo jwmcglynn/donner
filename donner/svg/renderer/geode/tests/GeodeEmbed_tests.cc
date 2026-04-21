@@ -11,7 +11,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep — provides wgpuLabel
 
 namespace donner::svg {
 namespace {
