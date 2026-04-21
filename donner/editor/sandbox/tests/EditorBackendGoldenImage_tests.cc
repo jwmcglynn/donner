@@ -1077,6 +1077,229 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
 // selected, `CompositorController::promoteEntity` refuses to promote
 // it (descendant of a compositing-breaking ancestor) and every drag
 // frame falls through to the full-document render path.
+// User-reported regression: after dragging `Big_lightning_glow` the
+// element disappears. Drive the sandbox against the REAL splash
+// through mouseDown + N moves + mouseUp + one idle render, and
+// verify the filter group's content is still visible at its post-
+// drag position.
+TEST(EditorBackendCoreFilterDragTest, BigLightningGlowSurvivesDragReleaseCycle) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 892;
+  vp.height = 512;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  // Sample the pre-drag color at Big_lightning_glow's center
+  // (approx. (450, 180) in canvas = doc coords on the 892×512 splash
+  // at 1:1 scale). The bolt is yellow-white, painted under the blur.
+  const size_t rowBytes = loadFrame.finalBitmapRowBytes > 0
+                               ? loadFrame.finalBitmapRowBytes
+                               : static_cast<size_t>(loadFrame.finalBitmapWidth) * 4u;
+  const auto samplePixel = [&rowBytes](const FramePayload& frame, int x, int y) {
+    const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
+    struct Rgba {
+      uint8_t r, g, b, a;
+    };
+    return Rgba{frame.finalBitmapPixels[off + 0], frame.finalBitmapPixels[off + 1],
+                frame.finalBitmapPixels[off + 2], frame.finalBitmapPixels[off + 3]};
+  };
+
+  // Record pre-drag pixel. Lightning bolts are pale/white inside the
+  // blur; check that we have non-background content at the drag
+  // target before continuing.
+  const auto preDrag = samplePixel(loadFrame, 450, 180);
+  if (!(preDrag.r > 50 || preDrag.g > 50)) {
+    GTEST_SKIP()
+        << "pre-drag pixel at (450, 180) doesn't contain lightning-bolt "
+           "content — splash geometry may have shifted";
+  }
+
+  // Click inside Big_lightning_glow; SelectTool elevates to the
+  // filter group (via `ElevateToCompositingGroupAncestor`).
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 455.0;
+  down.documentY = 160.0;
+  down.buttons = 1;
+  const auto downFrame = core.handlePointerEvent(down);
+  ASSERT_FALSE(downFrame.selections.empty())
+      << "click should land on Big_lightning_glow's cls-79 path";
+
+  // Drag 10 cumulative frames to the right (30 doc units total).
+  for (int i = 1; i <= 10; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 455.0 + static_cast<double>(i) * 3.0;
+    mv.documentY = 160.0;
+    mv.buttons = 1;
+    (void)core.handlePointerEvent(mv);
+  }
+
+  // Release and hover.
+  PointerEventPayload up;
+  up.phase = donner::editor::sandbox::PointerPhase::kUp;
+  up.documentX = 485.0;
+  up.documentY = 160.0;
+  (void)core.handlePointerEvent(up);
+
+  PointerEventPayload hover;
+  hover.phase = donner::editor::sandbox::PointerPhase::kMove;
+  hover.documentX = 485.0;
+  hover.documentY = 160.0;
+  hover.buttons = 0;
+  const auto postRelease = core.handlePointerEvent(hover);
+
+  ASSERT_TRUE(postRelease.hasFinalBitmap);
+
+  // Post-drag position: lightning content moved 30 doc units right →
+  // was at (~450, ~180), now at (~480, ~180). Probe a 7×7 grid
+  // around there. Pre-drag pixel was bright; post-drag pixel should
+  // still be bright (lightning content still visible).
+  int brightHits = 0;
+  for (int dy = -3; dy <= 3; ++dy) {
+    for (int dx = -3; dx <= 3; ++dx) {
+      const auto px = samplePixel(postRelease, 480 + dx, 180 + dy);
+      const int luma = (px.r + px.g + px.b) / 3;
+      if (luma > 60) {
+        ++brightHits;
+      }
+    }
+  }
+  EXPECT_GE(brightHits, 5)
+      << "after drag + release, Big_lightning_glow content is missing from "
+         "the post-release frame. Expected bright lightning-bolt pixels "
+         "around (480, 180); got mostly dark.";
+}
+
+// User-reported regression: after dragging a `<g filter>` the element
+// disappears. Drive the sandbox through mouseDown + N moves + mouseUp
+// + one idle render, and verify the dragged group's descendant
+// geometry is still visible in the final bitmap at its post-drag
+// position.
+TEST(EditorBackendCoreFilterDragTest, FilterGroupSurvivesDragReleaseCycle) {
+  constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <filter id="blur"><feGaussianBlur stdDeviation="1"/></filter>
+  </defs>
+  <rect width="200" height="200" fill="white"/>
+  <g id="target" filter="url(#blur)">
+    <rect x="50" y="80" width="40" height="40" fill="red"/>
+  </g>
+</svg>)svg";
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 200;
+  vp.height = 200;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = std::string(kSvg);
+  (void)core.handleLoadBytes(load);
+
+  // Click inside the red rect, which lives under `<g filter>`.
+  // SelectTool elevates the click to the filter group.
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 70.0;
+  down.documentY = 100.0;
+  down.buttons = 1;
+  (void)core.handlePointerEvent(down);
+
+  // Drag 10 cumulative frames — each `kMove` posts the latest mouse
+  // position, mirroring how main.cc dispatches drag events.
+  for (int i = 1; i <= 10; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 70.0 + static_cast<double>(i) * 3.0;
+    mv.documentY = 100.0;
+    mv.buttons = 1;
+    (void)core.handlePointerEvent(mv);
+  }
+
+  // Release.
+  PointerEventPayload up;
+  up.phase = donner::editor::sandbox::PointerPhase::kUp;
+  up.documentX = 100.0;
+  up.documentY = 100.0;
+  (void)core.handlePointerEvent(up);
+
+  // One more idle pointer event (`kMove` without button, mirroring a
+  // hover that ImGui's main loop fires every frame). This is the
+  // frame the user actually SEES post-release — if the element is
+  // gone here, that matches the "disappears" report.
+  PointerEventPayload hover;
+  hover.phase = donner::editor::sandbox::PointerPhase::kMove;
+  hover.documentX = 100.0;
+  hover.documentY = 100.0;
+  hover.buttons = 0;
+  const auto postReleaseFrame = core.handlePointerEvent(hover);
+
+  // Reconstruct the bitmap from the wire payload and probe where the
+  // red rect should be. Drag was 10 × 3 = 30 doc units right.
+  // Original rect center: (70, 100). Post-drag center: (100, 100).
+  ASSERT_TRUE(postReleaseFrame.hasFinalBitmap)
+      << "post-release frame must produce a final bitmap";
+  ASSERT_FALSE(postReleaseFrame.finalBitmapPixels.empty());
+
+  // `finalBitmapAlphaType` is the straight/premul flag that flows
+  // with the bitmap; we don't care for this probe.
+  const size_t width = static_cast<size_t>(postReleaseFrame.finalBitmapWidth);
+  const size_t rowBytes = postReleaseFrame.finalBitmapRowBytes > 0
+                               ? postReleaseFrame.finalBitmapRowBytes
+                               : width * 4u;
+  const auto samplePixel = [&](int x, int y) {
+    const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
+    struct Rgba {
+      uint8_t r, g, b, a;
+    };
+    return Rgba{postReleaseFrame.finalBitmapPixels[off + 0],
+                postReleaseFrame.finalBitmapPixels[off + 1],
+                postReleaseFrame.finalBitmapPixels[off + 2],
+                postReleaseFrame.finalBitmapPixels[off + 3]};
+  };
+
+  // Probe a 5×5 grid around the post-drag center. At least one pixel
+  // should show a meaningfully red component (filter blur smears the
+  // color, so we accept a broad tolerance).
+  int redHits = 0;
+  for (int dy = -2; dy <= 2; ++dy) {
+    for (int dx = -2; dx <= 2; ++dx) {
+      const auto px = samplePixel(100 + dx, 100 + dy);
+      if (px.r > 100 && px.g < 180 && px.b < 180) {
+        ++redHits;
+      }
+    }
+  }
+  EXPECT_GE(redHits, 5)
+      << "dragged filter group's red rect is missing from the post-release "
+         "frame. Expected some red around canvas pixel (100, 100); got none. "
+         "Likely causes: `propagateFastPathTranslationToSubtree` corrupting "
+         "descendant `worldFromEntityTransform`, or the compositor re-"
+         "rasterizing the layer with stale descendant positions.";
+
+  // Also sanity-check that the ORIGINAL position is now vacated —
+  // otherwise the test passes with a red streak that never moved.
+  const auto originalCenter = samplePixel(70, 100);
+  EXPECT_FALSE(originalCenter.r > 100 && originalCenter.g < 180 && originalCenter.b < 180)
+      << "original rect position (70, 100) is still red after drag — the "
+         "drag didn't actually move the element, or the renderer drew it "
+         "twice.";
+}
+
 // UI-level perf repro: the user reports a `<g filter>` drag caps at
 // 20 fps (~50 ms/frame) in the editor, but the backend-only timing
 // tests above show ~5 ms/frame for the same gesture. The gap is the
@@ -1098,6 +1321,146 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
 // The budget is 20 ms/frame — well inside a 60 fps vsync window —
 // so any regression that pushes a frame past 20 ms will trip the
 // assertion at HiDPI canvas sizes where the gap actually shows up.
+// Control: drag a single `<rect>` at 1× DPR. Numbers from here set
+// the baseline for what "healthy" looks like — any filter-group /
+// HiDPI variant should land within the same order of magnitude.
+TEST(EditorUiFlowPerfTest, RegularObjectDragHitsSixtyFpsBudget) {
+  constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="white"/>
+  <rect id="target" x="100" y="100" width="80" height="60" fill="red"/>
+</svg>)svg";
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 800;
+  vp.height = 600;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = std::string(kSvg);
+  (void)core.handleLoadBytes(load);
+
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 140.0;
+  down.documentY = 130.0;
+  down.buttons = 1;
+  ASSERT_FALSE(core.handlePointerEvent(down).selections.empty());
+
+  PointerEventPayload warmup;
+  warmup.phase = donner::editor::sandbox::PointerPhase::kMove;
+  warmup.documentX = 141.0;
+  warmup.documentY = 130.0;
+  warmup.buttons = 1;
+  (void)core.handlePointerEvent(warmup);
+
+  constexpr int kSteadyFrames = 30;
+  std::vector<uint8_t> textureStandIn(800 * 600 * 4, 0);
+  using Clock = std::chrono::steady_clock;
+  double totalMs = 0.0;
+  for (int i = 0; i < kSteadyFrames; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 141.0 + (i + 1) * 1.5;
+    mv.documentY = 130.0;
+    mv.buttons = 1;
+    const auto t0 = Clock::now();
+    const auto payload = core.handlePointerEvent(mv);
+    std::memcpy(textureStandIn.data(), payload.finalBitmapPixels.data(),
+                std::min(payload.finalBitmapPixels.size(), textureStandIn.size()));
+    const auto t1 = Clock::now();
+    totalMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+  }
+  const double avg = totalMs / kSteadyFrames;
+  std::fprintf(stderr, "[UIPerf regular 800x600] avg=%.2f ms\n", avg);
+  EXPECT_LT(avg, 20.0)
+      << "regular-object drag should trivially hit 60 fps; avg=" << avg << " ms";
+}
+
+// Compare filter-group drag to the regular-object baseline: if the
+// filter-group drag is substantially slower than the rect drag at the
+// SAME canvas size, we have a filter-specific bottleneck.
+TEST(EditorUiFlowPerfTest, FilterGroupDragMatchesRegularObjectBaseline) {
+  // Two-pass test on identical 800×600 canvases: one rect, one
+  // `<g filter>` with a rect child. Same viewport, same pointer
+  // events, same steady-state frame count. Report the ratio; fail
+  // if filter drag is more than 2× slower than rect drag.
+  constexpr std::string_view kRectSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="white"/>
+  <rect id="target" x="100" y="100" width="80" height="60" fill="red"/>
+</svg>)svg";
+  constexpr std::string_view kFilterSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
+  <rect width="800" height="600" fill="white"/>
+  <g id="target" filter="url(#blur)">
+    <rect x="100" y="100" width="80" height="60" fill="red"/>
+  </g>
+</svg>)svg";
+
+  const auto measure = [&](std::string_view svg) -> double {
+    sandbox::EditorBackendCore core;
+    SetViewportPayload vp;
+    vp.width = 800;
+    vp.height = 600;
+    (void)core.handleSetViewport(vp);
+
+    LoadBytesPayload load;
+    load.bytes = std::string(svg);
+    (void)core.handleLoadBytes(load);
+
+    PointerEventPayload down;
+    down.phase = donner::editor::sandbox::PointerPhase::kDown;
+    down.documentX = 140.0;
+    down.documentY = 130.0;
+    down.buttons = 1;
+    (void)core.handlePointerEvent(down);
+
+    PointerEventPayload warmup;
+    warmup.phase = donner::editor::sandbox::PointerPhase::kMove;
+    warmup.documentX = 141.0;
+    warmup.documentY = 130.0;
+    warmup.buttons = 1;
+    (void)core.handlePointerEvent(warmup);
+
+    constexpr int kSteadyFrames = 30;
+    std::vector<uint8_t> stand(800 * 600 * 4, 0);
+    using Clock = std::chrono::steady_clock;
+    double totalMs = 0.0;
+    for (int i = 0; i < kSteadyFrames; ++i) {
+      PointerEventPayload mv;
+      mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+      mv.documentX = 141.0 + (i + 1) * 1.5;
+      mv.documentY = 130.0;
+      mv.buttons = 1;
+      const auto t0 = Clock::now();
+      const auto payload = core.handlePointerEvent(mv);
+      std::memcpy(stand.data(), payload.finalBitmapPixels.data(),
+                  std::min(payload.finalBitmapPixels.size(), stand.size()));
+      const auto t1 = Clock::now();
+      totalMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
+    return totalMs / kSteadyFrames;
+  };
+
+  const double rectAvg = measure(kRectSvg);
+  const double filterAvg = measure(kFilterSvg);
+  std::fprintf(stderr, "[UIPerf compare 800x600] rect=%.2f ms filter=%.2f ms ratio=%.2fx\n",
+               rectAvg, filterAvg, filterAvg / rectAvg);
+
+  // The user reports filter-group drag stuck at 20 fps while
+  // regular-object drag runs at 40 fps — a 2× gap. If the backend
+  // takes the fast path for both, both should be within noise of
+  // each other. Flag a regression if the filter drag is more than
+  // 2× slower than the rect drag.
+  EXPECT_LT(filterAvg, rectAvg * 2.0 + 2.0)
+      << "filter-group drag is substantially slower than regular-object "
+         "drag at the same canvas size. rect=" << rectAvg
+      << " ms, filter=" << filterAvg
+      << " ms. Check whether `propagateFastPathTranslationToSubtree` "
+         "scales with descendant count or whether the overlay render "
+         "path costs more for filter groups.";
+}
+
 TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {

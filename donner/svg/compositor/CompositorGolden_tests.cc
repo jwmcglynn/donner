@@ -168,6 +168,92 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
 // (filter groups, clip-path groups, `<g>` with children) failed the
 // gate, forcing every drag frame through `prepareDocumentForRendering`
 // at ~25 ms/frame on real splash content.
+// User-reported regression: after dragging a `<g filter>` element,
+// the element disappears from subsequent frames. Symptom traces to
+// `propagateFastPathTranslationToSubtree` mutating descendant RICs'
+// `worldFromEntityTransform` by the CUMULATIVE delta every frame
+// rather than the frame's INCREMENTAL delta. After N drag frames a
+// descendant's world transform has been multiplied by N deltas,
+// shoving the next re-rasterize output far off-canvas.
+//
+// This test drags a `<g filter>` by multiple cumulative steps, then
+// forces a re-rasterize (by toggling a flag that evicts the layer
+// bitmap) and renders again. The cls-64-style circle inside the
+// group should still be at its post-drag position, visible to
+// `getPixel`.
+TEST_F(CompositorGoldenTest, DraggingFilterGroupThenForcingRerasterizeKeepsElementVisible) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="1"/></filter>
+      </defs>
+      <rect width="200" height="200" fill="white"/>
+      <g id="group" filter="url(#blur)">
+        <rect id="inner" x="50" y="50" width="40" height="40" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto group = document.querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+  const Entity groupEntity = group->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(groupEntity, InteractionHint::ActiveDrag));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  // Drag sequence: 3 cumulative translations mirroring
+  // `SelectTool::onMouseMove`'s `Translate(deltaDoc) * startTransform`
+  // pattern — each call resets the element's local transform to the
+  // TOTAL delta from drag start, not the per-frame increment.
+  for (int step : {5, 10, 15}) {
+    group->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(static_cast<double>(step), 0.0)));
+    compositor.renderFrame(viewport);
+  }
+
+  // Force the layer bitmap to be re-rasterized on the next frame.
+  // `resetAllLayers(false)` drops every layer's cached bitmap but
+  // keeps the layer list intact — next `renderFrame` will call
+  // `rasterizeLayer`, which iterates descendants through
+  // `drawEntityRange` and reads `instance.worldFromEntityTransform`
+  // on each one. If `propagateFastPathTranslationToSubtree`
+  // corrupted descendant world transforms during drag, the re-
+  // rasterize reads the corrupted values and paints the descendant
+  // geometry far off-canvas — the "element disappears" symptom.
+  compositor.resetAllLayers(/*documentReplaced=*/false);
+  ASSERT_TRUE(compositor.promoteEntity(groupEntity, InteractionHint::ActiveDrag));
+  compositor.renderFrame(viewport);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  // After the drag, #inner's center is at doc (70 + 15, 70) = (85, 70).
+  // Sample a 3×3 patch so a 1-px drift in the filter's output doesn't
+  // flake the test — the red fill is 40×40 so there's plenty of
+  // slack.
+  int redHits = 0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      const Pixel px = getPixel(flat, 85 + dx, 70 + dy);
+      // Red gets blurred by the filter, so allow broad tolerance —
+      // we're checking "the pixel still has a strong red component",
+      // not pixel-identity.
+      if (px.r > 100 && px.g < 100 && px.b < 100) {
+        ++redHits;
+      }
+    }
+  }
+  EXPECT_GE(redHits, 5)
+      << "after drag + re-rasterize, the filter group's descendant geometry "
+         "is missing from the rendered output. Suggests "
+         "`propagateFastPathTranslationToSubtree` corrupted descendant "
+         "RIC `worldFromEntityTransform` by applying the cumulative "
+         "delta every frame instead of per-frame increments.";
+}
+
 TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
