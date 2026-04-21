@@ -135,16 +135,53 @@ set -euo pipefail
 # .clang-tidy (which would re-enable the broader check set).
 cp -f {config} .clang-tidy
 
-CLANG_TIDY="${{CLANG_TIDY:-clang-tidy}}"
+if [[ -n "${{CLANG_TIDY:-}}" ]]; then
+  : # honour explicit override
+elif command -v clang-tidy-19 >/dev/null 2>&1; then
+  CLANG_TIDY="clang-tidy-19"
+elif command -v clang-tidy >/dev/null 2>&1; then
+  CLANG_TIDY="clang-tidy"
+else
+  echo "include_cleaner_lint: clang-tidy not found in PATH" >&2
+  echo "  Install clang-tidy 19+ (e.g. 'apt-get install clang-tidy-19' on" >&2
+  echo "  Debian/Ubuntu, 'brew install llvm@19' on macOS) or set CLANG_TIDY" >&2
+  echo "  to a usable binary." >&2
+  exit 1
+fi
 if ! command -v "$CLANG_TIDY" >/dev/null 2>&1; then
-  echo "include_cleaner_lint: clang-tidy not found in PATH ($CLANG_TIDY)" >&2
-  echo "  Install clang-tidy 19+ or set CLANG_TIDY to a usable binary." >&2
+  echo "include_cleaner_lint: clang-tidy override '$CLANG_TIDY' not executable" >&2
   exit 1
 fi
 
+EXTRA_ARGS=()
+if [[ "$(uname)" == "Darwin" ]]; then
+  # Bazel's macOS cc toolchain doesn't emit -isysroot through
+  # cc_common.get_memory_inefficient_command_line, so a non-Apple
+  # clang-tidy (e.g. brew's llvm@19) can't find macOS SDK headers like
+  # <stdlib.h> / <math.h>. We also have to swap brew's bundled libc++
+  # for Apple's, because brew's libc++ expects a glibc-style C library
+  # and trips over Apple's <math.h>/<stdlib.h> definitions (missing
+  # FP_NAN, ldiv_t, etc.). Force -nostdinc++ and point clang-tidy at
+  # the Apple toolchain's libc++ headers instead.
+  if command -v xcrun >/dev/null 2>&1; then
+    SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
+    if [[ -n "$SDK_PATH" ]]; then
+      EXTRA_ARGS+=(-isysroot "$SDK_PATH")
+    fi
+  fi
+  if command -v xcode-select >/dev/null 2>&1; then
+    DEV_DIR="$(xcode-select -p 2>/dev/null || true)"
+    if [[ -n "$DEV_DIR" ]]; then
+      APPLE_CXX="$DEV_DIR/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1"
+      if [[ -d "$APPLE_CXX" ]]; then
+        EXTRA_ARGS+=(-nostdinc++ -isystem "$APPLE_CXX")
+      fi
+    fi
+  fi
+fi
 # `--quiet` suppresses the per-file "N warnings generated" banner; the
 # test_output=errors stream stays clean unless misc-include-cleaner fires.
-exec "$CLANG_TIDY" --quiet {files} -- {flags}
+exec "$CLANG_TIDY" --quiet {files} -- {flags} "${{EXTRA_ARGS[@]}}"
 """.format(
         config = _shell_quote(config_short_path),
         files = file_args,
