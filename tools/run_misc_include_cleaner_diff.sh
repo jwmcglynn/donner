@@ -66,7 +66,13 @@ if [[ ${#MODIFIED_FILES[@]} -eq 0 ]]; then
 fi
 
 echo "Refreshing compile_commands.json..."
-"${BAZEL}" run //tools:refresh_compile_commands
+# `--config=geode` is required so target-gated Geode sources
+# (//donner/svg/renderer:renderer_geode et al.) pick up a compile command.
+# Without it their target_compatible_with guard makes them invisible to
+# hedron_compile_commands, clang-tidy falls back to default flags, and
+# headers that depend on the Geode toolchain (webgpu-cpp, wgpu-native)
+# fail to resolve.
+"${BAZEL}" run --config=geode //tools:refresh_compile_commands
 
 echo "Running misc-include-cleaner on changed lines of ${#MODIFIED_FILES[@]} file(s):"
 printf '  %s\n' "${MODIFIED_FILES[@]}"
