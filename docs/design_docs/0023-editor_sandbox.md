@@ -1105,6 +1105,152 @@ Every commit is independently buildable and testable, but the PR is
 reviewed as a whole. CI runs full suites after each commit via
 `git rebase --exec`.
 
+## S12: parity with the main-branch editor (post-S7–S11 follow-up)
+
+The S7–S11 PR intentionally scopes to the **architecture split** — the
+IPC boundary, the `EditorBackendClient` API, the thin-client shell,
+the address bar, and the resource policy. It does NOT re-wire all of
+main's editor UX behaviors through that boundary; that's S12.
+
+The consequence: after S7–S11 lands, `//donner/editor:editor` runs
+the thin-client shell against an in-process or subprocess backend,
+but its on-pane behavior has regressed from main in specific,
+enumerated ways. This section lists each gap, the test that pins it
+(writing the test first per the project's debugging discipline), and
+the approximate shape of the fix.
+
+Intent: S12 doesn't re-architect anything. It ports
+`EditorShell`-shaped UX wiring from main into the thin client,
+replacing direct-`EditorApp` calls with `EditorBackendClient` calls
+where necessary. New protocol fields are allowed but kept minimal.
+
+### Parity gaps
+
+| # | Symptom on sandbox | Root cause | Fix surface |
+|---|---|---|---|
+| G1 | "All black" pane on startup; selection chrome draws in the right place but the document doesn't | `viewport.documentViewBox` left as `Box2d::Zero` in the thin-client `main.cc`; `imageScreenRect()` returns a 0×0 rect so `ImGui::AddImage` draws into empty space | **Fixed in this PR.** Added `FramePayload.hasDocumentViewBox / documentViewBox[4]` to the wire protocol (back-compat-safe trailing optional). Backend fills from `svgElement().viewBox()` with `(0, 0, width, height)` fallback; client exposes it on `FrameResult.documentViewBox` and `latestDocumentViewBox()`; `main.cc` seeds `ViewportState::documentViewBox` from it on load + refresh in `ProcessFrameResult`. |
+| G2 | Top-left corner of the document is centered in the pane instead of the document's center; clicks land in the wrong document-space region; AABB overlay appears in the wrong position | Same as G1. With `documentViewBox = Box2d::Zero`, `documentViewBoxCenter()` returns `(0, 0)` so `resetTo100Percent` anchors the doc's origin to the pane center; `screenToDocument(click)` yields coordinates in the rasterized-bitmap pixel space (when G1 was tactically seeded from bitmap dims) or garbage (when left zero), which the backend hit-tests against its own SVG-viewBox-space geometry and either misses or picks the wrong element. | **Fixed with G1.** Pinned by `ThinClientUiFlowTest.FramePayloadReportsSvgOwnViewBox`, `ClickOnScreenHitsCorrectElementInDocumentSpace`, and `DocumentCenterMapsToPaneCenter`. |
+| G3 | `setViewport` is fired on every UI frame and its `FrameResult` is discarded via `(void)-`cast — backend re-rasterizes every frame for nothing, and the new bitmap never reaches the GL texture | Thin-client `main.cc` never pipelined `setViewport`'s future through `ProcessFrameResult` | `main.cc` tracks the last posted canvas size, only re-posts on change, and threads the returned future through `pendingFrame` so the bitmap gets uploaded. Pinned by `EditorBackendClientHostFlowTest.DiscardedSetViewportLeavesHostUploadFrozenAtInitialBitmap`. |
+| G4 | **Element inspector pane shows only a tree list; no per-node attribute table, computed-style dump, or edit affordances** | `SidebarPresenter::renderInspector` in the main-branch library dereferences host-side `SVGElement` handles to format the attribute table — the thin client has no such handle, only the backend's opaque `entityId` | Either (a) add `InspectedElementSnapshot` to `FrameResult` (attribute name/value pairs + computed-style summary for the current selection), or (b) expose a new `inspectElement(entityId)` API that returns the snapshot on demand. (b) is cleaner since the inspector only opens when the user looks at it. |
+| G5 | No `--experimental` (composited drag preview) or `--save-repro` wiring on the sandbox thin-client | Both depend on `SelectTool` / `ReproRecorder` in `EditorShell` that the thin-client shell omits entirely. Flags are CLI-parsed and ignored with a stderr diagnostic. | Port `SelectTool` into the backend and add `setExperimentalMode(bool)` to `EditorBackendClient`; host-side `ReproRecorder` records pointer/key events pre-forward to the backend. |
+| G6 | ~~No drag feedback — click, see AABB, but dragging doesn't move the selection~~ **Drag now correct; see G6b for the perf story.** | Backend's `handlePointerEvent` did only hit-test + setSelection; `SelectTool` lived in `backend_lib` but wasn't instantiated by `EditorBackendCore` | **Fixed in this PR.** `EditorBackendCore` owns a `SelectTool` member; `handlePointerEvent` dispatches `kDown`/`kMove`/`kUp` (and folds `kCancel` → up) through it. Writebacks from drag-end flow through `FrameResult.writebacks`. Pinned by `ThinClientUiFlowTest.DragMovesSelectedElementAndCommitsWriteback`. |
+| G6b | ~~Dragging is slow~~ **Partially fixed in this PR** (35ms → 16ms avg). Composited rendering ported to backend; tile-level host caching is the remaining phase-2 win. | Every `kMove` previously triggered a full `buildFramePayload` → full `SerializingRenderer` tree walk → full `ReplayingRenderer` re-raster on the host. | **Phase 1 done in this PR.** Backend now owns a real `svg::Renderer` + `CompositorController`; `buildFramePayload` runs `compositor_->renderFrame(viewport)` and ships the final pre-composed bitmap via new `FramePayload.finalBitmap` fields. Drag events route through `SelectTool` which mutates the drag target's transform; the compositor's translation-only fast path detects the pure-translation delta and reuses the cached layer bitmap instead of re-rasterizing. Additional fix along the way: `SVGDocument::setCanvasSize` unconditionally `invalidateRenderTree()`s, so `EditorBackendCore` now skips the call when the requested dimensions haven't changed (comparing against a local shadow, not `doc.canvasSize()` which reports the aspect-fit-scaled result). Pinned by `ThinClientUiFlowTest.CompositorModeSteadyStateDragIsFast` with a 30 ms budget against a 100-shape document. **Phase 2 (follow-up):** add per-tile fields to `FramePayload` so the host can cache individual layer bitmaps across frames and skip re-uploading the static bg/fg tiles on every drag frame — the compositor's `snapshotTilesForUpload()` already exposes the tile list with stable `tileId` + `generation`. |
+| G7 | No marquee, no hover rect, no multi-select shortcuts | Host forwards the pointer event but the backend's default pointer handler doesn't implement marquee state or hover tracking | `SelectTool` in the backend already tracks marquee state via `marqueeRect()` (`std::optional<Box2d>`). Gap is the serialization: backend doesn't populate `FramePayload.hasMarquee / marquee[4]` from SelectTool. Small addition — marquee field already exists in the payload. |
+| G8 | Zoom / pan gestures adjust `ViewportState` locally but the backend keeps rendering at its own `viewportWidth/Height` — on zoom-in the rasterized image is still pane-sized and stretches | Thin-client zoom adjusts `viewport.zoom`, which changes `desiredCanvasSize()`, but the current `main.cc` computes canvas from `paneSize * dpr` directly (bypassing zoom) so that the `documentViewBox`-unpopulated state doesn't explode | Fold back to `desiredCanvasSize()` once G1's `documentViewBox` plumbing lands. |
+| G9 | Source-pane typos produce backend reparses per keystroke — no debounce | `main.cc` has `textChangePending` debounce logic inherited from main but `ApplySourcePatch` payload is sent too eagerly | Tune the debounce threshold / hold condition. Not load-bearing, but noticeable. |
+| G10 | Export dialog / Save-As uses a thin-wrapper `gh`/nfd path but doesn't round-trip through the backend for "serialize current state" | Thin-client's `backend->exportDocument(kSvgText)` returns empty — `EditorBackendCore::handleExport` is a placeholder | Implement `handleExport` in backend. Small; the SVG serializer already lives next to `SVGDocument`. |
+
+### S12 PR structure — landed, in progress, remaining
+
+Unlike S7–S11 which had to land as a single PR for the banned-pattern
+lint to stick, S12 is a collection of ~10-14 narrower PRs. Status as
+of this commit:
+
+**Landed this PR:**
+
+- [x] **G1/G2 `documentViewBox` plumbing** — `FramePayload.documentViewBox`
+      added, thin-client consumes via `backend->latestDocumentViewBox()`.
+- [x] **G3 `setViewport` pipelining audit** — `(void)setViewport` bug
+      fixed, `pendingFrame` now threads through `ProcessFrameResult`.
+- [x] **G5 `--experimental` + `--save-repro` wiring** — both CLI flags
+      parsed; `--experimental` enables drag stderr instrumentation,
+      `--save-repro` drives the existing `ReproRecorder` on the host
+      side (once-per-frame `snapshotFrame()` + on-exit `flush()`).
+- [x] **G6a drag correctness** — `SelectTool` wired into
+      `EditorBackendCore::handlePointerEvent`; drag moves elements,
+      commits writeback.
+- [x] **G6b phase 1: composited rendering port** — backend owns
+      `svg::Renderer` + `CompositorController`; ships
+      `FramePayload.finalBitmap`; selection chrome baked into the
+      bitmap via `OverlayRenderer::drawChromeWithTransform`; drag
+      fast path verified under
+      `CompositorModeSteadyStateDragIsFast` (35 ms → 18 ms/frame).
+- [x] **G8 zoom/pan re-wiring** — `desiredCanvasSize()` replaces the
+      direct pane-size fallback once `documentViewBox` is populated.
+- [x] **Bridging phase A** — `BridgeTexture{.h,.cc}` interface +
+      CPU stub; `BridgeHandleKind` enum; host/backend stub factories.
+- [x] **Bridging phase B part 1** — macOS `IOSurfaceCreate` host +
+      `IOSurfaceLookup` backend; `kAttachSharedTexture` session
+      opcode; `EditorBackendClient::attachSharedTexture()`;
+      `handleAttachSharedTexture` in the backend core; `main.cc`
+      fires attach on startup.
+- [x] **Rust patch, unconditional source build** —
+      `third_party/patches/wgpu-native-iosurface-export.patch`
+      (the concrete diff), `bazel_dep(name = "rules_rust")` +
+      toolchain, `crate.from_cargo` extension wired into
+      `MODULE.bazel`, `@wgpu_native_source//:wgpu_native` as the
+      single wgpu-native target (no flag, no prebuilt fallback).
+      Patched exports return null today — the MTLDevice extraction
+      itself is the follow-up.
+
+**Remaining work** (in priority order for the next PR spate):
+
+1. **Bridging phase B part 2 — fill in the Rust extraction.**
+    Replace the `std::ptr::null_mut()` stubs in
+    `@wgpu_native_source//src/iosurface.rs` with a real
+    `Global::device_as_hal::<wgpu_hal::api::Metal, _, _>` callback
+    that yields the `MTLDevice` pointer. Mirror for Vulkan on
+    Linux. **Estimated: 4-6 hours.** Fallback: the Metal-bypass
+    backup plan below.
+2. **Bridging phase B part 3 — host GL `CGLTexImageIOSurface2D`.**
+    Populate `MacOSHost::glTextureId()` so ImGui's `AddImage`
+    samples the shared IOSurface. Needs the GL context from
+    `main.cc`. **Estimated: 1-2 hours.** Independent of part 2;
+    can land first.
+3. **Bridging phase B engagement.** Flip `MacOSBackend::ready()`
+    to return `true` once parts 2+3 are in; flip
+    `buildFramePayload` to skip `finalBitmapPixels` when
+    `bridge_->ready()`. One-line change; test covers the flip.
+4. **G6b phase 2 — per-tile host texture cache.** Expose
+    `CompositorController::snapshotTilesForUpload()` across the
+    IPC boundary (add a tiles array to `FramePayload` with
+    `{tileId, generation, paintOrderIndex, bitmap,
+    compositionTransform}` per entry). Host caches GL textures
+    keyed on `tileId`; only re-uploads when `generation` bumps.
+    Orthogonal to bridging — bridging saves bytes; tile caching
+    saves work. **Estimated: 2-3 days**, mostly protocol +
+    host-side cache.
+5. **G4 element inspector.** `inspectElement(entityId)` API +
+    host sidebar UI. Needs a flattened name/value snapshot per
+    element (no DOM mirror — see Invariants).
+6. **G7 marquee/hover serialization.** `SelectTool`'s
+    `marqueeRect()` + hover tracking already populated backend-
+    side; add `FramePayload.hasMarquee / marquee` fields if they
+    aren't already (they are — just need to wire the populate).
+7. **G9 source-pane debounce tuning.** Host-only. Tune
+    `kTextChangeDebounceSeconds` so keystroke storms don't spam
+    `kReplaceSource`.
+8. **G10 backend export handler.** `EditorBackendCore::
+    handleExport` currently returns empty bytes. Serialize
+    `editor_.document()` via the existing SVG writer.
+9. **Bridging phase C — Linux dmabuf.** Blocked on seccomp
+    audit for `SCM_RIGHTS` receive during handshake. The Rust
+    patch from phase B part 2 also needs the Vulkan-hal variant
+    (`wgpuTextureCreateFromVulkanDmabufFd` or similar). **Scope:
+    ~1 week once the Rust pipeline from phase B is working.**
+10. **Bridging phase D — Windows shared handle.** Lowest
+     priority; ship when the WASM-browser-WebGPU path settles.
+
+**Testing surface.** Each of those is independently testable under
+the `EditorBackendClient` harness the current PR introduces — no
+new test infrastructure required.
+
+### Invariants S12 must preserve
+
+- **IPC shape stays `FrameResult`-centric.** S12 adds fields to
+  `FrameResult` as needed (inspector snapshot, drag hints, document
+  viewBox) but does not add new round-trip response types. The host
+  shouldn't grow a family of small request/response pairs —
+  everything flows through the frame bundle.
+- **No host-side `SVGDocument` reintroduction.** G4 in particular is
+  tempting to solve by shipping a DOM mirror; that reopens the
+  attack surface the whole sandbox exists to close. The inspector
+  snapshot must be a flattened name/value structure, not an
+  entt-reflection.
+- **Banned-pattern lint stays green.** Any new host-side file that
+  reaches for `SVGParser::` or `svg::components::*` fails the lint;
+  S12 PRs must re-check that gate.
+
 ## User Stories
 
 - **As a security-conscious user**, I want to paste a URL from a random
@@ -1271,6 +1417,486 @@ interface that already exists*.
 - **Shutdown**: host writes `{opcode=kShutdown}`; child exits cleanly.
   Host joins the reader thread. On editor exit, host sends `kShutdown`
   with a 100 ms grace before `SIGKILL`.
+
+### Rendering data flow (no shared textures)
+
+A question that comes up on every code review of this area: *how do the
+pixels get from the sandbox back to the UI?* Short answer: **there is no
+shared GPU memory and no shared texture handle.** The sandbox boundary
+sits strictly below the renderer command interface, so pixels live only
+on the host side — the backend emits **draw-command bytes**, the host
+re-rasterizes them. That decision is load-bearing; the rest of this
+section unpacks why and what it means in practice.
+
+```
+  Backend (sandbox)                              Host (thin client)
+  ───────────────────                            ──────────────────────
+  EditorBackendCore                              EditorBackendClient
+       │                                              │
+       │  (operates on EditorApp)                     │
+       ▼                                              │
+  SerializingRenderer                                 │
+       │  encodes draw calls                          │
+       │  as opcode stream                            │
+       ▼                                              │
+  FramePayload.renderWire  ═══ IPC / move ══▶   ReplayingRenderer
+       │                    (Linux subprocess           │
+       │                     pipes or in-process        ▼
+       │                     vector move)          svg::Renderer
+       │                                           (tiny-skia / Geode /
+       │                                            whatever the host has)
+       │                                                │
+       │                                                ▼  cpu/gpu raster
+       │                                           RendererBitmap (RGBA)
+       │                                                │
+       │                                                ▼  one copy
+       │                                           glTexImage2D → GL texture
+       │                                                │
+       │                                                ▼
+       │                                           ImGui::Image in render pane
+```
+
+The backend builds one `SerializingRenderer` per call to
+`buildFramePayload()`; it holds no pixels and never calls into any
+graphics driver. The host builds one long-lived `svg::Renderer` per
+client; each frame it runs a fresh `ReplayingRenderer` over the wire
+bytes, dispatching every opcode onto that renderer. `takeSnapshot()`
+reads the resulting RGBA buffer; `glTexImage2D` copies it into a
+texture; ImGui samples the texture for the render pane.
+
+Consequences worth internalizing:
+
+1. **The backend touches no GL/Metal state.** This is the whole point —
+   the subprocess sandbox on Linux uses seccomp to refuse the syscalls
+   GL would need, and can't open `/dev/nvidia*` or a display server.
+   Command-level replay is what lets the same backend binary run
+   identically under subprocess sandboxing, in-process on macOS, and
+   in-process in a WASM worker.
+
+2. **Rasterization cost is on the host.** The backend pays for
+   `prepareDocumentForRendering` + `RendererDriver` traversal +
+   opcode encoding; the host pays for decode + the actual pixel
+   work (tiny-skia scan-conversion, or Geode's WebGPU shaders).
+   Perf work on the render pane budget has to measure both halves.
+   See `editor_backend_golden_image_tests` for a pixel-identity
+   gate that proves the two renderers agree on simple documents —
+   a divergence there points at `SerializingRenderer` dropping
+   calls or `ReplayingRenderer` mis-decoding them.
+
+3. **Every frame is a full re-raster.** We don't (yet) diff the wire
+   stream or cache bitmaps across `FramePayload`s on the host side;
+   a setViewport or replaceSource call always produces a full
+   `renderWire` from the backend, and the host always replays it
+   end-to-end. That's acceptable for the sandboxed S7–S11 milestone
+   (the previous in-process editor also re-rastered per frame); S12
+   is where we integrate the compositor caching from #531.
+
+4. **The bitmap is a value type.** `FrameResult.bitmap` owns its
+   pixel `std::vector<uint8_t>`. There's no lifetime entanglement
+   between the backend's buffers and the host's GL texture; we can
+   drop the backend half and keep rendering from the cached
+   `latestBitmap_`.
+
+**Pitfall: discarding a `FrameResult` discards the bitmap.** Every
+mutating API on `EditorBackendClient` (including `setViewport`,
+`pointerEvent`, `replaceSource`, `undo`/`redo`) returns a
+`std::future<FrameResult>` whose `.bitmap` is the authoritative
+post-mutation rasterization. If the host drops the future without
+running it through `ProcessFrameResult`, the backend's internal state
+advanced but the GL texture is frozen at whatever the last explicit
+upload produced. The editor's thin-client `main.cc` hit this exact
+bug by firing `(void)backend->setViewport(...)` once per UI frame and
+never re-uploading — on a pane larger than the backend's 512×384
+default, the texture stayed at the tiny startup bitmap and the user
+reported "nothing renders." Fix: pipeline the returned future through
+`pendingFrame`, and only post `setViewport` when the canvas size
+actually changed. The test
+`EditorBackendClientHostFlowTest.DiscardedSetViewportLeavesHostUpload
+FrozenAtInitialBitmap` pins the failure mode.
+
+**Pitfall: `ViewportState::documentViewBox` is the SVG's own viewBox,
+not the rasterized bitmap's dimensions.** All three of these host-
+side facilities live in SVG user-space (document) coordinates:
+selection bboxes (`FrameResult.selection.worldBBox`), the pointer-
+event inputs (`PointerEventPayload.documentPoint`), and the
+viewport transforms (`documentToScreen` / `screenToDocument`).
+The rasterized bitmap is SVG user-space *mapped through
+`canvasFromDocumentTransform`* into canvas pixels — the same shape
+as the viewBox only when the SVG's intrinsic size and aspect
+happen to match. Seeding `documentViewBox` from bitmap dims
+produces three correlated failures that look like one
+"miscalibrated editor" bug:
+
+1. `imageScreenRect() = documentToScreen(documentViewBox)` returns a
+   rect in the wrong coordinate space — the image draws at the
+   wrong place or at 0×0 (when documentViewBox is left zero).
+2. `resetTo100Percent()` anchors `panDocPoint = documentViewBoxCenter()`.
+   A bad viewBox means the doc's top-left lands at the pane's
+   center instead of the doc's center.
+3. `screenToDocument(click)` yields coords in the wrong space. The
+   backend hit-tests those against its own viewBox-space geometry
+   and either misses or picks the wrong element. The resulting
+   AABB chrome then draws at the wrong point too — two wrongs
+   that look deceptively like a single consistent offset.
+
+**The fix:** the backend ships the SVG's viewBox in
+`FramePayload.documentViewBox` (4 doubles, fall back to `(0, 0,
+widthAttr, heightAttr)` when there's no explicit viewBox attribute).
+The host reads it out of `FrameResult.documentViewBox` (or the
+cached `client->latestDocumentViewBox()`) and seeds `Viewport
+State::documentViewBox` from it on load and in `ProcessFrameResult`.
+`desiredCanvasSize() = documentViewBox * zoom * dpr` then produces
+a sensible canvas size, and zoom/pan gestures update
+`panScreenPoint` / `zoom` without re-rasterize calls.
+
+### Compatibility with Geode (WebGPU / wgpu-native)
+
+**Yes, compatible — but suboptimal.** Geode renders on the GPU via
+**wgpu-native** — the C ABI over Mozilla's Rust `wgpu` crate
+(Firefox's WebGPU impl). See `donner/svg/renderer/geode/BUILD.bazel`
+which fetches prebuilt `libwgpu_native` tarballs; we migrated off
+Dawn (Google/Chrome's impl) a few releases ago. `svg::Renderer::
+takeSnapshot()` does a `wgpuTextureCopyToBuffer` + buffer map
+readback that produces a CPU RGBA buffer. We then ship those bytes
+over IPC and the host uploads them to GL via `glTexImage2D` — a
+round-trip GPU → CPU → CPU → GPU on every frame.
+
+The GPU → CPU readback is **~2-4 ms** per 1280×720 frame on
+integrated GPUs, wasted work if the host is going to turn around
+and upload it right back. Geode's layer-cached drag path still
+saves work (the cached layer bitmap is reused with a fast-path
+compose-transform update, no per-frame re-rasterize), but every
+frame still pays the readback tax.
+
+### Cross-process texture bridging (design)
+
+**Goal.** Replace the `wgpuTextureCopyToBuffer` → memcpy →
+`glTexImage2D` round-trip with a zero-copy shared GPU texture that
+the backend writes and the host samples. Because we're on
+wgpu-native, the backend side is tractable — wgpu's `hal` layer
+exposes raw platform handles (`MTLTexture`, `VkImage`,
+`ID3D12Resource`) via `as_hal::<T, _>` in Rust, and wgpu-native's
+C ABI surfaces the same capability via `wgpuTextureGetHal*`
+helpers.
+
+```
+  Backend                                     Host
+  ──────────                                  ───────────────
+  wgpu::Device                                GL context
+     │                                             │
+     │   wgpu::Texture                             │   GLuint
+     │       │                                     │       │
+     ▼       ▼                                     ▼       ▼
+  BridgeTextureBackend ── Transport ──▶ BridgeTextureHost
+   (imports host-allocated                   (wraps handle as a
+    native texture via wgpu hal)              GL texture the
+                                              ImGui shader samples)
+```
+
+#### Transport primitive (platform-specific)
+
+| Platform | Shared-surface type | Creation (host) | Wire format |
+|---|---|---|---|
+| macOS | `IOSurface` | `IOSurfaceCreate` | `mach_port` via `mach_msg` |
+| Linux | `dmabuf` | `VkDeviceMemory` + `VK_EXT_external_memory_fd` | `int fd` via `SCM_RIGHTS` |
+| Windows | D3D11/12 shared handle | `D3D11_RESOURCE_MISC_SHARED_NTHANDLE` | `HANDLE` via `DuplicateHandle` |
+
+New files at `donner/editor/sandbox/bridge/` (one per platform +
+shared interface). The session codec grows a new opcode
+`kAttachSharedTexture` carrying the platform FD/handle once per
+session, before any `kLoadBytes`; subsequent `FramePayload`s refer
+to the bound texture by integer id + optional dirty-region rect.
+
+#### Backend side (wgpu-native texture import)
+
+`svg::Renderer` (Geode backend) grows an alternate rasterization
+target:
+
+```cpp
+// New sibling to takeSnapshot — binds the renderer's output to a
+// pre-allocated shared GPU texture instead of the internal scratch
+// pixmap. Caller owns the texture; Renderer holds a non-owning view.
+void attachSharedTexture(BridgeTextureHandle handle);
+```
+
+Under wgpu-native, the implementation on macOS is
+`wgpuHalCreateTextureFromIOSurfaceMetal(device, ioSurface, &desc)`
+(the exact symbol depends on our pinned wgpu-native version — check
+`ffi/src/wgpu_hal.h`). Linux uses
+`wgpuHalCreateTextureFromVulkanDmabufFd(...)`; Windows uses
+the D3D12 equivalent. Because wgpu is one library across all three,
+the C++ caller is platform-branching by one layer, not
+per-renderer-backend branching.
+
+The tiny-skia backend doesn't participate in the bridge — it's
+CPU-rasterizing — so on tiny-skia we fall through to the existing
+`finalBitmapPixels` wire field and pay the copy. Feature flag on
+`CompositorConfig::bridgeToHostTexture` (default off, enable per-
+platform per-renderer-backend as each lands).
+
+#### Host side (shared handle → GL texture)
+
+| Platform | GL interop extension |
+|---|---|
+| macOS | `CGLTexImageIOSurface2D` (Apple, pre-existing) |
+| Linux | `EGL_EXT_image_dma_buf_import` + `glEGLImageTargetTexture2DOES` |
+| Windows | `WGL_NV_DX_interop2` (or switch the host to D3D) |
+
+Each produces a `GLuint` ImGui's existing `AddImage` path samples
+with no shader changes.
+
+#### Security: why bridging is safe across the sandbox
+
+The sandbox guarantee is "backend can't read or write arbitrary
+host memory / fds." Sharing a texture naively breaks this; we
+preserve the guarantee by construction:
+
+- **Unidirectional data flow.** Backend writes (render target),
+  host reads (sampler). The host allocates the texture with the
+  appropriate usage flags and hands the backend a handle with
+  render-target-only usage. Backend cannot allocate new shares
+  or upgrade usage post-facto.
+- **Pre-allocated, fixed-size.** The handle is passed once at
+  session start via `kAttachSharedTexture`. Backend can't grow
+  it or request additional shares.
+- **No new sandbox syscalls.** Fd-receive happens on the host
+  pre-fork (`SCM_RIGHTS`) or on the backend before `seccomp(2)`
+  locks down. We already do this dance for stdin/stdout on
+  Linux and `mach_msg` on macOS — one more handle in the
+  handshake is a bounded addition.
+
+The one sensitive bit is "backend scribbling garbage into a
+texture the host will trust." We mitigate by: (a) host samples
+with a trust-but-verify size-clamp shader uniform, and (b) the
+texture is single-purpose (this compositor session only) — no
+cross-session or cross-user reuse.
+
+#### Implementation plan and status
+
+Phase order — each phase is independently testable + shippable:
+
+- [x] **Design locked in this doc.** ☝️
+- [x] **Phase A: `BridgeTexture` interface + CPU stub.** Landed at
+      `donner/editor/sandbox/bridge/BridgeTexture.{h,cc}`. Abstract
+      `BridgeTextureHost` + `BridgeTextureBackend` surface;
+      `MakeHostStub` / `MakeBackendStub` factories; `BridgeHandle
+      Kind` enum enumerates each platform. Tests at
+      `bridge_texture_tests`.
+- [x] **Phase B, part 1: macOS IOSurface + transport opcode.**
+      `BridgeTexture_macOS.cc` ships `IOSurfaceCreate` host
+      factory + same-process `IOSurfaceLookup` backend factory.
+      Session protocol gains `kAttachSharedTexture`,
+      `EditorApiCodec` gains `AttachSharedTexturePayload` +
+      encode/decode, `EditorBackendClient::attachSharedTexture()`
+      is live on both in-process and session-backed clients, and
+      `EditorBackendCore::handleAttachSharedTexture` imports the
+      handle + stashes the bridge. `main.cc` fires the attach on
+      macOS at startup before `loadBytes`. `BridgeTextureBackend::
+      ready()` still returns `false` — CPU `finalBitmapPixels`
+      wire path stays authoritative until phase B part 2.
+- [ ] **Phase B, part 2: wgpu-native `IOSurface` → `MTLTexture`
+      import.** BLOCKS zero-copy engagement on macOS. Grepping our
+      pinned wgpu-native C ABI (`webgpu.h` + `wgpu.h`) for
+      `IOSurface` / `MTLTexture` / `ExternalTexture` returns zero
+      symbols — this path needs a Rust-side patch on wgpu-native.
+      See "Rust-side wgpu-native patch" below.
+- [ ] **Phase B, part 3: host GL `IOSurface` → `GLuint` via
+      `CGLTexImageIOSurface2D`.** Populates `MacOSHost::
+      glTextureId()` so ImGui's `AddImage` samples the shared
+      surface instead of the uploaded-from-CPU texture. Lands
+      after part 2 so the first version tested has a GPU
+      producer to point at.
+- [ ] **Phase C: Linux dmabuf.** Blocked on auditing seccomp for
+      `SCM_RIGHTS` receive during handshake. Send is host-side +
+      pre-sandbox; receive is backend-side and must happen before
+      `prctl(PR_SET_NO_NEW_PRIVS)`. Also needs the same Rust
+      patch applied to wgpu-native's Vulkan hal (export an
+      external-memory-fd → `VkImage` → `wgpu::Texture` path).
+- [ ] **Phase D: Windows.** Lowest priority until the WASM-
+      browser-WebGPU path settles.
+
+### Rust-side wgpu-native patch (phase B, part 2)
+
+wgpu-native's Rust source exports the `hal` module internally
+(not through the C ABI) and `wgpu-hal::metal` already has
+`Device::texture_from_raw(MTLTexture)`. We need a thin C wrapper —
+tentatively `wgpuTextureCreateFromIOSurfaceMTL` — that takes an
+`IOSurfaceRef` + `WGPUDevice` and returns a `WGPUTexture` C++ can
+bind as a render-pass color attachment.
+
+**Target files in the gfx-rs/wgpu repo** (we pin a tagged release
+via prebuilt tarball at `third_party/bazel/non_bcr_deps.bzl`):
+
+1. **`wgpu-native/src/lib.rs`** — add the exported function:
+   ```rust
+   #[cfg(target_os = "macos")]
+   #[no_mangle]
+   pub unsafe extern "C" fn wgpuTextureCreateFromIOSurfaceMTL(
+       device: native::WGPUDevice,
+       surface: *mut std::ffi::c_void,   // IOSurfaceRef
+       desc: *const native::WGPUTextureDescriptor,
+   ) -> native::WGPUTexture {
+       // Extract MTLDevice from wgpu Device via the Metal hal.
+       let mtl_device = /* device.as_hal::<wgpu_hal::metal::Api, _, _>(…) */;
+       let mtl_tex = mtl_device.new_texture_from_iosurface(
+           surface.cast(), 0, convert_desc(desc));
+       let hal_tex = wgpu_hal::metal::Texture::from_raw(mtl_tex);
+       wgpu_core::device::texture_from_hal::<wgpu_hal::metal::Api>(
+           device, hal_tex, &convert_desc(desc),
+       ).into_ffi()
+   }
+   ```
+
+2. **`wgpu-native/ffi/src/wgpu.h`** — add the matching C prototype
+   inside `#if defined(__APPLE__)`.
+
+3. **`wgpu-hal/src/metal/mod.rs`** — likely no change; verify
+   `Texture::from_raw` is exposed (may need to remove a `pub(crate)`
+   gate).
+
+**Integration on Donner's side**, once the patched wgpu-native is
+pinned in:
+
+```cpp
+// donner/editor/sandbox/bridge/BridgeTexture_macOS.cc — replaces
+// the `bindAsRenderTarget` no-op with the real import.
+void MacOSBackend::bindAsRenderTarget() {
+  if (!surface_.valid() || device_ == nullptr) return;
+  WGPUTextureDescriptor desc = { /* w,h, BGRA8Unorm, RENDER_ATTACHMENT */ };
+  wgpuTexture_ = ::wgpuTextureCreateFromIOSurfaceMTL(
+      device_, const_cast<void*>(static_cast<const void*>(surface_.get())), &desc);
+  // Subsequent Geode render passes bind `wgpuTexture_` as the color
+  // attachment instead of the internal scratch target.
+}
+```
+
+**Build-system delta.** We currently fetch wgpu-native via prebuilt
+tarballs. The patched version needs either:
+- **(a)** a fork built from source with `rules_rust` + `cargo_
+      bootstrap_repository` — long-term correct but multi-day
+      Bazel/CI investment;
+- **(b)** a locally-built tarball uploaded to our release
+      artifacts, SHA-pinned in `non_bcr_deps.bzl` — faster to
+      land, needs one-time build machinery but no Bazel-Rust
+      interop.
+
+Option (b) is the right iteration-speed bet; option (a) is the
+long-term home once we grow other Rust deps.
+
+**Effort estimate:** ~3-5 days of Rust work (hal surface already
+exists, Mach API integration is straightforward), plus 1-2 days
+of Bazel/CI wiring for option (b).
+
+For the current milestone: phase 2 of the composited-rendering
+port (G6b tile-level host cache) is still the biggest incremental
+win without any GPU plumbing. The bridging work above is phase 3
+and needs the Rust patch to actually engage.
+
+### Backup plan: direct Metal bypass (no Rust patch required)
+
+If the Rust patch path proves too expensive — wgpu-native API drift,
+Cargo-in-Bazel friction, or remote-cache characterization showing
+unacceptable CI runtime regression — there's a simpler alternative
+that skips wgpu-native entirely for the final render pass into the
+IOSurface.
+
+**Key observation.** wgpu-native's C ABI *does* export a way to pull
+the underlying `MTLDevice` out of a `WGPUDevice`:
+
+```c
+// wgpu-native/ffi/src/wgpu.h (already present upstream)
+WGPU_EXPORT void* wgpuDeviceGetMetalDevice(WGPUDevice device);
+```
+
+That handle lets C++ talk directly to Metal, no Rust patch needed.
+The backend render flow then becomes:
+
+```
+  WGPUDevice   ──wgpuDeviceGetMetalDevice──▶   MTLDevice
+                                                  │
+                                                  ▼  newTextureWithDescriptor:iosurface:plane:
+                                             MTLTexture (aliases the host IOSurface)
+                                                  │
+                                                  ▼  MTLRenderPassDescriptor.colorAttachments[0].texture = …
+                                             Direct Metal render pass
+                                                  │
+                                                  ▼  Geode draws into this MTLTexture
+                                             (via its own wgpu-issued draw calls —
+                                              they target the wgpu swapchain, and
+                                              we manually blit from the swapchain
+                                              texture to our IOSurface-backed one
+                                              before presenting)
+```
+
+**Shape of the work:**
+
+1. **`BridgeTexture_macOS.mm`** — an Objective-C++ translation unit
+   (`.mm` so Metal headers are available). Uses
+   `wgpuDeviceGetMetalDevice` + `MTLDevice::
+   newTextureWithDescriptor:iosurface:plane:` to wrap the IOSurface
+   as an `MTLTexture` at `handleAttachSharedTexture` time.
+
+2. **Blit stage inside the backend's render loop.** After Geode's
+   normal `wgpuCommandEncoderCopyTextureToTexture` (or equivalent)
+   targets its internal swapchain, insert a manual
+   `MTLBlitCommandEncoder` copy from the wgpu swapchain's
+   `MTLTexture` into our IOSurface-backed `MTLTexture`. This costs
+   one GPU blit per frame (~0.5-1 ms on Apple Silicon for a
+   1280×720 BGRA8 texture, negligible vs the readback tax we're
+   replacing).
+
+3. **No wire-format change.** The session protocol's
+   `kAttachSharedTexture` opcode + `BridgeTextureHandle` are
+   already in place and carry an `IOSurfaceRef`/`IOSurfaceID` —
+   the backend just interprets them via a different code path.
+
+**Tradeoffs vs. the Rust patch:**
+
+| Dimension | Rust patch | Metal bypass |
+|---|---|---|
+| Sync cost | Zero-copy — wgpu writes directly into IOSurface | One GPU blit/frame (~0.5-1 ms @ 1280×720) |
+| Rust knowledge needed | Yes (wgpu-hal, wgpu-core internals) | No (Objective-C++ + Apple docs) |
+| Build-system change | Major (rules_rust + crates_repository) | Minor (`.mm` + `-framework Metal`) |
+| Forward-compat with wgpu updates | Fragile (internal API) | Stable (uses only public `wgpuDeviceGetMetalDevice`) |
+| Applies to Linux / Windows | Yes (same Rust patch shape) | No (Metal-specific; Linux/Windows need separate fallbacks) |
+| Effort estimate | ~1 week | ~2-3 days |
+
+**Recommended decision rule.** Start the Rust patch. If after
+~3 days of Rust work the patch isn't landing cleanly (either API
+surface drift in wgpu or crate-universe reproducibility problems),
+pivot to the Metal bypass for macOS alone. The Metal bypass is
+self-contained and blocks nothing else; keep it in the toolbox.
+
+For Linux/Windows, the Rust patch path is strictly preferred —
+there's no equivalent "just use the native API" shortcut when the
+backend is renderer-agnostic (Vulkan on Linux, D3D12 on Windows)
+and we're not investing in per-platform Objective-C-style
+bindings.
+
+### Alternatives we considered and rejected
+
+- **Shared memory for the bitmap.** Would avoid one memcpy per frame
+  on the Linux subprocess path. Rejected because (a) it requires
+  unsandbox-ing an shm fd, re-opening the backend→host attack
+  surface we just closed; (b) the in-process and WASM paths don't
+  benefit (pointer copy of a `std::vector` is already ~memcpy speed
+  on those transports); (c) the bottleneck measured on real
+  documents is rasterization, not bitmap transport.
+
+- **Shared GL texture via `EGL_EXT_image_dma_buf_import` or a Mach
+  surface.** Would move the work from host CPU to backend GPU, but
+  re-introduces a graphics driver into the sandbox — exactly the
+  thing we're trying to keep out. Would also make the WASM path
+  impossible (browsers don't expose cross-worker texture handles).
+
+- **Render on the backend, ship pixels.** A middle ground: backend
+  rasterizes into its own `tiny_skia::Pixmap`, ships the RGBA
+  buffer instead of the opcode stream. Rejected because it doubles
+  raster cost when the host already has the work to do for
+  selection chrome, marquee overlay, and the ImGui compositor; and
+  because the opcode stream is *smaller* than a 892×512 RGBA
+  buffer for most documents (a filled-rect wire message is 30
+  bytes; the equivalent bitmap region is 160 KB).
 
 ### Wire format
 

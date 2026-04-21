@@ -38,14 +38,22 @@
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
 #include "donner/editor/Notice.h"
+#include <cinttypes>
+
 #include "donner/editor/PinchEventMonitor.h"
+#include "donner/editor/repro/ReproRecorder.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/editor/SelectionOverlay.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/ViewportState.h"
 
-#ifndef __EMSCRIPTEN__
+// The session-backed (subprocess sandbox) backend only links on Linux —
+// `donner/editor/sandbox:session` is gated to `@platforms//os:linux` in
+// BUILD.bazel. WASM and non-Linux desktops (macOS) pick up the in-process
+// client instead, which doesn't need `SandboxSession`.
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include "donner/editor/sandbox/SandboxSession.h"
 #endif
 
@@ -357,6 +365,7 @@ std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
 /// text editor, update error markers. Returns true if a bitmap was uploaded.
 bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint texture,
                         int& textureWidth, int& textureHeight,
+                        donner::editor::ViewportState& viewport,
                         donner::editor::TextEditor& textEditor, int& lastShownErrorLine,
                         std::string& lastShownErrorReason) {
   if (!result.ok) {
@@ -373,6 +382,17 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint textur
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     textureWidth = result.bitmap.dimensions.x;
     textureHeight = result.bitmap.dimensions.y;
+    // Keep `documentViewBox` in step with the SVG's own viewBox as
+    // reported by the backend. This is what makes screen↔document
+    // math — `imageScreenRect`, `screenToDocument` (for pointer
+    // hit-tests), `documentToScreen` (for selection chrome) — line
+    // up with the actual bitmap that was just uploaded. Unlike the
+    // rasterized bitmap dimensions, the document viewBox is invariant
+    // under setViewport: zoom/pan don't change which doc coordinates
+    // the user is clicking in, only how they map to screen pixels.
+    if (result.documentViewBox.has_value()) {
+      viewport.documentViewBox = *result.documentViewBox;
+    }
     bitmapUploaded = true;
   }
 
@@ -420,21 +440,60 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(bwd);
   }
 
+  // CLI shape matches the composited-rendering editor's main.cc on
+  // `--experimental` is a reserved CLI slot. Composited drag preview
+  // is already on-by-default in the sandbox thin-client, so this
+  // flag doesn't gate *rendering* behavior — but it does enable
+  // **drag instrumentation**: per-event stderr logging of
+  // pointer-event → backend → texture-upload wall-clock, so a
+  // developer reporting "drag is laggy" can paste the output and
+  // tell us which stage is the bottleneck. Always-on instrumentation
+  // would clutter normal launches; hiding it behind `--experimental`
+  // keeps the steady-state launch quiet.
+  bool experimentalMode = false;
+  // `--save-repro <path>`: install a host-side `ReproRecorder` that
+  // captures raw ImGui input state once per frame and writes the
+  // recording out on exit. Replay via `donner-editor` + the repro
+  // binary (decodes the file and re-drives the editor).
+  std::optional<std::string> reproOutputPath;
+
 #ifdef __EMSCRIPTEN__
   const std::string initialSource = EmbeddedBytesToString(donner::embedded::kEditorIconSvg);
   const std::optional<std::string> initialPath = std::string("donner_icon.svg");
 #else
-  if (argc != 2) {
-    std::cerr << "Usage: donner-editor <filename>\n";
+  constexpr std::string_view kUsage =
+      "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";
+  std::optional<std::string> svgPath;
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg(argv[i]);
+    if (arg == "--experimental") {
+      experimentalMode = true;
+      continue;
+    }
+    if (arg == "--save-repro") {
+      if (i + 1 >= argc) {
+        std::cerr << "--save-repro requires a filename argument\n" << kUsage;
+        return 1;
+      }
+      reproOutputPath = std::string(argv[++i]);
+      continue;
+    }
+    if (svgPath.has_value()) {
+      std::cerr << kUsage;
+      return 1;
+    }
+    svgPath = std::string(arg);
+  }
+  if (!svgPath.has_value()) {
+    std::cerr << kUsage;
     return 1;
   }
 
-  const std::string svgPath = argv[1];
-  const std::string initialSource = LoadFile(svgPath);
+  const std::string initialSource = LoadFile(*svgPath);
   if (initialSource.empty()) {
     return 1;
   }
-  const std::optional<std::string> initialPath = svgPath;
+  const std::optional<std::string> initialPath = *svgPath;
 #endif
 
   // ---------------------------------------------------------------------------
@@ -568,15 +627,47 @@ int main(int argc, char** argv) {
         .count();
   };
 
-  // Create the backend client.
-#ifdef __EMSCRIPTEN__
-  auto backend = donner::editor::EditorBackendClient::MakeInProcess();
-#else
+  // Create the backend client. The subprocess-sandboxed client only exists on
+  // Linux (see BUILD.bazel's select on `editor_backend_client_session`);
+  // everything else — WASM and macOS desktops — falls back to the in-process
+  // client, which statically links the backend core into this address space.
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
   donner::editor::sandbox::SandboxSession session(
       donner::editor::sandbox::SandboxSessionOptions{
           .childBinaryPath = "donner/editor/sandbox/donner_editor_backend",
       });
   auto backend = donner::editor::EditorBackendClient::MakeSessionBacked(session);
+#else
+  auto backend = donner::editor::EditorBackendClient::MakeInProcess();
+#endif
+
+  // Offer a shared-GPU-texture handle to the backend before the first
+  // render. Today only macOS ships a real factory (via `IOSurface`);
+  // everything else falls through to the CPU stub. The backend's
+  // `BridgeTextureBackend::ready()` currently returns `false` on every
+  // platform (wgpu-native doesn't yet export the Metal-texture import
+  // — see `docs/design_docs/0023-editor_sandbox.md` §"Cross-process
+  // texture bridging"), so engaging this doesn't yet skip the CPU
+  // `finalBitmapPixels` wire path. The plumbing is in place so the
+  // switchover to zero-copy is a one-line behavior change once the
+  // Rust-side wgpu-native patch lands.
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  std::unique_ptr<donner::editor::sandbox::bridge::BridgeTextureHost> sharedTextureHost;
+  {
+    int fbW = 0;
+    int fbH = 0;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW > 0 && fbH > 0) {
+      sharedTextureHost =
+          donner::editor::sandbox::bridge::MakeHost_macOS(donner::Vector2i(fbW, fbH));
+      if (sharedTextureHost) {
+        auto attachFuture = backend->attachSharedTexture(sharedTextureHost->handle());
+        (void)attachFuture.get();
+        std::cerr << "[startup] +" << msSinceStart() << "ms attached shared IOSurface ("
+                  << fbW << "x" << fbH << ")\n";
+      }
+    }
+  }
 #endif
 
   // Load the initial document.
@@ -624,6 +715,20 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Seed `viewport.documentViewBox` from the initial bitmap so that
+  // `imageScreenRect() = documentToScreen(documentViewBox)` returns a
+  // non-zero rect — otherwise `ImGui::AddImage` targets a 0×0 box and
+  // nothing appears on screen even though the texture is correctly
+  // uploaded. On the main branch this wiring lived in `EditorShell`
+  // via `ViewportState::setDocumentBounds(...)`; the thin-client
+  // branch (S7–S11) doesn't carry it yet, and mistakenly leaves
+  // `documentViewBox` at its zero-initialized default. S12 follow-up
+  // will plumb the SVG's own viewBox through from the backend so
+  // zoom-to-fit / aspect-preservation semantics match main — for now
+  // we seed from the rendered bitmap dimensions, which is correct
+  // for 1:1 / pane-fill rendering. Seeded below, right after the
+  // viewport is declared.
+
   // Surface initial parse error.
   constexpr int kNoErrorLine = -1;
   int lastShownErrorLine = kNoErrorLine;
@@ -637,6 +742,19 @@ int main(int argc, char** argv) {
   }
 
   donner::editor::ViewportState viewport;
+  // Seed `documentViewBox` from the backend — this is the SVG's user-
+  // space coordinate system, the space every bbox and pointer event
+  // travels in. Must be populated *before* `resetTo100Percent` (in
+  // the main loop below) so `documentViewBoxCenter()` returns the
+  // true center, not (0, 0). Using the backend's reported viewBox
+  // (rather than the rasterized bitmap's dims) is what makes
+  // `screenToDocument` yield usable coordinates — otherwise
+  // hit-tests land at 1-to-bitmap-pixel coords, which aren't doc
+  // coords at all on any document whose intrinsic width/height
+  // differs from the rasterized canvas.
+  if (auto vb = backend->latestDocumentViewBox()) {
+    viewport.documentViewBox = *vb;
+  }
   bool viewportInitialized = false;
 
   bool panning = false;
@@ -645,6 +763,13 @@ int main(int argc, char** argv) {
 
   // Pending async results from backend.
   std::optional<std::future<donner::editor::FrameResult>> pendingFrame;
+
+  // Tracks the last canvas size we told the backend about, so we only
+  // re-post `setViewport` when the UI pane actually resizes rather than
+  // on every main-loop tick. `(-1, -1)` forces a post on the first
+  // usable-pane frame (matches the initial implicit render from
+  // `loadBytes`).
+  donner::Vector2i lastPostedCanvasSize(-1, -1);
 
   // Text change debounce state.
   bool textChangePending = false;
@@ -660,6 +785,33 @@ int main(int argc, char** argv) {
   bool openFileModalRequested = false;
   std::array<char, 4096> openFilePathBuffer{};
   std::string openFileError;
+
+  // Install the repro recorder if `--save-repro` was passed. Held in
+  // an `optional` so the steady-state non-recording case skips the
+  // branch overhead entirely. `snapshotFrame()` is called once per
+  // frame (right after `ImGui::NewFrame` below); `flush()` runs in
+  // the shutdown path so Ctrl-C / kill-9 lose at most the in-memory
+  // tail — flushing on every frame would dominate main-loop cost.
+  std::optional<donner::editor::repro::ReproRecorder> reproRecorder;
+#ifndef __EMSCRIPTEN__
+  if (reproOutputPath.has_value()) {
+    int winW = 0;
+    int winH = 0;
+    glfwGetWindowSize(window, &winW, &winH);
+    float xScale = 1.0f;
+    float yScale = 1.0f;
+    glfwGetWindowContentScale(window, &xScale, &yScale);
+    donner::editor::repro::ReproRecorderOptions options;
+    options.outputPath = *reproOutputPath;
+    options.svgPath = *svgPath;
+    options.windowWidth = winW;
+    options.windowHeight = winH;
+    options.displayScale = std::max(1.0, static_cast<double>(xScale));
+    options.experimentalMode = experimentalMode;
+    reproRecorder.emplace(std::move(options));
+    std::cerr << "[repro] recording UI inputs to " << *reproOutputPath << "\n";
+  }
+#endif
 
   std::cerr << "[startup] +" << msSinceStart() << "ms entering main loop\n";
 
@@ -693,10 +845,26 @@ int main(int argc, char** argv) {
     // Poll pending async frame results.
     if (pendingFrame.has_value()) {
       if (pendingFrame->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const auto processStart = std::chrono::steady_clock::now();
         auto result = pendingFrame->get();
-        ProcessFrameResult(result, texture, textureWidth, textureHeight, textEditor,
+        const auto gotResult = std::chrono::steady_clock::now();
+        ProcessFrameResult(result, texture, textureWidth, textureHeight, viewport, textEditor,
                            lastShownErrorLine, lastShownErrorReason);
+        const auto processEnd = std::chrono::steady_clock::now();
         pendingFrame.reset();
+        if (experimentalMode) {
+          const double getMs =
+              std::chrono::duration<double, std::milli>(gotResult - processStart).count();
+          const double uploadMs =
+              std::chrono::duration<double, std::milli>(processEnd - gotResult).count();
+          const std::size_t pixels =
+              static_cast<std::size_t>(result.bitmap.dimensions.x * result.bitmap.dimensions.y);
+          std::fprintf(stderr,
+                       "[drag] frame=%" PRIu64
+                       " get=%.3f ms upload+writebacks=%.3f ms (%dx%d = %zu px)\n",
+                       result.frameId, getMs, uploadMs, result.bitmap.dimensions.x,
+                       result.bitmap.dimensions.y, pixels);
+        }
       }
     }
 
@@ -739,6 +907,17 @@ int main(int argc, char** argv) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    // Snapshot must happen AFTER `ImGui::NewFrame` (so ImGuiIO is
+    // populated with this frame's input state) but BEFORE any UI
+    // widget code consumes those events — reading IsMouseClicked
+    // from a widget marks the event "used", which affects later
+    // frame-delta calculations but not the raw state the recorder
+    // captures. Placing it here keeps the recording layer below
+    // any UI dispatch.
+    if (reproRecorder.has_value()) {
+      reproRecorder->snapshotFrame();
+    }
+
     const auto applyZoom = [&](double factor, const donner::Vector2d& focalScreen) {
       viewport.zoomAround(viewport.zoom * factor, focalScreen);
     };
@@ -775,7 +954,7 @@ int main(int argc, char** argv) {
       openFileError.clear();
 
       // Upload the new bitmap.
-      ProcessFrameResult(loadResult, texture, textureWidth, textureHeight, textEditor,
+      ProcessFrameResult(loadResult, texture, textureWidth, textureHeight, viewport, textEditor,
                          lastShownErrorLine, lastShownErrorReason);
       return true;
     };
@@ -804,13 +983,13 @@ int main(int argc, char** argv) {
     const auto triggerUndo = [&]() {
       auto future = backend->undo();
       auto result = future.get();
-      ProcessFrameResult(result, texture, textureWidth, textureHeight, textEditor,
+      ProcessFrameResult(result, texture, textureWidth, textureHeight, viewport, textEditor,
                          lastShownErrorLine, lastShownErrorReason);
     };
     const auto triggerRedo = [&]() {
       auto future = backend->redo();
       auto result = future.get();
-      ProcessFrameResult(result, texture, textureWidth, textureHeight, textEditor,
+      ProcessFrameResult(result, texture, textureWidth, textureHeight, viewport, textEditor,
                          lastShownErrorLine, lastShownErrorReason);
     };
     const auto triggerQuit = [&]() { glfwSetWindowShouldClose(window, GLFW_TRUE); };
@@ -1177,10 +1356,78 @@ int main(int argc, char** argv) {
     }
 
     // Set viewport size on the backend so it renders at the right resolution.
+    //
+    // `setViewport` re-renders the entire document and returns a fresh
+    // `FrameResult` with a new `result.bitmap`. If we drop the returned
+    // future without running it through `ProcessFrameResult`, the GL
+    // texture stays frozen at whatever the last explicit upload produced
+    // — which on startup is the backend's default-viewport render
+    // (512×384 → aspect-fit-squared to the document's aspect for
+    // whatever SVG we loaded). The user experiences that as "nothing
+    // renders" or "all black" once the pane grows past the tiny initial
+    // crop.
+    //
+    // Target size: `paneSize * devicePixelRatio`. On this branch
+    // `ViewportState::documentViewBox` is not yet populated (that wiring
+    // is S12 follow-up — it lived in `EditorShell` on main), so
+    // `viewport.desiredCanvasSize()` falls through to `(1, 1)` and
+    // posting THAT would clobber the good initial bitmap with a 1×1
+    // render. Using pane pixels directly matches the user's intent
+    // ("render the SVG to fill the pane") and will collapse cleanly
+    // into the S12-wired `desiredCanvasSize()` once documentViewBox
+    // flows through.
+    //
+    // Two adjustments to get this right:
+    //   1. Only fire `setViewport` when the target size actually changed
+    //      — otherwise we'd re-rasterize the document on every UI frame
+    //      even while idle, which defeats the purpose of the event-
+    //      driven loop.
+    //   2. Capture the returned future as the frame's `pendingFrame` so
+    //      the next loop iteration picks up the new bitmap via the same
+    //      `ProcessFrameResult` path as every other mutation. Awaiting
+    //      inline would stall the UI; pipelining through
+    //      `pendingFrame` keeps input/paint cadence intact.
     if (renderPaneUsable) {
-      const donner::Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
-      // Fire and forget — don't block on setViewport.
-      (void)backend->setViewport(desiredCanvasSize.x, desiredCanvasSize.y);
+      // Prefer `ViewportState::desiredCanvasSize()` (which reads
+      // `documentViewBox * zoom * dpr`) now that documentViewBox is
+      // seeded from the backend's authoritative SVG viewBox. That
+      // keeps zoom working correctly — raw pane-size bypass would
+      // always render at 1:1 regardless of zoom. Fall through to
+      // pane-size when documentViewBox is still empty (e.g. a
+      // zero-sized document or the brief window between load and
+      // first backend viewBox report).
+      donner::Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
+      const double dpr = viewport.devicePixelRatio > 0.0 ? viewport.devicePixelRatio : 1.0;
+      if (desiredCanvasSize.x <= 1 || desiredCanvasSize.y <= 1) {
+        desiredCanvasSize = donner::Vector2i(
+            std::max(1, static_cast<int>(std::round(viewport.paneSize.x * dpr))),
+            std::max(1, static_cast<int>(std::round(viewport.paneSize.y * dpr))));
+      }
+      // Guard against the "pane layout not settled" state — on the very
+      // first ImGui frame the content region is occasionally clamped to
+      // (1, 1). Posting a setViewport at that size clobbers the good
+      // initial bitmap. Pick a small-but-reasonable floor; any real
+      // pane is at least tens of pixels.
+      constexpr int kMinUsefulCanvasDim = 16;
+      const bool canvasSizeIsReasonable = desiredCanvasSize.x >= kMinUsefulCanvasDim &&
+                                          desiredCanvasSize.y >= kMinUsefulCanvasDim;
+      if (canvasSizeIsReasonable && desiredCanvasSize != lastPostedCanvasSize) {
+        lastPostedCanvasSize = desiredCanvasSize;
+        if (pendingFrame.has_value() &&
+            pendingFrame->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+          ProcessFrameResult(pendingFrame->get(), texture, textureWidth, textureHeight,
+                             viewport, textEditor, lastShownErrorLine, lastShownErrorReason);
+          pendingFrame.reset();
+        }
+        if (!pendingFrame.has_value()) {
+          pendingFrame = backend->setViewport(desiredCanvasSize.x, desiredCanvasSize.y);
+        } else {
+          // An input-driven frame is still in flight; let it land first
+          // and pick up the new viewport on the next main-loop tick.
+          // Reset `lastPostedCanvasSize` so we try again next frame.
+          lastPostedCanvasSize = donner::Vector2i(-1, -1);
+        }
+      }
     }
 
     bool paneHovered = false;
@@ -1298,11 +1545,19 @@ int main(int argc, char** argv) {
       if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !panning && !spaceHeld &&
           ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const donner::Vector2d docPoint = screenToDocument(ImGui::GetMousePos());
+        const auto dragPostStart = std::chrono::steady_clock::now();
         pendingFrame = backend->pointerEvent(donner::editor::PointerEventPayload{
             .phase = donner::editor::sandbox::PointerPhase::kMove,
             .documentPoint = docPoint,
             .buttons = 1,
         });
+        if (experimentalMode) {
+          const auto dragPostEnd = std::chrono::steady_clock::now();
+          const double postMs =
+              std::chrono::duration<double, std::milli>(dragPostEnd - dragPostStart).count();
+          std::fprintf(stderr, "[drag] kMove post=%.3f ms (docPoint=%.1f,%.1f)\n", postMs,
+                       docPoint.x, docPoint.y);
+        }
       }
       if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !panning) {
         const donner::Vector2d docPoint = screenToDocument(ImGui::GetMousePos());
@@ -1312,44 +1567,14 @@ int main(int argc, char** argv) {
         });
       }
 
-      // Draw selection chrome from backend's SelectionOverlay.
-      const auto& sel = backend->selection();
-      for (const auto& s : sel.selections) {
-        const donner::Box2d docBBox = s.worldBBox;
-        const donner::Box2d screenBBox = viewport.documentToScreen(docBBox);
-        paneDrawList->AddRect(ImVec2(static_cast<float>(screenBBox.topLeft.x),
-                                     static_cast<float>(screenBBox.topLeft.y)),
-                              ImVec2(static_cast<float>(screenBBox.bottomRight.x),
-                                     static_cast<float>(screenBBox.bottomRight.y)),
-                              kSelectionChromeColor, 0.0f, ImDrawFlags_None,
-                              kSelectionChromeThickness);
-      }
-
-      // Marquee from selection overlay.
-      if (sel.marquee.has_value()) {
-        const donner::Box2d marqueeScreen = viewport.documentToScreen(*sel.marquee);
-        paneDrawList->AddRectFilled(ImVec2(static_cast<float>(marqueeScreen.topLeft.x),
-                                           static_cast<float>(marqueeScreen.topLeft.y)),
-                                    ImVec2(static_cast<float>(marqueeScreen.bottomRight.x),
-                                           static_cast<float>(marqueeScreen.bottomRight.y)),
-                                    kMarqueeFillColor);
-        paneDrawList->AddRect(ImVec2(static_cast<float>(marqueeScreen.topLeft.x),
-                                     static_cast<float>(marqueeScreen.topLeft.y)),
-                              ImVec2(static_cast<float>(marqueeScreen.bottomRight.x),
-                                     static_cast<float>(marqueeScreen.bottomRight.y)),
-                              kMarqueeStrokeColor, 0.0f, ImDrawFlags_None, kMarqueeStrokeThickness);
-      }
-
-      // Hover rect.
-      if (sel.hoverRect.has_value()) {
-        const donner::Box2d hoverScreen = viewport.documentToScreen(*sel.hoverRect);
-        paneDrawList->AddRect(
-            ImVec2(static_cast<float>(hoverScreen.topLeft.x),
-                   static_cast<float>(hoverScreen.topLeft.y)),
-            ImVec2(static_cast<float>(hoverScreen.bottomRight.x),
-                   static_cast<float>(hoverScreen.bottomRight.y)),
-            IM_COL32(0xff, 0xff, 0xff, 0x80), 0.0f, ImDrawFlags_None, 1.0f);
-      }
+      // Selection chrome (path outlines + AABB + marquee + hover rect)
+      // is drawn into the document bitmap on the backend via
+      // `OverlayRenderer::drawChromeWithTransform`, so it's pixel-
+      // locked to the rasterized content. We intentionally do NOT
+      // draw chrome via the ImGui draw list here: doing that produces
+      // shear during drag (the chrome follows the mouse while the
+      // rendered image lags by one backend frame), and it skips the
+      // path-outline stroke that the overlay renderer draws.
     } else {
       ImGui::TextUnformatted("(no rendered image)");
     }
@@ -1485,6 +1710,16 @@ int main(int argc, char** argv) {
   // ---------------------------------------------------------------------------
   // Teardown
   // ---------------------------------------------------------------------------
+  if (reproRecorder.has_value()) {
+    const std::size_t frames = reproRecorder->frameCount();
+    if (reproRecorder->flush()) {
+      std::cerr << "[repro] wrote " << frames << " frames to "
+                << reproOutputPath.value_or("") << "\n";
+    } else {
+      std::cerr << "[repro] failed to write " << reproOutputPath.value_or("") << "\n";
+    }
+  }
+
   glfwSetScrollCallback(window, pendingScrollEvents.previousCallback);
   glfwSetWindowUserPointer(window, nullptr);
   glDeleteTextures(1, &texture);

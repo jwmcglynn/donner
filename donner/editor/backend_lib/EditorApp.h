@@ -100,6 +100,14 @@ public:
     isDirty_ = false;
   }
 
+  /// The last-persisted source bytes. Backend export path
+  /// (`EditorBackendCore::handleExport`) returns this so the host
+  /// can round-trip "save-as" without re-serializing the DOM. Writebacks
+  /// update this via `kReplaceSource` each time the host applies a
+  /// structural edit, so this is the authoritative view of the
+  /// parsed-then-edited document.
+  [[nodiscard]] const std::string& cleanSourceText() const { return cleanSourceText_; }
+
   /// Recompute the dirty flag from the current source text. This allows the
   /// editor to clear the dirty indicator when the user undoes or edits back
   /// to the last clean baseline.

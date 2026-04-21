@@ -205,3 +205,29 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+# Golden-image integration test: validates that the editor sandbox pipeline
+# produces the correct pixels end-to-end by replaying `FramePayload.renderWire`
+# into a real `svg::Renderer` and diffing against a direct-rendered reference.
+# Cross-platform because it uses `EditorBackendCore` in-process — no
+# subprocess sandbox / seccomp gate, so macOS developers can iterate on
+# rendering regressions without a Linux box.
+donner_cc_test(
+    name = "editor_backend_golden_image_tests",
+    srcs = ["EditorBackendGoldenImage_tests.cc"],
+    data = ["//:donner_splash.svg"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    deps = [
+        "//donner/base",
+        "//donner/editor:editor_backend_client",
+        "//donner/editor:editor_backend_client_inprocess",
+        "//donner/editor:viewport_state",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:editor_backend_core",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

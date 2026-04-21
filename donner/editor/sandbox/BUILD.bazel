@@ -263,10 +263,15 @@ donner_cc_library(
     visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":editor_api_codec",
-        ":serializing_renderer",
         "//donner/base/xml",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:selection_aabb",
         "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/editor/sandbox/bridge:bridge_texture",
         "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
     ],
 )
 

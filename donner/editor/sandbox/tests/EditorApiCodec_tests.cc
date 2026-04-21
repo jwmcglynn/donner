@@ -268,7 +268,6 @@ TEST(EditorApiCodecTest, FrameRoundTripMinimal) {
   FramePayload out;
   ASSERT_TRUE(DecodeFrame(encoded, out));
   EXPECT_EQ(out.frameId, 99u);
-  EXPECT_TRUE(out.renderWire.empty());
   EXPECT_TRUE(out.selections.empty());
   EXPECT_FALSE(out.hasMarquee);
   EXPECT_FALSE(out.hasHoverRect);
@@ -283,7 +282,6 @@ TEST(EditorApiCodecTest, FrameRoundTripMinimal) {
 TEST(EditorApiCodecTest, FrameRoundTripFull) {
   FramePayload in;
   in.frameId = 42;
-  in.renderWire = {0xDE, 0xAD, 0xBE, 0xEF};
 
   FrameSelectionEntry sel;
   sel.bbox[0] = 10.0;
@@ -339,7 +337,6 @@ TEST(EditorApiCodecTest, FrameRoundTripFull) {
   ASSERT_TRUE(DecodeFrame(encoded, out));
 
   EXPECT_EQ(out.frameId, 42u);
-  EXPECT_EQ(out.renderWire, in.renderWire);
   ASSERT_EQ(out.selections.size(), 1u);
   EXPECT_DOUBLE_EQ(out.selections[0].bbox[0], 10.0);
   EXPECT_DOUBLE_EQ(out.selections[0].bbox[3], 200.0);
@@ -491,10 +488,9 @@ TEST(EditorApiCodecTest, InvalidExportFormat) {
 TEST(EditorApiCodecTest, TruncatedFramePayload) {
   FramePayload in;
   in.frameId = 1;
-  in.renderWire = {1, 2, 3};
   auto encoded = EncodeFrame(in);
-  // Truncate.
-  encoded.resize(10);
+  // Truncate mid-field.
+  encoded.resize(4);
   FramePayload out;
   EXPECT_FALSE(DecodeFrame(encoded, out));
 }

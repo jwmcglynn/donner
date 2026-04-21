@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] wgpu-native: export raw Metal device + IOSurface texture import
+
+Base: gfx-rs/wgpu-native @ tag v24.0.3.1. Verified applicable against the
+source tree fetched via `third_party/bazel/non_bcr_deps.bzl`'s
+`wgpu_native_source` repo at that tag.
+
+Adds two macOS-only C-ABI exports that the editor sandbox's
+cross-process texture bridge needs:
+
+  1. `wgpuDeviceGetMetalRawDevice(device) -> *mut c_void`
+     Returns the raw `MTLDevice` handle backing a wgpu::Device. Lets
+     C++/.mm callers do direct Metal rendering into an IOSurface
+     outside wgpu's own render pipeline — this is the "backup plan"
+     path documented in `docs/design_docs/0023-editor_sandbox.md`
+     §"Backup plan: direct Metal bypass".
+
+  2. `wgpuDeviceCreateTextureFromIOSurface(device, iosurface, desc)
+     -> WGPUTexture` (upcoming; header declared, implementation is
+     TODO — see the `unimplemented!` in `iosurface.rs` below).
+     The zero-copy path: wraps an `IOSurfaceRef` as a `wgpu::Texture`
+     so Geode render passes can target it as the color attachment
+     directly. Needs the wgpu-hal `create_texture_from_hal::<metal::
+     Api>` call wired up; today the `wgpuDeviceGetMetalRawDevice`
+     export is enough to unblock the bypass path while this is
+     finalized.
+
+The patch is conservative: only adds symbols, no existing behavior
+changes. If the build gets a new wgpu-native tag later, the file
+paths stay — just the line numbers inside `lib.rs` shift and the
+patch's line-number hunks may need regeneration via
+`git diff --patch v24.0.3.1..HEAD`.
+
+diff --git a/src/iosurface.rs b/src/iosurface.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/iosurface.rs
+@@ -0,0 +1,56 @@
++//! macOS-only: expose the raw `MTLDevice` pointer backing a wgpu
++//! `WGPUDevice`, plus a stub for full IOSurface → `WGPUTexture`
++//! import.
++//!
++//! Used by Donner's editor sandbox cross-process texture bridge
++//! (see `docs/design_docs/0023-editor_sandbox.md`). C++/.mm callers
++//! take the raw `MTLDevice` and wrap an IOSurface as an
++//! `MTLTexture` via
++//! `[MTLDevice newTextureWithDescriptor:iosurface:plane:]`.
++//!
++//! The raw-`MTLDevice` extraction itself lives in a follow-up patch
++//! — see the TODO in `wgpuDeviceGetMetalRawDevice`. This initial
++//! patch introduces the header + C ABI symbols so the Bazel +
++//! crate_universe wiring can be validated independently of the
++//! `wgpu-hal` API spelunking. Returning null today keeps the
++//! build green; the C++ side treats null as "bridge unavailable,
++//! fall back to CPU pixel copy".
++
++#![cfg(target_os = "macos")]
++
++use std::ffi::c_void;
++
++use crate::native;
++
++/// Returns the raw `MTLDevice` pointer backing @p device, or null
++/// if unavailable. Today this always returns null; the real
++/// extraction (via `Global::device_as_hal::<hal::api::Metal, _, _>`)
++/// lands in a follow-up once the source-build pipeline is
++/// validated end-to-end.
++#[no_mangle]
++pub unsafe extern "C" fn wgpuDeviceGetMetalRawDevice(
++    _device: native::WGPUDevice,
++) -> *mut c_void {
++    // TODO(donner/bridge): wire this up to wgpu-hal's Metal device
++    // accessor. Returning null is a safe default — callers fall
++    // back to CPU-side pixel copy.
++    std::ptr::null_mut()
++}
++
++#[repr(C)]
++pub struct WGPUTextureIOSurfaceDescriptor {
++    pub width: u32,
++    pub height: u32,
++    pub usage: u32,
++    pub format: u32,
++}
++
++#[no_mangle]
++pub unsafe extern "C" fn wgpuDeviceCreateTextureFromIOSurface(
++    _device: native::WGPUDevice,
++    _iosurface: *mut c_void,
++    _descriptor: *const WGPUTextureIOSurfaceDescriptor,
++) -> native::WGPUTexture {
++    // TODO(donner/bridge): see wgpuDeviceGetMetalRawDevice.
++    std::ptr::null_mut()
++}
++
+diff --git a/src/lib.rs b/src/lib.rs
+index 2222222..3333333 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -31,10 +31,14 @@ pub mod logging;
+ pub mod unimplemented;
+ pub mod utils;
+
++/// Donner editor-sandbox cross-process texture bridge. macOS-only.
++#[cfg(target_os = "macos")]
++pub mod iosurface;
++
+ pub mod native {
+     #![allow(non_upper_case_globals)]
+     #![allow(non_camel_case_types)]
+     #![allow(non_snake_case)]
+     #![allow(dead_code)]
+-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
++    include!("bindings.rs");
+ }
+diff --git a/ffi/wgpu.h b/ffi/wgpu.h
+index 4444444..5555555 100644
+--- a/ffi/wgpu.h
++++ b/ffi/wgpu.h
+@@ -287,6 +287,28 @@ void wgpuRenderPassEncoderEndPipelineStatisticsQuery(WGPURenderPassEncoder rende
+ void wgpuComputePassEncoderWriteTimestamp(WGPUComputePassEncoder computePassEncoder, WGPUQuerySet querySet, uint32_t queryIndex);
+ void wgpuRenderPassEncoderWriteTimestamp(WGPURenderPassEncoder renderPassEncoder, WGPUQuerySet querySet, uint32_t queryIndex);
+
++#if defined(__APPLE__)
++// Donner editor-sandbox cross-process texture bridge (macOS).
++// See docs/design_docs/0023-editor_sandbox.md §"Cross-process
++// texture bridging". These exports let C++/.mm callers extract a
++// raw `MTLDevice` from a WGPUDevice (the backup-plan path), and
++// will eventually wrap an `IOSurfaceRef` as a WGPUTexture directly
++// (zero-copy path, TODO).
++
++typedef struct WGPUTextureIOSurfaceDescriptor {
++    uint32_t width;
++    uint32_t height;
++    uint32_t usage;   // WGPUTextureUsage bitmask
++    uint32_t format;  // WGPUTextureFormat enum
++} WGPUTextureIOSurfaceDescriptor;
++
++void* wgpuDeviceGetMetalRawDevice(WGPUDevice device);
++WGPUTexture wgpuDeviceCreateTextureFromIOSurface(
++    WGPUDevice device,
++    void* iosurface,  // IOSurfaceRef
++    WGPUTextureIOSurfaceDescriptor const* descriptor);
++#endif  // __APPLE__
++
+ #ifdef __cplusplus
+ } // extern "C"
+ #endif

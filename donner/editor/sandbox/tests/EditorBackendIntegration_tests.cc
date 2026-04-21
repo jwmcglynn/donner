@@ -78,7 +78,7 @@ TEST_F(EditorBackendIntegrationTest, LoadBytesProducesRenderWire) {
   ASSERT_TRUE(DecodeFrame(resp.bytes, frame)) << "Failed to decode FramePayload";
 
   EXPECT_GT(frame.frameId, 0u);
-  EXPECT_FALSE(frame.renderWire.empty()) << "kLoadBytes should produce non-empty render wire";
+  EXPECT_TRUE(frame.hasFinalBitmap) << "kLoadBytes should produce a finalBitmap";
   EXPECT_EQ(frame.statusKind, FrameStatusKind::kRendered);
 }
 
@@ -113,7 +113,7 @@ TEST_F(EditorBackendIntegrationTest, SetViewportUpdatesRendering) {
 
   FramePayload frame;
   ASSERT_TRUE(DecodeFrame(resp.bytes, frame));
-  EXPECT_FALSE(frame.renderWire.empty());
+  EXPECT_TRUE(frame.hasFinalBitmap);
 }
 
 TEST_F(EditorBackendIntegrationTest, UndoRedoRoundTrip) {
@@ -142,7 +142,7 @@ TEST_F(EditorBackendIntegrationTest, UndoRedoRoundTrip) {
 
   FramePayload frame;
   ASSERT_TRUE(DecodeFrame(undoResp.bytes, frame));
-  EXPECT_FALSE(frame.renderWire.empty());
+  EXPECT_TRUE(frame.hasFinalBitmap);
 
   // Send redo.
   WireRequest redoReq;
@@ -153,7 +153,7 @@ TEST_F(EditorBackendIntegrationTest, UndoRedoRoundTrip) {
 
   FramePayload redoFrame;
   ASSERT_TRUE(DecodeFrame(redoResp.bytes, redoFrame));
-  EXPECT_FALSE(redoFrame.renderWire.empty());
+  EXPECT_TRUE(redoFrame.hasFinalBitmap);
 }
 
 }  // namespace

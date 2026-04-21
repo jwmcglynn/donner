@@ -3,14 +3,154 @@
 #include <algorithm>
 
 #include "donner/base/xml/XMLNode.h"
-#include "donner/editor/sandbox/SerializingRenderer.h"
+#include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 
 namespace donner::editor::sandbox {
 
-EditorBackendCore::EditorBackendCore() = default;
+namespace {
+
+/// Straight-alpha "source-over" composite: writes each pixel of
+/// @p overlay onto @p base in place. Both buffers are assumed to be
+/// **straight (unpremultiplied)** RGBA — that's what
+/// `RendererTinySkia::takeSnapshot` and `RendererGeode::takeSnapshot`
+/// both produce (see the "straight-alpha RGBA" note in
+/// `RendererGeode.cc::takeSnapshot`). Treating straight data as
+/// premultiplied (or vice versa) shifts the hue on partially
+/// transparent overlay pixels, which is what produced the wrong-color
+/// selection chrome during bring-up.
+///
+/// Mismatched dimensions are silently skipped so a stale overlay
+/// frame doesn't crash the backend.
+void CompositeOverlayOnto(donner::svg::RendererBitmap& base,
+                          const donner::svg::RendererBitmap& overlay) {
+  if (overlay.empty() || base.empty()) {
+    return;
+  }
+  if (overlay.dimensions != base.dimensions) {
+    return;
+  }
+  const auto height = static_cast<size_t>(base.dimensions.y);
+  const auto width = static_cast<size_t>(base.dimensions.x);
+  for (size_t y = 0; y < height; ++y) {
+    uint8_t* baseRow = base.pixels.data() + y * base.rowBytes;
+    const uint8_t* overlayRow = overlay.pixels.data() + y * overlay.rowBytes;
+    for (size_t x = 0; x < width; ++x) {
+      const uint32_t sa = overlayRow[x * 4 + 3];
+      if (sa == 0u) {
+        continue;
+      }
+      if (sa == 255u) {
+        baseRow[x * 4 + 0] = overlayRow[x * 4 + 0];
+        baseRow[x * 4 + 1] = overlayRow[x * 4 + 1];
+        baseRow[x * 4 + 2] = overlayRow[x * 4 + 2];
+        baseRow[x * 4 + 3] = 255u;
+        continue;
+      }
+      // Porter–Duff source-over for straight-alpha inputs:
+      //   outA   = sa + da*(1-sa)
+      //   outRGB = (sRGB*sa + dRGB*da*(1-sa)) / outA
+      // Integer math: work in /255 fixed-point with round-nearest.
+      const uint32_t da = baseRow[x * 4 + 3];
+      const uint32_t invA = 255u - sa;
+      const uint32_t daInv = (da * invA + 127u) / 255u;  // = da*(1-sa) in 0..255
+      const uint32_t outA = sa + daInv;                   // can't overflow: max 255
+      const auto blend = [sa, daInv, outA](uint32_t s, uint32_t d) -> uint8_t {
+        const uint32_t num = s * sa + d * daInv;  // in 0..255*255
+        return static_cast<uint8_t>((num + (outA >> 1u)) / outA);
+      };
+      baseRow[x * 4 + 0] = blend(overlayRow[x * 4 + 0], baseRow[x * 4 + 0]);
+      baseRow[x * 4 + 1] = blend(overlayRow[x * 4 + 1], baseRow[x * 4 + 1]);
+      baseRow[x * 4 + 2] = blend(overlayRow[x * 4 + 2], baseRow[x * 4 + 2]);
+      baseRow[x * 4 + 3] = static_cast<uint8_t>(outA);
+    }
+  }
+}
+
+/// Premul-alpha "source-over": premultiplied src over premultiplied
+/// dst. `out_premul = src_premul + dst_premul * (1 - src.a)`. No
+/// division — that's why the compositor caches its bitmaps in premul.
+void CompositePremulOntoPremul(donner::svg::RendererBitmap& dst,
+                               const donner::svg::RendererBitmap& src, int offsetX, int offsetY) {
+  if (src.empty() || dst.empty()) {
+    return;
+  }
+  const int dstW = dst.dimensions.x;
+  const int dstH = dst.dimensions.y;
+  const int srcW = src.dimensions.x;
+  const int srcH = src.dimensions.y;
+  const int xStart = std::max(0, offsetX);
+  const int yStart = std::max(0, offsetY);
+  const int xEnd = std::min(dstW, offsetX + srcW);
+  const int yEnd = std::min(dstH, offsetY + srcH);
+  if (xStart >= xEnd || yStart >= yEnd) {
+    return;
+  }
+  for (int y = yStart; y < yEnd; ++y) {
+    uint8_t* dstRow = dst.pixels.data() + static_cast<size_t>(y) * dst.rowBytes;
+    const uint8_t* srcRow =
+        src.pixels.data() + static_cast<size_t>(y - offsetY) * src.rowBytes;
+    for (int x = xStart; x < xEnd; ++x) {
+      const size_t dstOff = static_cast<size_t>(x) * 4;
+      const size_t srcOff = static_cast<size_t>(x - offsetX) * 4;
+      const uint32_t sa = srcRow[srcOff + 3];
+      if (sa == 0u) continue;
+      if (sa == 255u) {
+        dstRow[dstOff + 0] = srcRow[srcOff + 0];
+        dstRow[dstOff + 1] = srcRow[srcOff + 1];
+        dstRow[dstOff + 2] = srcRow[srcOff + 2];
+        dstRow[dstOff + 3] = 255u;
+        continue;
+      }
+      const uint32_t invA = 255u - sa;
+      const auto blend = [invA](uint32_t s, uint32_t d) -> uint8_t {
+        return static_cast<uint8_t>(s + ((d * invA + 127u) / 255u));
+      };
+      dstRow[dstOff + 0] = blend(srcRow[srcOff + 0], dstRow[dstOff + 0]);
+      dstRow[dstOff + 1] = blend(srcRow[srcOff + 1], dstRow[dstOff + 1]);
+      dstRow[dstOff + 2] = blend(srcRow[srcOff + 2], dstRow[dstOff + 2]);
+      dstRow[dstOff + 3] = blend(srcRow[srcOff + 3], dstRow[dstOff + 3]);
+    }
+  }
+}
+
+/// In-place unpremultiply so the final bitmap shipped over the wire
+/// matches host-side straight-alpha expectations (GL's
+/// `glTexImage2D(GL_RGBA, GL_UNSIGNED_BYTE, …)` is straight by default,
+/// ImGui blends with `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`).
+void UnpremultiplyInPlace(donner::svg::RendererBitmap& bitmap) {
+  if (bitmap.alphaType == donner::svg::AlphaType::Unpremultiplied) return;
+  const auto height = static_cast<size_t>(bitmap.dimensions.y);
+  const auto width = static_cast<size_t>(bitmap.dimensions.x);
+  for (size_t y = 0; y < height; ++y) {
+    uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    for (size_t x = 0; x < width; ++x) {
+      const uint32_t a = row[x * 4 + 3];
+      if (a == 0u || a == 255u) continue;
+      const uint32_t half = a >> 1u;
+      row[x * 4 + 0] = static_cast<uint8_t>(std::min(255u, (row[x * 4 + 0] * 255u + half) / a));
+      row[x * 4 + 1] = static_cast<uint8_t>(std::min(255u, (row[x * 4 + 1] * 255u + half) / a));
+      row[x * 4 + 2] = static_cast<uint8_t>(std::min(255u, (row[x * 4 + 2] * 255u + half) / a));
+    }
+  }
+  bitmap.alphaType = donner::svg::AlphaType::Unpremultiplied;
+}
+
+}  // namespace
+
+EditorBackendCore::EditorBackendCore() {
+  // Always-on in the sandbox — the backend owns both `SelectTool` and
+  // the `CompositorController`, so there's no off-by-default gate to
+  // wait on (unlike main, where `EditorShell` flips this via a CLI
+  // flag). With the flag enabled, `SelectTool::activeDragPreview()`
+  // surfaces the current drag target so `buildFramePayload` can
+  // route it into `compositor_.promoteEntity(..., ActiveDrag)`, which
+  // is what engages the translation-only fast path during drag.
+  selectTool_.setCompositedDragPreviewEnabled(true);
+}
 EditorBackendCore::~EditorBackendCore() = default;
 
 void EditorBackendCore::bumpEntityGeneration() {
@@ -18,6 +158,12 @@ void EditorBackendCore::bumpEntityGeneration() {
   entityToId_.clear();
   idToElement_.clear();
   nextEntityId_ = 1;
+  // Any entity id the compositor was tracking is now dead — its
+  // internal layer / segment caches are keyed on the old registry's
+  // entity ids. Drop the whole compositor so `buildFramePayload`
+  // rebuilds it against the new document on the next render.
+  compositor_.reset();
+  compositorEntity_ = entt::null;
 }
 
 uint64_t EditorBackendCore::entityIdFor(entt::entity entity, const svg::SVGElement& element) {
@@ -143,14 +289,243 @@ FramePayload EditorBackendCore::buildFramePayload() {
   if (editor_.hasDocument()) {
     editor_.flushFrame();
 
-    SerializingRenderer renderer;
     auto& doc = editor_.document().document();
-    doc.setCanvasSize(viewportWidth_, viewportHeight_);
-    renderer.draw(doc);
+    // Avoid calling `setCanvasSize` on every frame: it unconditionally
+    // calls `invalidateRenderTree()`, which in turn clamps the next
+    // `renderFrame` out of the compositor's translation-only fast
+    // path (`needsFullRebuild` gets set on the render-tree context).
+    // Idempotence here is what makes steady-state drag cheap.
+    //
+    // Use a local shadow of the request — `doc.canvasSize()` reports
+    // the aspect-fit-scaled result (e.g. setting (512, 384) on a
+    // 400×400 viewBox reads back as (384, 384)), so comparing against
+    // it would fire the setter every frame.
+    const Vector2i requested(viewportWidth_, viewportHeight_);
+    if (lastSetCanvasSize_ != requested) {
+      doc.setCanvasSize(requested.x, requested.y);
+      lastSetCanvasSize_ = requested;
+    }
 
-    frame.statusKind =
-        renderer.hasUnsupported() ? FrameStatusKind::kRenderedLossy : FrameStatusKind::kRendered;
-    frame.renderWire = std::move(renderer).takeBuffer();
+    // Lazily construct the compositor the first time we render a new
+    // document. `compositor_` is cleared anywhere the document is
+    // reparsed / replaced so the next render rebuilds against the new
+    // registry.
+    if (!compositor_.has_value()) {
+      compositor_.emplace(doc, renderer_);
+      compositorEntity_ = entt::null;
+      // The backend CPU-composites the compositor's cached bg/drag/fg
+      // bitmaps into the wire-format frame (see `cpuComposeActive`
+      // path below), so the compositor's own GPU main-compose is
+      // redundant during an active drag. Skipping it cuts ~20-30 ms
+      // off each drag frame on real-splash content by avoiding an
+      // extra `beginFrame/drawImage×3/endFrame/takeSnapshot` on
+      // Geode.
+      compositor_->setSkipMainComposeDuringSplit(true);
+    }
+
+    // Route selection / drag state into compositor promote/demote calls
+    // so dragging takes the translation-only fast path instead of
+    // re-rasterizing the whole document on every `kMove`. Priority:
+    // an in-flight drag target wins over the pre-warmed selection.
+    Entity desiredEntity = entt::null;
+    donner::svg::compositor::InteractionHint desiredKind =
+        donner::svg::compositor::InteractionHint::Selection;
+    if (auto preview = selectTool_.activeDragPreview()) {
+      desiredEntity = preview->entity;
+      desiredKind = donner::svg::compositor::InteractionHint::ActiveDrag;
+    } else if (!editor_.selectedElements().empty()) {
+      desiredEntity = editor_.selectedElements().front().entityHandle().entity();
+      desiredKind = donner::svg::compositor::InteractionHint::Selection;
+    }
+    if (desiredEntity != compositorEntity_) {
+      if (compositorEntity_ != entt::null) {
+        compositor_->demoteEntity(compositorEntity_);
+      }
+      compositorEntity_ = entt::null;
+      if (desiredEntity != entt::null &&
+          compositor_->promoteEntity(desiredEntity, desiredKind)) {
+        compositorEntity_ = desiredEntity;
+      }
+    }
+
+    donner::svg::RenderViewport viewport;
+    viewport.size = Vector2d(viewportWidth_, viewportHeight_);
+    viewport.devicePixelRatio = 1.0;
+
+    compositor_->renderFrame(viewport);
+
+    // Fast-path: when the compositor has a single promoted layer with
+    // cached bg/drag/fg bitmaps, skip the GPU main compose AND its
+    // readback. Instead CPU-composite the compositor's internal
+    // premul-alpha bitmaps (bg, drag layer at its canvas-space
+    // compose offset, fg) into the wire-format bitmap. Saves a full
+    // `beginFrame/drawImage×3/endFrame/takeSnapshot` cycle per drag
+    // frame — on a 892×512 real-splash drag that's the difference
+    // between 25–40 ms/frame (GPU compose+readback) and sub-10 ms
+    // (three memcpy-like passes). `setSkipMainComposeDuringSplit`
+    // below tells the compositor to skip its own GPU compose once
+    // this CPU path is feasible.
+    donner::svg::RendererBitmap snapshot;
+    const bool cpuComposeActive = compositor_->hasSplitStaticLayers() &&
+                                   compositorEntity_ != entt::null;
+    if (cpuComposeActive) {
+      const donner::svg::RendererBitmap& bg = compositor_->backgroundBitmap();
+      const donner::svg::RendererBitmap& fg = compositor_->foregroundBitmap();
+      const donner::svg::RendererBitmap& dragBitmap =
+          compositor_->layerBitmapOf(compositorEntity_);
+      const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
+      int dragOffsetX = 0;
+      int dragOffsetY = 0;
+      if (composeOffset.isTranslation()) {
+        const Vector2d t = composeOffset.translation();
+        dragOffsetX = static_cast<int>(std::round(t.x));
+        dragOffsetY = static_cast<int>(std::round(t.y));
+      }
+      snapshot.dimensions = Vector2i(viewportWidth_, viewportHeight_);
+      snapshot.rowBytes = static_cast<size_t>(viewportWidth_) * 4u;
+      snapshot.pixels.assign(snapshot.rowBytes * static_cast<size_t>(viewportHeight_), 0u);
+      snapshot.alphaType = donner::svg::AlphaType::Premultiplied;
+      // Start with opaque black underneath in premul space so the
+      // subsequent source-over stays premul-exact (bg is canvas-sized
+      // premul; its own contents paint over this baseline).
+      CompositePremulOntoPremul(snapshot, bg, 0, 0);
+      CompositePremulOntoPremul(snapshot, dragBitmap, dragOffsetX, dragOffsetY);
+      CompositePremulOntoPremul(snapshot, fg, 0, 0);
+      UnpremultiplyInPlace(snapshot);
+    } else {
+      // Non-split path — the compositor wrote into the main renderer
+      // the old way; read it back.
+      snapshot = renderer_.takeSnapshot();
+    }
+
+    // Rasterize selection chrome into a dedicated transparent bitmap
+    // via `overlayRenderer_`, then software-composite onto the
+    // compositor's snapshot. The chrome can't share `renderer_`'s
+    // frame because the compositor has already called `endFrame`
+    // before returning; on Geode, post-`endFrame` draws are no-ops
+    // against a finished command buffer. A separate renderer opens
+    // its own frame lifecycle, so the chrome draws are real.
+    //
+    // Render the overlay into a TIGHT bitmap sized around the selection's
+    // canvas-space AABB (plus stroke + AA padding) instead of the full
+    // canvas. On Geode a full-canvas overlay pays `beginFrame` (MSAA
+    // texture alloc at 892×512×4) + render + `endFrame` + readback
+    // every frame — ~20 ms on `donner_splash.svg`. A tight overlay on
+    // a single letter is ~100×140 pixels, roughly 30× smaller, which
+    // drops the overlay cost into the single-digit-ms range.
+    const bool hasSelectionOrMarquee = !editor_.selectedElements().empty() ||
+                                        selectTool_.marqueeRect().has_value();
+    if (hasSelectionOrMarquee && !snapshot.empty()) {
+      const Transform2d canvasFromDoc = doc.canvasFromDocumentTransform();
+      const auto selectionBoundsDoc =
+          donner::editor::SnapshotSelectionWorldBounds(editor_.selectedElements());
+
+      // Union all element AABBs + the marquee rect (if any) into a
+      // doc-space bounding rect, then map to canvas space.
+      std::optional<Box2d> combinedDoc;
+      const auto unionDoc = [&](const Box2d& b) {
+        if (!combinedDoc) {
+          combinedDoc = b;
+        } else {
+          combinedDoc->addBox(b);
+        }
+      };
+      for (const Box2d& b : selectionBoundsDoc) unionDoc(b);
+      if (selectTool_.marqueeRect().has_value()) unionDoc(*selectTool_.marqueeRect());
+
+      Vector2i tightTopLeftPx(0, 0);
+      Vector2i tightSizePx(viewportWidth_, viewportHeight_);
+      if (combinedDoc.has_value()) {
+        const Box2d canvasBounds = canvasFromDoc.transformBox(*combinedDoc);
+        // Padding: selection strokes are 1–2 px, AA + marquee
+        // strokes add a pixel or two. 8 px absolute + a relative 2 px
+        // on each side keeps us well clear of being clipped.
+        constexpr double kPadPx = 8.0;
+        Vector2d tl(std::floor(std::max(0.0, canvasBounds.topLeft.x - kPadPx)),
+                    std::floor(std::max(0.0, canvasBounds.topLeft.y - kPadPx)));
+        Vector2d br(std::ceil(std::min<double>(viewportWidth_, canvasBounds.bottomRight.x + kPadPx)),
+                    std::ceil(std::min<double>(viewportHeight_,
+                                                canvasBounds.bottomRight.y + kPadPx)));
+        if (br.x > tl.x && br.y > tl.y) {
+          tightTopLeftPx = Vector2i(static_cast<int>(tl.x), static_cast<int>(tl.y));
+          tightSizePx =
+              Vector2i(static_cast<int>(br.x - tl.x), static_cast<int>(br.y - tl.y));
+        }
+      }
+
+      donner::svg::RenderViewport overlayViewport;
+      overlayViewport.size = Vector2d(tightSizePx.x, tightSizePx.y);
+      overlayViewport.devicePixelRatio = 1.0;
+
+      // Shift the chrome into tight-local coords by pre-multiplying
+      // `Translate(-tightTopLeft)` onto `canvasFromDoc`. After
+      // `setTransform(T × canvasFromDoc)` inside `OverlayRenderer`,
+      // the chrome draws land at `canvas - tightTopLeft`, which is
+      // exactly the offset this bitmap represents when composited
+      // back at `tightTopLeft`.
+      const Transform2d tightCanvasFromDoc =
+          canvasFromDoc * Transform2d::Translate(-tightTopLeftPx.x, -tightTopLeftPx.y);
+
+      overlayRenderer_.beginFrame(overlayViewport);
+      donner::editor::OverlayRenderer::drawChromeWithTransform(
+          overlayRenderer_, editor_.selectedElements(), selectTool_.marqueeRect(),
+          tightCanvasFromDoc);
+      overlayRenderer_.endFrame();
+      donner::svg::RendererBitmap overlay = overlayRenderer_.takeSnapshot();
+      // Composite the tight overlay bitmap at its offset. Re-use
+      // `CompositeOverlayOnto` but applied row-by-row with the offset
+      // — inline the straight-alpha source-over here to avoid an
+      // allocation-heavy full-canvas padding step.
+      if (!overlay.empty()) {
+        const int dstW = snapshot.dimensions.x;
+        const int dstH = snapshot.dimensions.y;
+        const int srcW = overlay.dimensions.x;
+        const int srcH = overlay.dimensions.y;
+        const int xStart = std::max(0, tightTopLeftPx.x);
+        const int yStart = std::max(0, tightTopLeftPx.y);
+        const int xEnd = std::min(dstW, tightTopLeftPx.x + srcW);
+        const int yEnd = std::min(dstH, tightTopLeftPx.y + srcH);
+        for (int y = yStart; y < yEnd; ++y) {
+          uint8_t* dstRow = snapshot.pixels.data() + static_cast<size_t>(y) * snapshot.rowBytes;
+          const uint8_t* srcRow =
+              overlay.pixels.data() + static_cast<size_t>(y - tightTopLeftPx.y) * overlay.rowBytes;
+          for (int x = xStart; x < xEnd; ++x) {
+            const size_t dstOff = static_cast<size_t>(x) * 4;
+            const size_t srcOff = static_cast<size_t>(x - tightTopLeftPx.x) * 4;
+            const uint32_t sa = srcRow[srcOff + 3];
+            if (sa == 0u) continue;
+            if (sa == 255u) {
+              dstRow[dstOff + 0] = srcRow[srcOff + 0];
+              dstRow[dstOff + 1] = srcRow[srcOff + 1];
+              dstRow[dstOff + 2] = srcRow[srcOff + 2];
+              dstRow[dstOff + 3] = 255u;
+              continue;
+            }
+            const uint32_t da = dstRow[dstOff + 3];
+            const uint32_t invA = 255u - sa;
+            const uint32_t daInv = (da * invA + 127u) / 255u;
+            const uint32_t outA = sa + daInv;
+            const auto blend = [sa, daInv, outA](uint32_t s, uint32_t d) -> uint8_t {
+              const uint32_t num = s * sa + d * daInv;
+              return static_cast<uint8_t>((num + (outA >> 1u)) / outA);
+            };
+            dstRow[dstOff + 0] = blend(srcRow[srcOff + 0], dstRow[dstOff + 0]);
+            dstRow[dstOff + 1] = blend(srcRow[srcOff + 1], dstRow[dstOff + 1]);
+            dstRow[dstOff + 2] = blend(srcRow[srcOff + 2], dstRow[dstOff + 2]);
+            dstRow[dstOff + 3] = static_cast<uint8_t>(outA);
+          }
+        }
+      }
+    }
+    if (!snapshot.empty()) {
+      frame.hasFinalBitmap = true;
+      frame.finalBitmapWidth = snapshot.dimensions.x;
+      frame.finalBitmapHeight = snapshot.dimensions.y;
+      frame.finalBitmapRowBytes = static_cast<uint32_t>(snapshot.rowBytes);
+      frame.finalBitmapAlphaType = static_cast<uint8_t>(snapshot.alphaType);
+      frame.finalBitmapPixels = std::move(snapshot.pixels);
+    }
+    frame.statusKind = FrameStatusKind::kRendered;
 
     // Populate selection entries.
     for (const auto& elem : editor_.selectedElements()) {
@@ -180,6 +555,47 @@ FramePayload EditorBackendCore::buildFramePayload() {
 
     // Tree summary.
     populateTreeSummary(frame.tree);
+
+    // Document viewBox — the coordinate space every bbox / marquee /
+    // pointer event on this frame is in. The host needs it to map
+    // screen pixels ↔ document-space points. Prefer an explicit
+    // `viewBox="..."` attribute; fall back to `(0, 0, width, height)`
+    // from the root's intrinsic length attributes; fall back further
+    // to SVG's default `(300, 150)` when neither is set. Unit coercion
+    // is best-effort: we use the raw attribute value so a `<svg
+    // width="892">` lands as 892 user units regardless of the unit
+    // tag, which matches what the backend's own hit-test uses.
+    auto rootEl = doc.svgElement();
+    Box2d viewBox;
+    if (auto explicitVb = rootEl.viewBox()) {
+      viewBox = *explicitVb;
+    } else {
+      const double w = rootEl.width().has_value() ? rootEl.width()->value : 300.0;
+      const double h = rootEl.height().has_value() ? rootEl.height()->value : 150.0;
+      viewBox = Box2d::FromXYWH(0.0, 0.0, w, h);
+    }
+    frame.hasDocumentViewBox = true;
+    frame.documentViewBox[0] = viewBox.topLeft.x;
+    frame.documentViewBox[1] = viewBox.topLeft.y;
+    frame.documentViewBox[2] = viewBox.width();
+    frame.documentViewBox[3] = viewBox.height();
+
+    // Marquee (rubber-band selection rect). `SelectTool` owns the
+    // state during a drag-on-empty-space; we ship the doc-space
+    // rect into `FramePayload.marquee` so the host (or the overlay
+    // renderer baked into the bitmap) can draw the chrome that goes
+    // on top of the content. The overlay renderer also reads this
+    // above, so the same rect shows up twice: once painted into the
+    // final bitmap, once as metadata the host can use for hit-test
+    // proximity hints. Both reads pull from `SelectTool` directly —
+    // single source of truth.
+    if (auto marquee = selectTool_.marqueeRect()) {
+      frame.hasMarquee = true;
+      frame.marquee[0] = marquee->topLeft.x;
+      frame.marquee[1] = marquee->topLeft.y;
+      frame.marquee[2] = marquee->bottomRight.x;
+      frame.marquee[3] = marquee->bottomRight.y;
+    }
   } else {
     frame.statusKind = FrameStatusKind::kNone;
   }
@@ -213,12 +629,34 @@ FramePayload EditorBackendCore::handleApplySourcePatch(const ApplySourcePatchPay
 }
 
 FramePayload EditorBackendCore::handlePointerEvent(const PointerEventPayload& ptr) {
-  if (ptr.phase == PointerPhase::kDown && editor_.hasDocument()) {
-    auto hit = editor_.hitTest(Vector2d(ptr.documentX, ptr.documentY));
-    if (hit.has_value()) {
-      editor_.setSelection(donner::svg::SVGElement(*hit));
-    } else {
-      editor_.clearSelection();
+  if (editor_.hasDocument()) {
+    const Vector2d docPoint(ptr.documentX, ptr.documentY);
+    // `SelectTool` expects the shift modifier through its own
+    // `MouseModifiers` struct; map the protocol bitmask across.
+    MouseModifiers modifiers;
+    modifiers.shift = (ptr.modifiers & 0x1u) != 0;
+    switch (ptr.phase) {
+      case PointerPhase::kDown:
+        selectTool_.onMouseDown(editor_, docPoint, modifiers);
+        break;
+      case PointerPhase::kMove:
+        // `buttonHeld` is only meaningful while a drag is in flight.
+        // `ptr.buttons` bit 0 = primary; default-treat any held
+        // button as drag continuation since the host only forwards
+        // moves during a drag anyway.
+        selectTool_.onMouseMove(editor_, docPoint, /*buttonHeld=*/ptr.buttons != 0);
+        break;
+      case PointerPhase::kUp:
+      case PointerPhase::kCancel:
+        // Treat cancel like an up so any in-flight drag commits or
+        // cleanly aborts rather than leaving `dragState_` populated.
+        selectTool_.onMouseUp(editor_, docPoint);
+        break;
+      case PointerPhase::kEnter:
+      case PointerPhase::kLeave:
+        // Focus-tracking events; no tool state change required. Host
+        // uses these to drive hover/cursor UI, not document state.
+        break;
     }
   }
   return buildFramePayload();
@@ -269,8 +707,48 @@ FramePayload EditorBackendCore::handleRedo() {
 ExportResponsePayload EditorBackendCore::handleExport(const ExportRequestPayload& req) {
   ExportResponsePayload resp;
   resp.format = req.format;
-  // Placeholder: empty bytes.
+  // SVG text export: return the last-persisted source bytes. This is
+  // the same text the host's `kReplaceSource` path feeds us, so drag
+  // writebacks / attribute edits / source-pane keystrokes have
+  // already been incorporated by the time the export request lands.
+  // PNG/other formats are not yet wired on the backend (would need to
+  // serialize `finalBitmapPixels` into a PNG encoder); the host
+  // currently only invokes `kExport` for the SVG save-as flow.
+  if (req.format == ExportFormat::kSvgText && editor_.hasDocument()) {
+    const std::string& svg = editor_.cleanSourceText();
+    resp.bytes.assign(svg.begin(), svg.end());
+  }
   return resp;
+}
+
+FramePayload EditorBackendCore::handleAttachSharedTexture(
+    const AttachSharedTexturePayload& attach) {
+  // Translate the wire payload into a `BridgeTextureHandle` and ask
+  // the platform-specific factory to import it. Unknown `kind`
+  // values fall through to the stub so the backend stays functional
+  // — the host will just see `finalBitmapPixels` instead of
+  // zero-copy rendering.
+  bridge::BridgeTextureHandle handle;
+  handle.kind = static_cast<bridge::BridgeHandleKind>(attach.kind);
+  handle.handle = attach.handle;
+  handle.dimensions = Vector2i(attach.width, attach.height);
+  handle.rowBytes = attach.rowBytes;
+
+  switch (handle.kind) {
+#if defined(__APPLE__)
+    case bridge::BridgeHandleKind::kIOSurfaceMacOS:
+      bridge_ = bridge::MakeBackend_macOS(handle);
+      break;
+#endif
+    case bridge::BridgeHandleKind::kCpuStub:
+    default:
+      // Unknown / unsupported kind → stub. The host gets an
+      // acknowledgment frame but subsequent renders keep shipping
+      // `finalBitmapPixels`.
+      bridge_ = bridge::MakeBackendStub(handle);
+      break;
+  }
+  return buildFramePayload();
 }
 
 }  // namespace donner::editor::sandbox

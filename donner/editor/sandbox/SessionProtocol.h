@@ -92,6 +92,17 @@ enum class SessionOpcode : uint32_t {
   /// Request the current source bytes (or a rendered raster) back.
   kExport = 40,
 
+  /// Hand a host-allocated shared-GPU-texture descriptor to the backend
+  /// so subsequent renders can target the shared surface directly
+  /// (see `docs/design_docs/0023-editor_sandbox.md` §"Cross-process
+  /// texture bridging"). Payload is a
+  /// `donner::editor::sandbox::bridge::BridgeTextureHandle` — opaque
+  /// platform handle + dimensions. Sent once per session, before the
+  /// first `kLoadBytes`. Backend replies with a `kFrame` of status
+  /// `kRendered` (no bitmap content, just an ack) or `kError` if the
+  /// handle failed to import.
+  kAttachSharedTexture = 41,
+
   // ---------------------------------------------------------------
   // Responses + async pushes — backend → host
   // ---------------------------------------------------------------

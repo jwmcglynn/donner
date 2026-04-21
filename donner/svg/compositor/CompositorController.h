@@ -404,6 +404,16 @@ public:
   /// bucket layers keep their generation and their GL texture binding.
   [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload() const;
 
+  /// Read-only accessor for the layer bound to @p entity. Test-only —
+  /// lets regression tests inspect `compositionTransform` /
+  /// `bitmapEntityFromWorldTransform` after a drag frame to verify the
+  /// translation-only fast path engaged (bitmap stamp unchanged,
+  /// composition transform carries the delta). Production callers
+  /// should go through `isPromoted` / `promoteEntity` instead.
+  [[nodiscard]] const CompositorLayer* findLayerForTest(Entity entity) const {
+    return findLayer(entity);
+  }
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
@@ -500,16 +510,6 @@ private:
   /// Inspect a RenderingInstanceComponent and return which fallback reasons apply.
   static FallbackReason detectFallbackReasons(
       const components::RenderingInstanceComponent& instance);
-
-  /// Fast-path helper: a promoted subtree layer's root just shifted by a pure
-  /// world-space translation. Descendants' local transforms are unchanged, so
-  /// their world transforms shift by the same delta. Pre-multiply every
-  /// descendant RIC's `worldFromEntityTransform` by @p delta so subsequent
-  /// reads (e.g. a forced re-rasterize later in the session, or the next
-  /// frame's fast-path delta computation against a descendant-rooted layer)
-  /// see up-to-date world positions.
-  static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
-                                                    const Transform2d& delta);
 
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;

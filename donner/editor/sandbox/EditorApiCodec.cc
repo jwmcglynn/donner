@@ -135,6 +135,16 @@ std::vector<uint8_t> EncodeExport(const ExportRequestPayload& payload) {
   return std::move(w).take();
 }
 
+std::vector<uint8_t> EncodeAttachSharedTexture(const AttachSharedTexturePayload& payload) {
+  WireWriter w;
+  w.writeU8(payload.kind);
+  w.writeU64(payload.handle);
+  w.writeI32(payload.width);
+  w.writeI32(payload.height);
+  w.writeU32(payload.rowBytes);
+  return std::move(w).take();
+}
+
 // ===========================================================================
 // Response encoders
 // ===========================================================================
@@ -154,10 +164,6 @@ std::vector<uint8_t> EncodeShutdownAck() {
 std::vector<uint8_t> EncodeFrame(const FramePayload& payload) {
   WireWriter w;
   w.writeU64(payload.frameId);
-
-  // renderWire
-  w.writeU32(static_cast<uint32_t>(payload.renderWire.size()));
-  w.writeBytes(payload.renderWire);
 
   // selections
   w.writeU32(static_cast<uint32_t>(payload.selections.size()));
@@ -238,6 +244,28 @@ std::vector<uint8_t> EncodeFrame(const FramePayload& payload) {
     w.writeU32(node.sourceStart);
     w.writeU32(node.sourceEnd);
     w.writeBool(node.selected);
+  }
+
+  // documentViewBox (added after tree summary so older decoders that stop
+  // at tree summary don't crash — they'll just see a trailing blob).
+  w.writeBool(payload.hasDocumentViewBox);
+  if (payload.hasDocumentViewBox) {
+    for (int i = 0; i < 4; ++i) {
+      w.writeF64(payload.documentViewBox[i]);
+    }
+  }
+
+  // finalBitmap — appended after documentViewBox for the same back-compat
+  // reason. Skip entirely when absent (the flag byte is 0 → 1 byte of
+  // overhead per frame; fine).
+  w.writeBool(payload.hasFinalBitmap);
+  if (payload.hasFinalBitmap) {
+    w.writeI32(payload.finalBitmapWidth);
+    w.writeI32(payload.finalBitmapHeight);
+    w.writeU32(payload.finalBitmapRowBytes);
+    w.writeU8(payload.finalBitmapAlphaType);
+    w.writeU32(static_cast<uint32_t>(payload.finalBitmapPixels.size()));
+    w.writeBytes(payload.finalBitmapPixels);
   }
 
   return std::move(w).take();
@@ -423,6 +451,16 @@ bool DecodeExport(std::span<const uint8_t> data, ExportRequestPayload& out) {
   return !r.failed();
 }
 
+bool DecodeAttachSharedTexture(std::span<const uint8_t> data, AttachSharedTexturePayload& out) {
+  WireReader r(data);
+  if (!r.readU8(out.kind)) return false;
+  if (!r.readU64(out.handle)) return false;
+  if (!r.readI32(out.width)) return false;
+  if (!r.readI32(out.height)) return false;
+  if (!r.readU32(out.rowBytes)) return false;
+  return !r.failed();
+}
+
 // ===========================================================================
 // Response decoders
 // ===========================================================================
@@ -442,14 +480,6 @@ bool DecodeShutdownAck(std::span<const uint8_t> /*data*/) {
 bool DecodeFrame(std::span<const uint8_t> data, FramePayload& out) {
   WireReader r(data);
   if (!r.readU64(out.frameId)) return false;
-
-  // renderWire
-  uint32_t wireLen = 0;
-  if (!r.readCount(wireLen, kMaxFrameBytes)) return false;
-  out.renderWire.resize(wireLen);
-  if (wireLen > 0) {
-    if (!r.readBytes(out.renderWire)) return false;
-  }
 
   // selections
   uint32_t selCount = 0;
@@ -547,6 +577,40 @@ bool DecodeFrame(std::span<const uint8_t> data, FramePayload& out) {
     if (!r.readU32(node.sourceStart)) return false;
     if (!r.readU32(node.sourceEnd)) return false;
     if (!r.readBool(node.selected)) return false;
+  }
+
+  // documentViewBox — optional trailing block. Old encoders (fuzzer
+  // corpus, archived captures) stop at the tree summary; skip the
+  // field cleanly in that case rather than failing the whole decode.
+  if (r.remaining() == 0) {
+    out.hasDocumentViewBox = false;
+    return !r.failed();
+  }
+  if (!r.readBool(out.hasDocumentViewBox)) return false;
+  if (out.hasDocumentViewBox) {
+    for (int i = 0; i < 4; ++i) {
+      if (!r.readF64(out.documentViewBox[i])) return false;
+    }
+  }
+
+  // finalBitmap — optional trailing block (may not be present in
+  // pre-composited-rendering captures).
+  if (r.remaining() == 0) {
+    out.hasFinalBitmap = false;
+    return !r.failed();
+  }
+  if (!r.readBool(out.hasFinalBitmap)) return false;
+  if (out.hasFinalBitmap) {
+    if (!r.readI32(out.finalBitmapWidth)) return false;
+    if (!r.readI32(out.finalBitmapHeight)) return false;
+    if (!r.readU32(out.finalBitmapRowBytes)) return false;
+    if (!r.readU8(out.finalBitmapAlphaType)) return false;
+    uint32_t pixelCount = 0;
+    if (!r.readCount(pixelCount, kMaxFrameBytes)) return false;
+    out.finalBitmapPixels.resize(pixelCount);
+    if (pixelCount > 0) {
+      if (!r.readBytes(out.finalBitmapPixels)) return false;
+    }
   }
 
   return !r.failed();

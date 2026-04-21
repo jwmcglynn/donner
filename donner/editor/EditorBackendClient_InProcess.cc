@@ -9,7 +9,6 @@
 
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
-#include "donner/editor/sandbox/ReplayingRenderer.h"
 #include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {
@@ -23,17 +22,13 @@ FrameResult MakeFrameResult(const sandbox::FramePayload& frame, svg::Renderer& r
   result.ok = true;
   result.frameId = frame.frameId;
 
-  // Replay render wire.
-  if (!frame.renderWire.empty()) {
-    sandbox::ReplayReport report;
-    sandbox::ReplayingRenderer replayer(renderer);
-    auto status = replayer.pumpFrame(frame.renderWire, report);
-    result.unsupportedCount = report.unsupportedCount;
-
-    if (status == sandbox::ReplayStatus::kOk ||
-        status == sandbox::ReplayStatus::kEncounteredUnsupported) {
-      result.bitmap = renderer.takeSnapshot();
-    }
+  // Backend ships the pre-composed bitmap directly; host just
+  // re-wraps it as `result.bitmap` for upload.
+  if (frame.hasFinalBitmap) {
+    result.bitmap.dimensions = Vector2i(frame.finalBitmapWidth, frame.finalBitmapHeight);
+    result.bitmap.rowBytes = frame.finalBitmapRowBytes;
+    result.bitmap.alphaType = static_cast<svg::AlphaType>(frame.finalBitmapAlphaType);
+    result.bitmap.pixels = frame.finalBitmapPixels;
   }
 
   // Convert selection entries.
@@ -110,6 +105,14 @@ FrameResult MakeFrameResult(const sandbox::FramePayload& frame, svg::Renderer& r
 
   // Tree summary.
   result.tree = frame.tree;
+
+  // Document viewBox — the SVG-user-space coordinate system bboxes /
+  // pointer events travel in. Absent when the backend has no document
+  // loaded yet.
+  if (frame.hasDocumentViewBox) {
+    result.documentViewBox = Box2d::FromXYWH(frame.documentViewBox[0], frame.documentViewBox[1],
+                                             frame.documentViewBox[2], frame.documentViewBox[3]);
+  }
 
   return result;
 }
@@ -195,6 +198,17 @@ public:
     return makeReadyFuture(core_.handleSetViewport(payload));
   }
 
+  std::future<FrameResult> attachSharedTexture(
+      const sandbox::bridge::BridgeTextureHandle& handle) override {
+    sandbox::AttachSharedTexturePayload payload;
+    payload.kind = static_cast<uint8_t>(handle.kind);
+    payload.handle = handle.handle;
+    payload.width = handle.dimensions.x;
+    payload.height = handle.dimensions.y;
+    payload.rowBytes = handle.rowBytes;
+    return makeReadyFuture(core_.handleAttachSharedTexture(payload));
+  }
+
   std::future<FrameResult> undo() override { return makeReadyFuture(core_.handleUndo()); }
 
   std::future<FrameResult> redo() override { return makeReadyFuture(core_.handleRedo()); }
@@ -242,6 +256,7 @@ public:
   uint64_t lastFrameId() const override { return lastFrameId_; }
   const SelectionOverlay& selection() const override { return selection_; }
   const svg::RendererBitmap& latestBitmap() const override { return latestBitmap_; }
+  std::optional<Box2d> latestDocumentViewBox() const override { return latestDocumentViewBox_; }
   std::optional<ParseDiagnostic> lastParseError() const override { return lastParseError_; }
   const sandbox::FrameTreeSummary& tree() const override { return tree_; }
 
@@ -260,6 +275,9 @@ private:
     lastFrameId_ = result.frameId;
     selection_ = result.selection;
     latestBitmap_ = result.bitmap;
+    if (result.documentViewBox.has_value()) {
+      latestDocumentViewBox_ = result.documentViewBox;
+    }
     tree_ = result.tree;
     if (!result.parseDiagnostics.empty()) {
       lastParseError_ = result.parseDiagnostics.front();
@@ -274,6 +292,7 @@ private:
   uint64_t lastFrameId_ = 0;
   SelectionOverlay selection_;
   svg::RendererBitmap latestBitmap_;
+  std::optional<Box2d> latestDocumentViewBox_;
   sandbox::FrameTreeSummary tree_;
   std::optional<ParseDiagnostic> lastParseError_;
 

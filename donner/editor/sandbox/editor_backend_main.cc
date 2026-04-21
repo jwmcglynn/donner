@@ -249,6 +249,16 @@ int main(int /*argc*/, char** /*argv*/) {
         break;
       }
 
+      case SessionOpcode::kAttachSharedTexture: {
+        donner::editor::sandbox::AttachSharedTexturePayload attach;
+        if (!DecodeAttachSharedTexture(request.payload, attach)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleAttachSharedTexture(attach), request.requestId)) return 1;
+        break;
+      }
+
       default:
         if (!RespondError(request.requestId, SessionErrorKind::kUnknownOpcode)) return 1;
         break;

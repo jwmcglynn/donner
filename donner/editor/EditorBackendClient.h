@@ -30,12 +30,14 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Vector2.h"
-#include "donner/editor/AddressBar.h"       // AddressBarStatusChip
+#include "donner/editor/AddressBarStatus.h"  // AddressBarStatusChip — no ImGui dep
 #include "donner/editor/SelectionOverlay.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor::sandbox {
@@ -106,6 +108,11 @@ struct FrameResult {
   std::vector<ParseDiagnostic> parseDiagnostics;
   /// Document tree summary from the backend.
   sandbox::FrameTreeSummary tree;
+  /// The SVG's own viewBox, in document (user-space) coordinates.
+  /// `nullopt` when the backend reports no document (before loadBytes
+  /// or after a parse error). Host uses this to drive
+  /// `ViewportState::documentViewBox` so screen↔document math works.
+  std::optional<Box2d> documentViewBox;
 };
 
 struct ExportResult {
@@ -174,6 +181,16 @@ public:
       sandbox::ToolKind kind) = 0;
   [[nodiscard]] virtual std::future<FrameResult> setViewport(
       int width, int height) = 0;
+
+  /// Hand a host-allocated shared GPU texture descriptor to the
+  /// backend so subsequent renders can target it directly (zero-copy
+  /// GPU path). Session-lifetime one-shot — call once after
+  /// construction, before `loadBytes`. Handle ownership stays with
+  /// the caller; backend takes a retain on the underlying platform
+  /// surface. See `donner/editor/sandbox/bridge/BridgeTexture.h`.
+  [[nodiscard]] virtual std::future<FrameResult> attachSharedTexture(
+      const sandbox::bridge::BridgeTextureHandle& handle) = 0;
+
   [[nodiscard]] virtual std::future<FrameResult> undo() = 0;
   [[nodiscard]] virtual std::future<FrameResult> redo() = 0;
 
@@ -203,6 +220,10 @@ public:
   [[nodiscard]] virtual uint64_t lastFrameId() const = 0;
   [[nodiscard]] virtual const SelectionOverlay& selection() const = 0;
   [[nodiscard]] virtual const svg::RendererBitmap& latestBitmap() const = 0;
+  /// Latest document viewBox the backend reported — the user-space
+  /// coordinate system for selection bboxes and pointer events.
+  /// `nullopt` when no document has been loaded yet.
+  [[nodiscard]] virtual std::optional<Box2d> latestDocumentViewBox() const = 0;
   [[nodiscard]] virtual std::optional<ParseDiagnostic> lastParseError() const = 0;
   [[nodiscard]] virtual const sandbox::FrameTreeSummary& tree() const = 0;
 

@@ -15,8 +15,12 @@
 #include <vector>
 
 #include "donner/editor/backend_lib/EditorApp.h"
+#include "donner/editor/backend_lib/SelectTool.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::sandbox {
 
@@ -77,6 +81,13 @@ public:
   /// Handles kExport. Placeholder — returns empty export response payload.
   [[nodiscard]] ExportResponsePayload handleExport(const ExportRequestPayload& req);
 
+  /// Handles kAttachSharedTexture. Imports the host-allocated shared GPU
+  /// texture via `bridge::MakeBackend_macOS` (or the platform variant),
+  /// storing the result for subsequent `buildFramePayload` calls to use
+  /// as a render target. Returns a one-shot frame carrying the ack —
+  /// no bitmap yet since the first real render hasn't fired.
+  [[nodiscard]] FramePayload handleAttachSharedTexture(const AttachSharedTexturePayload& attach);
+
   /// Direct access to the underlying EditorApp (for tests).
   [[nodiscard]] EditorApp& editor() { return editor_; }
 
@@ -100,8 +111,59 @@ private:
                                                               uint64_t entityGeneration) const;
 
   EditorApp editor_;
+  /// Owns the drag/marquee/hover state for pointer events. Dispatched
+  /// in `handlePointerEvent` (k{Down,Move,Up}) so dragging a selection
+  /// actually moves it — without this, the backend's default pointer
+  /// handler only hit-tested and called `setSelection`, leaving drag
+  /// dead. Sharing a single `SelectTool` across events matches how
+  /// `EditorShell` drives it on main.
+  SelectTool selectTool_;
+  /// Real CPU rasterizer. The backend now owns the pixel output rather
+  /// than emitting a wire for the host to replay — shipping pre-
+  /// composed bitmaps is what lets `CompositorController` below
+  /// actually save work during drag (its layer bitmap cache survives
+  /// across frames, so a drag's translation-only fast path skips the
+  /// shape re-raster entirely). See `docs/design_docs/0023-editor
+  /// _sandbox.md` §"Rendering data flow" G6b.
+  donner::svg::Renderer renderer_;
+  /// Separate renderer used to rasterize selection chrome (path
+  /// outlines, AABB box, marquee) into its own transparent bitmap.
+  /// Kept distinct from `renderer_` because the Geode backend's
+  /// `drawRect` calls are only valid between `beginFrame` /
+  /// `endFrame` against the renderer's render-target texture — the
+  /// compositor's `renderFrame` has already ended the frame by the
+  /// time chrome is drawn, so sharing the main renderer drops the
+  /// chrome draws on Geode. With a dedicated overlay renderer each
+  /// chrome pass opens its own frame, and the result is
+  /// software-composited onto the compositor's snapshot below.
+  donner::svg::Renderer overlayRenderer_;
+  /// Lazily constructed on first render after a document change. Tied
+  /// to `editor_`'s current `SVGDocument` handle; invalidated via
+  /// `compositor_.reset()` whenever the document is reparsed / replaced
+  /// so the next render rebuilds against the new registry.
+  std::optional<donner::svg::compositor::CompositorController> compositor_;
+  /// Entity currently promoted on the compositor, or `entt::null`.
+  /// Maintained to match the SelectTool's current drag / selection
+  /// target so promote/demote calls stay O(changes) not O(frames).
+  Entity compositorEntity_ = entt::null;
   int viewportWidth_ = 512;
   int viewportHeight_ = 384;
+  /// What we last called `SVGDocument::setCanvasSize` with. Used to
+  /// skip the call when the request hasn't changed — `setCanvasSize`
+  /// unconditionally `invalidateRenderTree()`s, which drops us out of
+  /// the compositor's translation-only fast path. Can't use
+  /// `doc.canvasSize()` for the compare because the document reports
+  /// the aspect-fit-scaled result, not the request we made.
+  Vector2i lastSetCanvasSize_ = Vector2i(-1, -1);
+
+  /// Host-provided shared GPU texture the backend renders into when
+  /// available (`bridge_->ready() == true`). Null until the host
+  /// sends `kAttachSharedTexture`; on platforms where wgpu-native
+  /// can't yet import the handle (every platform as of this commit
+  /// — see the design doc's §"Implementation status") the bridge
+  /// reports `ready() == false` and we fall through to shipping
+  /// `finalBitmapPixels` in the wire.
+  std::unique_ptr<bridge::BridgeTextureBackend> bridge_;
   uint64_t frameIdCounter_ = 1;
 
   /// Entity handle bimap state.

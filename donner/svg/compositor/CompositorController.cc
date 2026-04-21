@@ -79,17 +79,6 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
   return false;
 }
 
-/// Convert premultiplied-alpha pixels to unpremultiplied-alpha pixels in
-/// place. Required before passing a `RendererBitmap` snapshot (which is
-/// premultiplied by convention) into `RendererInterface::drawImage` via
-/// `ImageResource` (which has no alpha-type field and is implicitly
-/// unpremultiplied). Without this conversion, semi-transparent pixels compose
-/// as though their RGB were already multiplied by alpha a *second* time —
-/// showing up as too-dark colors for opacity<1 content.
-///
-/// Fully-opaque pixels (alpha = 255) are unchanged; this step is only
-/// meaningful for semi-transparent content, which is why single-element
-/// drag of fully-opaque elements worked without the fix.
 /// True if @p maybeDescendant is a (non-strict) descendant of @p root in the
 /// DOM tree. Used by the translation-only fast path to check, defensively,
 /// that a subtree layer's cache-range doesn't overlap any other layer — if it
@@ -123,15 +112,23 @@ bool IsDomDescendantOf(Registry& registry, Entity maybeDescendant, Entity root) 
   return false;
 }
 
+/// Wrap a cached layer or segment bitmap for `RendererInterface::drawImage`
+/// consumption, preserving its alpha-storage convention. The compositor
+/// prefers premultiplied bytes (via `takeSnapshotPremultiplied()`) so the
+/// renderer's `drawImage` path can skip the shader-side straight→premul
+/// conversion — each round-trip of that conversion drops up to 1 channel
+/// unit of 8-bit precision and the drift accumulates across nested filter
+/// composes. For paths that still hand us straight-alpha bytes (e.g.
+/// tinyskia's native `takeSnapshot`, or external PNG decodes), forward
+/// the convention unchanged.
 ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   ImageResource img;
   img.width = bitmap.dimensions.x;
   img.height = bitmap.dimensions.y;
-  if (bitmap.alphaType == AlphaType::Premultiplied) {
-    img.data = UnpremultiplyRgba(bitmap.pixels);
-  } else {
-    img.data = bitmap.pixels;
-  }
+  img.data = bitmap.pixels;
+  img.alphaType = bitmap.alphaType == AlphaType::Premultiplied
+                       ? ImageAlphaType::Premultiplied
+                       : ImageAlphaType::Unpremultiplied;
   return img;
 }
 
@@ -970,6 +967,21 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // rasterize at the post-drag position, producing misalignment
   // crescents at the sub-layers' rendered edges (the
   // `#Clouds_with_gradients` splash artifact).
+  // `worldFromEntityTransform` is stamped by `RenderingContext` as
+  // `absoluteTransform × canvasFromDocument` (for worldIsCanvas
+  // entities). The `abs × C × (abs × C)^-1` algebra below cancels the
+  // `C` on both sides, leaving the delta in DOC space — but
+  // `compositionTransform` gets fed into the canvas-pixel-space
+  // `setTransform` + `drawImage` pipeline at compose time. Conjugate
+  // by C once so a doc-space `Translate(dxDoc)` becomes the canvas-
+  // pixel `Translate(dxDoc × canvasScale)` that actually stamps the
+  // bitmap at the right pixel position. Without this, a drag on a
+  // 2× canvas (retina or zoomed) moves the shape half as far as the
+  // pointer — the regression
+  // `ScaledCanvasTranslationOnlyDragProducesCorrectPixels` guards
+  // this.
+  const Transform2d canvasFromDoc = components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+  const Transform2d docFromCanvas = canvasFromDoc.inverse();
   for (auto& layer : layers_) {
     if (!layer.hasValidBitmap() || !layer.bitmapEntityFromWorldTransform().has_value()) {
       continue;
@@ -980,7 +992,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
     const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
     const Transform2d& bitmapStamp = *layer.bitmapEntityFromWorldTransform();
-    const Transform2d delta = instance.worldFromEntityTransform * bitmapStamp.inverse();
+    const Transform2d deltaDocSpace = instance.worldFromEntityTransform * bitmapStamp.inverse();
+    const Transform2d delta = docFromCanvas * deltaDocSpace * canvasFromDoc;
     if (delta.isTranslation()) {
       layer.setCanvasFromBitmap(delta);
     }
@@ -1264,7 +1277,11 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     worldFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
                           .worldFromEntityTransform;
   }
-  layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
+  // Keep layer bitmaps premultiplied end-to-end — the compose-side
+  // `drawImage` will read `ImageAlphaType::Premultiplied` and skip the
+  // shader's straight→premul conversion, preserving full 8-bit precision
+  // across nested filter composes.
+  layer.setBitmap(offscreen->takeSnapshotPremultiplied(), worldFromEntity);
   // Don't reset `canvasFromBitmap_` here — a caller may have set it
   // explicitly (tests, editor drag hand-off paths) and expect that
   // additional offset to apply on top of the freshly-rasterized bitmap.
@@ -1443,14 +1460,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
                                Transform2d::Translate(-tightBoundsSnapped.topLeft));
-        staticSegments_[i] = offscreen->takeSnapshot();
+        staticSegments_[i] = offscreen->takeSnapshotPremultiplied();
         staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
                                Transform2d());
-        staticSegments_[i] = offscreen->takeSnapshot();
+        staticSegments_[i] = offscreen->takeSnapshotPremultiplied();
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
     }
@@ -1741,7 +1758,7 @@ void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLaye
     RendererBitmap snapshot;
     {
       ZoneScopedN("Compositor::composeRange::takeSnapshot");
-      snapshot = offscreen->takeSnapshot();
+      snapshot = offscreen->takeSnapshotPremultiplied();
     }
     return snapshot;
   };

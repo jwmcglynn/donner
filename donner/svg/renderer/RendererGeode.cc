@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -1559,6 +1560,13 @@ void RendererGeode::setTargetTexture(wgpu::Texture texture) {
 
 void RendererGeode::clearTargetTexture() {
   impl_->hostTarget = wgpu::Texture();
+}
+
+std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() const {
+  if (!impl_->device) {
+    return nullptr;
+  }
+  return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
 }
 
 RendererGeode::~RendererGeode() {
@@ -3170,35 +3178,31 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 #endif
 }
 
-std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() const {
-  if (!impl_->device) {
-    return nullptr;
-  }
-  return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
-}
+namespace {
 
-RendererBitmap RendererGeode::takeSnapshot() const {
+/// Read a wgpu `target` texture back to a CPU `RendererBitmap`, optionally
+/// unpremultiplying on the way out. `RendererGeode::takeSnapshot()` needs
+/// straight-alpha output for cross-backend parity; the compositor's layer
+/// bitmap cache uses `takeSnapshotPremultiplied()` to skip the conversion
+/// and preserve full 8-bit precision across nested composes.
+RendererBitmap readbackTexture(const wgpu::Texture& target, uint32_t width, uint32_t height,
+                               geode::GeodeDevice& device, bool unpremultiply) {
   RendererBitmap bitmap;
-  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+  if (!target || width == 0 || height == 0) {
     return bitmap;
   }
-
-  const uint32_t width = static_cast<uint32_t>(impl_->pixelWidth);
-  const uint32_t height = static_cast<uint32_t>(impl_->pixelHeight);
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
 
-  // Allocate readback buffer.
   wgpu::BufferDescriptor bd = {};
   bd.label = wgpuLabel("RendererGeodeReadback");
   bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
   bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = impl_->device->device().createBuffer(bd);
-  impl_->device->countBuffer();
+  wgpu::Buffer readback = device.device().createBuffer(bd);
+  device.countBuffer();
 
-  // Copy texture → readback buffer.
-  wgpu::CommandEncoder enc = impl_->device->device().createCommandEncoder();
+  wgpu::CommandEncoder enc = device.device().createCommandEncoder();
   wgpu::TexelCopyTextureInfo src = {};
-  src.texture = impl_->target;
+  src.texture = target;
   src.mipLevel = 0;
   src.origin = {0, 0, 0};
   wgpu::TexelCopyBufferInfo dst = {};
@@ -3209,16 +3213,9 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   enc.copyTextureToBuffer(src, dst, copySize);
 
   wgpu::CommandBuffer cmd = enc.finish();
-  impl_->device->queue().submit(1, &cmd);
-  impl_->device->countSubmit();
+  device.queue().submit(1, &cmd);
+  device.countSubmit();
 
-  // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
-  // `BufferMapCallbackInfo` form of `mapAsync`, which takes a raw C function
-  // pointer + two void*'s rather than a std::function. We stash the "done"
-  // flag in `userdata1` so the callback can flip it and we can spin until it
-  // flips. wgpu-native guarantees `wgpuDevicePoll(wait=true)` drains pending
-  // callbacks before returning — a single `poll(true, nullptr)` is enough to
-  // wait for the map to complete.
   struct MapState {
     bool done = false;
     bool ok = false;
@@ -3232,21 +3229,13 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   };
   mapCb.userdata1 = &mapState;
   mapCb.userdata2 = nullptr;
-  // Browser WebGPU fires `mapAsync` completion via the JS Promise
-  // microtask — there is no wgpu-native-style "poll" on the instance.
-  // `AllowProcessEvents` would require an explicit `wgpuInstanceProcessEvents`
-  // call, which we never make (our Emscripten `wgpuDevicePoll` stub only
-  // yields via `emscripten_sleep`). Use `AllowSpontaneous` so the browser
-  // can fire the callback as soon as the Promise resolves, during the
-  // microtask tick that runs while we're sleeping. wgpu-native also
-  // accepts spontaneous mode and fires callbacks during `wgpuDevicePoll`.
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   readback.mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   int pollIter = 0;
   while (!mapState.done) {
-    impl_->device->device().poll(true, nullptr);
+    device.device().poll(true, nullptr);
     ++pollIter;
-    if (pollIter > 2000) {  // 2000 * 5ms = 10s bail-out.
+    if (pollIter > 2000) {
       break;
     }
   }
@@ -3256,49 +3245,70 @@ RendererBitmap RendererGeode::takeSnapshot() const {
 
   const uint8_t* mapped = static_cast<const uint8_t*>(readback.getConstMappedRange(0, bd.size));
 
-  // Strip row padding and unpremultiply alpha so the consumer gets a tightly
-  // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
-  // paint RGB by alpha before upload to match the blend pipeline's
-  // premultiplied storage, but `RendererBitmap` — like Skia's and
-  // tiny-skia's `takeSnapshot()` outputs — is defined as straight RGBA.
-  // Returning raw texture bytes would darken semi-transparent content and
-  // break cross-backend parity.
   bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
   bitmap.rowBytes = static_cast<size_t>(width) * 4u;
   bitmap.pixels.resize(bitmap.rowBytes * height);
-  for (uint32_t y = 0; y < height; ++y) {
-    const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
-    uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (uint32_t x = 0; x < width; ++x) {
-      const uint8_t srcR = srcRow[x * 4 + 0];
-      const uint8_t srcG = srcRow[x * 4 + 1];
-      const uint8_t srcB = srcRow[x * 4 + 2];
-      const uint8_t srcA = srcRow[x * 4 + 3];
-      if (srcA == 0u) {
-        dstRow[x * 4 + 0] = 0u;
-        dstRow[x * 4 + 1] = 0u;
-        dstRow[x * 4 + 2] = 0u;
-        dstRow[x * 4 + 3] = 0u;
-        continue;
+  if (unpremultiply) {
+    bitmap.alphaType = AlphaType::Unpremultiplied;
+    for (uint32_t y = 0; y < height; ++y) {
+      const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
+      uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
+      for (uint32_t x = 0; x < width; ++x) {
+        const uint8_t srcR = srcRow[x * 4 + 0];
+        const uint8_t srcG = srcRow[x * 4 + 1];
+        const uint8_t srcB = srcRow[x * 4 + 2];
+        const uint8_t srcA = srcRow[x * 4 + 3];
+        if (srcA == 0u) {
+          dstRow[x * 4 + 0] = 0u;
+          dstRow[x * 4 + 1] = 0u;
+          dstRow[x * 4 + 2] = 0u;
+          dstRow[x * 4 + 3] = 0u;
+          continue;
+        }
+        if (srcA == 255u) {
+          dstRow[x * 4 + 0] = srcR;
+          dstRow[x * 4 + 1] = srcG;
+          dstRow[x * 4 + 2] = srcB;
+          dstRow[x * 4 + 3] = 255u;
+          continue;
+        }
+        const unsigned a = srcA;
+        const unsigned half = a >> 1u;
+        dstRow[x * 4 + 0] = static_cast<uint8_t>(std::min(255u, (srcR * 255u + half) / a));
+        dstRow[x * 4 + 1] = static_cast<uint8_t>(std::min(255u, (srcG * 255u + half) / a));
+        dstRow[x * 4 + 2] = static_cast<uint8_t>(std::min(255u, (srcB * 255u + half) / a));
+        dstRow[x * 4 + 3] = srcA;
       }
-      if (srcA == 255u) {
-        dstRow[x * 4 + 0] = srcR;
-        dstRow[x * 4 + 1] = srcG;
-        dstRow[x * 4 + 2] = srcB;
-        dstRow[x * 4 + 3] = 255u;
-        continue;
-      }
-      // Round-nearest unpremultiply: straight = (premul * 255 + alpha/2) / alpha.
-      const unsigned a = srcA;
-      const unsigned half = a >> 1u;
-      dstRow[x * 4 + 0] = static_cast<uint8_t>(std::min(255u, (srcR * 255u + half) / a));
-      dstRow[x * 4 + 1] = static_cast<uint8_t>(std::min(255u, (srcG * 255u + half) / a));
-      dstRow[x * 4 + 2] = static_cast<uint8_t>(std::min(255u, (srcB * 255u + half) / a));
-      dstRow[x * 4 + 3] = srcA;
+    }
+  } else {
+    bitmap.alphaType = AlphaType::Premultiplied;
+    for (uint32_t y = 0; y < height; ++y) {
+      std::memcpy(bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes,
+                  mapped + static_cast<size_t>(y) * bytesPerRow, width * 4u);
     }
   }
   readback.unmap();
   return bitmap;
+}
+
+}  // namespace
+
+RendererBitmap RendererGeode::takeSnapshot() const {
+  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    return RendererBitmap();
+  }
+  return readbackTexture(impl_->target, static_cast<uint32_t>(impl_->pixelWidth),
+                         static_cast<uint32_t>(impl_->pixelHeight), *impl_->device,
+                         /*unpremultiply=*/true);
+}
+
+RendererBitmap RendererGeode::takeSnapshotPremultiplied() const {
+  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    return RendererBitmap();
+  }
+  return readbackTexture(impl_->target, static_cast<uint32_t>(impl_->pixelWidth),
+                         static_cast<uint32_t>(impl_->pixelHeight), *impl_->device,
+                         /*unpremultiply=*/false);
 }
 
 }  // namespace donner::svg

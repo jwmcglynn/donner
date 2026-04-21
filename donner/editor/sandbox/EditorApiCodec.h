@@ -82,6 +82,26 @@ struct ExportRequestPayload {
   ExportFormat format = ExportFormat::kSvgText;
 };
 
+/// Payload for `SessionOpcode::kAttachSharedTexture`. Carries a
+/// host-allocated `BridgeTextureHandle` — platform-specific shared
+/// GPU texture the backend imports once per session. See
+/// `donner/editor/sandbox/bridge/BridgeTexture.h` for the handle
+/// semantics. The three fields mirror `BridgeTextureHandle` so the
+/// codec stays independent of the bridge library (which lives
+/// higher in the DAG).
+struct AttachSharedTexturePayload {
+  /// Matches `BridgeHandleKind` as a raw u8 on the wire; unknown
+  /// kinds are treated by the backend as "no bridge" (falls back
+  /// to the CPU `finalBitmapPixels` wire field).
+  uint8_t kind = 0;
+  /// Platform handle value. Interpretation depends on `kind`:
+  /// mach_port / IOSurfaceID (macOS), fd (Linux), HANDLE (Windows).
+  uint64_t handle = 0;
+  int32_t width = 0;
+  int32_t height = 0;
+  uint32_t rowBytes = 0;
+};
+
 struct HandshakePayload {
   uint32_t protocolVersion = 0;
   std::string buildId;
@@ -148,7 +168,6 @@ struct FrameTreeSummary {
 
 struct FramePayload {
   uint64_t frameId = 0;
-  std::vector<uint8_t> renderWire;
   std::vector<FrameSelectionEntry> selections;
   bool hasMarquee = false;
   double marquee[4] = {};
@@ -163,6 +182,35 @@ struct FramePayload {
   bool hasCursorHint = false;
   uint32_t cursorHintSourceOffset = 0;
   FrameTreeSummary tree;
+
+  /// The SVG's own viewBox, in user-space (document) coordinates:
+  /// `[x, y, width, height]`. This is the coordinate system all
+  /// `selections[*].bbox`, `marquee`, `hoverRect`, and the
+  /// `PointerEventPayload.documentX/Y` the host sends back are in —
+  /// so the host needs it to convert between screen pixels and
+  /// document coordinates. Falls back to `(0, 0, widthAttr, heightAttr)`
+  /// when the SVG has no explicit `viewBox` attribute. Populated iff
+  /// `hasDocumentViewBox == true` (false for `kNone` / `kParseError`
+  /// frames where there is no document yet).
+  bool hasDocumentViewBox = false;
+  double documentViewBox[4] = {};
+
+  /// Pre-composed final bitmap produced by the backend's
+  /// `CompositorController` + real `svg::Renderer`. The sandbox
+  /// architecture doesn't ship a render-command wire stream — the
+  /// backend does the rasterization so the compositor's layer-
+  /// caching + translation fast path save work during drag.
+  ///
+  /// Dimensions and `rowBytes` describe the pixel buffer; `alphaType`
+  /// matches `svg::AlphaType` (0 = Unpremultiplied, 1 = Premultiplied).
+  /// Pixel data in `finalBitmapPixels` is RGBA8. Present iff a
+  /// document is currently loaded (`statusKind != kNone`).
+  bool hasFinalBitmap = false;
+  int32_t finalBitmapWidth = 0;
+  int32_t finalBitmapHeight = 0;
+  uint32_t finalBitmapRowBytes = 0;
+  uint8_t finalBitmapAlphaType = 0;
+  std::vector<uint8_t> finalBitmapPixels;
 };
 
 struct ExportResponsePayload {
@@ -214,6 +262,7 @@ std::vector<uint8_t> EncodeSelectElement(const SelectElementPayload& payload);
 std::vector<uint8_t> EncodeUndo();
 std::vector<uint8_t> EncodeRedo();
 std::vector<uint8_t> EncodeExport(const ExportRequestPayload& payload);
+std::vector<uint8_t> EncodeAttachSharedTexture(const AttachSharedTexturePayload& payload);
 /// @}
 
 /// @name Response encoders (backend → host)
@@ -249,6 +298,7 @@ bool DecodeSelectElement(std::span<const uint8_t> data, SelectElementPayload& ou
 bool DecodeUndo(std::span<const uint8_t> data);
 bool DecodeRedo(std::span<const uint8_t> data);
 bool DecodeExport(std::span<const uint8_t> data, ExportRequestPayload& out);
+bool DecodeAttachSharedTexture(std::span<const uint8_t> data, AttachSharedTexturePayload& out);
 /// @}
 
 /// @name Response decoders (backend → host)

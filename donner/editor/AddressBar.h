@@ -19,26 +19,9 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/AddressBarStatus.h"
+
 namespace donner::editor {
-
-/// Status chip shown next to the URL input. Colors match the existing
-/// slim-shell conventions (green / amber / blue / red / grey).
-enum class AddressBarStatus {
-  kEmpty,
-  kLoading,
-  kRendered,
-  kRenderedLossy,
-  kFetchError,
-  kParseError,
-  kPolicyDenied,
-  kSandboxCrashed,
-};
-
-struct AddressBarStatusChip {
-  AddressBarStatus status = AddressBarStatus::kEmpty;
-  std::string message;  ///< Human-readable detail for the tooltip.
-  std::string uri;      ///< Currently-loaded URI; empty when none.
-};
 
 /// Populated payload when the user triggers a navigation. When `bytes` is
 /// non-empty the UI shortcutted the fetch (e.g. file drop on WASM), and

@@ -1339,7 +1339,14 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
     return;
   }
 
-  std::vector<std::uint8_t> premultiplied = PremultiplyRgba(image.data);
+  // tiny_skia::Pixmap stores pixels in premultiplied form. If the
+  // caller already gave us premul bytes (compositor layer cache path),
+  // skip `PremultiplyRgba` — running premultiplication twice on
+  // partial-alpha content shows up as a visible darkening halo.
+  std::vector<std::uint8_t> premultiplied =
+      image.alphaType == ImageAlphaType::Premultiplied
+          ? std::vector<std::uint8_t>(image.data.begin(), image.data.end())
+          : PremultiplyRgba(image.data);
   auto maybePixmap = tiny_skia::Pixmap::fromVec(
       std::move(premultiplied), tiny_skia::IntSize(static_cast<std::uint32_t>(image.width),
                                                    static_cast<std::uint32_t>(image.height)));

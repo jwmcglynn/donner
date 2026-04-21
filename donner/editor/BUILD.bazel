@@ -13,7 +13,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "renderer_backend_compatible_with")
 
 # Editor libraries are public so the //examples:svg_viewer target (in the
 # separate examples Bazel module) can depend on `:text_editor`. BCR
@@ -43,6 +43,9 @@ donner_cc_library(
     name = "viewport_state",
     srcs = ["ViewportState.cc"],
     hdrs = ["ViewportState.h"],
+    # Sandbox tests exercise this directly to reproduce the thin-client
+    # viewport-centering regression.
+    visibility = ["//donner/editor:__subpackages__"],
     deps = [
         "//donner/base",
     ],
@@ -115,6 +118,10 @@ donner_cc_library(
     name = "overlay_renderer",
     srcs = ["OverlayRenderer.cc"],
     hdrs = ["OverlayRenderer.h"],
+    # Sandbox backend draws selection chrome into the composited
+    # bitmap via this helper — keeps the AABB + path outlines pixel-
+    # locked to the rendered content, no ImGui shear on drag.
+    visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":selection_aabb",
         ":tracy_wrapper",
@@ -177,6 +184,7 @@ _EDITOR_RUNTIME_DEPS = [
     ":text_patch",
     ":tracy_wrapper",
     "//donner/base",
+    "//donner/editor/repro:repro_recorder",
     "//donner/svg/renderer:renderer_interface",
     "//third_party/fira-code",
     "//third_party/glad",
@@ -336,8 +344,20 @@ donner_cc_library(
     srcs = ["AddressBar.cc"],
     hdrs = ["AddressBar.h"],
     deps = [
+        ":address_bar_status",
         "@imgui",
     ],
+)
+
+# Tiny header-only slice of `address_bar` that carries just the
+# `AddressBarStatus` enum + chip struct — no ImGui dependency so
+# headless backend-client consumers can ship the chip through
+# `FrameResult.statusChip` without pulling in GLFW / libX11 on
+# Linux remote-execution workers.
+donner_cc_library(
+    name = "address_bar_status",
+    hdrs = ["AddressBarStatus.h"],
+    visibility = ["//donner/editor:__subpackages__"],
 )
 
 donner_cc_library(
@@ -363,11 +383,15 @@ donner_cc_library(
         "EditorBackendClient.h",
         "SelectionOverlay.h",
     ],
+    # Sandbox tests drive the full host-side flow through this interface,
+    # so they need to link the header.
+    visibility = ["//donner/editor:__subpackages__"],
     deps = [
-        ":address_bar",
+        ":address_bar_status",
         "//donner/base",
         "//donner/editor/sandbox:editor_api_codec",
         "//donner/editor/sandbox:session_protocol",
+        "//donner/editor/sandbox/bridge:bridge_texture",
         "//donner/svg/renderer:renderer_interface",
     ],
 )
@@ -391,17 +415,20 @@ donner_cc_library(
 )
 
 # In-process implementation of EditorBackendClient (WASM + desktop tests).
+# Statically links the backend core into the same address space — no OS-level
+# sandbox IPC — so it compiles on every platform that has a renderer backend.
+# The sibling `editor_backend_client_session` is the Linux-only desktop
+# variant that actually speaks to a subprocess sandbox.
 donner_cc_library(
     name = "editor_backend_client_inprocess",
     srcs = ["EditorBackendClient_InProcess.cc"],
-    target_compatible_with = select({
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    # Sandbox tests drive this impl directly to reproduce the host-side
+    # thin-client flow under gtest.
+    visibility = ["//donner/editor:__subpackages__"],
     deps = [
         ":editor_backend_client",
         "//donner/editor/sandbox:editor_backend_core",
-        "//donner/editor/sandbox:replaying_renderer",
         "//donner/svg/renderer",
     ],
 )
