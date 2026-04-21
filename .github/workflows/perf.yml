@@ -1,0 +1,100 @@
+name: Perf
+
+# Runs wall-clock perf targets on a nightly schedule after checking whether
+# origin/main advanced since the last successful run.
+on:
+  schedule:
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  gatekeeper:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Decide whether nightly perf jobs should run
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "Manual dispatch requested; running perf jobs."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin main
+          main_sha="$(git rev-parse origin/main)"
+          last_success_sha="$(gh run list \
+            --workflow=perf.yml \
+            --status=success \
+            --limit=1 \
+            --json headSha \
+            --jq '.[0].headSha')"
+
+          if [[ -z "$last_success_sha" || "$last_success_sha" == "null" ]]; then
+            echo "No previous successful perf.yml run found; running perf jobs."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$last_success_sha" == "$main_sha" ]]; then
+            echo "origin/main has not advanced since the last successful perf.yml run; skipping."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "origin/main advanced from $last_success_sha to $main_sha; running perf jobs."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  macos:
+    runs-on: macos-15
+    needs: gatekeeper
+    if: needs.gatekeeper.outputs.should_run == 'true'
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-perf
+          repository-cache: true
+          external-cache: true
+          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+      - name: Discover perf-tagged test targets
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          targets="$(
+            bazelisk query 'tests(//...) intersect attr("tags", "perf", //...)' |
+              python3 -c 'import sys; print(" ".join(line.strip() for line in sys.stdin if line.strip()))'
+          )"
+
+          if [[ -z "$targets" ]]; then
+            echo "No perf-tagged test targets found."
+            echo "targets=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+      - name: Test perf-tagged targets
+        if: steps.discover.outputs.targets != ''
+        run: |
+          bazelisk test \
+            --config=ci \
+            --test_output=errors \
+            --build_tag_filters=perf \
+            --test_tag_filters=perf \
+            ${{ steps.discover.outputs.targets }}
