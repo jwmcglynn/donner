@@ -109,6 +109,12 @@ public:
   void countPathEncode() const {
     if (counters_) ++counters_->pathEncodes;
   }
+  void countDraw() const {
+    if (counters_) ++counters_->drawCalls;
+  }
+  void countPipelineSwitch() const {
+    if (counters_) ++counters_->pipelineSwitches;
+  }
 
   /**
    * Whether the driver supports GPU timestamp queries. Always false
@@ -146,6 +152,18 @@ public:
   const wgpu::TextureView& dummyClipMaskTextureView() const;
   /// Linear-ClampToEdge sampler used for both the dummy and real clip masks.
   const wgpu::Sampler& dummyClipMaskSampler() const;
+
+  /// One-element instance-transform storage buffer carrying the identity
+  /// affine. Bound at binding 7 of the Slug fill bind-group layout by
+  /// every non-instanced solid fill so the bind-group layout stays
+  /// stable across draw calls regardless of whether `fillPathInstanced`
+  /// is in play. See design doc 0030 §M6 Bullet 2.
+  ///
+  /// Layout mirrors the WGSL `InstanceTransform` struct in
+  /// `shaders/slug_fill.wgsl`: two `vec4f` per entry, row-major affine,
+  /// so the identity is `{(1, 0, 0, 0), (0, 1, 0, 0)}`. The `.z`
+  /// components carry the translation (0 for identity).
+  const wgpu::Buffer& identityInstanceTransformBuffer() const;
   /// @}
 
 private:

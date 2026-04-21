@@ -28,7 +28,7 @@ Pixel GetPixel(const tiny_skia::Pixmap& pixmap, int x, int y) {
   return Pixel{data[index + 0], data[index + 1], data[index + 2], data[index + 3]};
 }
 
-tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& filterTransform) {
+tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& deviceFromFilterTransform) {
   auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
   EXPECT_TRUE(maybePixmap.has_value());
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
@@ -44,7 +44,7 @@ tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& filterTransform) {
   };
   graph.nodes.push_back(std::move(node));
 
-  ApplyFilterGraphToPixmap(pixmap, graph, filterTransform, std::nullopt);
+  ApplyFilterGraphToPixmap(pixmap, graph, deviceFromFilterTransform, std::nullopt);
   return pixmap;
 }
 

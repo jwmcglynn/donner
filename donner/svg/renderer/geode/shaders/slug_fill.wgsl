@@ -103,6 +103,25 @@ struct Band {
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(6) var clipMaskSampler: sampler;
 
+// Per-instance affine transform (Milestone 6 Bullet 2: `<use>` instancing).
+//
+// Each `array` element is a 2×3 affine packed as two vec4f:
+//   row0 = (a, c, e, _pad)  →  x' = a*x + c*y + e
+//   row1 = (b, d, f, _pad)  →  y' = b*x + d*y + f
+//
+// The vertex shader composes this transform into `uniforms.mvp` before
+// applying it to `pos`/`normal`, so a single instanced draw can paint N
+// copies of the same encoded path at N different transforms.
+//
+// For non-instanced draws (instanceCount == 1) a device-owned 1-element
+// buffer with identity transform is bound here so the bind-group layout
+// stays stable across draw calls.
+struct InstanceTransform {
+  row0: vec4f,
+  row1: vec4f,
+};
+@group(0) @binding(7) var<storage, read> instanceTransforms: array<InstanceTransform>;
+
 // ============================================================================
 // Vertex stage
 // ============================================================================
@@ -126,22 +145,43 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(@builtin(instance_index) instance_index: u32, in: VertexInput) -> VertexOutput {
+  // Compose the per-instance affine transform into the MVP. For
+  // non-instanced draws `instance_index == 0` and the identity
+  // transform bound by the encoder makes this a no-op. For a
+  // `fillPathInstanced` draw each invocation picks up its own
+  // transform, so N copies of the same encoded path land at N
+  // different screen positions with a single draw call.
+  let xf = instanceTransforms[instance_index];
+  // WGSL matrices are column-major: mat4x4f(col0, col1, col2, col3).
+  //   col 0: (a, b, 0, 0)   col 1: (c, d, 0, 0)
+  //   col 2: (0, 0, 1, 0)   col 3: (e, f, 0, 1)
+  let instance_mat = mat4x4f(
+    vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
+    vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
+    vec4f(0.0,       0.0,       1.0, 0.0),
+    vec4f(xf.row0.z, xf.row1.z, 0.0, 1.0),
+  );
+  let effective_mvp = uniforms.mvp * instance_mat;
+
   // Dynamic half-pixel dilation: expand the quad by exactly half a pixel
   // in viewport space along the outward normal.
   //
   // For the orthographic 2D case the math simplifies significantly from the
   // full quadratic solution — d = 1 / |viewport-space normal projection|.
-  let world_normal = (uniforms.mvp * vec4f(in.normal, 0.0, 0.0)).xy;
+  let world_normal = (effective_mvp * vec4f(in.normal, 0.0, 0.0)).xy;
   let viewport_normal = world_normal * uniforms.viewport * 0.5;
   let viewport_len = length(viewport_normal);
   let d = 1.0 / max(viewport_len, 0.001);
 
   // Dilate in path space so the fragment shader still samples in path space.
+  // (Sample space is the path's own coordinate system — the fragment ray-cast
+  // against `curveData` must stay pre-transform; `effective_mvp` only drives
+  // clip-space positioning.)
   let dilated = in.pos + in.normal * d;
 
   var out: VertexOutput;
-  out.clip_pos = uniforms.mvp * vec4f(dilated, 0.0, 1.0);
+  out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
   out.bandIndex = in.bandIndex;
   return out;

@@ -55,6 +55,14 @@ struct Band {
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(6) var clipMaskSampler: sampler;
 
+// Per-instance affine transform (Milestone 6 Bullet 2). See slug_fill.wgsl
+// for the full comment — this binding/struct mirror that shader.
+struct InstanceTransform {
+  row0: vec4f,
+  row1: vec4f,
+};
+@group(0) @binding(7) var<storage, read> instanceTransforms: array<InstanceTransform>;
+
 // ============================================================================
 // Vertex stage (identical to slug_fill.wgsl)
 // ============================================================================
@@ -72,8 +80,17 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-  let world_normal = (uniforms.mvp * vec4f(in.normal, 0.0, 0.0)).xy;
+fn vs_main(@builtin(instance_index) instance_index: u32, in: VertexInput) -> VertexOutput {
+  let xf = instanceTransforms[instance_index];
+  let instance_mat = mat4x4f(
+    vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
+    vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
+    vec4f(0.0,       0.0,       1.0, 0.0),
+    vec4f(xf.row0.z, xf.row1.z, 0.0, 1.0),
+  );
+  let effective_mvp = uniforms.mvp * instance_mat;
+
+  let world_normal = (effective_mvp * vec4f(in.normal, 0.0, 0.0)).xy;
   let viewport_normal = world_normal * uniforms.viewport * 0.5;
   let viewport_len = length(viewport_normal);
   let d = 1.0 / max(viewport_len, 0.001);
@@ -81,7 +98,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
   let dilated = in.pos + in.normal * d;
 
   var out: VertexOutput;
-  out.clip_pos = uniforms.mvp * vec4f(dilated, 0.0, 1.0);
+  out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
   out.bandIndex = in.bandIndex;
   return out;
