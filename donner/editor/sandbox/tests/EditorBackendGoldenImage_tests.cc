@@ -46,6 +46,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1076,6 +1077,160 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
 // selected, `CompositorController::promoteEntity` refuses to promote
 // it (descendant of a compositing-breaking ancestor) and every drag
 // frame falls through to the full-document render path.
+// UI-level perf repro: the user reports a `<g filter>` drag caps at
+// 20 fps (~50 ms/frame) in the editor, but the backend-only timing
+// tests above show ~5 ms/frame for the same gesture. The gap is the
+// host-side work — GL texture upload + ImGui frame + vsync wait —
+// which the backend-only tests don't exercise.
+//
+// This test simulates the editor's actual main-loop cadence:
+//   1. Post `pointerEvent(kMove)` to the backend (same synchronous
+//      call main.cc makes; blocks on the in-process handler).
+//   2. Copy the returned bitmap the way `glTexImage2D` would read
+//      it. The stand-in for the GL upload is a same-size
+//      `std::memcpy` — memory-bandwidth equivalent to the
+//      host→texture DMA, minus the driver overhead. Not perfectly
+//      faithful (real drivers can sync on previous uses or convert
+//      formats), but it exposes the bitmap-size scaling that the
+//      backend-only test elides.
+//   3. Sum all that into a per-frame wall clock.
+//
+// The budget is 20 ms/frame — well inside a 60 fps vsync window —
+// so any regression that pushes a frame past 20 ms will trip the
+// assertion at HiDPI canvas sizes where the gap actually shows up.
+TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  // 1784×1024 = what the editor renders on a retina MacBook at
+  // default zoom. Backend-only costs scale roughly linearly with
+  // pixel count, but the "GL upload" stand-in (host→DMA copy) scales
+  // harder because bandwidth-bound work dominates a larger bitmap.
+  constexpr int kCanvasW = 1784;
+  constexpr int kCanvasH = 1024;
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = kCanvasW;
+  vp.height = kCanvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  (void)core.handleLoadBytes(load);
+
+  // Click inside `Big_lightning_glow`'s cls-79 path — `SelectTool`
+  // elevates the leaf to the filter group; the compositor takes the
+  // subtree fast path on the subsequent drags.
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 455.0;
+  down.documentY = 160.0;
+  down.buttons = 1;
+  auto downFrame = core.handlePointerEvent(down);
+  ASSERT_FALSE(downFrame.selections.empty())
+      << "expected click to hit the cls-79 path inside Big_lightning_glow";
+
+  // Warm-up move so the layer's bitmap is stamped and the compose
+  // cache is populated before the steady-state measurement starts.
+  PointerEventPayload warmup;
+  warmup.phase = donner::editor::sandbox::PointerPhase::kMove;
+  warmup.documentX = 456.0;
+  warmup.documentY = 160.0;
+  warmup.buttons = 1;
+  (void)core.handlePointerEvent(warmup);
+
+  // Per-frame scratch buffer mimicking the texture-upload target.
+  // Allocated once outside the loop so allocator cost doesn't bleed
+  // into the per-frame measurement — matches main.cc's single-
+  // texture bind + `glTexImage2D`-into-preallocated-target pattern.
+  const size_t kBytesPerFrame = static_cast<size_t>(kCanvasW) * kCanvasH * 4u;
+  std::vector<uint8_t> textureStandIn(kBytesPerFrame, 0);
+
+  constexpr int kSteadyFrames = 30;
+  using Clock = std::chrono::steady_clock;
+  std::vector<double> frameMs;
+  frameMs.reserve(kSteadyFrames);
+  double backendTotalMs = 0.0;
+  double uploadTotalMs = 0.0;
+  for (int i = 0; i < kSteadyFrames; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 456.0 + (i + 1) * 1.5;
+    mv.documentY = 160.0;
+    mv.buttons = 1;
+
+    const auto t0 = Clock::now();
+    const auto payload = core.handlePointerEvent(mv);
+    const auto tBackendEnd = Clock::now();
+
+    // "GL upload" stand-in: copy the `finalBitmapPixels` into the
+    // host-side texture buffer the same way `glTexImage2D` drains
+    // the source pointer into the driver. Memory-bandwidth matches
+    // even if driver details don't.
+    ASSERT_TRUE(payload.hasFinalBitmap)
+        << "backend failed to produce a final bitmap on drag frame " << i;
+    if (!payload.finalBitmapPixels.empty() &&
+        payload.finalBitmapPixels.size() <= textureStandIn.size()) {
+      std::memcpy(textureStandIn.data(), payload.finalBitmapPixels.data(),
+                  payload.finalBitmapPixels.size());
+    }
+    const auto tUploadEnd = Clock::now();
+
+    const double backendMs =
+        std::chrono::duration<double, std::milli>(tBackendEnd - t0).count();
+    const double uploadMs =
+        std::chrono::duration<double, std::milli>(tUploadEnd - tBackendEnd).count();
+    backendTotalMs += backendMs;
+    uploadTotalMs += uploadMs;
+    frameMs.push_back(backendMs + uploadMs);
+  }
+
+  double worst = 0.0;
+  double total = 0.0;
+  int overSixtyFps = 0;
+  int overThirtyFps = 0;
+  int overTwentyFps = 0;
+  for (double v : frameMs) {
+    worst = std::max(worst, v);
+    total += v;
+    if (v > 16.67) ++overSixtyFps;
+    if (v > 33.33) ++overThirtyFps;
+    if (v > 50.0) ++overTwentyFps;
+  }
+  const double avg = total / static_cast<double>(frameMs.size());
+  const double backendAvg = backendTotalMs / kSteadyFrames;
+  const double uploadAvg = uploadTotalMs / kSteadyFrames;
+  std::fprintf(stderr,
+               "[UIPerf %dx%d] frames avg=%.2f ms (backend=%.2f + upload=%.2f), "
+               "max=%.2f, >60fps=%d/%d, >30fps=%d, >20fps=%d\n",
+               kCanvasW, kCanvasH, avg, backendAvg, uploadAvg, worst, overSixtyFps,
+               kSteadyFrames, overThirtyFps, overTwentyFps);
+
+  // 20 ms/frame budget: inside a 60 Hz vsync window, with slack for
+  // the driver work the stand-in copy doesn't model. If avg > 20
+  // ms, a 60 Hz host will drop to 30 fps every frame; >33 ms drops
+  // to 20 fps (the user-reported cap). The specific sub-budgets
+  // below are diagnostic so the failure message points at the
+  // stage that regressed.
+  EXPECT_LT(avg, 20.0)
+      << "HiDPI filter-group drag can't hit 60 fps: backend avg=" << backendAvg
+      << " ms, upload avg=" << uploadAvg
+      << " ms. If backend is the big number, the compositor fast path "
+         "isn't engaging; check fast-path counters + "
+         "`SelectTool::elevateToCompositingGroupAncestor`. If upload is "
+         "the big number, the overlay fell back to full-canvas rendering "
+         "(check `SnapshotSelectionWorldBounds` / tight-bound sizing).";
+  EXPECT_EQ(overTwentyFps, 0)
+      << overTwentyFps << " of " << kSteadyFrames
+      << " frames exceeded 50 ms (the user-reported 20 fps cap).";
+}
+
 // Direct `EditorBackendCore` check: after SelectTool elevates a click
 // inside `<g filter>` and the drag starts, every subsequent kMove
 // frame MUST increment `fastPathFrames`, not `slowPathFramesWithDirty`.

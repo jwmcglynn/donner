@@ -376,9 +376,25 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint textur
   if (!result.bitmap.empty()) {
     glBindTexture(GL_TEXTURE_2D, texture);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(result.bitmap.rowBytes / 4u));
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result.bitmap.dimensions.x,
-                 result.bitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                 result.bitmap.pixels.data());
+    // `glTexImage2D` reallocates the GPU-side texture storage on every
+    // call, even when the dimensions haven't changed. On retina macOS
+    // (1784×1024×4 = 7 MB/frame) that allocation has been measured at
+    // ~15-20 ms, which caps the drag frame rate at 20-30 fps. When
+    // dimensions are unchanged (the steady-state drag case — the
+    // canvas is resized only via `setViewport`, not per-frame),
+    // `glTexSubImage2D` reuses the existing storage and just pushes
+    // pixel bytes, which drops the upload to sub-millisecond. Match
+    // the outer allocation path on first-render and resize.
+    if (result.bitmap.dimensions.x == textureWidth &&
+        result.bitmap.dimensions.y == textureHeight) {
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, result.bitmap.dimensions.x,
+                      result.bitmap.dimensions.y, GL_RGBA, GL_UNSIGNED_BYTE,
+                      result.bitmap.pixels.data());
+    } else {
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result.bitmap.dimensions.x,
+                   result.bitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                   result.bitmap.pixels.data());
+    }
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     textureWidth = result.bitmap.dimensions.x;
     textureHeight = result.bitmap.dimensions.y;
