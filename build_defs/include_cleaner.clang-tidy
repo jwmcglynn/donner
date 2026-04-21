@@ -1,0 +1,17 @@
+# clang-tidy config for the per-library `misc-include-cleaner` lint test.
+#
+# This file is intentionally narrow — only `misc-include-cleaner` is enabled,
+# so opted-in libraries assert IWYU correctness (every used symbol's defining
+# header is directly #included; every direct #include is used) without
+# inheriting the broader check set from the workspace `.clang-tidy`.
+#
+# Wired up by `build_defs/include_cleaner.bzl` and emitted per-library by
+# `donner_cc_library`/`_test`/`_binary` when `include_cleaner = "strict"`.
+# Historical debt is tracked in #559; libraries opt in directory-by-directory.
+UseColor: true
+
+Checks: "-*,misc-include-cleaner"
+
+HeaderFilterRegex: "donner"
+
+WarningsAsErrors: "*"

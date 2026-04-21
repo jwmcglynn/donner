@@ -204,6 +204,15 @@ that approach was dropped in favor of enabling clang-tidy's
 existing `--config=clang-tidy` aspect, has real C++ semantics, no regex
 false positives, and no hand-maintained rule table.
 
+**2026-04 update (doc 0031 M2.9):** `misc-include-cleaner` is now also
+emitted per-library inside `bazel test //...` for opt-in targets via
+`include_cleaner = "strict"` on `donner_cc_library`/`_test`/`_binary` (see
+`build_defs/include_cleaner.bzl`). Default off because of historical debt
+([#559](https://github.com/jwmcglynn/donner/issues/559), ~2,875 findings) —
+libraries opt in directory-by-directory as they're cleaned. The diff-only
+`tools/run_misc_include_cleaner_diff.sh` lint stays as the safety net for
+non-opted-in code.
+
 ### Workflow integration
 
 - **`tools/presubmit.sh`** — single-command local check. Since banned

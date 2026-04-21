@@ -5,6 +5,7 @@ Helper rules, such as for building fuzzers.
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
+load(":include_cleaner.bzl", "INCLUDE_CLEANER_VALUES", "include_cleaner_lint_test")
 
 # Script that enforces banned source patterns (no `long long`, no
 # `std::aligned_storage`, no user-defined literal operators). See
@@ -50,6 +51,50 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
         data = lintable,
         tags = propagated_tags,
         size = "small",
+    )
+
+def _maybe_emit_include_cleaner(name, srcs, hdrs, deps, copts, tags, include_cleaner):
+    """Emit a `{name}_include_cleaner` test if the parent opted in.
+
+    `include_cleaner` is False by default; libraries opt in to "strict" as
+    they're cleaned of historical findings (issue #559). select()-valued
+    srcs/hdrs are skipped because we can't enumerate them at load time —
+    those files are still picked up by sibling targets that list them as
+    plain strings.
+    """
+    if not include_cleaner:
+        return
+
+    if include_cleaner not in INCLUDE_CLEANER_VALUES:
+        fail(
+            "include_cleaner must be False or one of {}; got {}".format(
+                INCLUDE_CLEANER_VALUES,
+                repr(include_cleaner),
+            ),
+        )
+
+    if type(srcs) != "list" or type(hdrs) != "list":
+        return
+
+    lintable_srcs = [f for f in srcs if type(f) == "string" and not f.startswith(":") and not f.startswith("//")]
+    lintable_hdrs = [f for f in hdrs if type(f) == "string" and not f.startswith(":") and not f.startswith("//")]
+    if not (lintable_srcs or lintable_hdrs):
+        return
+
+    # `deps` may be a select() (uncommon at this layer); fall back to an
+    # empty list rather than failing — the lint will still see the
+    # library's own srcs/hdrs but lose deps' include paths. Better to
+    # opt-in only when deps are concrete.
+    if type(deps) != "list":
+        return
+
+    include_cleaner_lint_test(
+        name = name + "_include_cleaner",
+        srcs = lintable_srcs,
+        hdrs = lintable_hdrs,
+        deps = deps,
+        copts = copts,
+        tags = tags,
     )
 
 def llvm21_macos_workaround_linkopts():
@@ -320,7 +365,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
         testonly = 1,
     )
 
-def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
+def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], include_cleaner = False, **kwargs):
     """
     Create a cc_binary with donner-specific defaults including LLVM 21 workaround.
 
@@ -330,6 +375,9 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
       linkopts: List of linker options.
       deps: List of dependencies.
       tags: Tags.
+      include_cleaner: Opt-in to per-target `misc-include-cleaner` lint. False
+        (default) skips. "strict" emits `{name}_include_cleaner` test that
+        fails on any IWYU finding. See `build_defs/include_cleaner.bzl`.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
     cc_binary(
@@ -346,6 +394,16 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
         tags = tags,
+    )
+
+    _maybe_emit_include_cleaner(
+        name = name,
+        srcs = srcs,
+        hdrs = kwargs.get("hdrs", []),
+        deps = deps,
+        copts = kwargs.get("copts", []),
+        tags = tags,
+        include_cleaner = include_cleaner,
     )
 
 # Standard variant specs for donner_cc_test(variants = ...).
@@ -385,7 +443,7 @@ _VARIANT_FORWARDED_ATTRS = (
     "target_compatible_with",
 )
 
-def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variants = None, **kwargs):
+def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variants = None, include_cleaner = False, **kwargs):
     """
     Create a cc_test with donner-specific defaults including LLVM 21 workaround.
 
@@ -401,6 +459,7 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
         wrapper per entry via `donner_multi_transitioned_test`. This is the
         opt-in mechanism that lets `bazel test //...` cover variant lanes
         without per-test `--config=` flags. See doc 0031 M2.3.
+      include_cleaner: See `donner_cc_binary`.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     cc_test(
@@ -417,6 +476,16 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
         tags = tags,
+    )
+
+    _maybe_emit_include_cleaner(
+        name = name,
+        srcs = srcs,
+        hdrs = kwargs.get("hdrs", []),
+        deps = deps,
+        copts = kwargs.get("copts", []),
+        tags = tags,
+        include_cleaner = include_cleaner,
     )
 
     if variants:
@@ -493,7 +562,7 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         **kwargs
     )
 
-def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, **kwargs):
+def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, include_cleaner = False, **kwargs):
     """
     Create a cc_library with donner-specific defaults.
 
@@ -504,6 +573,7 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       copts: List of copts.
       tags: List of tags.
       visibility: Visibility.
+      include_cleaner: See `donner_cc_binary`.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
 
@@ -539,6 +609,16 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         srcs = srcs,
         hdrs = hdrs,
         tags = tags,
+    )
+
+    _maybe_emit_include_cleaner(
+        name = name,
+        srcs = srcs,
+        hdrs = hdrs,
+        deps = kwargs.get("deps", []),
+        copts = copts,
+        tags = tags,
+        include_cleaner = include_cleaner,
     )
 
 def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):

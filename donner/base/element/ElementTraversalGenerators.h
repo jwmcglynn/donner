@@ -2,7 +2,9 @@
 /// @file
 
 #include <coroutine>
+#include <optional>
 
+#include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/base/element/ElementLike.h"  // IWYU pragma: keep, used for ElementLike
 
