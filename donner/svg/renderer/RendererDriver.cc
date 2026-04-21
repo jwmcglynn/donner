@@ -4,6 +4,8 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Length.h"
@@ -39,6 +41,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {

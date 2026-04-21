@@ -1,15 +1,12 @@
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <iostream>
 #include <numbers>
 #include <unordered_map>
 #include <variant>
 
-#include "donner/base/MathUtils.h"
-#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"

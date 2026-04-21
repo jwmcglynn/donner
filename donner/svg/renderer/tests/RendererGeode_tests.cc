@@ -6,7 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <numbers>
+#include <optional>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
@@ -16,7 +16,7 @@
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/properties/PaintServer.h"
-#include "donner/svg/renderer/PixelFormatUtils.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep — provides UnpremultiplyRgba
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"

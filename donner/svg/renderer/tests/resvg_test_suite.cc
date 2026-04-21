@@ -2,7 +2,10 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
+#include <string>
+#include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"

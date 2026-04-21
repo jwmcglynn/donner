@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <string_view>
 
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
