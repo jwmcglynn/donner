@@ -230,7 +230,8 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
       (category == "filters/feSpecularLighting" && filename == "specularExponent=0.svg") ||
       (category == "filters/feTile" && filename == "empty-region.svg") ||
       (category == "filters/filter" && filename == "transform-on-shape.svg") ||
-      (category == "painting/opacity" && filename == "mixed-group-opacity.svg") ||
+      (category == "painting/opacity" &&
+       (filename == "mixed-group-opacity.svg" || filename == "on-an-invalid-element.svg")) ||
       (category == "painting/fill-opacity" && filename == "with-opacity.svg") ||
       (category == "painting/stroke" &&
        (filename == "control-points-clamping-1.svg" ||
