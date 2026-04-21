@@ -5,8 +5,7 @@
 
 namespace donner::geode {
 
-GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device,
-                                       wgpu::TextureFormat colorFormat,
+GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
                                        uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----

@@ -2,10 +2,9 @@
 /// @file
 /// Reusable GPU texture upload + textured-quad draw helpers for Geode.
 
-#include <webgpu/webgpu.hpp>
-
 #include <cstdint>
 #include <optional>
+#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 
