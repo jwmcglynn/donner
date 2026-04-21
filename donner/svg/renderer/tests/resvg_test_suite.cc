@@ -236,9 +236,11 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
       (category == "painting/stroke" &&
        (filename == "control-points-clamping-1.svg" ||
         filename == "currentColor-without-a-parent.svg" ||
+        filename == "gradient-with-objectBoundingBox-and-fallback-on-lines.svg" ||
         filename == "gradient-with-objectBoundingBox-on-shape-without-a-bbox.svg" ||
         filename == "gradient-with-objectBoundingBox-on-path-without-a-bbox-2.svg" ||
         filename == "pattern-with-objectBoundingBox-fallback-on-zero-bbox-shape.svg")) ||
+      (category == "painting/stroke-dasharray" && filename == "em-units.svg") ||
       (category == "painting/overflow" && filename == "inherit-on-marker-without-parent.svg") ||
       (category == "text/font-variant" && filename == "inherit.svg") ||
       (category == "painting/paint-order" &&
