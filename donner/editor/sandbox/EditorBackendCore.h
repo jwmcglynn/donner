@@ -142,6 +142,21 @@ private:
   /// `compositor_.reset()` whenever the document is reparsed / replaced
   /// so the next render rebuilds against the new registry.
   std::optional<donner::svg::compositor::CompositorController> compositor_;
+
+public:
+  /// Test-only: read the compositor's fast-path counters so regression
+  /// tests can assert that a drag sequence actually took the fast path
+  /// instead of relying on wall-clock budgets that flake under CI
+  /// scheduling noise.
+  [[nodiscard]] donner::svg::compositor::CompositorController::FastPathCounters
+  compositorFastPathCountersForTesting() const {
+    if (!compositor_.has_value()) {
+      return {};
+    }
+    return compositor_->fastPathCountersForTesting();
+  }
+
+private:
   /// Entity currently promoted on the compositor, or `entt::null`.
   /// Maintained to match the SelectTool's current drag / selection
   /// target so promote/demote calls stay O(changes) not O(frames).

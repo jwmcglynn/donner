@@ -1076,6 +1076,89 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
 // selected, `CompositorController::promoteEntity` refuses to promote
 // it (descendant of a compositing-breaking ancestor) and every drag
 // frame falls through to the full-document render path.
+// Direct `EditorBackendCore` check: after SelectTool elevates a click
+// inside `<g filter>` and the drag starts, every subsequent kMove
+// frame MUST increment `fastPathFrames`, not `slowPathFramesWithDirty`.
+// Wall-clock budgets flake under CI noise; the counter is the
+// deterministic signal.
+TEST(EditorBackendCoreFastPathTest, FilterGroupDragCountsAsFastPath) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+
+  SetViewportPayload vp;
+  vp.width = 892;
+  vp.height = 512;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  (void)core.handleLoadBytes(load);
+
+  // Click inside `Big_lightning_glow`'s cls-79 path. SelectTool's
+  // `ElevateToCompositingGroupAncestor` should redirect the selection
+  // to the filter group.
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 455.0;
+  down.documentY = 160.0;
+  down.buttons = 1;
+  auto downFrame = core.handlePointerEvent(down);
+  ASSERT_FALSE(downFrame.selections.empty())
+      << "click inside Big_lightning_glow should hit something — splash "
+         "geometry may have shifted";
+
+  // One warm-up kMove frame so the compositor processes the promote
+  // + first drag-transform and stamps the layer bitmap.
+  PointerEventPayload warmup;
+  warmup.phase = donner::editor::sandbox::PointerPhase::kMove;
+  warmup.documentX = 456.0;
+  warmup.documentY = 160.0;
+  warmup.buttons = 1;
+  (void)core.handlePointerEvent(warmup);
+
+  const auto beforeCounters = core.compositorFastPathCountersForTesting();
+
+  constexpr int kSteadyFrames = 20;
+  for (int i = 0; i < kSteadyFrames; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 456.0 + (i + 1) * 1.5;
+    mv.documentY = 160.0;
+    mv.buttons = 1;
+    (void)core.handlePointerEvent(mv);
+  }
+
+  const auto afterCounters = core.compositorFastPathCountersForTesting();
+  const uint64_t fastPathDelta =
+      afterCounters.fastPathFrames - beforeCounters.fastPathFrames;
+  const uint64_t slowPathDelta =
+      afterCounters.slowPathFramesWithDirty - beforeCounters.slowPathFramesWithDirty;
+
+  // Every steady-state kMove should be a fast-path frame. Slow-path
+  // frames during drag indicate:
+  //   - `SelectTool::elevateToCompositingGroupAncestor` not firing
+  //     (selection is the leaf path, `promoteEntity` refuses it as a
+  //     descendant-of-filter-ancestor, fallback full render),
+  //   - the compositor's subtree fast-path gate rejecting the dragged
+  //     entity (single-entity-layer gate regression),
+  //   - non-translation delta (shouldn't happen on pointer drag).
+  EXPECT_EQ(slowPathDelta, 0u)
+      << "drag hit slow path " << slowPathDelta << " times out of "
+      << kSteadyFrames << " steady-state frames. Fast-path delta="
+      << fastPathDelta << ". Check `SelectTool::onMouseDown` elevation and "
+         "`CompositorController::renderFrame` subtree-layer eligibility.";
+  EXPECT_GE(fastPathDelta, static_cast<uint64_t>(kSteadyFrames))
+      << "expected every steady-state drag frame to hit the fast path; "
+         "fastPathDelta=" << fastPathDelta << " slowPathDelta=" << slowPathDelta;
+}
+
 TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
@@ -1155,6 +1238,90 @@ TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
   EXPECT_EQ(spikeCount, 0)
       << spikeCount << " of " << kDragFrames << " drag frames spiked past "
       << kSpikeThresholdMs << " ms.";
+}
+
+// HiDPI scenario (DPR ≈ 2) matters because the user's editor runs at
+// device-pixel viewport 1784×1024 on retina, not the 892×512 the
+// default test uses. Every backend stage scales roughly with pixel
+// count — compositor composite, overlay render, CPU composite, GL
+// upload. If the fast path is engaging but a non-fast-path stage is
+// bottlenecking at HiDPI, we'd see a per-pixel-scaled budget
+// regression that the 1× test misses.
+TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragAtHiDpiViewport) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto client = EditorBackendClient::MakeInProcess();
+  (void)client->setViewport(1784, 1024).get();
+  FrameResult load = client
+                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
+                                                splashSource.size()),
+                                     std::nullopt)
+                         .get();
+  ASSERT_TRUE(load.ok);
+
+  // Click inside `#Big_lightning_glow` at the HiDPI equivalent of
+  // (445, 180). documentPoint is in SVG user units so the click
+  // coordinate doesn't scale with canvas size; only the rendered
+  // bitmap dimensions do.
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(445.0, 180.0);
+  down.buttons = 1;
+  FrameResult downFrame = client->pointerEvent(down).get();
+  ASSERT_TRUE(downFrame.ok);
+  if (downFrame.selection.selections.empty()) {
+    GTEST_SKIP()
+        << "expected click to hit Big_lightning_glow — splash geometry may "
+           "have shifted";
+  }
+
+  ::donner::editor::PointerEventPayload warmup;
+  warmup.phase = PointerPhase::kMove;
+  warmup.documentPoint = Vector2d(446.0, 180.0);
+  warmup.buttons = 1;
+  (void)client->pointerEvent(warmup).get();
+
+  constexpr int kDragFrames = 30;
+  using Clock = std::chrono::steady_clock;
+  std::vector<double> ms;
+  ms.reserve(kDragFrames);
+  for (int i = 0; i < kDragFrames; ++i) {
+    ::donner::editor::PointerEventPayload mv;
+    mv.phase = PointerPhase::kMove;
+    mv.documentPoint = Vector2d(445.0 + (i + 2) * 1.5, 180.0);
+    mv.buttons = 1;
+    const auto t0 = Clock::now();
+    (void)client->pointerEvent(mv).get();
+    const auto t1 = Clock::now();
+    ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+  }
+
+  double total = 0.0;
+  double worst = 0.0;
+  int spikeCount = 0;
+  constexpr double kSpikeThresholdMs = 60.0;
+  for (double v : ms) {
+    total += v;
+    worst = std::max(worst, v);
+    if (v > kSpikeThresholdMs) ++spikeCount;
+  }
+  const double avg = total / static_cast<double>(ms.size());
+  std::fprintf(stderr,
+               "[HiDpiFilterDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
+               avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
+  EXPECT_LT(avg, 60.0)
+      << "HiDPI filter-group drag is slow. If avg > 30 ms, the overlay "
+         "probably fell back to full-canvas rendering because "
+         "`SnapshotSelectionWorldBounds` returned empty for the filter "
+         "group and the tight-bound sizing code in "
+         "`EditorBackendCore::buildFramePayload` hit its fallback branch.";
+  EXPECT_EQ(spikeCount, 0);
 }
 
 TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragEngagesFastPath) {
