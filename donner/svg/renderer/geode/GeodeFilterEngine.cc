@@ -1559,23 +1559,37 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       }
       // else: source generator or no inputs → nodeSubregion stays as filterRegionSubregion.
 
-      if (hasExplicitSubregion) {
+      // Detect whether the CTM is axis-aligned.  When it is, the CPU
+      // path crops the primitive output with floor/ceil-rounded pixel
+      // bounds (tiny-skia's `applySubregionClipping` per-primitive crop).
+      // We mirror that behaviour by passing pixel-space bounds through
+      // the identity-transform shader path with the same round-out
+      // rounding.  When the CTM has rotation/skew we keep the existing
+      // per-pixel point-in-rect test against the user-space rect (the
+      // tightest representation that survives rotation).
+      const bool ctmAxisAligned =
+          NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
+
+      if (hasExplicitSubregion && !ctmAxisAligned) {
         // Rotation-aware clip using inverse CTM and user-space bounds.
-        // Only needed when the node has explicit subregion attributes,
-        // matching the CPU path's per-pixel point-in-rect test.
+        // Only needed when the node has explicit subregion attributes
+        // and the CTM has rotation/skew, matching the CPU path's
+        // per-pixel point-in-rect test.
         outputTex = applySubregionClip(outputTex, filterFromDevice, nodeSubregion.topLeft.x,
                                        nodeSubregion.topLeft.y, nodeSubregion.bottomRight.x,
                                        nodeSubregion.bottomRight.y);
       } else {
         // AABB clip in pixel space — project the user-space subregion
         // through the full CTM and clip to the axis-aligned bounding box.
-        // This matches the CPU path, which only uses rotation-aware
-        // clipping when userSpaceSubregion is set (explicit attributes).
+        // Round-out to integer pixel bounds to match the CPU path's
+        // floor/ceil cropping in tiny-skia's per-primitive clip; without
+        // this, half-pixel-aligned subregion edges drop a row/column of
+        // pixels relative to the CPU reference.
         const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
         static const Transform2d kIdentity;
-        outputTex =
-            applySubregionClip(outputTex, kIdentity, pixelAABB.topLeft.x, pixelAABB.topLeft.y,
-                               pixelAABB.bottomRight.x, pixelAABB.bottomRight.y);
+        outputTex = applySubregionClip(
+            outputTex, kIdentity, std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y),
+            std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y));
       }
 
       // Record the subregion for downstream nodes.
@@ -1597,9 +1611,25 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   // Use rotation-aware clipping (via the inverse CTM) so that skewed/rotated
   // filter regions produce correctly-shaped parallelogram clips, matching the
   // CPU path's per-pixel point-in-rect test in ClipFilterOutputToRegion.
-  currentBuffer = applySubregionClip(currentBuffer, filterFromDevice, filterRegion.topLeft.x,
-                                     filterRegion.topLeft.y, filterRegion.bottomRight.x,
-                                     filterRegion.bottomRight.y);
+  // For axis-aligned CTMs we mirror the CPU's `floor/ceil` round-out so that
+  // half-pixel-aligned filter region edges keep the same row/column as
+  // tiny-skia's `clipFilterOutputToRegion`.
+  {
+    const bool ctmAxisAligned =
+        NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
+    if (ctmAxisAligned) {
+      const Box2d pixelAABB = deviceFromFilter.transformBox(filterRegion);
+      static const Transform2d kIdentity;
+      currentBuffer =
+          applySubregionClip(currentBuffer, kIdentity, std::floor(pixelAABB.topLeft.x),
+                             std::floor(pixelAABB.topLeft.y), std::ceil(pixelAABB.bottomRight.x),
+                             std::ceil(pixelAABB.bottomRight.y));
+    } else {
+      currentBuffer = applySubregionClip(currentBuffer, filterFromDevice, filterRegion.topLeft.x,
+                                         filterRegion.topLeft.y, filterRegion.bottomRight.x,
+                                         filterRegion.bottomRight.y);
+    }
+  }
 
   return currentBuffer;
 }
