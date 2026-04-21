@@ -51,11 +51,13 @@ Stages transform components through the ECS:
 When creating a pull request:
 
 1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
-2. **Run `tools/presubmit.sh`** before opening the PR. It runs everything CI runs:
-   - `bazel test //...` — covers unit tests AND the per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators directly at test time.
-   - `tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
-   - `clang-format --dry-run` on modified files.
-   Fast iteration: `tools/presubmit.sh --fast` skips `bazel test`.
+2. **Run `bazel test //...`** before opening the PR. This is the single source of truth for local validation — it covers:
+   - Unit tests across the default config AND the `tiny` / `text_full` / `geode` variant lanes (auto-emitted as `*_tiny` / `*_text_full` / `*_geode` wrappers by `donner_cc_test(variants=…)`).
+   - The per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators at test time.
+   On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
+   Also run, separately:
+   - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
+   - `clang-format --dry-run` on modified files (`git clang-format` covers staged changes).
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
 4. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
 5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
@@ -146,6 +148,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 - Format: `clang-format -i` (`git clang-format` for pending changes) for C++, `dprint` for TS/JSON/Markdown (line width 100, indent 2), `buildifier` for Bazel files. Don't format `third_party/` or `external/`. Doc-only changes skip formatting and builds.
 - Generated docs: `tools/doxygen.sh` → `generated-doxygen/html/`. Coverage: `tools/coverage.sh`.
+- Coverage CI intentionally runs only on `main` pushes and `workflow_dispatch`; PRs get Codecov patch coverage without rerunning the full coverage workflow.
 - IDE false positives (`entt.hpp` not found, unknown `Registry`) are from missing Bazel context — verify with `bazel build`.
 - **LLM quiet mode**: `LLM=1` suppresses verbose renderer test output (pixel dumps, terminal previews, SVG echoes). Set in `.bazelrc`. Re-enable with `DONNER_RENDERER_TEST_VERBOSE=1`. In-repo Claude/Codex settings set `LLM=1` by default.
 

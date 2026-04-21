@@ -1,20 +1,217 @@
 name: CI
 
-# Controls when the action will run. Triggers the workflow on push or pull request
-# events but only for the main branch
+# Controls when the action will run. Triggers the workflow on pushes to any
+# branch and PRs targeting the mainline branches we actively use.
 on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main]
+    branches: [main, feature/ci-hardening-2026q2]
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
 
 jobs:
+  gatekeeper:
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.docs_only.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: docs_only
+        name: Detect docs-only PR
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          is_docs_only_path() {
+            local path="$1"
+            # Build-impacting files (.bazelignore changes Bazel package
+            # discovery, .gitmodules changes vendored deps) are intentionally
+            # NOT in this allowlist — see Codex review on PR #570.
+            case "$path" in
+              docs/*|CHANGELOG*|.editorconfig|.gitattributes|.gitignore)
+                return 0
+                ;;
+            esac
+
+            if [[ "$path" != */* && "$path" == *.md ]]; then
+              return 0
+            fi
+
+            return 1
+          }
+
+          changed_files="$(git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}")"
+
+          if [[ -z "$changed_files" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            if ! is_docs_only_path "$path"; then
+              echo "Non-doc change: $path"
+              docs_only=false
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+
+  determine-targets:
+    runs-on: ubuntu-24.04
+    needs: gatekeeper
+    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
+    env:
+      BAZEL_DIFF_TAG: "v18.1.0"
+    outputs:
+      fallback: ${{ steps.determine.outputs.fallback }}
+      affected: ${{ steps.determine.outputs.affected }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Download bazel-diff
+        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+
+      - id: determine
+        name: Determine affected Bazel targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "Non-PR event; keeping full //... coverage."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          eval "$(
+            python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
+          )"
+
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "Missing PR base/head SHA; falling back to //...."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$FORCE_FULL_TEST" == "true" ]]; then
+            echo "ci:full-test label present; forcing full //... coverage."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+
+          if [[ -z "$changed_files" ]]; then
+            echo "No changed files detected; falling back to //...."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          should_fallback=false
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              MODULE.bazel|WORKSPACE|WORKSPACE.*|.bazelrc|build_defs/*|.github/workflows/*|.github/actions/*)
+                echo "Infra change requires full //... coverage: $path"
+                should_fallback=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          if [[ "$should_fallback" == "true" ]]; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          work_dir="$(mktemp -d)"
+          base_dir="$work_dir/base"
+          head_dir="$work_dir/head"
+          cleanup() {
+            git worktree remove --force "$base_dir" 2>/dev/null || true
+            git worktree remove --force "$head_dir" 2>/dev/null || true
+            rm -rf "$work_dir"
+          }
+          trap cleanup EXIT
+
+          git worktree add --detach "$base_dir" "$BASE_SHA"
+          git worktree add --detach "$head_dir" "$HEAD_SHA"
+
+          java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+            -w "$base_dir" \
+            -b bazelisk \
+            "$work_dir/base-hashes.json"
+
+          java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+            -w "$head_dir" \
+            -b bazelisk \
+            "$work_dir/head-hashes.json"
+
+          java -jar "$RUNNER_TEMP/bazel-diff.jar" get-impacted-targets \
+            -w "$head_dir" \
+            -b bazelisk \
+            -sh "$work_dir/base-hashes.json" \
+            -fh "$work_dir/head-hashes.json" \
+            -o "$work_dir/affected.txt"
+
+          affected="$(
+            python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$work_dir/affected.txt"
+          )"
+
+          if [[ -z "$affected" ]]; then
+            echo "bazel-diff produced no affected targets; falling back to //...."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "fallback=false" >> "$GITHUB_OUTPUT"
+          echo "affected=$affected" >> "$GITHUB_OUTPUT"
+
   linux:
     runs-on: ubuntu-24.04
+    needs: [gatekeeper, determine-targets]
+    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -36,23 +233,39 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk build --config=ci $TARGETS
 
       - name: Test
+        shell: bash
         run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
           bazelisk test --config=ci --test_output=errors \
-            //...
+            $TARGETS
 
 
   macos:
     runs-on: macos-15
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    needs: [gatekeeper, determine-targets]
+    if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -61,16 +274,32 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: bazelisk build --config=ci //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk build --config=ci $TARGETS
 
       - name: Test
-        run: bazelisk test --config=ci --test_output=errors //...
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk test --config=ci --test_output=errors $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.

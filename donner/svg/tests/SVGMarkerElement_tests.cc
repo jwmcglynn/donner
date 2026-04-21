@@ -7,6 +7,7 @@
 #include "donner/svg/SVGPolygonElement.h"
 #include "donner/svg/SVGPolylineElement.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -91,9 +92,8 @@ TEST(SVGMarkerElementTests, ViewBoxPreserveAspectRatioAndMarkerUnits) {
 
   const Box2d viewBox(Vector2d(1, 2), Vector2d(11, 22));
   marker.setViewBox(viewBox);
-  marker.setPreserveAspectRatio(
-      PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMid,
-                          PreserveAspectRatio::MeetOrSlice::Slice});
+  marker.setPreserveAspectRatio(PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMid,
+                                                    PreserveAspectRatio::MeetOrSlice::Slice});
   marker.setMarkerUnits(MarkerUnits::UserSpaceOnUse);
 
   EXPECT_THAT(marker.viewBox(), Optional(Eq(viewBox)));
@@ -107,6 +107,11 @@ TEST(SVGMarkerElementTests, ViewBoxPreserveAspectRatioAndMarkerUnits) {
 /// The SVG uses a 16×16 coordinate system; the marker (a 4×4 triangle) is applied
 /// to the first point (2,8) of a diamond-shaped polygon.
 TEST(SVGMarkerElementTests, MarkerStartProperty) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   SVGDocument document = instantiateSubtree(R"-(
     <svg viewBox="0 0 16 16">
       <defs>
@@ -146,6 +151,11 @@ TEST(SVGMarkerElementTests, MarkerStartProperty) {
 /// This test uses a polyline (with the same diamond points) so that the two
 /// mid–points (namely at 8,2 and 14,8) receive markers.
 TEST(SVGMarkerElementTests, MarkerMidPropertyPolyline) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
     <svg viewBox="0 0 16 16">
       <defs>
@@ -180,6 +190,11 @@ TEST(SVGMarkerElementTests, MarkerMidPropertyPolyline) {
 /// Test that a marker defined is applied at the midpoints of a polygon, which should be the
 /// everything besides the start/end of the closed shape (2,8).
 TEST(SVGMarkerElementTests, MarkerMidPropertyPolygon) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
     <svg viewBox="0 0 16 16">
       <defs>
@@ -215,6 +230,11 @@ TEST(SVGMarkerElementTests, MarkerMidPropertyPolygon) {
 /// Here the same diamond–shaped polygon is used, so that the last point for the path close (2,8)
 /// receives the marker.
 TEST(SVGMarkerElementTests, MarkerEndProperty) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
     <svg viewBox="0 0 16 16">
       <defs>

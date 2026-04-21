@@ -43,7 +43,7 @@ that every agent inherits.
 
 | Agent | Area | When to call |
 |---|---|---|
-| **BazelBot** | Bazel build system, custom rules, feature flags, presubmit, banned-patterns lint | Adding a target, debugging a `*_lint` failure, understanding a `--config=` flag, CMake-mirror questions |
+| **BazelBot** | Bazel build system, custom rules, feature flags, banned-patterns lint, CMake mirror | Adding a target, debugging a `*_lint` failure, understanding a `--config=` flag, CMake-mirror questions |
 | **CSSBot** | `donner::css` parser, selectors, cascade, `PropertyRegistry`, `StyleSystem` | Selector parsing bugs, specificity/inheritance questions, how presentation attributes interact with CSS in SVG2 |
 | **DesignReviewBot** | Design docs under `docs/design_docs/` | Before a design moves from draft to implementing; periodic scope-drift checks during implementation |
 | **DuckBot** | Big-picture brainstorming, Donner's innovation registry | You're stuck on *what* to build, not *how* — architectural reframes, "is there a cleverer way?" |
@@ -66,10 +66,10 @@ same YAML frontmatter shape:
 ---
 name: BazelBot
 description: Expert on Donner's Bazel build system — custom rules, feature
-  flags, license/NOTICE pipeline, the CMake mirror, presubmit, and the
-  banned-patterns lint. Use for questions about adding targets, debugging
-  build failures, understanding config flags, or anything involving
-  BUILD.bazel / MODULE.bazel / rules.bzl.
+  flags, license/NOTICE pipeline, the CMake mirror, and the banned-patterns
+  lint. Use for questions about adding targets, debugging build failures,
+  understanding config flags, or anything involving BUILD.bazel /
+  MODULE.bazel / rules.bzl.
 ---
 ```
 
@@ -106,7 +106,6 @@ truth includes:
 - `build_defs/rules.bzl` for the `donner_cc_library` / `_test` / `_binary`
   macros.
 - `build_defs/check_banned_patterns.py` for the lint rules.
-- `tools/presubmit.sh` for what CI actually runs.
 
 If a bot ever gives you an answer that contradicts the code, your first move
 is to re-point it at its source-of-truth list ("grep first, speculate never")

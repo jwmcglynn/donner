@@ -16,6 +16,13 @@ donner_cc_library(
 
 donner_cc_test(
     name = "core_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     shard_count = 4,
     srcs = [
         "ClipPathUnits_tests.cc",

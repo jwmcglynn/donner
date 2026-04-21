@@ -103,6 +103,49 @@ sense but they do show up as red CI runs that waste developer attention. Mitigat
 retry the network-sensitive steps automatically so a single transient failure
 doesn't block a PR.
 
+### Category 8: Wall-Clock-Gated Perf Tests on Shared Runners (Added 2026-04-20)
+
+**Affected PRs:** 8043ad7b, 1f147f2f, 43f42cf7, ab68092b, 8cd89ef7 — five
+threshold-widening hotfixes in 48h for `AsyncRendererTest`, `FilterDragBench`,
+`CompositorBench`.
+
+**Root cause:** Perf tests written with ~2 ms thresholds on dev hardware fail
+on shared GHA macOS runners (~40 ms under load). Not a correctness escape, but
+it blocks PRs and churns the history.
+
+**Mitigation (tracked in doc 0030 M2):** `donner_perf_cc_test` macro splitting
+correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged
+`perf`). Nightly-only wall-clock runs stream into `tools/ci_timing_report.py`.
+
+### Category 9: Sanitizer-Only Heap / UB Bugs (Added 2026-04-20)
+
+**Affected:** GitHub issue [#552](https://github.com/jwmcglynn/donner/issues/552)
+— `FiltersFeImage/*` crashes in `resvg_test_suite_geode`. Root cause: heap
+UAF in `GeodeDevice::counters_` (raw pointer into a sibling `Impl` that was
+freed) combined with iterator/reference invalidation in `RendererDriver::traverse`
+(a held `RenderingInstanceView` crossed a `registry.sort<RenderingInstanceComponent>`
+call inside `preRenderFeImageFragments`).
+
+**Root cause:** `bazel test //...` runs the default config. Heap UAFs, ODR
+violations, and UB surface only when a developer opts into `--config=asan` or
+`--config=ubsan`. In #552 the UAF manifested as random SIGSEGV at unrelated
+allocation sites (`tiny_free_list_remove_ptr`, `lvp_CreateBuffer` → `calloc`);
+under ASan the exact free/use pair was identified in <1 second.
+
+**Local repro:**
+```
+ASAN_OPTIONS=abort_on_error=1:halt_on_error=1 \
+  bazel test --config=asan --config=geode \
+    //donner/svg/renderer/...:resvg_test_suite_geode \
+    --test_arg=--gtest_filter=FiltersFeImage/*
+```
+
+**Mitigation (tracked in doc 0030):** M1.2 adds a paths-scoped `asan-geode`
+PR gate for changes to `donner/svg/renderer/geode/**` and
+`donner/svg/renderer/RendererDriver.*`. M2 adds a nightly `sanitizers.yml`
+running ASan+UBSan across `//donner/...` (required for `main` merges,
+skip-idle when no commits landed that day).
+
 ## Implementation Status (Phase 1 Landed)
 
 The first phase of mitigations has landed. Recap:

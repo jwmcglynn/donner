@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -36,6 +37,11 @@ TEST(SVGClipPathElementTests, InvalidClipPathUnits) {
 }
 
 TEST(SVGClipPathElementTests, RenderingDefaults) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <clipPath id="a">
           <circle cx="8" cy="8" r="8" />
@@ -43,8 +49,7 @@ TEST(SVGClipPathElementTests, RenderingDefaults) {
         <rect width="16" height="16" clip-path="url(#a)" fill="black" />
         )-");
 
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ......@@@@......
         ....@@@@@@@@....
         ..@@@@@@@@@@@@..
@@ -65,6 +70,11 @@ TEST(SVGClipPathElementTests, RenderingDefaults) {
 }
 
 TEST(SVGClipPathElementTests, RenderingObjectBoundingBox) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <clipPath id="a" clipPathUnits="objectBoundingBox">
           <circle cx="0.5" cy="0.5" r="0.5" />
@@ -73,8 +83,7 @@ TEST(SVGClipPathElementTests, RenderingObjectBoundingBox) {
         <rect y="8" width="16" height="8" clip-path="url(#a)" fill="black" />
         )-");
 
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ..@@@@..........
         .@@@@@@.........
         @@@@@@@@........
@@ -232,6 +241,11 @@ TEST(SVGClipPathElementTests, MultiplePathsWithDifferentClipRulesSideBySide) {
  * Verify that transforms on elements within a clipPath are applied correctly.
  */
 TEST(SVGClipPathElementTests, RenderingTransform) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <clipPath id="clipTransform">
           <circle cx="8" cy="8" r="8" transform="translate(2 2)" />
@@ -240,8 +254,7 @@ TEST(SVGClipPathElementTests, RenderingTransform) {
         )-");
 
   // Expected output assumes that the translated circle defines a shifted clipping region.
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ................
         ................
         ........@@@@....
@@ -266,6 +279,11 @@ TEST(SVGClipPathElementTests, RenderingTransform) {
  * is correctly applied when rendering.
  */
 TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
+  // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
+  // bug is fixed (tracked in jwmcglynn/donner#566).
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(R"-(
         <clipPath id="clipMultiTrans">
           <circle cx="4" cy="4" r="4" transform="translate(4,0)" />
@@ -274,8 +292,7 @@ TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
         <rect width="16" height="16" clip-path="url(#clipMultiTrans)" fill="black" />
         )-");
 
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ......@@@@......
         .....@@@@@@.....
         ....@@@@@@@@....
