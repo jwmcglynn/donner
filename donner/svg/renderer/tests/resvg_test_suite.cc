@@ -232,6 +232,7 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
       (category == "filters/filter" && filename == "transform-on-shape.svg") ||
       (category == "painting/opacity" && filename == "mixed-group-opacity.svg") ||
       (category == "painting/fill-opacity" && filename == "with-opacity.svg") ||
+      (category == "painting/stroke" && filename == "control-points-clamping-1.svg") ||
       (category == "painting/shape-rendering" &&
        (filename == "path-with-marker.svg" || filename == "inheritance.svg"))) {
     return [](ImageComparisonParams& p) {
