@@ -1209,9 +1209,8 @@ struct RendererGeode::Impl {
   /// has cached fill encode, no in-flight pattern).
   bool tryAppendOrStartBatch(Entity sourceEntity, const Path& path, const css::RGBA& color,
                              FillRule rule, const geode::EncodedPath* encoded) {
-    const bool matches = pendingBatch.has_value() &&
-                        pendingBatch->sourceEntity == sourceEntity &&
-                        pendingBatch->color == color && pendingBatch->rule == rule;
+    const bool matches = pendingBatch.has_value() && pendingBatch->sourceEntity == sourceEntity &&
+                         pendingBatch->color == color && pendingBatch->rule == rule;
     if (matches) {
       pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
       return true;
@@ -2707,18 +2706,16 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // return early. A later state change (pushClip, popLayer, endFrame,
   // setPaint-different-key, non-batchable draw) flushes as one instanced
   // draw.
-  const bool hasStroke =
-      !(stroke.strokeWidth <= 0.0 ||
-        std::holds_alternative<PaintServer::None>(impl_->paint.stroke));
-  const bool batchable =
-      !hasStroke && fillEncoded != nullptr &&
-      path.sourceEntity.entity() != entt::null &&
-      std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
-      !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr;
+  const bool hasStroke = !(stroke.strokeWidth <= 0.0 ||
+                           std::holds_alternative<PaintServer::None>(impl_->paint.stroke));
+  const bool batchable = !hasStroke && fillEncoded != nullptr &&
+                         path.sourceEntity.entity() != entt::null &&
+                         std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
+                         !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr;
   if (batchable) {
     const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
-    const css::RGBA color = solid.color.resolve(
-        impl_->paint.currentColor.rgba(), static_cast<float>(impl_->paint.fillOpacity));
+    const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
+                                                static_cast<float>(impl_->paint.fillOpacity));
     impl_->tryAppendOrStartBatch(path.sourceEntity.entity(), path.path, color, path.fillRule,
                                  fillEncoded);
     return;
