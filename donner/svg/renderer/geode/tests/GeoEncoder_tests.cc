@@ -43,11 +43,18 @@ class GeoEncoderTest : public ::testing::Test {
     device_ = sharedDevice();
     ASSERT_NE(device_, nullptr);
 
+    // Build the fixture pipelines with the device's *actual* sample
+    // count, not the default. On Intel + Vulkan the device falls back
+    // to alpha-coverage AA at `sampleCount() == 1`; defaulting to 4
+    // here produced a `RenderPipeline vs RenderPass` sample-count
+    // mismatch that crashed the test (issue #575 investigation).
+    const uint32_t sampleCount = device_->sampleCount();
     pipeline_ = std::make_unique<GeodePipeline>(device_->device(), kFormat,
-                                                device_->useAlphaCoverageAA());
+                                                device_->useAlphaCoverageAA(), sampleCount);
     gradientPipeline_ = std::make_unique<GeodeGradientPipeline>(
-        device_->device(), kFormat, device_->useAlphaCoverageAA());
-    imagePipeline_ = std::make_unique<GeodeImagePipeline>(device_->device(), kFormat);
+        device_->device(), kFormat, device_->useAlphaCoverageAA(), sampleCount);
+    imagePipeline_ =
+        std::make_unique<GeodeImagePipeline>(device_->device(), kFormat, sampleCount);
 
     wgpu::TextureDescriptor td = {};
     td.label = wgpuLabel("TestTarget");
@@ -61,19 +68,23 @@ class GeoEncoderTest : public ::testing::Test {
     target_ = device_->device().createTexture(td);
     ASSERT_TRUE(static_cast<bool>(target_));
 
-    // 4× MSAA companion required by the GeoEncoder constructor. Pipelines
-    // are created with `multisample.count = 4` so every render pass
-    // attaches an MSAA color target that resolves into `target_`.
-    wgpu::TextureDescriptor msaaDesc = {};
-    msaaDesc.label = wgpuLabel("TestTargetMSAA");
-    msaaDesc.size = {kSize, kSize, 1};
-    msaaDesc.format = kFormat;
-    msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
-    msaaDesc.mipLevelCount = 1;
-    msaaDesc.sampleCount = 4;
-    msaaDesc.dimension = wgpu::TextureDimension::_2D;
-    msaaTarget_ = device_->device().createTexture(msaaDesc);
-    ASSERT_TRUE(static_cast<bool>(msaaTarget_));
+    // MSAA companion required by the GeoEncoder constructor whenever
+    // the device uses multisampled rendering. `sampleCount == 1` means
+    // the alpha-coverage path is active and there's no MSAA target to
+    // allocate; pass an empty texture and `GeoEncoder::ensurePassOpen`
+    // draws directly into `target_`.
+    if (sampleCount > 1) {
+      wgpu::TextureDescriptor msaaDesc = {};
+      msaaDesc.label = wgpuLabel("TestTargetMSAA");
+      msaaDesc.size = {kSize, kSize, 1};
+      msaaDesc.format = kFormat;
+      msaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      msaaDesc.mipLevelCount = 1;
+      msaaDesc.sampleCount = sampleCount;
+      msaaDesc.dimension = wgpu::TextureDimension::_2D;
+      msaaTarget_ = device_->device().createTexture(msaaDesc);
+      ASSERT_TRUE(static_cast<bool>(msaaTarget_));
+    }
 
     wgpu::BufferDescriptor bd = {};
     bd.label = wgpuLabel("TestReadback");

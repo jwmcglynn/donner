@@ -9,6 +9,10 @@
 
 #include <cstdio>
 
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePipeline.h"
+
 namespace donner::geode {
 
 namespace {
@@ -54,12 +58,22 @@ struct GeodeDevice::Impl {
   // struct: two vec4f rows carrying the identity affine
   // `{(1,0,0,0), (0,1,0,0)}`.
   wgpu::Buffer identityInstanceTransformBuffer;
+
+  // Shared render / compute pipelines. Constructed once per GeodeDevice
+  // in `initSharedPipelines` — see the public `pipeline()` / … / `filterEngine()`
+  // accessors on GeodeDevice for the "why" behind sharing. These fields
+  // are at the bottom of Impl so they destruct before the wgpu::Device
+  // at the top of GeodeDevice (reverse-declaration order).
+  std::unique_ptr<GeodePipeline> pipeline;
+  std::unique_ptr<GeodeGradientPipeline> gradientPipeline;
+  std::unique_ptr<GeodeImagePipeline> imagePipeline;
+  /// Built lazily on first `maskPipeline()` access — see the header.
+  std::unique_ptr<GeodeMaskPipeline> maskPipeline;
+  std::unique_ptr<GeodeFilterEngine> filterEngine;
 };
 
 GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
 GeodeDevice::~GeodeDevice() = default;
-GeodeDevice::GeodeDevice(GeodeDevice&&) noexcept = default;
-GeodeDevice& GeodeDevice::operator=(GeodeDevice&&) noexcept = default;
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
@@ -269,6 +283,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
                                sizeof(identity));
   }
 
+  result->initSharedPipelines();
+
   return result;
 }
 
@@ -292,6 +308,29 @@ const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
 }
 const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
   return impl_->identityInstanceTransformBuffer;
+}
+
+GeodePipeline& GeodeDevice::pipeline() const {
+  return *impl_->pipeline;
+}
+GeodeGradientPipeline& GeodeDevice::gradientPipeline() const {
+  return *impl_->gradientPipeline;
+}
+GeodeImagePipeline& GeodeDevice::imagePipeline() const {
+  return *impl_->imagePipeline;
+}
+GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
+  if (!impl_->maskPipeline) {
+    // Lazy: most documents never hit the clip-path mask pass, and
+    // production WASM callers that never need it should not pay the
+    // pipeline-compile cost at startup.
+    impl_->maskPipeline =
+        std::make_unique<GeodeMaskPipeline>(device_, useAlphaCoverageAA_, sampleCount());
+  }
+  return *impl_->maskPipeline;
+}
+GeodeFilterEngine& GeodeDevice::filterEngine() const {
+  return *impl_->filterEngine;
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
@@ -325,7 +364,25 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
 
   result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
 
+  result->initSharedPipelines();
+
   return result;
+}
+
+void GeodeDevice::initSharedPipelines() {
+  // Requires device_ / queue_ / textureFormat_ / useAlphaCoverageAA_ to
+  // be fully populated — `CreateHeadless` and `CreateFromExternal` both
+  // call this as the final step.
+  const wgpu::TextureFormat fmt = textureFormat_;
+  const uint32_t samples = sampleCount();
+  const bool alphaCoverage = useAlphaCoverageAA_;
+
+  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt, alphaCoverage, samples);
+  impl_->gradientPipeline =
+      std::make_unique<GeodeGradientPipeline>(device_, fmt, alphaCoverage, samples);
+  impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt, samples);
+  // Mask pipeline is built on first `maskPipeline()` access — see header.
+  impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }
 
 void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {

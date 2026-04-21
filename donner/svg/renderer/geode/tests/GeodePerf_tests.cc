@@ -562,5 +562,59 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
       << "Texture allocation on unchanged second render of Ghostscript_Tiger.svg.";
 }
 
+// ---------------------------------------------------------------------------
+// Issue #575 regression: constructing many `RendererGeode` instances on a
+// shared `GeodeDevice` must not leak pipeline allocations.
+//
+// The original fix (moving pipeline ownership onto `GeodeDevice`) was
+// worth ~1.6 MB per renderer across the resvg test suite. This test
+// pins the contract: a fresh renderer may allocate a handful of bucket-
+// sized resources (target + MSAA pair go into the per-instance pool,
+// plus a readback buffer for `takeSnapshot`), but every *pipeline*
+// lives on the device. Doubling the renderer count therefore roughly
+// doubles textures/buffers, not pipelines — and the per-renderer
+// overhead stays comfortably under the ceiling we assert below.
+// ---------------------------------------------------------------------------
+TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // Warm the lazy caches on the shared device (mask pipeline, any
+  // first-render device-side buffers) so we measure steady-state
+  // per-renderer overhead only.
+  (void)renderAndGetCounters(kSimpleShapesSvg, device);
+
+  const uint64_t baselineTex = device->lifetimeTextureCreates();
+  const uint64_t baselineBuf = device->lifetimeBufferCreates();
+
+  // 50 renderers is enough to trip the old pipeline-leak path by roughly
+  // an order of magnitude (900 pipelines × 50 = 45k wgpu pipeline objects
+  // under the old code). 50 is also small enough to keep the test fast.
+  constexpr int kRendererCount = 50;
+  for (int i = 0; i < kRendererCount; ++i) {
+    (void)renderAndGetCounters(kSimpleShapesSvg, device);
+  }
+
+  const uint64_t deltaTex = device->lifetimeTextureCreates() - baselineTex;
+  const uint64_t deltaBuf = device->lifetimeBufferCreates() - baselineBuf;
+
+  // `renderAndGetCounters` constructs one renderer, renders one frame,
+  // and takes a snapshot. Per iteration that legitimately creates:
+  //   - target + MSAA pair (2 textures on the MSAA path; 1 on the
+  //     alpha-coverage fallback for Intel + Vulkan)
+  //   - a readback buffer inside `takeSnapshot`
+  //   - ~4 arena buffers for the vertex/band/curve/uniform data of
+  //     the three solid fills in `kSimpleShapesSvg`
+  // Budget liberally: 4 textures and 8 buffers per iteration absorbs
+  // both paths plus a little slack. Anything larger than that means
+  // something new is being allocated per-renderer — most likely a
+  // pipeline, which is exactly what this test guards against.
+  EXPECT_LE(deltaTex, 4u * kRendererCount) << "Per-renderer texture growth exceeds expected "
+                                              "(target + MSAA + slack). Did pipeline construction "
+                                              "move back onto `RendererGeode::Impl`?";
+  EXPECT_LE(deltaBuf, 8u * kRendererCount) << "Per-renderer buffer growth exceeds expected "
+                                              "(arenas + readback + slack). See issue #575.";
+}
+
 }  // namespace
 }  // namespace donner::svg

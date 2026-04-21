@@ -103,26 +103,17 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeCategoryGate(
   // gate here. Individual per-file overrides handle any remaining
   // divergences.
 
-  // Markers render correctly at the driver level on Geode, but running
-  // the marker suite plus the mix-blend-mode / isolation suites on the
-  // ubuntu-24.04 CI runner (software llvmpipe WebGPU) pushes the whole
-  // Geode variant past the 50-minute runner-communication limit — two
-  // back-to-back CI runs died at exactly 51m in the Test step with no
-  // output, matching the pattern of main's 11m run vs our 41m+ run
-  // when these categories are live. Keep the category-level skips
-  // until we either switch the linux runner to a hardware GPU or split
-  // the Geode test into multiple shards.
-  if (category == "painting/marker") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode, "markers (Geode): CI runtime budget on llvmpipe");
-    };
-  }
-  if (category == "painting/mix-blend-mode" || category == "painting/isolation") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "mix-blend-mode / isolation (Geode): CI runtime budget on llvmpipe");
-    };
-  }
+  // The `painting/marker`, `painting/mix-blend-mode`, and `painting/isolation`
+  // categories used to be wholesale-disabled on Geode because their combined
+  // runtime pushed the whole variant past the 50-minute CI runner limit —
+  // back-to-back llvmpipe runs died at exactly 51m in the Test step. That
+  // slowdown was a symptom of issue #575 (wgpu-native pipeline accumulation
+  // leaked ~1.6 MB per `RendererGeode`). With pipelines now pinned on
+  // `GeodeDevice` the steady-state cost of a fresh renderer drops by ~18
+  // pipelines and the full suite runs in ~45 s end-to-end on x86 — well
+  // inside the runner's budget. The category gates are gone as of that fix;
+  // any remaining marker / blend-mode / isolation failures are handled by
+  // the per-filename overrides below.
 
   return std::nullopt;
 }
@@ -218,9 +209,12 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
     };
   }
 
-  // Other Geode filter regressions uncovered by running the full resvg suite
-  // on Linux llvmpipe / macOS Metal CI. Each needs its own investigation pass;
-  // disable on Geode to unblock the merge.
+  // Genuine Geode filter regressions. These are real pixel divergences
+  // that predate issue #575's leak-fix and persist in isolation — the
+  // failures were never about the leak, even though the leak's CI hang
+  // surfaced them whack-a-mole style. Each needs its own investigation
+  // pass; the disable stays until a dedicated fix lands.
+  //
   // TODO(geode): fix these individually.
   //   - feMorphology/source-with-opacity.svg (~4.9k px)
   //   - feSpecularLighting/specularExponent=0.svg (~19.9k px on llvmpipe)
@@ -229,30 +223,22 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
   if ((category == "filters/feMorphology" && filename == "source-with-opacity.svg") ||
       (category == "filters/feSpecularLighting" && filename == "specularExponent=0.svg") ||
       (category == "filters/feTile" && filename == "empty-region.svg") ||
-      (category == "filters/filter" && filename == "transform-on-shape.svg") ||
-      (category == "painting/opacity" &&
-       (filename == "mixed-group-opacity.svg" || filename == "on-an-invalid-element.svg")) ||
-      (category == "painting/fill-opacity" && filename == "with-opacity.svg") ||
-      (category == "painting/stroke" &&
-       (filename == "control-points-clamping-1.svg" ||
-        filename == "currentColor-without-a-parent.svg" ||
-        filename == "gradient-with-objectBoundingBox-and-fallback-on-lines.svg" ||
-        filename == "gradient-with-objectBoundingBox-on-shape-without-a-bbox.svg" ||
-        filename == "gradient-with-objectBoundingBox-on-path-without-a-bbox-2.svg" ||
-        filename == "pattern-with-objectBoundingBox-fallback-on-zero-bbox-shape.svg")) ||
-      (category == "painting/stroke-dasharray" && filename == "em-units.svg") ||
-      (category == "painting/overflow" && filename == "inherit-on-marker-without-parent.svg") ||
-      (category == "text/font-variant" && filename == "inherit.svg") ||
-      (category == "painting/paint-order" &&
-       (filename == "fill.svg" || filename == "stroke-invalid.svg")) ||
-      (category == "painting/shape-rendering" &&
-       (filename == "path-with-marker.svg" || filename == "inheritance.svg"))) {
+      (category == "filters/filter" && filename == "transform-on-shape.svg")) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): regression uncovered on CI — "
+                       "TODO(geode): genuine pixel regression — "
                        "needs follow-up investigation");
     };
   }
+
+  // The painting/{opacity, fill-opacity, stroke, stroke-dasharray, overflow,
+  // paint-order, shape-rendering} and text/font-variant entries that used to
+  // sit on this block were added as fire-victims of issue #575's CI
+  // watchdog — the pipeline-leak slowdown made them time out one at a time
+  // as the run progressed. With the leak fixed on `geode-dev` they render
+  // within budget and either pass outright or fall into an existing widening
+  // rule elsewhere in this file. Re-enabling them uncovers real regressions
+  // if any are still broken.
 
   // `orient=auto-on-M-L-Z.svg` still disagrees with the resvg/tiny-skia
   // reference at curve cusps — a real auto-orient tangent bug, not just

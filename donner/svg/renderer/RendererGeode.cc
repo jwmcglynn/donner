@@ -504,9 +504,14 @@ struct RendererGeode::Impl {
   // Held via shared_ptr so that test fixtures can share a single GeodeDevice
   // across many short-lived renderer instances (see RendererTestBackendGeode).
   std::shared_ptr<geode::GeodeDevice> device;
-  std::unique_ptr<geode::GeodePipeline> pipeline;
-  std::unique_ptr<geode::GeodeGradientPipeline> gradientPipeline;
-  std::unique_ptr<geode::GeodeImagePipeline> imagePipeline;
+  // Non-owning: the pipelines live on `device`. Shared across all
+  // RendererGeode instances pointing at the same GeodeDevice (issue
+  // #575 — per-renderer pipeline construction leaked ~1.6 MB/renderer
+  // through wgpu-native's internal cache; not released even after
+  // `wgpuDevicePoll(wait=true)`).
+  geode::GeodePipeline* pipeline = nullptr;
+  geode::GeodeGradientPipeline* gradientPipeline = nullptr;
+  geode::GeodeImagePipeline* imagePipeline = nullptr;
 
   // --- Host-provided target texture (Phase 6 embedding) ---
   //
@@ -773,8 +778,9 @@ struct RendererGeode::Impl {
   };
   std::vector<LayerStackFrame> layerStack;
 
-  /// Phase 7: GPU filter-graph executor (owns compute pipelines).
-  std::unique_ptr<geode::GeodeFilterEngine> filterEngine;
+  /// Phase 7: GPU filter-graph executor. Non-owning pointer into the
+  /// shared GeodeDevice — see pipeline field comment above for why.
+  geode::GeodeFilterEngine* filterEngine = nullptr;
 
   /// Phase 3c: state for an in-progress `<mask>` element. Two offscreen
   /// texture pairs, one capturing the mask element's content and one
@@ -1467,19 +1473,21 @@ struct RendererGeode::Impl {
   // (which is a no-op if the component isn't present), or the
   // registry is gone and no signal will ever fire again.
 
-  /// Initialize GPU pipelines after the device is set. Called from all
-  /// RendererGeode constructors to avoid duplicating pipeline-creation.
-  void initPipelines(bool verboseFlag) {
-    const wgpu::TextureFormat fmt = device->textureFormat();
-    textureFormat = fmt;
+  /// Wire up per-renderer state against the shared GeodeDevice. Before
+  /// issue #575's fix each renderer constructed its own pipelines
+  /// here — that leaked ~1.6 MB/renderer through wgpu-native's internal
+  /// pipeline cache (see `GeodeDevice::pipeline()` header comment).
+  /// Now we just point at the device's shared copies. The `verboseFlag`
+  /// parameter is kept on the method signature for API continuity but
+  /// no longer toggles filter-engine logging — the shared filter engine
+  /// is always constructed with `verbose=false`.
+  void initPipelines(bool /*verboseFlag*/) {
+    textureFormat = device->textureFormat();
     device->setCounters(&counters);
-    pipeline = std::make_unique<geode::GeodePipeline>(
-        device->device(), fmt, device->useAlphaCoverageAA(), device->sampleCount());
-    gradientPipeline = std::make_unique<geode::GeodeGradientPipeline>(
-        device->device(), fmt, device->useAlphaCoverageAA(), device->sampleCount());
-    imagePipeline =
-        std::make_unique<geode::GeodeImagePipeline>(device->device(), fmt, device->sampleCount());
-    filterEngine = std::make_unique<geode::GeodeFilterEngine>(*device, verboseFlag);
+    pipeline = &device->pipeline();
+    gradientPipeline = &device->gradientPipeline();
+    imagePipeline = &device->imagePipeline();
+    filterEngine = &device->filterEngine();
   }
 };
 

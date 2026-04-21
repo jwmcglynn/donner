@@ -90,8 +90,25 @@ donner_cc_library(
 
 donner_cc_library(
     name = "geode_device",
-    srcs = ["GeodeDevice.cc"],
-    hdrs = ["GeodeDevice.h"],
+    # GeodeFilterEngine and GeodePipeline / GeodeImagePipeline are folded
+    # into this library so `GeodeDevice` can own them as shared-across-
+    # renderers singletons (issue #575). Splitting them back out would
+    # reintroduce the circular dep (`geode_device` needs their ctors;
+    # they need `GeodeDevice::device()`/`queue()`). The filter engine
+    # no longer has a meaningful life independent of a `GeodeDevice`,
+    # so the merge is semantic rather than mechanical.
+    srcs = [
+        "GeodeDevice.cc",
+        "GeodeFilterEngine.cc",
+        "GeodeImagePipeline.cc",
+        "GeodePipeline.cc",
+    ],
+    hdrs = [
+        "GeodeDevice.h",
+        "GeodeFilterEngine.h",
+        "GeodeImagePipeline.h",
+        "GeodePipeline.h",
+    ],
     # wgpu-native's prebuilt libwgpu_native.dylib ships with its Metal
     # backend already linked, so no per-target framework linkopts are
     # needed on macOS — unlike the previous Dawn cmake() build which
@@ -113,8 +130,10 @@ donner_cc_library(
     ],
     deps = [
         ":geode_counters",
+        ":geode_shaders",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/svg/components/filter:components",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
@@ -466,45 +485,11 @@ donner_multi_transitioned_test(
     testonly = 1,
 )
 
-donner_cc_library(
-    name = "geode_filter_engine",
-    srcs = ["GeodeFilterEngine.cc"],
-    hdrs = ["GeodeFilterEngine.h"],
-    target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-    deps = [
-        ":geode_device",
-        ":geode_shaders",
-        ":geode_wgpu_util",
-        "//donner/base",
-        "//donner/svg/components/filter:components",
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
-)
-
-donner_cc_library(
-    name = "geode_pipeline",
-    srcs = ["GeodePipeline.cc"],
-    hdrs = ["GeodePipeline.h"],
-    target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-    deps = [
-        ":geode_shaders",
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
-)
-
-donner_cc_library(
-    name = "geode_image_pipeline",
-    srcs = ["GeodeImagePipeline.cc"],
-    hdrs = ["GeodeImagePipeline.h"],
-    target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-    deps = [
-        ":geode_shaders",
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
-)
+# `geode_filter_engine`, `geode_pipeline`, and `geode_image_pipeline` are
+# folded into `:geode_device` (see the comment on that target) to break
+# the circular dependency created by moving pipeline ownership onto
+# `GeodeDevice` (issue #575). Callers that referenced these targets
+# directly should switch to `:geode_device`.
 
 donner_cc_library(
     name = "geode_texture_encoder",
@@ -514,7 +499,6 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
-        ":geode_image_pipeline",
         "//donner/base",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
@@ -528,9 +512,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
-        ":geode_image_pipeline",
         ":geode_path_encoder",
-        ":geode_pipeline",
         ":geode_texture_encoder",
         "//donner/base",
         "//donner/css",
@@ -546,8 +528,6 @@ donner_cc_test(
     deps = [
         ":geo_encoder",
         ":geode_device",
-        ":geode_image_pipeline",
-        ":geode_pipeline",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/css",

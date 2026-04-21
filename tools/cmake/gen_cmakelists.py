@@ -237,11 +237,11 @@ OPTIONAL_DEPS: Set[str] = {
 SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
     "donner_svg_renderer_geode_geo_encoder",
     "donner_svg_renderer_geode_geode_counters",
+    # :geode_device now absorbs the former :geode_filter_engine,
+    # :geode_image_pipeline, and :geode_pipeline targets — see the
+    # comment on that Bazel library (issue #575).
     "donner_svg_renderer_geode_geode_device",
-    "donner_svg_renderer_geode_geode_filter_engine",
-    "donner_svg_renderer_geode_geode_image_pipeline",
     "donner_svg_renderer_geode_geode_path_cache_component",
-    "donner_svg_renderer_geode_geode_pipeline",
     "donner_svg_renderer_geode_geode_path_encoder",
     "donner_svg_renderer_geode_geode_shaders",
     "donner_svg_renderer_geode_geode_texture_encoder",

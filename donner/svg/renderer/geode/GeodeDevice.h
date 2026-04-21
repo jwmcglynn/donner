@@ -10,6 +10,17 @@
 
 namespace donner::geode {
 
+// Forward declarations — GeodeDevice exposes accessors for the pipeline
+// objects it owns (see "Shared render / compute pipelines" section below).
+// The full class definitions live in their own headers; including them
+// here would pull the entire Slug / filter compilation graph into every
+// translation unit that only needs a `GeodeDevice*`.
+class GeodePipeline;
+class GeodeGradientPipeline;
+class GeodeImagePipeline;
+class GeodeMaskPipeline;
+class GeodeFilterEngine;
+
 /**
  * Configuration for embedding Geode into a host application that already owns a
  * WebGPU device.
@@ -98,13 +109,17 @@ public:
   /// Destructor releases the device and all GPU resources.
   ~GeodeDevice();
 
-  // Non-copyable, movable.
+  // Non-copyable, non-movable. The device owns pipelines and a filter
+  // engine that hold a `GeodeDevice&` internally (see `filterEngine()`),
+  // so moving the outer `GeodeDevice` would leave dangling references.
+  // All call sites hold `GeodeDevice` via `unique_ptr` / `shared_ptr`
+  // already, so deleting moves is a no-op in practice but rules out a
+  // latent bug where shared-pipeline ownership is moved out from under
+  // the filter engine.
   GeodeDevice(const GeodeDevice&) = delete;
   GeodeDevice& operator=(const GeodeDevice&) = delete;
-  /// Move constructor.
-  GeodeDevice(GeodeDevice&&) noexcept;
-  /// Move assignment operator.
-  GeodeDevice& operator=(GeodeDevice&&) noexcept;
+  GeodeDevice(GeodeDevice&&) = delete;
+  GeodeDevice& operator=(GeodeDevice&&) = delete;
 
   /// Returns the wgpu::Device. Guaranteed valid for the lifetime of this object.
   const wgpu::Device& device() const { return device_; }
@@ -182,15 +197,31 @@ public:
   GeodeCounters* counters() const { return counters_; }
 
   // Counter increment helpers. Cheap no-op when counters are disabled.
+  // Also bump process-lifetime totals (`lifetimeBufferCreates_` /
+  // `lifetimeTextureCreates_`) that are visible regardless of which
+  // per-frame `GeodeCounters` instance is wired up — these exist so
+  // issue #575's leak hunt can measure unbounded growth across whole
+  // test-suite runs where each `RendererGeode` has its own scoped
+  // per-frame counters.
   void countBuffer() const {
+    ++lifetimeBufferCreates_;
     if (counters_) ++counters_->bufferCreates;
   }
   void countBindGroup() const {
     if (counters_) ++counters_->bindgroupCreates;
   }
   void countTexture() const {
+    ++lifetimeTextureCreates_;
     if (counters_) ++counters_->textureCreates;
   }
+
+  /// Cumulative number of `countTexture()` calls since this `GeodeDevice`
+  /// was created. Does not account for textures released back into a
+  /// pool — it is an allocation-site counter, not a live-count.
+  uint64_t lifetimeTextureCreates() const { return lifetimeTextureCreates_; }
+  /// Cumulative number of `countBuffer()` calls since this `GeodeDevice`
+  /// was created. Same caveat as `lifetimeTextureCreates()`.
+  uint64_t lifetimeBufferCreates() const { return lifetimeBufferCreates_; }
   void countSubmit() const {
     if (counters_) ++counters_->submits;
   }
@@ -254,8 +285,49 @@ public:
   const wgpu::Buffer& identityInstanceTransformBuffer() const;
   /// @}
 
+  /// @name Shared render / compute pipelines (issue #575 fix)
+  /// @{
+  ///
+  /// Every wgpu pipeline created by `createRenderPipeline` /
+  /// `createComputePipeline` is retained internally by wgpu-native even
+  /// after the public handle's refcount drops to zero — `wgpuDevicePoll`
+  /// does not drain it. Prior to this, `RendererGeode` constructed the
+  /// four pipeline objects below (~18 wgpu pipelines in total, most
+  /// inside `GeodeFilterEngine`) per-instance, so the image-comparison
+  /// suite leaked ~1.6 MB per test and ultimately exhausted the driver
+  /// memory budget (see issue #575). Moving ownership here — one copy
+  /// per `GeodeDevice` — caps the pipeline footprint at a fixed cost.
+  ///
+  /// Every renderer that talks to this device shares the same pipeline
+  /// objects; their state is intentionally immutable after construction
+  /// (no per-draw mutation), so concurrent use from sibling renderers
+  /// is safe as long as it is serialized at the `wgpu::Queue` level
+  /// (which Donner's render path already is).
+
+  /// Slug solid-fill render pipeline.
+  GeodePipeline& pipeline() const;
+  /// Slug gradient-fill render pipeline.
+  GeodeGradientPipeline& gradientPipeline() const;
+  /// Image-blit render pipeline (used by `GeoEncoder::drawImage` and the
+  /// pattern / layer composition path).
+  GeodeImagePipeline& imagePipeline() const;
+  /// Clip-path mask render pipeline. Built lazily on first access rather
+  /// than eagerly at device creation, matching the prior per-encoder
+  /// lazy path — most documents don't use `<clipPath>` and the
+  /// production WASM path avoids the cost.
+  GeodeMaskPipeline& maskPipeline() const;
+  /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
+  /// filter primitives.
+  GeodeFilterEngine& filterEngine() const;
+  /// @}
+
 private:
   GeodeDevice();
+
+  /// Allocate the shared pipelines and filter engine after `device_`,
+  /// `queue_`, and `textureFormat_` are finalised. Called from both
+  /// `CreateHeadless` and `CreateFromExternal`.
+  void initSharedPipelines();
 
   // Order matters: queue/device/adapter/instance destroy bottom-up.
   struct Impl;
@@ -275,6 +347,13 @@ private:
   bool external_ = false;
 
   GeodeCounters* counters_ = nullptr;
+
+  // Process-lifetime cumulative totals — see `lifetimeTextureCreates()`
+  // for why these are separate from the scoped `counters_`. Mutable
+  // because `countTexture()` / `countBuffer()` are logically const
+  // (the caller is reporting, not mutating visible state).
+  mutable uint64_t lifetimeTextureCreates_ = 0;
+  mutable uint64_t lifetimeBufferCreates_ = 0;
 
   // Deferred-destroy queues: resources enqueued via deferDestroy() are held
   // alive until drainDeferredDestroys() drops them at the next frame boundary.

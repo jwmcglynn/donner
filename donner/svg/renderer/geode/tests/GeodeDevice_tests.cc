@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <string_view>
 
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -246,6 +249,49 @@ TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
   wgpu::CommandEncoder encoder2 = device.createCommandEncoder();
   wgpu::CommandBuffer cmdBuf2 = encoder2.finish();
   queue.submit(1, &cmdBuf2);
+}
+
+/// Regression test for issue #575 (pipeline leak through wgpu-native):
+/// `GeodeDevice::pipeline()` / `gradientPipeline()` / `imagePipeline()` /
+/// `filterEngine()` must return the same object on every call — the
+/// expensive wgpu pipelines live on the device, not on per-renderer
+/// state. If someone moves pipeline construction back into
+/// `RendererGeode::Impl::initPipelines`, the ~1.6 MB/renderer leak that
+/// exhausted Mesa lavapipe's allocation budget comes back. Asserting
+/// reference identity is a cheap way to pin the sharing contract.
+TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  // Every accessor must return the same reference each time.
+  EXPECT_EQ(&device->pipeline(), &device->pipeline());
+  EXPECT_EQ(&device->gradientPipeline(), &device->gradientPipeline());
+  EXPECT_EQ(&device->imagePipeline(), &device->imagePipeline());
+  EXPECT_EQ(&device->filterEngine(), &device->filterEngine());
+  // `maskPipeline()` is lazy — two calls must still return the same
+  // instance (first call constructs, second call returns cached).
+  EXPECT_EQ(&device->maskPipeline(), &device->maskPipeline());
+}
+
+/// Regression test for issue #575: texture / buffer allocation
+/// must not grow unboundedly under a busy-idle pattern that hits the
+/// device's shared pipelines. Ten `countTexture` / `countBuffer`
+/// ticks with no actual wgpu work between them must show exactly the
+/// reported growth in `lifetimeTextureCreates()` / `lifetimeBufferCreates()`
+/// — this locks the accessor contract so a leak-hunt regression
+/// test written against it can't lie to itself.
+TEST(GeodeDevice, LifetimeCountersReflectCountHelpers) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  const uint64_t beforeTex = device->lifetimeTextureCreates();
+  const uint64_t beforeBuf = device->lifetimeBufferCreates();
+  for (int i = 0; i < 10; ++i) {
+    device->countTexture();
+    device->countBuffer();
+  }
+  EXPECT_EQ(device->lifetimeTextureCreates(), beforeTex + 10);
+  EXPECT_EQ(device->lifetimeBufferCreates(), beforeBuf + 10);
 }
 
 }  // namespace donner::geode

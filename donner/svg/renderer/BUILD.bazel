@@ -298,12 +298,12 @@ donner_cc_library(
         "//donner/svg/components",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_counters",
+        # :geode_device now also carries the shared pipelines +
+        # GeodeFilterEngine that were previously separate libraries
+        # (see that target's comment).
         "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/geode:geode_filter_engine",
-        "//donner/svg/renderer/geode:geode_image_pipeline",
         "//donner/svg/renderer/geode:geode_path_cache_component",
         "//donner/svg/renderer/geode:geode_path_encoder",
-        "//donner/svg/renderer/geode:geode_pipeline",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//donner/svg/resources:image_resource",
         "//third_party/webgpu-cpp:webgpu_cpp",
