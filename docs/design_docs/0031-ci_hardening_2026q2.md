@@ -75,7 +75,7 @@ every variant is covered by the default test command.
   - [ ] M1.8b: Branch-protection update — make the new `lint`, `asan-geode`, and core test jobs required on `main`. User action (requires admin).
 
 - [ ] **Milestone 2 — Cache and nightly infrastructure (M effort)**
-  - [ ] M2.1: Per-config cache slots. Extend `disk-cache` key with a config tag (`-default`, `-asan`, `-geode`). Prevents the asan-fuzzer-evicts-main collision observed pre-Skia-removal. (Subsumes 0029 M1.)
+  - [x] M2.1: Per-config cache slots. Extend `disk-cache` key with a config tag (`-default`, `-asan`, `-geode`). Prevents the asan-fuzzer-evicts-main collision observed pre-Skia-removal. (Subsumes 0029 M1.)
   - [x] M2.2: Extend `tools/cmake/gen_cmakelists.py --check` to optionally `cmake --build` the generated CMake via `--build`, while keeping plain `--check` fast and static. Catches drift that the static validator missed in commits 19d41df8, 398d312b, 89448ad7, a7d682fe.
   - [ ] M2.3: Make `bazel test //...` cover every variant by default. Audit `donner_variant_cc_test` usage; ensure `tiny`, `text-full`, `geode` variants auto-emit under the default test command. Once green, delete `tools/presubmit.sh`. **Blocked on test-surface debt (issue [#566](https://github.com/jwmcglynn/donner/issues/566))** — prototype confirmed the macro path works (471 → 874 test labels, 412 variant wrappers) but running the variants as default gates surfaces 1 tiny-tier + 17 Geode-tier real test failures that must be fixed first.
   - [ ] M2.4: Introduce `donner_perf_cc_test` macro splitting correctness counters (PR-gate) from wall-clock thresholds (nightly, tagged `perf`). Retires 5 recent threshold-widening hotfixes (8043ad7b, 1f147f2f, 43f42cf7, ab68092b, 8cd89ef7). Absorbs doc 0016 Category 8.
