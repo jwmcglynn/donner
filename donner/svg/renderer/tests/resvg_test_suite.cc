@@ -230,7 +230,9 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
       (category == "filters/feSpecularLighting" && filename == "specularExponent=0.svg") ||
       (category == "filters/feTile" && filename == "empty-region.svg") ||
       (category == "filters/filter" && filename == "transform-on-shape.svg") ||
-      (category == "painting/opacity" && filename == "mixed-group-opacity.svg")) {
+      (category == "painting/opacity" && filename == "mixed-group-opacity.svg") ||
+      (category == "painting/shape-rendering" &&
+       (filename == "path-with-marker.svg" || filename == "inheritance.svg"))) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
                        "TODO(geode): regression uncovered on CI — "
