@@ -77,9 +77,15 @@ _RULES: List[_Rule] = [
         ),
         # `examples/svg_viewer` covers the canonical //examples:svg_viewer
         # demo binary that wires the editor TextEditor + AsyncSVGDocument
-        # together for live demos. New non-editor consumers of these
-        # headers must add an explicit exemption (and a justification).
-        exempt_path_prefixes=("donner/editor/", "examples/svg_viewer"),
+        # together for live demos. `examples/geode_embed` is the Geode
+        # embedding reference app — Phase 6 — whose GLFW window demonstrates
+        # how a host integrates wgpu-native + Geode. New non-editor consumers
+        # of these headers must add an explicit exemption (and a justification).
+        exempt_path_prefixes=(
+            "donner/editor/",
+            "examples/svg_viewer",
+            "examples/geode_embed",
+        ),
     ),
     _Rule(
         pattern=re.compile(
