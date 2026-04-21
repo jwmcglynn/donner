@@ -160,6 +160,82 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
 //     (which would incorrectly make every delta `Identity`);
 //   - the dirty-flag consumer marking the drag target for re-raster
 //     even when the delta is pure translation.
+// Editor-reported regression: dragging a `<g filter>` group should
+// reuse the filter's cached bitmap via the compositor's translation-
+// only fast path, not re-rasterize the entire scene. Before the fix,
+// the fast-path eligibility check required `firstEntity == lastEntity
+// == e`, which is only true for single-entity layers. Subtree layers
+// (filter groups, clip-path groups, `<g>` with children) failed the
+// gate, forcing every drag frame through `prepareDocumentForRendering`
+// at ~25 ms/frame on real splash content.
+TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="4"/></filter>
+      </defs>
+      <rect width="200" height="200" fill="white"/>
+      <g id="target" filter="url(#blur)">
+        <rect x="60" y="60" width="40" height="20" fill="red"/>
+        <rect x="60" y="100" width="40" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  // Promote with ActiveDrag so the drag target sets up the single-
+  // promoted-layer split path. The filter group itself is also auto-
+  // promoted by `MandatoryHintDetector`; the explicit promote here
+  // matches what `SelectTool::onMouseDown` does when the user clicks
+  // a filter group after the editor's `elevateToCompositingRoot`
+  // hoist.
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* layer = compositor.findLayerForTest(entity);
+  ASSERT_NE(layer, nullptr) << "filter group must be a layer root";
+  ASSERT_TRUE(layer->hasValidBitmap());
+  const std::optional<Transform2d> stampAfterWarm = layer->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterWarm.has_value());
+
+  // Drag. The filter group contains children, so `layer.firstEntity()
+  // != layer.lastEntity()` — the single-entity fast-path gate would
+  // have rejected this, forcing a full `prepareDocumentForRendering`
+  // re-run every frame.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* layerAfterDrag = compositor.findLayerForTest(entity);
+  ASSERT_NE(layerAfterDrag, nullptr);
+  ASSERT_TRUE(layerAfterDrag->hasValidBitmap());
+
+  // Fast-path signal #1: the layer's rasterize-time stamp hasn't
+  // moved. If it changed, `setBitmap` ran — slow path.
+  const std::optional<Transform2d> stampAfterDrag =
+      layerAfterDrag->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterDrag.has_value());
+  EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+      << "filter-group layer was re-rasterized during drag instead of reusing "
+         "the cached bitmap — the `firstEntity == lastEntity == e` gate "
+         "rejected the subtree layer from the fast path";
+  EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
+
+  // Fast-path signal #2: `compositionTransform` carries the 10-px
+  // delta in canvas-pixel space.
+  const Transform2d compositionTransform = layerAfterDrag->canvasFromBitmap();
+  ASSERT_TRUE(compositionTransform.isTranslation());
+  EXPECT_NEAR(compositionTransform.translation().x, 10.0, 1e-6);
+  EXPECT_NEAR(compositionTransform.translation().y, 0.0, 1e-6);
+}
+
 TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScales) {
   for (double canvasScale : {1.0, 2.0, 1.5}) {
     SCOPED_TRACE("canvasScale=" + std::to_string(canvasScale));
@@ -222,7 +298,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
 
     // And the compositionTransform MUST carry the delta — 25 doc units
     // at `canvasScale` → `25 * canvasScale` canvas pixels.
-    const Transform2d compositionTransform = layerAfterDrag->compositionTransform();
+    const Transform2d compositionTransform = layerAfterDrag->canvasFromBitmap();
     ASSERT_TRUE(compositionTransform.isTranslation())
         << "compositionTransform should be a pure translation after a "
            "translation-only drag; non-translation means the conjugation "

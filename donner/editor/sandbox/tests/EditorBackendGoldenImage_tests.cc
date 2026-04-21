@@ -1059,6 +1059,96 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
       << "spiked past " << kSpikeThresholdMs
       << " ms. Spikes indicate intermittent cache invalidation — look at "
          "`rootDirty_`, `needsFullRebuild`, and segment-cache wipes.";
+}
+
+// Editor-reported regression: dragging a `<g filter>` should hit the
+// compositor fast path the same way dragging a letter does. Before the
+// subtree fast-path fix, the eligibility check required
+// `firstEntity == lastEntity == e`, which rejected every filter /
+// clip-path / group subtree layer and forced a full
+// `prepareDocumentForRendering` + per-layer re-rasterize per drag
+// frame. On `donner_splash.svg` that was ~60 ms/frame (slow path)
+// instead of ~20 ms/frame (fast path + CPU compose + tight overlay).
+TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragEngagesFastPath) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  auto client = EditorBackendClient::MakeInProcess();
+  (void)client->setViewport(892, 512).get();
+  FrameResult load = client
+                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
+                                                splashSource.size()),
+                                     std::nullopt)
+                         .get();
+  ASSERT_TRUE(load.ok);
+
+  // Click a point inside `#Big_lightning_glow` (filter group). The
+  // editor's `SelectTool` elevates the click to the filter group root
+  // via `elevateToCompositingRoot`, so the dragged entity is the
+  // `<g filter>` itself — a subtree layer.
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(445.0, 180.0);
+  down.buttons = 1;
+  FrameResult downFrame = client->pointerEvent(down).get();
+  ASSERT_TRUE(downFrame.ok);
+  if (downFrame.selection.selections.empty()) {
+    GTEST_SKIP()
+        << "expected click to land on the Big_lightning_glow filter group — "
+           "splash geometry may have shifted";
+  }
+
+  // Warm-up move so the first frame's promotion cost doesn't poison
+  // the steady-state measurement.
+  ::donner::editor::PointerEventPayload warmup;
+  warmup.phase = PointerPhase::kMove;
+  warmup.documentPoint = Vector2d(446.0, 180.0);
+  warmup.buttons = 1;
+  (void)client->pointerEvent(warmup).get();
+
+  constexpr int kDragFrames = 30;
+  using Clock = std::chrono::steady_clock;
+  std::vector<double> ms;
+  ms.reserve(kDragFrames);
+  for (int i = 0; i < kDragFrames; ++i) {
+    ::donner::editor::PointerEventPayload mv;
+    mv.phase = PointerPhase::kMove;
+    mv.documentPoint = Vector2d(445.0 + (i + 2) * 1.5, 180.0);
+    mv.buttons = 1;
+    const auto t0 = Clock::now();
+    (void)client->pointerEvent(mv).get();
+    const auto t1 = Clock::now();
+    ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+  }
+
+  double total = 0.0;
+  double worst = 0.0;
+  int spikeCount = 0;
+  constexpr double kSpikeThresholdMs = 60.0;
+  for (double v : ms) {
+    total += v;
+    worst = std::max(worst, v);
+    if (v > kSpikeThresholdMs) ++spikeCount;
+  }
+  const double avg = total / static_cast<double>(ms.size());
+  std::fprintf(stderr,
+               "[FilterDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
+               avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
+
+  EXPECT_LT(avg, 60.0)
+      << "dragging a `<g filter>` is slow — the subtree fast path isn't "
+         "engaging. Check the `firstEntity == lastEntity == e` gate in "
+         "`CompositorController::renderFrame` and that "
+         "`propagateFastPathTranslationToSubtree` is wired up.";
+  EXPECT_EQ(spikeCount, 0)
+      << spikeCount << " of " << kDragFrames << " filter-group drag frames "
+      << "spiked past " << kSpikeThresholdMs << " ms.";
   EXPECT_LT(worst, 120.0) << "drag frame spiked above budget";
 }
 
