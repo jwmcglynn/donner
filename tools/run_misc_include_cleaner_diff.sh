@@ -72,16 +72,18 @@ printf '  %s\n' "${MODIFIED_FILES[@]}"
 #   -p1           : strip one path component (matches `git diff` output)
 #   -path .       : look for compile_commands.json in the current dir
 #   -iregex       : only consider C/C++ source files
+#   -checks       : restrict to misc-include-cleaner; .clang-tidy's
+#                   WarningsAsErrors: "*" still applies to whatever
+#                   remains enabled, so any new finding fails.
 #   -clang-tidy-binary : pin to our clang-tidy-19
-#   -- <args>     : everything after -- is forwarded to clang-tidy
 #
-# We pass --warnings-as-errors so any new finding still fails CI.
+# Trailing `-- <args>` is intentionally omitted: that path forwards flags
+# to the compiler, not clang-tidy, and clang-tidy-diff.py has no pass-
+# through for clang-tidy options except via `-checks` above.
 git diff --unified=0 "${BASE}" HEAD -- '*.cc' '*.h' '*.hpp' '*.cpp' ':!third_party/' \
   | "${CLANG_TIDY_DIFF}" \
       -p1 \
       -path . \
       -iregex '.*\.(cc|h|hpp|cpp)$' \
-      -clang-tidy-binary "${CLANG_TIDY}" \
-      -- \
-      --checks=-*,misc-include-cleaner \
-      --warnings-as-errors=*
+      -checks '-*,misc-include-cleaner' \
+      -clang-tidy-binary "${CLANG_TIDY}"
