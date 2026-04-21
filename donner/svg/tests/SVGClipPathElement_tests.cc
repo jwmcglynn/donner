@@ -49,8 +49,7 @@ TEST(SVGClipPathElementTests, RenderingDefaults) {
         <rect width="16" height="16" clip-path="url(#a)" fill="black" />
         )-");
 
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ......@@@@......
         ....@@@@@@@@....
         ..@@@@@@@@@@@@..
@@ -84,8 +83,7 @@ TEST(SVGClipPathElementTests, RenderingObjectBoundingBox) {
         <rect y="8" width="16" height="8" clip-path="url(#a)" fill="black" />
         )-");
 
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ..@@@@..........
         .@@@@@@.........
         @@@@@@@@........
@@ -256,8 +254,7 @@ TEST(SVGClipPathElementTests, RenderingTransform) {
         )-");
 
   // Expected output assumes that the translated circle defines a shifted clipping region.
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ................
         ................
         ........@@@@....
@@ -295,8 +292,7 @@ TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {
         <rect width="16" height="16" clip-path="url(#clipMultiTrans)" fill="black" />
         )-");
 
-  EXPECT_TRUE(generatedAscii.matchBackend()
-      .defaultPattern(R"(
+  EXPECT_TRUE(generatedAscii.matchBackend().defaultPattern(R"(
         ......@@@@......
         .....@@@@@@.....
         ....@@@@@@@@....

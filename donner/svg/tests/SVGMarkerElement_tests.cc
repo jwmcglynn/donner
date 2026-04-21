@@ -92,9 +92,8 @@ TEST(SVGMarkerElementTests, ViewBoxPreserveAspectRatioAndMarkerUnits) {
 
   const Box2d viewBox(Vector2d(1, 2), Vector2d(11, 22));
   marker.setViewBox(viewBox);
-  marker.setPreserveAspectRatio(
-      PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMid,
-                          PreserveAspectRatio::MeetOrSlice::Slice});
+  marker.setPreserveAspectRatio(PreserveAspectRatio{PreserveAspectRatio::Align::XMaxYMid,
+                                                    PreserveAspectRatio::MeetOrSlice::Slice});
   marker.setMarkerUnits(MarkerUnits::UserSpaceOnUse);
 
   EXPECT_THAT(marker.viewBox(), Optional(Eq(viewBox)));

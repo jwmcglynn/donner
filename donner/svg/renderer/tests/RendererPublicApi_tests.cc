@@ -147,8 +147,8 @@ TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
   // and the assertion is meaningless. Skip rather than fail so the same
   // source runs unmodified in every lane of `bazel test //...`.
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
-    GTEST_SKIP() << "Text rendering disabled in this variant ("
-                 << ActiveRendererBackendName() << "); skipping glyph-placement assertion.";
+    GTEST_SKIP() << "Text rendering disabled in this variant (" << ActiveRendererBackendName()
+                 << "); skipping glyph-placement assertion.";
   }
 
   SVGDocument document = ParseDocument(R"svg(
