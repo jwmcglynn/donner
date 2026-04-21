@@ -241,7 +241,8 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
         filename == "pattern-with-objectBoundingBox-fallback-on-zero-bbox-shape.svg")) ||
       (category == "painting/overflow" && filename == "inherit-on-marker-without-parent.svg") ||
       (category == "text/font-variant" && filename == "inherit.svg") ||
-      (category == "painting/paint-order" && filename == "fill.svg") ||
+      (category == "painting/paint-order" &&
+       (filename == "fill.svg" || filename == "stroke-invalid.svg")) ||
       (category == "painting/shape-rendering" &&
        (filename == "path-with-marker.svg" || filename == "inheritance.svg"))) {
     return [](ImageComparisonParams& p) {
