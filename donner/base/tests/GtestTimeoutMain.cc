@@ -29,13 +29,13 @@
 
 namespace {
 
-// 60 s budget by default: tight enough to catch a real driver hang quickly
-// but loose enough that slow-software-renderer paths (Mesa llvmpipe on CI,
-// for example) can legitimately finish a heavy filter primitive without
-// tripping the watchdog. Override with `--donner_test_timeout_seconds=N`
-// or `DONNER_TEST_TIMEOUT_SECONDS=N` if a test is genuinely faster or
-// needs even more slack.
-constexpr unsigned int kDefaultTimeoutSeconds = 60;
+// 300 s budget by default: previous 60 s budget was tight enough for real
+// GPU backends but tripped on single complex-scene tests under Mesa
+// llvmpipe (software Vulkan on CI). 300 s still catches driver hangs
+// (Arc + Mesa 25.2.8 hangs are measured in minutes, not seconds) without
+// producing false positives on CI slow paths. Override with
+// `--donner_test_timeout_seconds=N` or `DONNER_TEST_TIMEOUT_SECONDS=N`.
+constexpr unsigned int kDefaultTimeoutSeconds = 300;
 constexpr int kTimeoutExitCode = 124;
 
 // Ownership: set on the main thread in `OnTestStart`, read from the signal
