@@ -208,10 +208,9 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
   // and preserveAlpha so these flip green without the disable.
   if (category == "filters/feConvolveMatrix" &&
       (filename == "edgeMode=none.svg" || filename == "edgeMode=wrap.svg" ||
-       filename == "order=4.svg" || filename == "order=4-2.svg" ||
-       filename == "order=4-4.svg" || filename == "preserveAlpha=true.svg" ||
-       filename == "targetX=0.svg" || filename == "targetX=2.svg" ||
-       filename == "unset-order.svg")) {
+       filename == "order=4.svg" || filename == "order=4-2.svg" || filename == "order=4-4.svg" ||
+       filename == "preserveAlpha=true.svg" || filename == "targetX=0.svg" ||
+       filename == "targetX=2.svg" || filename == "unset-order.svg")) {
     return [](ImageComparisonParams& p) {
       p.disableBackend(RendererBackend::Geode,
                        "TODO(geode): feConvolveMatrix edge-mode / targetX / "
