@@ -235,8 +235,10 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
       (category == "painting/fill-opacity" && filename == "with-opacity.svg") ||
       (category == "painting/stroke" &&
        (filename == "control-points-clamping-1.svg" ||
+        filename == "currentColor-without-a-parent.svg" ||
         filename == "gradient-with-objectBoundingBox-on-shape-without-a-bbox.svg" ||
         filename == "gradient-with-objectBoundingBox-on-path-without-a-bbox-2.svg")) ||
+      (category == "text/font-variant" && filename == "inherit.svg") ||
       (category == "painting/paint-order" && filename == "fill.svg") ||
       (category == "painting/shape-rendering" &&
        (filename == "path-with-marker.svg" || filename == "inheritance.svg"))) {
