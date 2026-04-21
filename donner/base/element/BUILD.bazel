@@ -7,6 +7,7 @@ donner_cc_library(
         "ElementLike.h",
         "ElementTraversalGenerators.h",
     ],
+    include_cleaner = "strict",
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",

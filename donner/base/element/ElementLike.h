@@ -1,10 +1,11 @@
 #pragma once
 /// @file
 
+#include <concepts>
 #include <optional>
 
+#include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
-#include "donner/base/Utils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner {
