@@ -1,10 +1,12 @@
 #include <gmock/gmock.h>
 
+#include <filesystem>
 #include <functional>
 #include <optional>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 using testing::ValuesIn;
 

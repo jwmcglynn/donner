@@ -31,7 +31,6 @@
 // extraction lives in separate TUs (`geode_embed_surface_linux.cc`,
 // `geode_embed_surface_macos.mm`) so X11 / Cocoa macros never leak into
 // donner headers.
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -39,7 +38,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/ParseWarningSink.h"

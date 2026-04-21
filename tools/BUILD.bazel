@@ -2,7 +2,14 @@ load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile
 
 refresh_compile_commands(
     name = "refresh_compile_commands",
-    targets = "//donner/...",
+    targets = {
+        "//donner/...": "",
+        # The Geode embedding examples include `<webgpu/webgpu.hpp>`, whose
+        # include path is only wired up when `--config=geode` is active.
+        # Without this entry, lint (misc-include-cleaner) would run with
+        # default flags and fail to locate the header.
+        "//examples:geode_embed": "--config=geode",
+    },
 )
 
 py_binary(
