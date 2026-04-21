@@ -119,6 +119,9 @@ int main(int argc, char** argv) {
 
   ::testing::InitGoogleTest(&mutable_argc, argv);
 
+  // Log resolved budget so CI log can confirm .bazelrc/env propagation.
+  std::fprintf(stderr, "[GtestTimeoutMain] per-case budget: %u s\n", seconds);
+
   gMainPid = getpid();
   struct sigaction sa = {};
   sa.sa_handler = &TimeoutHandler;
