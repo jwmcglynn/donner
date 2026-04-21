@@ -2,7 +2,12 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 
 exports_files(
-    ["check_banned_patterns.py"],
+    [
+        "check_banned_patterns.py",
+        # Picked up by the per-library include-cleaner lint test emitted by
+        # donner_cc_library/_test/_binary when `include_cleaner = "strict"`.
+        "include_cleaner.clang-tidy",
+    ],
     visibility = ["//visibility:public"],
 )
 

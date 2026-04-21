@@ -209,6 +209,11 @@ struct GeoEncoder::Impl {
   Arena bandArena;
   Arena curveArena;
   Arena uniformArena;
+  /// M6-B step 3: per-instance affine transforms for `fillPathInstanced`.
+  /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
+  /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
+  /// since the binding is storage read-only.
+  Arena instanceTransformArena;
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
   // calls `commandEncoder.finish()` + `queue().submit()`. When false
@@ -450,6 +455,7 @@ struct GeoEncoder::Impl {
   void bindSolidPipeline() {
     if (currentPipeline != BoundPipeline::kSolid) {
       pass.setPipeline(pipeline->pipeline());
+      device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kSolid;
       currentPipelineIsGradient = false;
     }
@@ -457,6 +463,7 @@ struct GeoEncoder::Impl {
   void bindGradientPipeline() {
     if (currentPipeline != BoundPipeline::kGradient) {
       pass.setPipeline(gradientPipeline->pipeline());
+      device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kGradient;
       currentPipelineIsGradient = true;
     }
@@ -464,6 +471,7 @@ struct GeoEncoder::Impl {
   void bindImagePipeline(const wgpu::RenderPipeline& imageRenderPipeline) {
     if (currentPipeline != BoundPipeline::kImage) {
       pass.setPipeline(imageRenderPipeline);
+      device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kImage;
       currentPipelineIsGradient = false;
     }
@@ -565,6 +573,8 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   impl.curveArena.label = "GeodeCurveArena";
   impl.uniformArena.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   impl.uniformArena.label = "GeodeUniformArena";
+  impl.instanceTransformArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.instanceTransformArena.label = "GeodeInstanceTransformArena";
 }
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -755,6 +765,7 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
   desc.label = wgpuLabel("GeoEncoderMaskPass");
   impl_->maskPass = impl_->commandEncoder.beginRenderPass(desc);
   impl_->maskPass.setPipeline(impl_->maskPipelineOwned->pipeline());
+  impl_->device->countPipelineSwitch();
   // Full-target scissor so clip-path fills aren't clipped by any
   // outer scissor still cached in the encoder state.
   impl_->maskPass.setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
@@ -850,6 +861,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   impl_->maskPass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->maskPass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->maskPass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::endMaskPass() {
@@ -912,6 +924,17 @@ struct GeoEncoder::FillDrawArgs {
   Transform2d patternFromPath;
   Vector2d tileSize;
   float patternOpacity;
+
+  /// M6 Bullet 2: optional per-instance transform buffer. When null,
+  /// `submitFillDraw` binds `GeodeDevice::identityInstanceTransformBuffer`
+  /// (single-instance draws). When set, the caller has uploaded N
+  /// copies of the 2-vec4f `InstanceTransform` struct at
+  /// `instanceTransformsOffset`, and `submitFillDraw` issues a draw
+  /// with `instanceCount == N`.
+  const wgpu::Buffer* instanceTransformsBuffer = nullptr;
+  uint64_t instanceTransformsOffset = 0;
+  uint64_t instanceTransformsSize = 0;
+  uint32_t instanceCount = 1;
 };
 
 void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rule,
@@ -935,6 +958,52 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   args.patternSampler = impl_->device->dummyPatternSampler();
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
+
+  submitFillDraw(args);
+}
+
+void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color,
+                                   FillRule rule, std::span<const float> instanceTransforms) {
+  if (encoded.empty() || instanceTransforms.empty()) {
+    return;
+  }
+  // Caller packs 8 floats per instance — two vec4f rows of a row-major
+  // affine. Malformed inputs drop silently rather than tripping a
+  // validation error mid-frame.
+  const size_t totalFloats = instanceTransforms.size();
+  const uint32_t instanceCount = static_cast<uint32_t>(totalFloats / 8u);
+  if (instanceCount == 0u || totalFloats != static_cast<size_t>(instanceCount) * 8u) {
+    return;
+  }
+
+  // Upload packed transforms into the dedicated instance arena.
+  const uint64_t itSize = roundUp4(totalFloats * sizeof(float));
+  const auto itAlloc = impl_->allocInArena(impl_->instanceTransformArena, instanceTransforms.data(),
+                                           itSize, kStorageOffsetAlignment);
+
+  FillDrawArgs args = {};
+  // `args.path` stays null — with a precomputed encode the submit path
+  // never re-encodes, so the raw Path isn't needed. Gradient/pattern
+  // variants aren't batchable in this PR; pure solid only.
+  args.path = nullptr;
+  args.rule = rule;
+  args.precomputedEncoded = &encoded;
+  args.paintMode = 0u;
+  const float alpha = color.a / 255.0f;
+  args.solidColor[0] = (color.r / 255.0f) * alpha;
+  args.solidColor[1] = (color.g / 255.0f) * alpha;
+  args.solidColor[2] = (color.b / 255.0f) * alpha;
+  args.solidColor[3] = alpha;
+  args.patternOpacity = 1.0f;
+  args.patternView = impl_->device->dummyPatternTextureView();
+  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.tileSize = Vector2d(1.0, 1.0);
+  args.patternFromPath = Transform2d();
+
+  args.instanceTransformsBuffer = itAlloc.buffer;
+  args.instanceTransformsOffset = itAlloc.offset;
+  args.instanceTransformsSize = itAlloc.size;
+  args.instanceCount = instanceCount;
 
   submitFillDraw(args);
 }
@@ -1042,12 +1111,14 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
-  // 3. Bind group — seven entries: uniforms, bands SSBO, curves SSBO,
+  // 3. Bind group — eight entries: uniforms, bands SSBO, curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask
-  // sampler. SSBO + uniform entries reference the arena buffers at
-  // per-draw offsets; the draws are unpacked from shared buffers by
-  // the bind group's `offset` + `size` fields.
-  wgpu::BindGroupEntry entries[7] = {};
+  // sampler, and (M6 Bullet 2) per-instance transforms SSBO. SSBO +
+  // uniform entries reference the arena buffers at per-draw offsets;
+  // the instance-transforms entry is either a caller-supplied arena
+  // slice (`fillPathInstanced`) or the device's 1-element identity
+  // buffer (single-instance fills).
+  wgpu::BindGroupEntry entries[8] = {};
   entries[0].binding = 0;
   entries[0].buffer = *uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -1068,11 +1139,24 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   entries[5].textureView = impl_->currentClipMaskView();
   entries[6].binding = 6;
   entries[6].sampler = impl_->device->dummyClipMaskSampler();
+  entries[7].binding = 7;
+  if (args.instanceTransformsBuffer != nullptr) {
+    entries[7].buffer = *args.instanceTransformsBuffer;
+    entries[7].offset = args.instanceTransformsOffset;
+    entries[7].size = args.instanceTransformsSize;
+  } else {
+    // One-element identity buffer owned by GeodeDevice. Layout is two
+    // vec4f rows = 32 bytes; kept in sync with the WGSL
+    // `InstanceTransform` struct in `shaders/slug_fill.wgsl`.
+    entries[7].buffer = impl_->device->identityInstanceTransformBuffer();
+    entries[7].offset = 0;
+    entries[7].size = 32u;
+  }
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeBindGroup");
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 7;
+  bgDesc.entryCount = 8;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
   impl_->device->countBindGroup();
@@ -1080,7 +1164,8 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   // 4. Record the draw call.
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), args.instanceCount, 0, 0);
+  impl_->device->countDraw();
 }
 
 namespace {
@@ -1227,6 +1312,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientParams& params,
@@ -1323,6 +1409,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {

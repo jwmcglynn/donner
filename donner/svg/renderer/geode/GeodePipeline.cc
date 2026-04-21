@@ -9,13 +9,18 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
                              bool useAlphaCoverageShader, uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
-  // Seven bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
-  // pattern sampler, clip-mask texture, clip-mask sampler. The pattern
+  // Eight bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
+  // pattern sampler, clip-mask texture, clip-mask sampler, and
+  // (Milestone 6 Bullet 2) per-instance transforms SSBO. The pattern
   // texture/sampler are only sampled when paintMode == "pattern" and
   // the clip-mask texture/sampler only when `hasClipMask != 0`. A 1x1
   // dummy texture is bound for both when the feature is inactive so
-  // the bind group layout is stable across draw calls.
-  wgpu::BindGroupLayoutEntry entries[7] = {};
+  // the bind group layout is stable across draw calls. The
+  // instance-transforms buffer is always bound too — a 1-element
+  // identity buffer (`GeodeDevice::identityInstanceTransformBuffer`)
+  // for single-draw fills, a full per-instance array for
+  // `fillPathInstanced`.
+  wgpu::BindGroupLayoutEntry entries[8] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -53,9 +58,15 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[6].visibility = wgpu::ShaderStage::Fragment;
   entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
 
+  // M6 Bullet 2: per-instance affine transforms (vertex-visible only).
+  entries[7].binding = 7;
+  entries[7].visibility = wgpu::ShaderStage::Vertex;
+  entries[7].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+  entries[7].buffer.minBindingSize = 0;
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
-  bglDesc.entryCount = 7;
+  bglDesc.entryCount = 8;
   bglDesc.entries = entries;
   bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
@@ -68,9 +79,8 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   // ----- Shader module -----
-  wgpu::ShaderModule shader =
-      useAlphaCoverageShader ? createSlugFillAlphaCoverageShader(device)
-                             : createSlugFillShader(device);
+  wgpu::ShaderModule shader = useAlphaCoverageShader ? createSlugFillAlphaCoverageShader(device)
+                                                     : createSlugFillShader(device);
 
   // ----- Vertex buffer layout -----
   // Matches EncodedPath::Vertex: pos (vec2f) + normal (vec2f) + bandIndex (u32)
@@ -144,8 +154,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 
 GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
                                              wgpu::TextureFormat colorFormat,
-                                             bool useAlphaCoverageShader,
-                                             uint32_t sampleCount)
+                                             bool useAlphaCoverageShader, uint32_t sampleCount)
     : colorFormat_(colorFormat) {
   // Five bindings — uniforms, bands SSBO, curves SSBO, clip-mask texture,
   // clip-mask sampler. The clip-mask bindings always carry something
@@ -192,9 +201,8 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   plDesc.bindGroupLayouts = layouts;
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
-  wgpu::ShaderModule shader =
-      useAlphaCoverageShader ? createSlugGradientAlphaCoverageShader(device)
-                             : createSlugGradientShader(device);
+  wgpu::ShaderModule shader = useAlphaCoverageShader ? createSlugGradientAlphaCoverageShader(device)
+                                                     : createSlugGradientShader(device);
 
   // Same vertex buffer layout as the solid-fill pipeline.
   wgpu::VertexAttribute vertexAttribs[3] = {};
@@ -305,9 +313,8 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   plDesc.bindGroupLayouts = layouts;
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
-  wgpu::ShaderModule shader =
-      useAlphaCoverageShader ? createSlugMaskAlphaCoverageShader(device)
-                             : createSlugMaskShader(device);
+  wgpu::ShaderModule shader = useAlphaCoverageShader ? createSlugMaskAlphaCoverageShader(device)
+                                                     : createSlugMaskShader(device);
 
   // Same vertex buffer layout as the fill pipelines: pos (vec2f) +
   // normal (vec2f) + bandIndex (u32) = 20 bytes per vertex.

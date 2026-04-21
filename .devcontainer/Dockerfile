@@ -14,9 +14,13 @@ RUN case "${TARGETPLATFORM}" in \
 #
 # Install base dependencies
 #
+# build-essential is required for Bazel's C++ toolchain auto-configuration:
+# donner_cc_test(variants=...) wrappers (doc 0031 M2.3) emit transitioned
+# targets whose analysis triggers toolchain resolution, which fails the
+# `bazel fetch //donner/...` prebuild step if there's no compiler on PATH.
 RUN apt-get update \
     && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends software-properties-common libncurses-dev
+    && apt-get -y install --no-install-recommends software-properties-common libncurses-dev build-essential
 
 #
 # Install java
