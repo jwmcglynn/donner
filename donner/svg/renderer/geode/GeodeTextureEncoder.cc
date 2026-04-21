@@ -178,14 +178,12 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
   device.countBindGroup();
 
-  // Switch to the image pipeline and record the draw call.
-  // The caller is expected to restore the Slug-fill pipeline if it needs
-  // to, but since `fillPath` sets the pipeline at the top of the pass via
-  // `ensurePassOpen`, switching mid-pass requires `SetPipeline` before the
-  // next fill call. `GeoEncoder` handles that by always calling
-  // `SetPipeline` at the start of each draw helper.
+  // The caller is expected to have invoked `GeoEncoder::bindImagePipeline`
+  // already, which is the sole place the image pipeline is bound + counted.
+  // Set the pipeline here too as a defensive no-op (Dawn collapses the
+  // rebind on GPU); skip counting so `pipelineSwitches` reflects actual
+  // pipeline transitions.
   pass.setPipeline(pipeline.pipeline());
-  device.countPipelineSwitch();
   pass.setBindGroup(0, bindGroup, 0, nullptr);
   pass.draw(6, 1, 0, 0);
   device.countDraw();

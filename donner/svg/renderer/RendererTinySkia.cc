@@ -806,13 +806,14 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   surfaceStack_.push_back(std::move(frame));
 
   // Apply the buffer offset to the current transform. setTransform (called by RendererDriver)
-  // ran BEFORE this filter layer was pushed, so deviceFromLocalTransform_ doesn't include the offset yet.
-  // Subsequent setTransform calls will pick up the offset from surfaceStack_.back(), but we
-  // need to fix the already-set transform for the element being filtered.
+  // ran BEFORE this filter layer was pushed, so deviceFromLocalTransform_ doesn't include the
+  // offset yet. Subsequent setTransform calls will pick up the offset from surfaceStack_.back(),
+  // but we need to fix the already-set transform for the element being filtered.
   const auto& pushedFrame = surfaceStack_.back();
   if (pushedFrame.filterBufferOffsetX != 0 || pushedFrame.filterBufferOffsetY != 0) {
-    deviceFromLocalTransform_ = deviceFromLocalTransform_ * Transform2d::Translate(pushedFrame.filterBufferOffsetX,
-                                                                  pushedFrame.filterBufferOffsetY);
+    deviceFromLocalTransform_ =
+        deviceFromLocalTransform_ *
+        Transform2d::Translate(pushedFrame.filterBufferOffsetX, pushedFrame.filterBufferOffsetY);
   }
 #else
   (void)filterGraph;
@@ -863,7 +864,7 @@ void RendererTinySkia::popFilterLayer() {
 
     const double blurPadding = computeBlurPadding(frame.filterGraph);
     const Box2d paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
-                            filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
+                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
 
     const int localWidth = std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
     const int localHeight =
@@ -1073,7 +1074,8 @@ void RendererTinySkia::popMask() {
   }
 }
 
-void RendererTinySkia::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
+void RendererTinySkia::beginPatternTile(const Box2d& tileRect,
+                                        const Transform2d& targetFromPattern) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
   frame.savedTransform = deviceFromLocalTransform_;
@@ -1348,8 +1350,8 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
   const double scaleX = params.targetRect.width() / static_cast<double>(image.width);
   const double scaleY = params.targetRect.height() / static_cast<double>(image.height);
   const Transform2d imageFromLocal = Transform2d::Scale(scaleX, scaleY) *
-                                    Transform2d::Translate(params.targetRect.topLeft) *
-                                    deviceFromLocalTransform_;
+                                     Transform2d::Translate(params.targetRect.topLeft) *
+                                     deviceFromLocalTransform_;
 
   tiny_skia::PixmapPaint paint;
   paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
@@ -1515,11 +1517,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         } else if (patternFillPaint_.has_value()) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.unpremulStore = surfaceStack_.empty();
-          paint.shader = tiny_skia::Pattern(
-              patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
-              tiny_skia::FilterQuality::Bilinear,
-              NarrowToFloat(spanFillOpacity * static_cast<float>(span.opacity)),
-              toTinyTransform(patternFillPaint_->targetFromPattern));
+          paint.shader =
+              tiny_skia::Pattern(patternFillPaint_->pixmap.view(), tiny_skia::SpreadMode::Repeat,
+                                 tiny_skia::FilterQuality::Bilinear,
+                                 NarrowToFloat(spanFillOpacity * static_cast<float>(span.opacity)),
+                                 toTinyTransform(patternFillPaint_->targetFromPattern));
           spanFillPaint = paint;
         } else if (ref->fallback.has_value()) {
           spanFillPaint = makeSolidPaint(
@@ -1584,8 +1586,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         glyphPath =
             textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
         if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPath(
-              glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+          glyphPath = transformPath(glyphPath,
+                                    Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
         }
       }
 
@@ -1611,12 +1613,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           const double targetH =
               static_cast<double>(bitmap->height) * bitmap->scale * glyph.stretchScaleY;
 
-          // Use the same transform pattern as drawImage: Scale * Translate * deviceFromLocalTransform_.
+          // Use the same transform pattern as drawImage: Scale * Translate *
+          // deviceFromLocalTransform_.
           const double imgScaleX = targetW / static_cast<double>(bitmap->width);
           const double imgScaleY = targetH / static_cast<double>(bitmap->height);
           const Transform2d imageFromLocal = Transform2d::Scale(imgScaleX, imgScaleY) *
-                                            Transform2d::Translate(Vector2d(targetX, targetY)) *
-                                            deviceFromLocalTransform_;
+                                             Transform2d::Translate(Vector2d(targetX, targetY)) *
+                                             deviceFromLocalTransform_;
 
           tiny_skia::PixmapPaint paint;
           paint.opacity = NarrowToFloat(paintOpacity_);
@@ -1827,12 +1830,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             }
 
             Path segPath = PathBuilder()
-                .moveTo(Vector2d(0.0, decoTopY))
-                .lineTo(Vector2d(segmentWidth, decoTopY))
-                .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
-                .lineTo(Vector2d(0.0, decoTopY + decoThickness))
-                .closePath()
-                .build();
+                               .moveTo(Vector2d(0.0, decoTopY))
+                               .lineTo(Vector2d(segmentWidth, decoTopY))
+                               .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
+                               .lineTo(Vector2d(0.0, decoTopY + decoThickness))
+                               .closePath()
+                               .build();
 
             Transform2d segTransform = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
             if (glyph.rotateDegrees != 0.0) {
@@ -1867,12 +1870,12 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
             const double y = baselineY + decoTopY;
             Path decoPath = PathBuilder()
-                .moveTo(Vector2d(x0, y))
-                .lineTo(Vector2d(x1, y))
-                .lineTo(Vector2d(x1, y + decoThickness))
-                .lineTo(Vector2d(x0, y + decoThickness))
-                .closePath()
-                .build();
+                                .moveTo(Vector2d(x0, y))
+                                .lineTo(Vector2d(x1, y))
+                                .lineTo(Vector2d(x1, y + decoThickness))
+                                .lineTo(Vector2d(x0, y + decoThickness))
+                                .closePath()
+                                .build();
             drawDecoPath(toTinyPath(decoPath));
           } else {
             PathBuilder decoBuilder;

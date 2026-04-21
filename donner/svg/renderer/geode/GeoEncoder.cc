@@ -962,8 +962,8 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   submitFillDraw(args);
 }
 
-void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color, FillRule rule,
-                                   std::span<const float> instanceTransforms) {
+void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color,
+                                   FillRule rule, std::span<const float> instanceTransforms) {
   if (encoded.empty() || instanceTransforms.empty()) {
     return;
   }
@@ -978,9 +978,8 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
 
   // Upload packed transforms into the dedicated instance arena.
   const uint64_t itSize = roundUp4(totalFloats * sizeof(float));
-  const auto itAlloc =
-      impl_->allocInArena(impl_->instanceTransformArena, instanceTransforms.data(), itSize,
-                          kStorageOffsetAlignment);
+  const auto itAlloc = impl_->allocInArena(impl_->instanceTransformArena, instanceTransforms.data(),
+                                           itSize, kStorageOffsetAlignment);
 
   FillDrawArgs args = {};
   // `args.path` stays null — with a precomputed encode the submit path

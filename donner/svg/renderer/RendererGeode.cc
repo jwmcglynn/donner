@@ -1218,7 +1218,7 @@ struct RendererGeode::Impl {
     }
     // Key doesn't match — flush whatever's pending, then start fresh.
     flushPendingBatch();
-    pendingBatch.emplace();
+    pendingBatch = PendingBatch{};
     pendingBatch->sourceEntity = sourceEntity;
     pendingBatch->color = color;
     pendingBatch->rule = rule;
