@@ -1725,6 +1725,23 @@ to drop to native APIs if needed.
   fully GPU-resident path updates.
 - **HDR and wide-gamut color:** WebGPU supports `rgba16float` textures — extend the pipeline
   for Display P3 / Rec. 2020 color spaces.
+- **Geode-specific coverage ramp:** PR #547 introduced the Phase 1–7 Geode stack in bulk and
+  patch coverage naturally dipped below the project baseline while follow-up test work is
+  still landing. `codecov/patch` is currently configured as `informational` so it reports
+  coverage deltas but does not gate merges; the signal is still visible in PR comments and on
+  the codecov dashboard. Coverage items to burn down:
+  - `GeodeFilterEngine` primitive-level unit tests (most primitives only have end-to-end resvg
+    coverage today — follow-up in the same vein as `RendererGeodeTest.FilterSourceAlphaInput*`).
+  - Geode pipeline-class tests (`GeodePipeline`, `GeodeImagePipeline`, `GeodeFilterEngine`)
+    now that they're owned on `GeodeDevice` per issue #575 — the new regression tests under
+    `GeodePerfTest` and `GeodeDevice.SharedPipelinesReturnSameInstance` are a starting point;
+    extend them with per-bind-group coverage.
+  - Error/fallback paths in `RendererGeode::beginFrame` / `pushFilterLayer` /
+    `pushClip` — several are only exercised when a `wgpu::Texture::createTexture` or
+    `createCommandEncoder` returns null, which doesn't happen on healthy CI hardware.
+  Once patch coverage on subsequent Geode PRs is consistently at or above the project
+  baseline, flip `codecov/patch` back to a blocking status (drop the `informational: true`
+  line in `codecov.yml`).
 
 ## Long-Term Vision: Geode as a Standalone Rendering Engine
 

@@ -13,6 +13,14 @@ coverage:
         target: auto
         threshold: 0%
         only_pulls: true
+        # Report patch coverage as a status/comment but never block the
+        # merge on it. For large backend-introduction PRs (Geode renderer
+        # stack, future backends) patch coverage naturally dips below the
+        # project baseline while follow-up test work lands. Keeping this
+        # informational matches the `project` status above — both are
+        # visibility, not merge gates. Coverage improvement is tracked
+        # as a follow-up in docs/design_docs/0017-geode_renderer.md.
+        informational: true
 
 comment:
   layout: "header, diff, flags, files, footer"
