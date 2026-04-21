@@ -1069,6 +1069,94 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
 // `prepareDocumentForRendering` + per-layer re-rasterize per drag
 // frame. On `donner_splash.svg` that was ~60 ms/frame (slow path)
 // instead of ~20 ms/frame (fast path + CPU compose + tight overlay).
+// User-reported regression: clicking a PATH that lives inside a
+// `<g filter>` should feel as fast as clicking the group itself.
+// `SelectTool::onMouseDown` must elevate the hit-tested leaf to the
+// outermost compositing-group ancestor — if it leaves the leaf
+// selected, `CompositorController::promoteEntity` refuses to promote
+// it (descendant of a compositing-breaking ancestor) and every drag
+// frame falls through to the full-document render path.
+TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto client = EditorBackendClient::MakeInProcess();
+  (void)client->setViewport(892, 512).get();
+  FrameResult load = client
+                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
+                                                splashSource.size()),
+                                     std::nullopt)
+                         .get();
+  ASSERT_TRUE(load.ok);
+
+  // `#Big_lightning_glow` contains a `<path class="cls-79">` with a
+  // non-trivial bounding box spanning ~[395..495] × [105..265]. Click
+  // a point inside that path — the editor's `SelectTool` must elevate
+  // the click to `#Big_lightning_glow` for the drag to hit the
+  // compositor's subtree fast path.
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(455.0, 160.0);  // Inside cls-79's top half.
+  down.buttons = 1;
+  FrameResult downFrame = client->pointerEvent(down).get();
+  ASSERT_TRUE(downFrame.ok);
+  if (downFrame.selection.selections.empty()) {
+    GTEST_SKIP()
+        << "expected click to hit the cls-79 path inside Big_lightning_glow — "
+           "splash geometry may have shifted";
+  }
+
+  // Warm-up + 30 steady-state drag frames, same shape as
+  // `RealSplashSteadyStateDragHasNoFrameSpikes`.
+  ::donner::editor::PointerEventPayload warmup;
+  warmup.phase = PointerPhase::kMove;
+  warmup.documentPoint = Vector2d(456.0, 160.0);
+  warmup.buttons = 1;
+  (void)client->pointerEvent(warmup).get();
+
+  constexpr int kDragFrames = 30;
+  using Clock = std::chrono::steady_clock;
+  std::vector<double> ms;
+  ms.reserve(kDragFrames);
+  for (int i = 0; i < kDragFrames; ++i) {
+    ::donner::editor::PointerEventPayload mv;
+    mv.phase = PointerPhase::kMove;
+    mv.documentPoint = Vector2d(455.0 + (i + 2) * 1.5, 160.0);
+    mv.buttons = 1;
+    const auto t0 = Clock::now();
+    (void)client->pointerEvent(mv).get();
+    const auto t1 = Clock::now();
+    ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+  }
+  double total = 0.0;
+  double worst = 0.0;
+  int spikeCount = 0;
+  constexpr double kSpikeThresholdMs = 60.0;
+  for (double v : ms) {
+    total += v;
+    worst = std::max(worst, v);
+    if (v > kSpikeThresholdMs) ++spikeCount;
+  }
+  const double avg = total / static_cast<double>(ms.size());
+  std::fprintf(stderr,
+               "[PathInFilter] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
+               avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
+
+  EXPECT_LT(avg, 60.0)
+      << "clicking inside a filter group and dragging is slow — "
+         "`SelectTool::onMouseDown` likely isn't elevating to the filter "
+         "group, so `promoteEntity` refuses the leaf and every frame "
+         "takes the full-document slow path.";
+  EXPECT_EQ(spikeCount, 0)
+      << spikeCount << " of " << kDragFrames << " drag frames spiked past "
+      << kSpikeThresholdMs << " ms.";
+}
+
 TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragEngagesFastPath) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {

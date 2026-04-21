@@ -49,6 +49,95 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_TRUE(tool.isDragging());
 }
 
+// Clicking a path inside a `<g filter>` elevates the selection to the
+// filter group so the compositor can promote the group as a single
+// cached layer. Without elevation, `promoteEntity` refuses the leaf
+// (descendant of a compositing-breaking ancestor) and every drag
+// frame falls into the full-document render path.
+TEST(SelectToolElevationTest, ClickOnPathInsideFilterGroupSelectsTheFilterGroup) {
+  // `R"svg(...)svg"` so the `url(#blur)"` sequence inside doesn't
+  // accidentally end the raw-string literal (default `R"(...)"`
+  // terminates on `)"`).
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
+           <g id="glow" filter="url(#blur)">
+             <rect id="inner" x="50" y="50" width="40" height="40" fill="red"/>
+           </g>
+         </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  SelectTool tool;
+
+  // Click the inner path. SelectTool should elevate to #glow.
+  tool.onMouseDown(app, Vector2d(70.0, 70.0), MouseModifiers{});
+
+  ASSERT_TRUE(app.hasSelection());
+  auto glow = app.document().document().querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+  EXPECT_EQ(*app.selectedElement(), *glow)
+      << "click on path inside `<g filter>` should select the filter group, "
+         "not the inner path — otherwise `CompositorController::promoteEntity` "
+         "refuses the leaf and every drag frame takes the slow path";
+}
+
+// The outermost filter/mask/clip-path ancestor wins — nested filter
+// groups still promote cleanly because the innermost group's own
+// promotion would be refused as a descendant of a compositing-breaking
+// ancestor.
+TEST(SelectToolElevationTest, NestedFilterGroupsElevateToOutermost) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <defs>
+             <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+             <filter id="blur2"><feGaussianBlur stdDeviation="3"/></filter>
+           </defs>
+           <g id="outer" filter="url(#blur)">
+             <g id="inner" filter="url(#blur2)">
+               <rect id="shape" x="50" y="50" width="40" height="40" fill="red"/>
+             </g>
+           </g>
+         </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  SelectTool tool;
+
+  tool.onMouseDown(app, Vector2d(70.0, 70.0), MouseModifiers{});
+
+  auto outer = app.document().document().querySelector("#outer");
+  ASSERT_TRUE(outer.has_value());
+  EXPECT_EQ(*app.selectedElement(), *outer)
+      << "with nested `<g filter>` groups, selection should elevate to the "
+         "outermost one (the only layer the compositor can promote)";
+}
+
+// Shift+click is an explicit curate-the-selection gesture — no
+// elevation, leaf accuracy preserved so the user can add or remove
+// individual paths from a multi-selection.
+TEST(SelectToolElevationTest, ShiftClickKeepsLeafAccuracy) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
+           <g id="glow" filter="url(#blur)">
+             <rect id="inner" x="50" y="50" width="40" height="40" fill="red"/>
+           </g>
+         </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  SelectTool tool;
+
+  MouseModifiers shift{};
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(70.0, 70.0), shift);
+
+  auto inner = app.document().document().querySelector("#inner");
+  ASSERT_TRUE(inner.has_value());
+  ASSERT_TRUE(app.hasSelection());
+  EXPECT_EQ(*app.selectedElement(), *inner)
+      << "shift-click preserves leaf accuracy so the user can curate a "
+         "multi-selection; only plain clicks elevate for drag intent";
+}
+
 TEST_F(SelectToolTest, CompositedRenderingToggleAllowedOnlyWithoutActiveGesture) {
   EXPECT_TRUE(CanToggleCompositedRendering(tool));
 
