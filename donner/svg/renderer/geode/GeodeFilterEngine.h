@@ -223,12 +223,11 @@ private:
   /// @param width Output texture width.
   /// @param height Output texture height.
   /// @param primitive The feTurbulence parameters.
-  /// @param scaleX User-to-pixel scale X.
-  /// @param scaleY User-to-pixel scale Y.
+  /// @param deviceFromFilter Transform from filter/user space into device space.
   /// @return The noise texture.
   wgpu::Texture applyTurbulence(uint32_t width, uint32_t height,
                                 const svg::components::filter_primitive::Turbulence& primitive,
-                                double scaleX, double scaleY);
+                                const Transform2d& deviceFromFilter);
 
   /// Per-pixel channel-driven displacement (feDisplacementMap).
   /// @param in1 Source image texture.

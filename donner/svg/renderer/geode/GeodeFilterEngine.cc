@@ -1414,7 +1414,8 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     } else if (const auto* conv = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
       outputTex = applyConvolveMatrix(inputTex, *conv);
     } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
-      outputTex = applyTurbulence(inputTex.getWidth(), inputTex.getHeight(), *turb, scaleX, scaleY);
+      outputTex =
+          applyTurbulence(inputTex.getWidth(), inputTex.getHeight(), *turb, deviceFromFilter);
     } else if (const auto* disp = std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
       wgpu::Texture in2Tex = inputTex;
       if (node.inputs.size() >= 2) {
@@ -2171,7 +2172,7 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 
 wgpu::Texture GeodeFilterEngine::applyTurbulence(
     uint32_t width, uint32_t height, const svg::components::filter_primitive::Turbulence& primitive,
-    double scaleX, double scaleY) {
+    const Transform2d& deviceFromFilter) {
   const wgpu::Device& dev = device_.device();
 
   wgpu::Texture output = createIntermediateTexture(dev, width, height, "FilterTurbulenceOutput");
@@ -2191,13 +2192,22 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   params.typeFlag =
       primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
   // Tile dimensions in user space (for stitchTiles).
-  params.tileWidth = static_cast<float>(width / scaleX);
-  params.tileHeight = static_cast<float>(height / scaleY);
-  // Inverse device-to-filter transform: for now assume identity (no skew/rotation).
-  params.filterFromDeviceA = static_cast<float>(1.0 / scaleX);
-  params.filterFromDeviceB = 0.0f;
-  params.filterFromDeviceC = 0.0f;
-  params.filterFromDeviceD = static_cast<float>(1.0 / scaleY);
+  params.tileWidth = static_cast<float>(width);
+  params.tileHeight = static_cast<float>(height);
+
+  const double determinant = deviceFromFilter.determinant();
+  if (NearZero(determinant, 1e-12)) {
+    params.filterFromDeviceA = 1.0f;
+    params.filterFromDeviceB = 0.0f;
+    params.filterFromDeviceC = 0.0f;
+    params.filterFromDeviceD = 1.0f;
+  } else {
+    const Transform2d filterFromDevice = deviceFromFilter.inverse();
+    params.filterFromDeviceA = static_cast<float>(filterFromDevice.data[0]);
+    params.filterFromDeviceB = static_cast<float>(filterFromDevice.data[2]);
+    params.filterFromDeviceC = static_cast<float>(filterFromDevice.data[1]);
+    params.filterFromDeviceD = static_cast<float>(filterFromDevice.data[3]);
+  }
 
   // Generate permutation + gradient tables from the seed.
   TurbulenceTables tables{};
@@ -2432,16 +2442,14 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   }
 
   const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
-  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)), int32_t(0),
-                                 static_cast<int32_t>(width) - 1);
-  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)), int32_t(0),
-                                 static_cast<int32_t>(height) - 1);
-  params.sampleMaxX =
-      std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1, int32_t(0),
-                 static_cast<int32_t>(width) - 1);
-  params.sampleMaxY =
-      std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1, int32_t(0),
-                 static_cast<int32_t>(height) - 1);
+  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)),
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
+  params.sampleMaxX = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1,
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMaxY = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1,
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
 
   // Upload as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
@@ -2532,16 +2540,14 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   }
 
   const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
-  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)), int32_t(0),
-                                 static_cast<int32_t>(width) - 1);
-  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)), int32_t(0),
-                                 static_cast<int32_t>(height) - 1);
-  params.sampleMaxX =
-      std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1, int32_t(0),
-                 static_cast<int32_t>(width) - 1);
-  params.sampleMaxY =
-      std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1, int32_t(0),
-                 static_cast<int32_t>(height) - 1);
+  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)),
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
+  params.sampleMaxX = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1,
+                                 int32_t(0), static_cast<int32_t>(width) - 1);
+  params.sampleMaxY = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1,
+                                 int32_t(0), static_cast<int32_t>(height) - 1);
 
   // Upload as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
