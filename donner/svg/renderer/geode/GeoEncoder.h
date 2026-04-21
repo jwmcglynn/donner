@@ -393,6 +393,41 @@ public:
                 const EncodedPath* precomputedEncoded = nullptr);
 
   /**
+   * Fill N copies of the same encoded path at N different affine
+   * transforms, in one GPU draw call (Milestone 6 Bullet 2).
+   *
+   * The caller has already packed each transform into the wire format
+   * the shader expects: two `vec4f` rows per instance (row-major affine,
+   * 32 bytes per entry). See `donner/svg/renderer/geode/shaders/slug_fill.wgsl`
+   * `struct InstanceTransform` for the exact layout.
+   *
+   * The vertex shader composes each instance's transform with the
+   * currently-bound `uniforms.mvp`, so `encoder.setTransform(...)`
+   * still applies an outer world transform; per-instance data is the
+   * *delta* relative to that. Pass `Transform2d::Identity` to
+   * `setTransform` if instance transforms already encode the full
+   * path→clip-space mapping (the common case for `<use>` batching,
+   * where each instance's transform is the full `worldFromEntity`).
+   *
+   * If `instanceTransforms` is empty the call is a no-op. If
+   * `instanceTransforms.size() == 1` this is equivalent to a single
+   * `fillPath` with the given transform folded in — the caller can
+   * still prefer it when bouncing through the batcher.
+   *
+   * @param encoded Precomputed `EncodedPath` shared across all
+   *   instances. Required (non-null) — there's no "encode inline"
+   *   path here; the whole point is to amortize one encode across
+   *   many draws.
+   * @param color Solid fill color (NOT premultiplied).
+   * @param rule Fill rule.
+   * @param instanceTransforms Span of `{row0, row1}` vec4f pairs,
+   *   two consecutive `vec4f` per instance (32 bytes each). The span
+   *   must contain exactly `8 * instanceCount` floats.
+   */
+  void fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color, FillRule rule,
+                         std::span<const float> instanceTransforms);
+
+  /**
    * Fill a path with a linear gradient.
    *
    * Same CPU-side Slug band encoding as @ref fillPath, but the shading stage
