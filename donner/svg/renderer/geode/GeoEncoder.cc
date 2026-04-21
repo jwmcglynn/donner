@@ -209,6 +209,11 @@ struct GeoEncoder::Impl {
   Arena bandArena;
   Arena curveArena;
   Arena uniformArena;
+  /// M6-B step 3: per-instance affine transforms for `fillPathInstanced`.
+  /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
+  /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
+  /// since the binding is storage read-only.
+  Arena instanceTransformArena;
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
   // calls `commandEncoder.finish()` + `queue().submit()`. When false
@@ -568,6 +573,8 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   impl.curveArena.label = "GeodeCurveArena";
   impl.uniformArena.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   impl.uniformArena.label = "GeodeUniformArena";
+  impl.instanceTransformArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.instanceTransformArena.label = "GeodeInstanceTransformArena";
 }
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -951,6 +958,53 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
   args.patternSampler = impl_->device->dummyPatternSampler();
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
+
+  submitFillDraw(args);
+}
+
+void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color, FillRule rule,
+                                   std::span<const float> instanceTransforms) {
+  if (encoded.empty() || instanceTransforms.empty()) {
+    return;
+  }
+  // Caller packs 8 floats per instance — two vec4f rows of a row-major
+  // affine. Malformed inputs drop silently rather than tripping a
+  // validation error mid-frame.
+  const size_t totalFloats = instanceTransforms.size();
+  const uint32_t instanceCount = static_cast<uint32_t>(totalFloats / 8u);
+  if (instanceCount == 0u || totalFloats != static_cast<size_t>(instanceCount) * 8u) {
+    return;
+  }
+
+  // Upload packed transforms into the dedicated instance arena.
+  const uint64_t itSize = roundUp4(totalFloats * sizeof(float));
+  const auto itAlloc =
+      impl_->allocInArena(impl_->instanceTransformArena, instanceTransforms.data(), itSize,
+                          kStorageOffsetAlignment);
+
+  FillDrawArgs args = {};
+  // `args.path` stays null — with a precomputed encode the submit path
+  // never re-encodes, so the raw Path isn't needed. Gradient/pattern
+  // variants aren't batchable in this PR; pure solid only.
+  args.path = nullptr;
+  args.rule = rule;
+  args.precomputedEncoded = &encoded;
+  args.paintMode = 0u;
+  const float alpha = color.a / 255.0f;
+  args.solidColor[0] = (color.r / 255.0f) * alpha;
+  args.solidColor[1] = (color.g / 255.0f) * alpha;
+  args.solidColor[2] = (color.b / 255.0f) * alpha;
+  args.solidColor[3] = alpha;
+  args.patternOpacity = 1.0f;
+  args.patternView = impl_->device->dummyPatternTextureView();
+  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.tileSize = Vector2d(1.0, 1.0);
+  args.patternFromPath = Transform2d();
+
+  args.instanceTransformsBuffer = itAlloc.buffer;
+  args.instanceTransformsOffset = itAlloc.offset;
+  args.instanceTransformsSize = itAlloc.size;
+  args.instanceCount = instanceCount;
 
   submitFillDraw(args);
 }

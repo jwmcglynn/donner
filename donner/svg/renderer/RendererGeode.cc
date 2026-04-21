@@ -1044,6 +1044,35 @@ struct RendererGeode::Impl {
   /// registries are never considered "consecutive same-source").
   Entity lastDrawSourceEntity = entt::null;
 
+  /// M6-B step 3 (design doc 0030 §M6 Bullet 2): deferred batch for
+  /// consecutive `drawPath` calls that share a source entity + resolved
+  /// solid paint + no stroke + no subtree complication. Each matching
+  /// call appends its `currentTransform` into `transforms`; the batch
+  /// is flushed by `flushPendingBatch()` whenever state changes in a
+  /// way that invalidates the batch (paint-key mismatch on the next
+  /// drawPath, any push/pop, end of frame, …). A flush of size >= 2
+  /// routes through `GeoEncoder::fillPathInstanced` — one GPU draw
+  /// with `instanceCount == N`. Size-1 flushes degrade to the regular
+  /// single-draw path so we don't pay the per-instance-buffer cost for
+  /// unbatched draws.
+  struct PendingBatch {
+    Entity sourceEntity = entt::null;
+    css::RGBA color;
+    FillRule rule = FillRule::NonZero;
+    const geode::EncodedPath* encoded = nullptr;
+    /// Reference to the source Path. Caller guarantees lifetime —
+    /// the Path is stored on `ComputedPathComponent` (pinned by
+    /// `GeodePathCacheComponent`'s cache invariant for the frame's
+    /// lifetime).
+    const Path* path = nullptr;
+    /// `currentTransform` captured at each `drawPath`. On flush, the
+    /// outer encoder transform is set to identity and these are
+    /// uploaded as per-instance transforms (see
+    /// `flushPendingBatch` for the math).
+    std::vector<Transform2d> transforms;
+  };
+  std::optional<PendingBatch> pendingBatch;
+
   /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
   /// `on_destroy<ComputedPathComponent>` listener onto `registry`.
   /// Called at the start of each `draw()`. Idempotent for the same
@@ -1096,6 +1125,107 @@ struct RendererGeode::Impl {
       cache.fillEncode = geode::GeodePathEncoder::encode(path, rule);
     }
     return &*cache.fillEncode;
+  }
+
+  /// Pack a 2D affine into the 8-float wire format the shader expects
+  /// (two `vec4f` rows, `(a, c, e, 0)` / `(b, d, f, 0)` — see
+  /// `struct InstanceTransform` in `shaders/slug_fill.wgsl`).
+  /// `Transform2d::data` is column-major `[a, b, c, d, e, f]`.
+  static void packTransform(const Transform2d& xf, float out[8]) {
+    out[0] = static_cast<float>(xf.data[0]);  // a
+    out[1] = static_cast<float>(xf.data[2]);  // c
+    out[2] = static_cast<float>(xf.data[4]);  // e
+    out[3] = 0.0f;
+    out[4] = static_cast<float>(xf.data[1]);  // b
+    out[5] = static_cast<float>(xf.data[3]);  // d
+    out[6] = static_cast<float>(xf.data[5]);  // f
+    out[7] = 0.0f;
+  }
+
+  /// Emit any pending M6-B batch. No-op if there's nothing pending.
+  /// On size == 1 the batch degrades to a single `fillPath` call so we
+  /// don't pay the per-instance-buffer cost when we accumulated
+  /// exactly one draw. Size >= 2 is one instanced GPU draw.
+  ///
+  /// Flushing mutates `currentTransform` to push the batch's
+  /// transform(s) down to the encoder, then RESTORES it to the
+  /// caller's current value. Without the restore, a flush in the
+  /// middle of `drawPath` (between fill and stroke, for example)
+  /// would leave the transform stuck at the flushed batch's value
+  /// for the subsequent stroke emit — breaks any fixture that
+  /// mixes batchable fills with stroked siblings.
+  void flushPendingBatch() {
+    if (!pendingBatch.has_value() || pendingBatch->transforms.empty()) {
+      pendingBatch.reset();
+      return;
+    }
+    if (!encoder) {
+      pendingBatch.reset();
+      return;
+    }
+    const Transform2d savedTransform = currentTransform;
+    PendingBatch batch = std::move(*pendingBatch);
+    pendingBatch.reset();
+
+    if (batch.transforms.size() == 1) {
+      // Single draw — restore the captured transform + use the
+      // non-instanced path.
+      currentTransform = batch.transforms.front();
+      syncTransform();
+      encoder->fillPath(*batch.path, batch.color, batch.rule, batch.encoded);
+    } else {
+      // Instanced: set encoder transform to identity so the shader's
+      // `uniforms.mvp` carries only the orthographic screen-pixel mapping.
+      // Each instance transform already encodes the full
+      // `worldFromEntity * surfaceFromCanvas` composition that a
+      // non-batched draw would fold into currentTransform; compose with
+      // identity `uniforms.mvp` is equivalent to composing with the
+      // original currentTransform per-draw.
+      currentTransform = Transform2d();
+      syncTransform();
+
+      // Pack transforms into the wire format the shader expects.
+      std::vector<float> packed(batch.transforms.size() * 8u);
+      for (size_t i = 0; i < batch.transforms.size(); ++i) {
+        packTransform(batch.transforms[i], packed.data() + i * 8u);
+      }
+      encoder->fillPathInstanced(*batch.encoded, batch.color, batch.rule, packed);
+    }
+
+    // Restore so subsequent draw/state ops see the driver-set
+    // transform intact. Draw-emitting helpers (`syncTransform` +
+    // `encoder->fillPath*`) read `currentTransform` when re-entered,
+    // so we don't need to re-sync the encoder right now.
+    currentTransform = savedTransform;
+  }
+
+  /// Predicate: would a batchable draw with this key extend the
+  /// currently pending batch, or does it start a new one? Returns
+  /// true when the current `drawPath` call should NOT emit (because
+  /// it's been absorbed into a batch). Always returns true on a
+  /// non-empty batch state — either appends or flushes + starts new.
+  /// The caller is expected to have already verified the draw is
+  /// "batch-compatible" (solid paint, no stroke, has source entity,
+  /// has cached fill encode, no in-flight pattern).
+  bool tryAppendOrStartBatch(Entity sourceEntity, const Path& path, const css::RGBA& color,
+                             FillRule rule, const geode::EncodedPath* encoded) {
+    const bool matches = pendingBatch.has_value() &&
+                        pendingBatch->sourceEntity == sourceEntity &&
+                        pendingBatch->color == color && pendingBatch->rule == rule;
+    if (matches) {
+      pendingBatch->transforms.push_back(currentTransform);
+      return true;
+    }
+    // Key doesn't match — flush whatever's pending, then start fresh.
+    flushPendingBatch();
+    pendingBatch.emplace();
+    pendingBatch->sourceEntity = sourceEntity;
+    pendingBatch->color = color;
+    pendingBatch->rule = rule;
+    pendingBatch->encoded = encoded;
+    pendingBatch->path = &path;
+    pendingBatch->transforms.push_back(currentTransform);
+    return true;
   }
 
   /// Determine the fill rule for a stroked outline per the subpath-count
@@ -1510,6 +1640,11 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 }
 
 void RendererGeode::endFrame() {
+  // M6-B step 3: flush any pending `<use>`-batch before closing out
+  // the frame. Without this, the last run of batchable draws in the
+  // frame would never emit.
+  impl_->flushPendingBatch();
+
   if (impl_->encoder) {
     // Ends the open render pass without submitting — shared-mode.
     impl_->encoder->finish();
@@ -1572,6 +1707,11 @@ void RendererGeode::popTransform() {
 }
 
 void RendererGeode::pushClip(const ResolvedClip& clip) {
+  // M6-B step 3: flush batch before a state change — a subsequent
+  // drawPath inside the new clip is no longer "batch-compatible"
+  // with the pending run from the outer clip region.
+  impl_->flushPendingBatch();
+
   // Rectangular clip (the nested-`<svg>` viewport, `overflow: hidden`, and
   // `<image>` dest-rect cases) is implemented via the WebGPU scissor rect
   // (plus the Phase 3a polygon clip for non-axis-aligned ancestors).
@@ -1786,6 +1926,10 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 }
 
 void RendererGeode::popClip() {
+  // M6-B step 3: flush before popping so the batched draws stay
+  // inside the clip region they were accumulated under.
+  impl_->flushPendingBatch();
+
   if (!impl_->clipStack.empty()) {
     // Defer release of the mask textures to endFrame — the main
     // encoder that was just drawing under this clip may have recorded
@@ -1803,6 +1947,8 @@ void RendererGeode::popClip() {
 }
 
 void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
+  impl_->flushPendingBatch();  // M6-B step 3
+
   // Phase 3d implements all 16 `mix-blend-mode` values: the pushed
   // layer renders normally, and `popIsolatedLayer` switches to a
   // blend-blit compositor that reads a frozen snapshot of the parent
@@ -1886,6 +2032,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
 }
 
 void RendererGeode::popIsolatedLayer() {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (impl_->layerStack.empty()) {
     return;
   }
@@ -1994,6 +2141,7 @@ void RendererGeode::popIsolatedLayer() {
 
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
                                     const std::optional<Box2d>& filterRegion) {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || !impl_->filterEngine) {
     // Headless or degenerate state — push a placeholder frame so
@@ -2069,6 +2217,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
 }
 
 void RendererGeode::popFilterLayer() {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (impl_->filterStack.empty()) {
     return;
   }
@@ -2125,6 +2274,7 @@ void RendererGeode::popFilterLayer() {
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     // Headless / degenerate — push a placeholder so popMask stays balanced.
@@ -2195,6 +2345,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
 }
 
 void RendererGeode::transitionMaskToContent() {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (impl_->maskStack.empty()) {
     return;
   }
@@ -2224,6 +2375,7 @@ void RendererGeode::transitionMaskToContent() {
 }
 
 void RendererGeode::popMask() {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (impl_->maskStack.empty()) {
     return;
   }
@@ -2276,6 +2428,7 @@ void RendererGeode::popMask() {
 }
 
 void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (!impl_->device || !impl_->pipeline) {
     return;
   }
@@ -2419,6 +2572,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 }
 
 void RendererGeode::endPatternTile(bool forStroke) {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (impl_->patternStack.empty()) {
     return;
   }
@@ -2540,6 +2694,38 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // falls back to the inline encode path.
   const geode::EncodedPath* fillEncoded =
       impl_->getFillEncode(path.sourceEntity, path.path, path.fillRule);
+
+  // M6-B step 3: try to append to a pending `<use>`-batch. Preconditions:
+  //  - Source entity valid (non-null handle).
+  //  - Fill encode cache hit (shared across all instances).
+  //  - Solid paint (gradient / pattern need per-draw uniforms today).
+  //  - No active pattern-fill handoff from the driver.
+  //  - No stroke (we can't defer a fill while the stroke runs on top).
+  //
+  // When all hold: append this draw's `currentTransform` into the pending
+  // batch (flushing + restarting if the paint/source key differs) and
+  // return early. A later state change (pushClip, popLayer, endFrame,
+  // setPaint-different-key, non-batchable draw) flushes as one instanced
+  // draw.
+  const bool hasStroke =
+      !(stroke.strokeWidth <= 0.0 ||
+        std::holds_alternative<PaintServer::None>(impl_->paint.stroke));
+  const bool batchable =
+      !hasStroke && fillEncoded != nullptr &&
+      path.sourceEntity.entity() != entt::null &&
+      std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
+      !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr;
+  if (batchable) {
+    const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
+    const css::RGBA color = solid.color.resolve(
+        impl_->paint.currentColor.rgba(), static_cast<float>(impl_->paint.fillOpacity));
+    impl_->tryAppendOrStartBatch(path.sourceEntity.entity(), path.path, color, path.fillRule,
+                                 fillEncoded);
+    return;
+  }
+
+  // Non-batchable: flush whatever's pending, then emit normally.
+  impl_->flushPendingBatch();
   impl_->fillResolved(path.path, path.fillRule, fillEncoded);
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
@@ -2623,6 +2809,7 @@ void RendererGeode::drawEllipse(const Box2d& bounds, const StrokeParams& stroke)
 }
 
 void RendererGeode::drawImage(const ImageResource& image, const ImageParams& params) {
+  impl_->flushPendingBatch();  // M6-B step 3
   if (!impl_->encoder) {
     return;
   }
@@ -2643,6 +2830,7 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
 
 void RendererGeode::drawText(Registry& registry, const components::ComputedTextComponent& text,
                              const TextParams& params) {
+  impl_->flushPendingBatch();  // M6-B step 3
 #ifdef DONNER_TEXT_ENABLED
   if (!impl_->device || !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return;
