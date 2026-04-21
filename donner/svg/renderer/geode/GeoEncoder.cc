@@ -297,11 +297,14 @@ struct GeoEncoder::Impl {
   wgpu::Texture activeClipMaskTexture;
   wgpu::TextureView activeClipMaskView;
 
-  // Lazily-constructed mask-rendering pipeline. We build one when the
-  // first `beginMaskPass` call arrives so encoders that never touch
-  // clipping pay no construction cost. Shared across all mask passes
-  // within the lifetime of this encoder.
-  std::unique_ptr<GeodeMaskPipeline> maskPipelineOwned;
+  // Non-owning pointer to the device's shared `GeodeMaskPipeline`.
+  // Built on demand via `GeodeDevice::maskPipeline()` the first time
+  // `beginMaskPass` fires on any encoder in the process; encoders that
+  // never open a mask pass pay nothing. Sharing matters because
+  // wgpu-native's internal pipeline cache never drains — constructing
+  // `GeodeMaskPipeline` per-encoder used to leak alongside the main
+  // render pipelines (issue #575).
+  GeodeMaskPipeline* maskPipelineOwned = nullptr;
 
   // While a mask pass is open (`maskPassOpen == true`), the main
   // render pass is closed — draw calls that hit the mask pipeline go
@@ -746,10 +749,10 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
     impl_->loadPreserve = true;
   }
 
-  // Lazily build the mask pipeline on first use.
+  // Fetch the device's shared mask pipeline — lazily built on first
+  // `maskPipeline()` call.
   if (!impl_->maskPipelineOwned) {
-    impl_->maskPipelineOwned = std::make_unique<GeodeMaskPipeline>(
-        impl_->device->device(), impl_->device->useAlphaCoverageAA(), impl_->device->sampleCount());
+    impl_->maskPipelineOwned = &impl_->device->maskPipeline();
   }
 
   impl_->maskPassSavedTransform = impl_->transform;

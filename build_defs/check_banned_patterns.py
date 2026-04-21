@@ -105,6 +105,35 @@ _RULES: List[_Rule] = [
         # non-core consumer must go through the SVG public API surface.
         exempt_path_prefixes=("donner/svg/", "donner/base/"),
     ),
+    _Rule(
+        pattern=re.compile(r"\.createRenderPipeline\b|\.createComputePipeline\b"),
+        description="wgpu pipeline construction outside GeodeDevice",
+        remediation=(
+            "wgpu-native retains every `wgpu::RenderPipeline` / `wgpu::ComputePipeline` it "
+            "ever constructs internally — `wgpuDevicePoll(wait=true)` does NOT drain the "
+            "pending-destroy queue for pipelines. Constructing pipelines per-frame or "
+            "per-renderer leaks ~100 KB each until the driver's `maxMemoryAllocationCount` "
+            "trips (Mesa lavapipe) or the process hangs (Mesa llvmpipe). See issue #575.\n"
+            "    Allowed sites: GeodePipeline.cc, GeodeImagePipeline.cc, GeodeFilterEngine.cc. "
+            "All pipelines must be owned by `GeodeDevice` so every renderer that shares the "
+            "device reuses them. If you need a new pipeline class, add ownership to "
+            "`GeodeDevice::Impl` and expose it via a `GeodeDevice` accessor — do not call "
+            "`createRenderPipeline` / `createComputePipeline` from anywhere else."
+        ),
+        # These are the only files that legitimately call the wgpu pipeline
+        # constructors — they are the pipeline *classes* themselves, owned
+        # end-to-end by GeodeDevice. GeoEncoder_tests / GeodeShaders_tests
+        # construct test fixtures that compile pipelines for shader-only
+        # validation; they're exempt because the test binary's wgpu::Device
+        # goes away at process exit, not during the test run.
+        exempt_path_prefixes=(
+            "donner/svg/renderer/geode/GeodePipeline.cc",
+            "donner/svg/renderer/geode/GeodeImagePipeline.cc",
+            "donner/svg/renderer/geode/GeodeFilterEngine.cc",
+            "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc",
+            "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc",
+        ),
+    ),
 ]
 
 
