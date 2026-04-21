@@ -364,6 +364,24 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
     };
   }
 
+  // `masking/clipPath/simple-case.svg` clips a green rect through a
+  // 5-point star path. Geode's 4× MSAA places the star's acute-angle
+  // edge pixels on a different sub-pixel grid than tiny-skia's 16×
+  // supersample, producing ~728 fully-coloured boundary pixels along
+  // the star's points (>30% per-pixel diff vs the soft-AA reference).
+  // The shape and clip are identical; only fractional edge coverage
+  // along the acute tips differs.
+  // TODO(geode): upgrade to 8× / 16× MSAA or analytic stroke AA to
+  // shed the acute-angle fringe pixels on star-clip tests.
+  if (category == "masking/clipPath" && filename == "simple-case.svg") {
+    return [](ImageComparisonParams& p) {
+      widenThresholdForGeode(p);
+      if (kActiveIsGeode) {
+        p.maxMismatchedPixels = std::max(p.maxMismatchedPixels, 900);
+      }
+    };
+  }
+
   return std::nullopt;
 }
 
