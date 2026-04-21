@@ -1,3 +1,5 @@
+#include <cstdint>
+
 #include "donner/editor/tests/AsyncRendererFilterGroupPerfTestUtils.h"
 #include "gtest/gtest.h"
 
