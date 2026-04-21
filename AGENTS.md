@@ -51,12 +51,13 @@ Stages transform components through the ECS:
 When creating a pull request:
 
 1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
-2. **Run `tools/presubmit.sh`** before opening the PR. It runs everything CI runs:
-   - `bazel test //...` — covers unit tests AND the per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators directly at test time.
-   - `tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
-   - `clang-format --dry-run` on modified files.
-   Fast iteration: `tools/presubmit.sh --fast` skips `bazel test`.
-   If your PR touches `BUILD.bazel` or `.bzl` files, also run `tools/presubmit.sh --variants` to cover the local `tiny`, `text-full`, and `geode` Bazel matrix checks before CI.
+2. **Run `bazel test //...`** before opening the PR. This is the single source of truth for local validation — it covers:
+   - Unit tests across the default config AND the `tiny` / `text_full` / `geode` variant lanes (auto-emitted as `*_tiny` / `*_text_full` / `*_geode` wrappers by `donner_cc_test(variants=…)`).
+   - The per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators at test time.
+   On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
+   Also run, separately:
+   - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
+   - `clang-format --dry-run` on modified files (`git clang-format` covers staged changes).
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
 4. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
 5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.

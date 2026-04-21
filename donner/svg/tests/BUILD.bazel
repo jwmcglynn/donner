@@ -6,8 +6,16 @@ load(
 )
 
 donner_cc_test(
-    name = "svg_tests_impl",
+    name = "svg_tests",
     shard_count = 10,
+    # Variant lanes (doc 0031 M2.3): emits `svg_tests_tiny`,
+    # `svg_tests_text_full`, and `svg_tests_geode` so `bazel test //...`
+    # exercises every renderer/text tier on every push.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "ElementStyle_tests.cc",
         "ElementType_tests.cc",
@@ -50,12 +58,6 @@ donner_cc_test(
         "//donner/svg/renderer/tests:renderer_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
-)
-
-alias(
-    name = "svg_tests",
-    actual = ":svg_tests_impl",
-    testonly = 1,
 )
 
 donner_cc_library(
