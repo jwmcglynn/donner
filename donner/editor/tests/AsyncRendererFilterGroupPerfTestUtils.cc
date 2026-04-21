@@ -1,17 +1,23 @@
 #include "donner/editor/tests/AsyncRendererFilterGroupPerfTestUtils.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
+#include <iostream>
 #include <optional>
+#include <ratio>
 #include <sstream>
 #include <string>
 #include <thread>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "gtest/gtest.h"
 
