@@ -43,6 +43,8 @@ constexpr int kTimeoutExitCode = 124;
 // `std::string` storage is safe to `write()` from a signal handler as long as
 // we don't mutate it there.
 std::string gCurrentTestName;
+// NOLINTNEXTLINE(misc-include-cleaner) — pid_t canonical header differs between
+// clang-tidy-18 (sys/types.h, included above) and clang-tidy-19; suppress.
 pid_t gMainPid = 0;
 
 void TimeoutHandler(int /*sig*/) {
