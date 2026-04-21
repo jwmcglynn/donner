@@ -27,8 +27,11 @@ jobs:
 
           is_docs_only_path() {
             local path="$1"
+            # Build-impacting files (.bazelignore changes Bazel package
+            # discovery, .gitmodules changes vendored deps) are intentionally
+            # NOT in this allowlist — see Codex review on PR #570.
             case "$path" in
-              docs/*|CHANGELOG*|.bazelignore|.editorconfig|.gitattributes|.gitignore|.gitmodules)
+              docs/*|CHANGELOG*|.editorconfig|.gitattributes|.gitignore)
                 return 0
                 ;;
             esac
