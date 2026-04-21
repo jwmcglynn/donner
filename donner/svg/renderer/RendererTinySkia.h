@@ -270,8 +270,8 @@ private:
   double paintOpacity_ = 1.0;
 
   tiny_skia::Pixmap frame_;
-  Transform2d currentTransform_;
-  std::vector<Transform2d> transformStack_;
+  Transform2d deviceFromLocalTransform_;
+  std::vector<Transform2d> deviceFromLocalTransformStack_;
   std::optional<tiny_skia::Mask> currentClipMask_;
   std::vector<std::optional<tiny_skia::Mask>> clipStack_;
   std::vector<SurfaceFrame> surfaceStack_;

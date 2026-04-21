@@ -542,8 +542,8 @@ struct RendererGeode::Impl {
 
   // CPU-side state.
   PaintParams paint;
-  Transform2d currentTransform;
-  std::vector<Transform2d> transformStack;
+  Transform2d deviceFromLocalTransform;
+  std::vector<Transform2d> deviceFromLocalTransformStack;
 
   // --- Pattern tile state (Phase 2H) ---
   //
@@ -562,8 +562,8 @@ struct RendererGeode::Impl {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
     wgpu::Texture savedMsaaTarget;
-    Transform2d savedTransform;
-    std::vector<Transform2d> savedTransformStack;
+    Transform2d savedDeviceFromLocalTransform;
+    std::vector<Transform2d> savedDeviceFromLocalTransformStack;
     int savedPixelWidth = 0;
     int savedPixelHeight = 0;
 
@@ -799,7 +799,7 @@ struct RendererGeode::Impl {
     /// objectBoundingBox-mapped user space — either way, NOT yet in
     /// device pixels).
     std::optional<Box2d> maskBounds;
-    /// `currentTransform` snapshotted at `pushMask` time so that
+    /// `deviceFromLocalTransform` snapshotted at `pushMask` time so that
     /// `popMask` can lift `maskBounds` into device-pixel space. This
     /// mirrors `RendererTinySkia::SurfaceFrame::maskBoundsTransform`.
     Transform2d maskBoundsTransform;
@@ -811,11 +811,11 @@ struct RendererGeode::Impl {
     wgpu::Texture tile;
     Vector2d tileSize;              // In pattern space.
     Transform2d targetFromPattern;  // destFromSource naming.
-    // `currentTransform` snapshotted at the time the outer element kicked
+    // `deviceFromLocalTransform` snapshotted at the time the outer element kicked
     // off `beginPatternTile`. This is the path→device transform that the
     // SAME outer element will use when its fill draw happens. Used at
     // pattern-paint build time to strip the canvas-scale / parent-transform
-    // chain back out of the live `currentTransform`, so the resulting
+    // chain back out of the live `deviceFromLocalTransform`, so the resulting
     // `patternFromPath` matrix compares path-space positions against the
     // pattern tile's user-space coordinate system instead of accidentally
     // multiplying them by the viewBox→canvas scale.
@@ -973,24 +973,24 @@ struct RendererGeode::Impl {
   /// current transform so the shader samples in the correct space.
   ///
   /// Math: during the fill draw, the Geode vertex shader emits `sample_pos`
-  /// in PATH space (pre-MVP, pre-`currentTransform`). The pattern fragment
+  /// in PATH space (pre-MVP, pre-`deviceFromLocalTransform`). The pattern fragment
   /// shader needs pattern-tile-space coordinates. The driver gave us
   /// `targetFromPattern` in USER space (i.e., the viewBox frame the outer
   /// element was drawn in) — *not* device space — which is a semantic
-  /// mismatch with the renderer, where `currentTransform` goes all the way
+  /// mismatch with the renderer, where `deviceFromLocalTransform` goes all the way
   /// from path space to device pixels (i.e., it bakes in the
   /// viewBox→canvas scale on top of the entity's own transform).
   ///
-  /// To bridge the mismatch we capture `deviceFromPathAtCapture = currentTransform`
+  /// To bridge the mismatch we capture `deviceFromPathAtCapture = deviceFromLocalTransform`
   /// at `beginPatternTile` time. Both the pattern's content subtree and the
   /// eventual fill draw use the same referencing element, so that transform
   /// is the path→device mapping we'd want for BOTH the tile raster and
   /// the final sample. The chain is:
   ///
   ///   pattern_pos  =  inverse(deviceFromPath_at_capture * targetFromPattern)
-  ///                 · currentTransform · path_pos
+  ///                 · deviceFromLocalTransform · path_pos
   ///
-  /// Expanding: the two `currentTransform`/`deviceFromPath_at_capture` matrices
+  /// Expanding: the two `deviceFromLocalTransform`/`deviceFromPath_at_capture` matrices
   /// cancel (they're the same transform when the outer element is drawing
   /// its own fill immediately after the pattern subtree returns), leaving
   /// `inverse(targetFromPattern) · path_pos` — which sits in the user-space
@@ -1001,7 +1001,7 @@ struct RendererGeode::Impl {
                                                     double opacity) const {
     const Transform2d deviceFromPattern = slot.deviceFromPathAtCapture * slot.targetFromPattern;
     const Transform2d patternFromDevice = deviceFromPattern.inverse();
-    const Transform2d patternFromPath = patternFromDevice * currentTransform;
+    const Transform2d patternFromPath = patternFromDevice * deviceFromLocalTransform;
     geode::GeoEncoder::PatternPaint p;
     p.tile = slot.tile;
     p.tileSize = slot.tileSize;
@@ -1010,10 +1010,10 @@ struct RendererGeode::Impl {
     return p;
   }
 
-  /// Push the renderer's currentTransform onto the encoder before drawing.
+  /// Push the renderer's deviceFromLocalTransform onto the encoder before drawing.
   void syncTransform() {
     if (encoder) {
-      encoder->setTransform(currentTransform);
+      encoder->setTransform(deviceFromLocalTransform);
     }
   }
 
@@ -1047,7 +1047,7 @@ struct RendererGeode::Impl {
   /// M6-B step 3 (design doc 0030 §M6 Bullet 2): deferred batch for
   /// consecutive `drawPath` calls that share a source entity + resolved
   /// solid paint + no stroke + no subtree complication. Each matching
-  /// call appends its `currentTransform` into `transforms`; the batch
+  /// call appends its `deviceFromLocalTransform` into `transforms`; the batch
   /// is flushed by `flushPendingBatch()` whenever state changes in a
   /// way that invalidates the batch (paint-key mismatch on the next
   /// drawPath, any push/pop, end of frame, …). A flush of size >= 2
@@ -1065,11 +1065,11 @@ struct RendererGeode::Impl {
     /// `GeodePathCacheComponent`'s cache invariant for the frame's
     /// lifetime).
     const Path* path = nullptr;
-    /// `currentTransform` captured at each `drawPath`. On flush, the
+    /// `deviceFromLocalTransform` captured at each `drawPath`. On flush, the
     /// outer encoder transform is set to identity and these are
     /// uploaded as per-instance transforms (see
     /// `flushPendingBatch` for the math).
-    std::vector<Transform2d> transforms;
+    std::vector<Transform2d> deviceFromLocalTransforms;
   };
   std::optional<PendingBatch> pendingBatch;
 
@@ -1147,7 +1147,7 @@ struct RendererGeode::Impl {
   /// don't pay the per-instance-buffer cost when we accumulated
   /// exactly one draw. Size >= 2 is one instanced GPU draw.
   ///
-  /// Flushing mutates `currentTransform` to push the batch's
+  /// Flushing mutates `deviceFromLocalTransform` to push the batch's
   /// transform(s) down to the encoder, then RESTORES it to the
   /// caller's current value. Without the restore, a flush in the
   /// middle of `drawPath` (between fill and stroke, for example)
@@ -1155,7 +1155,7 @@ struct RendererGeode::Impl {
   /// for the subsequent stroke emit — breaks any fixture that
   /// mixes batchable fills with stroked siblings.
   void flushPendingBatch() {
-    if (!pendingBatch.has_value() || pendingBatch->transforms.empty()) {
+    if (!pendingBatch.has_value() || pendingBatch->deviceFromLocalTransforms.empty()) {
       pendingBatch.reset();
       return;
     }
@@ -1163,14 +1163,14 @@ struct RendererGeode::Impl {
       pendingBatch.reset();
       return;
     }
-    const Transform2d savedTransform = currentTransform;
+    const Transform2d savedDeviceFromLocalTransform = deviceFromLocalTransform;
     PendingBatch batch = std::move(*pendingBatch);
     pendingBatch.reset();
 
-    if (batch.transforms.size() == 1) {
+    if (batch.deviceFromLocalTransforms.size() == 1) {
       // Single draw — restore the captured transform + use the
       // non-instanced path.
-      currentTransform = batch.transforms.front();
+      deviceFromLocalTransform = batch.deviceFromLocalTransforms.front();
       syncTransform();
       encoder->fillPath(*batch.path, batch.color, batch.rule, batch.encoded);
     } else {
@@ -1178,25 +1178,25 @@ struct RendererGeode::Impl {
       // `uniforms.mvp` carries only the orthographic screen-pixel mapping.
       // Each instance transform already encodes the full
       // `worldFromEntity * surfaceFromCanvas` composition that a
-      // non-batched draw would fold into currentTransform; compose with
+      // non-batched draw would fold into deviceFromLocalTransform; compose with
       // identity `uniforms.mvp` is equivalent to composing with the
-      // original currentTransform per-draw.
-      currentTransform = Transform2d();
+      // original deviceFromLocalTransform per-draw.
+      deviceFromLocalTransform = Transform2d();
       syncTransform();
 
       // Pack transforms into the wire format the shader expects.
-      std::vector<float> packed(batch.transforms.size() * 8u);
-      for (size_t i = 0; i < batch.transforms.size(); ++i) {
-        packTransform(batch.transforms[i], packed.data() + i * 8u);
+      std::vector<float> packed(batch.deviceFromLocalTransforms.size() * 8u);
+      for (size_t i = 0; i < batch.deviceFromLocalTransforms.size(); ++i) {
+        packTransform(batch.deviceFromLocalTransforms[i], packed.data() + i * 8u);
       }
       encoder->fillPathInstanced(*batch.encoded, batch.color, batch.rule, packed);
     }
 
     // Restore so subsequent draw/state ops see the driver-set
     // transform intact. Draw-emitting helpers (`syncTransform` +
-    // `encoder->fillPath*`) read `currentTransform` when re-entered,
+    // `encoder->fillPath*`) read `deviceFromLocalTransform` when re-entered,
     // so we don't need to re-sync the encoder right now.
-    currentTransform = savedTransform;
+    deviceFromLocalTransform = savedDeviceFromLocalTransform;
   }
 
   /// Predicate: would a batchable draw with this key extend the
@@ -1213,7 +1213,7 @@ struct RendererGeode::Impl {
                         pendingBatch->sourceEntity == sourceEntity &&
                         pendingBatch->color == color && pendingBatch->rule == rule;
     if (matches) {
-      pendingBatch->transforms.push_back(currentTransform);
+      pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
       return true;
     }
     // Key doesn't match — flush whatever's pending, then start fresh.
@@ -1224,7 +1224,7 @@ struct RendererGeode::Impl {
     pendingBatch->rule = rule;
     pendingBatch->encoded = encoded;
     pendingBatch->path = &path;
-    pendingBatch->transforms.push_back(currentTransform);
+    pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
     return true;
   }
 
@@ -1543,8 +1543,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->viewport = viewport;
   impl_->pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
   impl_->pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
-  impl_->currentTransform = Transform2d();
-  impl_->transformStack.clear();
+  impl_->deviceFromLocalTransform = Transform2d();
+  impl_->deviceFromLocalTransformStack.clear();
   impl_->paint = PaintParams();
   impl_->encoder.reset();
 
@@ -1668,8 +1668,8 @@ void RendererGeode::endFrame() {
   // new writes after the previous submit's GPU work completes.
   impl_->drainPendingReleases();
 
-  impl_->currentTransform = Transform2d();
-  impl_->transformStack.clear();
+  impl_->deviceFromLocalTransform = Transform2d();
+  impl_->deviceFromLocalTransformStack.clear();
 }
 
 void RendererGeode::setTransform(const Transform2d& transform) {
@@ -1687,23 +1687,23 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     scaled.data[1] *= scale.y;
     scaled.data[3] *= scale.y;
     scaled.data[5] *= scale.y;
-    impl_->currentTransform = scaled;
+    impl_->deviceFromLocalTransform = scaled;
     return;
   }
-  impl_->currentTransform = transform;
+  impl_->deviceFromLocalTransform = transform;
 }
 
 void RendererGeode::pushTransform(const Transform2d& transform) {
-  impl_->transformStack.push_back(impl_->currentTransform);
-  impl_->currentTransform = transform * impl_->currentTransform;
+  impl_->deviceFromLocalTransformStack.push_back(impl_->deviceFromLocalTransform);
+  impl_->deviceFromLocalTransform = transform * impl_->deviceFromLocalTransform;
 }
 
 void RendererGeode::popTransform() {
-  if (impl_->transformStack.empty()) {
+  if (impl_->deviceFromLocalTransformStack.empty()) {
     return;
   }
-  impl_->currentTransform = impl_->transformStack.back();
-  impl_->transformStack.pop_back();
+  impl_->deviceFromLocalTransform = impl_->deviceFromLocalTransformStack.back();
+  impl_->deviceFromLocalTransformStack.pop_back();
 }
 
 void RendererGeode::pushClip(const ResolvedClip& clip) {
@@ -1726,7 +1726,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // The active scissor is the INTERSECTION of everything on the stack.
   Impl::ClipStackEntry entry;
   if (clip.clipRect.has_value()) {
-    const Transform2d& t = impl_->currentTransform;
+    const Transform2d& t = impl_->deviceFromLocalTransform;
     entry.pixelRect = t.transformBox(*clip.clipRect);
     entry.valid = true;
 
@@ -1850,7 +1850,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // the input clip so shapes get intersected with the deeper
     // union. Runs at the same layer don't intersect with each other
     // — the Max blend on the R channel handles union within a run.
-    const Transform2d savedTransform = impl_->currentTransform;
+    const Transform2d savedDeviceFromLocalTransform = impl_->deviceFromLocalTransform;
 
     // If any clip stack entry already carries a path mask (e.g., an
     // ancestor `<g>` with its own `clip-path`), use the topmost one
@@ -1893,7 +1893,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       for (size_t s = it->begin; s < it->end; ++s) {
         const PathShape& shape = clip.clipPaths[s];
         const Transform2d composed =
-            clip.clipPathUnitsTransform * shape.parentFromEntity * savedTransform;
+            clip.clipPathUnitsTransform * shape.parentFromEntity * savedDeviceFromLocalTransform;
         impl_->encoder->setTransform(composed);
         impl_->encoder->fillPathIntoMask(shape.path, shape.fillRule);
       }
@@ -1918,7 +1918,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // Clear the encoder's internal clip-mask state — the next main
     // pass will rebind via `updateEncoderScissor`.
     impl_->encoder->clearClipMask();
-    impl_->encoder->setTransform(savedTransform);
+    impl_->encoder->setTransform(savedDeviceFromLocalTransform);
   }
 
   impl_->clipStack.push_back(std::move(entry));
@@ -2322,7 +2322,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
     return;
   }
   frame.maskBounds = maskBounds;
-  frame.maskBoundsTransform = impl_->currentTransform;
+  frame.maskBoundsTransform = impl_->deviceFromLocalTransform;
 
   // Flush the outer encoder's pending draws so they land before we
   // redirect subsequent commands into the mask capture.
@@ -2447,7 +2447,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // that was rendered at 40×40 texels. The extra resolution lets the
   // MSAA-resolved tile capture finer edge transitions, closing the gap.
   constexpr double kPatternSupersampleScale = 2.0;
-  const Transform2d deviceFromPattern = impl_->currentTransform * targetFromPattern;
+  const Transform2d deviceFromPattern = impl_->deviceFromLocalTransform * targetFromPattern;
   const double scaleX = std::hypot(deviceFromPattern.data[0], deviceFromPattern.data[1]);
   const double scaleY = std::hypot(deviceFromPattern.data[2], deviceFromPattern.data[3]);
   auto boundedPx = [](double v) {
@@ -2518,8 +2518,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   frame.savedEncoder = std::move(impl_->encoder);
   frame.savedTarget = impl_->target;
   frame.savedMsaaTarget = impl_->msaaTarget;
-  frame.savedTransform = impl_->currentTransform;
-  frame.savedTransformStack = std::move(impl_->transformStack);
+  frame.savedDeviceFromLocalTransform = impl_->deviceFromLocalTransform;
+  frame.savedDeviceFromLocalTransformStack = std::move(impl_->deviceFromLocalTransformStack);
   frame.savedPixelWidth = impl_->pixelWidth;
   frame.savedPixelHeight = impl_->pixelHeight;
   frame.tileRect = tileRect;
@@ -2552,12 +2552,12 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   impl_->pixelHeight = tilePixelHeight;
   impl_->target = tileTexture;
   impl_->msaaTarget = tileMsaaTexture;
-  impl_->transformStack.clear();
+  impl_->deviceFromLocalTransformStack.clear();
   // Initialise the current transform to the raster scale so direct draws
   // issued before the driver's next `setTransform` still land in the
   // correct place on the tile texture.
   const Vector2d& rasterScale = impl_->patternStack.back().rasterScale;
-  impl_->currentTransform = Transform2d::Scale(rasterScale.x, rasterScale.y);
+  impl_->deviceFromLocalTransform = Transform2d::Scale(rasterScale.x, rasterScale.y);
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
@@ -2591,8 +2591,8 @@ void RendererGeode::endPatternTile(bool forStroke) {
   impl_->msaaTarget = frame.savedMsaaTarget;
   impl_->pixelWidth = frame.savedPixelWidth;
   impl_->pixelHeight = frame.savedPixelHeight;
-  impl_->currentTransform = frame.savedTransform;
-  impl_->transformStack = std::move(frame.savedTransformStack);
+  impl_->deviceFromLocalTransform = frame.savedDeviceFromLocalTransform;
+  impl_->deviceFromLocalTransformStack = std::move(frame.savedDeviceFromLocalTransformStack);
 
   // Create a fresh encoder for the outer target. The old outer encoder was
   // finished in `beginPatternTile`; the new one loads the current contents
@@ -2656,13 +2656,13 @@ void RendererGeode::endPatternTile(bool forStroke) {
   slot.tile = frame.tileTexture;
   slot.tileSize = frame.tileRect.size();
   slot.targetFromPattern = frame.targetFromPattern;
-  // `frame.savedTransform` is the path→device transform that was live at
-  // `beginPatternTile` time — i.e., the outer element's currentTransform
+  // `frame.savedDeviceFromLocalTransform` is the path→device transform that was live at
+  // `beginPatternTile` time — i.e., the outer element's deviceFromLocalTransform
   // including the viewBox→canvas scale. We stash it on the slot so
-  // `buildPatternPaint` can cancel it out of the live `currentTransform`
+  // `buildPatternPaint` can cancel it out of the live `deviceFromLocalTransform`
   // at the upcoming fill draw, leaving the pattern sample in the pattern's
   // user-space frame (where `tileSize` is expressed).
-  slot.deviceFromPathAtCapture = frame.savedTransform;
+  slot.deviceFromPathAtCapture = frame.savedDeviceFromLocalTransform;
   if (forStroke) {
     impl_->patternStrokePaint = std::move(slot);
   } else {
@@ -2702,7 +2702,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   //  - No active pattern-fill handoff from the driver.
   //  - No stroke (we can't defer a fill while the stroke runs on top).
   //
-  // When all hold: append this draw's `currentTransform` into the pending
+  // When all hold: append this draw's `deviceFromLocalTransform` into the pending
   // batch (flushing + restarting if the paint/source key differs) and
   // return early. A later state change (pushClip, popLayer, endFrame,
   // setPaint-different-key, non-batchable draw) flushes as one instanced
@@ -2896,11 +2896,11 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
   // Snapshot the encoder's current transform so we can restore it if
   // per-glyph rotations mess with it. `fillPath` honours
-  // `impl_->currentTransform` via `setTransform`, and the glyph
+  // `impl_->deviceFromLocalTransform` via `setTransform`, and the glyph
   // outline coordinates are already mapped into the text element's
   // local space by the transformPath call below -- so we want the
-  // encoder to use the element's currentTransform unchanged.
-  impl_->encoder->setTransform(impl_->currentTransform);
+  // encoder to use the element's deviceFromLocalTransform unchanged.
+  impl_->encoder->setTransform(impl_->deviceFromLocalTransform);
 
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
