@@ -43,9 +43,10 @@ constexpr int kTimeoutExitCode = 124;
 // `std::string` storage is safe to `write()` from a signal handler as long as
 // we don't mutate it there.
 std::string gCurrentTestName;
-// NOLINTNEXTLINE(misc-include-cleaner) — pid_t canonical header differs between
-// clang-tidy-18 (sys/types.h, included above) and clang-tidy-19; suppress.
-pid_t gMainPid = 0;
+// pid_t canonical header differs between clang-tidy-18 (<sys/types.h>) and
+// clang-tidy-19 (which doesn't map it to anything currently included). The
+// trailing NOLINT suppresses the latter without chasing mapping deltas.
+pid_t gMainPid = 0;  // NOLINT(misc-include-cleaner)
 
 void TimeoutHandler(int /*sig*/) {
   // Only the main test-runner process should trip the watchdog: gtest death
