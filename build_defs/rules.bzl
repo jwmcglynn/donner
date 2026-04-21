@@ -376,6 +376,55 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], **kwarg
         tags = tags,
     )
 
+def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linkopts = [], deps = [], tags = [], wallclock_tags = [], **kwargs):
+    """
+    Create paired correctness and wall-clock cc_tests with donner defaults.
+
+    The macro emits:
+      {name}_correctness    - PR-gated, included in `bazel test //...`
+      {name}_wallclock      - tagged `manual` + `perf`, intended for nightly runs
+
+    Args:
+      name: Base rule name.
+      correctness_srcs: Source files compiled only into the correctness target.
+      wallclock_srcs: Source files compiled only into the wall-clock target.
+      srcs: Shared source files compiled into both generated targets.
+      linkopts: List of linker options.
+      deps: List of dependencies.
+      tags: Shared tags applied to both generated targets (except `manual` / `perf`
+        are stripped from the correctness target so it stays on the default path).
+      wallclock_tags: Additional tags applied only to the wall-clock target.
+      **kwargs: Additional arguments, matching the implementation of cc_test.
+    """
+    if not correctness_srcs:
+        fail("donner_perf_cc_test requires non-empty correctness_srcs")
+    if not wallclock_srcs:
+        fail("donner_perf_cc_test requires non-empty wallclock_srcs")
+
+    correctness_tags = [tag for tag in tags if tag not in ["manual", "perf"]]
+    generated_wallclock_tags = [tag for tag in tags if tag != "manual"]
+    for tag in wallclock_tags + ["perf", "manual"]:
+        if tag not in generated_wallclock_tags:
+            generated_wallclock_tags.append(tag)
+
+    donner_cc_test(
+        name = name + "_correctness",
+        srcs = srcs + correctness_srcs,
+        linkopts = linkopts,
+        deps = deps,
+        tags = correctness_tags,
+        **kwargs
+    )
+
+    donner_cc_test(
+        name = name + "_wallclock",
+        srcs = srcs + wallclock_srcs,
+        linkopts = linkopts,
+        deps = deps,
+        tags = generated_wallclock_tags,
+        **kwargs
+    )
+
 def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, **kwargs):
     """
     Create a cc_library with donner-specific defaults.

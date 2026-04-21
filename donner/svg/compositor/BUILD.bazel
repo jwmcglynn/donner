@@ -194,7 +194,7 @@ donner_cc_test(
     srcs = [
         "CompositorPerf_tests.cc",
     ],
-    tags = ["perf"],
+    tags = ["manual", "perf"],
     deps = [
         ":compositor",
         "//donner/svg/renderer:renderer_interface",

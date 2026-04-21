@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_test", "donner_perf_cc_test")
 
 donner_cc_test(
     name = "viewport_geometry_tests",
@@ -160,6 +160,26 @@ donner_cc_test(
         "//donner/svg/compositor",
         "//donner/svg/renderer",
         "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_perf_cc_test(
+    name = "async_renderer_filter_group_perf_tests",
+    srcs = [
+        "AsyncRendererFilterGroupPerfTestUtils.cc",
+        "AsyncRendererFilterGroupPerfTestUtils.h",
+    ],
+    correctness_srcs = ["AsyncRendererFilterGroupCorrectness_tests.cc"],
+    wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+    ],
+    deps = [
+        "//donner/editor:async_renderer",
+        "//donner/editor:async_svg_document",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
