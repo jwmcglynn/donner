@@ -9,6 +9,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
 namespace {
@@ -140,6 +141,16 @@ TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
 }
 
 TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
+  // Variant guard (doc 0031 M2.3 + issue #566): this test asserts that
+  // text glyphs land at the viewBox-scaled coordinates. Without text
+  // support compiled in (e.g. the `tiny` variant lane), no glyphs render
+  // and the assertion is meaningless. Skip rather than fail so the same
+  // source runs unmodified in every lane of `bazel test //...`.
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
+    GTEST_SKIP() << "Text rendering disabled in this variant ("
+                 << ActiveRendererBackendName() << "); skipping glyph-placement assertion.";
+  }
+
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="500" height="500" viewBox="0 0 200 200"
            font-size="64">

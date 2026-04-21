@@ -146,24 +146,34 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "renderer_public_api_tests_impl",
+    name = "renderer_public_api_tests",
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode wrappers run
+    # automatically under `bazel test //...`. The base test still runs at
+    # the active default config.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     deps = [
+        ":renderer_test_backend",
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
 
-alias(
-    name = "renderer_public_api_tests",
-    testonly = 1,
-    actual = ":renderer_public_api_tests_impl",
-)
-
 donner_cc_test(
     name = "renderer_error_paths_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "RendererErrorPaths_tests.cc",
     ],
@@ -177,6 +187,13 @@ donner_cc_test(
 
 donner_cc_test(
     name = "renderer_ascii_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "RendererAscii_tests.cc",
     ],
@@ -188,6 +205,13 @@ donner_cc_test(
 
 donner_cc_test(
     name = "terminal_image_viewer_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = ["TerminalImageViewer_tests.cc"],
     deps = [
         "//donner/svg/renderer:terminal_image_viewer",
@@ -311,6 +335,13 @@ donner_multi_transitioned_test(
 
 donner_cc_test(
     name = "renderer_driver_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "RendererDriver_tests.cc",
         "RenderingContext_tests.cc",

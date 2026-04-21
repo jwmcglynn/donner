@@ -2,6 +2,13 @@ load("//build_defs:rules.bzl", "donner_cc_test")
 
 donner_cc_test(
     name = "sub_document_cache_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "SubDocumentCache_tests.cc",
     ],

@@ -348,7 +348,44 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
         tags = tags,
     )
 
-def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
+# Standard variant specs for donner_cc_test(variants = ...).
+#
+# Each entry expands into a `{name}_{variant}` wrapper around the base
+# cc_test, transitioned via `donner_multi_transitioned_test` so the
+# renderer/text feature flags are flipped at test-graph configuration time.
+# This is what makes `bazel test //...` cover the `tiny` / `text-full` /
+# `geode` lanes by default — no `--config=` flag required (doc 0031 M2.3).
+_VARIANT_SPECS = {
+    "tiny": {
+        "backend": "tiny_skia",
+        "text": "false",
+        "text_full": "false",
+    },
+    "text_full": {
+        "backend": "tiny_skia",
+        "text": "true",
+        "text_full": "true",
+    },
+    "geode": {
+        "backend": "geode",
+        "text": "true",
+        "text_full": "false",
+    },
+}
+
+# Attributes that must be forwarded from the base cc_test onto each
+# transitioned wrapper so per-variant runs share execution semantics
+# (timeouts, sharding, OS gating, etc.) with the default-config target.
+_VARIANT_FORWARDED_ATTRS = (
+    "size",
+    "timeout",
+    "shard_count",
+    "flaky",
+    "local",
+    "target_compatible_with",
+)
+
+def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variants = None, **kwargs):
     """
     Create a cc_test with donner-specific defaults including LLVM 21 workaround.
 
@@ -358,6 +395,12 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], **kwarg
       linkopts: List of linker options.
       deps: List of dependencies.
       tags: Tags.
+      variants: Optional list of variant names from `_VARIANT_SPECS`
+        (e.g. `["tiny", "text_full", "geode"]`). When provided, in addition
+        to the default-config `name` target, emits one `{name}_{variant}`
+        wrapper per entry via `donner_multi_transitioned_test`. This is the
+        opt-in mechanism that lets `bazel test //...` cover variant lanes
+        without per-test `--config=` flags. See doc 0031 M2.3.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     cc_test(
@@ -375,6 +418,31 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], **kwarg
         hdrs = kwargs.get("hdrs", []),
         tags = tags,
     )
+
+    if variants:
+        forwarded = {
+            attr: kwargs[attr]
+            for attr in _VARIANT_FORWARDED_ATTRS
+            if attr in kwargs
+        }
+        for variant_name in variants:
+            spec = _VARIANT_SPECS.get(variant_name)
+            if spec == None:
+                fail("Unknown variant '{}' for donner_cc_test {}; valid names: {}".format(
+                    variant_name,
+                    name,
+                    sorted(_VARIANT_SPECS.keys()),
+                ))
+            donner_multi_transitioned_test(
+                name = "{}_{}".format(name, variant_name),
+                dep = ":" + name,
+                renderer_backend = spec["backend"],
+                text = spec["text"],
+                text_full = spec["text_full"],
+                tags = tags + ["variant_" + variant_name],
+                testonly = 1,
+                **forwarded
+            )
 
 def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linkopts = [], deps = [], tags = [], wallclock_tags = [], **kwargs):
     """

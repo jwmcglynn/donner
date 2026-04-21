@@ -61,6 +61,13 @@ cc_library(
 
 donner_cc_test(
     name = "shape_system_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "tests/ShapeSystem_tests.cc",
     ],
@@ -75,6 +82,13 @@ donner_cc_test(
 
 donner_cc_test(
     name = "rect_component_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "tests/RectComponent_tests.cc",
     ],
@@ -89,6 +103,13 @@ donner_cc_test(
 
 donner_cc_test(
     name = "circle_ellipse_component_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "tests/CircleEllipseComponent_tests.cc",
     ],

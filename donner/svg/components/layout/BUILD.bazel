@@ -44,6 +44,13 @@ donner_cc_library(
 
 donner_cc_test(
     name = "layout_system_tests",
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     srcs = [
         "tests/LayoutSystem_tests.cc",
     ],
