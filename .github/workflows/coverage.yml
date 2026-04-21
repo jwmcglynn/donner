@@ -1,9 +1,16 @@
 name: Coverage
 
-# Runs coverage on: main merges and on-demand via workflow_dispatch.
-# PRs rely on Codecov's server-side patch coverage instead of rerunning this ~30 min job.
+# Runs coverage on: main merges, every PR push (so Codecov has data to
+# annotate the patch with), and on-demand via workflow_dispatch.
+#
+# We previously dropped the pull_request trigger thinking Codecov could
+# patch-annotate without a PR-side run, but Codecov's patch-coverage signal
+# requires the PR head's own `coverage.dat` upload to compute "X% of changed
+# lines covered" against the main-branch baseline.
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:  # Re-run on demand (e.g. before final merge)
 

@@ -6,7 +6,7 @@ on:
   push:
     branches: ["*"]
   pull_request:
-    branches: [main, feature/ci-hardening-2026q2]
+    branches: [main]
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
