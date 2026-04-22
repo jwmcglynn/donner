@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, feature/ci-hardening-2026q2]
 
+concurrency:
+  # See main.yml for rationale; same shared push/PR dedupe pattern.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   gatekeeper:
     runs-on: ubuntu-24.04
