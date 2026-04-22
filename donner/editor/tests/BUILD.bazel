@@ -207,12 +207,16 @@ donner_cc_test(
 donner_cc_test(
     name = "filter_drag_repro_tests",
     srcs = ["FilterDragRepro_tests.cc"],
+    size = "enormous",
     data = [
         ":filter_drag_repro.rnr",
+        ":filter_elm_disappear.rnr",
+        ":filter_elm_disappear_2.rnr",
         "//:donner_splash.svg",
     ],
     deps = [
         "//donner/editor:render_coordinator",
+        "//donner/editor:selection_aabb",
         "//donner/editor:viewport_state",
         "//donner/editor/backend_lib:async_renderer",
         "//donner/editor/backend_lib:async_svg_document",
