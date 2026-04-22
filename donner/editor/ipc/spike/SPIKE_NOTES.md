@@ -647,3 +647,35 @@ process startup + actual SVG rasterization (~800 ms for the 800×600
   data item 2), drop the `donner-svg` subprocess hop and link
   `//donner/svg/renderer` straight in. Removes ~750 ms of process
   startup overhead per request.
+
+---
+
+## M0.3 status
+
+**BLOCKED — heavy-path toolchain build required.** See
+[`WASM_NOTES.md`](./WASM_NOTES.md) for the full investigation and
+verbatim Phase 1 output.
+
+Summary:
+
+* The Bloomberg `clang-p2996` fork image (both the `arm64` and `amd64`
+  tags at commit `f72d85e5a0fd9c960b07b6f1c8875110701cb627`) is built
+  with `LLVM_TARGETS_TO_BUILD=AArch64` (resp. `X86`) only. There is no
+  `wasm32` codegen, and no `libc++` / `compiler-rt` runtimes for any
+  wasm target.
+* Verified directly with `docker run --rm --network=host
+  vsavkov/clang-p2996:arm64 /opt/p2996/clang/bin/clang --print-targets`:
+  the "Registered Targets" list contains only `aarch64*` / `arm64*`
+  entries; `wasm32` is absent.
+* The brief's M0.3 decision rule maps `A=no` to the heavy path
+  ("4–8 hours from-source LLVM build, do NOT start without checking
+  in"). We stopped per that rule. No source has been cloned, no build
+  kicked off, no `emsdk` installed, no spike scaffolding committed.
+* Recommended next step: bake `WebAssembly` into the upstream fork image
+  (PR to `bloomberg/clang-p2996`) so M0.3 reduces to "set
+  `EM_LLVM_ROOT`, write the spike, run under node." Detailed cmake
+  invocation, runtime targets, and `emsdk` wiring are documented in
+  WASM_NOTES.md §C and §"Recommended next attempt".
+
+No code under `donner/` was modified by this milestone; M2's
+`bazel test //...` baseline at `253d2752` is unaffected.
