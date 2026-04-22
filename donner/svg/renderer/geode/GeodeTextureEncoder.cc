@@ -95,16 +95,29 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
     const size_t byteCount = static_cast<size_t>(unpaddedBytesPerRow) * height;
     queue.writeTexture(dst, rgbaPixels, byteCount, layout, writeSize);
   } else {
-    // Slow path — copy into a padded staging buffer. `std::vector` is the
-    // allowed allocation path (stdlib, not raw malloc/free). We size-cap on
-    // the same uint32_t × uint32_t × 4 that the GPU already accepted for
-    // the texture, so overflow is not a concern here.
-    std::vector<uint8_t> staging(static_cast<size_t>(paddedBytesPerRow) * height, 0u);
+    // Slow path — copy into a padded staging buffer. Reuse a thread-
+    // local buffer across calls so the compositor's per-frame
+    // `drawImage` invocations (one per cached layer bitmap) don't each
+    // pay a 7 MB-scale `std::vector` allocate + zero-init + destroy
+    // tax. On the splash at 1784×1024, `paddedBytesPerRow` is 7168 and
+    // the old `std::vector<uint8_t>(…, 0u)` constructor was ~40 % of
+    // every worker-thread `composeLayers` frame. The thread-local
+    // survives across frames within the worker and only grows.
+    //
+    // We memcpy every row into the buffer below, so the padding bytes
+    // don't need to be zeroed — the GPU ignores the bytes after
+    // `unpaddedBytesPerRow` on each row. That lets us `resize`
+    // without a fill value even when we grow the vector.
+    thread_local std::vector<uint8_t> staging;
+    const size_t needed = static_cast<size_t>(paddedBytesPerRow) * height;
+    if (staging.size() < needed) {
+      staging.resize(needed);
+    }
     for (uint32_t y = 0; y < height; ++y) {
       std::memcpy(staging.data() + static_cast<size_t>(y) * paddedBytesPerRow,
                   rgbaPixels + static_cast<size_t>(y) * unpaddedBytesPerRow, unpaddedBytesPerRow);
     }
-    queue.writeTexture(dst, staging.data(), staging.size(), layout, writeSize);
+    queue.writeTexture(dst, staging.data(), needed, layout, writeSize);
   }
 
   return texture;
