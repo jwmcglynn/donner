@@ -38,7 +38,6 @@ All other dependencies will be downloaded on-demand.
 The first build downloads LLVM and other external dependencies, and builds all dependencies from source. With the default tiny-skia backend, clean build times are reasonable. After dependencies are downloaded, clean build times are:
 
 - **Apple Silicon M1**: ~2 minutes
-- **GitHub Codespaces (4-core)**: ~10 minutes
 
 ## Running Tests
 

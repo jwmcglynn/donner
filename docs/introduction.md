@@ -27,8 +27,6 @@ Donner focuses on security and performance, which is validated with code coverag
 bazel run //examples:svg_to_png -- donner_splash.svg
 ```
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jwmcglynn/donner)
-
 How it works: \ref svg_to_png.cc
 
 ## API Demo

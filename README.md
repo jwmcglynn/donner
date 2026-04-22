@@ -99,8 +99,6 @@ bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --interactive
 
 Tool docs: [donner-svg CLI tool](https://jwmcglynn.github.io/donner/DonnerSvgTool.html)
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jwmcglynn/donner)
-
 ## Simplified Example: Saving an SVG to PNG
 
 ```sh
