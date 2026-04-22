@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -309,7 +310,8 @@ DragStats ComputeDragStats(const ReplayResults& r, uint64_t fromFrame, uint64_t 
   return stats;
 }
 
-void DumpHistogram(const ReplayResults& r, uint64_t fromFrame, uint64_t toFrame, const char* label) {
+void DumpHistogram(const ReplayResults& r, uint64_t fromFrame, uint64_t toFrame,
+                   const char* label) {
   int buckets[6] = {0};  // <5, 5-15, 15-30, 30-60, 60-120, >=120
   for (const auto& f : r.frames) {
     if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
@@ -379,11 +381,11 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
   ASSERT_GT(out->secondDrag.frameCount, 0);
 
   std::cerr << "[FilterDragRepro] first drag: frames=" << out->firstDrag.frameCount
-            << ", avg=" << out->firstDrag.avgWorkerMs
-            << " ms, max=" << out->firstDrag.maxWorkerMs << " ms\n";
+            << ", avg=" << out->firstDrag.avgWorkerMs << " ms, max=" << out->firstDrag.maxWorkerMs
+            << " ms\n";
   std::cerr << "[FilterDragRepro] second drag: frames=" << out->secondDrag.frameCount
-            << ", avg=" << out->secondDrag.avgWorkerMs
-            << " ms, max=" << out->secondDrag.maxWorkerMs << " ms\n";
+            << ", avg=" << out->secondDrag.avgWorkerMs << " ms, max=" << out->secondDrag.maxWorkerMs
+            << " ms\n";
 
   DumpHistogram(r, firstDown, firstUp, "first-drag");
   DumpHistogram(r, secondDown, secondUp, "second-drag");
@@ -399,8 +401,11 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
             << " filterAncestor=" << r.selectionFilterAncestorIds[1] << "\n";
 
   ASSERT_EQ(r.selectionAfterMouseUp.size(), 2u);
-  out->firstSelection = r.selectionAfterMouseUp[0];
-  out->secondSelection = r.selectionAfterMouseUp[1];
+  const Entity firstSel = r.selectionAfterMouseUp[0];
+  const Entity secondSel = r.selectionAfterMouseUp[1];
+  out->firstSelectionExists = (firstSel != entt::null);
+  out->secondSelectionExists = (secondSel != entt::null);
+  out->selectionChangedAcrossDrags = (firstSel != secondSel);
   out->firstSelectionId = r.selectionElementIds[0];
   out->firstSelectionFilterAncestorId = r.selectionFilterAncestorIds[0];
   out->secondSelectionId = r.selectionElementIds[1];

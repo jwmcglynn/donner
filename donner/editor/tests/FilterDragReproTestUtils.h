@@ -20,8 +20,6 @@
 #include <cstdint>
 #include <string>
 
-#include "donner/base/EcsRegistry_fwd.h"
-
 namespace donner::editor::filter_drag_repro {
 
 struct DragStats {
@@ -43,9 +41,13 @@ struct FilterDragReproResult {
   DragStats firstDrag;
   DragStats secondDrag;
 
-  // Selection invariants — the entity selected after each mouse-up.
-  donner::Entity firstSelection{};
-  donner::Entity secondSelection{};
+  // Selection invariants — did each mouse-up produce a selection, and
+  // did the second mouse-up end up on a different entity than the first?
+  // (The entity values themselves aren't useful to assert on by name;
+  // the invariant the user cares about is "new drag, new selection".)
+  bool firstSelectionExists = false;
+  bool secondSelectionExists = false;
+  bool selectionChangedAcrossDrags = false;
 
   // Diagnostic identifiers mirrored from the live editor, surfaced so
   // failing-test output tells the reader which element the user hit

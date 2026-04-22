@@ -12,7 +12,6 @@
 /// wall-clock budgets and is tagged `manual` + `perf` so it only
 /// runs in the nightly `perf` lane.
 
-#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/editor/tests/FilterDragReproTestUtils.h"
 #include "gtest/gtest.h"
 
@@ -34,12 +33,12 @@ TEST(FilterDragReproCorrectnessTest, ReplayHitsFastPathAndReSelects) {
   // failure mode where the first drag's selection sticks because the
   // new mouse-down was dropped (async renderer busy / first drag
   // layer never demoted).
-  EXPECT_TRUE(r.firstSelection != donner::Entity{})
+  EXPECT_TRUE(r.firstSelectionExists)
       << "first drag ended without a latched selection — hit-test missed or gesture aborted";
-  EXPECT_TRUE(r.secondSelection != donner::Entity{})
+  EXPECT_TRUE(r.secondSelectionExists)
       << "second mouse-down never produced a selection — user's 'can't select anything else' "
          "complaint exactly";
-  EXPECT_TRUE(r.firstSelection != r.secondSelection)
+  EXPECT_TRUE(r.selectionChangedAcrossDrags)
       << "second drag's selection did not differ from the first — second mouse-down was ignored "
          "(likely dropped because async renderer stayed busy through the entire repro window)";
 
