@@ -75,6 +75,10 @@ conventions automated agents should follow when editing design docs.
 | 0029 | [ci_runtime](0029-ci_runtime.md)                                                       | Superseded by [0031](0031-ci_hardening_2026q2.md)                          | CI runtime reduction plan (post-Skia baseline, per-config cache slots, runner sizing). Scope folded into 0031. |
 | 0030 | [geode_performance](0030-geode_performance.md)                                         | In Progress                                                                | Geode GPU-backend performance milestones (counters, arenas, shared command encoder, target reuse). |
 | 0031 | [ci_hardening_2026q2](0031-ci_hardening_2026q2.md)                                     | Design                                                                     | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029). |
+| 0032 | [teleport_ipc_framework](0032-teleport_ipc_framework.md)                               | Draft (one-pager)                                                          | **Teleport** — reflection-driven IPC framework (internal-first, public-later): no IDL, Mojo-level safety, record/replay transport. |
+| 0033 | [svg_debugger_in_editor](0033-svg_debugger_in_editor.md)                               | Draft (one-pager)                                                          | RenderDoc-style SVG rendering inspector as a first-class editor panel (tracks issue #443). |
+| 0034 | [animation_proof_of_life](0034-animation_proof_of_life.md)                             | Draft (one-pager)                                                          | Thinnest-possible end-to-end animation driver as a forcing function for 60 fps end-to-end. |
+| 0035 | [perf_framework_and_analyzer](0035-perf_framework_and_analyzer.md)                     | Draft (one-pager)                                                          | Unified perf instrumentation API + in-editor analyzer panel + Perfetto export + regression-diff CLI. |
 
 ## Cross-reference: developer docs
 
