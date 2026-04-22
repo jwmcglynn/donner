@@ -44,6 +44,28 @@ framework to embedders becomes a policy call ("do we want to?") rather
 than a toolchain blocker ("we can't give them C++26 today"). Revisit
 scope at each public-baseline bump.
 
+**Primary surface: Wasm.** The editor's primary deployment target is
+the Wasm (browser) build, not desktop. Desktop is a dev-time surface.
+This framing has two concrete consequences for Teleport:
+
+1. **Wasm must work — it's the production path, not a nice-to-have.**
+   Teleport's reflection codec and framework have to compile and
+   round-trip under `wasm32-unknown-emscripten`, and the framework
+   must ship a cross-thread transport (main-thread ↔ worker-thread,
+   via `postMessage` + optionally `SharedArrayBuffer`) alongside the
+   subprocess pipe transport. This is not a "spike and decide if we
+   need it" question — this is how the editor runs in production. The
+   M0.3 spike below proves out *the mechanism*, not the decision.
+2. **Desktop sandboxing is safety *parity*, not safety gain.** The
+   Wasm runtime gives us a sandbox for free — every browser tab is a
+   bounded, capability-less process that already treats fetched SVG as
+   untrusted. Teleport on desktop exists to match that threat model
+   (parser/renderer in a separate, privilege-dropped subprocess) so a
+   feature that's safe on Wasm doesn't silently lose its security
+   properties when the same code path runs on the desktop developer
+   build. The desktop IPC channel is not where we *add* new security;
+   it's where we catch up to what Wasm already provides.
+
 The gold standard we're benchmarking against is **Chromium Mojo**: typed interfaces, zero-copy
 message shapes, associated/callback interfaces, versioning discipline, and a strong
 "you cannot forge a handle" security model. We think reflection lets us match Mojo's safety and
@@ -154,21 +176,25 @@ Teleport under the same `ipc/` directory without a rename.
         `gen_cmakelists.py` (preferred), or carry a `-std=c++26` knob in
         the mirror. Document which.
 - [ ] **Milestone 0.3: Wasm toolchain spike — `EM_LLVM_ROOT` + Bloomberg
-      fork** (gated on M0.1 success, timeboxed to 1–2 days)
+      fork** (gated on M0.1 success)
   - [ ] Build Bloomberg's fork from source with
         `-DLLVM_TARGETS_TO_BUILD="X86;AArch64;WebAssembly"` plus
-        libcxx/libcxxabi/compiler-rt for Wasm.
+        libcxx/libcxxabi/compiler-rt for Wasm. (If the existing
+        vsavkov Docker image already ships a wasm-enabled clang, use
+        that; otherwise build once and cache.)
   - [ ] Point Emscripten at it via `EM_LLVM_ROOT`; build a minimal
-        "hello reflection" TU that reflects one struct and is callable
-        from JS. Success = round-trip encode/decode inside the browser.
-  - [ ] Document findings (`donner/editor/ipc/spike/WASM_NOTES.md`):
-        which Emscripten flags the fork accepts, any libc++ ABI gaps,
-        estimated per-Emscripten-bump maintenance cost.
-  - [ ] **Decision point:** based on spike result, either wire up Wasm
-        Teleport support in the M0.2 Bazel toolchain work, or commit to
-        the graceful-degrade fallback and add Wasm feature gates to
-        Teleport-dependent sites (docs 0033 / 0035 trace export,
-        record/replay).
+        "hello reflection" TU that reflects one struct and runs under
+        `node`. Success = round-trip encode/decode matches desktop.
+  - [ ] Document findings in `donner/editor/ipc/spike/WASM_NOTES.md`:
+        exact fork-clang commit, Emscripten version, compiler flags,
+        any libc++ ABI gaps encountered, estimated per-Emscripten-bump
+        maintenance cost.
+  - [ ] **No decision branch.** The spike is about finding the path,
+        not deciding whether to take it (Wasm is the primary surface —
+        see Summary). If the spike surfaces a genuine blocker, escalate
+        to "how do we solve it?" — e.g. build-from-source, patch the
+        fork, wait for emsdk to ship a compatible libc++. Do **not**
+        accept "graceful degrade" as the outcome.
 - [ ] **Milestone 1: Core framework** (gated on M0 results + full design-doc promotion)
 - [ ] **Milestone 2: First real consumer** — wire up to the `editor_sandbox` channel
       from design doc 0023, exercising the full send/receive/version-handshake path
@@ -195,10 +221,22 @@ Three layers, each testable and swappable:
    A single 64 KiB ring-buffer-backed shared-memory region for the hot path; a pipe
    fallback for control messages.
 
-3. **Transport layer.** Pluggable: `SharedMemoryTransport` (editor ↔ sandboxed renderer),
-   `PipeTransport` (control channel + attachment), `InProcessTransport` (unit tests,
-   same-process consumers), `FileTransport` (record/replay — writes and reads the
-   identical framed byte stream).
+3. **Transport layer.** Pluggable by surface:
+   - Desktop sandboxed peer: `SharedMemoryTransport` (editor ↔ sandboxed renderer,
+     hot path) + `PipeTransport` (control channel + attachment, cold path).
+   - **Wasm**: `WorkerTransport` — main-thread ↔ worker-thread via `postMessage`,
+     with `SharedArrayBuffer` + `Atomics.wait` for the hot path when
+     cross-origin-isolated headers are available. The framed byte stream is
+     identical to the desktop transports; only the delivery mechanism changes.
+   - Unit tests / same-process consumers: `InProcessTransport` (same
+     framed bytes, no serialization / no boundary crossing).
+   - Record/replay: `FileTransport` (writes and reads the identical framed
+     byte stream; works on every surface because it's just bytes to a file).
+
+   All four transports move the **same** frames — a message encoded on the
+   desktop pipe is bit-identical to the same message encoded on a wasm
+   `postMessage` channel. This is what makes the record/replay story work
+   across surfaces.
 
 ### How it fits Donner
 
@@ -208,8 +246,13 @@ Three layers, each testable and swappable:
   doesn't have. Visibility is restricted via Bazel `visibility` attributes
   so a stray `//donner/svg:...` dep on IPC code is a build-time error.
 - **Editor:** `AsyncRenderer` / `CompositorController` already have a well-defined
-  command-queue seam (`donner::editor::CommandQueue`). The IPC framework slots in as
-  the on-wire codec for that queue when the renderer becomes an out-of-process peer.
+  command-queue seam (`donner::editor::CommandQueue`). The IPC framework slots in
+  as the on-wire codec for that queue in both deployments: (a) on Wasm — our
+  primary surface — the renderer runs in a worker, and the command queue crosses
+  the worker boundary via `WorkerTransport`; (b) on the desktop dev surface the
+  renderer runs in a sandboxed subprocess, and the command queue crosses the
+  process boundary via `SharedMemoryTransport` / `PipeTransport`. Same command
+  queue, same codec, different transport.
 - **Renderer:** Common types live with their definitions under `donner/base`,
   `donner/svg/core`, `donner/svg/renderer/common` — and they stay
   reflection-agnostic in v1. The wire-shape glue lives *next to the IPC
@@ -351,58 +394,61 @@ pays the C++26 / reflection cost. This keeps the blast radius contained
 while we learn what the sharp edges are, and defers the "push C++26 at
 every embedder" decision until the public baseline moves forward anyway.
 
-**Wasm surface.** Donner's Wasm editor build uses Emscripten (currently
-`emsdk 5.0.5`), which vendors its own clang tracking mainline upstream —
-so Wasm inherits mainline's lack of P2996 support. The **goal is
-feature parity on every editor surface, native and Wasm, for Teleport**
-— but the path there depends on a toolchain spike.
+**Wasm toolchain.** Donner's Wasm editor build uses Emscripten
+(currently `emsdk 5.0.5`), which vendors its own clang tracking
+mainline upstream — so Wasm inherits mainline's lack of P2996 support.
 
-**Wasm policy: spike first, decide after.** There is a known
-"swap the compiler under Emscripten" pattern using the
+**Wasm is a required surface, not a negotiable one** (see "Primary
+surface: Wasm" in Summary). The path to get there is the
 [`EM_LLVM_ROOT`](https://emscripten.org/docs/building_from_source/index.html)
-environment variable: build Bloomberg's fork from source with
+mechanism: build Bloomberg's `clang-p2996` fork from source with
 `-DLLVM_TARGETS_TO_BUILD="...;WebAssembly"` + libcxx/compiler-rt for
 Wasm, point `EM_LLVM_ROOT` at the result, let `emcc` drive the build
-using the fork's clang. This is how the ecosystem does "custom clang
-with Emscripten" today — not a bespoke toolchain we invent. Whether it
-*actually* holds together for our workload is the question M0.3
-answers.
+using the fork's clang. This is the ecosystem's standard "custom
+clang with Emscripten" pattern, not a bespoke toolchain we invent.
 
-Real caveats that the spike must surface (each is a potential blocker):
+**What M0.3 answers.** The spike proves the mechanism end-to-end on a
+minimal reflection TU. It does **not** decide *whether* to ship Wasm
+support — that decision is already made, because Wasm is the primary
+surface. M0.3 decides *how*: which Emscripten flags need tweaking
+under the fork's clang, what the libc++-ABI alignment story is, which
+fork-clang commit + emsdk pair works, and how much per-Emscripten-
+bump maintenance cost we absorb.
 
-- Emscripten's `-fignore-exceptions` flag and other flags must exist in
-  the fork's clang. The fork is based on a recent-enough clang that it
-  likely does — confirm.
+Real caveats the spike must surface (each is an implementation detail
+to solve, not a veto):
+
+- Emscripten's `-fignore-exceptions` flag and other flags must work
+  under the fork's clang. The fork is based on recent clang and most
+  likely accepts them; confirm.
 - libc++ built from the fork must be ABI-compatible with what
-  Emscripten's JS glue expects at link time. Plausible but not
-  guaranteed.
+  Emscripten's JS glue expects at link time. If there's a gap, we
+  fix it in the fork build (rebuild fork's libc++ with matching
+  flags) rather than routing around it.
 - Every Emscripten version bump needs re-testing with the fork.
-  Ongoing maintenance tax, estimated small-but-nonzero per bump.
+  Ongoing maintenance tax, accepted.
 - `bazel_dep(name = "emsdk", ...)` must either respect `EM_LLVM_ROOT`
-  or we route around it — figure out which in the spike.
+  or we patch its driver wrapper to do so — figure out which in the
+  spike.
 
-**Two branches depending on M0.3 outcome.**
-
-- **If the EM_LLVM_ROOT spike succeeds:** Teleport ships on Wasm at
-  parity with native. Record/replay, debugger trace export, and any
-  Teleport-based record/replay integration (docs
-  [0033](0033-svg_debugger_in_editor.md) /
-  [0035](0035-perf_framework_and_analyzer.md)) work on both surfaces.
-- **If the spike fails (ABI mismatch, unfixable flag gap, etc.):**
-  fall back to graceful degradation on Wasm — core editor rendering,
-  live debugger inspection, and the live perf panel keep working (they
-  don't need a wire format); features that require serialization are
-  disabled on Wasm until mainline clang + Emscripten ship P2996. No
-  dual codec system either way — the only escape hatch for a
-  Wasm-critical message is a single hand-written codec for that one
-  message, as an exception, never a parallel system.
+**No graceful-degrade fallback.** An earlier draft of this doc
+permitted a "Wasm-critical messages ship as hand-written codecs if
+the toolchain fails" escape hatch. That fallback is **removed**. Wasm
+is the primary surface, and a hand-written codec on the primary
+surface is still a divergence from the reflection-driven framework
+— a divergence we refuse to accept for the canonical deployment. If
+the toolchain can't produce a working reflection codec on Wasm, we
+fix the toolchain (build from source, patch the fork, eat the
+maintenance cost); we do not fork the framework. The "graceful
+degrade" escape only ever made sense when Wasm was treated as a
+secondary surface, which it no longer is.
 
 **Parity restored on the public-baseline bump regardless.** When
 mainline clang has P2996 and Emscripten picks it up on its normal
-cascade, Wasm gets serialization features automatically with no
-per-interface migration work — Teleport's source of truth is the
-reflected C++ type; the toolchain substitution is invisible to the
-interfaces.
+cascade, the fork dependency drops on both surfaces simultaneously.
+Teleport's source of truth is the reflected C++ type; the toolchain
+substitution is invisible to the interfaces, so the transition is a
+`MODULE.bazel` diff, not a rewrite.
 
 **Feasibility gates (M0 spike must answer each).**
 

@@ -26,6 +26,17 @@ doc [0025](0025-composited_rendering.md) (composited rendering) and
 doc [0026](0026-drag_end_latency.md) (drag-end latency), so all three docs
 share one hardware anchor and one budget (16.67 ms / frame).
 
+**Primary surface: Wasm.** The editor's primary deployment is the
+Wasm/browser build (see doc [0032](0032-teleport_ipc_framework.md)
+"Primary surface: Wasm"), so the 60 fps animation gate has to hold
+inside a browser tab with the renderer running in a worker, not just
+on a native desktop build. The timeline scrubber lives on the main
+thread, tick requests cross to the worker via Teleport's
+`WorkerTransport`, and the worker ticks `AnimationDriver` +
+re-renders. The desktop native path is the dev-time equivalent
+(scrubber on main process, renderer in a subprocess). The 16.67 ms
+budget is enforced on both.
+
 **Coupled with editor drag perf by design.** Continuous 60 fps animation and
 continuous 60 fps dragging are the same problem: a bounded region of the DOM
 mutates every frame while the rest of the scene stays identical. Dragging is

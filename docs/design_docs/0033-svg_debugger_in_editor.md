@@ -20,6 +20,17 @@ draw-op stream emitted by the renderer. It is not a pixel-level / fragment-level
 debugger. Pixel-level questions ("what did WebGPU actually draw on this tile?") stay
 with RenderDoc / Xcode Metal capture.
 
+**Primary surface: Wasm.** The editor's primary deployment is the
+Wasm/browser build (see doc [0032](0032-teleport_ipc_framework.md)
+"Primary surface: Wasm"), so the debugger's primary home is the
+in-browser editor panel, not the native binary. On Wasm the debugger
+UI runs on the main thread and the renderer runs in a worker; the
+`DebugTrace` data crosses that boundary via Teleport's
+`WorkerTransport`. Desktop is a dev-time surface with the same
+architecture (editor on main process, renderer in a sandboxed
+subprocess, `DebugTrace` via Teleport's pipe transport). Both
+surfaces share the same code paths; the transport differs.
+
 Tracks GitHub issue
 [#443 — SVG Rendering Inspection Tool (like renderdoc)](https://github.com/jwmcglynn/donner/issues/443),
 which already gestures at a record/replay backend + ImGui viewer. This doc names
@@ -154,6 +165,11 @@ Key properties:
 - **Feeds naturally off the editor's existing seams.** `AsyncRenderer` already owns
   frame orchestration, and `EditorApp` already owns picking; the debugger is a
   consumer of both, not a sibling.
+- **`DebugTrace` rides the renderer's existing transport.** On Wasm the trace
+  crosses main-thread ↔ worker via Teleport's `WorkerTransport`; on sandboxed
+  desktop it crosses via `SharedMemoryTransport` / `PipeTransport`; in-process
+  it's a direct write. Same `DebugTrace` struct, same reflection-generated
+  codec, three transports — the debugger doesn't pick, the editor does.
 
 ## Testing and Validation
 
@@ -175,9 +191,16 @@ Key properties:
   and perf events share a frame ID and an entity ID, so "click a frame → see
   per-element cost" is a straight join, not a fuzzy correlation. Neither doc
   ships its panel without the other.
-- **Does not** depend on the IPC framework (doc 0032). If the editor moves to a
-  sandboxed out-of-process renderer, the debugger follows along naturally because
-  `DebugTrace` is one more IPC interface; until then it's in-process.
+- **Depends on the IPC framework (doc [0032](0032-teleport_ipc_framework.md))
+  on the primary surface.** Wasm is Donner's primary editor surface (see
+  0032 "Primary surface: Wasm"), the renderer runs in a worker there, and
+  `DebugTrace` crosses the main-thread ↔ worker boundary via Teleport's
+  `WorkerTransport`. On the desktop dev surface the renderer runs in a
+  sandboxed subprocess and `DebugTrace` crosses via the pipe transport.
+  In-process (non-sandboxed desktop dev builds) is still supported for
+  tight iteration, but it's the escape hatch, not the canonical path —
+  and `DebugTrace` uses the same `InProcessTransport` there, so the data
+  flow is identical to the cross-boundary case with one transport swap.
 
 ## Open Questions
 

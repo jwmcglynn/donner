@@ -23,6 +23,18 @@ that tool (the editor + the debugger). Shipping Perfetto-first would tell the
 perf culture "perf work is an offline activity", which is the culture this doc
 is explicitly trying to change.
 
+**Primary surface: Wasm.** The editor's primary deployment is the
+Wasm/browser build (see doc [0032](0032-teleport_ipc_framework.md)
+"Primary surface: Wasm"), so the analyzer panel's primary home is
+in-browser. On Wasm the per-thread ring buffers live in their
+respective workers and the main-thread analyzer panel consumes
+*flushes* of those ring buffers delivered via Teleport's
+`WorkerTransport` — a batched frame of events per N ms, not a
+per-event crossing. The desktop sandboxed equivalent works the same
+way (per-subprocess ring buffer, pipe-transport flushes to the
+editor). Unified ring buffer semantics across surfaces is what lets
+one analyzer UI work everywhere.
+
 Today "perf work" in Donner means opening the Tracy client for the editor, running
 a shell script for the CLI, reading test-log CSVs for the resvg suite, and stitching
 them together by hand. Three data-formats, three viewers, one problem. This doc
@@ -281,6 +293,12 @@ Key properties:
   not a loose dependency. Shared UI, shared frame/entity IDs on events, shared
   feature-flag gate (`debugger-instrumentation`). Neither doc ships its
   analyzer/debugger panel without the other.
+- Doc [0032](0032-teleport_ipc_framework.md) (Teleport IPC) — **hard
+  dependency on the primary (Wasm) surface.** Per-worker ring buffers
+  flush batched event frames to the main-thread analyzer panel via
+  Teleport's `WorkerTransport`. The same path holds on desktop with a
+  pipe/shared-memory transport. In-process builds skip Teleport (direct
+  ring-buffer consumption) as an escape-hatch path.
 
 ## Alternatives Considered
 
@@ -323,8 +341,10 @@ as one sink**, in parallel, for at least a release past M1 (see Decisions).
 - **GPU-counter integration on Geode.** The Geode design doc (0017) already
   wires up some WebGPU timestamp queries. Do we consume those here, or does
   Geode keep its own parallel perf surface? Strong preference: consume here.
-- **Interaction with the IPC framework (doc 0032).** When the editor moves to
-  out-of-process renderer, do perf events cross the IPC boundary, or does each
-  peer have its own ring buffer with merge at analysis time? Probably the latter
-  — crossing the boundary every event would dominate the cost it's trying to
-  measure.
+- **Ring-buffer flush cadence over Teleport.** Per-thread ring buffers
+  exist on Wasm workers and sandboxed desktop subprocesses; the
+  main-thread analyzer panel pulls them via Teleport's transport. Open
+  question is the flush cadence — every N frames? Every N ms? On panel
+  demand? Per-event crossing would dominate the cost the framework is
+  trying to measure, so batched-flush is the rule; the open question is
+  the batch size. Pin during M3.
