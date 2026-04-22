@@ -1,15 +1,7 @@
 /// @file
 ///
-/// Instrumented UI-layer test that replays the user-recorded
-/// `/tmp/filter_select.rnr` (checked in as `filter_drag_repro.rnr`)
-/// against the real editor stack — `EditorApp` + `SelectTool` +
-/// `RenderCoordinator` + `AsyncRenderer` — so we faithfully exercise
-/// the pipeline behind the user's report of:
-///
-///   - "drag an element with a `<feGaussianBlur>` filter, things get
-///     really laggy" — drag-frame wall-clock budget assertion,
-///   - "I can't select any other elements" after the first drag —
-///     second drag must actually start a new selection.
+/// Shared replay harness implementation for the `FilterDragRepro_*`
+/// tests. See `FilterDragReproTestUtils.h` for the contract.
 ///
 /// Replay is high-fidelity at the input boundary: we read mouse-down,
 /// mouse-move, and mouse-up events out of the `.donner-repro` file and
@@ -25,17 +17,23 @@
 /// replay player. When Stage 2 lands in full this harness collapses
 /// into `donner::editor::repro::ReplayPlayer`.
 
+#include "donner/editor/tests/FilterDragReproTestUtils.h"
+
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -54,8 +52,16 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "gtest/gtest.h"
 
-namespace donner::editor {
+namespace donner::editor::filter_drag_repro {
 namespace {
+
+using ::donner::Entity;
+using ::donner::editor::AsyncRenderer;
+using ::donner::editor::EditorApp;
+using ::donner::editor::RenderCoordinator;
+using ::donner::editor::RenderRequest;
+using ::donner::editor::SelectTool;
+using ::donner::editor::ViewportState;
 
 // ---------------------------------------------------------------------------
 // Editor pane layout constants — mirrors `EditorShell.cc`.
@@ -71,11 +77,6 @@ constexpr double kInspectorPaneWidth = 320.0;
 // Typical ImGui menu-bar height under the project's style; matches the
 // live editor's top-of-pane offset within ~1px across platforms.
 constexpr double kMenuBarHeight = 20.0;
-
-struct ReplayConfig {
-  std::filesystem::path reproPath;
-  std::filesystem::path svgPath;
-};
 
 struct FrameTiming {
   uint64_t reproFrameIndex = 0;
@@ -155,25 +156,12 @@ struct ReplayState {
   bool leftButtonHeld = false;
 };
 
-// ---------------------------------------------------------------------------
-// Actually replay the recording through the full editor stack. Returns
-// per-frame timings so the caller can enforce budget assertions.
-// ---------------------------------------------------------------------------
-
 struct ReplayResults {
   std::vector<FrameTiming> frames;
   std::vector<uint64_t> mouseDownFrameIndices;
   std::vector<uint64_t> mouseUpFrameIndices;
-  /// `selectedEntityAtFrame[i]` is the selection at the end of
-  /// `frames[i]`'s runFrame. `entt::null` means "nothing selected".
   std::vector<Entity> selectedEntityAtFrame;
-  /// Elements selected per mouse-up — one entry per mouse-up. `entt::null`
-  /// if the gesture ended without selecting anything (e.g. empty-space
-  /// click with no marquee hits).
   std::vector<Entity> selectionAfterMouseUp;
-  /// `id` attribute of each selected element post-mouse-up (or "<none>"),
-  /// and its nearest filter-bearing ancestor's id (or "<none>") — so a
-  /// failing budget test can tell the reader what the user actually hit.
   std::vector<std::string> selectionElementIds;
   std::vector<std::string> selectionFilterAncestorIds;
   uint64_t fastPathFrames = 0;
@@ -215,10 +203,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
   viewport.documentViewBox = *app.document().document().svgElement().viewBox();
   viewport.resetTo100Percent();
 
-  // Configure the document's canvas size to match the viewport's
-  // device-pixel target. The real shell does this in `EditorShell::
-  // runFrame` via `interactionController_.updatePaneLayout` -> the
-  // async-render request pipeline; here we do it directly.
   app.document().document().setCanvasSize(viewport.desiredCanvasSize().x,
                                           viewport.desiredCanvasSize().y);
 
@@ -231,20 +215,13 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
 
     const auto frameStart = std::chrono::steady_clock::now();
 
-    // Compute document-space mouse position. Repro coords are logical
-    // window pixels; the pane is offset from the window origin.
     const Vector2d mouseScreen(frame.mouseX, frame.mouseY);
     const Vector2d mouseDoc = viewport.screenToDocument(mouseScreen);
     const bool wasHeld = state.leftButtonHeld;
     const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
 
-    // Dispatch discrete events first (matches EditorInputBridge ordering).
     for (const auto& e : frame.events) {
       if (e.kind == repro::ReproEvent::Kind::MouseDown && e.mouseButton == 0) {
-        // Only fire onMouseDown when the renderer is idle — the live
-        // editor gates mouse-down on `!asyncRenderer.isBusy()` (see the
-        // gated dispatch in EditorShell/EditorInputBridge). If the user
-        // clicks during a long render they see the click dropped.
         if (!renderCoordinator.asyncRenderer().isBusy()) {
           selectTool.onMouseDown(app, mouseDoc, /*modifiers=*/{});
           results.mouseDownFrameIndices.push_back(frame.index);
@@ -260,10 +237,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
           const svg::SVGElement sel = *app.selectedElement();
           postSelect = sel.entityHandle().entity();
           selId = std::string(sel.id());
-          // Walk ancestors looking for a filter="..." attribute. If found,
-          // the leaf click is hitting a descendant of a filter group — the
-          // exact scenario where `CompositorController::promoteEntity`
-          // refuses because of `HasCompositingBreakingAncestor`.
           svg::SVGElement cursor = sel;
           while (auto parent = cursor.parentElement()) {
             if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter"))) {
@@ -280,10 +253,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
       }
     }
 
-    // Between a mouse-down and the matching mouse-up, the live editor
-    // calls `SelectTool::onMouseMove` once per frame the button is held
-    // so the drag tracks the cursor. Replay has to mirror that so the
-    // DOM transform mutation stream matches reality.
     if (nowHeld && wasHeld) {
       selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true);
     } else if (!nowHeld && wasHeld) {
@@ -292,10 +261,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
     }
     state.leftButtonHeld = nowHeld;
 
-    // `flushFrame` drains the command queue (applying any `SetTransform`
-    // commands dispatched this frame). Gated on `!isBusy()` in the real
-    // shell — we mirror that gate since a queued command must wait for
-    // the render to finish before it can mutate the DOM.
     const auto flushStart = std::chrono::steady_clock::now();
     timing.wasBusy = renderCoordinator.asyncRenderer().isBusy();
     if (!timing.wasBusy) {
@@ -305,12 +270,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - flushStart)
             .count();
 
-    // Request a render each frame (matches `RenderCoordinator::
-    // maybeRequestRender`'s behavior during an active drag). If the
-    // renderer was busy, we still drive a render this frame — the real
-    // shell's gate is "request new render IF idle", but here we block
-    // on the current one and then immediately issue a new one to
-    // measure steady-state frame cost.
     auto workerMs = DrainOneRender(renderCoordinator.asyncRenderer(), renderCoordinator.renderer(),
                                    app.document().document(), app, selectTool, version);
     ++version;
@@ -335,20 +294,74 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
   return results;
 }
 
-// ---------------------------------------------------------------------------
-// THE TEST. Faithfully replays the user's repro and asserts the two
-// user-reported invariants: drag frames stay under a reasonable budget,
-// and selection changes correctly across the release between drag #1
-// and drag #2.
-// ---------------------------------------------------------------------------
+DragStats ComputeDragStats(const ReplayResults& r, uint64_t fromFrame, uint64_t toFrame) {
+  DragStats stats;
+  double sum = 0.0;
+  for (const auto& f : r.frames) {
+    if (f.reproFrameIndex > fromFrame && f.reproFrameIndex < toFrame && f.workerMs >= 0.0) {
+      sum += f.workerMs;
+      stats.maxWorkerMs = std::max(stats.maxWorkerMs, f.workerMs);
+      ++stats.frameCount;
+    }
+  }
+  if (stats.frameCount > 0) {
+    stats.avgWorkerMs = sum / stats.frameCount;
+  }
+  return stats;
+}
 
-TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
+void DumpHistogram(const ReplayResults& r, uint64_t fromFrame, uint64_t toFrame,
+                   const char* label) {
+  int buckets[6] = {0};  // <5, 5-15, 15-30, 30-60, 60-120, >=120
+  for (const auto& f : r.frames) {
+    if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
+      continue;
+    }
+    if (f.workerMs < 5)
+      buckets[0]++;
+    else if (f.workerMs < 15)
+      buckets[1]++;
+    else if (f.workerMs < 30)
+      buckets[2]++;
+    else if (f.workerMs < 60)
+      buckets[3]++;
+    else if (f.workerMs < 120)
+      buckets[4]++;
+    else
+      buckets[5]++;
+  }
+  std::cerr << "[FilterDragRepro] " << label << " worker-ms histogram:";
+  std::cerr << " <5=" << buckets[0];
+  std::cerr << " 5-15=" << buckets[1];
+  std::cerr << " 15-30=" << buckets[2];
+  std::cerr << " 30-60=" << buckets[3];
+  std::cerr << " 60-120=" << buckets[4];
+  std::cerr << " >=120=" << buckets[5] << "\n";
+}
+
+void DumpFirstFiveFrames(const ReplayResults& r, uint64_t fromFrame, uint64_t toFrame,
+                         const char* label) {
+  std::cerr << "[FilterDragRepro] " << label << " first 5 frames: ";
+  int printed = 0;
+  for (const auto& f : r.frames) {
+    if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
+      continue;
+    }
+    if (printed++ >= 5) break;
+    std::cerr << f.workerMs << "ms ";
+  }
+  std::cerr << "\n";
+}
+
+}  // namespace
+
+void RunFilterDragReproScenario(FilterDragReproResult* out) {
   const std::filesystem::path reproPath = "donner/editor/tests/filter_drag_repro.rnr";
   const std::filesystem::path svgPath = "donner_splash.svg";
 
   if (!std::filesystem::exists(reproPath) || !std::filesystem::exists(svgPath)) {
-    GTEST_SKIP() << "Required data files not available in runfiles: " << reproPath << " or "
-                 << svgPath;
+    out->skipped = true;
+    return;
   }
 
   ReplayResults r = ReplayRepro(reproPath, svgPath);
@@ -357,88 +370,27 @@ TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
       << "expected exactly two mouse-down events in the repro (first drag, second drag)";
   ASSERT_EQ(r.mouseUpFrameIndices.size(), 2u) << "expected two mouse-up events in the repro";
 
-  // Partition the per-frame timings into phases so budget assertions can
-  // target the steady-state drag portion of each gesture separately.
   const uint64_t firstDown = r.mouseDownFrameIndices[0];
   const uint64_t firstUp = r.mouseUpFrameIndices[0];
   const uint64_t secondDown = r.mouseDownFrameIndices[1];
   const uint64_t secondUp = r.mouseUpFrameIndices[1];
 
-  double firstDragWorkerSum = 0.0;
-  double firstDragWorkerMax = 0.0;
-  int firstDragFrameCount = 0;
-  double secondDragWorkerSum = 0.0;
-  double secondDragWorkerMax = 0.0;
-  int secondDragFrameCount = 0;
-  for (const auto& f : r.frames) {
-    if (f.reproFrameIndex > firstDown && f.reproFrameIndex < firstUp && f.workerMs >= 0.0) {
-      firstDragWorkerSum += f.workerMs;
-      firstDragWorkerMax = std::max(firstDragWorkerMax, f.workerMs);
-      ++firstDragFrameCount;
-    }
-    if (f.reproFrameIndex > secondDown && f.reproFrameIndex < secondUp && f.workerMs >= 0.0) {
-      secondDragWorkerSum += f.workerMs;
-      secondDragWorkerMax = std::max(secondDragWorkerMax, f.workerMs);
-      ++secondDragFrameCount;
-    }
-  }
-  ASSERT_GT(firstDragFrameCount, 0);
-  ASSERT_GT(secondDragFrameCount, 0);
-  const double firstAvg = firstDragWorkerSum / firstDragFrameCount;
-  const double secondAvg = secondDragWorkerSum / secondDragFrameCount;
+  out->firstDrag = ComputeDragStats(r, firstDown, firstUp);
+  out->secondDrag = ComputeDragStats(r, secondDown, secondUp);
+  ASSERT_GT(out->firstDrag.frameCount, 0);
+  ASSERT_GT(out->secondDrag.frameCount, 0);
 
-  std::cerr << "[FilterDragRepro] first drag: frames=" << firstDragFrameCount
-            << ", avg=" << firstAvg << " ms, max=" << firstDragWorkerMax << " ms\n";
-  std::cerr << "[FilterDragRepro] second drag: frames=" << secondDragFrameCount
-            << ", avg=" << secondAvg << " ms, max=" << secondDragWorkerMax << " ms\n";
+  std::cerr << "[FilterDragRepro] first drag: frames=" << out->firstDrag.frameCount
+            << ", avg=" << out->firstDrag.avgWorkerMs << " ms, max=" << out->firstDrag.maxWorkerMs
+            << " ms\n";
+  std::cerr << "[FilterDragRepro] second drag: frames=" << out->secondDrag.frameCount
+            << ", avg=" << out->secondDrag.avgWorkerMs << " ms, max=" << out->secondDrag.maxWorkerMs
+            << " ms\n";
 
-  // Dump a histogram of per-frame worker-ms to understand the distribution.
-  const auto dumpHistogram = [&](uint64_t fromFrame, uint64_t toFrame, const char* label) {
-    int buckets[6] = {0};  // <5, 5-15, 15-30, 30-60, 60-120, >=120
-    for (const auto& f : r.frames) {
-      if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
-        continue;
-      }
-      if (f.workerMs < 5)
-        buckets[0]++;
-      else if (f.workerMs < 15)
-        buckets[1]++;
-      else if (f.workerMs < 30)
-        buckets[2]++;
-      else if (f.workerMs < 60)
-        buckets[3]++;
-      else if (f.workerMs < 120)
-        buckets[4]++;
-      else
-        buckets[5]++;
-    }
-    std::cerr << "[FilterDragRepro] " << label << " worker-ms histogram:";
-    std::cerr << " <5=" << buckets[0];
-    std::cerr << " 5-15=" << buckets[1];
-    std::cerr << " 15-30=" << buckets[2];
-    std::cerr << " 30-60=" << buckets[3];
-    std::cerr << " 60-120=" << buckets[4];
-    std::cerr << " >=120=" << buckets[5] << "\n";
-  };
-  dumpHistogram(firstDown, firstUp, "first-drag");
-  dumpHistogram(secondDown, secondUp, "second-drag");
-
-  // Print the first 5 frames of each drag (captures the cold-frame +
-  // steady-state transition).
-  const auto dumpFirstN = [&](uint64_t fromFrame, uint64_t toFrame, const char* label) {
-    std::cerr << "[FilterDragRepro] " << label << " first 5 frames: ";
-    int printed = 0;
-    for (const auto& f : r.frames) {
-      if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
-        continue;
-      }
-      if (printed++ >= 5) break;
-      std::cerr << f.workerMs << "ms ";
-    }
-    std::cerr << "\n";
-  };
-  dumpFirstN(firstDown, firstUp, "first-drag");
-  dumpFirstN(secondDown, secondUp, "second-drag");
+  DumpHistogram(r, firstDown, firstUp, "first-drag");
+  DumpHistogram(r, secondDown, secondUp, "second-drag");
+  DumpFirstFiveFrames(r, firstDown, firstUp, "first-drag");
+  DumpFirstFiveFrames(r, secondDown, secondUp, "second-drag");
   std::cerr << "[FilterDragRepro] fast-path counters at end: fast=" << r.fastPathFrames
             << " slowWithDirty=" << r.slowPathFramesWithDirty << " noDirty=" << r.noDirtyFrames
             << "\n";
@@ -448,56 +400,20 @@ TEST(FilterDragReproTest, ReplayOfUserRecordingMeetsDragBudgetAndSecondSelect) {
   std::cerr << "[FilterDragRepro] secondSel id=" << r.selectionElementIds[1]
             << " filterAncestor=" << r.selectionFilterAncestorIds[1] << "\n";
 
-  // Selection invariant: after the first mouse-up, ONE element must be
-  // selected (the first drag's target). The second mouse-down in the
-  // recording lands on a different location; it must hit-test, replace
-  // the selection, and produce a visible drag preview — the user's
-  // "I can't select any other elements" complaint is exactly the
-  // failure mode where the first drag's selection sticks because the
-  // new mouse-down was dropped (async renderer busy / first drag
-  // layer never demoted).
   ASSERT_EQ(r.selectionAfterMouseUp.size(), 2u);
   const Entity firstSel = r.selectionAfterMouseUp[0];
   const Entity secondSel = r.selectionAfterMouseUp[1];
-  EXPECT_TRUE(firstSel != entt::null)
-      << "first drag ended without a latched selection — hit-test missed or gesture aborted";
-  EXPECT_TRUE(secondSel != entt::null)
-      << "second mouse-down never produced a selection — user's 'can't select anything else' "
-         "complaint exactly";
-  EXPECT_TRUE(firstSel != secondSel)
-      << "second drag's selection did not differ from the first — second mouse-down was ignored "
-         "(likely dropped because async renderer stayed busy through the entire repro window)";
+  out->firstSelectionExists = (firstSel != entt::null);
+  out->secondSelectionExists = (secondSel != entt::null);
+  out->selectionChangedAcrossDrags = (firstSel != secondSel);
+  out->firstSelectionId = r.selectionElementIds[0];
+  out->firstSelectionFilterAncestorId = r.selectionFilterAncestorIds[0];
+  out->secondSelectionId = r.selectionElementIds[1];
+  out->secondSelectionFilterAncestorId = r.selectionFilterAncestorIds[1];
 
-  // Drag-budget invariants. The per-worker `workerMs` is the wall
-  // clock spent inside `CompositorController::renderFrame`. With the
-  // compositing-group elevation + `skipMainComposeDuringSplit` fast
-  // path both active, observed steady-state drag frames on this splash
-  // run at ~2 ms avg on dev hardware but ~40-50 ms avg on shared GitHub
-  // CI runners. Widened the wall-clock budgets to tolerate CI shape
-  // while still catching the "really laggy" regression (100+ ms frames)
-  // the user originally reported at ~250 ms / frame. Observed worst-
-  // frame spikes on shared GitHub CI Mac runners land ~165 ms typical,
-  // with single-outlier excursions past 200 ms (saw 218.8 ms on
-  // 2026-04-21, CI main #24742526232) — raised max to 300 ms so the
-  // gate tolerates cold-frame + runner-scheduling noise. The primary
-  // regression gates are the avg budget (80 ms — catches "every frame
-  // laggy") and the fast-path counter check below (CPU-speed-invariant).
-  // The max budget only has to catch pathological multi-frame stalls
-  // well above any observed CI noise. The proper structural fix here
-  // is to split this test via `donner_perf_cc_test` so the wall-clock
-  // assertions move to the nightly `perf` target; tracked for a
-  // follow-up PR.
-  constexpr double kDragWorkerAvgBudgetMs = 80.0;
-  constexpr double kDragWorkerMaxBudgetMs = 300.0;
-  EXPECT_LT(firstAvg, kDragWorkerAvgBudgetMs)
-      << "first drag (recorded as 'laggy'): avg worker ms exceeds budget — drag is re-running "
-         "the heavy full-document render pipeline every frame";
-  EXPECT_LT(firstDragWorkerMax, kDragWorkerMaxBudgetMs)
-      << "first drag: worst-frame worker ms exceeds budget";
-  EXPECT_LT(secondAvg, kDragWorkerAvgBudgetMs) << "second drag: avg worker ms exceeds budget";
-  EXPECT_LT(secondDragWorkerMax, kDragWorkerMaxBudgetMs)
-      << "second drag: worst-frame worker ms exceeds budget";
+  out->fastPathFrames = r.fastPathFrames;
+  out->slowPathFramesWithDirty = r.slowPathFramesWithDirty;
+  out->noDirtyFrames = r.noDirtyFrames;
 }
 
-}  // namespace
-}  // namespace donner::editor
+}  // namespace donner::editor::filter_drag_repro
