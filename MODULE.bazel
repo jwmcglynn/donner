@@ -163,10 +163,49 @@ bazel_dep(name = "toolchains_llvm", version = "1.7.0", dev_dependency = True)
 # )
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm", dev_dependency = True)
+teleport_p2996 = use_extension(
+    "//build_defs/teleport_p2996_toolchain:extensions.bzl",
+    "teleport_p2996",
+    dev_dependency = True,
+)
 
 llvm.toolchain(
     name = "llvm_toolchain",
     llvm_version = "21.1.6",
+)
+
+teleport_p2996.local_root(
+    name = "teleport_p2996_llvm_root",
+    default_path = "/opt/p2996/clang",
+    env_var = "TELEPORT_P2996_ROOT",
+    llvm_major_version = "21",
+)
+use_repo(teleport_p2996, "teleport_p2996_llvm_root")
+
+llvm.toolchain(
+    name = "teleport_p2996_toolchain",
+    llvm_version = "21.0.0",
+    extra_link_flags = {
+        "linux-x86_64": [
+            "-Wl,-rpath,{toolchain_path_prefix}/lib/x86_64-unknown-linux-gnu",
+        ],
+    },
+)
+llvm.toolchain_root(
+    name = "teleport_p2996_toolchain",
+    # Provide a root for both Linux host architectures so the config repo can
+    # instantiate cleanly on developer aarch64 machines, even though the spike
+    # target itself stays linux/x86_64-only in M0.2 Phase A.
+    targets = [
+        "linux-aarch64",
+        "linux-x86_64",
+    ],
+    label = "@teleport_p2996_llvm_root//:root",
+)
+llvm.sysroot(
+    name = "teleport_p2996_toolchain",
+    targets = ["linux-x86_64"],
+    label = "@sysroot_linux_x86_64//:sysroot",
 )
 
 # Hermetic Linux sysroots: keep the toolchain self-contained on Bazel
@@ -183,10 +222,13 @@ llvm.sysroot(
     label = "@sysroot_linux_x86_64//:sysroot",
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
+use_repo(llvm, "teleport_p2996_toolchain")
 
 # NOTE: This to use this toolchain specify --config=latest_llvm
 # This is enabled by default on Linux, disabled by default on macOS
 # register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
+# NOTE: Bloomberg's clang-p2996 fork is opt-in only via --config=teleport_spike.
+# Do not register it globally; default Bazel wildcard builds must stay on LLVM 21.1.6.
 
 bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)
 
@@ -250,4 +292,3 @@ git_override(
     ],
     patch_strip = 1,
 )
-

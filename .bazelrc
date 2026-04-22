@@ -61,6 +61,17 @@ common:latest_llvm --@rules_python//python/config_settings:bootstrap_impl=script
 # emscripten's `compiler.mjs` is happy with.
 common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 
+# Enable the Teleport spike's developer-local clang-p2996 toolchain. This is
+# opt-in only: default bazel build/test wildcards must remain on the mainline
+# LLVM 21.1.6 toolchain.
+common:teleport_spike --extra_toolchains=@teleport_p2996_toolchain//:all
+common:teleport_spike --//build_defs:llvm_latest=1
+common:teleport_spike --//donner/editor/ipc/spike:enable_spike=true
+common:teleport_spike --repo_env=TELEPORT_P2996_ROOT
+build:teleport_spike --cxxopt=-std=c++26
+build:teleport_spike --cxxopt=-freflection-latest
+build:teleport_spike --cxxopt=-fexpansion-statements
+
 # Renderer backend selection
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
 # Geode (experimental WebGPU + Slug). Also toggles enable_geode so that

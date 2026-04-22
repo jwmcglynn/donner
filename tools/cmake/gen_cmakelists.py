@@ -112,6 +112,8 @@ SKIPPED_PACKAGES = {
     "donner/editor/resources",
     "donner/editor/sandbox",
     "donner/editor/sandbox/tests",
+    "donner/editor/ipc",
+    "donner/editor/ipc/spike",  # Teleport spike — Bazel-only, requires clang-p2996
     "donner/editor/tests",
     "donner/editor/wasm",
     "third_party/emscripten-glfw",

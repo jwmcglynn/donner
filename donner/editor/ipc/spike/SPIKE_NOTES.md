@@ -120,19 +120,18 @@ its payload), so the length check `len > r.remaining()` fires. An earlier
 draft of this doc predicted `DecodeError=0` (`kTruncated`); that was a
 placeholder, corrected after the first real run.
 
-### Build (Bazel path — present for M0.2 continuity, will fail today)
+### Build (Bazel path — M0.2)
 
 ```bash
 bazel build --config=teleport_spike //donner/editor/ipc/spike:teleport_spike
 ```
 
-This is intentionally a hard error under the current `MODULE.bazel` because
-the toolchain doesn't exist there yet — wiring it up is exactly what M0.2
-will do. The `--config=teleport_spike` shortcut is not yet defined in
-`tools/bazel/.bazelrc`; add it (or use the long-form
-`--//donner/editor/ipc/spike:enable_spike=True
---repo_env=CC=/path/to/clang-p2996/bin/clang
---repo_env=CXX=/path/to/clang-p2996/bin/clang++`) when M0.2 lands.
+M0.2 wires this through Bazel as a second, opt-in `toolchains_llvm`
+registration. The config is intentionally **not** registered globally: plain
+`bazel build //...` and `bazel test //...` stay on the mainline LLVM 21.1.6
+toolchain, while `--config=teleport_spike` flips the spike build setting,
+adds the Bloomberg fork via `--extra_toolchains`, and injects the reflection
+flags.
 
 ### Why a Makefile, not Bazel
 
@@ -149,6 +148,149 @@ Three reasons it stays out of Bazel for M0.1:
 3. We want a single-command "does this even round-trip?" answer for any
    developer with Docker, without requiring a Bazel rebuild of the
    toolchain.
+
+---
+
+## M0.2: Bazel toolchain integration
+
+### Chosen approach
+
+M0.2 reuses `toolchains_llvm` instead of introducing a hand-written
+Linux-only `cc_toolchain_config`. The new pieces are:
+
+* `build_defs/teleport_p2996_toolchain/extensions.bzl` — a tiny module
+  extension + repository rule that exposes a **developer-local** Bloomberg
+  fork install as `@teleport_p2996_llvm_root`.
+* `MODULE.bazel` — a second `llvm.toolchain(...)` named
+  `teleport_p2996_toolchain`, plus `llvm.toolchain_root(...)` pointing at that
+  local repo. Everything is `dev_dependency = True` and **not registered by
+  default**.
+* `.bazelrc` — `build:teleport_spike` adds
+  `--extra_toolchains=@teleport_p2996_toolchain//:all`,
+  flips `//donner/editor/ipc/spike:enable_spike=true`, forwards
+  `TELEPORT_P2996_ROOT`, and injects
+  `-std=c++26 -freflection-latest -fexpansion-statements`.
+
+Trade-off vs a custom `cc_toolchain_config`: less code, less drift from the
+repo's existing LLVM integration, and fewer ways to accidentally perturb the
+default toolchain. The downside is that the fork still relies on a
+developer-local install in Phase A rather than a hosted tarball.
+
+### Setup
+
+If the fork is installed at the default path `/opt/p2996/clang`, no
+environment variable is required. Otherwise set `TELEPORT_P2996_ROOT` to the
+`clang/` directory that contains `bin/clang++`, `include/`, and `lib/`.
+
+```bash
+docker pull vsavkov/clang-p2996:amd64
+CID=$(docker create vsavkov/clang-p2996:amd64)
+sudo docker cp "$CID:/opt/p2996/." /opt/p2996/
+docker rm "$CID"
+
+/opt/p2996/clang/bin/clang++ --version
+# clang version 21.0.0git (https://github.com/bloomberg/clang-p2996.git f72d85e5...)
+
+# Only needed if you install it somewhere other than /opt/p2996/clang:
+export TELEPORT_P2996_ROOT=/abs/path/to/p2996/clang
+```
+
+The helper repository rule is deliberately tolerant when the fork is absent:
+it materializes a placeholder repo instead of failing module resolution. That
+is what keeps a plain `bazel test //...` green on machines that never opted
+into the spike toolchain.
+
+### Invocation
+
+```bash
+bazel build --config=teleport_spike //donner/editor/ipc/spike:teleport_spike
+./bazel-bin/donner/editor/ipc/spike/teleport_spike
+```
+
+Expected output:
+
+```text
+Round-trip: MATCH
+Negative test: OK (DecodeError=1)
+```
+
+### Default-build invariance
+
+Verified wiring expectations for M0.2:
+
+* Without `--config=teleport_spike`, the spike target stays gated behind
+  `//donner/editor/ipc/spike:enable_spike=false` and
+  `target_compatible_with = ["@platforms//:incompatible"]`.
+* The Bloomberg fork is **not** registered through `register_toolchains(...)`;
+  it only enters resolution when `--config=teleport_spike` adds it through
+  `--extra_toolchains`.
+* `tools/cmake/gen_cmakelists.py` explicitly skips `donner/editor/ipc/**`, so
+  the CMake mirror never sees the C++26/reflection subtree.
+
+### Rpath / runfiles
+
+The Teleport toolchain injects:
+
+```text
+-Wl,-rpath,<toolchain-root>/lib/x86_64-unknown-linux-gnu
+```
+
+through `llvm.toolchain(extra_link_flags=...)` in `MODULE.bazel`. That keeps
+`./bazel-bin/donner/editor/ipc/spike/teleport_spike` runnable without
+`LD_LIBRARY_PATH` even when the loader needs the fork's shared libraries.
+On Linux, `toolchains_llvm` still prefers the fork's bundled static
+`libc++.a` / `libc++abi.a` in `builtin-libc++` mode; the absolute rpath is
+there for the dynamic fallback and for any future fork packaging changes.
+
+### Host-architecture limit in Phase A
+
+Phase A is intentionally `linux/x86_64` only. The spike target is marked
+incompatible on other platforms. On an `aarch64` developer machine, the
+default Bazel wildcard build remains green, but
+`bazel build --config=teleport_spike //donner/editor/ipc/spike:teleport_spike`
+should fail as incompatible until the arm64 follow-up lands.
+
+## M0.2 blocker
+
+This checkout was implemented and validated on a **Linux `aarch64` host**,
+while Phase A is explicitly **amd64-only**. That leaves one verification gap:
+I could not honestly prove the exact native Phase A command
+
+```bash
+bazel build --config=teleport_spike //donner/editor/ipc/spike:teleport_spike
+```
+
+from this machine.
+
+What *was* validated here:
+
+* The default repo gate stayed green:
+  `bazel test //... --test_output=errors
+  --test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+  --test_env=XDG_RUNTIME_DIR=/tmp`
+  passed on this Intel Arc host. (The llvmpipe env override is required here;
+  without it the Geode lane times out or renders corrupt output, exactly as the
+  repo notes warn.)
+* The spike target remains invisible to default wildcard builds and is
+  incompatible without `--config=teleport_spike`.
+* The Teleport toolchain resolves and analyzes cleanly for an
+  `@toolchains_llvm//platforms:linux-x86_64` target under `--nobuild`.
+
+Why the final native spike build is still blocked on this host:
+
+* The straightforward qemu wrapper approach distorts Clang's builtin-header
+  discovery enough that Bazel's include checker sees absolute builtin headers
+  outside the declared toolchain (`/opt/p2996/.../lib/clang/21/include`).
+* Forcing the `llvm_latest` helper flag back off to skip that one host-only
+  `libc_compat` compile edge just moves the failure: the qemu-wrapped toolchain
+  then loses `<expected>` from its builtin C++ include path.
+* Running an amd64 Bazel binary under qemu was also not a clean escape hatch:
+  Bazel's embedded amd64 JDK hit `Exec format error` when it tried to spawn
+  Java subprocesses inside this arm64 environment.
+
+Bottom line: the checked-in M0.2 wiring is ready for verification on a real
+amd64 host, but this particular arm64 machine cannot provide a faithful final
+proof of the opt-in spike build without a proper binfmt-enabled amd64 runtime.
 
 ---
 
@@ -255,9 +397,8 @@ Verified against the pinned digest above.
   `/opt/p2996/clang/lib/x86_64-unknown-linux-gnu/`, but the Makefile does
   not emit an rpath, so `./teleport_spike` fails with
   `libc++.so.1: cannot open shared object file` unless
-  `LD_LIBRARY_PATH` is set. M0.2's Bazel `cc_toolchain` should inject
-  `-Wl,-rpath,<libc++ dir>` (or equivalent `features`) so binaries are
-  self-contained.
+  `LD_LIBRARY_PATH` is set. M0.2's Bazel toolchain wiring now injects
+  `-Wl,-rpath,<libc++ dir>` so the Bazel-built binary is self-contained.
 * **Sanitizer runtimes are not shipped in the image.** *(Confirmed, new
   finding.)* `find /opt/p2996 -name 'libclang_rt*'` returns only
   `libclang_rt.builtins.a` — no `asan`, `ubsan`, `tsan`, `msan`, or
