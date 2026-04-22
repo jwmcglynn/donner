@@ -7,8 +7,9 @@ on:
     branches: [main, feature/ci-hardening-2026q2]
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # See main.yml for rationale; same shared push/PR dedupe pattern.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 
 # Fast lint jobs covering checks that don't live inside `bazel test //...`:
 #

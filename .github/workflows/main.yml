@@ -9,8 +9,14 @@ on:
     branches: [main]
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Shared group between push and pull_request events on the same branch:
+  # `github.event.pull_request.head.ref` (PR) and `github.ref_name` (push) both
+  # resolve to the bare branch name, so a `git push` to a branch with an open PR
+  # races into the same group as the PR's synchronize event and one cancels the
+  # other. Push to a branch without an open PR still gets a fresh group, so
+  # feature branches keep CI coverage before the PR is opened.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 
 # Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
 # are retried to survive transient GitHub/registry outages. Build/test steps
