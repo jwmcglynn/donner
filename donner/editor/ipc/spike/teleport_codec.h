@@ -126,8 +126,16 @@ inline void encodeOne(Writer& w, const T& v) {
   } else if constexpr (std::is_class_v<T>) {
     // P2996: enumerate non-static data members at compile time, splice each
     // member access at runtime. `template for` (P1306) drives the loop.
-    constexpr auto members = std::meta::nonstatic_data_members_of(
-        ^^T, std::meta::access_context::current());
+    //
+    // `nonstatic_data_members_of` returns `std::vector<info>` whose heap
+    // allocation cannot persist in a non-transient `constexpr` variable, so
+    // `std::define_static_array` promotes it to statically-stored storage
+    // (returns `std::span<const info>`). Without this wrapper clang rejects
+    // the loop with "pointer to subobject of heap-allocated object is not a
+    // constant expression".
+    static constexpr auto members = std::define_static_array(
+        std::meta::nonstatic_data_members_of(
+            ^^T, std::meta::access_context::current()));
     template for (constexpr auto member : members) {
       encodeOne(w, v.[:member:]);
     }
@@ -142,8 +150,9 @@ inline std::expected<void, DecodeError> decodeOne(Reader& r, T& out) {
     if (!r.readScalar(out)) return std::unexpected(DecodeError::kTruncated);
     return {};
   } else if constexpr (std::is_class_v<T>) {
-    constexpr auto members = std::meta::nonstatic_data_members_of(
-        ^^T, std::meta::access_context::current());
+    static constexpr auto members = std::define_static_array(
+        std::meta::nonstatic_data_members_of(
+            ^^T, std::meta::access_context::current()));
     template for (constexpr auto member : members) {
       auto sub = decodeOne(r, out.[:member:]);
       if (!sub) return std::unexpected(sub.error());
