@@ -1,0 +1,53 @@
+"""Teleport IPC framework feasibility spike (M0.1).
+
+The spike intentionally lives outside the default `bazel test //...` graph: it
+requires Bloomberg's clang-p2996 fork (P2996 reflection + P1306 expansion
+statements), which is not wired into MODULE.bazel until M0.2. The
+`teleport_spike` target is gated behind the user-defined build setting
+`//donner/editor/ipc/spike:enable_spike`, which is `False` by default and is
+flipped on by `--config=teleport_spike` in tools/.bazelrc-style usage:
+
+    bazel build --config=teleport_spike //donner/editor/ipc/spike:teleport_spike
+
+In practice you almost certainly want the Makefile fallback (see
+SPIKE_NOTES.md) — running this under the upstream Bazel toolchain will fail
+because mainline clang has no `-freflection-latest`. The Bazel target exists
+so the M0.2 hermetic-toolchain milestone has somewhere to point.
+"""
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+package(default_visibility = ["//donner/editor/ipc:__subpackages__"])
+
+bool_flag(
+    name = "enable_spike",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "spike_enabled",
+    flag_values = {":enable_spike": "True"},
+)
+
+cc_binary(
+    name = "teleport_spike",
+    srcs = [
+        "render_request.h",
+        "teleport_codec.h",
+        "teleport_spike.cc",
+    ],
+    copts = [
+        "-std=c++26",
+        "-freflection-latest",
+        "-fexpansion-statements",
+    ],
+    # Tag manual + opt-in select() so this never lands in default test/build
+    # wildcards. If the spike flag is off we evaluate to an empty srcs list
+    # via select(), which makes the target a hard error to depend on — that
+    # is intentional.
+    tags = ["manual"],
+    target_compatible_with = select({
+        ":spike_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
