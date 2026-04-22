@@ -121,14 +121,20 @@ donner_cc_test(
     ],
 )
 
-donner_cc_test(
+donner_perf_cc_test(
     name = "filter_drag_repro_tests",
-    srcs = ["FilterDragRepro_tests.cc"],
+    srcs = [
+        "FilterDragReproTestUtils.cc",
+        "FilterDragReproTestUtils.h",
+    ],
+    correctness_srcs = ["FilterDragReproCorrectness_tests.cc"],
+    wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     data = [
         ":filter_drag_repro.rnr",
         "//:donner_splash.svg",
     ],
     deps = [
+        "//donner/base:base",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:editor_app",
