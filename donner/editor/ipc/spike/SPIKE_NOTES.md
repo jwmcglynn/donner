@@ -569,3 +569,81 @@ they block hermetic Bazel integration. Updated after the 2026-04-22 run.
 (1), (3), (4) green means the go/no-go question is answered: **the codec
 is feasible.** (2), (5), (6) are real M0.2 work but none is a hard
 architectural block — each has at least one credible mitigation.
+
+---
+
+## M2 status (2026-04-22) — proof of life: GREEN
+
+End-to-end picture proven on arm64 + Docker (`vsavkov/clang-p2996:arm64`):
+**real SVG → Teleport pipe IPC → real Donner renderer → real PNG on disk,
+cross-process.**
+
+### What shipped
+
+**Option D (shell to `donner-svg`).** `render_service` writes the request
+SVG to a tempfile, forks/execs the Bazel-built `donner-svg` binary via
+`posix_spawn`, waits with a 10s timeout, slurps the resulting PNG, and
+returns the bytes in the Teleport response. This sidesteps the
+fork-clang × donner-mainline-build toolchain-mixing problem: the service
+itself is a 80 KB C++26 binary that links only against the fork's libc++,
+while `donner-svg` keeps its mainline libstdc++ ABI untouched. Direct
+linking was not attempted — the brief explicitly blesses Option D and the
+priority was a working demo today.
+
+The codec gained one tiny addition: an explicit `std::vector<std::byte>`
+specialization in `teleport_codec.h`. Without it, the generic class
+fallback would try to reflect on libc++'s vector internals at compile
+time. Wire format: u32 length prefix + raw bytes (same shape as
+`std::string`).
+
+### Observed proof-of-life numbers
+
+```
+Teleport M2 proof of life: PASS
+  Wrote /tmp/teleport_m2_out.png (171917 bytes, first 8 bytes valid PNG signature)
+  Round-trip (parse + render + transport + decode): 837.68 ms
+```
+
+PNG signature `89 50 4E 47 0D 0A 1A 0A` confirmed via `od -An -tx1`. The
+round-trip dwarfs M1's 19.86 µs/op echo because the bulk is `donner-svg`
+process startup + actual SVG rasterization (~800 ms for the 800×600
+`donner_splash.svg`); Teleport framing itself is still in the µs range.
+
+### Paper cuts
+
+1. **Demo binaries built with the fork's libc++ won't run on the host
+   without a matching libc++.so.1 in the loader path.** Workaround: run
+   the demo *inside* the same Docker container that built it, with the
+   repo bind-mounted. The Bazel-built `donner-svg` is dynamically linked
+   against host libstdc++ which the Bloomberg image happens to also
+   ship, so it works as a child of the in-container demo. M3 should
+   either statically link the demo or wire `-rpath $ORIGIN` to a
+   bundled libc++ snapshot.
+2. **No common-types codec library yet.** `RenderResponse::png_bytes`
+   needed an explicit `std::vector<std::byte>` codec specialization
+   inline-added to `teleport_codec.h`. Each new transported container
+   type repeats this pattern. M3 should pull these into a small
+   `teleport/types/` library next to the codec.
+3. **No structured error channel.** When `donner-svg` fails (e.g. SVG
+   parse error), `render_service` returns `RenderResponse{png_bytes={}}`
+   and writes a stderr line. The client's only signal is "PNG bytes
+   empty" which it converts into `proof of life: FAIL`. M3 needs a
+   `std::expected`-style envelope or a `result_kind` field in every
+   response message.
+
+### What M3 still needs
+
+- **Record/replay transport** — capture every (request bytes, response
+  bytes, latency) tuple to a sidecar log so we can replay traffic
+  against an unchanged service for differential testing.
+- **Common-types codec library** — `std::vector<std::byte>`,
+  `std::optional`, `std::variant`, `std::array<T, N>` specializations
+  in a single header that `teleport/types:teleport_types` exports.
+- **Structured error envelope** — every Teleport response carries a
+  status byte + optional message; bypasses the "empty payload means
+  failure" convention currently in use.
+- **Direct-link path for `render_service`** — once the toolchain-mixing
+  story is settled (libc++ vs libstdc++ unification per M0.2 decision
+  data item 2), drop the `donner-svg` subprocess hop and link
+  `//donner/svg/renderer` straight in. Removes ~750 ms of process
+  startup overhead per request.

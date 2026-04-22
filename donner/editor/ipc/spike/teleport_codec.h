@@ -117,6 +117,29 @@ inline std::expected<void, DecodeError> decodeOne(Reader& r, std::string& out) {
   return {};
 }
 
+// std::vector<std::byte>: u32 length + raw bytes. Explicit specialization so
+// the generic class fallback below does not try to reflect on libc++'s vector
+// internals.
+inline void encodeOne(Writer& w, const std::vector<std::byte>& v) {
+  const std::uint32_t len = static_cast<std::uint32_t>(v.size());
+  w.writeScalar(len);
+  if (len > 0) {
+    w.writeBytes(v.data(), len);
+  }
+}
+
+inline std::expected<void, DecodeError> decodeOne(Reader& r,
+                                                  std::vector<std::byte>& out) {
+  std::uint32_t len = 0;
+  if (!r.readScalar(len)) return std::unexpected(DecodeError::kTruncated);
+  if (len > r.remaining()) return std::unexpected(DecodeError::kStringTooLarge);
+  out.resize(len);
+  if (len > 0 && !r.readBytes(out.data(), len)) {
+    return std::unexpected(DecodeError::kTruncated);
+  }
+  return {};
+}
+
 // Generic fallback: trivially-copyable scalars take the fast path; everything
 // else goes through reflection on its non-static data members.
 template <class T>

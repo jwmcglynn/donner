@@ -52,3 +52,25 @@ child service by first checking for a sibling `echo_service` binary next to
 `argv[0]`, which works under `bazel run` because Bazel places same-package
 executables side-by-side in `bazel-bin`. It then falls back to the runfiles
 tree (`RUNFILES_DIR`) before trying `PATH`.
+
+## M2: render demo
+
+`donner/editor/ipc/render_demo/` ships the Teleport M2 proof of life:
+
+```sh
+bazel build //donner/svg/tool:donner-svg                 # default toolchain
+bazel run --config=teleport_spike \
+    //donner/editor/ipc/render_demo:render_demo -- \
+    "$PWD/donner_splash.svg" /tmp/teleport_m2_out.png
+```
+
+The demo proves the full picture cross-process: a real SVG file is sent
+over the Teleport pipe transport to a `render_service` subprocess, which
+in turn shells to `donner-svg` to produce a PNG, returns the bytes as a
+`RenderResponse`, and the demo writes them to disk. On success it
+prints `Teleport M2 proof of life: PASS`, the output size, and the
+end-to-end round-trip in milliseconds.
+
+See [`spike/SPIKE_NOTES.md`](../spike/SPIKE_NOTES.md) "M2 status" for the
+design rationale (Option D: shell to `donner-svg` to avoid toolchain
+mixing) and observed numbers.

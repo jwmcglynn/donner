@@ -1,0 +1,44 @@
+"""Teleport M2 proof-of-life render demo binaries."""
+
+package(default_visibility = ["//donner/editor/ipc:__subpackages__"])
+
+_SPIKE_COMPATIBLE_WITH = select({
+    "//donner/editor/ipc/spike:spike_enabled": [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+cc_library(
+    name = "render_messages",
+    hdrs = ["render_messages.h"],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)
+
+cc_binary(
+    name = "render_service",
+    srcs = ["render_service.cc"],
+    deps = [
+        ":render_messages",
+        "//donner/editor/ipc/teleport:teleport",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)
+
+cc_binary(
+    name = "render_demo",
+    srcs = ["render_demo.cc"],
+    data = [
+        ":render_service",
+        "//donner/svg/tool:donner-svg",
+    ],
+    deps = [
+        ":render_messages",
+        "//donner/editor/ipc/teleport:teleport",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)
