@@ -1,0 +1,41 @@
+"""Teleport M1 echo demo binaries."""
+
+package(default_visibility = ["//donner/editor/ipc:__subpackages__"])
+
+_SPIKE_COMPATIBLE_WITH = select({
+    "//donner/editor/ipc/spike:spike_enabled": [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+cc_library(
+    name = "echo_messages",
+    hdrs = ["echo_messages.h"],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)
+
+cc_binary(
+    name = "echo_service",
+    srcs = ["echo_service.cc"],
+    deps = [
+        ":echo_messages",
+        "//donner/editor/ipc/teleport:teleport",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)
+
+cc_binary(
+    name = "echo_demo",
+    srcs = ["echo_demo.cc"],
+    data = [":echo_service"],
+    deps = [
+        ":echo_messages",
+        "//donner/editor/ipc/teleport:teleport",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)

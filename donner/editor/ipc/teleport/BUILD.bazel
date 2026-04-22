@@ -1,0 +1,29 @@
+"""Minimal Teleport IPC framework (M1).
+
+This package remains opt-in behind `--config=teleport_spike` because it depends
+on the same Bloomberg clang-p2996 fork as the M0.1 codec spike.
+"""
+
+package(default_visibility = ["//donner/editor/ipc:__subpackages__"])
+
+_SPIKE_COMPATIBLE_WITH = select({
+    "//donner/editor/ipc/spike:spike_enabled": [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+cc_library(
+    name = "teleport",
+    hdrs = [
+        "client.h",
+        "service_runner.h",
+        "transport.h",
+    ],
+    deps = [
+        "//donner/editor/ipc/spike:teleport_codec",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _SPIKE_COMPATIBLE_WITH,
+)

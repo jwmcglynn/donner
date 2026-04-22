@@ -418,6 +418,7 @@ Verified against the pinned digest above.
 * **`<experimental/meta>` is a thin alias.** The real header is `<meta>`;
   `<experimental/meta>` just `#include`s it. Either works, but M0.2
   should standardize on `<meta>` since that's the final P2996 header name.
+
 * **`clangd` coverage.** *(Still a prediction — not exercised here since
   the spike was built and run non-interactively.)* Mainline `clangd` has
   no idea what `^^T` or `template for` mean. The image does ship a
@@ -448,6 +449,85 @@ Verified against the pinned digest above.
   one-file scaffold — `teleport_codec_fuzzer.cc` calling
   `Decode<RenderRequest>` on the fuzzer input — but it now depends on
   resolving the sanitizer-runtime gap first.
+
+---
+
+## M1 status
+
+Source landed for the minimum viable Teleport framework:
+
+* `donner/editor/ipc/teleport/` now contains the framed pipe transport, the
+  synchronous service loop, and the subprocess client.
+* `donner/editor/ipc/echo_demo/` contains the single-method uppercase echo
+  demo (`echo_demo` + `echo_service`), both gated behind
+  `--config=teleport_spike`.
+* The existing reflection codec is now exported as
+  `//donner/editor/ipc/spike:teleport_codec` so the M1 library can depend on
+  it cleanly.
+
+Verification completed on 2026-04-22:
+
+* `bazel query 'tests(//donner/editor/ipc/...)'` returns empty without
+  `--config=teleport_spike`, so the new Teleport packages still stay out of
+  the default wildcard test set.
+* `bazel test //... --test_output=errors --test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp`
+  passes on this host. A plain `bazel test //... --test_output=errors`
+  reproduces the repo's documented Intel Arc failure mode instead
+  (`XDG_RUNTIME_DIR` invalid, Geode tests time out in the Vulkan path), so
+  the llvmpipe override is required here.
+* `TELEPORT_P2996_ROOT=/opt/p2996/qemu-clang bazel build --config=teleport_spike --platforms=@toolchains_llvm//platforms:linux-x86_64 --nobuild //donner/editor/ipc/echo_demo:echo_demo`
+  analyzes successfully through the opt-in toolchain on this arm64 host.
+* The real qemu-backed Teleport build still does not complete on this arm64
+  host; see [M1 blocker](#m1-blocker).
+
+Round-trip median: **verification deferred to a native amd64 host**. The demo
+binary could not be linked and run from this arm64 machine because the qemu
+toolchain path still fails before link/run.
+
+## M1 blocker
+
+Attempted qemu-user-static verification on 2026-04-22:
+
+* `TELEPORT_P2996_ROOT=/opt/p2996/qemu-clang bazel build --config=teleport_spike --platforms=@toolchains_llvm//platforms:linux-x86_64 //donner/editor/ipc/echo_demo:echo_demo`
+  fails in `//third_party/libc_compat:libc_compat` because Bazel's include
+  checker sees the qemu wrapper's builtin headers as undeclared absolute
+  includes:
+  `/opt/p2996/qemu-clang/lib/clang/21/include/stddef.h` and
+  `/opt/p2996/qemu-clang/lib/clang/21/include/__stddef_size_t.h`.
+* Forcing `--//build_defs:llvm_latest=0` to skip that `libc_compat` edge moves
+  the failure forward to Teleport itself:
+  `donner/editor/ipc/teleport/service_runner.h` then fails with
+  `fatal error: 'expected' file not found`, which confirms the qemu-wrapped
+  toolchain is still losing libc++ builtin include discovery inside Bazel
+  compile actions.
+
+Bottom line: the checked-in M1 BUILD wiring is ready for a native
+`linux/x86_64` proof, but this `aarch64` host still cannot honestly verify the
+native `bazel build --config=teleport_spike //donner/editor/ipc/echo_demo:echo_demo`
+or run the demo end-to-end without first fixing the qemu toolchain path.
+
+## M1 paper cuts
+
+* `build_defs/teleport_p2996_toolchain/extensions.bzl` used Starlark
+  `str.format()` with `!r`, which throws `Missing argument '!r'` instead of
+  reporting the actual missing path when the toolchain root is malformed.
+  Fixed while investigating the qemu wrapper path.
+* On this Intel Arc A380 host, the repo's documented llvmpipe override is not
+  optional for local verification: without
+  `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json` and
+  `XDG_RUNTIME_DIR=/tmp`, the Geode lane enters the native Vulkan path and
+  times out in the resvg / golden / perf tests.
+
+## M2 still needs
+
+* Method IDs and a dispatch table so one process can host more than one RPC.
+* Typed application-level error propagation instead of collapsing malformed
+  response bodies into transport short-read failures.
+* Automated tests once the opt-in P2996 toolchain is buildable on a native
+  amd64 host (or via a working arm64 qemu/binfmt bridge).
+* Versioning, schema hashes, and a handshake before any request bytes flow.
+* Async calls, multiplexing, and transport-level cancellation or liveness
+  handling.
 
 ---
 

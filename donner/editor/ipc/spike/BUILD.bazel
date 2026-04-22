@@ -30,6 +30,20 @@ config_setting(
     flag_values = {":enable_spike": "True"},
 )
 
+cc_library(
+    name = "teleport_codec",
+    hdrs = ["teleport_codec.h"],
+    deps = libc_compat_deps(),
+    tags = ["manual"],
+    target_compatible_with = select({
+        ":spike_enabled": [
+            "@platforms//cpu:x86_64",
+            "@platforms//os:linux",
+        ],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
 cc_binary(
     name = "teleport_spike",
     srcs = [
@@ -37,7 +51,7 @@ cc_binary(
         "teleport_codec.h",
         "teleport_spike.cc",
     ],
-    deps = libc_compat_deps(),
+    deps = [":teleport_codec"],
     # Tag manual + opt-in select() so this never lands in default test/build
     # wildcards. If the spike flag is off we evaluate to an empty srcs list
     # via select(), which makes the target a hard error to depend on — that

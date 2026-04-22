@@ -224,7 +224,7 @@ def _teleport_p2996_root_impl(repository_ctx):
     ]
     if missing:
         fail(
-            "Teleport P2996 root {!r} is missing required paths: {}".format(
+            "Teleport P2996 root '{}' is missing required paths: {}".format(
                 root_path,
                 ", ".join(missing),
             ),
