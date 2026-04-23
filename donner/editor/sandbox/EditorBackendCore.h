@@ -156,6 +156,22 @@ public:
     return compositor_->fastPathCountersForTesting();
   }
 
+  /// Test-only: force the backend to build `FramePayload` via the main
+  /// renderer's `takeSnapshot()` (the full GPU/CPU compose path the
+  /// compositor would otherwise do) instead of the fast CPU-compose
+  /// path that reads bg/drag/fg bitmaps off the compositor's cache and
+  /// stitches them together. Used to bisect #582: if disabling the
+  /// fast CPU compose makes the backend bitmap match a direct render,
+  /// the bug is in the CPU compose itself; if the divergence
+  /// survives, the compositor's cached state is already wrong and
+  /// the CPU compose is a faithful-but-unhelpful projection of it.
+  void setCpuComposeEnabledForTesting(bool enabled) {
+    cpuComposeEnabledForTesting_ = enabled;
+    if (compositor_.has_value()) {
+      compositor_->setSkipMainComposeDuringSplit(enabled);
+    }
+  }
+
 private:
   /// Entity currently promoted on the compositor, or `entt::null`.
   /// Maintained to match the SelectTool's current drag / selection
@@ -180,6 +196,14 @@ private:
   /// `finalBitmapPixels` in the wire.
   std::unique_ptr<bridge::BridgeTextureBackend> bridge_;
   uint64_t frameIdCounter_ = 1;
+
+  /// Test-only kill-switch for the CPU-compose fast path in
+  /// `buildFramePayload`. Default-true matches production behavior;
+  /// `setCpuComposeEnabledForTesting(false)` flips it off so the
+  /// backend produces its bitmap via `renderer_.takeSnapshot()` (main
+  /// compose) instead. See that setter's doc for the #582 bisection
+  /// use case.
+  bool cpuComposeEnabledForTesting_ = true;
 
   /// Entity handle bimap state.
   uint64_t entityGeneration_ = 1;

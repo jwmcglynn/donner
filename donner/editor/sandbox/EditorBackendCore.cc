@@ -319,8 +319,10 @@ FramePayload EditorBackendCore::buildFramePayload() {
       // redundant during an active drag. Skipping it cuts ~20-30 ms
       // off each drag frame on real-splash content by avoiding an
       // extra `beginFrame/drawImage×3/endFrame/takeSnapshot` on
-      // Geode.
-      compositor_->setSkipMainComposeDuringSplit(true);
+      // Geode. Tests that opt out of CPU compose flip this off so the
+      // main renderer actually produces the pixels `takeSnapshot`
+      // returns.
+      compositor_->setSkipMainComposeDuringSplit(cpuComposeEnabledForTesting_);
     }
 
     // Route selection / drag state into compositor promote/demote calls
@@ -382,7 +384,8 @@ FramePayload EditorBackendCore::buildFramePayload() {
     // below tells the compositor to skip its own GPU compose once
     // this CPU path is feasible.
     donner::svg::RendererBitmap snapshot;
-    const bool cpuComposeActive = compositor_->hasSplitStaticLayers() &&
+    const bool cpuComposeActive = cpuComposeEnabledForTesting_ &&
+                                   compositor_->hasSplitStaticLayers() &&
                                    compositorEntity_ != entt::null;
     if (cpuComposeActive) {
       const donner::svg::RendererBitmap& bg = compositor_->backgroundBitmap();

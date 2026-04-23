@@ -2156,6 +2156,138 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
                mouseUpCount);
 }
 
+// #582 bisection: the above test shows the backend bitmap diverges
+// from direct render on every post-mup frame. That test uses the
+// fast CPU-compose path (`cpuComposeActive`). This variant FORCES
+// the main-renderer compose path (`renderer_.takeSnapshot()`) by
+// flipping the CPU-compose kill-switch off. If this variant PASSES
+// where the above fails, the bug is in the CPU compose code itself.
+// If this variant ALSO fails, the bug is upstream — in the
+// compositor's cached state or in whatever the main compose is
+// doing with that state.
+TEST(EditorBackendCoreFilterDragTest,
+     FilterDisappearRepro7WithoutCpuComposeMatchesDirectRender) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-7.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-7.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-7.rnr");
+  ASSERT_TRUE(reproOpt.has_value());
+  const auto& repro = *reproOpt;
+
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  // FLIP THE KILL-SWITCH: route through main compose, not CPU compose.
+  core.setCpuComposeEnabledForTesting(false);
+
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  const auto directRenderCurrentDom = [&]() -> svg::RendererBitmap {
+    svg::SVGDocument& doc = core.editor().document().document();
+    svg::Renderer reference;
+    reference.draw(doc);
+    return reference.takeSnapshot();
+  };
+
+  donner::editor::tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 5000;
+
+  bool leftHeld = false;
+  std::size_t mouseUpCount = 0;
+  int divergedCheckpoints = 0;
+
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+    const bool shiftHeld = (frame.modifiers & 0x1) != 0;
+    const uint32_t ptrModifiers = shiftHeld ? 0x1u : 0u;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.modifiers = ptrModifiers;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        (void)core.handlePointerEvent(ptr);
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        const auto mupFrame = core.handlePointerEvent(ptr);
+        ++mouseUpCount;
+        if (!mupFrame.hasFinalBitmap) continue;
+
+        svg::RendererBitmap backend = BitmapFromFrame(mupFrame);
+        svg::RendererBitmap expected = directRenderCurrentDom();
+        ASSERT_FALSE(backend.empty());
+        ASSERT_FALSE(expected.empty());
+        if (backend.dimensions != expected.dimensions) continue;
+
+        const std::string label = "rnr7_mup" + std::to_string(mouseUpCount) +
+                                  "_noCpuCompose_vs_direct";
+        const int before = ::testing::UnitTest::GetInstance()
+                                ->current_test_info()
+                                ->result()
+                                ->total_part_count();
+        donner::editor::tests::CompareBitmapToBitmap(backend, expected, label, params);
+        const int after = ::testing::UnitTest::GetInstance()
+                               ->current_test_info()
+                               ->result()
+                               ->total_part_count();
+        if (after > before) {
+          ++divergedCheckpoints;
+        }
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      ptr.modifiers = ptrModifiers;
+      (void)core.handlePointerEvent(ptr);
+    }
+    leftHeld = nowHeld;
+  }
+
+  std::fprintf(stderr, "[rnr7-diff-nocpu] %d/%zu checkpoints diverged (CPU compose OFF)\n",
+               divergedCheckpoints, mouseUpCount);
+}
+
 // Baseline sanity check: cold-load of splash at the 1310×1726 viewport
 // should produce bright highlights in Lightning_glow_dark's canvas
 // region (the filter's bright contribution, visible in the cold
