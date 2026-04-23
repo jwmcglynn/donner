@@ -4,6 +4,8 @@ exports_files([
     "filter_elm_disappear-2.rnr",
     "filter_elm_disappear-3.rnr",
     "filter_elm_disappear-4.rnr",
+    "filter_elm_disappear-5.rnr",
+    "filter_elm_disappear-6.rnr",
 ])
 
 # Shared replay harness for tests that drive `EditorApp` + `SelectTool`

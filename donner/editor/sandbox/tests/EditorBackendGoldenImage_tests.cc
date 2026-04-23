@@ -1570,6 +1570,267 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
   std::fprintf(stderr, "[rnr4] mouseUpCount=%zu canvas=%dx%d\n", mouseUpCount, canvasW, canvasH);
 }
 
+// Replay `filter_elm_disappear-5.rnr` — user-captured repro of the
+// "filter group stops rendering after selecting the next thing" bug
+// that surfaced post-#582 fix. Four drag sequences against the splash;
+// the bug manifests when a filter-g is promoted then another element
+// promoted + demoted, leaving the filter-g selected while its
+// rendered pixels vanish.
+//
+// Diagnostic-first: dumps cold + every post-mup frame + the final
+// frame so a reviewer can step through the sequence visually.
+// Asserts that at the final frame, Big_lightning_glow's canvas region
+// still has non-trivial rendered content (catches the "group stops
+// rendering" symptom as a bright-pixel collapse relative to cold).
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasingFilters) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-5.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-5.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-5.rnr");
+  ASSERT_TRUE(reproOpt.has_value());
+  const auto& repro = *reproOpt;
+
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+  const int bmpW = loadFrame.finalBitmapWidth;
+  const int bmpH = loadFrame.finalBitmapHeight;
+  const std::size_t rowBytes = loadFrame.finalBitmapRowBytes;
+
+  bool leftHeld = false;
+  std::optional<FramePayload> lastFrame = loadFrame;
+  std::size_t mouseUpCount = 0;
+  std::vector<FramePayload> afterMup;
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        lastFrame = core.handlePointerEvent(ptr);
+        std::fprintf(stderr, "[rnr5] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount + 1, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        lastFrame = core.handlePointerEvent(ptr);
+        afterMup.push_back(*lastFrame);
+        ++mouseUpCount;
+        std::fprintf(stderr, "[rnr5] mup#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      lastFrame = core.handlePointerEvent(ptr);
+    }
+    leftHeld = nowHeld;
+  }
+
+  ASSERT_GE(mouseUpCount, 1u);
+  ASSERT_TRUE(lastFrame.has_value() && lastFrame->hasFinalBitmap);
+
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string prefix = AttemptTagPrefix();
+    const auto dump = [&](const char* name, const FramePayload& fp) {
+      const std::string path = std::string(dir) + "/" + prefix + name;
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
+          static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
+    };
+    dump("rnr5_cold.png", loadFrame);
+    for (std::size_t i = 0; i < afterMup.size(); ++i) {
+      std::string name = "rnr5_after_mup" + std::to_string(i + 1) + ".png";
+      dump(name.c_str(), afterMup[i]);
+    }
+    dump("rnr5_final.png", *lastFrame);
+  }
+
+  // Post-fix assertion: the final frame's bitmap should have the same
+  // dimensions as the cold frame's bitmap (pre-fix this jumped from
+  // canvas-fit to unclamped viewport once any element was selected).
+  ASSERT_EQ(lastFrame->finalBitmapWidth, bmpW);
+  ASSERT_EQ(lastFrame->finalBitmapHeight, bmpH);
+
+  // Sanity: the scene shouldn't have collapsed. Sum bright (any
+  // channel > 180) pixels across the cold vs final bitmap. Post-fix
+  // the two should be roughly comparable — a few dragged elements
+  // shifted but the total "illuminated scene" mass stays similar.
+  const auto countBright = [&](const FramePayload& fp) {
+    int hits = 0;
+    for (int cy = 0; cy < bmpH; cy += 8) {
+      for (int cx = 0; cx < bmpW; cx += 8) {
+        const std::size_t off = static_cast<std::size_t>(cy) * rowBytes +
+                                static_cast<std::size_t>(cx) * 4u;
+        const uint8_t r = fp.finalBitmapPixels[off + 0];
+        const uint8_t g = fp.finalBitmapPixels[off + 1];
+        const uint8_t b = fp.finalBitmapPixels[off + 2];
+        if (std::max({r, g, b}) > 180) ++hits;
+      }
+    }
+    return hits;
+  };
+  const int coldBright = countBright(loadFrame);
+  const int finalBright = countBright(*lastFrame);
+  std::fprintf(stderr, "[rnr5] bright pixels: cold=%d, final=%d (ratio=%.2fx)\n", coldBright,
+               finalBright, coldBright > 0 ? double(finalBright) / coldBright : 0.0);
+  EXPECT_GT(finalBright, coldBright * 3 / 4)
+      << "final-frame bright-pixel count (" << finalBright << ") is "
+      << "less than 75% of cold (" << coldBright << ") — scene brightness "
+      << "collapsed, likely because a filter group stopped rendering.";
+}
+
+// Replay `filter_elm_disappear-6.rnr` — user-captured repro where a
+// filter-g renders at a stale transform (old position) even though
+// its selection chrome is at the correct post-drag position. Bitmap
+// + `canvasFromBitmap_` drift between promote / demote cycles.
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspection) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-6.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-6.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-6.rnr");
+  ASSERT_TRUE(reproOpt.has_value());
+  const auto& repro = *reproOpt;
+
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  bool leftHeld = false;
+  std::optional<FramePayload> lastFrame = loadFrame;
+  std::size_t mouseUpCount = 0;
+  std::vector<FramePayload> afterMup;
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        lastFrame = core.handlePointerEvent(ptr);
+        std::fprintf(stderr, "[rnr6] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount + 1, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        lastFrame = core.handlePointerEvent(ptr);
+        afterMup.push_back(*lastFrame);
+        ++mouseUpCount;
+        std::fprintf(stderr, "[rnr6] mup#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      lastFrame = core.handlePointerEvent(ptr);
+    }
+    leftHeld = nowHeld;
+  }
+
+  ASSERT_TRUE(lastFrame.has_value() && lastFrame->hasFinalBitmap);
+
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string prefix = AttemptTagPrefix();
+    const auto dump = [&](const char* name, const FramePayload& fp) {
+      const std::string path = std::string(dir) + "/" + prefix + name;
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
+          static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
+    };
+    dump("rnr6_cold.png", loadFrame);
+    for (std::size_t i = 0; i < afterMup.size(); ++i) {
+      std::string name = "rnr6_after_mup" + std::to_string(i + 1) + ".png";
+      dump(name.c_str(), afterMup[i]);
+    }
+    dump("rnr6_final.png", *lastFrame);
+  }
+}
+
 // Baseline sanity check: cold-load of splash at the 1310×1726 viewport
 // should produce bright highlights in Lightning_glow_dark's canvas
 // region (the filter's bright contribution, visible in the cold
