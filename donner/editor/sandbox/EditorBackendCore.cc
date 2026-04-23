@@ -348,8 +348,24 @@ FramePayload EditorBackendCore::buildFramePayload() {
       }
     }
 
+    // Compositor viewport must match `doc.canvasSize()` — the aspect-
+    // fit-clamped size the main renderer uses via `setCanvasSize`
+    // above. Using the raw `viewportWidth_ × viewportHeight_` instead
+    // produces compositor-internal bitmaps at a different size than
+    // the main renderer's `takeSnapshot()`, which then ships a
+    // differently-sized `finalBitmap` once cpu-compose activates
+    // (split-layer cache populated + at least one entity promoted).
+    // The editor's display pane then sees the bitmap change size
+    // the moment anything gets selected — reads as "the filter
+    // group stops rendering" once a different element is picked,
+    // because the UI scales the bigger bitmap down and crops. Issue
+    // #582 follow-up repro: after selecting Big_lightning_glow then
+    // Lightning_glow_dark, the snapshot jumped from 1310×752
+    // (aspect-fit) to 1310×1726 (unclamped viewport) and the filter
+    // group visually disappeared from the render pane.
+    const Vector2i canvasSize = doc.canvasSize();
     donner::svg::RenderViewport viewport;
-    viewport.size = Vector2d(viewportWidth_, viewportHeight_);
+    viewport.size = Vector2d(canvasSize.x, canvasSize.y);
     viewport.devicePixelRatio = 1.0;
 
     compositor_->renderFrame(viewport);
@@ -381,8 +397,28 @@ FramePayload EditorBackendCore::buildFramePayload() {
         dragOffsetX = static_cast<int>(std::round(t.x));
         dragOffsetY = static_cast<int>(std::round(t.y));
       }
-      snapshot.dimensions = Vector2i(viewportWidth_, viewportHeight_);
-      snapshot.rowBytes = static_cast<size_t>(viewportWidth_) * 4u;
+      // Output dimensions must match the compositor's internal
+      // canvas — i.e. the `bg` / `dragBitmap` / `fg` bitmap size the
+      // split-layer cache was built against. That size is
+      // `doc.canvasSize()`, which applies the SVG's aspect-fit
+      // (`setCanvasSize` clamps the requested `viewportWidth_ ×
+      // viewportHeight_` to the viewBox's aspect ratio). If we sized
+      // the output snapshot to the *unclamped* `viewportWidth_ ×
+      // viewportHeight_` instead, `snapshot.pixels = bg.pixels` would
+      // copy a too-small bg buffer into a too-big snapshot →
+      // out-of-bounds composite writes, and the output dimensions
+      // wouldn't match what the main-compose path (`renderer_
+      // .takeSnapshot()`) produces for the same document, so the
+      // editor's display path would see the bitmap suddenly change
+      // size as soon as anything gets selected. Issue #582 post-fix
+      // repro: a click on `<g filter>` made the scene jump from
+      // 1310×752 (aspect-fit) to 1310×1726 (unclamped) in the
+      // editor's render pane, which read as "the filter group
+      // stopped rendering" because the UI was scaling the bigger
+      // bitmap down + cropping.
+      const Vector2i canvasSize = doc.canvasSize();
+      snapshot.dimensions = canvasSize;
+      snapshot.rowBytes = static_cast<size_t>(canvasSize.x) * 4u;
       snapshot.alphaType = donner::svg::AlphaType::Premultiplied;
       // Initialize the composite buffer by COPYING `bg` directly —
       // `bg` is already canvas-sized premul and covers every pixel,

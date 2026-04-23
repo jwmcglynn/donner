@@ -1643,6 +1643,112 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
       << "is broken even at rest.";
 }
 
+// Repro for "filter group stops rendering after selecting the next
+// thing": click/select filter group A, then click elsewhere to select
+// B, then verify A's filter output still appears in the bitmap at its
+// expected canvas region. Checks the compositor-cache interaction
+// between `demoteEntity` + `promoteEntity` for a new drag target —
+// specifically that a mandatory-promoted filter layer's cached
+// bitmap isn't wiped by the subsequent promote of a different entity.
+TEST(EditorBackendCoreFilterDragTest, SelectingNextFilterDoesNotEraseTheFirst) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1310;
+  vp.height = 1726;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto cold = core.handleLoadBytes(load);
+  ASSERT_TRUE(cold.hasFinalBitmap);
+
+  const auto sendPointer = [&](PointerPhase phase, double x, double y, uint32_t buttons) {
+    PointerEventPayload ev;
+    ev.phase = phase;
+    ev.documentX = x;
+    ev.documentY = y;
+    ev.buttons = buttons;
+    return core.handlePointerEvent(ev);
+  };
+
+  // Click A: Big_lightning_glow at (455, 160). Elevation lands on the
+  // filter-g.
+  const auto afterA = sendPointer(PointerPhase::kDown, 455.0, 160.0, 1);
+  (void)sendPointer(PointerPhase::kUp, 455.0, 160.0, 0);
+  std::fprintf(stderr, "[next-filter] after click A: %s\n",
+               DescribeSelection(afterA).c_str());
+
+  // Click B: Lightning_glow_dark at (474.5, 406.5). Triggers
+  // demote(A) + promote(B).
+  const auto afterB = sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
+  const auto afterBUp = sendPointer(PointerPhase::kUp, 474.5, 406.5, 0);
+  std::fprintf(stderr, "[next-filter] after click B: %s\n",
+               DescribeSelection(afterB).c_str());
+
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string prefix = AttemptTagPrefix();
+    const auto dump = [&](const char* name, const FramePayload& fp) {
+      const std::string path = std::string(dir) + "/" + prefix + name;
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
+          static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
+    };
+    dump("next_filter_cold.png", cold);
+    dump("next_filter_after_A.png", afterA);
+    dump("next_filter_after_B.png", afterBUp);
+  }
+
+  // Compare Big_lightning_glow's canvas region cold vs after-B. Since
+  // A was just deselected (no drag), its rendered pixels should be
+  // unchanged from the cold baseline — selection state doesn't move
+  // the entity.
+  const int bmpW = afterBUp.finalBitmapWidth;
+  const int bmpH = afterBUp.finalBitmapHeight;
+  ASSERT_EQ(cold.finalBitmapWidth, bmpW);
+  ASSERT_EQ(cold.finalBitmapHeight, bmpH);
+  const std::size_t rowBytes = cold.finalBitmapRowBytes;
+
+  // Big_lightning_glow region: (378, 104) → (500, 280) in doc space.
+  const double scale = static_cast<double>(bmpW) / 892.0;
+  const int rectMinX = static_cast<int>(std::round(378.0 * scale));
+  const int rectMinY = static_cast<int>(std::round(104.0 * scale));
+  const int rectMaxX = static_cast<int>(std::round(500.0 * scale));
+  const int rectMaxY = static_cast<int>(std::round(280.0 * scale));
+
+  int diverged = 0;
+  for (int cy = rectMinY; cy < rectMaxY; ++cy) {
+    for (int cx = rectMinX; cx < rectMaxX; ++cx) {
+      const std::size_t off = static_cast<std::size_t>(cy) * rowBytes +
+                              static_cast<std::size_t>(cx) * 4u;
+      const int dr = std::abs(int(cold.finalBitmapPixels[off + 0]) -
+                              int(afterBUp.finalBitmapPixels[off + 0]));
+      const int dg = std::abs(int(cold.finalBitmapPixels[off + 1]) -
+                              int(afterBUp.finalBitmapPixels[off + 1]));
+      const int db = std::abs(int(cold.finalBitmapPixels[off + 2]) -
+                              int(afterBUp.finalBitmapPixels[off + 2]));
+      if (std::max({dr, dg, db}) > 20) ++diverged;
+    }
+  }
+  const int rectArea = (rectMaxX - rectMinX) * (rectMaxY - rectMinY);
+  std::fprintf(stderr, "[next-filter] Big_lightning_glow region: %d / %d px diverged\n",
+               diverged, rectArea);
+
+  EXPECT_LT(diverged, rectArea / 10)
+      << "after selecting the next element, `Big_lightning_glow`'s region "
+      << "diverged from the cold baseline by " << diverged << " px (out of "
+      << rectArea << ") — >10% drift means A's filter output got erased by "
+      << "the subsequent promote/demote cycle. See `next_filter_cold.png` "
+      << "and `next_filter_after_B.png`.";
+}
+
 // Pins the elevation contract: clicking a path inside a `<g filter>`
 // selects the filter group — not the clicked path (too narrow for a
 // filter whose output is a composite of its subtree) nor an ancestor
