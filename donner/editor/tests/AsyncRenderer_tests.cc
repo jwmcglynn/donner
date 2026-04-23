@@ -8,6 +8,7 @@
 #include <sstream>
 #include <thread>
 
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/RenderCoordinator.h"
@@ -17,6 +18,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -402,6 +404,534 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   // The compositor should not have been reset a single time — only frame
   // version changed, not documentGeneration.
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+}
+
+// Regression test for the "double-render" signature from filter_elm_disappear-7
+// (see issue #582 follow-up). After dragging filter A, releasing, then
+// changing the drag target to a different entity B, assert the bg + promoted +
+// fg composite that the editor will display pixel-matches a direct render of
+// the current DOM state. The double-render bug signature is: a cached static
+// segment retains A's pre-promote content (i.e. A baked into its paint-order
+// slot at cold position) while A's own promoted layer ALSO draws at the drag-
+// offset position. Composing bg (stale segment) + promoted (correct) + fg
+// leaves A visible in two places — once at the cold position (from bg)
+// and once at the drag offset (from promoted).
+//
+// Direct-render reference bypasses the compositor entirely via
+// `renderer.draw(document)` — whatever pixels it produces for the current
+// DOM is the ground truth the compositor's split path must reproduce.
+TEST(AsyncRendererTest, BgPlusPromotedPlusFgMatchesDirectRenderAfterPromoteSwap) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs>
+      <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter>
+    </defs>
+    <rect width="400" height="200" fill="#0d0f1d"/>
+    <g id="A" filter="url(#blur)">
+      <rect x="40" y="40" width="60" height="60" fill="#ffe54a"/>
+    </g>
+    <ellipse id="B" cx="250" cy="100" rx="60" ry="40" fill="#3355cc"/>
+    <rect id="C" x="340" y="50" width="40" height="60" fill="#44ff88"/>
+  )svg");
+  document.setCanvasSize(400, 200);
+
+  auto entityA = document.querySelector("#A");
+  auto entityB = document.querySelector("#B");
+  ASSERT_TRUE(entityA.has_value());
+  ASSERT_TRUE(entityB.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() {
+    std::optional<RenderResult> result;
+    for (int i = 0; i < 400 && !result.has_value(); ++i) {
+      result = asyncRenderer.pollResult();
+      if (!result.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return result;
+  };
+
+  const auto runRequest = [&](Entity selectedEntity, std::optional<Entity> dragPreviewEntity,
+                              std::uint64_t version,
+                              svg::compositor::InteractionHint kind =
+                                  svg::compositor::InteractionHint::Selection) {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = selectedEntity;
+    if (dragPreviewEntity.has_value()) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = *dragPreviewEntity,
+          .interactionKind = kind,
+      };
+    }
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+
+  // Phase 1: warm selection on A (no drag yet).
+  ASSERT_TRUE(runRequest(entityA->entityHandle().entity(), entityA->entityHandle().entity(),
+                         1, svg::compositor::InteractionHint::Selection)
+                  .has_value());
+
+  // Phase 2: drag A with a +30 px translation applied to the DOM.
+  entityA->cast<svg::SVGGraphicsElement>().setTransform(
+      Transform2d::Translate(Vector2d(30.0, 0.0)));
+  auto dragFrame = runRequest(entityA->entityHandle().entity(), entityA->entityHandle().entity(),
+                              2, svg::compositor::InteractionHint::ActiveDrag);
+  ASSERT_TRUE(dragFrame.has_value());
+  ASSERT_TRUE(dragFrame->compositedPreview.has_value());
+
+  // Phase 3: release — selection still A but no drag preview. The DOM
+  // transform from phase 2 stays in place (commit would happen on mup in
+  // the live editor via `SetTransformCommand`).
+  ASSERT_TRUE(runRequest(entityA->entityHandle().entity(), std::nullopt, 3).has_value());
+
+  // Phase 4: switch selection to B (simulates clicking a different element
+  // after the drag — the user's "-7" scenario). Drag preview wires to B,
+  // so A gets demoted and B gets promoted as the split-layer drag target.
+  auto afterSwap =
+      runRequest(entityB->entityHandle().entity(), entityB->entityHandle().entity(), 4,
+                 svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(afterSwap.has_value());
+  ASSERT_TRUE(afterSwap->compositedPreview.has_value());
+
+  const auto& preview = *afterSwap->compositedPreview;
+  ASSERT_FALSE(preview.backgroundBitmap.empty());
+  ASSERT_FALSE(preview.promotedBitmap.empty());
+  ASSERT_FALSE(preview.foregroundBitmap.empty());
+
+  // Produce a direct-render reference of the current DOM. This is the
+  // ground truth the split-layer compose must reproduce.
+  svg::Renderer referenceRenderer;
+  referenceRenderer.draw(document);
+  const svg::RendererBitmap referenceBitmap = referenceRenderer.takeSnapshot();
+  ASSERT_EQ(referenceBitmap.dimensions, preview.backgroundBitmap.dimensions);
+  const int w = referenceBitmap.dimensions.x;
+  const int h = referenceBitmap.dimensions.y;
+  const std::size_t rb = referenceBitmap.rowBytes;
+
+  // Manually compose bg + promoted-at-offset + fg, same as the editor's
+  // display path does (GPU-side). Promoted is translated by the compose
+  // offset the compositor reported (in doc units, so multiply by
+  // pixelsPerDocUnit — for this fixture canvasSize == viewBox, so that's
+  // 1.0 and the doc-unit delta IS the pixel delta).
+  std::vector<uint8_t> composite = preview.backgroundBitmap.pixels;
+  const auto composeOver = [&](const std::vector<uint8_t>& src, int offsetX, int offsetY,
+                                const Vector2i& srcDims, std::size_t srcRowBytes) {
+    for (int y = 0; y < h; ++y) {
+      const int sy = y - offsetY;
+      if (sy < 0 || sy >= srcDims.y) continue;
+      for (int x = 0; x < w; ++x) {
+        const int sx = x - offsetX;
+        if (sx < 0 || sx >= srcDims.x) continue;
+        const std::size_t dstOff =
+            static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+        const std::size_t srcOff = static_cast<std::size_t>(sy) * srcRowBytes +
+                                   static_cast<std::size_t>(sx) * 4u;
+        const unsigned sa = src[srcOff + 3];
+        const unsigned inv = 255u - sa;
+        for (int c = 0; c < 4; ++c) {
+          const unsigned s = src[srcOff + c];
+          const unsigned d = composite[dstOff + c];
+          const unsigned out = std::min(255u, s + ((d * inv + 127u) / 255u));
+          composite[dstOff + c] = static_cast<uint8_t>(out);
+        }
+      }
+    }
+  };
+  const int promotedOffsetX = static_cast<int>(std::round(preview.promotedTranslationDoc.x));
+  const int promotedOffsetY = static_cast<int>(std::round(preview.promotedTranslationDoc.y));
+  composeOver(preview.promotedBitmap.pixels, promotedOffsetX, promotedOffsetY,
+              preview.promotedBitmap.dimensions, preview.promotedBitmap.rowBytes);
+  composeOver(preview.foregroundBitmap.pixels, 0, 0, preview.foregroundBitmap.dimensions,
+              preview.foregroundBitmap.rowBytes);
+
+  // Pixel-by-pixel diff. Premul/straight differences + AA edges would
+  // produce low-magnitude noise; a real double-render leaks dozens of
+  // saturated-color pixels.
+  int diverged = 0;
+  int maxDiff = 0;
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const std::size_t off =
+          static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+      for (int c = 0; c < 3; ++c) {
+        const int d = std::abs(int(referenceBitmap.pixels[off + c]) -
+                               int(composite[off + c]));
+        if (d > maxDiff) maxDiff = d;
+        if (d > 8) {
+          ++diverged;
+          break;
+        }
+      }
+    }
+  }
+  const int pixelCount = w * h;
+  std::fprintf(stderr, "[DoubleRenderCheck] %d/%d px diverged (maxDiff=%d)\n", diverged,
+               pixelCount, maxDiff);
+  EXPECT_LT(diverged, pixelCount / 20)
+      << "bg + promoted-at-offset + fg diverges from a direct render of the "
+      << "current DOM by " << diverged << " px (max channel diff " << maxDiff
+      << "). This is the double-render signature: a promoted element's content "
+      << "leaks into bg or fg while its own promoted-layer draw ALSO produces "
+      << "it, so the composite shows it in two places. Check that "
+      << "`rasterizeDirtyStaticSegments` skips promoted-entity paint ranges and "
+      << "that `canvasFromBitmap_` resets correctly when the drag target swaps.";
+}
+
+// Stress variant of the previous test: multiple promote-swap cycles to see
+// if accumulated compositor state eventually produces a divergence between
+// the split composite and the direct render. The user's "-7" bug needed 8
+// clicks + shift-selection churn to trigger — repeated promote/demote on
+// the same entities may accumulate stale `canvasFromBitmap_` offsets or
+// segment boundary state.
+TEST(AsyncRendererTest, BgPlusPromotedPlusFgSurvivesManyPromoteSwaps) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs>
+      <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter>
+    </defs>
+    <rect width="400" height="200" fill="#0d0f1d"/>
+    <g id="A" filter="url(#blur)">
+      <rect x="40" y="40" width="60" height="60" fill="#ffe54a"/>
+    </g>
+    <ellipse id="B" cx="250" cy="100" rx="60" ry="40" fill="#3355cc"/>
+    <rect id="C" x="340" y="50" width="40" height="60" fill="#44ff88"/>
+  )svg");
+  document.setCanvasSize(400, 200);
+
+  auto entityA = document.querySelector("#A");
+  auto entityB = document.querySelector("#B");
+  auto entityC = document.querySelector("#C");
+  ASSERT_TRUE(entityA.has_value() && entityB.has_value() && entityC.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() {
+    std::optional<RenderResult> result;
+    for (int i = 0; i < 400 && !result.has_value(); ++i) {
+      result = asyncRenderer.pollResult();
+      if (!result.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return result;
+  };
+
+  const auto runRequest = [&](Entity selectedEntity, std::optional<Entity> dragPreviewEntity,
+                              std::uint64_t version,
+                              svg::compositor::InteractionHint kind =
+                                  svg::compositor::InteractionHint::Selection) {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = selectedEntity;
+    if (dragPreviewEntity.has_value()) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = *dragPreviewEntity,
+          .interactionKind = kind,
+      };
+    }
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+
+  const Entity eA = entityA->entityHandle().entity();
+  const Entity eB = entityB->entityHandle().entity();
+  const Entity eC = entityC->entityHandle().entity();
+  const std::array<Entity, 3> rotation{eA, eB, eC};
+
+  std::uint64_t version = 1;
+  // Apply a drag delta to A once and leave it committed (the live editor
+  // scenario: first drag commits the transform).
+  entityA->cast<svg::SVGGraphicsElement>().setTransform(
+      Transform2d::Translate(Vector2d(30.0, 10.0)));
+
+  // Cycle through many promote-swap pairs. Each iteration picks a new drag
+  // target, fires a drag frame against it, releases, then moves on. After
+  // every release, verify bg + promoted + fg matches a direct render.
+  for (int iter = 0; iter < 12; ++iter) {
+    const Entity target = rotation[iter % rotation.size()];
+    // Drag frame.
+    auto drag = runRequest(target, target, ++version,
+                           svg::compositor::InteractionHint::ActiveDrag);
+    ASSERT_TRUE(drag.has_value()) << "iter " << iter << " drag frame failed";
+    ASSERT_TRUE(drag->compositedPreview.has_value());
+
+    // Release + selection held.
+    auto release = runRequest(target, std::nullopt, ++version);
+    ASSERT_TRUE(release.has_value());
+
+    // Compare bg + promoted + fg against a direct render. Need a new
+    // promote to produce a composited preview to diff.
+    auto prewarm = runRequest(target, target, ++version,
+                              svg::compositor::InteractionHint::Selection);
+    ASSERT_TRUE(prewarm.has_value());
+    ASSERT_TRUE(prewarm->compositedPreview.has_value())
+        << "iter " << iter << " should have produced a composited preview";
+
+    const auto& preview = *prewarm->compositedPreview;
+    svg::Renderer referenceRenderer;
+    referenceRenderer.draw(document);
+    const svg::RendererBitmap referenceBitmap = referenceRenderer.takeSnapshot();
+    ASSERT_EQ(referenceBitmap.dimensions, preview.backgroundBitmap.dimensions);
+
+    const int w = referenceBitmap.dimensions.x;
+    const int h = referenceBitmap.dimensions.y;
+    const std::size_t rb = referenceBitmap.rowBytes;
+    std::vector<uint8_t> composite = preview.backgroundBitmap.pixels;
+    const auto composeOver = [&](const std::vector<uint8_t>& src, int offsetX, int offsetY,
+                                  const Vector2i& srcDims, std::size_t srcRowBytes) {
+      for (int y = 0; y < h; ++y) {
+        const int sy = y - offsetY;
+        if (sy < 0 || sy >= srcDims.y) continue;
+        for (int x = 0; x < w; ++x) {
+          const int sx = x - offsetX;
+          if (sx < 0 || sx >= srcDims.x) continue;
+          const std::size_t dstOff =
+              static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+          const std::size_t srcOff = static_cast<std::size_t>(sy) * srcRowBytes +
+                                     static_cast<std::size_t>(sx) * 4u;
+          const unsigned sa = src[srcOff + 3];
+          const unsigned inv = 255u - sa;
+          for (int c = 0; c < 4; ++c) {
+            const unsigned s = src[srcOff + c];
+            const unsigned d = composite[dstOff + c];
+            const unsigned out = std::min(255u, s + ((d * inv + 127u) / 255u));
+            composite[dstOff + c] = static_cast<uint8_t>(out);
+          }
+        }
+      }
+    };
+    const int promotedOffsetX = static_cast<int>(std::round(preview.promotedTranslationDoc.x));
+    const int promotedOffsetY = static_cast<int>(std::round(preview.promotedTranslationDoc.y));
+    composeOver(preview.promotedBitmap.pixels, promotedOffsetX, promotedOffsetY,
+                preview.promotedBitmap.dimensions, preview.promotedBitmap.rowBytes);
+    composeOver(preview.foregroundBitmap.pixels, 0, 0, preview.foregroundBitmap.dimensions,
+                preview.foregroundBitmap.rowBytes);
+
+    int diverged = 0;
+    int maxDiff = 0;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const std::size_t off =
+            static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+        for (int c = 0; c < 3; ++c) {
+          const int d = std::abs(int(referenceBitmap.pixels[off + c]) -
+                                 int(composite[off + c]));
+          if (d > maxDiff) maxDiff = d;
+          if (d > 8) {
+            ++diverged;
+            break;
+          }
+        }
+      }
+    }
+    const int pixelCount = w * h;
+    ASSERT_LT(diverged, pixelCount / 20)
+        << "iter " << iter << " target=" << static_cast<uint32_t>(target) << ": "
+        << diverged << "/" << pixelCount << " px diverged from direct render "
+        << "(maxDiff=" << maxDiff << "). Stale compositor state after repeated "
+        << "promote-swap cycles.";
+  }
+}
+
+// Real-splash version of the "double-render after promote swap" invariant.
+// Loads `donner_splash.svg`, then drives the exact event sequence from the
+// user's `filter_elm_disappear-7.rnr`: drag `#Big_lightning_glow`, release,
+// click the background ellipse (radial gradient), click back on
+// `#Big_lightning_glow`. After each mup, assert bg + promoted + fg matches
+// a direct render of the current DOM.
+TEST(AsyncRendererTest, Rnr7EventSequenceProducesCorrectSplitCompositeOnSplash) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  ParseWarningSink warningSink;
+  auto parseResult = svg::parser::SVGParser::ParseSVG(splashSource, warningSink);
+  ASSERT_FALSE(parseResult.hasError()) << parseResult.error().reason;
+  svg::SVGDocument document = std::move(parseResult).result();
+
+  // Match the recording's pane canvas: pw=655 ph=863 dpr=2 → 1310×1726
+  // before aspect-fit. Let `setCanvasSize` do the aspect-fit.
+  document.setCanvasSize(1310, 1726);
+
+  auto bigGlow = document.querySelector("#Big_lightning_glow");
+  ASSERT_TRUE(bigGlow.has_value());
+  const Entity bigGlowEntity = bigGlow->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() {
+    std::optional<RenderResult> result;
+    for (int i = 0; i < 400 && !result.has_value(); ++i) {
+      result = asyncRenderer.pollResult();
+      if (!result.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return result;
+  };
+
+  const auto runRequest = [&](Entity selectedEntity, std::optional<Entity> dragPreviewEntity,
+                              std::uint64_t version,
+                              svg::compositor::InteractionHint kind =
+                                  svg::compositor::InteractionHint::Selection) {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = selectedEntity;
+    if (dragPreviewEntity.has_value()) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = *dragPreviewEntity,
+          .interactionKind = kind,
+      };
+    }
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+
+  const auto divergencePctFromDirectRender = [&](const RenderResult::CompositedPreview& preview) {
+    svg::Renderer referenceRenderer;
+    referenceRenderer.draw(document);
+    const svg::RendererBitmap referenceBitmap = referenceRenderer.takeSnapshot();
+    if (referenceBitmap.dimensions != preview.backgroundBitmap.dimensions) {
+      ADD_FAILURE() << "dimension mismatch: direct=" << referenceBitmap.dimensions.x << "x"
+                    << referenceBitmap.dimensions.y << " preview="
+                    << preview.backgroundBitmap.dimensions.x << "x"
+                    << preview.backgroundBitmap.dimensions.y;
+      return 100.0;
+    }
+    const int w = referenceBitmap.dimensions.x;
+    const int h = referenceBitmap.dimensions.y;
+    const std::size_t rb = referenceBitmap.rowBytes;
+    std::vector<uint8_t> composite = preview.backgroundBitmap.pixels;
+    const auto composeOver = [&](const std::vector<uint8_t>& src, int offsetX, int offsetY,
+                                  const Vector2i& srcDims, std::size_t srcRowBytes) {
+      for (int y = 0; y < h; ++y) {
+        const int sy = y - offsetY;
+        if (sy < 0 || sy >= srcDims.y) continue;
+        for (int x = 0; x < w; ++x) {
+          const int sx = x - offsetX;
+          if (sx < 0 || sx >= srcDims.x) continue;
+          const std::size_t dstOff =
+              static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+          const std::size_t srcOff = static_cast<std::size_t>(sy) * srcRowBytes +
+                                     static_cast<std::size_t>(sx) * 4u;
+          const unsigned sa = src[srcOff + 3];
+          const unsigned inv = 255u - sa;
+          for (int c = 0; c < 4; ++c) {
+            const unsigned s = src[srcOff + c];
+            const unsigned d = composite[dstOff + c];
+            const unsigned out = std::min(255u, s + ((d * inv + 127u) / 255u));
+            composite[dstOff + c] = static_cast<uint8_t>(out);
+          }
+        }
+      }
+    };
+    // pixelsPerDocUnit = canvasSize / viewBoxSize. For the splash, viewBox
+    // is 892×512; canvas is whatever `setCanvasSize` clamped to.
+    const double scale =
+        referenceBitmap.dimensions.x > 0 ? double(referenceBitmap.dimensions.x) / 892.0 : 1.0;
+    const int promotedOffsetX =
+        static_cast<int>(std::round(preview.promotedTranslationDoc.x * scale));
+    const int promotedOffsetY =
+        static_cast<int>(std::round(preview.promotedTranslationDoc.y * scale));
+    composeOver(preview.promotedBitmap.pixels, promotedOffsetX, promotedOffsetY,
+                preview.promotedBitmap.dimensions, preview.promotedBitmap.rowBytes);
+    composeOver(preview.foregroundBitmap.pixels, 0, 0, preview.foregroundBitmap.dimensions,
+                preview.foregroundBitmap.rowBytes);
+
+    int diverged = 0;
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const std::size_t off =
+            static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+        for (int c = 0; c < 3; ++c) {
+          const int d = std::abs(int(referenceBitmap.pixels[off + c]) -
+                                 int(composite[off + c]));
+          if (d > 12) {
+            ++diverged;
+            break;
+          }
+        }
+      }
+    }
+    return 100.0 * double(diverged) / (double(w) * h);
+  };
+
+  std::uint64_t version = 0;
+
+  // Step 1: warm select Big_lightning_glow (recording starts with selection).
+  auto warm = runRequest(bigGlowEntity, bigGlowEntity, ++version,
+                         svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(warm.has_value());
+  ASSERT_TRUE(warm->compositedPreview.has_value());
+  const double dWarm = divergencePctFromDirectRender(*warm->compositedPreview);
+  std::fprintf(stderr, "[rnr7-async] warm divergence=%.2f%%\n", dWarm);
+  EXPECT_LT(dWarm, 5.0) << "warm state diverges from direct render";
+
+  // Step 2: drag Big_lightning_glow by small delta (~9, 4 doc units from
+  // recording). Transform is committed on mup.
+  bigGlow->cast<svg::SVGGraphicsElement>().setTransform(
+      Transform2d::Translate(Vector2d(9.0, 4.0)));
+  auto drag1 = runRequest(bigGlowEntity, bigGlowEntity, ++version,
+                          svg::compositor::InteractionHint::ActiveDrag);
+  ASSERT_TRUE(drag1.has_value());
+
+  // Step 3: release (selection held, no drag).
+  auto release1 = runRequest(bigGlowEntity, std::nullopt, ++version);
+  ASSERT_TRUE(release1.has_value());
+
+  // Step 4: click background ellipse. Resolve its entity from the DOM.
+  // The splash's full-document ellipse is the `ellipse` child of
+  // `<g id="Background_sticker">` or the radial-gradient target — grab
+  // whichever ellipse the recording's (382.5, 248.5) click would hit.
+  // For the test we just pick the first ellipse that's a direct child
+  // of the wrapping container and use its entity.
+  auto anyEllipse = document.querySelector("ellipse");
+  ASSERT_TRUE(anyEllipse.has_value());
+  const Entity ellipseEntity = anyEllipse->entityHandle().entity();
+
+  auto promoteEllipse = runRequest(ellipseEntity, ellipseEntity, ++version,
+                                   svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(promoteEllipse.has_value());
+  ASSERT_TRUE(promoteEllipse->compositedPreview.has_value());
+  const double dPromoteEllipse = divergencePctFromDirectRender(*promoteEllipse->compositedPreview);
+  std::fprintf(stderr, "[rnr7-async] promote-ellipse divergence=%.2f%%\n", dPromoteEllipse);
+
+  // Step 5: click back on Big_lightning_glow (exact rnr7 scenario — swap
+  // back to the previously-dragged filter-g). This is where the double-
+  // render bug should surface if it's going to.
+  auto reswap = runRequest(bigGlowEntity, bigGlowEntity, ++version,
+                           svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(reswap.has_value());
+  ASSERT_TRUE(reswap->compositedPreview.has_value());
+  const double dReswap = divergencePctFromDirectRender(*reswap->compositedPreview);
+  std::fprintf(stderr, "[rnr7-async] re-swap-to-big-lightning divergence=%.2f%%\n", dReswap);
+
+  EXPECT_LT(dPromoteEllipse, 5.0)
+      << "after promoting a different element, bg+promoted+fg diverges from the "
+      << "direct render by " << dPromoteEllipse << "% — double-render signature.";
+  EXPECT_LT(dReswap, 5.0)
+      << "after swapping back to the originally-dragged filter-g, bg+promoted+fg "
+      << "diverges from direct render by " << dReswap << "% — this is the exact "
+      << "state from filter_elm_disappear-7.rnr where the user saw the bolt "
+      << "rendered at two positions.";
 }
 
 // Regression: bumping `version` every drag frame (as `AsyncSVGDocument::

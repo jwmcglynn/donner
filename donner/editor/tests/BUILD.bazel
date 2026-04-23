@@ -255,6 +255,7 @@ donner_cc_test(
         "//donner/editor/backend_lib:command_queue",
         "//donner/editor/backend_lib:editor_app",
         "//donner/svg/compositor",
+        "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
