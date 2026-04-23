@@ -1,0 +1,20 @@
+# Git diff enhancements.
+#
+# Route binary-image diffs through a text-preview driver so `git diff`,
+# `git log -p`, and IDE diff views (VS Code's built-in diff, PR review
+# surfaces, etc.) show *something* useful instead of "Binary file not
+# shown". The actual preview command is controlled by the `textconv`
+# key on the `exif` / `imgdiff` diff drivers — set these once per clone
+# (see `README.md` or run `tools/setup_image_diff.sh`):
+#
+#     git config diff.exif.textconv exiftool
+#     # or, without external deps:
+#     git config diff.imgdiff.textconv "file -b"
+#
+# Unconfigured clones fall back to Git's default "Binary files ...
+# differ" behavior — no regression.
+*.png       diff=exif
+*.jpg       diff=exif
+*.jpeg      diff=exif
+*.webp      diff=exif
+*.gif       diff=exif
