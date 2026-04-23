@@ -220,7 +220,10 @@ donner_cc_test(
         "//donner/editor/tests:filter_elm_disappear-2.rnr",
         "//donner/editor/tests:filter_elm_disappear-3.rnr",
         "//donner/editor/tests:filter_elm_disappear-4.rnr",
-    ],
+    ] + glob(
+        ["testdata/filter_disappear_*.png"],
+        allow_empty = True,
+    ),
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     deps = [
         "//donner/base",
@@ -231,6 +234,7 @@ donner_cc_test(
         "//donner/editor/sandbox:editor_api_codec",
         "//donner/editor/sandbox:editor_backend_core",
         "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer",

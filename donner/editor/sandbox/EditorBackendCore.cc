@@ -535,25 +535,32 @@ FramePayload EditorBackendCore::buildFramePayload() {
     }
     frame.statusKind = FrameStatusKind::kRendered;
 
-    // Populate selection entries.
+    // Populate selection entries. Emit one per selected element, ordered
+    // by `editor_.selectedElements()`. Use `SnapshotSelectionWorldBounds`
+    // per-element so non-geometry `<g>` selections (filter groups, plain
+    // groups) get an AABB unioned across the subtree's renderable
+    // geometry. Previously this skipped any non-`SVGGeometryElement`,
+    // which meant `selections` came back EMPTY whenever the user elevated
+    // a click to a `<g filter>` — blinding test harnesses that want to
+    // sanity-check "what actually got selected".
+    //
+    // Per-element query preserves 1:1 index correspondence with
+    // `selectedElements()` even when some selected elements have no
+    // renderable geometry (e.g. `<defs>`, empty `<g>`); those get an
+    // all-zero bbox.
     for (const auto& elem : editor_.selectedElements()) {
-      auto geometry = elem.tryCast<donner::svg::SVGGeometryElement>();
-      if (!geometry.has_value()) {
-        continue;
-      }
-
-      auto bounds = geometry->worldBounds();
-      if (!bounds.has_value()) {
-        continue;
-      }
-
       FrameSelectionEntry entry;
-      entry.bbox[0] = bounds->topLeft.x;
-      entry.bbox[1] = bounds->topLeft.y;
-      entry.bbox[2] = bounds->bottomRight.x;
-      entry.bbox[3] = bounds->bottomRight.y;
       entry.hasTransform = false;
       entry.handleMask = 0xFF;
+      std::array<svg::SVGElement, 1> single{elem};
+      const auto bounds = donner::editor::SnapshotSelectionWorldBounds(single);
+      if (!bounds.empty()) {
+        const Box2d& bb = bounds.front();
+        entry.bbox[0] = bb.topLeft.x;
+        entry.bbox[1] = bb.topLeft.y;
+        entry.bbox[2] = bb.bottomRight.x;
+        entry.bbox[3] = bb.bottomRight.y;
+      }
       frame.selections.push_back(entry);
     }
 

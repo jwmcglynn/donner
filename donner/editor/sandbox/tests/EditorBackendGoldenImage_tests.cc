@@ -44,11 +44,13 @@
 /// `EditorBackendCore` directly, not `SandboxSession` — so macOS
 /// developers can iterate on the pipeline without a Linux box.
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -59,6 +61,7 @@
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
 #include "donner/editor/sandbox/ReplayingRenderer.h"
@@ -69,6 +72,117 @@
 
 namespace donner::editor::sandbox {
 namespace {
+
+// ---------------------------------------------------------------------------
+// Selection diagnostics.
+//
+// The replay tests used to eyeball PNGs to tell drag-outcome regressions
+// apart. Four attempts-at-fix on issue #582 all produced different
+// DOM-level symptoms (no-change / dark-halo-only-moved / whole-tree-
+// moved / whole-document-moved) but ALL tripped the same bright-pixel
+// assertion, so the test name didn't tell the reviewer which bug they
+// were looking at. These helpers read `FramePayload.selections` +
+// `treeSummary` and emit a human-readable identity + coverage summary,
+// plus an assertion that catches "selection escalated to the document
+// root" cleanly.
+// ---------------------------------------------------------------------------
+
+/// Return the tree-summary node that's marked `selected == true`, or
+/// `nullptr` if the frame has no selection.
+const TreeNodeEntry* FindSelectedNode(const FramePayload& frame) {
+  for (const auto& node : frame.tree.nodes) {
+    if (node.selected) {
+      return &node;
+    }
+  }
+  return nullptr;
+}
+
+/// Format `selections[0]`'s AABB + the selected node's tag/id into a
+/// one-line string like `"g#Lightning_glow_dark [aabb 473.5,375.5 →
+/// 552.5,480.5 | 98×117 doc-units]"`. Returns `"<none>"` when the frame
+/// has no selection. Used in stderr logs so a failing test's output
+/// immediately tells the reviewer WHICH element got picked.
+std::string DescribeSelection(const FramePayload& frame) {
+  const TreeNodeEntry* node = FindSelectedNode(frame);
+  if (node == nullptr) return "<none>";
+  std::string out = node->tagName;
+  if (!node->idAttr.empty()) {
+    out += "#";
+    out += node->idAttr;
+  }
+  if (!frame.selections.empty()) {
+    const auto& sel = frame.selections.front();
+    const double w = sel.bbox[2] - sel.bbox[0];
+    const double h = sel.bbox[3] - sel.bbox[1];
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  " [aabb %.1f,%.1f → %.1f,%.1f | %.0f×%.0f doc-units]",
+                  sel.bbox[0], sel.bbox[1], sel.bbox[2], sel.bbox[3], w, h);
+    out += buf;
+  } else {
+    out += " [no-bbox]";
+  }
+  return out;
+}
+
+/// Build a `svg::RendererBitmap` view of a `FramePayload`'s pixel
+/// buffer for pixelmatch diffing.
+svg::RendererBitmap BitmapFromFrame(const FramePayload& fp) {
+  svg::RendererBitmap bm;
+  bm.dimensions = Vector2i(fp.finalBitmapWidth, fp.finalBitmapHeight);
+  bm.rowBytes = fp.finalBitmapRowBytes;
+  bm.pixels = fp.finalBitmapPixels;
+  bm.alphaType = static_cast<svg::AlphaType>(fp.finalBitmapAlphaType);
+  return bm;
+}
+
+/// Return `DONNER_ATTEMPT_TAG` as a `{tag}_` filename prefix, or empty
+/// when unset. Lets reviewers do
+///
+///   DONNER_ATTEMPT_TAG=attempt5 bazel test //donner/editor/sandbox/tests/...
+///
+/// so each attempt's dumped PNGs sit side-by-side in
+/// `test.outputs/` rather than overwriting the previous run. Empty when
+/// unset, so existing CI paths stay byte-identical.
+std::string AttemptTagPrefix() {
+  const char* tag = std::getenv("DONNER_ATTEMPT_TAG");
+  if (tag == nullptr || tag[0] == '\0') return "";
+  std::string out(tag);
+  out += "_";
+  return out;
+}
+
+/// Assert the selection's AABB covers less than `maxFraction` of the
+/// given doc viewBox area. Catches "drag escalated to the document
+/// root" regressions (attempt2/attempt4 from issue #582) directly —
+/// without the PNG inspection a bright-pixel heuristic forces. Logs
+/// `DescribeSelection` on failure so the reviewer sees WHICH ancestor
+/// swallowed the click.
+::testing::AssertionResult SelectionAabbWithinDocBudget(
+    const FramePayload& frame, double docViewBoxW, double docViewBoxH,
+    double maxFraction = 0.50) {
+  if (frame.selections.empty()) {
+    return ::testing::AssertionSuccess() << "no selection (skipped)";
+  }
+  const auto& sel = frame.selections.front();
+  const double selW = std::max(0.0, sel.bbox[2] - sel.bbox[0]);
+  const double selH = std::max(0.0, sel.bbox[3] - sel.bbox[1]);
+  const double docArea = docViewBoxW * docViewBoxH;
+  if (docArea <= 0.0) {
+    return ::testing::AssertionSuccess() << "doc area unknown (skipped)";
+  }
+  const double fraction = (selW * selH) / docArea;
+  if (fraction < maxFraction) {
+    return ::testing::AssertionSuccess();
+  }
+  return ::testing::AssertionFailure()
+         << "selection " << DescribeSelection(frame) << " covers "
+         << std::fixed << std::setprecision(1) << (fraction * 100.0) << "% of the "
+         << docViewBoxW << "×" << docViewBoxH << " document — "
+         << "elevation escalated past the intended composite group. "
+         << "Issue #582 attempt2 / attempt4 signature.";
+}
 
 /// A small SVG the test suite reuses: 100×100 canvas, one red rect that
 /// covers most of it. Chosen to be the smallest possible input that
@@ -1305,7 +1419,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
 
   // Dump the mid-drag-2 frame for inspection.
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/rnr_host_mid_drag2.png";
+    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
+                             "rnr_host_mid_drag2.png";
     donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
         path.c_str(), midDrag2Frame->finalBitmapPixels, bmpW, bmpH,
         static_cast<uint32_t>(rowBytes / 4u));
@@ -1408,6 +1523,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
+        std::fprintf(stderr, "[rnr4] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount + 1, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
@@ -1415,6 +1533,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
         lastFrame = core.handlePointerEvent(ptr);
         if (mouseUpCount < 4) afterMup[mouseUpCount] = *lastFrame;
         ++mouseUpCount;
+        std::fprintf(stderr, "[rnr4] mup#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -1430,8 +1551,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
 
   ASSERT_GT(mouseUpCount, 0u);
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
-      const std::string path = std::string(dir) + "/" + name;
+      const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
           static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
@@ -1478,7 +1600,8 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
   const std::size_t rowBytes = loadFrame.finalBitmapRowBytes;
 
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/cold_load_sanity.png";
+    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
+                             "cold_load_sanity.png";
     donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
         path.c_str(), loadFrame.finalBitmapPixels, bmpW, bmpH,
         static_cast<uint32_t>(rowBytes / 4u));
@@ -1579,11 +1702,22 @@ TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkKeepsFilter) 
   };
 
   // Coords from repro-3 drag 2: mdown (474.5, 406.5) → mup (511.5, 410.5).
-  (void)sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
+  const auto afterMdown = sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
+  std::fprintf(stderr, "[single_drag] after mdown: selection = %s\n",
+               DescribeSelection(afterMdown).c_str());
   (void)sendPointer(PointerPhase::kMove, 485.0, 408.0, 1);
   (void)sendPointer(PointerPhase::kMove, 495.0, 409.0, 1);
   (void)sendPointer(PointerPhase::kMove, 511.5, 410.5, 1);
   const auto post = sendPointer(PointerPhase::kUp, 511.5, 410.5, 0);
+  std::fprintf(stderr, "[single_drag] after mup: selection = %s\n",
+               DescribeSelection(post).c_str());
+
+  // Catch "elevation escalated to the document root" regressions
+  // immediately — without waiting for a bright-pixel-threshold
+  // inspection that would also trip for correct-but-sheared drags.
+  // Splash viewBox is 892×512. 50% coverage fires only on attempts
+  // that drag a near-full-document ancestor.
+  EXPECT_TRUE(SelectionAabbWithinDocBudget(afterMdown, 892.0, 512.0, 0.50));
 
   ASSERT_TRUE(post.hasFinalBitmap);
   const int bmpW = post.finalBitmapWidth;
@@ -1591,67 +1725,29 @@ TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkKeepsFilter) 
   const std::size_t rowBytes = post.finalBitmapRowBytes;
 
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/single_drag_lgd_post.png";
+    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
+                             "single_drag_lgd_post.png";
     donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
         path.c_str(), post.finalBitmapPixels, bmpW, bmpH,
         static_cast<uint32_t>(rowBytes / 4u));
   }
 
-  const auto samplePx = [&](int x, int y) {
-    const std::size_t off = static_cast<std::size_t>(y) * rowBytes +
-                            static_cast<std::size_t>(x) * 4u;
-    struct Rgba {
-      uint8_t r, g, b, a;
-    };
-    return Rgba{post.finalBitmapPixels[off + 0], post.finalBitmapPixels[off + 1],
-                post.finalBitmapPixels[off + 2], post.finalBitmapPixels[off + 3]};
-  };
-
-  const double scale = static_cast<double>(bmpW) / 892.0;
-  const int centerX = static_cast<int>(std::round(507.0 * scale));
-  const int centerY = static_cast<int>(std::round(419.0 * scale));
-  const int halfExtent = static_cast<int>(std::round(35.0 * scale));
-  const int rectMinX = std::max(0, centerX - halfExtent);
-  const int rectMinY = std::max(0, centerY - halfExtent);
-  const int rectMaxX = std::min(bmpW, centerX + halfExtent);
-  const int rectMaxY = std::min(bmpH, centerY + halfExtent);
-
-  // The filter adds bright highlight pixels (lightning bolt core +
-  // Lightning_glow_bright's cyan overlay blending onto this region).
-  // Without the filter, only the flat dark-blue `#224084` survives and
-  // bright pixels vanish. Count "any channel > 180" as a bright-pixel
-  // signature. Cold rendering of this region has ~hundreds of bright
-  // pixels; a filter-loss regression drops it to single digits.
-  int brightHits = 0;
-  for (int cy = rectMinY; cy < rectMaxY; ++cy) {
-    for (int cx = rectMinX; cx < rectMaxX; ++cx) {
-      const auto px = samplePx(cx, cy);
-      if (std::max({px.r, px.g, px.b}) > 180) {
-        ++brightHits;
-      }
-    }
-  }
-
-  // Empirically the cold render's probe has ~4500 bright pixels at the
-  // pre-drag Lightning_glow_dark position; when the filter is correctly
-  // preserved post-drag, the shifted probe sees a similar count
-  // (~3000+). When the filter is lost the count collapses to ~1700.
-  // 3000 sits cleanly in the gap.
-  std::fprintf(stderr, "[single_drag brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits,
-               rectMinX, rectMinY, rectMaxX, rectMaxY);
-  EXPECT_GT(brightHits, 3000)
-      << "Single drag of Lightning_glow_dark `<g filter>`: post-settle region "
-      << "at (" << rectMinX << "," << rectMinY << ")→(" << rectMaxX << ","
-      << rectMaxY << ") has " << brightHits << " bright (any channel > 180) "
-      << "pixels; expected >3000 (cold-load baseline for this region is ~4500). "
-      << "The bolt's bright core + inner cyan glow (`Lightning_white` + "
-      << "`Lightning_glow_bright`) did not move with `Lightning_glow_dark` — they "
-      << "are siblings under the same parent `<g>`, not descendants, so dragging "
-      << "only the filter-g leaves them at the pre-drag position. "
-      << "`ElevateToCompositingGroupAncestor` needs to escalate to the shared "
-      << "parent for this composite. See `single_drag_lgd_post.png` — the dark-"
-      << "blue rectangle in the pre-drag region IS `Lightning_glow_dark` shifted "
-      << "correctly; the bug is that its siblings stayed.";
+  // Pin the post-drag pixels against a committed golden. Catches any
+  // regression in the pipeline — including fix attempts that
+  // accidentally make MORE pixels wrong somewhere else (attempt2/4
+  // whole-document drags) — without the false-positive-prone bright-
+  // pixel threshold the older assertion used. Regenerate via
+  //   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
+  //     bazel run //donner/editor/sandbox/tests:editor_backend_golden_image_tests -- \
+  //       --gtest_filter='*SingleDragOnLightningGlowDark*'
+  // when a fix intentionally changes the output.
+  donner::editor::tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 500;
+  donner::editor::tests::CompareBitmapToGolden(
+      BitmapFromFrame(post),
+      "donner/editor/sandbox/tests/testdata/filter_disappear_single_drag_lgd_post.png",
+      "single_drag_lgd_post", params);
 }
 
 // User-reported regression (filter_elm_disappear-3.rnr + accompanying
@@ -1763,6 +1859,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
+        std::fprintf(stderr, "[rnr3] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount + 1, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
@@ -1770,6 +1869,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
         lastFrame = core.handlePointerEvent(ptr);
         ++mouseUpCount;
         if (mouseUpCount == 2) afterMup2 = *lastFrame;
+        std::fprintf(stderr, "[rnr3] mup#%zu @ (%.1f, %.1f): selection = %s\n",
+                     mouseUpCount, docX, docY,
+                     DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -1793,10 +1895,15 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
   ASSERT_TRUE(afterMup2.has_value());
   ASSERT_TRUE(lastFrame.has_value() && lastFrame->hasFinalBitmap);
 
+  // Pin elevation regressions to the exact attempt signature before
+  // the bitmap-level assertion fires.
+  EXPECT_TRUE(SelectionAabbWithinDocBudget(*afterMup2, 892.0, 512.0, 0.50));
+
   // Dump artifacts for eyeballing.
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
-      const std::string path = std::string(dir) + "/" + name;
+      const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
           static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
@@ -1806,73 +1913,15 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
     dump("rnr3_after_mup2.png", *afterMup2);
   }
 
-  // The post-settle frame must retain the filter content. The drag
-  // deltas are small (+35,+4 and +37,+4 doc units ~ 70×8 canvas px
-  // shifts at DPR=2), so the overall "warm pixel mass" shouldn't move
-  // by much. A filter-disappear regression crashes this count to a
-  // fraction of the cold value.
-  int postBright = 0;
-  for (int cy = 0; cy < bmpH; cy += 30) {
-    for (int cx = 0; cx < bmpW; cx += 30) {
-      const auto px = samplePx(*lastFrame, cx, cy);
-      if (int(px.r) + int(px.g) > 120) ++postBright;
-    }
-  }
-
-  // Sanity: the overall warm-pixel mass shouldn't collapse. A failure
-  // here means we're missing a lot of content — big lightning or
-  // DONNER text also disappeared.
-  const int requiredBright = (coldBright * 3) / 4;
-  EXPECT_GE(postBright, requiredBright)
-      << "filter_elm_disappear-3.rnr post-settle replay: warm (R+G>120) pixel "
-      << "count collapsed from " << coldBright << " (cold) to " << postBright
-      << " (post-settle) across the " << bmpW << "x" << bmpH << " canvas. "
-      << "A filter element appears to have disappeared from the post-mup-2 settle "
-      << "frame. Inspect `rnr3_cold.png`, `rnr3_mid_drag2.png`, and "
-      << "`rnr3_after_mup2.png` in the test's outputs dir.";
-
-  // Specific assertion for the user-reported regression: the small
-  // Lightning_glow_dark bolt (cls-80 fill `#224084`) is wrapped in a
-  // `<g filter="url(#lightning_glow_dark_blur)">` so its rendered
-  // pixels should be the *filtered* bright glow — NOT the flat fill.
-  // When the filter breaks, the bolt renders as a plain dark-blue
-  // shape the color of `#224084` (~RGB 34,64,132). Count pixels
-  // inside the bolt's post-drag canvas bounds that match that flat
-  // fill (within a tight tolerance) vs. pixels with the warm glow a
-  // correctly-filtered bolt produces.
-  //
-  // Post-drag-2 doc position: bolt center ~(470, 415) pre-drag +
-  // drag-2 delta (+37, +4) → ~(507, 419). The splash renders
-  // pane-fit; use canvas-pixel scale = `bmpW / 892` (splash viewBox
-  // width) to convert. The bolt's visible AABB is ~60×60 doc units.
-  const double scale = static_cast<double>(bmpW) / 892.0;
-  const int centerX = static_cast<int>(std::round(507.0 * scale));
-  const int centerY = static_cast<int>(std::round(419.0 * scale));
-  const int halfExtent = static_cast<int>(std::round(35.0 * scale));
-  const int rectMinX = std::max(0, centerX - halfExtent);
-  const int rectMinY = std::max(0, centerY - halfExtent);
-  const int rectMaxX = std::min(bmpW, centerX + halfExtent);
-  const int rectMaxY = std::min(bmpH, centerY + halfExtent);
-
-  int brightHits = 0;
-  for (int cy = rectMinY; cy < rectMaxY; ++cy) {
-    for (int cx = rectMinX; cx < rectMaxX; ++cx) {
-      const auto px = samplePx(*lastFrame, cx, cy);
-      if (std::max({px.r, px.g, px.b}) > 180) ++brightHits;
-    }
-  }
-
-  std::fprintf(stderr, "[rnr3 brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits,
-               rectMinX, rectMinY, rectMaxX, rectMaxY);
-  EXPECT_GT(brightHits, 3000)
-      << "filter_elm_disappear-3.rnr post-settle: the region around "
-      << "`Lightning_glow_dark`'s post-drag position (" << rectMinX << ","
-      << rectMinY << ")→(" << rectMaxX << "," << rectMaxY << ") has "
-      << brightHits << " bright (any channel > 180) pixels; expected >3000 "
-      << "(cold-load baseline is ~4500). See `SingleDragOnLightningGlow"
-      << "DarkKeepsFilter`'s docstring for the root-cause analysis; fix "
-      << "is in `ElevateToCompositingGroupAncestor`. See `rnr3_after_mup2.png` "
-      << "in the test outputs dir.";
+  // Pin post-settle pixels against a committed golden. Same update
+  // workflow as `SingleDragOnLightningGlowDarkKeepsFilter`.
+  donner::editor::tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 500;
+  donner::editor::tests::CompareBitmapToGolden(
+      BitmapFromFrame(*afterMup2),
+      "donner/editor/sandbox/tests/testdata/filter_disappear_rnr3_after_mup2.png",
+      "rnr3_after_mup2", params);
 }
 
 TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
@@ -1943,7 +1992,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
 
   // Dump the mid-drag-2 frame for inspection.
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/mid_drag2_hidpi_host.png";
+    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
+                             "mid_drag2_hidpi_host.png";
     donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
         path.c_str(), midDrag2.finalBitmapPixels, 1784, 1024, 1784u);
   }

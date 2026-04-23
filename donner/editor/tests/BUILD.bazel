@@ -40,6 +40,10 @@ donner_cc_library(
     testonly = 1,
     srcs = ["BitmapGoldenCompare.cc"],
     hdrs = ["BitmapGoldenCompare.h"],
+    visibility = [
+        "//donner/editor/sandbox/tests:__pkg__",
+        "//donner/editor/tests:__pkg__",
+    ],
     deps = [
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
