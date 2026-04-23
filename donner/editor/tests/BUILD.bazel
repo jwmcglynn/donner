@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_perf_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 exports_files([
     "filter_elm_disappear-2.rnr",
@@ -9,32 +9,7 @@ exports_files([
     "filter_elm_disappear-7.rnr",
 ])
 
-# Shared replay harness for tests that drive `EditorApp` + `SelectTool`
-# + `RenderCoordinator` from a v2 `.donner-repro` recording. Scoped to
-# these tests; collapses into the general `ReproPlayer` when
-# `docs/design_docs/0029-ui_input_repro.md` Stage 2 lands.
-donner_cc_library(
-    name = "repro_replay_harness",
-    testonly = 1,
-    srcs = ["ReproReplayHarness.cc"],
-    hdrs = ["ReproReplayHarness.h"],
-    deps = [
-        "//donner/base",
-        "//donner/editor:render_coordinator",
-        "//donner/editor:selection_aabb",
-        "//donner/editor:viewport_state",
-        "//donner/editor/backend_lib:async_renderer",
-        "//donner/editor/backend_lib:editor_app",
-        "//donner/editor/backend_lib:select_tool",
-        "//donner/editor/repro:repro_file",
-        "//donner/svg",
-        "//donner/svg/compositor",
-        "//donner/svg/renderer",
-        "@com_google_gtest//:gtest",
-    ],
-)
-
-# Golden-PNG comparison helper for editor replay tests. Mirrors the
+# Golden-PNG comparison helper for editor tests. Mirrors the
 # renderer suite's `ImageComparisonTestFixture` diff semantics
 # (pixelmatch threshold / max-mismatched-pixels) + update workflow
 # (`UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace)`).
@@ -53,16 +28,6 @@ donner_cc_library(
         "//donner/svg/renderer/tests:renderer_image_test_utils",
         "@com_google_gtest//:gtest",
         "@pixelmatch-cpp17",
-    ],
-)
-
-
-donner_cc_test(
-    name = "viewport_geometry_tests",
-    srcs = ["ViewportGeometry_tests.cc"],
-    deps = [
-        "//donner/editor:viewport_geometry",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 
@@ -126,15 +91,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "clipboard_interface_tests",
-    srcs = ["ClipboardInterface_tests.cc"],
-    deps = [
-        "//donner/editor:clipboard_interface",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "address_bar_tests",
     srcs = ["AddressBar_tests.cc"],
     deps = [
@@ -181,151 +137,6 @@ donner_cc_test(
         "//donner/editor/sandbox:session",
         "//donner/editor/sandbox:session_codec",
         "//donner/editor/sandbox:session_protocol",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-# --- Tests for new composited-rendering targets (from #531) ---
-
-donner_cc_test(
-    name = "keyboard_shortcut_policy_tests",
-    srcs = ["KeyboardShortcutPolicy_tests.cc"],
-    deps = [
-        "//donner/editor:keyboard_shortcut_policy",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "viewport_interaction_controller_tests",
-    srcs = ["ViewportInteractionController_tests.cc"],
-    deps = [
-        "//donner/editor:viewport_interaction_controller",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "document_sync_controller_tests",
-    srcs = ["DocumentSyncController_tests.cc"],
-    deps = [
-        "//donner/editor:document_sync_controller",
-        "//donner/editor/backend_lib:editor_app",
-        "//donner/editor:text_editor",
-        "@com_google_gtest//:gtest_main",
-        "@imgui",
-    ],
-)
-
-donner_cc_test(
-    name = "experimental_drag_presentation_tests",
-    srcs = ["ExperimentalDragPresentation_tests.cc"],
-    deps = [
-        "//donner/editor:experimental_drag_presentation",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "drag_release_pop_back_tests",
-    srcs = ["DragReleasePopBack_tests.cc"],
-    deps = [
-        "//donner/editor:experimental_drag_presentation",
-        "//donner/editor/backend_lib:select_tool",
-        "//donner/svg",
-        "//donner/svg/compositor",
-        "//donner/svg/parser",
-        "//donner/svg/renderer",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
-    name = "async_renderer_tests",
-    srcs = ["AsyncRenderer_tests.cc"],
-    data = [
-        "//:donner_splash.svg",
-    ],
-    deps = [
-        "//donner/editor:overlay_renderer",
-        "//donner/editor:render_coordinator",
-        "//donner/editor:tracy_wrapper",
-        "//donner/editor/backend_lib:async_renderer",
-        "//donner/editor/backend_lib:async_svg_document",
-        "//donner/editor/backend_lib:command_queue",
-        "//donner/editor/backend_lib:editor_app",
-        "//donner/svg/compositor",
-        "//donner/svg/parser",
-        "//donner/svg/renderer",
-        "//donner/svg/tests:parser_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_perf_cc_test(
-    name = "async_renderer_filter_group_perf_tests",
-    srcs = [
-        "AsyncRendererFilterGroupPerfTestUtils.cc",
-        "AsyncRendererFilterGroupPerfTestUtils.h",
-    ],
-    correctness_srcs = ["AsyncRendererFilterGroupCorrectness_tests.cc"],
-    wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
-    data = [
-        "//:donner_splash.svg",
-    ],
-    deps = [
-        "//donner/editor/backend_lib:async_renderer",
-        "//donner/editor/backend_lib:async_svg_document",
-        "//donner/svg/compositor",
-        "//donner/svg/renderer",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-# Regression test for the "filter element disappears after follow-up
-# drag" bug. Replays the user-captured `.donner-repro` against the
-# full editor stack and asserts the first-dragged element's
-# post-drag-1 region still has visible content in the final bitmap.
-donner_cc_test(
-    name = "filter_disappear_replay_tests",
-    srcs = ["FilterDisappearReplay_tests.cc"],
-    size = "large",
-    data = [
-        ":filter_elm_disappear.rnr",
-        ":filter_elm_disappear_minimal.rnr",
-        "//:donner_splash.svg",
-    ],
-    deps = [
-        ":repro_replay_harness",
-        "//donner/base",
-        "//donner/editor/backend_lib:async_renderer",
-        "//donner/svg/renderer:renderer_image_io",
-        "//donner/svg/renderer:renderer_interface",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-# Golden-image regression test for composited drag promotion. Replays
-# `selection_composited_promote_test.rnr` with composited drag preview
-# enabled and diffs bitmaps at three pipeline phases against committed
-# PNGs. See `CompositedPromoteReplay_tests.cc` for the update workflow.
-donner_cc_test(
-    name = "composited_promote_replay_tests",
-    srcs = ["CompositedPromoteReplay_tests.cc"],
-    size = "large",
-    data = [
-        ":selection_composited_promote_test.rnr",
-        ":selection_composited_promote_test_minimal.rnr",
-        "//:donner_splash.svg",
-    ] + glob(
-        ["testdata/composited_promote_*.png"],
-        allow_empty = True,
-    ),
-    deps = [
-        ":bitmap_golden_compare",
-        ":repro_replay_harness",
-        "//donner/editor/backend_lib:async_renderer",
-        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )

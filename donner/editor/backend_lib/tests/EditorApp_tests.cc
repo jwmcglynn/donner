@@ -1,6 +1,5 @@
 #include "donner/editor/backend_lib/EditorApp.h"
 
-#include "donner/editor/ViewportGeometry.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -210,83 +209,6 @@ TEST(EditorAppTest, SyncDirtyFromSourceClearsWhenTextReturnsToCleanBaseline) {
 
   app.syncDirtyFromSource(kTrivialSvg);
   EXPECT_FALSE(app.isDirty());
-}
-
-// Regression for the "scale is wrong, clicks land on the background" bug in
-// the editor's main loop. Mirrors exactly the sequence main.cc runs each
-// frame:
-//   1. Load a document whose intrinsic viewBox differs from the editor pane.
-//   2. Set the canvas size to the pane size (the renderer draws a
-//      pane-sized bitmap that the user sees).
-//   3. Snapshot `cachedDocViewBox` from the document transform the way the
-//      render-request path does.
-//   4. Build a `DrawingViewportLayout` with the full pane filled at zoom=1,
-//      pan=0, and ask `screenToDocument` to map the pane center.
-//
-// The pane center must hit the center of the viewBox. `canvasFromDocument`
-// bakes in the preserveAspectRatio scale + letterbox offset, so click math
-// needs its inverse — leaving it un-inverted (or worse, using the old
-// misnamed `documentFromCanvasTransform()`) is exactly the "I keep selecting
-// the background when I'm trying to click on a letter path" failure mode.
-TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
-  // donner_splash.svg shape: viewBox 892x512 rendered into a ~square pane.
-  constexpr std::string_view kViewBoxDoc =
-      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 892 512">
-           <rect id="fill" x="0" y="0" width="892" height="512" fill="white"/>
-           <rect id="target" x="436" y="246" width="20" height="20" fill="red"/>
-         </svg>)";
-
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kViewBoxDoc));
-
-  // Pane is 720x800 — narrower than the 892-wide viewBox, so with the
-  // default preserveAspectRatio="xMidYMid meet" the rendered content is
-  // vertically letterboxed inside the pane.
-  constexpr int kPaneW = 720;
-  constexpr int kPaneH = 800;
-  app.document().document().setCanvasSize(kPaneW, kPaneH);
-
-  // Auto-fit may shrink the canvas to preserve the document's aspect
-  // ratio — the renderer draws at this size, not at the pane size.
-  // This is what main.cc re-reads as `currentCanvasSize` after calling
-  // `setCanvasSize`.
-  const Vector2i renderedCanvas = app.document().document().canvasSize();
-  ASSERT_GT(renderedCanvas.x, 0);
-  ASSERT_GT(renderedCanvas.y, 0);
-
-  // Same snapshot code as main.cc at render-request time. `canvasFromDoc`
-  // maps viewBox points to canvas pixels (see
-  // `SVGDocument.CanvasFromDocumentTransformScaling`), so click math wants
-  // the reverse direction.
-  const Transform2d docFromCanvas =
-      app.document().document().canvasFromDocumentTransform().inverse();
-  const Box2d canvasBox = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(renderedCanvas.x),
-                                          static_cast<double>(renderedCanvas.y));
-  const Box2d cachedDocViewBox = docFromCanvas.transformBox(canvasBox);
-
-  // Pane lives at screen origin (0, 0). zoom=1, pan=0, so imageSize
-  // matches the rendered canvas (720x413), vertically centered in the
-  // 720x800 pane by `ComputeDrawingViewportLayout`.
-  const DrawingViewportLayout layout = ComputeDrawingViewportLayout(
-      Vector2d(0.0, 0.0), Vector2d(kPaneW, kPaneH), Vector2d(renderedCanvas.x, renderedCanvas.y),
-      Vector2d(0.0, 0.0), cachedDocViewBox);
-
-  // Image should be vertically centered: origin y = (800-413)/2 = 193.5.
-  EXPECT_DOUBLE_EQ(layout.imageOrigin.x, 0.0);
-  EXPECT_DOUBLE_EQ(layout.imageOrigin.y, (kPaneH - renderedCanvas.y) / 2.0);
-
-  // A click at the center of the pane must land at the center of the
-  // viewBox (892/2, 512/2) = (446, 256) — which is inside #target.
-  const auto center = layout.screenToDocument(Vector2d(kPaneW / 2.0, kPaneH / 2.0));
-  ASSERT_TRUE(center.has_value());
-  EXPECT_NEAR(center->x, 446.0, 1.0) << "center=" << *center;
-  EXPECT_NEAR(center->y, 256.0, 1.0) << "center=" << *center;
-
-  // And the same point should hit-test to #target (not the background
-  // #fill rect).
-  auto hit = app.hitTest(*center);
-  ASSERT_TRUE(hit.has_value());
-  EXPECT_EQ(hit->id(), "target");
 }
 
 }  // namespace

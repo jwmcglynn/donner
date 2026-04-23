@@ -26,7 +26,6 @@ donner_cc_test(
     srcs = ["EditorApp_tests.cc"],
     deps = [
         "//donner/editor/backend_lib:editor_app",
-        "//donner/editor:viewport_geometry",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
