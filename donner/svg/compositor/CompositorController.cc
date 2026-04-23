@@ -720,6 +720,26 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       unhandledDirtyEntities.reserve(resolutions.size());
       for (const auto& res : resolutions) {
         auto& instance = registry.get<components::RenderingInstanceComponent>(res.entity);
+        // Compute the per-frame delta BEFORE we overwrite the RIC:
+        // `instance.worldFromEntityTransform` at this moment is the
+        // PREVIOUS frame's value (set either by a prior fast-path
+        // iteration, by `prepareDocumentForRendering`, or by the
+        // initial tree instantiation). `res.delta` below, in contrast,
+        // is the cumulative delta since the bitmap was STAMPED —
+        // the right value for `setCanvasFromBitmap` (which operates
+        // against the stamped bitmap) but the WRONG value for
+        // `propagateFastPathTranslationToSubtree`, which left-composes
+        // it onto each descendant's already-translated
+        // `worldFromEntityTransform`. Using the stamp-delta there
+        // re-applies every prior frame's translation on top of
+        // itself, producing canvas pixels that drift further from
+        // the DOM's true position with every drag frame — the #582
+        // "filter element mispositioned after many drag frames"
+        // symptom. Per-frame delta is what the descendants actually
+        // need: layered over their current (already-post-previous-frame)
+        // transforms, it advances them exactly one drag step.
+        const Transform2d perFrameDelta =
+            res.newWorldFromEntity * instance.worldFromEntityTransform.inverse();
         instance.worldFromEntityTransform = res.newWorldFromEntity;
 
         if (res.delta.isTranslation()) {
@@ -732,7 +752,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           // rather than going back to the renderer.
           res.layer->setCanvasFromBitmap(res.delta);
           if (res.isSubtree) {
-            propagateFastPathTranslationToSubtree(registry, res.entity, res.delta);
+            propagateFastPathTranslationToSubtree(registry, res.entity, perFrameDelta);
           }
         } else {
           // Single-entity layer with non-translation delta (scale,
