@@ -2914,6 +2914,174 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
 // + one idle render, and verify the dragged group's descendant
 // geometry is still visible in the final bitmap at its post-drag
 // position.
+// Minimal reproducer for #582 on the REAL SPLASH but with only the
+// first rnr7 interaction (click + small drag of `#Big_lightning_glow`,
+// release). If this fails where `MinimalFilterDragProducesCorrectBackendPixels`
+// passes, the bug is triggered by something splash-specific — multiple
+// filter groups, nested group structure, or something in the complex
+// compositing — NOT by the click-drag-release sequence itself.
+TEST(EditorBackendCoreFilterDragTest, SplashFilterDragFirstReleaseMatchesDirectRender) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1310;
+  vp.height = 1726;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  (void)core.handleLoadBytes(load);
+
+  const auto directRenderCurrentDom = [&]() -> svg::RendererBitmap {
+    svg::SVGDocument& doc = core.editor().document().document();
+    svg::Renderer reference;
+    reference.draw(doc);
+    return reference.takeSnapshot();
+  };
+
+  // Pre-click sanity: cold bitmap = direct render.
+  {
+    svg::RendererBitmap backend = BitmapFromFrame(core.buildFramePayload());
+    svg::RendererBitmap expected = directRenderCurrentDom();
+    donner::editor::tests::BitmapGoldenCompareParams params;
+    params.threshold = 0.03f;
+    params.maxMismatchedPixels = 100;
+    donner::editor::tests::CompareBitmapToBitmap(backend, expected,
+                                                  "splash_cold_vs_direct", params);
+  }
+
+  // Exactly the rnr7 mup#1 sequence: click filter-g, drag ~9/4 pixels,
+  // release.
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 486.5;
+  down.documentY = 189.5;
+  down.buttons = 1;
+  (void)core.handlePointerEvent(down);
+
+  // Fire ~50 interpolated move events to match the ~50 drag frames
+  // between rnr7's mdown#1 and mup#1. Each kMove triggers a
+  // `buildFramePayload` and a compositor fast-path state update; the
+  // hypothesis is that state accumulates through many frames in a way
+  // that diverges from what a single-drag test would show.
+  constexpr int kMoves = 50;
+  const double dx = (495.5 - 486.5) / static_cast<double>(kMoves);
+  const double dy = (193.5 - 189.5) / static_cast<double>(kMoves);
+  for (int i = 1; i <= kMoves; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 486.5 + dx * i;
+    mv.documentY = 189.5 + dy * i;
+    mv.buttons = 1;
+    (void)core.handlePointerEvent(mv);
+  }
+
+  PointerEventPayload up;
+  up.phase = donner::editor::sandbox::PointerPhase::kUp;
+  up.documentX = 495.5;
+  up.documentY = 193.5;
+  up.buttons = 0;
+  const auto postReleaseFrame = core.handlePointerEvent(up);
+
+  svg::RendererBitmap backend = BitmapFromFrame(postReleaseFrame);
+  svg::RendererBitmap expected = directRenderCurrentDom();
+  donner::editor::tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 5000;
+  donner::editor::tests::CompareBitmapToBitmap(backend, expected,
+                                                "splash_postrelease_vs_direct", params);
+}
+
+// Minimal reproducer for #582. A single `<g filter>` element, clicked
+// and dragged a few pixels. After release, diff the backend's
+// finalBitmapPixels against a direct render of the DOM. The simpler
+// fixture should isolate the failure away from splash-specific details
+// (multiple filters, nested groups, complex compositing).
+TEST(EditorBackendCoreFilterDragTest, MinimalFilterDragProducesCorrectBackendPixels) {
+  constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <defs>
+    <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+  </defs>
+  <rect width="200" height="200" fill="white"/>
+  <g id="target" filter="url(#blur)">
+    <rect x="50" y="80" width="40" height="40" fill="red"/>
+  </g>
+</svg>)svg";
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 200;
+  vp.height = 200;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = std::string(kSvg);
+  (void)core.handleLoadBytes(load);
+
+  const auto directRenderCurrentDom = [&]() -> svg::RendererBitmap {
+    svg::SVGDocument& doc = core.editor().document().document();
+    svg::Renderer reference;
+    reference.draw(doc);
+    return reference.takeSnapshot();
+  };
+
+  donner::editor::tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 200;  // tighter budget on the minimal fixture
+
+  // Pre-click sanity: no interactions, no chrome. Backend bitmap should
+  // equal direct render exactly. If this fails the fixture is broken.
+  {
+    LoadBytesPayload noop;  // handleLoadBytes already produced a frame
+    svg::RendererBitmap backend = BitmapFromFrame(core.buildFramePayload());
+    svg::RendererBitmap expected = directRenderCurrentDom();
+    donner::editor::tests::CompareBitmapToBitmap(backend, expected,
+                                                  "minimal_preclick_vs_direct", params);
+  }
+
+  // Click on the filter group (SelectTool elevates to `<g filter>`).
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 70.0;
+  down.documentY = 100.0;
+  down.buttons = 1;
+  (void)core.handlePointerEvent(down);
+
+  // Drag 10 pixels right.
+  PointerEventPayload mv;
+  mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+  mv.documentX = 80.0;
+  mv.documentY = 100.0;
+  mv.buttons = 1;
+  (void)core.handlePointerEvent(mv);
+
+  // Release.
+  PointerEventPayload up;
+  up.phase = donner::editor::sandbox::PointerPhase::kUp;
+  up.documentX = 80.0;
+  up.documentY = 100.0;
+  up.buttons = 0;
+  const auto postReleaseFrame = core.handlePointerEvent(up);
+
+  // Post-release: diff. Backend should match direct render (modulo
+  // chrome, which here is only the selection AABB — ~400 px at most
+  // for a 40×40 shape with 1-2 px outline).
+  svg::RendererBitmap backend = BitmapFromFrame(postReleaseFrame);
+  svg::RendererBitmap expected = directRenderCurrentDom();
+  donner::editor::tests::BitmapGoldenCompareParams postParams;
+  postParams.threshold = 0.03f;
+  postParams.maxMismatchedPixels = 600;  // chrome for 40×40 rect + AA
+  donner::editor::tests::CompareBitmapToBitmap(backend, expected,
+                                                "minimal_postrelease_vs_direct", postParams);
+}
+
 TEST(EditorBackendCoreFilterDragTest, FilterGroupSurvivesDragReleaseCycle) {
   constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
   <defs>
