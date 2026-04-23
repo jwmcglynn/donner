@@ -1282,12 +1282,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // shader's straight→premul conversion, preserving full 8-bit precision
   // across nested filter composes.
   layer.setBitmap(offscreen->takeSnapshotPremultiplied(), worldFromEntity);
-  // Don't reset `canvasFromBitmap_` here — a caller may have set it
-  // explicitly (tests, editor drag hand-off paths) and expect that
-  // additional offset to apply on top of the freshly-rasterized bitmap.
-  // The fast path in `renderFrame` is what updates `canvasFromBitmap_`
-  // for DOM-driven deltas; rasterization itself just refreshes the
-  // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
+  // `setBitmap` resets `canvasFromBitmap_` to identity — see its doc.
+  // Callers that want a specific compose offset on top of the fresh
+  // bitmap must call `setCanvasFromBitmap` AFTER this. Rasterization
+  // captures the entity AT its current world transform, so the natural
+  // compose is "draw at stamped pos + identity" — any stale offset left
+  // over from the pre-rasterize slow-path loop would double-stamp the
+  // element.
 }
 
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport) {

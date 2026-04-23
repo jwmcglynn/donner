@@ -892,6 +892,13 @@ TEST(AsyncRendererTest, Rnr7EventSequenceProducesCorrectSplitCompositeOnSplash) 
   auto drag1 = runRequest(bigGlowEntity, bigGlowEntity, ++version,
                           svg::compositor::InteractionHint::ActiveDrag);
   ASSERT_TRUE(drag1.has_value());
+  ASSERT_TRUE(drag1->compositedPreview.has_value());
+  const double dDrag1 = divergencePctFromDirectRender(*drag1->compositedPreview);
+  std::fprintf(stderr, "[rnr7-async] drag1 divergence=%.2f%%\n", dDrag1);
+  EXPECT_LT(dDrag1, 5.0)
+      << "during drag, the compositedPreview (what the UI displays) must match "
+      << "a direct render of the post-drag DOM — if this diverges the user "
+      << "sees filter-g at a wrong position the instant they drag";
 
   // Step 3: release (selection held, no drag).
   auto release1 = runRequest(bigGlowEntity, std::nullopt, ++version);
@@ -932,6 +939,172 @@ TEST(AsyncRendererTest, Rnr7EventSequenceProducesCorrectSplitCompositeOnSplash) 
       << "diverges from direct render by " << dReswap << "% — this is the exact "
       << "state from filter_elm_disappear-7.rnr where the user saw the bolt "
       << "rendered at two positions.";
+}
+
+// Models the exact UI-thread race the user reports: drag filter-g by a
+// small delta, release, then click a DIFFERENT element. On the UI frame
+// RIGHT AFTER the click (before the new prewarm result lands), the
+// presenter keeps displaying filter-g's LAST-UPLOADED compositedPreview
+// (cached triple + promotedTranslationDoc) as the drag-target-swap
+// fallback. Invariant: that cached triple, composited with its cached
+// offset, must still produce a pixel-correct render of the CURRENT DOM
+// — because the DOM didn't actually move between the last drag frame
+// and the click on the other element (filter-g committed in-place,
+// new_elm click has no mutation yet). If the cached triple diverges
+// from the current-DOM direct render, the user sees filter-g
+// mispositioned / clipped / disappeared for one-to-many frames until
+// the new prewarm lands.
+TEST(AsyncRendererTest, StaleFilterPreviewAfterClickOtherStillMatchesDirectRender) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  ParseWarningSink warningSink;
+  auto parseResult = svg::parser::SVGParser::ParseSVG(splashSource, warningSink);
+  ASSERT_FALSE(parseResult.hasError()) << parseResult.error().reason;
+  svg::SVGDocument document = std::move(parseResult).result();
+  document.setCanvasSize(1310, 1726);
+
+  auto bigGlow = document.querySelector("#Big_lightning_glow");
+  ASSERT_TRUE(bigGlow.has_value());
+  const Entity bigGlowEntity = bigGlow->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto r = asyncRenderer.pollResult();
+      if (r.has_value()) return r;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::nullopt;
+  };
+
+  const auto runRequest = [&](Entity selectedEntity, std::optional<Entity> dragEntity,
+                              std::uint64_t v, svg::compositor::InteractionHint kind) {
+    RenderRequest req;
+    req.renderer = &renderer;
+    req.document = &document;
+    req.version = v;
+    req.documentGeneration = 1;
+    req.selectedEntity = selectedEntity;
+    if (dragEntity.has_value()) {
+      req.dragPreview = RenderRequest::DragPreview{.entity = *dragEntity, .interactionKind = kind};
+    }
+    asyncRenderer.requestRender(req);
+    return waitForResult();
+  };
+
+  std::uint64_t version = 0;
+
+  // Warm-select filter-g (UI does a Selection-kind prewarm on selection).
+  auto warm = runRequest(bigGlowEntity, bigGlowEntity, ++version,
+                         svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(warm.has_value() && warm->compositedPreview.has_value());
+
+  // Drag by multiple increments — matches the "small movement" user
+  // reports as exacerbating the bug. Cumulative delta ~= (12, 6) doc
+  // units, delivered across three drag frames so canvasFromBitmap_
+  // churns through several values before settling.
+  const Vector2d cumulativeDelta[] = {
+      Vector2d(4.0, 2.0),
+      Vector2d(8.0, 4.0),
+      Vector2d(12.0, 6.0),
+  };
+  std::optional<RenderResult> lastDragResult;
+  for (const auto& delta : cumulativeDelta) {
+    bigGlow->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(delta));
+    lastDragResult = runRequest(bigGlowEntity, bigGlowEntity, ++version,
+                                svg::compositor::InteractionHint::ActiveDrag);
+    ASSERT_TRUE(lastDragResult.has_value() && lastDragResult->compositedPreview.has_value());
+  }
+
+  // The UI now holds `lastDragResult->compositedPreview` in its GL
+  // textures (final drag frame). The user releases the mouse — DOM is
+  // at Translate(12, 6). Then the user CLICKS a different element.
+  // `ExperimentalDragPresentation::presentationPreview` returns the
+  // drag-target-swap fallback {cachedEntity=bigGlow, Zero()} because
+  // the new render for the other entity hasn't landed yet, and the
+  // presenter draws bg + promoted@cached_offset + fg using the CACHED
+  // triple.
+  //
+  // Invariant: that cached triple, composited at the cached offset,
+  // matches a direct render of the current DOM (Translate(12, 6) on
+  // bigGlow). Since the DOM hasn't changed since the last drag frame,
+  // this is just asserting that the last drag frame's preview is
+  // a valid stand-in for one UI tick.
+  const auto& cached = *lastDragResult->compositedPreview;
+  svg::Renderer referenceRenderer;
+  referenceRenderer.draw(document);
+  const svg::RendererBitmap referenceBitmap = referenceRenderer.takeSnapshot();
+  ASSERT_EQ(referenceBitmap.dimensions, cached.backgroundBitmap.dimensions);
+
+  const int w = referenceBitmap.dimensions.x;
+  const int h = referenceBitmap.dimensions.y;
+  const std::size_t rb = referenceBitmap.rowBytes;
+  std::vector<uint8_t> composite = cached.backgroundBitmap.pixels;
+  const auto composeOver = [&](const std::vector<uint8_t>& src, int offsetX, int offsetY,
+                               const Vector2i& srcDims, std::size_t srcRowBytes) {
+    for (int y = 0; y < h; ++y) {
+      const int sy = y - offsetY;
+      if (sy < 0 || sy >= srcDims.y) continue;
+      for (int x = 0; x < w; ++x) {
+        const int sx = x - offsetX;
+        if (sx < 0 || sx >= srcDims.x) continue;
+        const std::size_t dstOff =
+            static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+        const std::size_t srcOff =
+            static_cast<std::size_t>(sy) * srcRowBytes + static_cast<std::size_t>(sx) * 4u;
+        const unsigned sa = src[srcOff + 3];
+        const unsigned inv = 255u - sa;
+        for (int c = 0; c < 4; ++c) {
+          const unsigned s = src[srcOff + c];
+          const unsigned d = composite[dstOff + c];
+          const unsigned out = std::min(255u, s + ((d * inv + 127u) / 255u));
+          composite[dstOff + c] = static_cast<uint8_t>(out);
+        }
+      }
+    }
+  };
+  const double scale = referenceBitmap.dimensions.x > 0
+                           ? double(referenceBitmap.dimensions.x) / 892.0
+                           : 1.0;
+  const int promotedOffsetX =
+      static_cast<int>(std::round(cached.promotedTranslationDoc.x * scale));
+  const int promotedOffsetY =
+      static_cast<int>(std::round(cached.promotedTranslationDoc.y * scale));
+  composeOver(cached.promotedBitmap.pixels, promotedOffsetX, promotedOffsetY,
+              cached.promotedBitmap.dimensions, cached.promotedBitmap.rowBytes);
+  composeOver(cached.foregroundBitmap.pixels, 0, 0, cached.foregroundBitmap.dimensions,
+              cached.foregroundBitmap.rowBytes);
+
+  int diverged = 0;
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const std::size_t off =
+          static_cast<std::size_t>(y) * rb + static_cast<std::size_t>(x) * 4u;
+      for (int c = 0; c < 3; ++c) {
+        const int d = std::abs(int(referenceBitmap.pixels[off + c]) - int(composite[off + c]));
+        if (d > 12) {
+          ++diverged;
+          break;
+        }
+      }
+    }
+  }
+  const double pct = 100.0 * double(diverged) / (double(w) * h);
+  std::fprintf(stderr, "[stale-preview-after-click-other] divergence=%.2f%%\n", pct);
+  EXPECT_LT(pct, 5.0)
+      << "after a multi-frame drag, the FINAL drag frame's compositedPreview "
+      << "(the one the UI keeps displaying as drag-target-swap fallback while "
+      << "the next prewarm is in flight) must match a direct render of the "
+      << "current DOM — otherwise the filter element visibly mispositions "
+      << "for one-to-many UI frames after click-other. Divergence " << pct << "%";
 }
 
 // Regression: bumping `version` every drag frame (as `AsyncSVGDocument::
