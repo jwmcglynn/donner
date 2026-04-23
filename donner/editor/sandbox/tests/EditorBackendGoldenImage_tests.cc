@@ -2914,6 +2914,101 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
 // + one idle render, and verify the dragged group's descendant
 // geometry is still visible in the final bitmap at its post-drag
 // position.
+// Per-frame bisection of #582: replay the filter-g drag on splash
+// one move event at a time, and after EACH move measure the divergence
+// between backend and direct render. Identifies the exact frame where
+// the drift crosses a meaningful threshold — handy for pointing at
+// what the compositor is doing on THAT frame vs the ones before.
+//
+// Logs-only (no assertion on divergence count), so the test always
+// passes; the output is the interesting artifact.
+TEST(EditorBackendCoreFilterDragTest, SplashFilterDragPerFrameDivergence) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1310;
+  vp.height = 1726;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  (void)core.handleLoadBytes(load);
+
+  const auto directRenderCurrentDom = [&]() -> svg::RendererBitmap {
+    svg::SVGDocument& doc = core.editor().document().document();
+    svg::Renderer reference;
+    reference.draw(doc);
+    return reference.takeSnapshot();
+  };
+
+  // Count pixels that differ by any channel > 0.03. No threshold on
+  // total count — just count and log.
+  const auto countDiverged = [](const svg::RendererBitmap& a, const svg::RendererBitmap& b) -> int {
+    if (a.dimensions != b.dimensions || a.rowBytes != b.rowBytes ||
+        a.pixels.size() != b.pixels.size()) {
+      return -1;
+    }
+    const int w = a.dimensions.x;
+    const int h = a.dimensions.y;
+    const std::size_t rb = a.rowBytes;
+    int diff = 0;
+    for (int y = 0; y < h; ++y) {
+      const std::size_t rowOff = static_cast<std::size_t>(y) * rb;
+      for (int x = 0; x < w; ++x) {
+        const std::size_t p = rowOff + static_cast<std::size_t>(x) * 4u;
+        int dMax = 0;
+        for (int c = 0; c < 3; ++c) {
+          dMax = std::max(dMax,
+                           std::abs(int(a.pixels[p + c]) - int(b.pixels[p + c])));
+        }
+        if (dMax > 8) ++diff;  // 8/255 ≈ 0.03 threshold
+      }
+    }
+    return diff;
+  };
+
+  PointerEventPayload down;
+  down.phase = donner::editor::sandbox::PointerPhase::kDown;
+  down.documentX = 486.5;
+  down.documentY = 189.5;
+  down.buttons = 1;
+  const auto downFrame = core.handlePointerEvent(down);
+  const int downDivergence = countDiverged(BitmapFromFrame(downFrame),
+                                            directRenderCurrentDom());
+  std::fprintf(stderr, "[frame-by-frame] mdown: divergence=%d px\n", downDivergence);
+
+  constexpr int kMoves = 50;
+  const double dx = (495.5 - 486.5) / static_cast<double>(kMoves);
+  const double dy = (193.5 - 189.5) / static_cast<double>(kMoves);
+  for (int i = 1; i <= kMoves; ++i) {
+    PointerEventPayload mv;
+    mv.phase = donner::editor::sandbox::PointerPhase::kMove;
+    mv.documentX = 486.5 + dx * i;
+    mv.documentY = 189.5 + dy * i;
+    mv.buttons = 1;
+    const auto mvFrame = core.handlePointerEvent(mv);
+    const int d = countDiverged(BitmapFromFrame(mvFrame), directRenderCurrentDom());
+    std::fprintf(stderr, "[frame-by-frame] mv#%d (doc=%.2f,%.2f): divergence=%d px\n", i,
+                 mv.documentX, mv.documentY, d);
+  }
+
+  PointerEventPayload up;
+  up.phase = donner::editor::sandbox::PointerPhase::kUp;
+  up.documentX = 495.5;
+  up.documentY = 193.5;
+  up.buttons = 0;
+  const auto upFrame = core.handlePointerEvent(up);
+  const int upDivergence = countDiverged(BitmapFromFrame(upFrame), directRenderCurrentDom());
+  std::fprintf(stderr, "[frame-by-frame] mup: divergence=%d px\n", upDivergence);
+}
+
 // Minimal reproducer for #582 on the REAL SPLASH but with only the
 // first rnr7 interaction (click + small drag of `#Big_lightning_glow`,
 // release). If this fails where `MinimalFilterDragProducesCorrectBackendPixels`
