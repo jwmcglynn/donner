@@ -1607,7 +1607,7 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
         static_cast<uint32_t>(rowBytes / 4u));
   }
 
-  // Same probe rectangle as SingleDragOnLightningGlowDarkKeepsFilter,
+  // Same probe rectangle as SingleDragOnLightningGlowDarkMovesOnlyThatGroup,
   // but at the COLD position (no drag applied): bolt center ~(470,
   // 415) doc → canvas center ~(690, 610) at bmpW/892 scale.
   const double scale = static_cast<double>(bmpW) / 892.0;
@@ -1643,37 +1643,86 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
       << "is broken even at rest.";
 }
 
-// Minimal single-drag repro of the filter-disappear regression from
-// `filter_elm_disappear-3.rnr`. Drags the Lightning_glow_dark
-// `<g filter>` once using the recording's drag-2 coords, then probes
-// the post-drag region for the bolt's bright highlights.
+// Pins the elevation contract: clicking a path inside a `<g filter>`
+// selects the filter group — not the clicked path (too narrow for a
+// filter whose output is a composite of its subtree) nor an ancestor
+// beyond the filter (the filter's cached-layer promotion invariants
+// break and the drag drops to the 250 ms/frame full-render path).
+// Deliberately does NOT assert sibling co-selection: the editor
+// respects the DOM structure, so if the SVG author grouped siblings
+// they move together, otherwise they don't. See issue #582 — the
+// "drag-shears-composite" UX is accepted as an authoring-time
+// concern, not something elevation auto-fixes at click time.
+TEST(EditorBackendCoreFilterDragTest, ClickInsideFilterGroupSelectsTheGroup) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1310;
+  vp.height = 1726;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  ASSERT_TRUE(core.handleLoadBytes(load).hasFinalBitmap);
+
+  const auto sendPointer = [&](PointerPhase phase, double x, double y, uint32_t buttons) {
+    PointerEventPayload ev;
+    ev.phase = phase;
+    ev.documentX = x;
+    ev.documentY = y;
+    ev.buttons = buttons;
+    return core.handlePointerEvent(ev);
+  };
+
+  // (474.5, 406.5) lands on Lightning_glow_dark's cls-80 path — the
+  // small lightning bolt's dark halo input geometry. This is the exact
+  // repro-3 drag-2 click, so the elevation result must match what the
+  // golden bitmap depends on.
+  const auto afterMdown = sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
+
+  std::vector<std::string> selectedIds;
+  for (const auto& node : afterMdown.tree.nodes) {
+    if (node.selected && !node.idAttr.empty()) {
+      selectedIds.push_back(node.idAttr);
+    }
+  }
+  const std::vector<std::string> expected = {"Lightning_glow_dark"};
+  EXPECT_EQ(selectedIds, expected)
+      << "click inside `<g id=\"Lightning_glow_dark\" filter=…>` should "
+      << "elevate to the filter-g itself, producing a single-element "
+      << "selection. Getting a different element means top-level-object "
+      << "elevation picked the wrong ancestor (too shallow → a path "
+      << "leaks; too deep → the wrapping container does).";
+}
+
+// Pins the elevation + drag contract for the small lightning bolt's
+// `<g id="Lightning_glow_dark" filter="…">`. Matches the drag-2 click
+// from `filter_elm_disappear-3.rnr` (474.5, 406.5 → 511.5, 410.5) at
+// the recording's 1310×1726 canvas. Expected outcome:
 //
-// ROOT CAUSE (found via this test suite): the visible "blue rectangle
-// where the bolt should be" is NOT a compositor bug — it is
-// `SelectTool::ElevateToCompositingGroupAncestor` picking only the
-// filter-g, not the logical composite. `donner_splash.svg`'s small
-// lightning bolt is composed from three siblings under the same
-// parent: `Lightning_glow_dark` (dark-blue halo, has `filter`),
-// `Lightning_glow_bright` (cyan inner glow, has `filter`), and
-// `Lightning_white` (bright core, no filter). Dragging only
-// `Lightning_glow_dark` shears the composite — halo goes to the new
-// position, core + inner glow stay put. The filter is applied
-// correctly to the entity that moved; the other entities simply
-// didn't move with it.
+//   * Elevation lands on `Lightning_glow_dark` (top-level object under
+//     the splash's wrapping `<g class="cls-94">`);
+//   * Drag translates ONLY that group's transform — sibling layers
+//     (`Lightning_glow_bright`, `Lightning_white`) stay put;
+//   * The composite visually shears, which is the accepted cost of
+//     respecting the DOM structure (issue #582 — the user explicitly
+//     vetoed auto-expansion to sibling composites. If a document
+//     author wants the bolt to move as one unit, they wrap the three
+//     in a parent `<g>`).
 //
-// FIX (not yet implemented): elevation needs a spatial-proximity
-// heuristic that detects "filter siblings that visually form one
-// object" and escalates to their shared parent. A naive
-// `HasMultipleCompositingChildren(parent)` check is too broad — the
-// splash's outermost `<g class="cls-94">` contains THREE filter
-// children (Lightning_glow_dark, Lightning_glow_bright,
-// Big_lightning_glow) but Big_lightning_glow is a geometrically-
-// separate bolt, not part of the same composite.
-//
-// This test fails today and will pass once elevation escalates
-// correctly. The PNG dump (`single_drag_lgd_post.png`) shows the
-// symptom for anyone inspecting the failure.
-TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkKeepsFilter) {
+// Golden pixels capture that accepted shear; a regression that
+// re-introduces either over-escalation (entire doc drags, caught by
+// the `SelectionAabbWithinDocBudget` assertion) or auto-expansion
+// (three sibling bboxes in `selections`) changes the output and trips
+// the pixelmatch.
+TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkMovesOnlyThatGroup) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -1754,7 +1803,7 @@ TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkKeepsFilter) 
 // screenshot): the post-settle frame shows a dark-blue rectangle
 // where the small lightning bolt should be.
 //
-// Same root cause as `SingleDragOnLightningGlowDarkKeepsFilter` — the
+// Same root cause as `SingleDragOnLightningGlowDarkMovesOnlyThatGroup` — the
 // two-drag structure is incidental. See that test's docstring for the
 // elevation-escalation fix sketch.
 TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDirectRender) {
@@ -1914,7 +1963,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
   }
 
   // Pin post-settle pixels against a committed golden. Same update
-  // workflow as `SingleDragOnLightningGlowDarkKeepsFilter`.
+  // workflow as `SingleDragOnLightningGlowDarkMovesOnlyThatGroup`.
   donner::editor::tests::BitmapGoldenCompareParams params;
   params.threshold = 0.03f;
   params.maxMismatchedPixels = 500;

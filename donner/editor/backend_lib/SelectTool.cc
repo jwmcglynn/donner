@@ -1,164 +1,111 @@
 #include "donner/editor/backend_lib/SelectTool.h"
 
 #include <algorithm>
-#include <optional>
 #include <vector>
 
-#include "donner/base/Box.h"
+#include "donner/base/RcString.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/backend_lib/AttributeWriteback.h"
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/editor/backend_lib/UndoTimeline.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGSVGElement.h"
 
 namespace donner::editor {
 
 namespace {
 
-bool HasCompositingBoundaryAttribute(const svg::SVGElement& element) {
+/// Elements that don't contribute geometry to the rendered tree.
+/// `<defs>` / `<title>` / `<desc>` / `<metadata>` / `<style>` / `<script>`
+/// live under an SVG document but paint nothing — they must be excluded
+/// when detecting "wrapping single-g containers" so the presence of a
+/// `<defs>` block doesn't prevent a top-level `<g>` from being recognised
+/// as the sole render child.
+bool IsNonRenderChild(const svg::SVGElement& element) {
+  const auto tag = element.tagName().name;
+  return tag == RcString("defs") || tag == RcString("title") || tag == RcString("desc") ||
+         tag == RcString("metadata") || tag == RcString("style") || tag == RcString("script");
+}
+
+/// Walk down from the document root through "wrapping" layers — each
+/// level where the element has exactly one render-contributing child
+/// that's a `<g>` — and return the deepest such container. The children
+/// of this container are the document's **top-level objects**: the
+/// logical units the editor treats as grouped for click/drag selection.
+///
+/// Rationale (design intent, post-#582): SVG artists routinely wrap
+/// their whole document in one or more `<g>` layers (scale, paint order,
+/// viewport coord reset, etc.) that carry no semantic weight. Treating
+/// those wrappers as selection targets means clicks on any visible path
+/// would select the entire document. Descending through them to reach
+/// the *real* top-level grouping (e.g. `<g id="Donner">`,
+/// `<g id="Lightning_glow_dark">`, `<g id="Big_lightning_glow">` on the
+/// splash) matches what Figma / Illustrator / Inkscape do — and what a
+/// user expects when they click on a composed object.
+///
+/// Stop conditions, each "top-level object(s) live here" signal:
+///   * current element has ≠ 1 render child (zero or multiple distinct
+///     objects at this level);
+///   * the lone render child isn't a `<g>` (a terminal geometry element
+///     like `<path>` is itself a top-level object);
+///   * the lone child carries `filter` / `mask` / `clip-path` / `id`, or
+///     any attribute the editor treats as semantic — those are the
+///     "this wrapper IS a logical object" markers.
+svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
+  svg::SVGElement current = root;
+  while (true) {
+    std::optional<svg::SVGElement> soleRenderChild;
+    bool multipleRenderChildren = false;
+    for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
+      if (IsNonRenderChild(*child)) continue;
+      if (soleRenderChild.has_value()) {
+        multipleRenderChildren = true;
+        break;
+      }
+      soleRenderChild = *child;
+    }
+    if (multipleRenderChildren || !soleRenderChild.has_value()) return current;
+
+    // Stop at non-`<g>` children (terminal geometry) and at `<g>`s that
+    // carry semantic attributes — a `<g id="Foo">` or `<g filter="…">`
+    // is itself a top-level object, not a wrapper.
+    const auto tag = soleRenderChild->tagName().name;
+    if (tag != RcString("g")) return current;
+    if (!soleRenderChild->id().empty()) return current;
+    if (soleRenderChild->hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
+        soleRenderChild->hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
+        soleRenderChild->hasAttribute(xml::XMLQualifiedNameRef("clip-path"))) {
+      return current;
+    }
+
+    current = *soleRenderChild;
+  }
+}
+
+/// True when @p element carries an inline `filter` / `mask` / `clip-path`
+/// attribute — the markers the editor treats as "this group is a
+/// compositing-aware object, not a plain transparent wrapper".
+bool HasCompositingAttribute(const svg::SVGElement& element) {
   return element.hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
          element.hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
          element.hasAttribute(xml::XMLQualifiedNameRef("clip-path"));
 }
 
-template <typename Visitor>
-void ForEachGeometryDescendant(const svg::SVGElement& node, Visitor& visit) {
-  if (node.isa<svg::SVGGeometryElement>()) {
-    visit(node.cast<svg::SVGGeometryElement>());
-  }
-  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
-    ForEachGeometryDescendant(*child, visit);
-  }
-}
-
-/// Union of `worldBounds()` across every `SVGGeometryElement` descendant
-/// of @p root (including the root itself). Mirrors
-/// `SnapshotSelectionWorldBounds`'s single-element case without pulling
-/// that whole translation unit in. Returns `nullopt` when the subtree
-/// carries no rendered geometry.
-std::optional<Box2d> SubtreeWorldBounds(const svg::SVGElement& root) {
-  std::optional<Box2d> merged;
-  auto visit = [&merged](const svg::SVGGeometryElement& geometry) {
-    if (const auto wb = geometry.worldBounds(); wb.has_value()) {
-      merged = merged.has_value() ? Box2d::Union(*merged, *wb) : *wb;
-    }
-  };
-  ForEachGeometryDescendant(root, visit);
-  return merged;
-}
-
-/// Fraction of @p inner's area that lies inside @p outer (0.0–1.0). 0 when
-/// `inner` is empty or degenerate. Used as the "visual composite containment"
-/// score — a sibling whose geometry is mostly inside a clicked filter-g's
-/// bbox is almost certainly part of the same visual object (e.g. a bright
-/// lightning-bolt core painted under its dark filter halo). Callers treat
-/// values near 1.0 as "include in the drag group".
-double ContainmentFraction(const Box2d& inner, const Box2d& outer) {
-  const double innerArea = std::max(0.0, inner.width()) * std::max(0.0, inner.height());
-  if (innerArea <= 0.0) return 0.0;
-
-  const double ixMin = std::max(inner.topLeft.x, outer.topLeft.x);
-  const double iyMin = std::max(inner.topLeft.y, outer.topLeft.y);
-  const double ixMax = std::min(inner.bottomRight.x, outer.bottomRight.x);
-  const double iyMax = std::min(inner.bottomRight.y, outer.bottomRight.y);
-  const double iw = std::max(0.0, ixMax - ixMin);
-  const double ih = std::max(0.0, iyMax - iyMin);
-  return (iw * ih) / innerArea;
-}
-
-/// Collect direct siblings of @p compositingGroup whose geometry is mostly
-/// contained within @p compositingGroup's bbox — the heuristic for "in the
-/// same visual composite, should move together on drag".
-///
-/// Why this matters (issue #582): a filter group's visual contribution is
-/// often painted across several SIBLING DOM nodes, not descendants. The
-/// splash's small lightning bolt is three siblings under `<g class="cls-94">`:
-/// `Lightning_glow_dark` (`<g filter>` — dark halo), `Lightning_glow_bright`
-/// (`<g filter>` — cyan inner glow), and `Lightning_white` (no filter —
-/// bright core). Dragging any one of them via the compositor-aware elevation
-/// moves only that one element; the other two stay at the pre-drag position
-/// and the composite visibly shears into two pieces ("the filter
-/// disappeared"). Collecting overlapping siblings and dragging the set in
-/// lockstep keeps the composite together.
-///
-/// Uses bbox containment, not just intersection, so we DON'T sweep in
-/// siblings that merely happen to share a row/column with the clicked group
-/// (DONNER text, Donner_line decorative squiggle). Only siblings whose
-/// geometry lives mostly INSIDE the clicked group's footprint count as part
-/// of the same composite. Threshold 0.70: three layers that paint the same
-/// bolt naturally share ≥90 % of their footprint; a coincidental intersection
-/// like a wide text path crossing the bolt's bbox falls well under 70 %.
-std::vector<svg::SVGElement> CollectCompositePeerSiblings(
-    const svg::SVGElement& compositingGroup) {
-  std::vector<svg::SVGElement> peers;
-  auto parent = compositingGroup.parentElement();
-  if (!parent.has_value()) return peers;
-
-  const auto anchorBounds = SubtreeWorldBounds(compositingGroup);
-  if (!anchorBounds.has_value() || anchorBounds->isEmpty()) return peers;
-
-  constexpr double kContainmentThreshold = 0.70;
-  for (auto sibling = parent->firstChild(); sibling.has_value(); sibling = sibling->nextSibling()) {
-    if (*sibling == compositingGroup) continue;
-
-    // Refuse to expand across a compositing-boundary sibling that
-    // DOESN'T belong to this composite (e.g. `Big_lightning_glow` when
-    // the user clicked the small bolt's `Lightning_glow_dark`). Its
-    // own filter's output lives in its own cached layer and a
-    // lockstep drag would move two unrelated composites at once.
-    // Containment check above already rejects non-overlapping siblings,
-    // so this extra gate only blocks NEAR siblings that happen to
-    // barely pass the containment threshold.
-    const auto siblingBounds = SubtreeWorldBounds(*sibling);
-    if (!siblingBounds.has_value() || siblingBounds->isEmpty()) continue;
-    if (ContainmentFraction(*siblingBounds, *anchorBounds) < kContainmentThreshold) {
-      continue;
-    }
-    peers.push_back(*sibling);
-  }
-  return peers;
-}
-
-/// Walk @p leaf's ancestor chain and return the outermost ancestor whose
-/// presentation attributes break the compositor's promotion invariants —
-/// `filter`, `mask`, or `clip-path` as an inline attribute. If the entire
-/// chain is clear, returns @p leaf unchanged.
-///
-/// Motivation: clicking a path that lives inside `<g filter="url(#blur)">`
-/// hit-tests to the path, but `CompositorController::promoteEntity` refuses
-/// to promote any descendant of a compositing-breaking ancestor (correctly
-/// — promoting the leaf would bake the path into its own bitmap and lose
-/// the ancestor filter's contribution). The compositor then falls through
-/// to the full-document render path at every drag frame, which on the
-/// splash costs ~250 ms per frame — "really laggy". Elevating the drag
-/// target to the filter group itself matches user intent ("move the blurred
-/// group") AND lets the compositor promote it into its own cached bitmap,
-/// so steady-state drag frames drop to ~15 ms via the translation-only
-/// fast path. Figma, Illustrator, and Inkscape all select the filter/mask
-/// group when the user clicks a descendant, for the same reasons.
-///
-/// We elevate to the OUTERMOST such ancestor so nested filter-group chains
-/// (`<g filter><g filter>…</g></g>`) still promote cleanly: the innermost
-/// group would itself be refused by `HasCompositingBreakingAncestor`.
-///
-/// We check inline attributes only, not resolved CSS-derived filters —
-/// intentional: `onMouseDown` fires on any click, including before the
-/// next `renderFrame` has had a chance to resolve styles. Inline
-/// attributes are available immediately after parse and catch the common
-/// case. Missing a CSS-applied filter here means that rare case still
-/// falls into the slow path; not a correctness issue, just a perf one.
-svg::SVGElement ElevateToCompositingGroupAncestor(svg::SVGElement leaf) {
-  svg::SVGElement best = leaf;
-  svg::SVGElement cursor = leaf;
+/// Return the ancestor of @p hit that's a direct child of @p container, or
+/// @p hit unchanged if no such ancestor exists (the hit either IS the
+/// container or sits outside it entirely).
+svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& container) {
+  svg::SVGElement cursor = hit;
   while (auto parent = cursor.parentElement()) {
-    if (HasCompositingBoundaryAttribute(*parent)) {
-      best = *parent;
+    if (*parent == container) {
+      return cursor;
     }
     cursor = *parent;
   }
-  return best;
+  return hit;
 }
 
 }  // namespace
@@ -202,16 +149,32 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return;
   }
 
-  // Plain click on an element. If the hit-tested leaf is a descendant
-  // of a `<g filter>` / `<g mask>` / `<g clip-path>` group, elevate to
-  // that group — both because the user's intent is to move the visible
-  // filtered shape (not a single internal path that can't exist
-  // visually on its own post-filter) AND because the compositor can
-  // only promote the outermost compositing group into its own cached
-  // layer. Without elevation the drag falls back to full-document
-  // rendering at ~250 ms / frame on the splash.
-  svg::SVGElement element = ElevateToCompositingGroupAncestor(*hit);
-  const bool didElevate = !(element == *hit);
+  // Plain click on an element. Two-step elevation:
+  //
+  //   1. Find the "top-level object" — the ancestor that sits directly
+  //      under the deepest `<g>`-only wrapping container (see
+  //      `DeepestWrappingContainer`). This skips past transparent
+  //      `<g class="cls-94">`-style outer wrappers that exist only to
+  //      group the paint order, so the editor treats their children
+  //      as the document's top-level objects.
+  //
+  //   2. Elevate the click to that top-level object ONLY IF it carries
+  //      a compositing attribute (`filter` / `mask` / `clip-path`).
+  //      Compositing attributes mark a `<g>` as a unit whose
+  //      descendants can't be individually dragged without visibly
+  //      breaking the composition (the filter output depends on the
+  //      whole subtree being rendered as one). Plain `<g>`s (no
+  //      compositing attribute) leave the selection on the clicked
+  //      leaf — a single Donner letter, a single cloud path, etc. —
+  //      matching what a vector editor's direct-select tool does.
+  //
+  // TODO: double-click "focus into" to descend one level deeper in a
+  // filter-group — select the clicked path instead of the whole group.
+  // Requires double-click detection in the pointer-event protocol.
+  svg::SVGDocument& doc = editor.document().document();
+  const svg::SVGElement container = DeepestWrappingContainer(doc.svgElement());
+  const svg::SVGElement topLevel = TopLevelAncestor(*hit, container);
+  svg::SVGElement element = HasCompositingAttribute(topLevel) ? topLevel : *hit;
 
   // If the element is already in the current multi-selection, preserve
   // the selection and drag ALL selected elements in lockstep — classic
@@ -223,26 +186,6 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       std::any_of(currentSelection.begin(), currentSelection.end(),
                   [&element](const svg::SVGElement& selected) { return selected == element; });
   const bool isMultiDrag = elementAlreadySelected && currentSelection.size() > 1;
-
-  // Composite-peer expansion. When elevation moved the drag target to a
-  // `<g filter>` / `<g mask>` / `<g clip-path>`, check the group's
-  // siblings for ones whose geometry is mostly contained inside the
-  // group's bbox — those are the other DOM nodes that visually paint
-  // the same object (e.g. the splash's small lightning bolt is three
-  // siblings: dark halo, cyan inner glow, bright white core — only the
-  // first two are `<g filter>`; the third is a plain `<g>`). Without
-  // this expansion dragging one shears the composite apart, which
-  // users read as "the filter disappeared" (issue #582).
-  //
-  // Skipped on multi-drag (the user already curated a multi-selection,
-  // don't override it) and when elevation didn't happen (click landed
-  // on a leaf with no filter/mask/clip-path ancestor — expanding
-  // there would trap unrelated siblings into every single-element
-  // drag).
-  std::vector<svg::SVGElement> compositePeers;
-  if (didElevate && !isMultiDrag) {
-    compositePeers = CollectCompositePeerSiblings(element);
-  }
 
   const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
   const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
@@ -261,29 +204,6 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
           .currentTransform = extraStart,
           .writebackTarget = captureAttributeWritebackTarget(selected),
           .sourceTransformAttributeValue = selected.getAttribute("transform"),
-      });
-    }
-  } else if (!compositePeers.empty()) {
-    // Composite drag: primary = the elevated filter-g, extras = its
-    // overlapping sibling layers. Set the editor's selection to the
-    // full set so overlay chrome draws AABBs around every peer and
-    // downstream panels (tree view, inspector) see a coherent group.
-    std::vector<svg::SVGElement> fullSelection;
-    fullSelection.reserve(1 + compositePeers.size());
-    fullSelection.push_back(element);
-    for (const auto& peer : compositePeers) {
-      fullSelection.push_back(peer);
-    }
-    editor.setSelection(std::move(fullSelection));
-    extras.reserve(compositePeers.size());
-    for (const auto& peer : compositePeers) {
-      const Transform2d peerStart = peer.cast<svg::SVGGraphicsElement>().transform();
-      extras.push_back(PerElementDrag{
-          .element = peer,
-          .startTransform = peerStart,
-          .currentTransform = peerStart,
-          .writebackTarget = captureAttributeWritebackTarget(peer),
-          .sourceTransformAttributeValue = peer.getAttribute("transform"),
       });
     }
   } else {
