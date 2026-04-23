@@ -23,9 +23,28 @@
 
 When debugging bugs — **especially performance or UI bugs** — write an automated test that reproduces the bug BEFORE attempting a fix. No fixes without repros.
 
+- **A regression test is only valid if it FAILED on the broken code.** Run the test at HEAD *before* applying the fix, capture the failure output (diff PNG, pixel count, error) and verify it matches the user-reported symptom. Commit the test on its own commit first so CI records a red→green transition. If you can't get the test to fail at HEAD, the test is wrong — not the bug. "Plausible-sounding fix without a red→green transition" is an attempt, not a fix — title the commit `attempt:` / `hypothesis:` and do not mark the issue closed.
+- **User pushback is automatic evidence the test was wrong.** When the user reports a bug is still present after a claimed fix, the default response is "the test that verifies my fix is wrong or missing — writing a new one." Never reply with "I don't see why it would still be broken" or ask the user to re-confirm steps. The user's repro *is* the signal; your test is what needs debugging.
 - **Perf bugs**: the repro must measure the exact latency the user observes (e.g. click-to-first-pixel wall-clock, per-frame time). Put explicit budget assertions in the test (`EXPECT_LT(measured_ms, budget_ms)`) so regressions trip loudly. New perf tests should use `donner_perf_cc_test` so CPU-invariant correctness counters stay on the PR gate while runner-sensitive wall-clock budgets move to nightly `perf` targets. Don't settle for "works on my laptop" — the test itself is the verification.
-- **UI bugs**: if the bug only manifests through the full editor event loop (mouse events, ImGui state, worker-thread ping-pong), write an instrumented UI-layer test that drives `AsyncRenderer`/`AsyncSVGDocument`/`RenderCoordinator` with the exact request-posting sequence the editor uses. Faithfully mirror the event flow — do not fabricate a prewarm phase that the real editor doesn't fire.
+- **UI bugs**: if the bug only manifests through the full editor event loop (mouse events, ImGui state, worker-thread ping-pong), write an instrumented UI-layer test that drives the live backend path (`EditorBackendCore` + `CompositorController`) with the exact request-posting sequence the editor uses. Faithfully mirror the event flow — do not fabricate a prewarm phase that the real editor doesn't fire.
 - **Iterating without a repro** wastes everyone's time. A bug you can't reproduce automatically is a bug you can't fix; a fix you can't verify automatically is a fix you can't ship. Manual "please run it and tell me what you see" cycles are a last resort, not a primary workflow.
 - Reference tests:
-  - `donner/editor/tests/AsyncRenderer_tests.cc`'s `AsyncRendererE2ETest` suite — examples of the full editor-flow harness (cold render → click-then-drag → steady-state drag frames, with wall-clock budgets).
-  - `donner/svg/compositor/CompositorGolden_tests.cc`'s `SplashDrag*` tests — examples of compositor-level perf gates on the real `donner_splash.svg` via the `data` dep.
+  - `donner/editor/sandbox/tests/EditorBackendGoldenImage_tests.cc`'s `FilterDisappearRepro7*` suite — full thin-client flow (`.rnr` → `EditorBackendCore` → pixelmatch diff vs `svg::Renderer::draw`) with inspectable diff PNGs.
+  - `donner/svg/compositor/CompositorGolden_tests.cc`'s `SplashDrag*` tests — compositor-level perf gates on the real `donner_splash.svg` via the `data` dep.
+
+## Pixel-Diff Tests
+
+- **Use `donner/editor/tests:bitmap_golden_compare`** (`CompareBitmapToBitmap` / `CompareBitmapToGolden`) + pixelmatch for every bitmap comparison. Do NOT roll a private `composeOver` / `CompositeOver` / `CountDifferingPixelsInRect` helper in the test file — those "boutique" comparators hid bug #582 behind a 5% threshold for weeks.
+- **Do NOT use percentage thresholds.** They mask regressions smaller than the threshold and scale with scene size. Either the diff is zero (identity) or the test writes `actual_*.png` / `expected_*.png` / `diff_*.png` to `$TEST_UNDECLARED_OUTPUTS_DIR` for operator inspection.
+- If a new pixel-diff test needs composition the helper library doesn't provide, extend `bitmap_golden_compare` — do not inline a private variant in the test.
+
+## Bug-Fix Commit Discipline
+
+- **Commits claiming `Fixes #NNN` / `closes #NNN` must name a test file + test name that failed at the parent commit and passes at this commit.** If the test was introduced in the same PR, an earlier commit in the series must show it failing (red→green sequence on the branch).
+- **"Plausible-sounding fix without a documented red→green transition" is an attempt, not a fix.** Use `attempt:` or `hypothesis:` in the commit subject and do NOT close the issue — a human reviewer decides when the evidence is sufficient.
+
+## No Dead Code, Refactor In-Place
+
+- **Never leave dark or dead code.** Orphaned `.cc`/`.h` files whose only callers are their own tests are dead code per the always-green-main rule. They pass CI (their tests still work), but they actively harm debugging — investigators grep for symbols that no live binary executes and burn hours chasing ghosts. The `EditorShell` / `GlTextureCache` / `RenderPanePresenter` / `ExperimentalDragPresentation` cluster that soaked up weeks of the #582 investigation is the worst-case example.
+- **Refactoring must be incremental and in-place.** Modify the existing type/function/module step by step, landing each step on `main`. Do NOT build a parallel new implementation alongside the old one with the intent to "switch over later" — the old path inevitably persists, accumulates "we'll delete this in the migration" TODOs, diverges, and becomes the dark-code trap above. If the change really is too large for an in-place sequence, write a design doc describing the migration strategy and the deletion milestones, and hold each deletion as a blocking gate.
+- **A rebase/merge commit that enumerates "deleted files" must actually delete them.** The `Category A (deleted files kept deleted)` pattern (60052563) is banned — either land the deletions in the same commit, or open a tracking issue for each orphaned path and link it so the omission is visible.
