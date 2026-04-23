@@ -21,10 +21,41 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
+      is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - id: dup_push
+        name: Detect duplicate push (PR already open for this branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # When a `git push` lands on a branch that already has an open PR,
+          # GitHub fires both a `push` and a `pull_request` (synchronize) event,
+          # creating two parallel CI runs at the same SHA. We let the PR run do
+          # the work and skip the push run cleanly so it shows green-skipped
+          # instead of red-cancelled. Pushes to main, or to feature branches
+          # without an open PR, are NOT skipped.
+          if [[ "${{ github.event_name }}" != "push" ]]; then
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          open_prs="$(gh pr list --repo "${{ github.repository }}" \
+            --state open --head "${{ github.ref_name }}" \
+            --json number -q 'length')"
+          if [[ "${open_prs}" -gt 0 ]]; then
+            echo "Skipping push CI: open PR already covers branch '${{ github.ref_name }}'"
+            echo "is_duplicate_push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - id: docs_only
         name: Detect docs-only PR
@@ -77,7 +108,7 @@ jobs:
   determine-targets:
     runs-on: ubuntu-24.04
     needs: gatekeeper
-    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     env:
       BAZEL_DIFF_TAG: "v18.1.0"
     outputs:
@@ -211,7 +242,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -265,7 +296,7 @@ jobs:
   macos:
     runs-on: macos-15
     needs: [gatekeeper, determine-targets]
-    if: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
