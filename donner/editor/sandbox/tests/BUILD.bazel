@@ -222,6 +222,7 @@ donner_cc_test(
         "//donner/editor/tests:filter_elm_disappear-4.rnr",
         "//donner/editor/tests:filter_elm_disappear-5.rnr",
         "//donner/editor/tests:filter_elm_disappear-6.rnr",
+        "//donner/editor/tests:filter_elm_disappear-7.rnr",
     ] + glob(
         ["testdata/filter_disappear_*.png"],
         allow_empty = True,

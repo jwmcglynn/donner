@@ -1831,6 +1831,129 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspecti
   }
 }
 
+// Replay `filter_elm_disappear-7.rnr`. User-captured state where, after
+// clicking the background radial gradient and then shift-clicking
+// multiple elements, a previously-dragged bolt renders at TWO positions
+// on screen — once at its correct post-drag position (matching the
+// selection chrome's AABB) and once shifted roughly one viewBox width
+// to the right (clipped by the SVG edge). Strong signature of a
+// cached static segment retaining the element's pre-drag content
+// WHILE the same element's promoted layer also renders it at the
+// post-drag offset — two draws for one element.
+//
+// Diagnostic-only. Dumps cold + every post-mup frame so the
+// double-render can be tracked frame by frame; no bitmap assertion
+// because the repro's symptom (double-draw) is easier to see visually
+// than to encode as a bright-pixel metric.
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7DumpFramesForInspection) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-7.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-7.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-7.rnr");
+  ASSERT_TRUE(reproOpt.has_value());
+  const auto& repro = *reproOpt;
+
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  bool leftHeld = false;
+  std::optional<FramePayload> lastFrame = loadFrame;
+  std::size_t mouseUpCount = 0;
+  std::vector<FramePayload> afterMup;
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+    const bool shiftHeld = (frame.modifiers & 0x1) != 0;
+    const uint32_t ptrModifiers = shiftHeld ? 0x1u : 0u;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.modifiers = ptrModifiers;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        lastFrame = core.handlePointerEvent(ptr);
+        std::fprintf(stderr, "[rnr7] mdown#%zu @ (%.1f, %.1f) mod=%u: selection = %s\n",
+                     mouseUpCount + 1, docX, docY, ptrModifiers,
+                     DescribeSelection(*lastFrame).c_str());
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        lastFrame = core.handlePointerEvent(ptr);
+        afterMup.push_back(*lastFrame);
+        ++mouseUpCount;
+        std::fprintf(stderr, "[rnr7] mup#%zu @ (%.1f, %.1f) mod=%u: selection = %s\n",
+                     mouseUpCount, docX, docY, ptrModifiers,
+                     DescribeSelection(*lastFrame).c_str());
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      ptr.modifiers = ptrModifiers;
+      lastFrame = core.handlePointerEvent(ptr);
+    }
+    leftHeld = nowHeld;
+  }
+
+  ASSERT_TRUE(lastFrame.has_value() && lastFrame->hasFinalBitmap);
+
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string prefix = AttemptTagPrefix();
+    const auto dump = [&](const char* name, const FramePayload& fp) {
+      const std::string path = std::string(dir) + "/" + prefix + name;
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
+          static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
+    };
+    dump("rnr7_cold.png", loadFrame);
+    for (std::size_t i = 0; i < afterMup.size(); ++i) {
+      std::string name = "rnr7_after_mup" + std::to_string(i + 1) + ".png";
+      dump(name.c_str(), afterMup[i]);
+    }
+    dump("rnr7_final.png", *lastFrame);
+  }
+  std::fprintf(stderr, "[rnr7] mouseUpCount=%zu canvas=%dx%d\n", mouseUpCount, canvasW, canvasH);
+}
+
 // Baseline sanity check: cold-load of splash at the 1310×1726 viewport
 // should produce bright highlights in Lightning_glow_dark's canvas
 // region (the filter's bright contribution, visible in the cold
