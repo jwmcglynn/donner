@@ -41,6 +41,31 @@ std::optional<std::string> LoadFile(const std::string& filename) {
   return std::move(out).str();
 }
 
+// Pre-order doc-walk helper: locate `target` among all elements in a
+// depth-first traversal of `root` and return its 0-based index, or
+// `-1` if not found. Stable as long as the DOM structure hasn't
+// mutated between the call and any later comparison — which is the
+// regime the repro recorder uses (it runs at the top of the frame,
+// before any tool dispatch or DOM mutation).
+int DocumentOrderIndexOf(const svg::SVGElement& root, const svg::SVGElement& target) {
+  int index = 0;
+  int found = -1;
+  auto walk = [&](auto& self, const svg::SVGElement& node) -> void {
+    if (found != -1) return;
+    if (node == target) {
+      found = index;
+      return;
+    }
+    ++index;
+    for (auto child = node.firstChild(); child.has_value() && found == -1;
+         child = child->nextSibling()) {
+      self(self, *child);
+    }
+  };
+  walk(walk, root);
+  return found;
+}
+
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
   if (auto viewBox = document.svgElement().viewBox(); viewBox.has_value()) {
     return *viewBox;
@@ -481,7 +506,66 @@ void EditorShell::runFrame() {
     // state for the frame has been populated by
     // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
     // upstream of `runFrame`); nothing below has touched it yet.
-    reproRecorder_->snapshotFrame();
+    //
+    // Feed the recorder the live viewport state and a hit-tester so
+    // replay gets authoritative doc-space mouse coords and hit-test
+    // checkpoints. The viewport in `interactionController_` is the
+    // one from the END of the previous frame — exactly the one that
+    // was active when the mouse events we're about to snapshot fired,
+    // since ImGui's input-for-frame-N is against last-frame's layout.
+    const ViewportState& vpState = interactionController_.viewport();
+    repro::FrameContext context;
+    if (vpState.paneSize.x > 0.0 && vpState.paneSize.y > 0.0 && app_.hasDocument()) {
+      repro::ReproViewport vp;
+      vp.paneOriginX = vpState.paneOrigin.x;
+      vp.paneOriginY = vpState.paneOrigin.y;
+      vp.paneSizeW = vpState.paneSize.x;
+      vp.paneSizeH = vpState.paneSize.y;
+      vp.devicePixelRatio = vpState.devicePixelRatio;
+      vp.zoom = vpState.zoom;
+      vp.panDocX = vpState.panDocPoint.x;
+      vp.panDocY = vpState.panDocPoint.y;
+      vp.panScreenX = vpState.panScreenPoint.x;
+      vp.panScreenY = vpState.panScreenPoint.y;
+      vp.viewBoxX = vpState.documentViewBox.topLeft.x;
+      vp.viewBoxY = vpState.documentViewBox.topLeft.y;
+      vp.viewBoxW = vpState.documentViewBox.width();
+      vp.viewBoxH = vpState.documentViewBox.height();
+      context.viewport = vp;
+
+      // Record mouse-doc only when the cursor is inside the render
+      // pane — clicks on the sidebar / source pane have no meaningful
+      // doc-space coord and replay doesn't tool-dispatch them.
+      const ImVec2 mouse = ImGui::GetIO().MousePos;
+      const Vector2d mouseScreen(mouse.x, mouse.y);
+      const bool insidePane =
+          mouseScreen.x >= vpState.paneOrigin.x &&
+          mouseScreen.x <= vpState.paneOrigin.x + vpState.paneSize.x &&
+          mouseScreen.y >= vpState.paneOrigin.y &&
+          mouseScreen.y <= vpState.paneOrigin.y + vpState.paneSize.y;
+      if (insidePane) {
+        const Vector2d docPoint = vpState.screenToDocument(mouseScreen);
+        context.mouseDoc = std::make_pair(docPoint.x, docPoint.y);
+      }
+
+      // Hit-tester — invoked lazily inside `snapshotFrame` on
+      // mouse-down events only. Captures by reference; `this` outlives
+      // the recorder (destructor order guarantees).
+      context.hitTester = [this](double docX, double docY) -> repro::ReproHit {
+        repro::ReproHit out;
+        auto hit = app_.hitTest(Vector2d(docX, docY));
+        if (!hit.has_value()) {
+          out.empty = true;
+          return out;
+        }
+        out.tag = std::string(hit->tagName().name.str());
+        out.id = std::string(hit->id());
+        out.docOrderIndex =
+            DocumentOrderIndexOf(app_.document().document().svgElement(), *hit);
+        return out;
+      };
+    }
+    reproRecorder_->snapshotFrame(context);
   }
   interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
   updateWindowTitle();

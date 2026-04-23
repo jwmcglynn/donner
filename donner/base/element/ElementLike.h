@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 
-#include <concepts>
+#include <concepts>  // IWYU pragma: keep, std::same_as used in requires-expression constraints
 #include <optional>
 
 #include "donner/base/RcString.h"

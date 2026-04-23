@@ -88,7 +88,7 @@ ReproRecorder::ReproRecorder(ReproRecorderOptions options) : options_(std::move(
   prevWindowHeight_ = options_.windowHeight;
 }
 
-void ReproRecorder::snapshotFrame() {
+void ReproRecorder::snapshotFrame(const FrameContext& context) {
   ImGuiIO& io = ImGui::GetIO();
   if (!started_) {
     startTime_ = std::chrono::steady_clock::now();
@@ -112,6 +112,25 @@ void ReproRecorder::snapshotFrame() {
   frame.mouseButtonMask = CurrentMouseButtonMask();
   frame.modifiers = PackCurrentModifiers();
 
+  // Viewport snapshot — delta-encoded. Emit only on change so a long
+  // session with a stable viewport doesn't pay 14-double-per-frame
+  // overhead.
+  if (context.viewport.has_value()) {
+    if (!lastEmittedViewport_.has_value() || *context.viewport != *lastEmittedViewport_) {
+      frame.viewport = *context.viewport;
+      lastEmittedViewport_ = *context.viewport;
+    }
+  }
+
+  // Document-space mouse coord. The live editor computes this from the
+  // viewport for every tool dispatch; capturing it here pins down the
+  // replay coord without requiring the replayer to re-derive it from
+  // hand-tuned pane-layout constants.
+  if (context.mouseDoc.has_value()) {
+    frame.mouseDocX = context.mouseDoc->first;
+    frame.mouseDocY = context.mouseDoc->second;
+  }
+
   // Mouse button edges.
   const int prevMask = prevButtonMask_;
   const int currMask = frame.mouseButtonMask;
@@ -123,6 +142,12 @@ void ReproRecorder::snapshotFrame() {
       ReproEvent ev;
       ev.kind = ReproEvent::Kind::MouseDown;
       ev.mouseButton = b;
+      // Hit-test checkpoint — only left button (0), which is the one
+      // that matters for selection / drag. Right / middle clicks skip
+      // it since no tool uses them for element selection today.
+      if (b == 0 && context.hitTester && context.mouseDoc.has_value()) {
+        ev.hit = context.hitTester(context.mouseDoc->first, context.mouseDoc->second);
+      }
       frame.events.push_back(ev);
     } else if (wasDown && !isDown) {
       ReproEvent ev;

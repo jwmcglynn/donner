@@ -931,7 +931,48 @@ int main(int argc, char** argv) {
     // captures. Placing it here keeps the recording layer below
     // any UI dispatch.
     if (reproRecorder.has_value()) {
-      reproRecorder->snapshotFrame();
+      // Feed the recorder the live viewport state and a document-space
+      // mouse coord so the recording is replayable without
+      // reconstructing screen→doc math from hand-tuned pane-layout
+      // constants. `viewport` here is last-frame's layout — ImGui's
+      // input for frame N fires against frame N-1's layout, so using
+      // last-frame's viewport correctly maps the current mouse events.
+      donner::editor::repro::FrameContext reproContext;
+      if (viewport.paneSize.x > 0.0 && viewport.paneSize.y > 0.0) {
+        donner::editor::repro::ReproViewport vp;
+        vp.paneOriginX = viewport.paneOrigin.x;
+        vp.paneOriginY = viewport.paneOrigin.y;
+        vp.paneSizeW = viewport.paneSize.x;
+        vp.paneSizeH = viewport.paneSize.y;
+        vp.devicePixelRatio = viewport.devicePixelRatio;
+        vp.zoom = viewport.zoom;
+        vp.panDocX = viewport.panDocPoint.x;
+        vp.panDocY = viewport.panDocPoint.y;
+        vp.panScreenX = viewport.panScreenPoint.x;
+        vp.panScreenY = viewport.panScreenPoint.y;
+        vp.viewBoxX = viewport.documentViewBox.topLeft.x;
+        vp.viewBoxY = viewport.documentViewBox.topLeft.y;
+        vp.viewBoxW = viewport.documentViewBox.width();
+        vp.viewBoxH = viewport.documentViewBox.height();
+        reproContext.viewport = vp;
+
+        const ImVec2 mouse = io.MousePos;
+        const donner::Vector2d mouseScreen(mouse.x, mouse.y);
+        const bool insidePane = mouseScreen.x >= viewport.paneOrigin.x &&
+                                mouseScreen.x <= viewport.paneOrigin.x + viewport.paneSize.x &&
+                                mouseScreen.y >= viewport.paneOrigin.y &&
+                                mouseScreen.y <= viewport.paneOrigin.y + viewport.paneSize.y;
+        if (insidePane) {
+          const donner::Vector2d docPoint = viewport.screenToDocument(mouseScreen);
+          reproContext.mouseDoc = std::make_pair(docPoint.x, docPoint.y);
+        }
+        // No hit-tester wired: the thin-client main.cc frontend
+        // dispatches pointer events to an out-of-process backend and
+        // has no synchronous hit-test API. The `hit` field is
+        // diagnostic-only anyway (see `ReproHit` in `ReproFile.h`),
+        // so replay works fine without it.
+      }
+      reproRecorder->snapshotFrame(reproContext);
     }
 
     const auto applyZoom = [&](double factor, const donner::Vector2d& focalScreen) {

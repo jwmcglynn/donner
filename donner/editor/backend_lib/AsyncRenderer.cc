@@ -214,12 +214,32 @@ void AsyncRenderer::workerLoop() {
       if (request.dragPreview.has_value() && compositorEntity_ != entt::null &&
           compositor_->hasSplitStaticLayers()) {
         const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
+        // `canvasFromBitmap` is stored in CANVAS PIXELS (see
+        // `CompositorLayer::canvasFromBitmap` doc). Divide out the
+        // canvasFromDocument scale so the RenderResult field is in
+        // document units — that's what `RenderPanePresenter::Promoted
+        // TextureScreenOffset` expects for its `* pixelsPerDocUnit()`
+        // screen-space conversion. Without this divide, the presenter
+        // over-shifts the promoted bitmap by the `devicePixelRatio`
+        // factor (2× on Retina), which presents as the first-dragged
+        // filter element appearing to shift out from under the
+        // user's cursor on HiDPI displays — part of the family of
+        // "filter disappears" symptoms.
+        const Transform2d canvasFromDoc =
+            request.document->canvasFromDocumentTransform();
+        const double docPerCanvasX =
+            canvasFromDoc.data[0] != 0.0 ? 1.0 / canvasFromDoc.data[0] : 1.0;
+        const double docPerCanvasY =
+            canvasFromDoc.data[3] != 0.0 ? 1.0 / canvasFromDoc.data[3] : 1.0;
+        const Vector2d composeOffsetCanvas = composeOffset.translation();
+        const Vector2d composeOffsetDoc(composeOffsetCanvas.x * docPerCanvasX,
+                                        composeOffsetCanvas.y * docPerCanvasY);
         compositedPreview = RenderResult::CompositedPreview{
             .backgroundBitmap = compositor_->backgroundBitmap(),
             .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
             .foregroundBitmap = compositor_->foregroundBitmap(),
             .entity = compositorEntity_,
-            .promotedTranslationDoc = composeOffset.translation(),
+            .promotedTranslationDoc = composeOffsetDoc,
         };
       }
 

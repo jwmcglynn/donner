@@ -58,6 +58,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
 #include "donner/editor/sandbox/ReplayingRenderer.h"
@@ -1182,6 +1183,807 @@ TEST(EditorBackendCoreFilterDragTest, BigLightningGlowSurvivesDragReleaseCycle) 
       << "after drag + release, Big_lightning_glow content is missing from "
          "the post-release frame. Expected bright lightning-bolt pixels "
          "around (480, 180); got mostly dark.";
+}
+
+// User-reported regression (filter_elm_disappear-2.rnr): drag a
+// filter element, release, then start dragging a DIFFERENT element —
+// the first-dragged filter disappears from the live composited view
+// mid-second-drag. Drives `EditorBackendCore` directly with the
+// exact doc-space coords + event sequence from the recording, at
+// the same 1784×1024 HiDPI viewport the user runs in, then samples
+// the filter's post-drag-1 canvas bounds at mid-drag-2 for warm
+// lightning-glow content.
+TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-2.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-2.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-2.rnr");
+  ASSERT_TRUE(reproOpt.has_value()) << "failed to parse repro";
+  const auto& repro = *reproOpt;
+
+  // Viewport MUST match the recording — the compositor's canvas-pixel
+  // buffer sizes, the promoted-layer rasterize bounds, and the hit-
+  // test AABBs all depend on it, and a size mismatch can mask bugs
+  // that depend on exact layer sizing (e.g. split-layer cache
+  // invalidation after a viewport change). Recording's pane is
+  // `pw × ph × dpr` logical pixels.
+  ASSERT_TRUE(repro.frames.size() > 0 && [&] {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return true;
+    return false;
+  }()) << "recording has no viewport block — cannot size the backend canvas";
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames) {
+      if (f.viewport.has_value()) return &*f.viewport;
+    }
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  ASSERT_TRUE(core.handleLoadBytes(load).hasFinalBitmap);
+
+  // Mid-drag-2 checkpoint frame — between the 2nd mdown and its
+  // mup. Uses the recording's authoritative `mdx`/`mdy` coords.
+  // Recording layout:
+  //   drag 1: mdown @ f=535, mup @ f=560
+  //   drag 2: mdown @ f=714, mup @ f=730
+  constexpr std::uint64_t kMidDrag2Frame = 722;
+
+  // Walk frames, replay button edges and moves. SelectTool expects
+  // onMouseMove to fire on every frame the button is held (it
+  // reads the current cursor pos to compute the drag delta — mup
+  // alone doesn't commit a final move), so we mirror that: between
+  // mdown and mup, a kMove fires with each frame's mouse position.
+  bool leftHeld = false;
+  std::optional<FramePayload> midDrag2Frame;
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        (void)core.handlePointerEvent(ptr);
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp && ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        (void)core.handlePointerEvent(ptr);
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      auto result = core.handlePointerEvent(ptr);
+      if (frame.index == kMidDrag2Frame) {
+        midDrag2Frame = std::move(result);
+      }
+    }
+    leftHeld = nowHeld;
+  }
+
+  ASSERT_TRUE(midDrag2Frame.has_value())
+      << "mid-drag-2 checkpoint frame " << kMidDrag2Frame
+      << " wasn't reached — replay may not have applied the expected button-held sequence";
+  ASSERT_TRUE(midDrag2Frame->hasFinalBitmap);
+  const int bmpW = midDrag2Frame->finalBitmapWidth;
+  const int bmpH = midDrag2Frame->finalBitmapHeight;
+  ASSERT_GT(bmpW, 0);
+  ASSERT_GT(bmpH, 0);
+
+  const size_t rowBytes = midDrag2Frame->finalBitmapRowBytes;
+
+  // Dump the mid-drag-2 frame for inspection.
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string path = std::string(dir) + "/rnr_host_mid_drag2.png";
+    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.c_str(), midDrag2Frame->finalBitmapPixels, bmpW, bmpH,
+        static_cast<uint32_t>(rowBytes / 4u));
+  }
+
+  // Probe the entire SVG content region for warm (R+G > 120) lightning-
+  // glow pixels. If the filter truly vanished mid-drag-2, the region
+  // reverts to the dark navy background (R+G < 60).
+  const auto samplePx = [&](int x, int y) {
+    const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
+    struct Rgba { uint8_t r, g, b, a; };
+    return Rgba{midDrag2Frame->finalBitmapPixels[off + 0],
+                midDrag2Frame->finalBitmapPixels[off + 1],
+                midDrag2Frame->finalBitmapPixels[off + 2],
+                midDrag2Frame->finalBitmapPixels[off + 3]};
+  };
+
+  int brightHits = 0;
+  int totalSamples = 0;
+  for (int cy = 0; cy < bmpH; cy += 30) {
+    for (int cx = 0; cx < bmpW; cx += 30) {
+      ++totalSamples;
+      const auto px = samplePx(cx, cy);
+      const int warmth = int(px.r) + int(px.g);
+      if (warmth > 120) {
+        ++brightHits;
+      }
+    }
+  }
+
+  EXPECT_GE(brightHits, 20)
+      << "filter_elm_disappear-2.rnr replay through host/sandbox path: at mid-drag-2, "
+      << "the Big_lightning_glow filter's canvas region has only "
+      << brightHits << " bright (R+G>120) pixels out of " << totalSamples << " probed "
+      << "across the " << bmpW << "x" << bmpH << " canvas. "
+      << "The filter appears to have disappeared from the composited output — the "
+      << "user-reported regression is still live.";
+}
+
+// Replay `filter_elm_disappear-4.rnr` through EditorBackendCore and dump
+// frames for inspection. Diagnostic-only (no assertions beyond "frame
+// exists") — the user supplied this as a fresh, DIFFERENT repro from
+// `-3` to help narrow down which bug pattern they're actually seeing.
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspection) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-4.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-4.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-4.rnr");
+  ASSERT_TRUE(reproOpt.has_value());
+  const auto& repro = *reproOpt;
+
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  bool leftHeld = false;
+  std::optional<FramePayload> lastFrame = loadFrame;
+  std::size_t mouseUpCount = 0;
+  std::optional<FramePayload> afterMup[4];
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        lastFrame = core.handlePointerEvent(ptr);
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        lastFrame = core.handlePointerEvent(ptr);
+        if (mouseUpCount < 4) afterMup[mouseUpCount] = *lastFrame;
+        ++mouseUpCount;
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      lastFrame = core.handlePointerEvent(ptr);
+    }
+    leftHeld = nowHeld;
+  }
+
+  ASSERT_GT(mouseUpCount, 0u);
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const auto dump = [&](const char* name, const FramePayload& fp) {
+      const std::string path = std::string(dir) + "/" + name;
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
+          static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
+    };
+    dump("rnr4_cold.png", loadFrame);
+    for (std::size_t i = 0; i < 4; ++i) {
+      if (afterMup[i].has_value()) {
+        std::string name = "rnr4_after_mup" + std::to_string(i + 1) + ".png";
+        dump(name.c_str(), *afterMup[i]);
+      }
+    }
+    dump("rnr4_final.png", *lastFrame);
+  }
+  std::fprintf(stderr, "[rnr4] mouseUpCount=%zu canvas=%dx%d\n", mouseUpCount, canvasW, canvasH);
+}
+
+// Baseline sanity check: cold-load of splash at the 1310×1726 viewport
+// should produce bright highlights in Lightning_glow_dark's canvas
+// region (the filter's bright contribution, visible in the cold
+// rendering). This gates the single-drag / repro-3 regressions — if
+// it fails along with them, the bug isn't drag-state-specific.
+TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1310;
+  vp.height = 1726;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  const int bmpW = loadFrame.finalBitmapWidth;
+  const int bmpH = loadFrame.finalBitmapHeight;
+  const std::size_t rowBytes = loadFrame.finalBitmapRowBytes;
+
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string path = std::string(dir) + "/cold_load_sanity.png";
+    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.c_str(), loadFrame.finalBitmapPixels, bmpW, bmpH,
+        static_cast<uint32_t>(rowBytes / 4u));
+  }
+
+  // Same probe rectangle as SingleDragOnLightningGlowDarkKeepsFilter,
+  // but at the COLD position (no drag applied): bolt center ~(470,
+  // 415) doc → canvas center ~(690, 610) at bmpW/892 scale.
+  const double scale = static_cast<double>(bmpW) / 892.0;
+  const int centerX = static_cast<int>(std::round(470.0 * scale));
+  const int centerY = static_cast<int>(std::round(415.0 * scale));
+  const int halfExtent = static_cast<int>(std::round(35.0 * scale));
+  const int rectMinX = std::max(0, centerX - halfExtent);
+  const int rectMinY = std::max(0, centerY - halfExtent);
+  const int rectMaxX = std::min(bmpW, centerX + halfExtent);
+  const int rectMaxY = std::min(bmpH, centerY + halfExtent);
+
+  int brightHits = 0;
+  for (int cy = rectMinY; cy < rectMaxY; ++cy) {
+    for (int cx = rectMinX; cx < rectMaxX; ++cx) {
+      const std::size_t off = static_cast<std::size_t>(cy) * rowBytes +
+                              static_cast<std::size_t>(cx) * 4u;
+      const uint8_t r = loadFrame.finalBitmapPixels[off + 0];
+      const uint8_t g = loadFrame.finalBitmapPixels[off + 1];
+      const uint8_t b = loadFrame.finalBitmapPixels[off + 2];
+      if (std::max({r, g, b}) > 180) {
+        ++brightHits;
+      }
+    }
+  }
+
+  std::fprintf(stderr, "[cold_load brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits,
+               rectMinX, rectMinY, rectMaxX, rectMaxY);
+  EXPECT_GT(brightHits, 100)
+      << "Cold load at (" << rectMinX << "," << rectMinY << ")→(" << rectMaxX << ","
+      << rectMaxY << ") has only " << brightHits << " bright (any channel > 180) "
+      << "pixels. The Lightning_glow_dark filter region should have hundreds of "
+      << "bright highlights at cold load — if this fails, the filter pipeline "
+      << "is broken even at rest.";
+}
+
+// Minimal single-drag repro of the filter-disappear regression from
+// `filter_elm_disappear-3.rnr`. Drags the Lightning_glow_dark
+// `<g filter>` once using the recording's drag-2 coords, then probes
+// the post-drag region for the bolt's bright highlights.
+//
+// ROOT CAUSE (found via this test suite): the visible "blue rectangle
+// where the bolt should be" is NOT a compositor bug — it is
+// `SelectTool::ElevateToCompositingGroupAncestor` picking only the
+// filter-g, not the logical composite. `donner_splash.svg`'s small
+// lightning bolt is composed from three siblings under the same
+// parent: `Lightning_glow_dark` (dark-blue halo, has `filter`),
+// `Lightning_glow_bright` (cyan inner glow, has `filter`), and
+// `Lightning_white` (bright core, no filter). Dragging only
+// `Lightning_glow_dark` shears the composite — halo goes to the new
+// position, core + inner glow stay put. The filter is applied
+// correctly to the entity that moved; the other entities simply
+// didn't move with it.
+//
+// FIX (not yet implemented): elevation needs a spatial-proximity
+// heuristic that detects "filter siblings that visually form one
+// object" and escalates to their shared parent. A naive
+// `HasMultipleCompositingChildren(parent)` check is too broad — the
+// splash's outermost `<g class="cls-94">` contains THREE filter
+// children (Lightning_glow_dark, Lightning_glow_bright,
+// Big_lightning_glow) but Big_lightning_glow is a geometrically-
+// separate bolt, not part of the same composite.
+//
+// This test fails today and will pass once elevation escalates
+// correctly. The PNG dump (`single_drag_lgd_post.png`) shows the
+// symptom for anyone inspecting the failure.
+TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkKeepsFilter) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1310;
+  vp.height = 1726;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  ASSERT_TRUE(core.handleLoadBytes(load).hasFinalBitmap);
+
+  const auto sendPointer = [&](PointerPhase phase, double x, double y, uint32_t buttons) {
+    PointerEventPayload ev;
+    ev.phase = phase;
+    ev.documentX = x;
+    ev.documentY = y;
+    ev.buttons = buttons;
+    return core.handlePointerEvent(ev);
+  };
+
+  // Coords from repro-3 drag 2: mdown (474.5, 406.5) → mup (511.5, 410.5).
+  (void)sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
+  (void)sendPointer(PointerPhase::kMove, 485.0, 408.0, 1);
+  (void)sendPointer(PointerPhase::kMove, 495.0, 409.0, 1);
+  (void)sendPointer(PointerPhase::kMove, 511.5, 410.5, 1);
+  const auto post = sendPointer(PointerPhase::kUp, 511.5, 410.5, 0);
+
+  ASSERT_TRUE(post.hasFinalBitmap);
+  const int bmpW = post.finalBitmapWidth;
+  const int bmpH = post.finalBitmapHeight;
+  const std::size_t rowBytes = post.finalBitmapRowBytes;
+
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string path = std::string(dir) + "/single_drag_lgd_post.png";
+    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.c_str(), post.finalBitmapPixels, bmpW, bmpH,
+        static_cast<uint32_t>(rowBytes / 4u));
+  }
+
+  const auto samplePx = [&](int x, int y) {
+    const std::size_t off = static_cast<std::size_t>(y) * rowBytes +
+                            static_cast<std::size_t>(x) * 4u;
+    struct Rgba {
+      uint8_t r, g, b, a;
+    };
+    return Rgba{post.finalBitmapPixels[off + 0], post.finalBitmapPixels[off + 1],
+                post.finalBitmapPixels[off + 2], post.finalBitmapPixels[off + 3]};
+  };
+
+  const double scale = static_cast<double>(bmpW) / 892.0;
+  const int centerX = static_cast<int>(std::round(507.0 * scale));
+  const int centerY = static_cast<int>(std::round(419.0 * scale));
+  const int halfExtent = static_cast<int>(std::round(35.0 * scale));
+  const int rectMinX = std::max(0, centerX - halfExtent);
+  const int rectMinY = std::max(0, centerY - halfExtent);
+  const int rectMaxX = std::min(bmpW, centerX + halfExtent);
+  const int rectMaxY = std::min(bmpH, centerY + halfExtent);
+
+  // The filter adds bright highlight pixels (lightning bolt core +
+  // Lightning_glow_bright's cyan overlay blending onto this region).
+  // Without the filter, only the flat dark-blue `#224084` survives and
+  // bright pixels vanish. Count "any channel > 180" as a bright-pixel
+  // signature. Cold rendering of this region has ~hundreds of bright
+  // pixels; a filter-loss regression drops it to single digits.
+  int brightHits = 0;
+  for (int cy = rectMinY; cy < rectMaxY; ++cy) {
+    for (int cx = rectMinX; cx < rectMaxX; ++cx) {
+      const auto px = samplePx(cx, cy);
+      if (std::max({px.r, px.g, px.b}) > 180) {
+        ++brightHits;
+      }
+    }
+  }
+
+  // Empirically the cold render's probe has ~4500 bright pixels at the
+  // pre-drag Lightning_glow_dark position; when the filter is correctly
+  // preserved post-drag, the shifted probe sees a similar count
+  // (~3000+). When the filter is lost the count collapses to ~1700.
+  // 3000 sits cleanly in the gap.
+  std::fprintf(stderr, "[single_drag brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits,
+               rectMinX, rectMinY, rectMaxX, rectMaxY);
+  EXPECT_GT(brightHits, 3000)
+      << "Single drag of Lightning_glow_dark `<g filter>`: post-settle region "
+      << "at (" << rectMinX << "," << rectMinY << ")→(" << rectMaxX << ","
+      << rectMaxY << ") has " << brightHits << " bright (any channel > 180) "
+      << "pixels; expected >3000 (cold-load baseline for this region is ~4500). "
+      << "The bolt's bright core + inner cyan glow (`Lightning_white` + "
+      << "`Lightning_glow_bright`) did not move with `Lightning_glow_dark` — they "
+      << "are siblings under the same parent `<g>`, not descendants, so dragging "
+      << "only the filter-g leaves them at the pre-drag position. "
+      << "`ElevateToCompositingGroupAncestor` needs to escalate to the shared "
+      << "parent for this composite. See `single_drag_lgd_post.png` — the dark-"
+      << "blue rectangle in the pre-drag region IS `Lightning_glow_dark` shifted "
+      << "correctly; the bug is that its siblings stayed.";
+}
+
+// User-reported regression (filter_elm_disappear-3.rnr + accompanying
+// screenshot): the post-settle frame shows a dark-blue rectangle
+// where the small lightning bolt should be.
+//
+// Same root cause as `SingleDragOnLightningGlowDarkKeepsFilter` — the
+// two-drag structure is incidental. See that test's docstring for the
+// elevation-escalation fix sketch.
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDirectRender) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-3.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-3.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-3.rnr");
+  ASSERT_TRUE(reproOpt.has_value()) << "failed to parse repro-3";
+  const auto& repro = *reproOpt;
+
+  // Pull canvas size from the recording's first viewport block so the
+  // backend renders at the same dimensions the recording was made at.
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr) << "repro-3 has no viewport block";
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  ASSERT_GT(canvasW, 0);
+  ASSERT_GT(canvasH, 0);
+
+  sandbox::EditorBackendCore core;
+  {
+    SetViewportPayload vp;
+    vp.width = canvasW;
+    vp.height = canvasH;
+    (void)core.handleSetViewport(vp);
+  }
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+  // Backend may fit the canvas to the SVG's viewBox aspect ratio; the
+  // bitmap dimensions can be smaller than the requested canvas. Use
+  // the actual bitmap dims for sampling.
+  const int bmpW = loadFrame.finalBitmapWidth;
+  const int bmpH = loadFrame.finalBitmapHeight;
+
+  // Sample the cold-load frame before replay so the comparison below
+  // has a known "nothing moved" baseline — whatever pattern of warm
+  // pixels the filter paints here is what MUST still be painted (at
+  // the post-drag position) in the post-settle frame.
+  const std::size_t rowBytes = loadFrame.finalBitmapRowBytes;
+  const auto samplePx = [&](const FramePayload& fp, int x, int y) {
+    const std::size_t off = static_cast<std::size_t>(y) * rowBytes +
+                            static_cast<std::size_t>(x) * 4u;
+    struct Rgba {
+      uint8_t r, g, b, a;
+    };
+    return Rgba{fp.finalBitmapPixels[off + 0], fp.finalBitmapPixels[off + 1],
+                fp.finalBitmapPixels[off + 2], fp.finalBitmapPixels[off + 3]};
+  };
+  int coldBright = 0;
+  for (int cy = 0; cy < bmpH; cy += 30) {
+    for (int cx = 0; cx < bmpW; cx += 30) {
+      const auto px = samplePx(loadFrame, cx, cy);
+      if (int(px.r) + int(px.g) > 120) ++coldBright;
+    }
+  }
+  ASSERT_GT(coldBright, 20) << "splash cold-render is missing expected warm content — "
+                               "fixture broken, not the bug under test";
+
+  // Replay every frame in order: button edges → pointer events;
+  // button-held → pointer kMove with the frame's doc coords.
+  bool leftHeld = false;
+  std::optional<FramePayload> lastFrame = loadFrame;
+  std::size_t mouseUpCount = 0;
+  std::optional<FramePayload> afterMup2;
+  std::optional<FramePayload> midDrag2;
+  bool mdown2Seen = false;
+  int drag2MoveCount = 0;
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        if (mouseUpCount == 1) {
+          mdown2Seen = true;
+        }
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        lastFrame = core.handlePointerEvent(ptr);
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        lastFrame = core.handlePointerEvent(ptr);
+        ++mouseUpCount;
+        if (mouseUpCount == 2) afterMup2 = *lastFrame;
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      lastFrame = core.handlePointerEvent(ptr);
+      if (mdown2Seen && mouseUpCount == 1) {
+        ++drag2MoveCount;
+        if (drag2MoveCount == 3) {
+          midDrag2 = *lastFrame;
+        }
+      }
+    }
+    leftHeld = nowHeld;
+  }
+
+  ASSERT_EQ(mouseUpCount, 2u) << "repro-3 should contain exactly two mups";
+  ASSERT_TRUE(afterMup2.has_value());
+  ASSERT_TRUE(lastFrame.has_value() && lastFrame->hasFinalBitmap);
+
+  // Dump artifacts for eyeballing.
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const auto dump = [&](const char* name, const FramePayload& fp) {
+      const std::string path = std::string(dir) + "/" + name;
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
+          static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
+    };
+    dump("rnr3_cold.png", loadFrame);
+    if (midDrag2.has_value()) dump("rnr3_mid_drag2.png", *midDrag2);
+    dump("rnr3_after_mup2.png", *afterMup2);
+  }
+
+  // The post-settle frame must retain the filter content. The drag
+  // deltas are small (+35,+4 and +37,+4 doc units ~ 70×8 canvas px
+  // shifts at DPR=2), so the overall "warm pixel mass" shouldn't move
+  // by much. A filter-disappear regression crashes this count to a
+  // fraction of the cold value.
+  int postBright = 0;
+  for (int cy = 0; cy < bmpH; cy += 30) {
+    for (int cx = 0; cx < bmpW; cx += 30) {
+      const auto px = samplePx(*lastFrame, cx, cy);
+      if (int(px.r) + int(px.g) > 120) ++postBright;
+    }
+  }
+
+  // Sanity: the overall warm-pixel mass shouldn't collapse. A failure
+  // here means we're missing a lot of content — big lightning or
+  // DONNER text also disappeared.
+  const int requiredBright = (coldBright * 3) / 4;
+  EXPECT_GE(postBright, requiredBright)
+      << "filter_elm_disappear-3.rnr post-settle replay: warm (R+G>120) pixel "
+      << "count collapsed from " << coldBright << " (cold) to " << postBright
+      << " (post-settle) across the " << bmpW << "x" << bmpH << " canvas. "
+      << "A filter element appears to have disappeared from the post-mup-2 settle "
+      << "frame. Inspect `rnr3_cold.png`, `rnr3_mid_drag2.png`, and "
+      << "`rnr3_after_mup2.png` in the test's outputs dir.";
+
+  // Specific assertion for the user-reported regression: the small
+  // Lightning_glow_dark bolt (cls-80 fill `#224084`) is wrapped in a
+  // `<g filter="url(#lightning_glow_dark_blur)">` so its rendered
+  // pixels should be the *filtered* bright glow — NOT the flat fill.
+  // When the filter breaks, the bolt renders as a plain dark-blue
+  // shape the color of `#224084` (~RGB 34,64,132). Count pixels
+  // inside the bolt's post-drag canvas bounds that match that flat
+  // fill (within a tight tolerance) vs. pixels with the warm glow a
+  // correctly-filtered bolt produces.
+  //
+  // Post-drag-2 doc position: bolt center ~(470, 415) pre-drag +
+  // drag-2 delta (+37, +4) → ~(507, 419). The splash renders
+  // pane-fit; use canvas-pixel scale = `bmpW / 892` (splash viewBox
+  // width) to convert. The bolt's visible AABB is ~60×60 doc units.
+  const double scale = static_cast<double>(bmpW) / 892.0;
+  const int centerX = static_cast<int>(std::round(507.0 * scale));
+  const int centerY = static_cast<int>(std::round(419.0 * scale));
+  const int halfExtent = static_cast<int>(std::round(35.0 * scale));
+  const int rectMinX = std::max(0, centerX - halfExtent);
+  const int rectMinY = std::max(0, centerY - halfExtent);
+  const int rectMaxX = std::min(bmpW, centerX + halfExtent);
+  const int rectMaxY = std::min(bmpH, centerY + halfExtent);
+
+  int brightHits = 0;
+  for (int cy = rectMinY; cy < rectMaxY; ++cy) {
+    for (int cx = rectMinX; cx < rectMaxX; ++cx) {
+      const auto px = samplePx(*lastFrame, cx, cy);
+      if (std::max({px.r, px.g, px.b}) > 180) ++brightHits;
+    }
+  }
+
+  std::fprintf(stderr, "[rnr3 brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits,
+               rectMinX, rectMinY, rectMaxX, rectMaxY);
+  EXPECT_GT(brightHits, 3000)
+      << "filter_elm_disappear-3.rnr post-settle: the region around "
+      << "`Lightning_glow_dark`'s post-drag position (" << rectMinX << ","
+      << rectMinY << ")→(" << rectMaxX << "," << rectMaxY << ") has "
+      << brightHits << " bright (any channel > 180) pixels; expected >3000 "
+      << "(cold-load baseline is ~4500). See `SingleDragOnLightningGlow"
+      << "DarkKeepsFilter`'s docstring for the root-cause analysis; fix "
+      << "is in `ElevateToCompositingGroupAncestor`. See `rnr3_after_mup2.png` "
+      << "in the test outputs dir.";
+}
+
+TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 1784;
+  vp.height = 1024;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  const size_t rowBytes = loadFrame.finalBitmapRowBytes;
+
+  // Drag 1 clicks Big_lightning_glow's cls-79 path (proven by the
+  // earlier `BigLightningGlowSurvivesDragReleaseCycle` test). Drag 2
+  // clicks inside Lightning_glow_dark's path — a SECOND mandatory-
+  // promoted filter group separate from Big_lightning_glow. This
+  // mirrors the user's recording pattern (`filter_elm_disappear-2`:
+  // drag one filter group, then drag a different element that's in
+  // its own mandatory-promoted layer).
+  constexpr double kDrag1MdownX = 455.0;
+  constexpr double kDrag1MdownY = 160.0;
+  constexpr double kDrag1MupX = 488.0;
+  constexpr double kDrag1MupY = 164.0;
+  // Lightning_glow_dark path center ~ (465, 415).
+  constexpr double kDrag2MdownX = 465.0;
+  constexpr double kDrag2MdownY = 415.0;
+  constexpr double kDrag2MidX = 470.0;
+  constexpr double kDrag2MidY = 418.0;
+
+  const auto sendPointer = [&](PointerPhase phase, double x, double y, uint32_t buttons) {
+    PointerEventPayload ev;
+    ev.phase = phase;
+    ev.documentX = x;
+    ev.documentY = y;
+    ev.buttons = buttons;
+    return core.handlePointerEvent(ev);
+  };
+
+  // Drag 1: click on filter, move a few times, release. Final
+  // transform is driven by the last onMouseMove's cursor pos (mup
+  // doesn't call onMouseMove), so send an explicit move to the mup
+  // location before the release.
+  (void)sendPointer(PointerPhase::kDown, kDrag1MdownX, kDrag1MdownY, 1);
+  (void)sendPointer(PointerPhase::kMove, (kDrag1MdownX + kDrag1MupX) * 0.5,
+                    (kDrag1MdownY + kDrag1MupY) * 0.5, 1);
+  (void)sendPointer(PointerPhase::kMove, kDrag1MupX, kDrag1MupY, 1);
+  (void)sendPointer(PointerPhase::kUp, kDrag1MupX, kDrag1MupY, 0);
+
+  // Drag 2: click a different element, move partway — capture the
+  // composited frame at mid-drag-2.
+  (void)sendPointer(PointerPhase::kDown, kDrag2MdownX, kDrag2MdownY, 1);
+  const auto midDrag2 = sendPointer(PointerPhase::kMove, kDrag2MidX, kDrag2MidY, 1);
+  ASSERT_TRUE(midDrag2.hasFinalBitmap);
+  ASSERT_EQ(midDrag2.finalBitmapWidth, 1784);
+  ASSERT_EQ(midDrag2.finalBitmapHeight, 1024);
+
+  // Dump the mid-drag-2 frame for inspection.
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::string path = std::string(dir) + "/mid_drag2_hidpi_host.png";
+    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.c_str(), midDrag2.finalBitmapPixels, 1784, 1024, 1784u);
+  }
+
+  // Drag 1 moved Big_lightning_glow by (33, 4) doc units from its
+  // original position. The lightning bolt's canvas bounds at DPR=2
+  // are roughly (800, 200) → (1100, 600) pre-drag and shift by
+  // (66, 8) canvas pixels post-drag-1 → (866, 208) → (1166, 608).
+  // Probe a grid centered there for the warm yellow glow the filter
+  // paints — if the filter "disappeared" mid-drag-2, the region
+  // reverts to dark navy background.
+  const auto samplePx = [&](int x, int y) {
+    const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
+    struct Rgba { uint8_t r, g, b, a; };
+    return Rgba{midDrag2.finalBitmapPixels[off + 0], midDrag2.finalBitmapPixels[off + 1],
+                midDrag2.finalBitmapPixels[off + 2], midDrag2.finalBitmapPixels[off + 3]};
+  };
+
+  // Probe the bolt-center area of the filter's post-drag-1 position.
+  // The filter content has the bright central bolt (pale yellow)
+  // surrounded by warm orange glow; dark navy background has R+G < 60.
+  int brightHits = 0;
+  int totalSamples = 0;
+  for (int cy = 280; cy <= 560; cy += 30) {
+    for (int cx = 880; cx <= 1140; cx += 30) {
+      ++totalSamples;
+      const auto px = samplePx(cx, cy);
+      const int warmth = int(px.r) + int(px.g);
+      if (warmth > 120) {
+        ++brightHits;
+      }
+    }
+  }
+
+  EXPECT_GE(brightHits, totalSamples / 4)
+      << "mid-drag-2 composite is missing the filter element at its post-drag-1 "
+      << "canvas bounds. Probed " << totalSamples << " pixels for warm (R+G>120) "
+      << "lightning-glow content; got " << brightHits << " hits; expected ≥"
+      << (totalSamples / 4) << ". If the live editor shows the filter "
+      << "vanishing mid-second-drag, that regression presents here too.";
 }
 
 // User-reported regression: after dragging a `<g filter>` the element

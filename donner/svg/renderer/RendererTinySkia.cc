@@ -1939,6 +1939,30 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 #endif
 }
 
+RendererBitmap RendererTinySkia::takeSnapshotPremultiplied() const {
+  // Frame buffer is stored unpremultiplied (see `takeSnapshot`). The
+  // compositor's split-bitmap cache + the editor's ImGui GPU compose
+  // both need premultiplied data (ImGui's default blend formula is
+  // `src + dst*(1 - srcA)`, which assumes premul). Premultiply once
+  // at snapshot time rather than every time a cached bitmap is
+  // drawn.
+  //
+  // Without this, the default virtual forwards to `takeSnapshot` and
+  // returns unpremul bytes under a `Premultiplied` label; downstream
+  // consumers (`compositor::recomposeSplitBitmaps`,
+  // `GlTextureCache::UploadBitmap`) treat them as premul and the
+  // editor's live drag display shows filter-heavy elements with
+  // wrong colors (the "filter disappears after second drag" symptom
+  // — see `FilterDisappearReplayTest::
+  // CompositedMidDrag2MatchesFullRerasterize`).
+  RendererBitmap snapshot = takeSnapshot();
+  if (snapshot.alphaType == AlphaType::Unpremultiplied && !snapshot.pixels.empty()) {
+    snapshot.pixels = PremultiplyRgba(snapshot.pixels);
+    snapshot.alphaType = AlphaType::Premultiplied;
+  }
+  return snapshot;
+}
+
 RendererBitmap RendererTinySkia::takeSnapshot() const {
   RendererBitmap snapshot;
   snapshot.dimensions = Vector2i(width(), height());
