@@ -7,9 +7,8 @@ on:
     branches: [main, feature/ci-hardening-2026q2]
 
 concurrency:
-  # See main.yml for rationale; same shared push/PR dedupe pattern.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Fast lint jobs covering checks that don't live inside `bazel test //...`:
 #
@@ -21,9 +20,41 @@ concurrency:
 # - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
 #   prevents running --check from inside bazel test; see design doc 0016)
 jobs:
+  gatekeeper:
+    runs-on: ubuntu-24.04
+    outputs:
+      is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
+    steps:
+      - id: dup_push
+        name: Detect duplicate push (PR already open for this branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # See main.yml for rationale; same dup-push detection.
+          if [[ "${{ github.event_name }}" != "push" ]]; then
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          open_prs="$(gh pr list --repo "${{ github.repository }}" \
+            --state open --head "${{ github.ref_name }}" \
+            --json number -q 'length')"
+          if [[ "${open_prs}" -gt 0 ]]; then
+            echo "Skipping push CI: open PR already covers branch '${{ github.ref_name }}'"
+            echo "is_duplicate_push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+          fi
+
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    needs: gatekeeper
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -96,6 +127,8 @@ jobs:
   misc-include-cleaner:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    needs: gatekeeper
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -135,6 +168,8 @@ jobs:
   cmake-validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    needs: gatekeeper
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' }}
     steps:
       - uses: actions/checkout@v6
 
