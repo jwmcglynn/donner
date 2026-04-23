@@ -53,4 +53,17 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
                            std::string_view testLabel,
                            const BitmapGoldenCompareParams& params = {});
 
+/// Compare two live bitmaps with pixelmatch. Use when the "ground truth"
+/// comes from running another code path (e.g. a direct SVG re-rasterize)
+/// rather than a committed PNG — the same threshold semantics + per-
+/// channel diff, but no `UPDATE_GOLDEN_IMAGES_DIR` path because there's
+/// no on-disk golden to regenerate.
+///
+/// On mismatch, writes `actual_<testLabel>.png`, `expected_<testLabel>.png`,
+/// and `diff_<testLabel>.png` to `$TEST_UNDECLARED_OUTPUTS_DIR` (or
+/// `/tmp`) so a failing replay can be inspected immediately.
+void CompareBitmapToBitmap(const svg::RendererBitmap& actual,
+                           const svg::RendererBitmap& expected, std::string_view testLabel,
+                           const BitmapGoldenCompareParams& params = {});
+
 }  // namespace donner::editor::tests

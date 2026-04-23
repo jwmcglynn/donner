@@ -1954,6 +1954,208 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7DumpFramesForInspecti
   std::fprintf(stderr, "[rnr7] mouseUpCount=%zu canvas=%dx%d\n", mouseUpCount, canvasW, canvasH);
 }
 
+// Bug hunt for #582 on the thin-client path.
+//
+// The `FilterDisappearRepro7DumpFramesForInspection` test above produces
+// PNG dumps of every post-mup backend bitmap. Eyeballing the dumps, the
+// filter element looks present at every checkpoint. But the user reports
+// the live editor shows the bug after the same sequence of clicks. So
+// either (a) the backend bitmap IS subtly wrong and eyeballing missed
+// it, or (b) the bug lives downstream of `buildFramePayload` (GL upload,
+// ImGui composite, IOSurface path, shared-texture bridge, etc.).
+//
+// This test settles (a) automatically: at every post-mup checkpoint,
+// diff the backend's `finalBitmapPixels` (what the frontend would blit)
+// against a direct render of the CURRENT mutated DOM via
+// `svg::Renderer::draw(doc)`. Pixel-level divergence anywhere above a
+// chrome-absorbing threshold means the backend is dropping or
+// mispositioning content vs. what the DOM actually describes. Inspectable
+// diff PNGs land in `$TEST_UNDECLARED_OUTPUTS_DIR` on failure.
+//
+// Threshold rationale:
+//   - The backend bitmap includes selection chrome (AABB outline, handles)
+//     composited on top of the render; direct render has none. Chrome is
+//     ~1–2 px thick around the selected element's AABB — for
+//     `#Big_lightning_glow` at 1310×1726 that's roughly 94×176 * 2 * 2 ≈
+//     1300 pixels along the outline.
+//   - `maxMismatchedPixels = 5000` leaves a comfortable ceiling for chrome
+//     + a few hundred AA edge pixels, but would catch a filter shape
+//     (~16k pixels for the big lightning bolt) disappearing entirely.
+//   - A filter MISPOSITIONED by even a few pixels also trips this
+//     threshold because both the "old" position (empty in backend,
+//     filled in direct render) and the "new" position (filled in backend
+//     but offset from direct render) diverge.
+//
+// If this test PASSES, the backend's bitmap is correct and the bug is
+// in the display path (next target: hidden-GLFW + ImGui + glReadPixels
+// harness on main.cc). If it FAILS, the diff PNG tells us which
+// checkpoint and which pixels drifted.
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesDirectRender) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ifstream reproStream("donner/editor/tests/filter_elm_disappear-7.rnr");
+  if (!reproStream.is_open()) {
+    GTEST_SKIP() << "filter_elm_disappear-7.rnr not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  auto reproOpt = donner::editor::repro::ReadReproFile(
+      "donner/editor/tests/filter_elm_disappear-7.rnr");
+  ASSERT_TRUE(reproOpt.has_value());
+  const auto& repro = *reproOpt;
+
+  const auto* firstVp = [&]() -> const donner::editor::repro::ReproViewport* {
+    for (const auto& f : repro.frames)
+      if (f.viewport.has_value()) return &*f.viewport;
+    return nullptr;
+  }();
+  ASSERT_NE(firstVp, nullptr);
+  const int canvasW =
+      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH =
+      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = canvasW;
+  vp.height = canvasH;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = splashSource;
+  const auto loadFrame = core.handleLoadBytes(load);
+  ASSERT_TRUE(loadFrame.hasFinalBitmap);
+
+  // Renders the backend's current DOM directly (no compositor, no chrome).
+  // Uses a separate Renderer per call so the backend's own `renderer_`
+  // state isn't touched by this comparison path. The canvas size matches
+  // what `buildFramePayload` uses so pixel dimensions line up one-to-one.
+  const auto directRenderCurrentDom = [&]() -> svg::RendererBitmap {
+    svg::SVGDocument& doc = core.editor().document().document();
+    svg::Renderer reference;
+    reference.draw(doc);
+    return reference.takeSnapshot();
+  };
+
+  donner::editor::tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 5000;
+
+  // Sanity gate: the COLD-LOAD frame (no selection, no compositor promote,
+  // nothing interactive yet) must already match direct render — otherwise
+  // the test is comparing apples to oranges (wrong alpha mode, different
+  // canvas size, etc.) and every "divergence" below is a test artifact,
+  // not the bug we're chasing. If this fails the test bails with a big
+  // red sign pointing at the test setup.
+  {
+    svg::RendererBitmap coldBackend = BitmapFromFrame(loadFrame);
+    svg::RendererBitmap coldExpected = directRenderCurrentDom();
+    ASSERT_EQ(coldBackend.dimensions, coldExpected.dimensions)
+        << "cold-load dimensions disagree — test setup bug, not the real #582";
+    donner::editor::tests::CompareBitmapToBitmap(coldBackend, coldExpected,
+                                                  "rnr7_coldload_backend_vs_direct", params);
+    if (::testing::Test::HasFatalFailure()) {
+      FAIL() << "cold-load backend bitmap already diverges from direct render — "
+                "the comparison is invalid; fix the test before trusting the replay results";
+    }
+  }
+
+  bool leftHeld = false;
+  std::size_t mouseUpCount = 0;
+  int divergedCheckpoints = 0;
+
+  for (const auto& frame : repro.frames) {
+    if (!frame.mouseDocX.has_value()) continue;
+    const double docX = *frame.mouseDocX;
+    const double docY = *frame.mouseDocY;
+    const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
+    const bool shiftHeld = (frame.modifiers & 0x1) != 0;
+    const uint32_t ptrModifiers = shiftHeld ? 0x1u : 0u;
+
+    for (const auto& ev : frame.events) {
+      PointerEventPayload ptr;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.modifiers = ptrModifiers;
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
+          ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kDown;
+        ptr.buttons = 1;
+        (void)core.handlePointerEvent(ptr);
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
+        ptr.phase = PointerPhase::kUp;
+        ptr.buttons = 0;
+        const auto mupFrame = core.handlePointerEvent(ptr);
+        ++mouseUpCount;
+        if (!mupFrame.hasFinalBitmap) continue;
+
+        // Backend bitmap wrapped so BitmapGoldenCompare can consume it.
+        svg::RendererBitmap backend = BitmapFromFrame(mupFrame);
+
+        // Ground truth: direct render of the DOM right now. If the
+        // backend has dropped or mispositioned any geometry, this is
+        // what it SHOULD look like (modulo chrome, which absorbs into
+        // the pixelmatch threshold).
+        svg::RendererBitmap expected = directRenderCurrentDom();
+        ASSERT_FALSE(backend.empty()) << "backend bitmap empty at mup#" << mouseUpCount;
+        ASSERT_FALSE(expected.empty()) << "direct-render reference empty at mup#" << mouseUpCount;
+        if (backend.dimensions != expected.dimensions) {
+          ADD_FAILURE() << "rnr7 mup#" << mouseUpCount << ": backend "
+                        << backend.dimensions.x << "x" << backend.dimensions.y
+                        << " vs direct-render " << expected.dimensions.x << "x"
+                        << expected.dimensions.y
+                        << " — size mismatch in backend bitmap vs direct render. "
+                           "Selection: "
+                        << DescribeSelection(mupFrame);
+          continue;
+        }
+
+        const std::string label = "rnr7_mup" + std::to_string(mouseUpCount) +
+                                  "_backend_vs_direct";
+        // Count failures before the call so we can tell per-mup if this
+        // one diverged (ADD_FAILURE doesn't return a value).
+        const int beforeFailures = ::testing::UnitTest::GetInstance()->failed_test_count() +
+                                    ::testing::UnitTest::GetInstance()
+                                        ->current_test_info()
+                                        ->result()
+                                        ->total_part_count();
+        donner::editor::tests::CompareBitmapToBitmap(backend, expected, label, params);
+        const int afterFailures = ::testing::UnitTest::GetInstance()->failed_test_count() +
+                                   ::testing::UnitTest::GetInstance()
+                                       ->current_test_info()
+                                       ->result()
+                                       ->total_part_count();
+        if (afterFailures > beforeFailures) {
+          ++divergedCheckpoints;
+          std::fprintf(stderr,
+                       "[rnr7-diff] mup#%zu DIVERGED (selection=%s) — see "
+                       "actual_%s.png / expected_%s.png / diff_%s.png\n",
+                       mouseUpCount, DescribeSelection(mupFrame).c_str(), label.c_str(),
+                       label.c_str(), label.c_str());
+        }
+      }
+    }
+    if (nowHeld && leftHeld) {
+      PointerEventPayload ptr;
+      ptr.phase = PointerPhase::kMove;
+      ptr.documentX = docX;
+      ptr.documentY = docY;
+      ptr.buttons = 1;
+      ptr.modifiers = ptrModifiers;
+      (void)core.handlePointerEvent(ptr);
+    }
+    leftHeld = nowHeld;
+  }
+
+  std::fprintf(stderr, "[rnr7-diff] %d/%zu checkpoints diverged\n", divergedCheckpoints,
+               mouseUpCount);
+}
+
 // Baseline sanity check: cold-load of splash at the 1310×1726 viewport
 // should produce bright highlights in Lightning_glow_dark's canvas
 // region (the filter's bright contribution, visible in the cold
