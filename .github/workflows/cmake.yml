@@ -6,20 +6,41 @@ on:
   pull_request:
     branches: [main, feature/ci-hardening-2026q2]
 
-concurrency:
-  # See main.yml for rationale; same shared push/PR dedupe pattern.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
-  cancel-in-progress: true
-
 jobs:
   gatekeeper:
     runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
+      is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - id: dup_push
+        name: Detect duplicate push (PR already open for this branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # See main.yml for rationale; same dup-push detection.
+          if [[ "${{ github.event_name }}" != "push" ]]; then
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          open_prs="$(gh pr list --repo "${{ github.repository }}" \
+            --state open --head "${{ github.ref_name }}" \
+            --json number -q 'length')"
+          if [[ "${open_prs}" -gt 0 ]]; then
+            echo "Skipping push CI: open PR already covers branch '${{ github.ref_name }}'"
+            echo "is_duplicate_push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_duplicate_push=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - id: docs_only
         name: Detect docs-only PR
@@ -72,7 +93,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     needs: gatekeeper
-    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -113,7 +134,7 @@ jobs:
   macos:
     runs-on: macos-15
     needs: gatekeeper
-    if: ${{ github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     strategy:
       fail-fast: false
       matrix:
