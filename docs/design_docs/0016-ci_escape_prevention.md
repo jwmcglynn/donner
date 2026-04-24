@@ -86,9 +86,9 @@ beyond monitoring the existing variant tests.
 `InstrumentedFilesInfo`, causing coverage collection to silently produce empty results.
 This was only discoverable by checking Codecov reports, not by test failures.
 
-### Category 6: DevContainer / CodeQL Flakiness
+### Category 6: CodeQL Flakiness
 
-**Affected:** Every main branch push (devcontainer), occasional CodeQL timeouts
+**Affected:** Occasional CodeQL timeouts.
 
 **Root cause:** Infrastructure issues unrelated to code changes. Not actionable via
 local testing.
@@ -547,11 +547,10 @@ After all mitigations, here is the expected escape coverage:
 | Fuzzer regressions (parser bugs) | Linux-only | Caught on macOS via `--config=asan-fuzzer` | Same | Same |
 | Cross-backend rendering diffs | Already caught | Already caught | Already caught | Already caught |
 | Transient GitHub/apt/bazel-fetch outages | Red CI | **Auto-retried 3× in CI** | Same | Same |
-| DevContainer/CodeQL flakiness | Infra-only | Infra-only (tracked separately) | Same | Same |
+| CodeQL flakiness | Infra-only | Infra-only (tracked separately) | Same | Same |
 
 **Acceptable remaining escapes:**
 - New fuzzer discoveries (requires Linux libFuzzer; corpus regressions are caught)
-- DevContainer infrastructure failures (not code-related)
 - CodeQL timeouts (resource-dependent)
 - Genuinely platform-specific bugs that can't be detected on the dev's OS
 
