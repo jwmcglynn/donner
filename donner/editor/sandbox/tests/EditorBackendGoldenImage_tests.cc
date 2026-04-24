@@ -984,8 +984,8 @@ TEST_F(ThinClientUiFlowTest, ClickOnScreenHitsCorrectElementInDocumentSpace) {
   // The selected element's worldBBox must cover the clicked point.
   const Box2d bbox = clickFrame.selection.selections[0].worldBBox;
   EXPECT_TRUE(bbox.contains(rightRectCenterDoc))
-      << "selected element's bbox " << bbox << " doesn't contain the clicked "
-      << "point " << rightRectCenterDoc
+      << "selected element's bbox " << bbox << " doesn't contain the clicked point "
+      << rightRectCenterDoc
       << " — the click landed in the wrong document-space region. This is "
          "the 'AABB overlay in wrong position' bug.";
 
@@ -1496,12 +1496,12 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
   }
 
   EXPECT_GE(brightHits, 20)
-      << "filter_elm_disappear-2.rnr replay through host/sandbox path: at mid-drag-2, "
-      << "the Big_lightning_glow filter's canvas region has only " << brightHits
-      << " bright (R+G>120) pixels out of " << totalSamples << " probed "
-      << "across the " << bmpW << "x" << bmpH << " canvas. "
-      << "The filter appears to have disappeared from the composited output — the "
-      << "user-reported regression is still live.";
+      << "filter_elm_disappear-2.rnr replay through host/sandbox path: at mid-drag-2, the "
+         "Big_lightning_glow filter's canvas region has only "
+      << brightHits << " bright (R+G>120) pixels out of " << totalSamples << " probed across the "
+      << bmpW << "x" << bmpH
+      << " canvas. The filter appears to have disappeared from the composited output — the "
+         "user-reported regression is still live.";
 }
 
 // Replay `filter_elm_disappear-4.rnr` through EditorBackendCore and dump
@@ -1758,9 +1758,10 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
   std::fprintf(stderr, "[rnr5] bright pixels: cold=%d, final=%d (ratio=%.2fx)\n", coldBright,
                finalBright, coldBright > 0 ? double(finalBright) / coldBright : 0.0);
   EXPECT_GT(finalBright, coldBright * 3 / 4)
-      << "final-frame bright-pixel count (" << finalBright << ") is "
-      << "less than 75% of cold (" << coldBright << ") — scene brightness "
-      << "collapsed, likely because a filter group stopped rendering.";
+      << "final-frame bright-pixel count (" << finalBright << ") is less than 75% of cold ("
+      << coldBright
+      << ") — scene brightness collapsed, likely because a filter group stopped "
+         "rendering.";
 }
 
 // Replay `filter_elm_disappear-6.rnr` — user-captured repro where a
