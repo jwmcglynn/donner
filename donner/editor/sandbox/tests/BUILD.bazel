@@ -119,6 +119,35 @@ donner_cc_fuzzer(
     ],
 )
 
+# Fuzzes the host→backend request path: `SessionCodec::DecodeFrame`
+# plus every per-opcode `Decode*` payload helper the backend loop
+# dispatches on. Adversarial inputs must return `false` (malformed) or
+# parse — they must never crash. See
+# docs/design_docs/0023-editor_sandbox.md §"Live-protocol fuzzing".
+donner_cc_fuzzer(
+    name = "editor_backend_request_fuzzer",
+    srcs = ["EditorBackendRequest_fuzzer.cc"],
+    corpus = "editor_backend_request_corpus",
+    deps = [
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+    ],
+)
+
+# Fuzzes the backend→host response path. A malformed response shouldn't
+# be able to crash the editor host — that would promote a backend bug
+# into a host-process DOS. Covers HandshakeAck, FramePayload, Export,
+# SourceReplaceAll, Toast, DialogRequest, Diagnostic, and Error.
+donner_cc_fuzzer(
+    name = "frame_response_fuzzer",
+    srcs = ["FrameResponse_fuzzer.cc"],
+    corpus = "frame_response_corpus",
+    deps = [
+        "//donner/editor/sandbox:editor_api_codec",
+    ],
+)
+
 donner_cc_test(
     name = "sandbox_diff_tests",
     srcs = ["SandboxDiff_tests.cc"],
