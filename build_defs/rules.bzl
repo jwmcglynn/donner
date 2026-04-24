@@ -593,6 +593,21 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
             if not matcher.startswith("//experimental"):
                 fail("Invalid visibility, must be under //experimental: " + matcher)
 
+    # Inject the `copy_file_range` glibc symver shim into every library's
+    # deps, just like `donner_cc_binary` does. Without this, any
+    # `donner_cc_library` that transitively pulls in libc++'s
+    # std::filesystem (which covers most of the tree) fails to link as a
+    # shared `.so` under the hermetic LLVM toolchain because
+    # `libc++.a` leaves `copy_file_range` as an unversioned reference
+    # and the Debian Bullseye sysroot only exports the
+    # `@GLIBC_2.27`-versioned flavor. Symptom is the `ld.lld: undefined
+    # reference: copy_file_range` error on libraries in `_solib_k8/`.
+    # See `//third_party/libc_compat` for the full rationale. No-op on
+    # macOS / non-latest-llvm builds (the select resolves to []).
+    extra_deps = libc_compat_deps()
+    kwargs_with_libc = dict(kwargs)
+    existing_deps = kwargs_with_libc.pop("deps", [])
+
     cc_library(
         name = name,
         srcs = srcs,
@@ -601,7 +616,8 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         copts = copts + ["-I."],
         tags = tags,
         visibility = visibility,
-        **kwargs
+        deps = existing_deps + extra_deps,
+        **kwargs_with_libc
     )
 
     _banned_patterns_lint_test(

@@ -12,10 +12,11 @@
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/backend_lib/AttributeWriteback.h"
 #include "donner/editor/backend_lib/EditorCommand.h"
+#include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
-#include "donner/svg/properties/PropertyRegistry.h"
+#include "donner/svg/properties/Property.h"
 
 namespace donner::editor::sandbox {
 
