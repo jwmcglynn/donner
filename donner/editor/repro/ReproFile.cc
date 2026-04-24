@@ -130,12 +130,27 @@ void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
 }
 
 void WriteViewport(std::ostream& os, const ReproViewport& vp) {
+  // clang-format off: clang-format 18.1.3 (CI) and 18.1.8 (local) disagree
+  // on how to pack this long `<<` chain — 18.1.3 wants one field per line,
+  // 18.1.8 collapses to many per line. Pinning the layout manually so
+  // both versions agree.
+  // clang-format off
   os << "\"vp\":{"
-     << "\"ox\":" << vp.paneOriginX << ",\"oy\":" << vp.paneOriginY << ",\"pw\":" << vp.paneSizeW
-     << ",\"ph\":" << vp.paneSizeH << ",\"dpr\":" << vp.devicePixelRatio << ",\"z\":" << vp.zoom
-     << ",\"pdx\":" << vp.panDocX << ",\"pdy\":" << vp.panDocY << ",\"psx\":" << vp.panScreenX
-     << ",\"psy\":" << vp.panScreenY << ",\"vbx\":" << vp.viewBoxX << ",\"vby\":" << vp.viewBoxY
-     << ",\"vbw\":" << vp.viewBoxW << ",\"vbh\":" << vp.viewBoxH << '}';
+     << "\"ox\":" << vp.paneOriginX
+     << ",\"oy\":" << vp.paneOriginY
+     << ",\"pw\":" << vp.paneSizeW
+     << ",\"ph\":" << vp.paneSizeH
+     << ",\"dpr\":" << vp.devicePixelRatio
+     << ",\"z\":" << vp.zoom
+     << ",\"pdx\":" << vp.panDocX
+     << ",\"pdy\":" << vp.panDocY
+     << ",\"psx\":" << vp.panScreenX
+     << ",\"psy\":" << vp.panScreenY
+     << ",\"vbx\":" << vp.viewBoxX
+     << ",\"vby\":" << vp.viewBoxY
+     << ",\"vbw\":" << vp.viewBoxW
+     << ",\"vbh\":" << vp.viewBoxH << '}';
+  // clang-format on
 }
 
 void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {

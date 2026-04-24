@@ -250,10 +250,14 @@ TEST(ReproFileTest, ViewportDeltaCarriedForwardInReader) {
   {
     std::ofstream os(path);
     os << R"({"v":2,"svg":"foo.svg","wnd":[1600,900],"scale":2.0,"exp":0})" << '\n';
+    // clang-format off: 18.1.3 and 18.1.8 disagree on how to break this
+    // multi-string-chunk write — pin the layout manually.
+    // clang-format off
     os << R"({"f":0,"t":0,"dt":16,"mx":0,"my":0,"btn":0,"mod":0,)"
        << R"("vp":{"ox":10,"oy":20,"pw":100,"ph":200,"dpr":1,"z":1,)"
        << R"("pdx":0,"pdy":0,"psx":50,"psy":100,)"
        << R"("vbx":0,"vby":0,"vbw":100,"vbh":200}})" << '\n';
+    // clang-format on
     os << R"({"f":1,"t":0.016,"dt":16,"mx":10,"my":20,"btn":0,"mod":0})" << '\n';
   }
   auto loaded = ReadReproFile(path);
