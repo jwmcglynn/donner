@@ -1,6 +1,7 @@
 #include "donner/editor/sandbox/EditorBackendCore.h"
 
 #include <algorithm>
+#include <entt/entity/entity.hpp>  // entt::entity, entt::null
 #include <limits>
 #include <numeric>
 #include <span>

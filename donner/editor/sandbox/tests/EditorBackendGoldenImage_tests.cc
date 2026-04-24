@@ -50,6 +50,7 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
