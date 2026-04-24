@@ -84,7 +84,13 @@ echo "Refreshing compile_commands.json..."
 # //donner/svg/renderer/tests:renderer_test_backend, etc.) produce compile
 # commands with webgpu-cpp / wgpu-native include paths. Passing the flag
 # here on `bazel run` only affects how the refresh tool itself is built.
-"${BAZEL}" run //tools:refresh_compile_commands
+#
+# `--config=latest_llvm` pins the refresh to the hermetic LLVM 21 toolchain
+# (the same one used on Linux by default). Without it the resulting
+# compile_commands.json can carry `-isystem` paths that only materialize
+# when `--//build_defs:llvm_latest=1` is set, so the apt-installed
+# clang-tidy fails on `'<cstddef>' file not found` style errors.
+"${BAZEL}" run --config=latest_llvm //tools:refresh_compile_commands
 
 echo "Running misc-include-cleaner on changed lines of ${#MODIFIED_FILES[@]} file(s):"
 printf '  %s\n' "${MODIFIED_FILES[@]}"
