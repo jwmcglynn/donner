@@ -43,6 +43,7 @@
 #include "donner/editor/AddressBarDispatcher.h"
 #include "donner/editor/AddressBarStatus.h"
 #include "donner/editor/ContentSniffer.h"  // IWYU pragma: keep
+#include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
@@ -124,7 +125,6 @@ constexpr std::size_t kFrameHistoryCapacity = 120;
 constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
-constexpr double kDragMoveScreenEpsilonPx = 0.25;
 #ifdef __EMSCRIPTEN__
 constexpr int kMaxWasmUploadBytes = 32 * 1024 * 1024;
 #endif
@@ -841,16 +841,6 @@ struct CompositedPreviewTextureState {
   bool active = false;
   bool texturesReady = false;
 };
-
-[[nodiscard]] bool ShouldPostDragMove(const donner::Vector2d& screenPoint,
-                                      const std::optional<donner::Vector2d>& lastScreenPoint) {
-  if (!lastScreenPoint.has_value()) {
-    return true;
-  }
-
-  const double epsilonSquared = kDragMoveScreenEpsilonPx * kDragMoveScreenEpsilonPx;
-  return (screenPoint - *lastScreenPoint).lengthSquared() > epsilonSquared;
-}
 
 void EnsureTextureInitialized(TextureUploadState& state) {
   if (state.texture != 0) {
@@ -2635,19 +2625,13 @@ int main(int argc, char** argv) {
           ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 mousePos = ImGui::GetMousePos();
         const donner::Vector2d screenPoint(mousePos.x, mousePos.y);
-        // Coalesce: only post a new kMove if the previous one's future
-        // has already been consumed. With the session-backed client a
-        // backend round-trip can take 20–60 ms (Geode rebuild + IPC);
-        // posting on every ImGui frame fills SandboxSession's FIFO
-        // with stale positions and the host then discards every
-        // future except the last one (`pendingFrame =` overwrite),
-        // so the user sees no preview updates until the queue drains
-        // — the "drag freezes mid-stroke, then snaps to release
-        // position" symptom. By gating on `!pendingFrame.has_value()`
-        // we rate-limit drag posts to the backend's actual cadence
-        // and the LATEST mouse position is captured at post time.
-        if (!pendingFrame.has_value() &&
-            ShouldPostDragMove(screenPoint, lastPostedDragMoveScreenPoint)) {
+        // Coalesce: rate-limit `kMove` posts to the backend's actual
+        // round-trip cadence so the host doesn't pile a stack of
+        // futures into SandboxSession's FIFO and then discard all but
+        // the last one. See `donner::editor::ShouldPostDragMove`'s
+        // doc for the full failure mode.
+        if (donner::editor::ShouldPostDragMove(screenPoint, lastPostedDragMoveScreenPoint,
+                                               /*pendingFrameInFlight=*/pendingFrame.has_value())) {
           lastPostedDragMoveScreenPoint = screenPoint;
           const donner::Vector2d docPoint = screenToDocument(mousePos);
           const auto dragPostStart = std::chrono::steady_clock::now();

@@ -53,6 +53,21 @@ donner_cc_test(
     ],
 )
 
+# Pins the host-side drag-coalesce policy. Without the pendingFrame
+# in-flight gate, dragging stalls under the session-backed client
+# because every ImGui frame queues a stale `kMove` and the host
+# discards every future except the last; see DragCoalesce.h header
+# comment for the full failure mode.
+donner_cc_test(
+    name = "drag_coalesce_tests",
+    srcs = ["DragCoalesce_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:drag_coalesce",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "text_buffer_tests",
     srcs = ["TextBuffer_tests.cc"],

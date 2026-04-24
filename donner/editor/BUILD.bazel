@@ -42,6 +42,16 @@ donner_cc_library(
     ],
 )
 
+# Drag input-coalescing policy for the editor's `kMove` post pipeline.
+# Header-only and tested in isolation so the regression that lets the
+# host overwrite `pendingFrame` faster than the backend can drain
+# stays caught (see DragCoalesce_tests.cc).
+donner_cc_library(
+    name = "drag_coalesce",
+    hdrs = ["DragCoalesce.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
 donner_cc_library(
     name = "selection_aabb",
     srcs = ["SelectionAabb.cc"],
@@ -165,6 +175,7 @@ _EDITOR_RUNTIME_DEPS = [
     ":address_bar",
     ":address_bar_dispatcher",
     ":content_sniffer",
+    ":drag_coalesce",
     ":editor_backend_client",
     ":editor_icon",
     ":editor_splash",
