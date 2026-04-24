@@ -13,7 +13,7 @@ namespace donner::editor::sandbox::bridge {
 namespace {
 
 class StubHost final : public BridgeTextureHost {
-public:
+ public:
   explicit StubHost(Vector2i dimensions) : dimensions_(dimensions) {}
 
   BridgeTextureHandle handle() const override {
@@ -27,12 +27,12 @@ public:
 
   uint32_t glTextureId() override { return 0; }
 
-private:
+ private:
   Vector2i dimensions_;
 };
 
 class StubBackend final : public BridgeTextureBackend {
-public:
+ public:
   explicit StubBackend(const BridgeTextureHandle& handle) : dimensions_(handle.dimensions) {}
 
   bool ready() const override { return false; }
@@ -40,7 +40,7 @@ public:
   void bindAsRenderTarget() override {}
   void waitRenderComplete() override {}
 
-private:
+ private:
   Vector2i dimensions_;
 };
 

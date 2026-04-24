@@ -25,9 +25,9 @@ namespace donner::editor {
 /// editor start-up; the settings UI (future) can mutate live.
 struct ResourcePolicy {
   bool allowHttps = true;
-  bool allowHttp = false;  ///< Default-deny plaintext; opt-in per session.
+  bool allowHttp = false;    ///< Default-deny plaintext; opt-in per session.
   bool allowFile = true;
-  bool allowData = false;  ///< `data:` URIs — off by default.
+  bool allowData = false;    ///< `data:` URIs — off by default.
 
   /// Filesystem scoping. Empty = anywhere readable; non-empty = reads must
   /// canonicalize into one of the listed roots.
@@ -84,10 +84,10 @@ public:
 
   struct Decision {
     enum class Outcome {
-      kAllow,             ///< Dispatch `resolved` to the fetcher.
-      kDeny,              ///< Surface `reason` as an error chip.
-      kNeedsUserConsent,  ///< Host wasn't in allow/deny; prompt the user. On
-                          ///< approval, call `grantHost(host)` and retry.
+      kAllow,            ///< Dispatch `resolved` to the fetcher.
+      kDeny,             ///< Surface `reason` as an error chip.
+      kNeedsUserConsent, ///< Host wasn't in allow/deny; prompt the user. On
+                         ///< approval, call `grantHost(host)` and retry.
     };
     Outcome outcome = Outcome::kDeny;
     std::string reason;       ///< Human-readable. Safe to surface as-is.

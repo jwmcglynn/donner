@@ -72,6 +72,7 @@ struct RenderPaneGestureAction {
 /// @param viewport Viewport state to mutate.
 /// @param action Gesture action previously returned by
 ///   `ClassifyRenderPaneScrollGesture`.
-void ApplyRenderPaneGesture(ViewportState& viewport, const RenderPaneGestureAction& action);
+void ApplyRenderPaneGesture(ViewportState& viewport,
+                            const RenderPaneGestureAction& action);
 
 }  // namespace donner::editor

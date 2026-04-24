@@ -137,7 +137,8 @@ TEST(UndoTimelineTest, TransactionBeginCommitAppendsEntry) {
   UndoTimeline timeline;
 
   EXPECT_FALSE(timeline.inTransaction());
-  timeline.beginTransaction("Drag", UndoSnapshot{.element = rect, .transform = Transform2d()});
+  timeline.beginTransaction("Drag",
+                            UndoSnapshot{.element = rect, .transform = Transform2d()});
   EXPECT_TRUE(timeline.inTransaction());
 
   timeline.commitTransaction(
@@ -153,7 +154,8 @@ TEST(UndoTimelineTest, AbortTransactionLeavesNoEntry) {
 
   UndoTimeline timeline;
 
-  timeline.beginTransaction("Drag", UndoSnapshot{.element = rect, .transform = Transform2d()});
+  timeline.beginTransaction("Drag",
+                            UndoSnapshot{.element = rect, .transform = Transform2d()});
   timeline.abortTransaction();
 
   EXPECT_FALSE(timeline.inTransaction());

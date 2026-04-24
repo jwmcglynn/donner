@@ -76,8 +76,8 @@ std::optional<std::string> DescribeNonSvgBytes(std::span<const uint8_t> bytes) {
   // Empty-looking or plainly non-XML: nothing starts with `<`.
   if (bytes[i] != '<') {
     return std::string(
-               "Response doesn't look like XML. "
-               "First byte: '") +
+        "Response doesn't look like XML. "
+        "First byte: '") +
            static_cast<char>(std::isprint(bytes[i]) ? bytes[i] : '?') + "'.";
   }
 

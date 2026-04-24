@@ -225,7 +225,8 @@ void AsyncRenderer::workerLoop() {
         // filter element appearing to shift out from under the
         // user's cursor on HiDPI displays — part of the family of
         // "filter disappears" symptoms.
-        const Transform2d canvasFromDoc = request.document->canvasFromDocumentTransform();
+        const Transform2d canvasFromDoc =
+            request.document->canvasFromDocumentTransform();
         const double docPerCanvasX =
             canvasFromDoc.data[0] != 0.0 ? 1.0 / canvasFromDoc.data[0] : 1.0;
         const double docPerCanvasY =

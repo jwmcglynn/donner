@@ -73,7 +73,7 @@ struct BridgeTextureHandle {
 /// is deferred to platform-specific factories; phase A ships only
 /// the stub factory + the plumbing hooks that call it.
 class BridgeTextureBackend {
-public:
+ public:
   virtual ~BridgeTextureBackend() = default;
 
   /// True once the backend has successfully imported the shared
@@ -105,7 +105,7 @@ public:
 /// `consumeFrame()` to pick up the latest backend-written contents
 /// for upload/blit.
 class BridgeTextureHost {
-public:
+ public:
   virtual ~BridgeTextureHost() = default;
 
   /// Descriptor the host sends to the backend via

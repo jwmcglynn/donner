@@ -16,6 +16,8 @@
 ///
 /// See `docs/design_docs/0023-editor_sandbox.md` §S10.
 
+#include "donner/editor/SvgFetcher.h"
+
 #include <emscripten/fetch.h>
 
 #include <cstdint>
@@ -23,8 +25,6 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-
-#include "donner/editor/SvgFetcher.h"
 
 namespace donner::editor {
 

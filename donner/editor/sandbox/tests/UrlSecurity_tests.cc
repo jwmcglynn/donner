@@ -1,6 +1,7 @@
 #include "donner/editor/sandbox/UrlSecurity.h"
 
 #include <arpa/inet.h>
+
 #include <gtest/gtest.h>
 
 namespace donner::editor::sandbox::url_security {
@@ -25,35 +26,45 @@ TEST_P(Ipv4Test, ClassifiesCorrectly) {
   EXPECT_EQ(IsPrivateIPv4(h), c.expectPrivate) << c.address;
 }
 
-INSTANTIATE_TEST_SUITE_P(Addresses, Ipv4Test,
-                         ::testing::Values(
-                             // Loopback.
-                             Ipv4Case{"127.0.0.1", true}, Ipv4Case{"127.255.255.255", true},
-                             // RFC 1918 private.
-                             Ipv4Case{"10.0.0.1", true}, Ipv4Case{"10.255.255.255", true},
-                             Ipv4Case{"172.16.0.1", true}, Ipv4Case{"172.31.255.255", true},
-                             Ipv4Case{"172.32.0.1", false},  // just outside 172.16/12
-                             Ipv4Case{"172.15.0.1", false},  // just outside 172.16/12
-                             Ipv4Case{"192.168.1.1", true}, Ipv4Case{"192.168.255.255", true},
-                             // Link-local + cloud metadata — the whole point of this module.
-                             Ipv4Case{"169.254.0.1", true},
-                             Ipv4Case{"169.254.169.254", true},  // AWS/GCE metadata endpoint
-                             Ipv4Case{"169.253.255.255", false},
-                             // CGNAT 100.64/10.
-                             Ipv4Case{"100.64.0.1", true}, Ipv4Case{"100.127.255.255", true},
-                             Ipv4Case{"100.63.255.255", false}, Ipv4Case{"100.128.0.1", false},
-                             // "This network" 0.0.0.0/8.
-                             Ipv4Case{"0.0.0.0", true}, Ipv4Case{"0.1.2.3", true},
-                             // Multicast + reserved.
-                             Ipv4Case{"224.0.0.1", true}, Ipv4Case{"239.255.255.255", true},
-                             Ipv4Case{"255.255.255.255", true},
-                             // Normal public addresses that MUST classify as non-private —
-                             // if any of these regress the SSRF gate will lock users out.
-                             Ipv4Case{"1.1.1.1", false}, Ipv4Case{"8.8.8.8", false},
-                             Ipv4Case{"208.80.154.224", false},  // upload.wikimedia.org
-                             Ipv4Case{"151.101.1.140", false},   // fastly
-                             Ipv4Case{"172.15.255.255", false},  // one off from 172.16/12
-                             Ipv4Case{"192.0.1.1", false}));
+INSTANTIATE_TEST_SUITE_P(
+    Addresses, Ipv4Test,
+    ::testing::Values(
+        // Loopback.
+        Ipv4Case{"127.0.0.1", true},
+        Ipv4Case{"127.255.255.255", true},
+        // RFC 1918 private.
+        Ipv4Case{"10.0.0.1", true},
+        Ipv4Case{"10.255.255.255", true},
+        Ipv4Case{"172.16.0.1", true},
+        Ipv4Case{"172.31.255.255", true},
+        Ipv4Case{"172.32.0.1", false},  // just outside 172.16/12
+        Ipv4Case{"172.15.0.1", false},  // just outside 172.16/12
+        Ipv4Case{"192.168.1.1", true},
+        Ipv4Case{"192.168.255.255", true},
+        // Link-local + cloud metadata — the whole point of this module.
+        Ipv4Case{"169.254.0.1", true},
+        Ipv4Case{"169.254.169.254", true},  // AWS/GCE metadata endpoint
+        Ipv4Case{"169.253.255.255", false},
+        // CGNAT 100.64/10.
+        Ipv4Case{"100.64.0.1", true},
+        Ipv4Case{"100.127.255.255", true},
+        Ipv4Case{"100.63.255.255", false},
+        Ipv4Case{"100.128.0.1", false},
+        // "This network" 0.0.0.0/8.
+        Ipv4Case{"0.0.0.0", true},
+        Ipv4Case{"0.1.2.3", true},
+        // Multicast + reserved.
+        Ipv4Case{"224.0.0.1", true},
+        Ipv4Case{"239.255.255.255", true},
+        Ipv4Case{"255.255.255.255", true},
+        // Normal public addresses that MUST classify as non-private —
+        // if any of these regress the SSRF gate will lock users out.
+        Ipv4Case{"1.1.1.1", false},
+        Ipv4Case{"8.8.8.8", false},
+        Ipv4Case{"208.80.154.224", false},  // upload.wikimedia.org
+        Ipv4Case{"151.101.1.140", false},   // fastly
+        Ipv4Case{"172.15.255.255", false},  // one off from 172.16/12
+        Ipv4Case{"192.0.1.1", false}));
 
 // ───────────────────────────────────────────────────────────────────────
 // IsPrivateIPv6
@@ -75,23 +86,24 @@ TEST_P(Ipv6Test, ClassifiesCorrectly) {
 
 INSTANTIATE_TEST_SUITE_P(
     Addresses, Ipv6Test,
-    ::testing::Values(Ipv6Case{"::1", true},                // loopback
-                      Ipv6Case{"::", true},                 // unspecified
-                      Ipv6Case{"fe80::1", true},            // link-local
-                      Ipv6Case{"fc00::1", true},            // unique-local
-                      Ipv6Case{"fd12:3456:789a::1", true},  // unique-local
-                      Ipv6Case{"ff02::1", true},            // multicast
-                      // IPv4-mapped private should still be caught.
-                      Ipv6Case{"::ffff:127.0.0.1", true},
-                      Ipv6Case{"::ffff:169.254.169.254", true},  // metadata via v4-mapped
-                      Ipv6Case{"::ffff:10.0.0.1", true},
-                      // IPv4-mapped public is allowed.
-                      Ipv6Case{"::ffff:1.1.1.1", false},
-                      // Public v6.
-                      Ipv6Case{"2606:4700:4700::1111", false},  // cloudflare
-                      Ipv6Case{"2001:db8::1", false}));  // documentation range is technically
-                                                         // reserved but we don't block it (not in
-                                                         // the IN6_IS_ADDR_* predicates)
+    ::testing::Values(
+        Ipv6Case{"::1", true},                        // loopback
+        Ipv6Case{"::", true},                         // unspecified
+        Ipv6Case{"fe80::1", true},                    // link-local
+        Ipv6Case{"fc00::1", true},                    // unique-local
+        Ipv6Case{"fd12:3456:789a::1", true},          // unique-local
+        Ipv6Case{"ff02::1", true},                    // multicast
+        // IPv4-mapped private should still be caught.
+        Ipv6Case{"::ffff:127.0.0.1", true},
+        Ipv6Case{"::ffff:169.254.169.254", true},     // metadata via v4-mapped
+        Ipv6Case{"::ffff:10.0.0.1", true},
+        // IPv4-mapped public is allowed.
+        Ipv6Case{"::ffff:1.1.1.1", false},
+        // Public v6.
+        Ipv6Case{"2606:4700:4700::1111", false},      // cloudflare
+        Ipv6Case{"2001:db8::1", false}));             // documentation range is technically reserved
+                                                      // but we don't block it (not in the
+                                                      // IN6_IS_ADDR_* predicates)
 
 // ───────────────────────────────────────────────────────────────────────
 // ParseHttpUrl

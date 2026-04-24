@@ -22,13 +22,15 @@ TEST_F(DesktopFetcherTest, StrictFetcherSurfacesFirstUseConsentAsError) {
   ResourceGatekeeper gatekeeper(DefaultDesktopPolicy());
   sandbox::SvgSource source;
 
-  auto fetcher = MakeDesktopFetcher(gatekeeper, source, /*autoGrantFirstUse=*/false);
+  auto fetcher =
+      MakeDesktopFetcher(gatekeeper, source, /*autoGrantFirstUse=*/false);
 
   std::optional<FetchError::Kind> errKind;
-  (void)fetcher->fetch("https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg",
-                       [&](std::optional<FetchBytes>, std::optional<FetchError> err) {
-                         if (err) errKind = err->kind;
-                       });
+  (void)fetcher->fetch(
+      "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg",
+      [&](std::optional<FetchBytes>, std::optional<FetchError> err) {
+        if (err) errKind = err->kind;
+      });
 
   ASSERT_TRUE(errKind.has_value());
   EXPECT_EQ(*errKind, FetchError::Kind::kNeedsUserConsent);
@@ -44,13 +46,15 @@ TEST_F(DesktopFetcherTest, UserInitiatedFetcherAutoGrantsFirstUseHost) {
     ASSERT_EQ(d.outcome, ResourceGatekeeper::Decision::Outcome::kNeedsUserConsent);
   }
 
-  auto fetcher = MakeDesktopFetcher(gatekeeper, source, /*autoGrantFirstUse=*/true);
+  auto fetcher =
+      MakeDesktopFetcher(gatekeeper, source, /*autoGrantFirstUse=*/true);
 
   std::optional<FetchError::Kind> errKind;
-  (void)fetcher->fetch("https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg",
-                       [&](std::optional<FetchBytes>, std::optional<FetchError> err) {
-                         if (err) errKind = err->kind;
-                       });
+  (void)fetcher->fetch(
+      "https://upload.wikimedia.org/wikipedia/commons/4/4f/SVG_Logo.svg",
+      [&](std::optional<FetchBytes>, std::optional<FetchError> err) {
+        if (err) errKind = err->kind;
+      });
 
   // The outer fetch may succeed or fail depending on whether the sandbox
   // has network — we don't assert on that. What we DO assert: the

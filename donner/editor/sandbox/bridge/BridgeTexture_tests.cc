@@ -32,10 +32,11 @@ TEST(BridgeTextureStubTest, BackendStubReportsNotReady) {
   auto backend = MakeBackendStub(host->handle());
   ASSERT_NE(backend, nullptr);
 
-  EXPECT_FALSE(backend->ready()) << "phase-A backend stub must report `ready() == false` so the "
-                                    "caller falls through to the CPU bitmap path. Returning true "
-                                    "here would make the caller skip `finalBitmapPixels` and the "
-                                    "user would see a black canvas.";
+  EXPECT_FALSE(backend->ready())
+      << "phase-A backend stub must report `ready() == false` so the "
+         "caller falls through to the CPU bitmap path. Returning true "
+         "here would make the caller skip `finalBitmapPixels` and the "
+         "user would see a black canvas.";
   EXPECT_EQ(backend->dimensions().x, 100);
   EXPECT_EQ(backend->dimensions().y, 100);
 
@@ -84,9 +85,10 @@ TEST(BridgeTextureMacOSTest, BackendLooksUpHostAllocatedSurface) {
   auto backend = MakeBackend_macOS(h);
   ASSERT_NE(backend, nullptr);
   EXPECT_EQ(backend->dimensions(), Vector2i(64, 48));
-  EXPECT_FALSE(backend->ready()) << "backend must still report `!ready()` until wgpu-native "
-                                    "Metal import + CGL texture bridge land; premature true "
-                                    "here masks the CPU fallback path.";
+  EXPECT_FALSE(backend->ready())
+      << "backend must still report `!ready()` until wgpu-native "
+         "Metal import + CGL texture bridge land; premature true "
+         "here masks the CPU fallback path.";
 }
 
 TEST(BridgeTextureMacOSTest, BackendWithoutHandleIsInertButSafe) {

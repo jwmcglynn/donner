@@ -5,14 +5,14 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/xml/XMLNode.h"
-#include "donner/editor/SelectionAabb.h"
-#include "donner/editor/TextPatch.h"
 #include "donner/editor/backend_lib/AttributeWriteback.h"
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/editor/backend_lib/SelectTool.h"
-#include "donner/editor/backend_lib/SourceSync.h"
 #include "donner/editor/backend_lib/UndoTimeline.h"
+#include "donner/editor/SelectionAabb.h"
+#include "donner/editor/backend_lib/SourceSync.h"
+#include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "gtest/gtest.h"
@@ -115,7 +115,8 @@ bool QueueDragWritebackReparse(EditorApp& app, std::string* source, std::string*
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText,
+                              lastWritebackSourceText);
   return true;
 }
 
@@ -128,7 +129,8 @@ bool QueueTransformWritebackReparse(EditorApp& app, std::string* source,
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText,
+                              lastWritebackSourceText);
   return true;
 }
 
@@ -151,7 +153,8 @@ bool QueueElementRemoveWritebackReparse(EditorApp& app, std::string* source,
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText,
+                              lastWritebackSourceText);
   return true;
 }
 
@@ -672,11 +675,9 @@ TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElemen
   const Transform2d before = Transform2d();
   const Transform2d after = Transform2d::Translate(Vector2d(25.0, 0.0));
   rect->cast<svg::SVGGraphicsElement>().setTransform(after);
-  UndoSnapshot beforeSnapshot{.element = *rect,
-                              .transform = before,
+  UndoSnapshot beforeSnapshot{.element = *rect, .transform = before,
                               .writebackTarget = captureAttributeWritebackTarget(*rect)};
-  UndoSnapshot afterSnapshot{.element = *rect,
-                             .transform = after,
+  UndoSnapshot afterSnapshot{.element = *rect, .transform = after,
                              .writebackTarget = captureAttributeWritebackTarget(*rect)};
   app.undoTimeline().record("Drag r", std::move(beforeSnapshot), std::move(afterSnapshot));
 
@@ -697,7 +698,8 @@ TEST(EditorSyncTest, DragThenSourceEditThenUndoReplaysAgainstFreshlyParsedElemen
 
   auto rectAfterUndo = app.document().document().querySelector("#r");
   ASSERT_TRUE(rectAfterUndo.has_value());
-  const Transform2d finalTransform = rectAfterUndo->cast<svg::SVGGraphicsElement>().transform();
+  const Transform2d finalTransform =
+      rectAfterUndo->cast<svg::SVGGraphicsElement>().transform();
   EXPECT_TRUE(finalTransform.isIdentity())
       << "undo after source-pane reparse failed to roll back the drag — snapshot dangled";
 }

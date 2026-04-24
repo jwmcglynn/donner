@@ -28,7 +28,8 @@ FetchError::Kind MapStatus(sandbox::SvgFetchStatus status) {
 
 class DesktopFetcher : public SvgFetcher {
 public:
-  DesktopFetcher(ResourceGatekeeper& gatekeeper, sandbox::SvgSource& source, bool autoGrantFirstUse)
+  DesktopFetcher(ResourceGatekeeper& gatekeeper, sandbox::SvgSource& source,
+                 bool autoGrantFirstUse)
       : gatekeeper_(gatekeeper), source_(source), autoGrantFirstUse_(autoGrantFirstUse) {}
 
   FetchHandle fetch(std::string_view uri, FetchCallback cb,
@@ -106,7 +107,8 @@ private:
 }  // namespace
 
 std::unique_ptr<SvgFetcher> MakeDesktopFetcher(ResourceGatekeeper& gatekeeper,
-                                               sandbox::SvgSource& source, bool autoGrantFirstUse) {
+                                               sandbox::SvgSource& source,
+                                               bool autoGrantFirstUse) {
   return std::make_unique<DesktopFetcher>(gatekeeper, source, autoGrantFirstUse);
 }
 

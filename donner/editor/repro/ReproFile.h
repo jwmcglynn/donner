@@ -240,7 +240,8 @@ struct ReproFile {
 /// on success; on failure writes an error message to `stderr` and
 /// returns `false`. Atomic: writes to `path.tmp` then renames over
 /// `path`, so a crash mid-write never truncates an existing file.
-[[nodiscard]] bool WriteReproFile(const std::filesystem::path& path, const ReproFile& file);
+[[nodiscard]] bool WriteReproFile(const std::filesystem::path& path,
+                                  const ReproFile& file);
 
 /// Parse an NDJSON repro file. Returns `std::nullopt` on any error
 /// (file missing, version mismatch, malformed line); writes details
