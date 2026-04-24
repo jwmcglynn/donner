@@ -81,7 +81,7 @@ public:
     return result;
   }
 
-  /// Returns the current drag preview, if a drag is in progress.
+  /// Returns the current drag preview, if a drag has crossed the movement threshold.
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
 private:

@@ -152,11 +152,24 @@ struct PendingScrollEvents {
   std::vector<donner::editor::RenderPaneScrollEvent> events;
 };
 
+#ifdef __EMSCRIPTEN__
+EM_JS(int, BrowserWheelZoomModifierHeld, (), {
+  const canvas = Module.canvas || document.getElementById("canvas");
+  const state = canvas && canvas.__donnerWheelModifierState;
+  return state && state.zoomModifierHeld ? 1 : 0;
+});
+#endif
+
 [[nodiscard]] bool IsZoomModifierHeld(GLFWwindow* window) {
-  return glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-         glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
-         glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
-         glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+  const bool glfwModifierHeld = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                                glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS ||
+                                glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+                                glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+#ifdef __EMSCRIPTEN__
+  return glfwModifierHeld || BrowserWheelZoomModifierHeld() != 0;
+#else
+  return glfwModifierHeld;
+#endif
 }
 
 void EditorScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
@@ -336,6 +349,93 @@ EM_JS(void, InstallBrowserDropHandler, (int maxBytes), {
       });
 
   canvas.__donnerDropInstalled = true;
+});
+
+EM_JS(void, InstallBrowserWheelModifierMonitor, (double wheelZoomStep), {
+  const canvas = Module.canvas || document.getElementById("canvas");
+  if (!canvas || canvas.__donnerWheelModifierMonitorInstalled) {
+    return;
+  }
+
+  const state = {
+    zoomModifierHeld: false,
+    lastGestureScale: 1.0,
+  };
+  canvas.__donnerWheelModifierState = state;
+
+  const updateWheelModifier = event => {
+    state.zoomModifierHeld = event.ctrlKey === true || event.metaKey === true;
+    if (state.zoomModifierHeld) {
+      // Browser trackpad pinch is surfaced as Ctrl+wheel in Chromium.
+      // Prevent the browser page-zoom default before emscripten-glfw's
+      // wheel listener receives the same event and forwards it to GLFW.
+      event.preventDefault();
+    }
+  };
+
+  canvas.addEventListener("wheel", updateWheelModifier, { capture: true, passive: false });
+
+  // Safari exposes trackpad pinch as WebKit gesture events instead of
+  // Chromium-style Ctrl+wheel. Convert each incremental scale change
+  // into a synthetic pixel-mode wheel event so the existing GLFW scroll
+  // callback and C++ gesture classifier handle both browser families.
+  const eventPoint = event => {
+    const rect = canvas.getBoundingClientRect();
+    const fallbackX = rect.left + rect.width * 0.5;
+    const fallbackY = rect.top + rect.height * 0.5;
+    return {
+      clientX: Number.isFinite(event.clientX) ? event.clientX : fallbackX,
+      clientY: Number.isFinite(event.clientY) ? event.clientY : fallbackY,
+    };
+  };
+  const dispatchSyntheticZoomWheel = (sourceEvent, scrollDeltaY) => {
+    if (!Number.isFinite(scrollDeltaY) || Math.abs(scrollDeltaY) <= 1e-9) {
+      return;
+    }
+    const point = eventPoint(sourceEvent);
+    canvas.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: point.clientX,
+      clientY: point.clientY,
+      screenX: window.screenX + point.clientX,
+      screenY: window.screenY + point.clientY,
+      deltaX: 0,
+      // emscripten-glfw maps DOM_DELTA_PIXEL as: yoffset = deltaY * -0.01.
+      deltaY: -scrollDeltaY * 100.0,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: true,
+    }));
+  };
+  const onGestureStart = event => {
+    state.lastGestureScale = Number.isFinite(event.scale) && event.scale > 0.0 ? event.scale : 1.0;
+    state.zoomModifierHeld = true;
+    event.preventDefault();
+  };
+  const onGestureChange = event => {
+    const scale = Number.isFinite(event.scale) && event.scale > 0.0 ? event.scale : 1.0;
+    const previousScale = state.lastGestureScale > 0.0 ? state.lastGestureScale : 1.0;
+    state.lastGestureScale = scale;
+    state.zoomModifierHeld = true;
+    event.preventDefault();
+
+    const incrementalScale = scale / previousScale;
+    if (incrementalScale > 0.0 && wheelZoomStep > 0.0 && Math.abs(wheelZoomStep - 1.0) > 1e-9) {
+      dispatchSyntheticZoomWheel(event, Math.log(incrementalScale) / Math.log(wheelZoomStep));
+    }
+  };
+  const onGestureEnd = event => {
+    state.zoomModifierHeld = false;
+    state.lastGestureScale = 1.0;
+    event.preventDefault();
+  };
+  canvas.addEventListener("gesturestart", onGestureStart, { passive: false });
+  canvas.addEventListener("gesturechange", onGestureChange, { passive: false });
+  canvas.addEventListener("gestureend", onGestureEnd, { passive: false });
+
+  canvas.__donnerWheelModifierMonitorInstalled = true;
 });
 
 // --- Test-hook instrumentation (opt-in via `?test=1` in the URL). ---
@@ -910,6 +1010,9 @@ int main(int argc, char** argv) {
   PendingScrollEvents pendingScrollEvents;
   glfwSetWindowUserPointer(window, &pendingScrollEvents);
   pendingScrollEvents.previousCallback = glfwSetScrollCallback(window, EditorScrollCallback);
+#ifdef __EMSCRIPTEN__
+  InstallBrowserWheelModifierMonitor(kWheelZoomStep);
+#endif
   (void)donner::editor::InstallPinchEventMonitor(window, &pendingScrollEvents.events,
                                                  kWheelZoomStep);
 #ifdef __EMSCRIPTEN__

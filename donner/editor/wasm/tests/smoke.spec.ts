@@ -1,6 +1,13 @@
 import { expect, type Page, test } from "@playwright/test";
 import { inflateSync } from "node:zlib";
 
+type ImageRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 function isExpectedStartupStderr(text: string): boolean {
   return text === ""
     || text.startsWith("[startup] ")
@@ -22,6 +29,27 @@ async function waitForCanvasContent(page: Page): Promise<void> {
     },
     { timeout: 45_000 },
   ).toBe(true);
+}
+
+async function waitForDocumentImageRect(
+  page: Page,
+  requireSettledLayout = false,
+): Promise<ImageRect> {
+  const imageRect = await page.waitForFunction(() => {
+    const rect = (window as any).__donner_metrics?.documentImageRect;
+    return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+  }, null, { timeout: 45_000 });
+  if (!requireSettledLayout) {
+    return imageRect.jsonValue() as Promise<ImageRect>;
+  }
+
+  const settledImageRect = await page.waitForFunction(() => {
+    const rect = (window as any).__donner_metrics?.documentImageRect;
+    return rect && rect.width > 0 && rect.height > 0 && (rect.left > 0 || rect.top > 0)
+      ? rect
+      : null;
+  }, null, { timeout: 45_000 });
+  return settledImageRect.jsonValue() as Promise<ImageRect>;
 }
 
 function pngHasVisiblePixel(png: Uint8Array): boolean {
@@ -211,4 +239,52 @@ test("plain WASM editor page finishes after late render-pane layout", async ({ p
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await waitForCanvasContent(page);
+});
+
+test("WASM trackpad pinch wheel zooms the render pane", async ({ page }) => {
+  await page.goto("/?test=1");
+  await page.waitForFunction(() => (window as any).__donner_ready === true, null, {
+    timeout: 45_000,
+  });
+  await waitForCanvasContent(page);
+
+  const before = await waitForDocumentImageRect(page, true);
+  await page.evaluate(async (rect) => {
+    const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
+    if (!canvas) {
+      throw new Error("canvas not found");
+    }
+
+    const x = rect.left + rect.width * 0.5;
+    const y = rect.top + rect.height * 0.5;
+    const eventBase = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      screenX: window.screenX + x,
+      screenY: window.screenY + y,
+    };
+
+    canvas.dispatchEvent(new MouseEvent("mouseenter", eventBase));
+    canvas.dispatchEvent(new MouseEvent("mousemove", eventBase));
+    canvas.dispatchEvent(new WheelEvent("wheel", {
+      ...eventBase,
+      deltaX: 0,
+      deltaY: -360,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      ctrlKey: true,
+    }));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  }, before);
+
+  await expect.poll(
+    async () => {
+      const rect = await page.evaluate(() => (window as any).__donner_metrics?.documentImageRect);
+      return rect?.width ?? 0;
+    },
+    { timeout: 15_000 },
+  ).toBeGreaterThan(before.width * 1.1);
 });

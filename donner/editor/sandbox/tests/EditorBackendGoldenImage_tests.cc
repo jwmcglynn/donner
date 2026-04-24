@@ -48,11 +48,13 @@
 
 #include <array>
 #include <chrono>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -1355,6 +1357,12 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
   // mdown and mup, a kMove fires with each frame's mouse position.
   bool leftHeld = false;
   std::optional<FramePayload> midDrag2Frame;
+  std::optional<FramePayload> latestPreviewUploadFrame;
+  const auto rememberPreviewUpload = [&](const FramePayload& frame) {
+    if (frame.hasCompositedPreviewBitmaps) {
+      latestPreviewUploadFrame = frame;
+    }
+  };
   for (const auto& frame : repro.frames) {
     if (!frame.mouseDocX.has_value()) continue;
     const double docX = *frame.mouseDocX;
@@ -1368,12 +1376,14 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
       if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
-        (void)core.handlePointerEvent(ptr);
+        const auto result = core.handlePointerEvent(ptr);
+        rememberPreviewUpload(result);
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
         ptr.buttons = 0;
-        (void)core.handlePointerEvent(ptr);
+        const auto result = core.handlePointerEvent(ptr);
+        rememberPreviewUpload(result);
       }
     }
     if (nowHeld && leftHeld) {
@@ -1383,6 +1393,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
       ptr.documentY = docY;
       ptr.buttons = 1;
       auto result = core.handlePointerEvent(ptr);
+      rememberPreviewUpload(result);
       if (frame.index == kMidDrag2Frame) {
         midDrag2Frame = std::move(result);
       }
@@ -1393,33 +1404,68 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
   ASSERT_TRUE(midDrag2Frame.has_value())
       << "mid-drag-2 checkpoint frame " << kMidDrag2Frame
       << " wasn't reached — replay may not have applied the expected button-held sequence";
-  ASSERT_TRUE(midDrag2Frame->hasFinalBitmap);
-  const int bmpW = midDrag2Frame->finalBitmapWidth;
-  const int bmpH = midDrag2Frame->finalBitmapHeight;
+  if (!midDrag2Frame->hasFinalBitmap) {
+    ASSERT_TRUE(midDrag2Frame->hasCompositedPreview)
+        << "mid-drag-2 produced neither a final bitmap nor split-preview metadata";
+    ASSERT_TRUE(latestPreviewUploadFrame.has_value())
+        << "mid-drag-2 used split preview, but no prior preview-upload frame was captured";
+  }
+  const bool sampleFinalBitmap = midDrag2Frame->hasFinalBitmap;
+  const FramePayload& sampleFrame = sampleFinalBitmap ? *midDrag2Frame : *latestPreviewUploadFrame;
+  const int bmpW = sampleFinalBitmap ? sampleFrame.finalBitmapWidth
+                                     : sampleFrame.compositedPreviewBackground.width;
+  const int bmpH = sampleFinalBitmap ? sampleFrame.finalBitmapHeight
+                                     : sampleFrame.compositedPreviewBackground.height;
   ASSERT_GT(bmpW, 0);
   ASSERT_GT(bmpH, 0);
 
-  const size_t rowBytes = midDrag2Frame->finalBitmapRowBytes;
-
   // Dump the mid-drag-2 frame for inspection.
-  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() + "rnr_host_mid_drag2.png";
-    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
-        path.c_str(), midDrag2Frame->finalBitmapPixels, bmpW, bmpH,
-        static_cast<uint32_t>(rowBytes / 4u));
+  if (sampleFinalBitmap) {
+    if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+      const std::string path =
+          std::string(dir) + "/" + AttemptTagPrefix() + "rnr_host_mid_drag2.png";
+      donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.c_str(), sampleFrame.finalBitmapPixels, bmpW, bmpH,
+          static_cast<uint32_t>(sampleFrame.finalBitmapRowBytes / 4u));
+    }
   }
 
   // Probe the entire SVG content region for warm (R+G > 120) lightning-
   // glow pixels. If the filter truly vanished mid-drag-2, the region
   // reverts to the dark navy background (R+G < 60).
-  const auto samplePx = [&](int x, int y) {
-    const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
-    struct Rgba {
-      uint8_t r, g, b, a;
+  struct Rgba {
+    uint8_t r, g, b, a;
+  };
+  const auto sampleFinalPx = [&](int x, int y) {
+    const size_t off =
+        static_cast<size_t>(y) * sampleFrame.finalBitmapRowBytes + static_cast<size_t>(x) * 4u;
+    return Rgba{sampleFrame.finalBitmapPixels[off + 0], sampleFrame.finalBitmapPixels[off + 1],
+                sampleFrame.finalBitmapPixels[off + 2], sampleFrame.finalBitmapPixels[off + 3]};
+  };
+  const auto samplePreviewPx = [](const FrameBitmapPayload& bitmap, int x, int y) {
+    const size_t off =
+        static_cast<size_t>(y) * static_cast<size_t>(bitmap.rowBytes) + static_cast<size_t>(x) * 4u;
+    return Rgba{bitmap.pixels[off + 0], bitmap.pixels[off + 1], bitmap.pixels[off + 2],
+                bitmap.pixels[off + 3]};
+  };
+  const auto sampleIsWarm = [&](int x, int y) {
+    if (sampleFinalBitmap) {
+      const auto px = sampleFinalPx(x, y);
+      return int(px.r) + int(px.g) > 120;
+    }
+    const std::array<const FrameBitmapPayload*, 3> previewBitmaps{
+        &sampleFrame.compositedPreviewBackground,
+        &sampleFrame.compositedPreviewPromoted,
+        &sampleFrame.compositedPreviewForeground,
     };
-    return Rgba{
-        midDrag2Frame->finalBitmapPixels[off + 0], midDrag2Frame->finalBitmapPixels[off + 1],
-        midDrag2Frame->finalBitmapPixels[off + 2], midDrag2Frame->finalBitmapPixels[off + 3]};
+    for (const FrameBitmapPayload* bitmap : previewBitmaps) {
+      if (bitmap->pixels.empty()) continue;
+      const auto px = samplePreviewPx(*bitmap, x, y);
+      if (int(px.r) + int(px.g) > 120) {
+        return true;
+      }
+    }
+    return false;
   };
 
   int brightHits = 0;
@@ -1427,9 +1473,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
   for (int cy = 0; cy < bmpH; cy += 30) {
     for (int cx = 0; cx < bmpW; cx += 30) {
       ++totalSamples;
-      const auto px = samplePx(cx, cy);
-      const int warmth = int(px.r) + int(px.g);
-      if (warmth > 120) {
+      if (sampleIsWarm(cx, cy)) {
         ++brightHits;
       }
     }
@@ -1532,6 +1576,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
+      if (!fp.hasFinalBitmap) {
+        return;
+      }
       const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
@@ -1650,6 +1697,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
+      if (!fp.hasFinalBitmap) {
+        return;
+      }
       const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
@@ -1786,6 +1836,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspecti
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
+      if (!fp.hasFinalBitmap) {
+        return;
+      }
       const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
@@ -2362,28 +2415,33 @@ TEST(EditorBackendCoreFilterDragTest, SelectingNextFilterDoesNotEraseTheFirst) {
     return core.handlePointerEvent(ev);
   };
 
-  // Click A: Big_lightning_glow at (455, 160). Elevation lands on the
-  // filter-g.
-  const auto afterA = sendPointer(PointerPhase::kDown, 455.0, 160.0, 1);
-  (void)sendPointer(PointerPhase::kUp, 455.0, 160.0, 0);
+  // Click A: Big_lightning_glow. Use a halo point that is not covered by
+  // the overlaid lightning highlight polygons.
+  const auto afterA = sendPointer(PointerPhase::kDown, 455.5, 266.5, 1);
+  const auto afterAUp = sendPointer(PointerPhase::kUp, 455.5, 266.5, 0);
   std::fprintf(stderr, "[next-filter] after click A: %s\n", DescribeSelection(afterA).c_str());
+  ASSERT_TRUE(afterAUp.hasFinalBitmap);
 
   // Click B: Lightning_glow_dark at (474.5, 406.5). Triggers
   // demote(A) + promote(B).
   const auto afterB = sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
   const auto afterBUp = sendPointer(PointerPhase::kUp, 474.5, 406.5, 0);
   std::fprintf(stderr, "[next-filter] after click B: %s\n", DescribeSelection(afterB).c_str());
+  ASSERT_TRUE(afterBUp.hasFinalBitmap);
 
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
+      if (!fp.hasFinalBitmap) {
+        return;
+      }
       const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
           static_cast<uint32_t>(fp.finalBitmapRowBytes / 4u));
     };
     dump("next_filter_cold.png", cold);
-    dump("next_filter_after_A.png", afterA);
+    dump("next_filter_after_A.png", afterAUp);
     dump("next_filter_after_B.png", afterBUp);
   }
 
@@ -2733,6 +2791,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const std::string prefix = AttemptTagPrefix();
     const auto dump = [&](const char* name, const FramePayload& fp) {
+      if (!fp.hasFinalBitmap) {
+        return;
+      }
       const std::string path = std::string(dir) + "/" + prefix + name;
       donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
           path.c_str(), fp.finalBitmapPixels, fp.finalBitmapWidth, fp.finalBitmapHeight,
@@ -2774,8 +2835,6 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
   const auto loadFrame = core.handleLoadBytes(load);
   ASSERT_TRUE(loadFrame.hasFinalBitmap);
 
-  const size_t rowBytes = loadFrame.finalBitmapRowBytes;
-
   // Drag 1 clicks Big_lightning_glow's cls-79 path (proven by the
   // earlier `BigLightningGlowSurvivesDragReleaseCycle` test). Drag 2
   // clicks inside Lightning_glow_dark's path — a SECOND mandatory-
@@ -2812,21 +2871,17 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
   (void)sendPointer(PointerPhase::kMove, kDrag1MupX, kDrag1MupY, 1);
   (void)sendPointer(PointerPhase::kUp, kDrag1MupX, kDrag1MupY, 0);
 
-  // Drag 2: click a different element, move partway — capture the
-  // composited frame at mid-drag-2.
-  (void)sendPointer(PointerPhase::kDown, kDrag2MdownX, kDrag2MdownY, 1);
+  // Drag 2: click a different element, move partway. The pointer-down
+  // frame primes the split-preview bg/promoted/fg textures; the active
+  // move frame should then ship only a translation, not a full bitmap.
+  const auto drag2Down = sendPointer(PointerPhase::kDown, kDrag2MdownX, kDrag2MdownY, 1);
+  ASSERT_TRUE(drag2Down.hasCompositedPreview);
+  ASSERT_TRUE(drag2Down.hasCompositedPreviewBitmaps);
   const auto midDrag2 = sendPointer(PointerPhase::kMove, kDrag2MidX, kDrag2MidY, 1);
-  ASSERT_TRUE(midDrag2.hasFinalBitmap);
-  ASSERT_EQ(midDrag2.finalBitmapWidth, 1784);
-  ASSERT_EQ(midDrag2.finalBitmapHeight, 1024);
-
-  // Dump the mid-drag-2 frame for inspection.
-  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path =
-        std::string(dir) + "/" + AttemptTagPrefix() + "mid_drag2_hidpi_host.png";
-    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(path.c_str(), midDrag2.finalBitmapPixels,
-                                                           1784, 1024, 1784u);
-  }
+  ASSERT_TRUE(midDrag2.hasCompositedPreview);
+  ASSERT_TRUE(midDrag2.compositedPreviewActive);
+  ASSERT_FALSE(midDrag2.hasFinalBitmap)
+      << "active drag should use split-preview textures instead of a full composed bitmap";
 
   // Drag 1 moved Big_lightning_glow by (33, 4) doc units from its
   // original position. The lightning bolt's canvas bounds at DPR=2
@@ -2835,13 +2890,14 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
   // Probe a grid centered there for the warm yellow glow the filter
   // paints — if the filter "disappeared" mid-drag-2, the region
   // reverts to dark navy background.
-  const auto samplePx = [&](int x, int y) {
-    const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
+  const auto samplePx = [](const FrameBitmapPayload& bitmap, int x, int y) {
+    const size_t off =
+        static_cast<size_t>(y) * static_cast<size_t>(bitmap.rowBytes) + static_cast<size_t>(x) * 4u;
     struct Rgba {
       uint8_t r, g, b, a;
     };
-    return Rgba{midDrag2.finalBitmapPixels[off + 0], midDrag2.finalBitmapPixels[off + 1],
-                midDrag2.finalBitmapPixels[off + 2], midDrag2.finalBitmapPixels[off + 3]};
+    return Rgba{bitmap.pixels[off + 0], bitmap.pixels[off + 1], bitmap.pixels[off + 2],
+                bitmap.pixels[off + 3]};
   };
 
   // Probe the bolt-center area of the filter's post-drag-1 position.
@@ -2849,13 +2905,23 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
   // surrounded by warm orange glow; dark navy background has R+G < 60.
   int brightHits = 0;
   int totalSamples = 0;
+  const std::array<const FrameBitmapPayload*, 2> staticPreviewBitmaps{
+      &drag2Down.compositedPreviewBackground,
+      &drag2Down.compositedPreviewForeground,
+  };
   for (int cy = 280; cy <= 560; cy += 30) {
     for (int cx = 880; cx <= 1140; cx += 30) {
       ++totalSamples;
-      const auto px = samplePx(cx, cy);
-      const int warmth = int(px.r) + int(px.g);
-      if (warmth > 120) {
-        ++brightHits;
+      for (const FrameBitmapPayload* bitmap : staticPreviewBitmaps) {
+        ASSERT_NE(bitmap, nullptr);
+        ASSERT_EQ(bitmap->width, 1784);
+        ASSERT_EQ(bitmap->height, 1024);
+        const auto px = samplePx(*bitmap, cx, cy);
+        const int warmth = int(px.r) + int(px.g);
+        if (warmth > 120) {
+          ++brightHits;
+          break;
+        }
       }
     }
   }
@@ -3545,7 +3611,7 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragMatchesRegularObjectBaseline) {
          "path costs more for filter groups.";
 }
 
-TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
+TEST(EditorUiFlowPerfTest, BigLightningGlowDragUsesPreviewOnlySteadyFramesAtHiDpi) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -3554,10 +3620,10 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  // 1784×1024 = what the editor renders on a retina MacBook at
-  // default zoom. Backend-only costs scale roughly linearly with
-  // pixel count, but the "GL upload" stand-in (host→DMA copy) scales
-  // harder because bandwidth-bound work dominates a larger bitmap.
+  // 1784x1024 = what the editor renders on a retina MacBook at
+  // default zoom. This regression path is dominated by full-canvas
+  // rerender + texture upload, so steady drag frames must ship only
+  // preview metadata after the pointer-down preview textures are primed.
   constexpr int kCanvasW = 1784;
   constexpr int kCanvasH = 1024;
 
@@ -3571,108 +3637,166 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
   load.bytes = splashSource;
   (void)core.handleLoadBytes(load);
 
-  // Click inside `Big_lightning_glow`'s cls-79 path — `SelectTool`
-  // elevates the leaf to the filter group; the compositor takes the
-  // subtree fast path on the subsequent drags.
+  const auto findBigLightningGlowHitPoint = [&]() -> std::optional<Vector2d> {
+    sandbox::EditorBackendCore probeCore;
+    SetViewportPayload probeVp;
+    probeVp.width = 892;
+    probeVp.height = 512;
+    (void)probeCore.handleSetViewport(probeVp);
+
+    LoadBytesPayload probeLoad;
+    probeLoad.bytes = splashSource;
+    (void)probeCore.handleLoadBytes(probeLoad);
+
+    for (double y = 110.0; y <= 280.0; y += 5.0) {
+      for (double x = 395.0; x <= 500.0; x += 5.0) {
+        PointerEventPayload probeDown;
+        probeDown.phase = donner::editor::sandbox::PointerPhase::kDown;
+        probeDown.documentX = x;
+        probeDown.documentY = y;
+        probeDown.buttons = 1;
+        const auto probeFrame = probeCore.handlePointerEvent(probeDown);
+        const TreeNodeEntry* probeSelected = FindSelectedNode(probeFrame);
+
+        PointerEventPayload probeUp;
+        probeUp.phase = donner::editor::sandbox::PointerPhase::kUp;
+        probeUp.documentX = x;
+        probeUp.documentY = y;
+        probeUp.buttons = 0;
+        (void)probeCore.handlePointerEvent(probeUp);
+
+        if (probeSelected != nullptr && probeSelected->idAttr == "Big_lightning_glow") {
+          return Vector2d(x, y);
+        }
+      }
+    }
+
+    return std::nullopt;
+  };
+
+  const std::optional<Vector2d> dragStart = findBigLightningGlowHitPoint();
+  ASSERT_TRUE(dragStart.has_value())
+      << "no canvas hit point selected `Big_lightning_glow`; the filtered group may be fully "
+         "occluded or hit-test elevation regressed";
+
+  // Click inside `Big_lightning_glow`'s selectable halo. `SelectTool`
+  // must elevate the leaf to the filtered group so the native editor
+  // can draw drag frames from cached bg/promoted/fg textures instead
+  // of uploading a full 1784x1024 bitmap on every move.
   PointerEventPayload down;
   down.phase = donner::editor::sandbox::PointerPhase::kDown;
-  down.documentX = 455.0;
-  down.documentY = 160.0;
+  down.documentX = dragStart->x;
+  down.documentY = dragStart->y;
   down.buttons = 1;
   auto downFrame = core.handlePointerEvent(down);
   ASSERT_FALSE(downFrame.selections.empty())
       << "expected click to hit the cls-79 path inside Big_lightning_glow";
+  const TreeNodeEntry* selected = FindSelectedNode(downFrame);
+  ASSERT_NE(selected, nullptr);
+  ASSERT_EQ(selected->idAttr, "Big_lightning_glow")
+      << "click selected " << DescribeSelection(downFrame)
+      << " instead of the filtered group; drag would bypass the subtree preview path";
+  ASSERT_TRUE(downFrame.hasCompositedPreview);
+  ASSERT_TRUE(downFrame.hasCompositedPreviewBitmaps)
+      << "pointer-down should prime native preview textures before active drag starts";
 
   // Warm-up move so the layer's bitmap is stamped and the compose
   // cache is populated before the steady-state measurement starts.
   PointerEventPayload warmup;
   warmup.phase = donner::editor::sandbox::PointerPhase::kMove;
-  warmup.documentX = 456.0;
-  warmup.documentY = 160.0;
+  warmup.documentX = dragStart->x + 1.0;
+  warmup.documentY = dragStart->y;
   warmup.buttons = 1;
   (void)core.handlePointerEvent(warmup);
-
-  // Per-frame scratch buffer mimicking the texture-upload target.
-  // Allocated once outside the loop so allocator cost doesn't bleed
-  // into the per-frame measurement — matches main.cc's single-
-  // texture bind + `glTexImage2D`-into-preallocated-target pattern.
-  const size_t kBytesPerFrame = static_cast<size_t>(kCanvasW) * kCanvasH * 4u;
-  std::vector<uint8_t> textureStandIn(kBytesPerFrame, 0);
 
   constexpr int kSteadyFrames = 30;
   using Clock = std::chrono::steady_clock;
   std::vector<double> frameMs;
-  frameMs.reserve(kSteadyFrames);
-  double backendTotalMs = 0.0;
-  double uploadTotalMs = 0.0;
+  frameMs.reserve(kSteadyFrames * 2);
+  int fullBitmapFrames = 0;
+  int previewBitmapUploadFrames = 0;
+  const auto countersBefore = core.compositorFastPathCountersForTesting();
   for (int i = 0; i < kSteadyFrames; ++i) {
     PointerEventPayload mv;
     mv.phase = donner::editor::sandbox::PointerPhase::kMove;
-    mv.documentX = 456.0 + (i + 1) * 1.5;
-    mv.documentY = 160.0;
+    mv.documentX = dragStart->x + 1.0 + (i + 1) * 1.5;
+    mv.documentY = dragStart->y;
     mv.buttons = 1;
 
     const auto t0 = Clock::now();
     const auto payload = core.handlePointerEvent(mv);
-    const auto tBackendEnd = Clock::now();
+    const auto t1 = Clock::now();
+    frameMs.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
 
-    // "GL upload" stand-in: copy the `finalBitmapPixels` into the
-    // host-side texture buffer the same way `glTexImage2D` drains
-    // the source pointer into the driver. Memory-bandwidth matches
-    // even if driver details don't.
-    ASSERT_TRUE(payload.hasFinalBitmap)
-        << "backend failed to produce a final bitmap on drag frame " << i;
-    if (!payload.finalBitmapPixels.empty() &&
-        payload.finalBitmapPixels.size() <= textureStandIn.size()) {
-      std::memcpy(textureStandIn.data(), payload.finalBitmapPixels.data(),
-                  payload.finalBitmapPixels.size());
-    }
-    const auto tUploadEnd = Clock::now();
+    fullBitmapFrames += payload.hasFinalBitmap ? 1 : 0;
+    previewBitmapUploadFrames += payload.hasCompositedPreviewBitmaps ? 1 : 0;
+    EXPECT_TRUE(payload.hasCompositedPreview) << "moving drag frame " << i;
+    EXPECT_TRUE(payload.compositedPreviewActive) << "moving drag frame " << i;
+    EXPECT_FALSE(payload.hasFinalBitmap)
+        << "moving drag frame " << i
+        << " shipped a full HiDPI bitmap; native drag will pay a full texture upload";
+    EXPECT_FALSE(payload.hasCompositedPreviewBitmaps)
+        << "moving drag frame " << i
+        << " re-uploaded preview bitmaps instead of sending only the translation";
+    EXPECT_NEAR(payload.compositedPreviewTranslationDoc[0], mv.documentX - down.documentX, 0.01);
+    EXPECT_NEAR(payload.compositedPreviewTranslationDoc[1], 0.0, 0.01);
 
-    const double backendMs = std::chrono::duration<double, std::milli>(tBackendEnd - t0).count();
-    const double uploadMs =
-        std::chrono::duration<double, std::milli>(tUploadEnd - tBackendEnd).count();
-    backendTotalMs += backendMs;
-    uploadTotalMs += uploadMs;
-    frameMs.push_back(backendMs + uploadMs);
+    // The editor can receive redundant mouse-move events at the same
+    // position. They must stay on the same preview-only path; otherwise
+    // merely holding the mouse still while dragging reintroduces the
+    // expensive native/WASM re-render the user reported.
+    const auto stationaryT0 = Clock::now();
+    const auto stationary = core.handlePointerEvent(mv);
+    const auto stationaryT1 = Clock::now();
+    frameMs.push_back(
+        std::chrono::duration<double, std::milli>(stationaryT1 - stationaryT0).count());
+
+    fullBitmapFrames += stationary.hasFinalBitmap ? 1 : 0;
+    previewBitmapUploadFrames += stationary.hasCompositedPreviewBitmaps ? 1 : 0;
+    EXPECT_TRUE(stationary.hasCompositedPreview) << "stationary drag frame " << i;
+    EXPECT_TRUE(stationary.compositedPreviewActive) << "stationary drag frame " << i;
+    EXPECT_FALSE(stationary.hasFinalBitmap)
+        << "stationary drag frame " << i
+        << " shipped a full HiDPI bitmap even though the mouse did not move";
+    EXPECT_FALSE(stationary.hasCompositedPreviewBitmaps)
+        << "stationary drag frame " << i
+        << " re-uploaded preview bitmaps even though the mouse did not move";
   }
+  const auto countersAfter = core.compositorFastPathCountersForTesting();
 
   double worst = 0.0;
   double total = 0.0;
-  int overSixtyFps = 0;
-  int overThirtyFps = 0;
   int overTwentyFps = 0;
   for (double v : frameMs) {
     worst = std::max(worst, v);
     total += v;
-    if (v > 16.67) ++overSixtyFps;
-    if (v > 33.33) ++overThirtyFps;
     if (v > 50.0) ++overTwentyFps;
   }
   const double avg = total / static_cast<double>(frameMs.size());
-  const double backendAvg = backendTotalMs / kSteadyFrames;
-  const double uploadAvg = uploadTotalMs / kSteadyFrames;
+  const uint64_t fastPathDelta = countersAfter.fastPathFrames - countersBefore.fastPathFrames;
+  const uint64_t noDirtyDelta = countersAfter.noDirtyFrames - countersBefore.noDirtyFrames;
+  const uint64_t slowPathDelta =
+      countersAfter.slowPathFramesWithDirty - countersBefore.slowPathFramesWithDirty;
   std::fprintf(stderr,
-               "[UIPerf %dx%d] frames avg=%.2f ms (backend=%.2f + upload=%.2f), "
-               "max=%.2f, >60fps=%d/%d, >30fps=%d, >20fps=%d\n",
-               kCanvasW, kCanvasH, avg, backendAvg, uploadAvg, worst, overSixtyFps, kSteadyFrames,
-               overThirtyFps, overTwentyFps);
+               "[UIPerf %dx%d Big_lightning_glow] avg=%.2f ms max=%.2f "
+               ">20fps=%d/%zu fast=%" PRIu64 " clean=%" PRIu64 " slow=%" PRIu64
+               " fullBitmaps=%d previewBitmapUploads=%d\n",
+               kCanvasW, kCanvasH, avg, worst, overTwentyFps, frameMs.size(), fastPathDelta,
+               noDirtyDelta, slowPathDelta, fullBitmapFrames, previewBitmapUploadFrames);
 
-  // 20 ms/frame budget: inside a 60 Hz vsync window, with slack for
-  // the driver work the stand-in copy doesn't model. If avg > 20
-  // ms, a 60 Hz host will drop to 30 fps every frame; >33 ms drops
-  // to 20 fps (the user-reported cap). The specific sub-budgets
-  // below are diagnostic so the failure message points at the
-  // stage that regressed.
-  EXPECT_LT(avg, 20.0) << "HiDPI filter-group drag can't hit 60 fps: backend avg=" << backendAvg
-                       << " ms, upload avg=" << uploadAvg
-                       << " ms. If backend is the big number, the compositor fast path "
-                          "isn't engaging; check fast-path counters + "
-                          "`SelectTool::elevateToCompositingGroupAncestor`. If upload is "
-                          "the big number, the overlay fell back to full-canvas rendering "
-                          "(check `SnapshotSelectionWorldBounds` / tight-bound sizing).";
-  EXPECT_EQ(overTwentyFps, 0) << overTwentyFps << " of " << kSteadyFrames
-                              << " frames exceeded 50 ms (the user-reported 20 fps cap).";
+  EXPECT_EQ(fullBitmapFrames, 0)
+      << "steady native drag must not ship full HiDPI bitmaps; those frames "
+         "map to `glTexImage2D`/`glTexSubImage2D` uploads in main.cc and are "
+         "the 90 ms/frame failure mode";
+  EXPECT_EQ(previewBitmapUploadFrames, 0)
+      << "steady native drag must not re-upload bg/promoted/fg/overlay textures";
+  EXPECT_EQ(slowPathDelta, 0u) << "drag hit slow compositor path during steady frames";
+  EXPECT_GE(fastPathDelta + noDirtyDelta, frameMs.size())
+      << "every moving or stationary drag frame should be accounted for by "
+         "the translation fast path or the clean-frame path";
+  EXPECT_LT(avg, 20.0) << "preview-only Big_lightning_glow drag exceeded 60 fps budget";
+  EXPECT_EQ(overTwentyFps, 0)
+      << overTwentyFps << " steady drag frames exceeded 50 ms (the reported 90 ms/frame class)";
 }
 
 // Direct `EditorBackendCore` check: after SelectTool elevates a click

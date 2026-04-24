@@ -116,6 +116,7 @@ void EditorBackendCore::bumpEntityGeneration() {
   // rebuilds it against the new document on the next render.
   compositor_.reset();
   compositorEntity_ = entt::null;
+  compositorInteractionKind_ = donner::svg::compositor::InteractionHint::Selection;
   compositedPreviewUploadsPrimed_ = false;
   compositedPreviewUploadEntity_ = entt::null;
   compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
@@ -264,6 +265,7 @@ FramePayload EditorBackendCore::buildFramePayload() {
     if (!compositor_.has_value()) {
       compositor_.emplace(doc, renderer_);
       compositorEntity_ = entt::null;
+      compositorInteractionKind_ = donner::svg::compositor::InteractionHint::Selection;
       // The backend CPU-composites the compositor's cached bg/drag/fg
       // bitmaps into the wire-format frame (see `cpuComposeActive`
       // path below), so the compositor's own GPU main-compose is
@@ -291,13 +293,20 @@ FramePayload EditorBackendCore::buildFramePayload() {
       desiredEntity = editor_.selectedElements().front().entityHandle().entity();
       desiredKind = donner::svg::compositor::InteractionHint::Selection;
     }
-    if (desiredEntity != compositorEntity_) {
-      if (compositorEntity_ != entt::null) {
+    const bool compositorEntityChanged = desiredEntity != compositorEntity_;
+    const bool compositorKindChanged =
+        desiredEntity != entt::null && desiredKind != compositorInteractionKind_;
+    if (compositorEntityChanged || compositorKindChanged) {
+      if (compositorEntityChanged && compositorEntity_ != entt::null) {
         compositor_->demoteEntity(compositorEntity_);
       }
-      compositorEntity_ = entt::null;
+      if (compositorEntityChanged) {
+        compositorEntity_ = entt::null;
+        compositorInteractionKind_ = donner::svg::compositor::InteractionHint::Selection;
+      }
       if (desiredEntity != entt::null && compositor_->promoteEntity(desiredEntity, desiredKind)) {
         compositorEntity_ = desiredEntity;
+        compositorInteractionKind_ = desiredKind;
       }
     }
 

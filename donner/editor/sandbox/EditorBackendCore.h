@@ -176,6 +176,9 @@ private:
   /// Maintained to match the SelectTool's current drag / selection
   /// target so promote/demote calls stay O(changes) not O(frames).
   Entity compositorEntity_ = entt::null;
+  /// Interaction kind last published for `compositorEntity_`.
+  donner::svg::compositor::InteractionHint compositorInteractionKind_ =
+      donner::svg::compositor::InteractionHint::Selection;
   int viewportWidth_ = 512;
   int viewportHeight_ = 384;
   /// What we last called `SVGDocument::setCanvasSize` with. Used to
