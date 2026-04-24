@@ -9,7 +9,10 @@
 #include <cstring>
 
 #if defined(__linux__)
+// Keep `<linux/bpf_common.h>` explicit — misc-include-cleaner can't
+// always trace BPF_LD/BPF_W/BPF_ABS back through `<linux/filter.h>`.
 #include <linux/audit.h>
+#include <linux/bpf_common.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <sys/prctl.h>
