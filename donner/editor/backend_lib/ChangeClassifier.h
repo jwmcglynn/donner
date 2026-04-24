@@ -50,6 +50,6 @@ struct ClassifyResult {
  *   `std::nullopt` for structural fallback.
  */
 ClassifyResult classifyTextChange(svg::SVGDocument& document, std::string_view oldSource,
-                                   std::string_view newSource);
+                                  std::string_view newSource);
 
 }  // namespace donner::editor

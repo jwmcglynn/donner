@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 ///
-/// Builds a \ref donner::editor::TextPatch "TextPatch" that updates an SVG element's attribute in the
-/// source text. This is the bridge between a canvas tool mutation
-/// (e.g. a drag that changes `transform`) and the source pane.
+/// Builds a \ref donner::editor::TextPatch "TextPatch" that updates an SVG element's attribute in
+/// the source text. This is the bridge between a canvas tool mutation (e.g. a drag that changes
+/// `transform`) and the source pane.
 ///
 /// The writeback path first tries the element's tracked source start offset.
 /// If that no longer points at the same opening tag in the current source,
@@ -82,8 +82,8 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
                                                  std::string_view newValue);
 
 /**
- * Build a \ref donner::editor::TextPatch "TextPatch" that sets the given attribute using a stable target
- * captured from an earlier frame.
+ * Build a \ref donner::editor::TextPatch "TextPatch" that sets the given attribute using a stable
+ * target captured from an earlier frame.
  *
  * @param source The current source text (from the text editor buffer).
  * @param target Stable locator for the target element.
@@ -100,8 +100,8 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
                                                  std::string_view newValue);
 
 /**
- * Build a \ref donner::editor::TextPatch "TextPatch" that removes the given attribute from the target
- * element in the source text.
+ * Build a \ref donner::editor::TextPatch "TextPatch" that removes the given attribute from the
+ * target element in the source text.
  *
  * @param source The current source text (from the text editor buffer).
  * @param target Stable locator for the target element.

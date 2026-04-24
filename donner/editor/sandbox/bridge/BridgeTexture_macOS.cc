@@ -28,12 +28,12 @@
 /// same fallback behaviour as the CPU stub, but with real
 /// cross-process plumbing exercised underneath.
 
-#include "donner/editor/sandbox/bridge/BridgeTexture.h"
-
-#include <IOSurface/IOSurfaceRef.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <IOSurface/IOSurfaceRef.h>
 
 #include <cstring>
+
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 
 namespace donner::editor::sandbox::bridge {
 
@@ -51,7 +51,7 @@ constexpr int kBytesPerElement = 4;
 /// `StubHost` / `StubBackend` object lifetimes. `IOSurface*` are
 /// CFType-ish — `CFRetain` / `CFRelease` work on them.
 class IOSurfaceRetainer {
- public:
+public:
   IOSurfaceRetainer() = default;
   explicit IOSurfaceRetainer(IOSurfaceRef surface) : surface_(surface) {
     if (surface_ != nullptr) {
@@ -80,7 +80,7 @@ class IOSurfaceRetainer {
   [[nodiscard]] IOSurfaceRef get() const { return surface_; }
   [[nodiscard]] bool valid() const { return surface_ != nullptr; }
 
- private:
+private:
   IOSurfaceRef surface_ = nullptr;
 };
 
@@ -90,8 +90,7 @@ class IOSurfaceRetainer {
 /// (no Objective-C runtime required).
 CFDictionaryRef MakeSurfaceProperties(int width, int height) {
   CFMutableDictionaryRef dict = CFDictionaryCreateMutable(
-      kCFAllocatorDefault, 4, &kCFTypeDictionaryKeyCallBacks,
-      &kCFTypeDictionaryValueCallBacks);
+      kCFAllocatorDefault, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
   const auto setInt = [&](CFStringRef key, int value) {
     CFNumberRef n = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &value);
@@ -118,7 +117,7 @@ CFDictionaryRef MakeSurfaceProperties(int width, int height) {
 /// `mach_port_t` at attach time is done by the backend-side code
 /// once we have a `mach_msg`-carrying transport in place.
 class MacOSHost final : public BridgeTextureHost {
- public:
+public:
   MacOSHost(IOSurfaceRetainer surface, Vector2i dimensions)
       : surface_(std::move(surface)), dimensions_(dimensions) {}
 
@@ -126,9 +125,8 @@ class MacOSHost final : public BridgeTextureHost {
     BridgeTextureHandle h;
     h.kind = BridgeHandleKind::kIOSurfaceMacOS;
     h.dimensions = dimensions_;
-    h.rowBytes = surface_.valid()
-                     ? static_cast<uint32_t>(IOSurfaceGetBytesPerRow(surface_.get()))
-                     : 0;
+    h.rowBytes =
+        surface_.valid() ? static_cast<uint32_t>(IOSurfaceGetBytesPerRow(surface_.get())) : 0;
     // `IOSurfaceID` fits in 32 bits; zero-extend into the handle
     // field. Peer side calls `IOSurfaceLookupFromMachPort` or
     // `IOSurfaceLookup` depending on transport.
@@ -143,7 +141,7 @@ class MacOSHost final : public BridgeTextureHost {
     return 0;
   }
 
- private:
+private:
   IOSurfaceRetainer surface_;
   Vector2i dimensions_;
 };
@@ -152,7 +150,7 @@ class MacOSHost final : public BridgeTextureHost {
 /// incoming `IOSurfaceID`; holds a retain so the surface outlives
 /// the session's render frames.
 class MacOSBackend final : public BridgeTextureBackend {
- public:
+public:
   explicit MacOSBackend(const BridgeTextureHandle& handle) : dimensions_(handle.dimensions) {
     if (handle.kind == BridgeHandleKind::kIOSurfaceMacOS && handle.handle != 0) {
       // `IOSurfaceLookup` only works when host + backend share the
@@ -191,7 +189,7 @@ class MacOSBackend final : public BridgeTextureBackend {
   /// public interface — internal helper only.
   [[nodiscard]] bool hasSurface() const { return surface_.valid(); }
 
- private:
+private:
   IOSurfaceRetainer surface_;
   Vector2i dimensions_;
 };

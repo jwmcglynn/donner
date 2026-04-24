@@ -61,8 +61,8 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
     return;
   }
 
-  auto maybeGolden = svg::RendererImageTestUtils::readRgbaImageFromPngFile(
-      std::string(goldenPath).c_str());
+  auto maybeGolden =
+      svg::RendererImageTestUtils::readRgbaImageFromPngFile(std::string(goldenPath).c_str());
   ASSERT_TRUE(maybeGolden.has_value())
       << "[" << testLabel << "] could not load golden PNG: " << goldenPath
       << " — regenerate with UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run …";
@@ -98,8 +98,8 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
                   << ". To regenerate: UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) "
                      "bazel run <test_target>.";
   } else {
-    std::fprintf(stderr, "[%s] PASS (%d px differ, max %d)\n",
-                 std::string(testLabel).c_str(), mismatched, params.maxMismatchedPixels);
+    std::fprintf(stderr, "[%s] PASS (%d px differ, max %d)\n", std::string(testLabel).c_str(),
+                 mismatched, params.maxMismatchedPixels);
   }
 }
 
@@ -142,8 +142,8 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
                                                    height, strideInPixels);
     ADD_FAILURE() << "[" << testLabel << "] " << mismatched
                   << " pixels differ (max allowed: " << params.maxMismatchedPixels
-                  << "). Actual: " << actualPath.string() << ". Expected: "
-                  << expectedPath.string() << ". Diff: " << diffPath.string();
+                  << "). Actual: " << actualPath.string() << ". Expected: " << expectedPath.string()
+                  << ". Diff: " << diffPath.string();
   } else {
     std::fprintf(stderr, "[%s] PASS bitmap-to-bitmap (%d px differ, max %d)\n",
                  std::string(testLabel).c_str(), mismatched, params.maxMismatchedPixels);

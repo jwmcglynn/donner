@@ -2,9 +2,9 @@
 #include <cstdint>
 // NOLINTEND(llvm-include-order)
 
-#include "donner/editor/AddressBar.h"
-
 #include <gtest/gtest.h>
+
+#include "donner/editor/AddressBar.h"
 
 namespace donner::editor {
 namespace {

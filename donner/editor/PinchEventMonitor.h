@@ -25,8 +25,7 @@ namespace donner::editor {
 /// @param wheelZoomStep Multiplicative zoom step per +1.0 scroll unit.
 /// @return Synthetic `scrollDelta.y` that yields the same zoom factor,
 ///   or 0.0 for degenerate inputs.
-[[nodiscard]] double PinchMagnificationToScrollDelta(double magnification,
-                                                     double wheelZoomStep);
+[[nodiscard]] double PinchMagnificationToScrollDelta(double magnification, double wheelZoomStep);
 
 /// Install the native pinch monitor for the editor window.
 ///

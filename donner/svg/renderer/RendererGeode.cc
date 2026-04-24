@@ -2367,7 +2367,8 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   // renders into the expanded region. Subsequent setTransform calls will also pick up the offset.
   if (filterBufferOffsetX != 0 || filterBufferOffsetY != 0) {
     impl_->deviceFromLocalTransform =
-        impl_->deviceFromLocalTransform * Transform2d::Translate(filterBufferOffsetX, filterBufferOffsetY);
+        impl_->deviceFromLocalTransform *
+        Transform2d::Translate(filterBufferOffsetX, filterBufferOffsetY);
   }
 
   // Per SVG Filter Effects § filter region: pixels outside the filter region are

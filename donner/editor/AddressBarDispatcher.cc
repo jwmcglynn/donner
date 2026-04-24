@@ -10,8 +10,7 @@ namespace {
 AddressBarStatus StatusForFetchError(FetchError::Kind kind) {
   switch (kind) {
     case FetchError::Kind::kPolicyDenied:
-    case FetchError::Kind::kNeedsUserConsent:
-      return AddressBarStatus::kPolicyDenied;
+    case FetchError::Kind::kNeedsUserConsent: return AddressBarStatus::kPolicyDenied;
     case FetchError::Kind::kSchemeNotSupported:
     case FetchError::Kind::kInvalidUri:
     case FetchError::Kind::kNotFound:
@@ -20,8 +19,7 @@ AddressBarStatus StatusForFetchError(FetchError::Kind kind) {
     case FetchError::Kind::kTooLarge:
     case FetchError::Kind::kReadFailed:
     case FetchError::Kind::kNetworkError:
-    case FetchError::Kind::kCurlMissing:
-      return AddressBarStatus::kFetchError;
+    case FetchError::Kind::kCurlMissing: return AddressBarStatus::kFetchError;
   }
   return AddressBarStatus::kFetchError;
 }
@@ -44,8 +42,8 @@ void AddressBarDispatcher::pump() {
     return;
   }
 
-  std::cerr << "[addrbar] navigation uri=" << nav->uri
-            << " droppedBytes=" << nav->bytes.size() << "\n";
+  std::cerr << "[addrbar] navigation uri=" << nav->uri << " droppedBytes=" << nav->bytes.size()
+            << "\n";
 
   // Drop / picker short-circuit: bytes are already in hand, no fetch.
   if (!nav->bytes.empty()) {
@@ -85,8 +83,7 @@ void AddressBarDispatcher::startFetch(std::string uri) {
         // total. Some servers stream without a Content-Length — keep
         // the indeterminate slider for those rather than pinning to 0.
         if (total > 0) {
-          addressBar_.setLoadProgress(static_cast<float>(received) /
-                                       static_cast<float>(total));
+          addressBar_.setLoadProgress(static_cast<float>(received) / static_cast<float>(total));
         }
       });
   activeHandle_ = handle;

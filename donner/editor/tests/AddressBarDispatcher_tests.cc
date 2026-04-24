@@ -73,8 +73,7 @@ protected:
   FakeFetcher fetcher_;
   std::vector<CapturedLoad> loads_;
   AddressBarDispatcher dispatcher_{bar_, fetcher_, [this](const AddressBarLoadRequest& r) {
-                                     loads_.push_back(
-                                         {r.originUri, r.bytes, r.resolvedPath});
+                                     loads_.push_back({r.originUri, r.bytes, r.resolvedPath});
                                    }};
 };
 
@@ -95,8 +94,8 @@ TEST_F(AddressBarDispatcherTest, DropPayloadSkipsFetcherAndInvokesLoad) {
 }
 
 TEST_F(AddressBarDispatcherTest, SuccessfulFetchRoutesBytesAndLogsHistory) {
-  fetcher_.nextBytes = FetchBytes{{0x3C, 0x73, 0x76, 0x67}, "/resolved/file.svg",
-                                  "file:///resolved/file.svg"};
+  fetcher_.nextBytes =
+      FetchBytes{{0x3C, 0x73, 0x76, 0x67}, "/resolved/file.svg", "file:///resolved/file.svg"};
   bar_.notifyDropPayload("file:///resolved/file.svg", {});  // uri-only navigation
 
   dispatcher_.pump();

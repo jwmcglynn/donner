@@ -14,28 +14,23 @@ TEST(LocalPathDisplayTest, EmptyPassesThrough) {
 }
 
 TEST(LocalPathDisplayTest, HttpsPassesThrough) {
-  EXPECT_EQ(PrettifyLocalPath("https://example.com/x.svg", kCwd),
-            "https://example.com/x.svg");
+  EXPECT_EQ(PrettifyLocalPath("https://example.com/x.svg", kCwd), "https://example.com/x.svg");
 }
 
 TEST(LocalPathDisplayTest, HttpPassesThrough) {
-  EXPECT_EQ(PrettifyLocalPath("http://example.com/x.svg", kCwd),
-            "http://example.com/x.svg");
+  EXPECT_EQ(PrettifyLocalPath("http://example.com/x.svg", kCwd), "http://example.com/x.svg");
 }
 
 TEST(LocalPathDisplayTest, DataUriPassesThrough) {
-  EXPECT_EQ(PrettifyLocalPath("data:image/svg+xml,<svg/>", kCwd),
-            "data:image/svg+xml,<svg/>");
+  EXPECT_EQ(PrettifyLocalPath("data:image/svg+xml,<svg/>", kCwd), "data:image/svg+xml,<svg/>");
 }
 
 TEST(LocalPathDisplayTest, AbsolutePathInsideCwdBecomesRelative) {
-  EXPECT_EQ(PrettifyLocalPath("/workspace/donner/donner_splash.svg", kCwd),
-            "./donner_splash.svg");
+  EXPECT_EQ(PrettifyLocalPath("/workspace/donner/donner_splash.svg", kCwd), "./donner_splash.svg");
 }
 
 TEST(LocalPathDisplayTest, AbsolutePathInSubdirGetsSubdirRelative) {
-  EXPECT_EQ(PrettifyLocalPath("/workspace/donner/testdata/foo.svg", kCwd),
-            "./testdata/foo.svg");
+  EXPECT_EQ(PrettifyLocalPath("/workspace/donner/testdata/foo.svg", kCwd), "./testdata/foo.svg");
 }
 
 TEST(LocalPathDisplayTest, FileUriInsideCwdIsRelativized) {
