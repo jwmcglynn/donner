@@ -98,6 +98,15 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "url_security_tests",
+    srcs = ["UrlSecurity_tests.cc"],
+    deps = [
+        "//donner/editor/sandbox:url_security",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_fuzzer(
     name = "sandbox_wire_fuzzer",
     srcs = ["SandboxWire_fuzzer.cc"],

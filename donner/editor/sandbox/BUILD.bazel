@@ -30,6 +30,17 @@ donner_cc_library(
     srcs = ["SvgSource.cc"],
     hdrs = ["SvgSource.h"],
     visibility = ["//donner/editor:__subpackages__"],
+    deps = [":url_security"],
+)
+
+# URL-parsing + private-IP classifier used by SvgSource's curl path for
+# SSRF defense. Broken out so the security-critical helpers carry their
+# own table-driven unit tests.
+donner_cc_library(
+    name = "url_security",
+    srcs = ["UrlSecurity.cc"],
+    hdrs = ["UrlSecurity.h"],
+    visibility = ["//donner/editor:__subpackages__"],
 )
 
 donner_cc_library(
