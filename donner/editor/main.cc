@@ -34,6 +34,8 @@
 
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Transform.h"
+#include "donner/editor/AddressBar.h"
+#include "donner/editor/AddressBarDispatcher.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
@@ -43,7 +45,17 @@
 #include "donner/editor/PinchEventMonitor.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/editor/sandbox/bridge/BridgeTexture.h"
+#ifndef __EMSCRIPTEN__
+// The desktop address-bar stack uses `SvgSource` + `ResourceGatekeeper` to
+// enforce the local resource policy before shelling out to `curl`. On WASM
+// the browser is the policy (CORS / mixed-content / user-gesture), so we
+// drop those headers entirely — their libraries aren't compiled into the
+// WASM target.
+#include "donner/editor/ResourcePolicy.h"
+#include "donner/editor/sandbox/SvgSource.h"
+#endif
 #include "donner/editor/SelectionOverlay.h"
+#include "donner/editor/SvgFetcher.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TracyWrapper.h"
@@ -686,6 +698,24 @@ int main(int argc, char** argv) {
   }
 #endif
 
+  // Address bar stack. The widget is shared between desktop and WASM; the
+  // fetcher underneath differs (desktop: `SvgSource` + curl for http(s);
+  // WASM: `emscripten_fetch` with the browser as the sandbox). See
+  // `docs/design_docs/0023-editor_sandbox.md` §S10/§S11.
+#ifndef __EMSCRIPTEN__
+  donner::editor::sandbox::SvgSource svgSource;
+  donner::editor::ResourceGatekeeper resourceGatekeeper(donner::editor::DefaultDesktopPolicy());
+  auto fetcher = donner::editor::MakeDesktopFetcher(resourceGatekeeper, svgSource);
+#else
+  auto fetcher = donner::editor::MakeWasmFetcher();
+#endif
+  donner::editor::AddressBar addressBar;
+  if (initialPath.has_value()) {
+    addressBar.setInitialUri(*initialPath);
+  }
+  // The `AddressBarDispatcher` that drives this widget is constructed further
+  // down, once the `loadBytesIntoDocument` helper it needs is in scope.
+
   // Load the initial document.
   {
     auto loadFuture = backend->loadBytes(
@@ -699,6 +729,9 @@ int main(int argc, char** argv) {
       }
       std::cerr << "\n";
     }
+    addressBar.setStatus({donner::editor::AddressBarStatus::kRendered,
+                          loadResult.ok ? "OK" : "Parse error",
+                          initialPath.value_or(std::string())});
   }
   std::cerr << "[startup] +" << msSinceStart() << "ms loadBytes done\n";
 
@@ -828,6 +861,52 @@ int main(int argc, char** argv) {
     std::cerr << "[repro] recording UI inputs to " << *reproOutputPath << "\n";
   }
 #endif
+
+  // Core loader. Used by three entry points: the File → Open modal, the
+  // WASM file-picker / drop shortcut, and the address-bar dispatcher. Takes
+  // already-in-memory bytes plus the origin URI (what the user typed or
+  // dropped) and optional resolved path (for title bar + file-watcher
+  // affordances; empty on HTTP loads). Returns true when the backend
+  // accepted the parse. Declared above the main loop so the dispatcher can
+  // hold a stable reference to it across frames.
+  const std::function<bool(const std::string&, std::span<const uint8_t>,
+                           const std::optional<std::string>&)>
+      loadBytesIntoDocument = [&](const std::string& originUri, std::span<const uint8_t> bytes,
+                                  const std::optional<std::string>& resolvedPath) -> bool {
+    auto loadFuture = backend->loadBytes(bytes, resolvedPath.has_value()
+                                                    ? std::optional<std::string>(*resolvedPath)
+                                                    : std::optional<std::string>(originUri));
+    auto loadResult = loadFuture.get();
+    if (!loadResult.ok) {
+      openFileError = "Failed to parse SVG.";
+      addressBar.setStatus(
+          {donner::editor::AddressBarStatus::kParseError, "Failed to parse SVG.", originUri});
+      return false;
+    }
+
+    const std::string contents(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    textEditor.setText(contents);
+    textEditor.resetTextChanged();
+    currentFilePath = resolvedPath.has_value() ? *resolvedPath : originUri;
+    documentDirty = false;
+    textChangePending = false;
+    textDispatchThrottled = false;
+    textChangeIdleTimer = 0.0f;
+    pendingFrame.reset();
+    openFileError.clear();
+    addressBar.setInitialUri(originUri);
+    addressBar.setStatus({donner::editor::AddressBarStatus::kRendered, "OK", originUri});
+
+    ProcessFrameResult(loadResult, texture, textureWidth, textureHeight, viewport, textEditor,
+                       lastShownErrorLine, lastShownErrorReason);
+    return true;
+  };
+
+  donner::editor::AddressBarDispatcher addressBarDispatcher(
+      addressBar, *fetcher, [&](const donner::editor::AddressBarLoadRequest& r) {
+        (void)loadBytesIntoDocument(
+            r.originUri, std::span<const uint8_t>(r.bytes.data(), r.bytes.size()), r.resolvedPath);
+      });
 
   std::cerr << "[startup] +" << msSinceStart() << "ms entering main loop\n";
 
@@ -991,29 +1070,10 @@ int main(int argc, char** argv) {
       out << file.rdbuf();
       const std::string contents = std::move(out).str();
 
-      auto loadFuture = backend->loadBytes(
+      return loadBytesIntoDocument(
+          path.string(),
           std::span(reinterpret_cast<const uint8_t*>(contents.data()), contents.size()),
           path.string());
-      auto loadResult = loadFuture.get();
-      if (!loadResult.ok) {
-        openFileError = "Failed to parse SVG.";
-        return false;
-      }
-
-      textEditor.setText(contents);
-      textEditor.resetTextChanged();
-      currentFilePath = path.string();
-      documentDirty = false;
-      textChangePending = false;
-      textDispatchThrottled = false;
-      textChangeIdleTimer = 0.0f;
-      pendingFrame.reset();
-      openFileError.clear();
-
-      // Upload the new bitmap.
-      ProcessFrameResult(loadResult, texture, textureWidth, textureHeight, viewport, textEditor,
-                         lastShownErrorLine, lastShownErrorReason);
-      return true;
     };
 
 #ifdef __EMSCRIPTEN__
@@ -1023,6 +1083,10 @@ int main(int argc, char** argv) {
       (void)tryOpenPath(path);
     }
 #endif
+
+    // Pump the address bar. The dispatcher itself is defined above the main
+    // loop so it isn't reconstructed each frame; here we only service it.
+    addressBarDispatcher.pump();
 
     const auto triggerOpen = [&]() {
 #ifdef __EMSCRIPTEN__
@@ -1306,6 +1370,18 @@ int main(int argc, char** argv) {
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
     ImGui::Begin("##EditorDockspaceHost", nullptr, dockspaceHostFlags);
     ImGui::PopStyleVar(3);
+
+    // Address bar lives above the dockspace so every pane reads the same
+    // URL context. Dispatcher is pumped above (before this frame's UI);
+    // drawing here renders this frame's state and captures navigations
+    // that fire on Enter / Load. Pumped again next frame.
+    {
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.0f, 4.0f));
+      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+      (void)addressBar.draw();
+      ImGui::PopStyleVar(2);
+      ImGui::Separator();
+    }
 
     const ImGuiID dockspaceId = ImGui::GetID("EditorDockspace");
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);

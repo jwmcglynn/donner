@@ -22,6 +22,7 @@ config_setting(
 _EDITOR_WASM_RUNTIME_DEPS = [
     "//donner/base",
     "//donner/editor:address_bar",
+    "//donner/editor:address_bar_dispatcher",
     "//donner/editor:editor_backend_client",
     "//donner/editor:editor_backend_client_inprocess",
     "//donner/editor:editor_icon",
@@ -35,6 +36,7 @@ _EDITOR_WASM_RUNTIME_DEPS = [
     "//donner/editor:text_patch",
     "//donner/editor:tracy_wrapper",
     "//donner/editor:viewport_state",
+    "//donner/editor/repro:repro_recorder",
     "//donner/svg",
     "//donner/svg/renderer",
     "//third_party/emscripten-glfw",

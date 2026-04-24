@@ -100,6 +100,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "address_bar_dispatcher_tests",
+    srcs = ["AddressBarDispatcher_tests.cc"],
+    deps = [
+        "//donner/editor:address_bar",
+        "//donner/editor:address_bar_dispatcher",
+        "//donner/editor:svg_fetcher",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resource_policy_tests",
     srcs = ["ResourcePolicy_tests.cc"],
     deps = [

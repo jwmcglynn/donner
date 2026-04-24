@@ -77,4 +77,12 @@ public:
 std::unique_ptr<SvgFetcher> MakeDesktopFetcher(ResourceGatekeeper& gatekeeper,
                                                sandbox::SvgSource& source);
 
+#ifdef __EMSCRIPTEN__
+/// Creates the WASM fetcher implementation backed by `emscripten_fetch`.
+/// CORS, HTTPS-only rules, and mixed-content blocking are enforced by the
+/// browser — this fetcher is intentionally permissive. See
+/// `SvgFetcherWasm.cc` for the threading / lifetime notes.
+std::unique_ptr<SvgFetcher> MakeWasmFetcher();
+#endif
+
 }  // namespace donner::editor

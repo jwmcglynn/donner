@@ -162,11 +162,16 @@ embed_resources(
 )
 
 _EDITOR_RUNTIME_DEPS = [
+    ":address_bar",
+    ":address_bar_dispatcher",
     ":editor_backend_client",
     ":editor_icon",
     ":editor_splash",
     ":pinch_event_monitor",
+    ":resource_policy",
+    ":svg_fetcher",
     ":viewport_state",
+    "//donner/editor/sandbox:svg_source",
 ] + select({
     "@platforms//os:macos": [":pinch_event_monitor_macos"],
     "//conditions:default": [],
@@ -339,6 +344,20 @@ donner_cc_library(
             "//donner/editor/sandbox:svg_source",
         ],
     }),
+)
+
+# Glue between `AddressBar` (UI widget) and `SvgFetcher` (I/O). Kept in its
+# own library so `main.cc` doesn't inline the logic and tests can drive the
+# navigation → fetch → loadBytes flow with a fake fetcher.
+donner_cc_library(
+    name = "address_bar_dispatcher",
+    srcs = ["AddressBarDispatcher.cc"],
+    hdrs = ["AddressBarDispatcher.h"],
+    deps = [
+        ":address_bar",
+        ":address_bar_status",
+        ":svg_fetcher",
+    ],
 )
 
 # Header-only target for the EditorBackendClient abstract interface.
