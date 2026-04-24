@@ -1133,6 +1133,20 @@ int main(int argc, char** argv) {
   while (!glfwWindowShouldClose(window)) {
     ZoneScopedN("main_loop");
 
+#ifdef __EMSCRIPTEN__
+    // On WASM emscripten-glfw updates its cached input state during
+    // pollEvents callback dispatch — there's no "live OS query" path
+    // the way desktop GLFW has. If we read `glfwGetMouseButton` BEFORE
+    // polling, `needsActive` below decides based on last iteration's
+    // state, which stutters drag start/end by a full iteration each
+    // way (and with ASYNCIFY's `emscripten_sleep(0)` round-trips that's
+    // a visible lag). Poll first so every state read below sees fresh
+    // data. On desktop the idle path is `glfwWaitEventsTimeout` further
+    // down, which inherently drains events on wake, so the equivalent
+    // hoist isn't needed there.
+    glfwPollEvents();
+#endif
+
     // Compute whether anything time-dependent is happening BEFORE we
     // decide between poll/wait. Signals read here are either external
     // to ImGui (futures, dispatcher state, the repro recorder) or
@@ -1143,8 +1157,16 @@ int main(int argc, char** argv) {
     const bool middleMouseHeld = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
     const bool rightMouseHeld = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
     const bool spaceHeldNow = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+    // ImGui's own mouse-down state is updated synchronously from the
+    // same emscripten-glfw callbacks, and catches the case where our
+    // direct `glfwGetMouseButton` read is still the one-iteration-stale
+    // value (can happen on the first loop iteration after a press, or
+    // when the browser coalesces pointer events). Treated as
+    // belt-and-suspenders — either signal indicates "user is actively
+    // clicking, keep polling at full speed".
+    const bool imguiMouseDown = ImGui::IsAnyMouseDown();
     const bool mouseOrModHeld =
-        leftMouseHeld || middleMouseHeld || rightMouseHeld || spaceHeldNow;
+        leftMouseHeld || middleMouseHeld || rightMouseHeld || spaceHeldNow || imguiMouseDown;
     // Text-change debounce must keep ticking without user input —
     // `textDispatchThrottled` stays true from first keystroke through
     // the debounce expiry, gating the "send the tail edit" replay. If
@@ -1199,7 +1221,10 @@ int main(int argc, char** argv) {
     // takes care of blink cadence for us) so the FPS counter doesn't
     // tick. Re-rendering a blink at 60 FPS on idle would defeat the
     // whole point of the on-demand loop.
-    glfwPollEvents();
+    //
+    // `glfwPollEvents()` already fired at the TOP of this iteration —
+    // see the `#ifdef __EMSCRIPTEN__` block right after the `while`
+    // header — so `needsActive` above was computed against fresh state.
     if (!needsActive) {
       // Still yield so emscripten's ASYNCIFY doesn't starve the
       // browser event loop (would manifest as the canvas freezing
@@ -2164,9 +2189,16 @@ int main(int argc, char** argv) {
     {
       const ImGuiIO& lastIo = ImGui::GetIO();
       const bool anyItemActive = ImGui::IsAnyItemActive();
-      const bool anyMouseDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
-                                    ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
-                                    ImGui::IsMouseDragging(ImGuiMouseButton_Right);
+      // Use `IsAnyMouseDown` rather than `IsMouseDragging`: the latter
+      // gates on a ~6px displacement threshold, so the first handful
+      // of milliseconds after a press (before enough motion has
+      // accumulated) don't register as "dragging" and the next-frame
+      // decision falls back to lastFrameWasActive=false. On WASM that
+      // manifests as a visible stutter at the start of every drag:
+      // the skip branch fires one iteration, the mouse events queue,
+      // the next frame replays them all at once, jump. Any mouse
+      // button held is sufficient signal to keep the loop polling.
+      const bool anyMouseDragging = ImGui::IsAnyMouseDown();
       const bool wantTextInput = lastIo.WantTextInput;
       const bool popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
       // "Active" = something other than a blinking cursor needs a
