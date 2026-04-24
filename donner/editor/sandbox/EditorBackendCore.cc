@@ -4,6 +4,7 @@
 #include <limits>
 #include <numeric>
 #include <span>
+#include <sstream>
 
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -14,6 +15,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor::sandbox {
 
@@ -400,6 +402,98 @@ void EditorBackendCore::populateTreeSummary(FrameTreeSummary& tree) {
       stack.push_back({*it, nodeIndex, depth + 1});
     }
   }
+}
+
+void EditorBackendCore::populateInspectedElement(FramePayload& frame) {
+  frame.hasInspectedElement = false;
+
+  if (!editor_.hasDocument()) {
+    return;
+  }
+  const auto& selected = editor_.selectedElements();
+  // Single-selection only — the sidebar renders one element at a time.
+  // Multi-selection would need a separate "properties common to all"
+  // mode that we haven't designed yet.
+  if (selected.size() != 1) {
+    return;
+  }
+
+  const svg::SVGElement& element = selected.front();
+  auto xmlNodeOpt = xml::XMLNode::TryCast(element.entityHandle());
+  if (!xmlNodeOpt.has_value()) {
+    return;
+  }
+  const xml::XMLNode& xmlNode = *xmlNodeOpt;
+
+  auto& insp = frame.inspectedElement;
+  insp.entityId = entityIdFor(element.entityHandle().entity(), element);
+  insp.entityGeneration = entityGeneration_;
+  auto tagNameRef = element.tagName();
+  insp.tagName = std::string(tagNameRef.name);
+
+  RcString elemId = element.id();
+  insp.idAttr = elemId.empty() ? std::string() : std::string(std::string_view(elemId));
+  RcString cls = element.className();
+  insp.className = cls.empty() ? std::string() : std::string(std::string_view(cls));
+
+  // XML attributes, in document order. `XMLNode::attributes()` returns
+  // the authored list including any namespace prefix; we flatten with
+  // a simple "prefix:name" rendering when a prefix is present.
+  insp.xmlAttributes.clear();
+  auto attrs = xmlNode.attributes();
+  insp.xmlAttributes.reserve(attrs.size());
+  for (const auto& attrName : attrs) {
+    std::string formatted;
+    if (!attrName.namespacePrefix.empty()) {
+      formatted.reserve(attrName.namespacePrefix.size() + 1 + attrName.name.size());
+      formatted.append(std::string_view(attrName.namespacePrefix));
+      formatted.push_back(':');
+      formatted.append(std::string_view(attrName.name));
+    } else {
+      formatted.assign(std::string_view(attrName.name));
+    }
+
+    InspectedAttributeEntry entry;
+    entry.name = std::move(formatted);
+    if (auto value = xmlNode.getAttribute(attrName); value.has_value()) {
+      entry.value.assign(std::string_view(*value));
+    }
+    insp.xmlAttributes.push_back(std::move(entry));
+  }
+
+  // Computed-style snapshot. Stick to a short, stable list of the
+  // properties reviewers care about most — a full dump would bloat
+  // every frame and the operator<< format isn't user-friendly at
+  // scale. The format here is "value (state)" extracted from
+  // `operator<<` on the `Property`.
+  insp.computedStyle.clear();
+  const auto& cs = element.getComputedStyle();
+  const auto appendProperty = [&insp](const char* name, const auto& prop) {
+    std::ostringstream os;
+    os << prop;
+    // `operator<<` prepends "name:"; strip so the sidebar table can
+    // show just the value column.
+    std::string line = os.str();
+    const std::string prefix = std::string(prop.name) + ":";
+    if (line.rfind(prefix, 0) == 0) {
+      line.erase(0, prefix.size());
+      while (!line.empty() && line.front() == ' ') {
+        line.erase(0, 1);
+      }
+    }
+    insp.computedStyle.push_back({std::string(name), std::move(line)});
+  };
+  appendProperty("display", cs.display);
+  appendProperty("visibility", cs.visibility);
+  appendProperty("opacity", cs.opacity);
+  appendProperty("fill", cs.fill);
+  appendProperty("fill-opacity", cs.fillOpacity);
+  appendProperty("stroke", cs.stroke);
+  appendProperty("stroke-width", cs.strokeWidth);
+  appendProperty("stroke-opacity", cs.strokeOpacity);
+  appendProperty("color", cs.color);
+
+  frame.hasInspectedElement = true;
 }
 
 void EditorBackendCore::appendPendingSourceWritebacks(FramePayload& frame) {
@@ -883,6 +977,9 @@ FramePayload EditorBackendCore::buildFramePayload() {
 
     // Tree summary.
     populateTreeSummary(frame.tree);
+
+    // Inspector snapshot for the single selected element, if any.
+    populateInspectedElement(frame);
 
     appendPendingSourceWritebacks(frame);
 

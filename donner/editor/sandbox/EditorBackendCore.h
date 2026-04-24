@@ -105,6 +105,12 @@ private:
   /// Walk the document tree and populate \p tree.
   void populateTreeSummary(FrameTreeSummary& tree);
 
+  /// Populate the inspector snapshot for the current selection — flat
+  /// XML attribute list + minimal computed-style dump. No-op when the
+  /// selection isn't exactly one element. Sets
+  /// `frame.hasInspectedElement` accordingly.
+  void populateInspectedElement(FramePayload& frame);
+
   /// Drain pending DOM-to-source writebacks into \p frame.
   void appendPendingSourceWritebacks(FramePayload& frame);
 

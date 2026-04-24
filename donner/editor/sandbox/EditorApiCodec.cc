@@ -308,6 +308,27 @@ std::vector<uint8_t> EncodeFrame(const FramePayload& payload) {
     }
   }
 
+  // Inspector snapshot — optional trailing block (G4 in §S12).
+  w.writeBool(payload.hasInspectedElement);
+  if (payload.hasInspectedElement) {
+    const auto& insp = payload.inspectedElement;
+    w.writeU64(insp.entityId);
+    w.writeU64(insp.entityGeneration);
+    w.writeString(insp.tagName);
+    w.writeString(insp.idAttr);
+    w.writeString(insp.className);
+    w.writeU32(static_cast<uint32_t>(insp.xmlAttributes.size()));
+    for (const auto& attr : insp.xmlAttributes) {
+      w.writeString(attr.name);
+      w.writeString(attr.value);
+    }
+    w.writeU32(static_cast<uint32_t>(insp.computedStyle.size()));
+    for (const auto& attr : insp.computedStyle) {
+      w.writeString(attr.name);
+      w.writeString(attr.value);
+    }
+  }
+
   return std::move(w).take();
 }
 
@@ -666,6 +687,39 @@ bool DecodeFrame(std::span<const uint8_t> data, FramePayload& out) {
       if (!ReadFrameBitmap(r, out.compositedPreviewPromoted)) return false;
       if (!ReadFrameBitmap(r, out.compositedPreviewForeground)) return false;
       if (!ReadFrameBitmap(r, out.compositedPreviewOverlay)) return false;
+    }
+  }
+
+  // Inspector snapshot — optional trailing block.
+  if (r.remaining() == 0) {
+    out.hasInspectedElement = false;
+    return !r.failed();
+  }
+  if (!r.readBool(out.hasInspectedElement)) return false;
+  if (out.hasInspectedElement) {
+    auto& insp = out.inspectedElement;
+    if (!r.readU64(insp.entityId)) return false;
+    if (!r.readU64(insp.entityGeneration)) return false;
+    if (!r.readString(insp.tagName)) return false;
+    if (!r.readString(insp.idAttr)) return false;
+    if (!r.readString(insp.className)) return false;
+    uint32_t xmlCount = 0;
+    // Cap at the same "max selections" ballpark; a single element
+    // with thousands of attributes would be pathological but non-fatal
+    // — reject to keep the inspector table responsive.
+    constexpr uint32_t kMaxAttributes = 4096;
+    if (!r.readCount(xmlCount, kMaxAttributes)) return false;
+    insp.xmlAttributes.resize(xmlCount);
+    for (auto& attr : insp.xmlAttributes) {
+      if (!r.readString(attr.name)) return false;
+      if (!r.readString(attr.value)) return false;
+    }
+    uint32_t styleCount = 0;
+    if (!r.readCount(styleCount, kMaxAttributes)) return false;
+    insp.computedStyle.resize(styleCount);
+    for (auto& attr : insp.computedStyle) {
+      if (!r.readString(attr.name)) return false;
+      if (!r.readString(attr.value)) return false;
     }
   }
 

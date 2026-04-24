@@ -698,5 +698,84 @@ TEST(EditorApiCodecTest, FrameTreeSummaryEmpty) {
   EXPECT_TRUE(out.tree.nodes.empty());
 }
 
+// ===========================================================================
+// Inspector snapshot round-trip (G4 in §S12 of 0023-editor_sandbox.md).
+// Covers empty (no selection), populated with XML attributes + computed
+// style, and selector-only (tag/id/class without attributes — the
+// degenerate path for a fresh document with no authored styling).
+// ===========================================================================
+
+TEST(EditorApiCodecTest, InspectedElementDefaultsWhenAbsent) {
+  FramePayload in;
+  in.frameId = 7;
+  // hasInspectedElement left default (false).
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+  EXPECT_FALSE(out.hasInspectedElement);
+}
+
+TEST(EditorApiCodecTest, InspectedElementRoundTripFull) {
+  FramePayload in;
+  in.frameId = 8;
+
+  in.hasInspectedElement = true;
+  auto& insp = in.inspectedElement;
+  insp.entityId = 0xDEADBEEFu;
+  insp.entityGeneration = 3;
+  insp.tagName = "rect";
+  insp.idAttr = "hero";
+  insp.className = "highlight accent";
+  insp.xmlAttributes = {
+      {"x", "10"},      {"y", "20"},     {"width", "100"},
+      {"height", "50"}, {"fill", "red"}, {"xlink:href", "#resource"},
+  };
+  insp.computedStyle = {
+      {"display", "Inline (set)"},
+      {"fill", "Color(rgba(255,0,0,255)) (set)"},
+      {"stroke", "none (not set)"},
+  };
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+  ASSERT_TRUE(out.hasInspectedElement);
+  const auto& rtt = out.inspectedElement;
+  EXPECT_EQ(rtt.entityId, 0xDEADBEEFu);
+  EXPECT_EQ(rtt.entityGeneration, 3u);
+  EXPECT_EQ(rtt.tagName, "rect");
+  EXPECT_EQ(rtt.idAttr, "hero");
+  EXPECT_EQ(rtt.className, "highlight accent");
+  ASSERT_EQ(rtt.xmlAttributes.size(), 6u);
+  EXPECT_EQ(rtt.xmlAttributes[0].name, "x");
+  EXPECT_EQ(rtt.xmlAttributes[0].value, "10");
+  EXPECT_EQ(rtt.xmlAttributes[5].name, "xlink:href");
+  EXPECT_EQ(rtt.xmlAttributes[5].value, "#resource");
+  ASSERT_EQ(rtt.computedStyle.size(), 3u);
+  EXPECT_EQ(rtt.computedStyle[1].name, "fill");
+  EXPECT_EQ(rtt.computedStyle[1].value, "Color(rgba(255,0,0,255)) (set)");
+}
+
+TEST(EditorApiCodecTest, InspectedElementRoundTripTagOnly) {
+  FramePayload in;
+  in.frameId = 9;
+  in.hasInspectedElement = true;
+  in.inspectedElement.entityId = 1;
+  in.inspectedElement.entityGeneration = 1;
+  in.inspectedElement.tagName = "svg";
+  // id/class/attributes/computedStyle all empty.
+
+  auto encoded = EncodeFrame(in);
+  FramePayload out;
+  ASSERT_TRUE(DecodeFrame(encoded, out));
+  ASSERT_TRUE(out.hasInspectedElement);
+  EXPECT_EQ(out.inspectedElement.tagName, "svg");
+  EXPECT_TRUE(out.inspectedElement.idAttr.empty());
+  EXPECT_TRUE(out.inspectedElement.className.empty());
+  EXPECT_TRUE(out.inspectedElement.xmlAttributes.empty());
+  EXPECT_TRUE(out.inspectedElement.computedStyle.empty());
+}
+
 }  // namespace
 }  // namespace donner::editor::sandbox

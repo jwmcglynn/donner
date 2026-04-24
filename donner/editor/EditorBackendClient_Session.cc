@@ -144,6 +144,11 @@ FrameResult DecodeFrameResult(const FramePayload& frame) {
   // Tree summary.
   result.tree = frame.tree;
 
+  // Inspector snapshot — matches EditorBackendClient_InProcess.cc.
+  if (frame.hasInspectedElement) {
+    result.inspectedElement = frame.inspectedElement;
+  }
+
   // Document viewBox — needed by the host to drive screen↔document
   // math; see the mirroring path in EditorBackendClient_InProcess.cc.
   if (frame.hasDocumentViewBox) {
@@ -360,6 +365,11 @@ public:
     return tree_;
   }
 
+  const std::optional<sandbox::InspectedElementSnapshot>& inspectedElement() const override {
+    std::lock_guard lock(stateMutex_);
+    return inspectedElement_;
+  }
+
   CompositorFastPathCounters compositorFastPathCountersForTesting() const override { return {}; }
 
 private:
@@ -414,6 +424,7 @@ private:
       latestDocumentViewBox_ = result.documentViewBox;
     }
     tree_ = result.tree;
+    inspectedElement_ = result.inspectedElement;
     if (!result.parseDiagnostics.empty()) {
       lastParseError_ = result.parseDiagnostics.front();
     } else {
@@ -430,6 +441,7 @@ private:
   svg::RendererBitmap latestBitmap_;
   std::optional<Box2d> latestDocumentViewBox_;
   sandbox::FrameTreeSummary tree_;
+  std::optional<sandbox::InspectedElementSnapshot> inspectedElement_;
   std::optional<ParseDiagnostic> lastParseError_;
 
   // Callbacks.

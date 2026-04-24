@@ -130,6 +130,12 @@ FrameResult MakeFrameResult(const sandbox::FramePayload& frame) {
   // Tree summary.
   result.tree = frame.tree;
 
+  // Inspector snapshot — present only when exactly one element is
+  // selected. Host UI shows an empty inspector otherwise.
+  if (frame.hasInspectedElement) {
+    result.inspectedElement = frame.inspectedElement;
+  }
+
   // Document viewBox — the SVG-user-space coordinate system bboxes /
   // pointer events travel in. Absent when the backend has no document
   // loaded yet.
@@ -283,6 +289,9 @@ public:
   std::optional<Box2d> latestDocumentViewBox() const override { return latestDocumentViewBox_; }
   std::optional<ParseDiagnostic> lastParseError() const override { return lastParseError_; }
   const sandbox::FrameTreeSummary& tree() const override { return tree_; }
+  const std::optional<sandbox::InspectedElementSnapshot>& inspectedElement() const override {
+    return inspectedElement_;
+  }
   CompositorFastPathCounters compositorFastPathCountersForTesting() const override {
     const auto counters = core_.compositorFastPathCountersForTesting();
     return CompositorFastPathCounters{
@@ -311,6 +320,7 @@ private:
       latestDocumentViewBox_ = result.documentViewBox;
     }
     tree_ = result.tree;
+    inspectedElement_ = result.inspectedElement;
     if (!result.parseDiagnostics.empty()) {
       lastParseError_ = result.parseDiagnostics.front();
     } else {
@@ -325,6 +335,7 @@ private:
   svg::RendererBitmap latestBitmap_;
   std::optional<Box2d> latestDocumentViewBox_;
   sandbox::FrameTreeSummary tree_;
+  std::optional<sandbox::InspectedElementSnapshot> inspectedElement_;
   std::optional<ParseDiagnostic> lastParseError_;
 
   ToastCallback toastCallback_;

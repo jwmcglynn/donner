@@ -166,6 +166,45 @@ struct FrameTreeSummary {
   std::vector<TreeNodeEntry> nodes;
 };
 
+/// One XML attribute on the inspected element, already flattened to a
+/// string pair. The name includes any namespace prefix verbatim
+/// ("xlink:href", "id", "class", "fill", ...) — the host uses it for
+/// display only and never tries to reinterpret it as a live DOM node.
+struct InspectedAttributeEntry {
+  std::string name;
+  std::string value;
+};
+
+/// Flattened snapshot of a single selected element. Ships inside
+/// `FramePayload` so the host's inspector sidebar can render
+/// attributes + basic computed-style for the current selection
+/// without holding an `SVGElement` handle — the thin-client stays
+/// ignorant of the live DOM.
+///
+/// Design doc §S12 G4: "must be a flattened name/value structure,
+/// not an entt-reflection" and "no host-side SVGDocument
+/// reintroduction". Both are enforced by shipping plain
+/// `std::string`s, not entity references.
+struct InspectedElementSnapshot {
+  uint64_t entityId = 0;
+  uint64_t entityGeneration = 0;
+  /// Lower-case tag name ("rect", "g", "path", ...).
+  std::string tagName;
+  /// DOM id attribute verbatim, or empty.
+  std::string idAttr;
+  /// DOM class attribute verbatim, or empty.
+  std::string className;
+  /// Raw XML attributes in document order. Useful for the inspector
+  /// to show a complete picture of the element as authored.
+  std::vector<InspectedAttributeEntry> xmlAttributes;
+  /// Resolved / computed presentation-attribute & CSS snapshot for a
+  /// short, stable list of properties the inspector always shows
+  /// ("fill", "stroke", "opacity", "transform"). Strings are
+  /// pre-formatted by the backend so the host doesn't need a CSS
+  /// serializer. Empty when the element lacks the property.
+  std::vector<InspectedAttributeEntry> computedStyle;
+};
+
 /// RGBA bitmap payload carried inside a frame.
 struct FrameBitmapPayload {
   int32_t width = 0;
@@ -191,6 +230,13 @@ struct FramePayload {
   bool hasCursorHint = false;
   uint32_t cursorHintSourceOffset = 0;
   FrameTreeSummary tree;
+
+  /// Inspector snapshot for the current selection. Populated when the
+  /// backend has exactly one selected element; the host's sidebar
+  /// renders the attribute + computed-style tables from this. See
+  /// `InspectedElementSnapshot` doc for the invariants.
+  bool hasInspectedElement = false;
+  InspectedElementSnapshot inspectedElement;
 
   /// The SVG's own viewBox, in user-space (document) coordinates:
   /// `[x, y, width, height]`. This is the coordinate system all

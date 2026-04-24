@@ -2766,10 +2766,66 @@ int main(int argc, char** argv) {
     }
     ImGui::End();
 
-    // --- Inspector pane (placeholder) ---
+    // --- Inspector pane ---
     ImGui::Begin("Inspector");
-    ImGui::TextDisabled("Element inspector pending backend element-detail API (S9 follow-up).");
+    {
+      const auto& inspected = backend->inspectedElement();
+      if (!inspected.has_value()) {
+        ImGui::TextDisabled("Select a single element to inspect its attributes.");
+      } else {
+        const auto& insp = *inspected;
+        // Header: <tag id="..." class="...">
+        std::string header = "<" + insp.tagName;
+        if (!insp.idAttr.empty()) {
+          header += " id=\"" + insp.idAttr + "\"";
+        }
+        if (!insp.className.empty()) {
+          header += " class=\"" + insp.className + "\"";
+        }
+        header += ">";
+        ImGui::TextUnformatted(header.c_str());
+        ImGui::Separator();
+
+        if (!insp.xmlAttributes.empty()) {
+          ImGui::TextDisabled("XML attributes");
+          if (ImGui::BeginTable("InspectorAttrs", 2,
+                                ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.35f);
+            ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.65f);
+            for (const auto& attr : insp.xmlAttributes) {
+              ImGui::TableNextRow();
+              ImGui::TableNextColumn();
+              ImGui::TextUnformatted(attr.name.c_str());
+              ImGui::TableNextColumn();
+              ImGui::TextUnformatted(attr.value.c_str());
+            }
+            ImGui::EndTable();
+          }
+          ImGui::Spacing();
+        }
+
+        if (!insp.computedStyle.empty()) {
+          ImGui::TextDisabled("Computed style");
+          if (ImGui::BeginTable("InspectorStyle", 2,
+                                ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.35f);
+            ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.65f);
+            for (const auto& attr : insp.computedStyle) {
+              ImGui::TableNextRow();
+              ImGui::TableNextColumn();
+              ImGui::TextUnformatted(attr.name.c_str());
+              ImGui::TableNextColumn();
+              ImGui::TextUnformatted(attr.value.c_str());
+            }
+            ImGui::EndTable();
+          }
+        }
+      }
+    }
     ImGui::Separator();
+    ImGui::TextDisabled("Viewport");
     ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);
     ImGui::Text("Pan anchor: doc=(%.1f, %.1f) screen=(%.0f, %.0f)", viewport.panDocPoint.x,
                 viewport.panDocPoint.y, viewport.panScreenPoint.x, viewport.panScreenPoint.y);

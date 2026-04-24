@@ -134,6 +134,12 @@ struct FrameResult {
   std::vector<ParseDiagnostic> parseDiagnostics;
   /// Document tree summary from the backend.
   sandbox::FrameTreeSummary tree;
+  /// Inspector snapshot for the currently selected element. Populated
+  /// only when exactly one element is selected (and the backend has a
+  /// live document); `nullopt` otherwise. The snapshot is flattened
+  /// to plain strings so the host can render the sidebar attribute /
+  /// computed-style tables without touching the live DOM.
+  std::optional<sandbox::InspectedElementSnapshot> inspectedElement;
   /// The SVG's own viewBox, in document (user-space) coordinates.
   /// `nullopt` when the backend reports no document (before loadBytes
   /// or after a parse error). Host uses this to drive
@@ -245,6 +251,11 @@ public:
   [[nodiscard]] virtual std::optional<Box2d> latestDocumentViewBox() const = 0;
   [[nodiscard]] virtual std::optional<ParseDiagnostic> lastParseError() const = 0;
   [[nodiscard]] virtual const sandbox::FrameTreeSummary& tree() const = 0;
+  /// Latest inspector snapshot from the backend — populated only when
+  /// exactly one element is selected. `nullopt` otherwise. Drives the
+  /// "Inspector" sidebar pane.
+  [[nodiscard]] virtual const std::optional<sandbox::InspectedElementSnapshot>& inspectedElement()
+      const = 0;
   [[nodiscard]] virtual CompositorFastPathCounters compositorFastPathCountersForTesting() const = 0;
 
 protected:
