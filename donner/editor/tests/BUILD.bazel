@@ -163,8 +163,11 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_editor_backend",
     ],
+    # Both desktop platforms ship the session-backed client; the test
+    # exercises both `kSession` and `kInProcess` parameters.
     target_compatible_with = select({
         "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
