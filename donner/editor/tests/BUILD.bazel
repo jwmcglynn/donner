@@ -183,3 +183,22 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+# Headless integration test: runs `//donner/editor:editor
+# --backend-smoke-test` and asserts that `transport=session`,
+# `status=ok`, and `host_pid != backend_pid`. This is the P0
+# verification called out in docs/design_docs/0023-editor_sandbox.md
+# — if a future refactor silently drops back to the in-process
+# backend, this test goes red.
+sh_test(
+    name = "backend_smoke_test",
+    srcs = ["backend_smoke_test.sh"],
+    data = [
+        "//donner/editor:editor",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
