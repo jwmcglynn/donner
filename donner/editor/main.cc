@@ -629,6 +629,15 @@ int main(int argc, char** argv) {
   io.DisplayFramebufferScale =
       ImVec2(static_cast<float>(initialDisplayScale), static_cast<float>(initialDisplayScale));
   io.FontGlobalScale = static_cast<float>(1.0 / initialDisplayScale);
+#ifdef __EMSCRIPTEN__
+  // The imgui_impl_glfw backend auto-sets ConfigMacOSXBehaviors from
+  // `__APPLE__` at compile time, which is false for the WASM build even
+  // when the user's browser is on macOS. Without this flag ImGui routes
+  // `ImGuiMod_Shortcut` to Ctrl, so Cmd-A / Cmd-C / Cmd-V never reach
+  // InputText's clipboard shortcuts on Mac browsers. Ask emscripten-glfw
+  // what the runtime platform is instead.
+  io.ConfigMacOSXBehaviors = emscripten_glfw_is_runtime_platform_apple() != 0;
+#endif
   ImGui::StyleColorsDark();
   ImGui_ImplGlfw_InitForOpenGL(window, true);
 #ifdef __EMSCRIPTEN__

@@ -55,9 +55,23 @@ bool AddressBar::draw() {
   ImGui::SameLine();
   const bool loadClicked = ImGui::Button("Load", ImVec2(60, 0));
 
-  // Status chip.
+  // Submit on Enter or Load click. Do this BEFORE rendering the status
+  // chip on its own line so a submission that transitions the chip
+  // (e.g. to `kLoading`) is reflected in the same frame.
+  if ((submit || loadClicked) && !navigated) {
+    std::string uri(inputBuffer_.data());
+    if (!uri.empty()) {
+      pending_ = AddressBarNavigation{std::move(uri), {}};
+      navigated = true;
+    }
+  }
+
+  // Status chip. Rendered on its own line below the input / button row
+  // with text wrapping. The previous right-of-button layout truncated
+  // on narrow windows — long messages like "Got an HTML page, not an
+  // SVG. Check that the URL points directly to a `.svg` file." were
+  // cut off.
   if (statusChip_.status != AddressBarStatus::kEmpty) {
-    ImGui::SameLine();
     ImVec4 color;
     switch (statusChip_.status) {
       case AddressBarStatus::kRendered: color = ImVec4(0.30f, 0.85f, 0.45f, 1.0f); break;
@@ -69,16 +83,11 @@ bool AddressBar::draw() {
       case AddressBarStatus::kSandboxCrashed: color = ImVec4(0.92f, 0.42f, 0.38f, 1.0f); break;
       case AddressBarStatus::kEmpty: color = ImVec4(0.60f, 0.60f, 0.60f, 1.0f); break;
     }
-    ImGui::TextColored(color, "[%s]", statusChip_.message.c_str());
-  }
-
-  // Submit on Enter or Load click.
-  if ((submit || loadClicked) && !navigated) {
-    std::string uri(inputBuffer_.data());
-    if (!uri.empty()) {
-      pending_ = AddressBarNavigation{std::move(uri), {}};
-      navigated = true;
-    }
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::PushTextWrapPos(0.0f);  // wrap at the edge of the host window
+    ImGui::TextUnformatted(statusChip_.message.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
   }
 
   // If a drop payload was queued, it counts as a navigation this frame.
