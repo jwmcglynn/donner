@@ -1,4 +1,146 @@
-import { test, expect } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+import { inflateSync } from "node:zlib";
+
+function isExpectedStartupStderr(text: string): boolean {
+  return text === ""
+    || text.startsWith("[startup] ")
+    || text === "[Geode/emscripten] WebGPU adapter acquired (browser-managed)."
+    || text.startsWith("GLFW error 0: [Warning] ");
+}
+
+async function waitForCanvasContent(page: Page): Promise<void> {
+  const canvas = page.locator("#canvas");
+  await expect.poll(
+    async () => {
+      const box = await canvas.boundingBox();
+      if (!box || box.width <= 0 || box.height <= 0) {
+        return false;
+      }
+
+      const png = await canvas.screenshot();
+      return pngHasVisiblePixel(png);
+    },
+    { timeout: 45_000 },
+  ).toBe(true);
+}
+
+function pngHasVisiblePixel(png: Uint8Array): boolean {
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (signature.some((byte, index) => png[index] !== byte)) {
+    return false;
+  }
+
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idatChunks: Uint8Array[] = [];
+  while (offset + 8 <= png.length) {
+    const length = readUint32(png, offset);
+    const type = String.fromCharCode(
+      png[offset + 4],
+      png[offset + 5],
+      png[offset + 6],
+      png[offset + 7],
+    );
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > png.length) {
+      return false;
+    }
+
+    if (type === "IHDR") {
+      width = readUint32(png, dataStart);
+      height = readUint32(png, dataStart + 4);
+      bitDepth = png[dataStart + 8];
+      colorType = png[dataStart + 9];
+    } else if (type === "IDAT") {
+      idatChunks.push(png.slice(dataStart, dataEnd));
+    } else if (type === "IEND") {
+      break;
+    }
+    offset = dataEnd + 4;
+  }
+
+  if (width <= 0 || height <= 0 || bitDepth !== 8 || idatChunks.length === 0) {
+    return false;
+  }
+
+  const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (bytesPerPixel === 0) {
+    return false;
+  }
+
+  const inflated = inflateSync(Buffer.concat(idatChunks.map((chunk) => Buffer.from(chunk))));
+  const stride = width * bytesPerPixel;
+  if (inflated.length < height * (stride + 1)) {
+    return false;
+  }
+
+  const previous = new Uint8Array(stride);
+  const current = new Uint8Array(stride);
+  let sourceOffset = 0;
+  for (let y = 0; y < height; ++y) {
+    const filter = inflated[sourceOffset++];
+    for (let x = 0; x < stride; ++x) {
+      const raw = inflated[sourceOffset++];
+      const left = x >= bytesPerPixel ? current[x - bytesPerPixel] : 0;
+      const up = previous[x];
+      const upLeft = x >= bytesPerPixel ? previous[x - bytesPerPixel] : 0;
+      current[x] = unfilterPngByte(filter, raw, left, up, upLeft);
+    }
+
+    for (let x = 0; x < stride; x += bytesPerPixel) {
+      if (current[x] > 35 || current[x + 1] > 35 || current[x + 2] > 35) {
+        return true;
+      }
+    }
+    previous.set(current);
+  }
+  return false;
+}
+
+function readUint32(bytes: Uint8Array, offset: number): number {
+  return (
+    ((bytes[offset] << 24) >>> 0)
+    + (bytes[offset + 1] << 16)
+    + (bytes[offset + 2] << 8)
+    + bytes[offset + 3]
+  );
+}
+
+function unfilterPngByte(
+  filter: number,
+  raw: number,
+  left: number,
+  up: number,
+  upLeft: number,
+): number {
+  if (filter === 0) {
+    return raw;
+  }
+  if (filter === 1) {
+    return (raw + left) & 0xff;
+  }
+  if (filter === 2) {
+    return (raw + up) & 0xff;
+  }
+  if (filter === 3) {
+    return (raw + Math.floor((left + up) / 2)) & 0xff;
+  }
+
+  const estimate = left + up - upLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upLeftDistance = Math.abs(estimate - upLeft);
+  const predictor = leftDistance <= upDistance && leftDistance <= upLeftDistance
+    ? left
+    : upDistance <= upLeftDistance
+    ? up
+    : upLeft;
+  return (raw + predictor) & 0xff;
+}
 
 // Smoke: the WASM editor loads end-to-end, the canvas exists, the first
 // frame renders (detected via `__donner_ready`), and the canvas contains
@@ -12,7 +154,10 @@ test("WASM editor loads and renders a first frame", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") {
-      consoleErrors.push(msg.text());
+      const text = msg.text();
+      if (!isExpectedStartupStderr(text)) {
+        consoleErrors.push(text);
+      }
     }
   });
   page.on("pageerror", (err) => {
@@ -31,33 +176,39 @@ test("WASM editor loads and renders a first frame", async ({ page }) => {
   // Sanity-check the canvas.
   const canvasSize = await page.evaluate(() => {
     const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
-    if (!canvas) { return null; }
+    if (!canvas) return null;
     return { width: canvas.width, height: canvas.height };
   });
   expect(canvasSize).not.toBeNull();
   expect(canvasSize!.width).toBeGreaterThan(0);
   expect(canvasSize!.height).toBeGreaterThan(0);
 
-  // `toDataURL` returns a data: URL of the backing framebuffer (we enable
-  // `preserveDrawingBuffer` in index.html). A truly-black canvas serializes
-  // to a stable short prefix + a long run; checking for > 256 distinct
-  // chars in the base64 body is a cheap "something was drawn" signal.
-  const dataUrlLength = await page.evaluate(() => {
-    const canvas = document.getElementById("canvas") as HTMLCanvasElement;
-    const url = canvas.toDataURL("image/png");
-    return url.length;
-  });
-  expect(dataUrlLength).toBeGreaterThan(1024);
+  await waitForCanvasContent(page);
 
   // Metrics must be populated.
   const metrics = await page.evaluate(() => (window as any).__donner_metrics);
   expect(metrics).toBeTruthy();
   expect(metrics.renderCount).toBeGreaterThan(0);
 
-  // No console errors during startup. If emscripten's stderr is noisy in
-  // the future, narrow this to exclude known benign strings rather than
-  // deleting the check — console errors are one of the cheapest escape
-  // detectors we have.
+  // No unexpected console errors during startup. Emscripten routes stderr
+  // through console.error, so keep known benign startup diagnostics filtered
+  // and fail on everything else.
   expect(consoleErrors, `console errors during startup:\n${consoleErrors.join("\n")}`)
-      .toEqual([]);
+    .toEqual([]);
+});
+
+test("plain WASM editor page completes startup without input", async ({ page }) => {
+  await page.goto("/", { waitUntil: "load", timeout: 45_000 });
+
+  await expect(page.locator("#status")).toBeHidden({ timeout: 45_000 });
+  await waitForCanvasContent(page);
+});
+
+test("plain WASM editor page finishes after late render-pane layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1, height: 1 });
+  await page.goto("/", { waitUntil: "load", timeout: 45_000 });
+  await expect(page.locator("#status")).toBeHidden({ timeout: 45_000 });
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await waitForCanvasContent(page);
 });

@@ -46,6 +46,28 @@ FrameResult DecodeFrameResult(const FramePayload& frame) {
     result.bitmap.pixels = frame.finalBitmapPixels;
   }
 
+  if (frame.hasCompositedPreview) {
+    const auto convertBitmap =
+        [](const sandbox::FrameBitmapPayload& payload) -> svg::RendererBitmap {
+      svg::RendererBitmap bitmap;
+      bitmap.dimensions = Vector2i(payload.width, payload.height);
+      bitmap.rowBytes = payload.rowBytes;
+      bitmap.alphaType = static_cast<svg::AlphaType>(payload.alphaType);
+      bitmap.pixels = payload.pixels;
+      return bitmap;
+    };
+    result.compositedPreview = FrameResult::CompositedPreview{
+        .backgroundBitmap = convertBitmap(frame.compositedPreviewBackground),
+        .promotedBitmap = convertBitmap(frame.compositedPreviewPromoted),
+        .foregroundBitmap = convertBitmap(frame.compositedPreviewForeground),
+        .overlayBitmap = convertBitmap(frame.compositedPreviewOverlay),
+        .promotedTranslationDoc = Vector2d(frame.compositedPreviewTranslationDoc[0],
+                                           frame.compositedPreviewTranslationDoc[1]),
+        .active = frame.compositedPreviewActive,
+        .includesBitmapUploads = frame.hasCompositedPreviewBitmaps,
+    };
+  }
+
   // Convert selection entries.
   for (const auto& sel : frame.selections) {
     OverlaySelection overlay;
@@ -242,8 +264,7 @@ public:
     payload.entityId = entityId;
     payload.entityGeneration = entityGeneration;
     payload.mode = mode;
-    return submitFrameRequest(SessionOpcode::kSelectElement,
-                              sandbox::EncodeSelectElement(payload));
+    return submitFrameRequest(SessionOpcode::kSelectElement, sandbox::EncodeSelectElement(payload));
   }
 
   // ------------ export ------------
@@ -338,6 +359,8 @@ public:
     std::lock_guard lock(stateMutex_);
     return tree_;
   }
+
+  CompositorFastPathCounters compositorFastPathCountersForTesting() const override { return {}; }
 
 private:
   /// Encodes + submits a request that expects a kFrame response, spawning a

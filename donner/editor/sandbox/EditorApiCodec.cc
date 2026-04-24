@@ -27,6 +27,29 @@ constexpr uint32_t kMaxWritebackCount = 100'000;
 constexpr uint32_t kMaxDiagnosticCount = 100'000;
 constexpr uint32_t kMaxTreeNodeCount = 500'000;
 
+void WriteFrameBitmap(WireWriter& w, const FrameBitmapPayload& bitmap) {
+  w.writeI32(bitmap.width);
+  w.writeI32(bitmap.height);
+  w.writeU32(bitmap.rowBytes);
+  w.writeU8(bitmap.alphaType);
+  w.writeU32(static_cast<uint32_t>(bitmap.pixels.size()));
+  w.writeBytes(bitmap.pixels);
+}
+
+bool ReadFrameBitmap(WireReader& r, FrameBitmapPayload& bitmap) {
+  if (!r.readI32(bitmap.width)) return false;
+  if (!r.readI32(bitmap.height)) return false;
+  if (!r.readU32(bitmap.rowBytes)) return false;
+  if (!r.readU8(bitmap.alphaType)) return false;
+  uint32_t pixelCount = 0;
+  if (!r.readCount(pixelCount, kMaxFrameBytes)) return false;
+  bitmap.pixels.resize(pixelCount);
+  if (pixelCount > 0) {
+    if (!r.readBytes(bitmap.pixels)) return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 // ===========================================================================
@@ -260,12 +283,29 @@ std::vector<uint8_t> EncodeFrame(const FramePayload& payload) {
   // overhead per frame; fine).
   w.writeBool(payload.hasFinalBitmap);
   if (payload.hasFinalBitmap) {
-    w.writeI32(payload.finalBitmapWidth);
-    w.writeI32(payload.finalBitmapHeight);
-    w.writeU32(payload.finalBitmapRowBytes);
-    w.writeU8(payload.finalBitmapAlphaType);
-    w.writeU32(static_cast<uint32_t>(payload.finalBitmapPixels.size()));
-    w.writeBytes(payload.finalBitmapPixels);
+    WriteFrameBitmap(w, FrameBitmapPayload{
+                            .width = payload.finalBitmapWidth,
+                            .height = payload.finalBitmapHeight,
+                            .rowBytes = payload.finalBitmapRowBytes,
+                            .alphaType = payload.finalBitmapAlphaType,
+                            .pixels = payload.finalBitmapPixels,
+                        });
+  }
+
+  // compositedPreview — optional trailing block. Carries bg/promoted/fg
+  // textures plus a selection-overlay texture for drag preview.
+  w.writeBool(payload.hasCompositedPreview);
+  if (payload.hasCompositedPreview) {
+    w.writeBool(payload.compositedPreviewActive);
+    w.writeBool(payload.hasCompositedPreviewBitmaps);
+    w.writeF64(payload.compositedPreviewTranslationDoc[0]);
+    w.writeF64(payload.compositedPreviewTranslationDoc[1]);
+    if (payload.hasCompositedPreviewBitmaps) {
+      WriteFrameBitmap(w, payload.compositedPreviewBackground);
+      WriteFrameBitmap(w, payload.compositedPreviewPromoted);
+      WriteFrameBitmap(w, payload.compositedPreviewForeground);
+      WriteFrameBitmap(w, payload.compositedPreviewOverlay);
+    }
   }
 
   return std::move(w).take();
@@ -601,15 +641,31 @@ bool DecodeFrame(std::span<const uint8_t> data, FramePayload& out) {
   }
   if (!r.readBool(out.hasFinalBitmap)) return false;
   if (out.hasFinalBitmap) {
-    if (!r.readI32(out.finalBitmapWidth)) return false;
-    if (!r.readI32(out.finalBitmapHeight)) return false;
-    if (!r.readU32(out.finalBitmapRowBytes)) return false;
-    if (!r.readU8(out.finalBitmapAlphaType)) return false;
-    uint32_t pixelCount = 0;
-    if (!r.readCount(pixelCount, kMaxFrameBytes)) return false;
-    out.finalBitmapPixels.resize(pixelCount);
-    if (pixelCount > 0) {
-      if (!r.readBytes(out.finalBitmapPixels)) return false;
+    FrameBitmapPayload finalBitmap;
+    if (!ReadFrameBitmap(r, finalBitmap)) return false;
+    out.finalBitmapWidth = finalBitmap.width;
+    out.finalBitmapHeight = finalBitmap.height;
+    out.finalBitmapRowBytes = finalBitmap.rowBytes;
+    out.finalBitmapAlphaType = finalBitmap.alphaType;
+    out.finalBitmapPixels = std::move(finalBitmap.pixels);
+  }
+
+  // compositedPreview — optional trailing block.
+  if (r.remaining() == 0) {
+    out.hasCompositedPreview = false;
+    return !r.failed();
+  }
+  if (!r.readBool(out.hasCompositedPreview)) return false;
+  if (out.hasCompositedPreview) {
+    if (!r.readBool(out.compositedPreviewActive)) return false;
+    if (!r.readBool(out.hasCompositedPreviewBitmaps)) return false;
+    if (!r.readF64(out.compositedPreviewTranslationDoc[0])) return false;
+    if (!r.readF64(out.compositedPreviewTranslationDoc[1])) return false;
+    if (out.hasCompositedPreviewBitmaps) {
+      if (!ReadFrameBitmap(r, out.compositedPreviewBackground)) return false;
+      if (!ReadFrameBitmap(r, out.compositedPreviewPromoted)) return false;
+      if (!ReadFrameBitmap(r, out.compositedPreviewForeground)) return false;
+      if (!ReadFrameBitmap(r, out.compositedPreviewOverlay)) return false;
     }
   }
 

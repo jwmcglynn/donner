@@ -133,10 +133,9 @@ private:
   /// `endFrame` against the renderer's render-target texture — the
   /// compositor's `renderFrame` has already ended the frame by the
   /// time chrome is drawn, so sharing the main renderer drops the
-  /// chrome draws on Geode. With a dedicated overlay renderer each
-  /// chrome pass opens its own frame, and the result is
-  /// software-composited onto the compositor's snapshot below.
-  donner::svg::Renderer overlayRenderer_;
+  /// chrome draws on Geode. Lazy construction keeps Geode from paying
+  /// for a second WebGPU adapter/device during startup.
+  std::optional<donner::svg::Renderer> overlayRenderer_;
   /// Lazily constructed on first render after a document change. Tied
   /// to `editor_`'s current `SVGDocument` handle; invalidated via
   /// `compositor_.reset()` whenever the document is reparsed / replaced
@@ -204,6 +203,13 @@ private:
   /// compose) instead. See that setter's doc for the #582 bisection
   /// use case.
   bool cpuComposeEnabledForTesting_ = true;
+
+  /// Split-preview texture upload state. During an active drag we ship
+  /// bg/drag/fg bitmaps once, then send only a translation until the
+  /// promoted entity or canvas size changes.
+  bool compositedPreviewUploadsPrimed_ = false;
+  Entity compositedPreviewUploadEntity_ = entt::null;
+  Vector2i compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
 
   /// Entity handle bimap state.
   uint64_t entityGeneration_ = 1;

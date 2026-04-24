@@ -147,13 +147,13 @@ enum class FrameStatusKind : uint8_t {
 
 /// Single node in the backend's flattened tree summary.
 struct TreeNodeEntry {
-  uint64_t entityId = 0;          ///< Opaque handle — sandbox-assigned.
+  uint64_t entityId = 0;  ///< Opaque handle — sandbox-assigned.
   uint64_t entityGeneration = 0;
   uint32_t parentIndex = 0xFFFFFFFF;  ///< Index into FrameTreeSummary::nodes; 0xFFFFFFFF for root.
   uint32_t depth = 0;
-  std::string tagName;            ///< Lower-case: "rect", "g", etc.
-  std::string idAttr;             ///< DOM id or empty.
-  std::string displayName;        ///< e.g. "<rect id=foo>".
+  std::string tagName;      ///< Lower-case: "rect", "g", etc.
+  std::string idAttr;       ///< DOM id or empty.
+  std::string displayName;  ///< e.g. "<rect id=foo>".
   uint32_t sourceStart = 0;
   uint32_t sourceEnd = 0;
   bool selected = false;
@@ -161,9 +161,18 @@ struct TreeNodeEntry {
 
 /// Flat tree summary shipped with every frame.
 struct FrameTreeSummary {
-  uint64_t generation = 0;        ///< Bumped on structural changes.
+  uint64_t generation = 0;  ///< Bumped on structural changes.
   uint32_t rootIndex = 0xFFFFFFFF;
   std::vector<TreeNodeEntry> nodes;
+};
+
+/// RGBA bitmap payload carried inside a frame.
+struct FrameBitmapPayload {
+  int32_t width = 0;
+  int32_t height = 0;
+  uint32_t rowBytes = 0;
+  uint8_t alphaType = 0;
+  std::vector<uint8_t> pixels;
 };
 
 struct FramePayload {
@@ -211,6 +220,21 @@ struct FramePayload {
   uint32_t finalBitmapRowBytes = 0;
   uint8_t finalBitmapAlphaType = 0;
   std::vector<uint8_t> finalBitmapPixels;
+
+  /// Split compositor preview for active drags. When present, the host
+  /// can draw background + promoted + foreground textures and update
+  /// only `compositedPreviewTranslationDoc` on steady translation
+  /// frames. `hasCompositedPreviewBitmaps` means the bitmap payloads
+  /// are included on this frame; when false, the host reuses the
+  /// textures uploaded by an earlier preview frame.
+  bool hasCompositedPreview = false;
+  bool compositedPreviewActive = false;
+  bool hasCompositedPreviewBitmaps = false;
+  double compositedPreviewTranslationDoc[2] = {};
+  FrameBitmapPayload compositedPreviewBackground;
+  FrameBitmapPayload compositedPreviewPromoted;
+  FrameBitmapPayload compositedPreviewForeground;
+  FrameBitmapPayload compositedPreviewOverlay;
 };
 
 struct ExportResponsePayload {

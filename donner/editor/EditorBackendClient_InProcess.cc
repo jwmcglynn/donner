@@ -33,6 +33,28 @@ FrameResult MakeFrameResult(const sandbox::FramePayload& frame) {
     result.bitmap.pixels = frame.finalBitmapPixels;
   }
 
+  if (frame.hasCompositedPreview) {
+    const auto convertBitmap =
+        [](const sandbox::FrameBitmapPayload& payload) -> svg::RendererBitmap {
+      svg::RendererBitmap bitmap;
+      bitmap.dimensions = Vector2i(payload.width, payload.height);
+      bitmap.rowBytes = payload.rowBytes;
+      bitmap.alphaType = static_cast<svg::AlphaType>(payload.alphaType);
+      bitmap.pixels = payload.pixels;
+      return bitmap;
+    };
+    result.compositedPreview = FrameResult::CompositedPreview{
+        .backgroundBitmap = convertBitmap(frame.compositedPreviewBackground),
+        .promotedBitmap = convertBitmap(frame.compositedPreviewPromoted),
+        .foregroundBitmap = convertBitmap(frame.compositedPreviewForeground),
+        .overlayBitmap = convertBitmap(frame.compositedPreviewOverlay),
+        .promotedTranslationDoc = Vector2d(frame.compositedPreviewTranslationDoc[0],
+                                           frame.compositedPreviewTranslationDoc[1]),
+        .active = frame.compositedPreviewActive,
+        .includesBitmapUploads = frame.hasCompositedPreviewBitmaps,
+    };
+  }
+
   // Convert selection entries.
   for (const auto& sel : frame.selections) {
     OverlaySelection overlay;
@@ -261,6 +283,14 @@ public:
   std::optional<Box2d> latestDocumentViewBox() const override { return latestDocumentViewBox_; }
   std::optional<ParseDiagnostic> lastParseError() const override { return lastParseError_; }
   const sandbox::FrameTreeSummary& tree() const override { return tree_; }
+  CompositorFastPathCounters compositorFastPathCountersForTesting() const override {
+    const auto counters = core_.compositorFastPathCountersForTesting();
+    return CompositorFastPathCounters{
+        .fastPathFrames = counters.fastPathFrames,
+        .slowPathFramesWithDirty = counters.slowPathFramesWithDirty,
+        .noDirtyFrames = counters.noDirtyFrames,
+    };
+  }
 
 private:
   /// Processes a FramePayload synchronously and returns an already-ready future.

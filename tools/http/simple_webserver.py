@@ -254,14 +254,14 @@ if args.https:
     for thread in threads:
         thread.start()
 
-    print(f"Local URL: {localhost_url}")
+    print(f"Local URL: {localhost_url}", flush=True)
     if lan_url:
-        print(f"LAN URL:   {lan_url}")
+        print(f"LAN URL:   {lan_url}", flush=True)
     else:
-        print(f"HTTPS URL: https://127.0.0.1:{https_port}")
-    print(f"Cert file: {certfile}")
-    print(f"Key file:  {keyfile}")
-    print("Press Ctrl+C to exit")
+        print(f"HTTPS URL: https://127.0.0.1:{https_port}", flush=True)
+    print(f"Cert file: {certfile}", flush=True)
+    print(f"Key file:  {keyfile}", flush=True)
+    print("Press Ctrl+C to exit", flush=True)
 
     try:
         for thread in threads:
@@ -278,10 +278,10 @@ else:
     lan_url = f"http://{lan_ip}:{port}" if lan_ip else None
 
     with socketserver.ThreadingTCPServer((bind_host, port), handler) as httpd:
-        print(f"Serving at {localhost_url}")
+        print(f"Serving at {localhost_url}", flush=True)
         if lan_url:
-            print(f"LAN URL:   {lan_url}")
-        print("Press Ctrl+C to exit")
+            print(f"LAN URL:   {lan_url}", flush=True)
+        print("Press Ctrl+C to exit", flush=True)
 
         try:
             httpd.serve_forever()

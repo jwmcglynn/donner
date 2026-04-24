@@ -183,6 +183,7 @@ _EDITOR_RUNTIME_DEPS = [
     ":tracy_wrapper",
     "//donner/base",
     "//donner/editor/repro:repro_recorder",
+    "//donner/svg/renderer:pixel_format_utils",
     "//donner/svg/renderer:renderer_interface",
     "//third_party/fira-code",
     "//third_party/glad",

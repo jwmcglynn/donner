@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -38,12 +39,10 @@
 #include "donner/editor/AddressBarDispatcher.h"
 #include "donner/editor/ContentSniffer.h"
 #include "donner/editor/EditorBackendClient.h"
-#include "donner/editor/LocalPathDisplay.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
+#include "donner/editor/LocalPathDisplay.h"
 #include "donner/editor/Notice.h"
-#include <cinttypes>
-
 #include "donner/editor/PinchEventMonitor.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/editor/sandbox/bridge/BridgeTexture.h"
@@ -62,6 +61,7 @@
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
 
 // The session-backed (subprocess sandbox) backend only links on Linux —
 // `donner/editor/sandbox:session` is gated to `@platforms//os:linux` in
@@ -86,13 +86,12 @@ extern "C" {
 #include "GLFW/glfw3.h"
 }
 
+#include "embed_resources/FiraCodeFont.h"
+#include "embed_resources/RobotoFont.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_internal.h"
-
-#include "embed_resources/FiraCodeFont.h"
-#include "embed_resources/RobotoFont.h"
 
 namespace {
 
@@ -111,11 +110,7 @@ constexpr std::size_t kFrameHistoryCapacity = 120;
 constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
-constexpr ImU32 kSelectionChromeColor = IM_COL32(0x00, 0xc8, 0xff, 0xff);
-constexpr float kSelectionChromeThickness = 1.5f;
-constexpr ImU32 kMarqueeFillColor = IM_COL32(0x00, 0xc8, 0xff, 0x33);
-constexpr ImU32 kMarqueeStrokeColor = IM_COL32(0xff, 0xff, 0xff, 0xff);
-constexpr float kMarqueeStrokeThickness = 1.5f;
+constexpr double kDragMoveScreenEpsilonPx = 0.25;
 #ifdef __EMSCRIPTEN__
 constexpr int kMaxWasmUploadBytes = 32 * 1024 * 1024;
 #endif
@@ -349,7 +344,7 @@ EM_JS(void, InstallBrowserDropHandler, (int maxBytes), {
 //   - `__donner_ready`   — set once the first frame has rendered.
 //   - `__donner_metrics` — rolling frame-time buffer + poll / render counters.
 //   - `__donner_simulate([{type,x,y,buttons}, ...])` — dispatches synthesized
-//     PointerEvents at canvas-local coords, used by the drag-perf test.
+//     mouse events at canvas-local coords, used by the drag-perf test.
 //
 // The hooks are strictly additive and behind a URL flag, so a normal page
 // launch is byte-for-byte unchanged. See `donner/editor/wasm/tests/README.md`.
@@ -376,6 +371,17 @@ EM_JS(void, DonnerTestHooksInstall, (), {
   window.__donner_metrics = {
     // Arrays are rebuilt on read so callers get a stable snapshot.
     frameTimesMs: [],
+    documentImageRect: null,
+    selectionCount: 0,
+    marqueeActive: false,
+    compositedPreviewActive: false,
+    flatBitmapUploads: 0,
+    compositedPreviewBitmapUploads: 0,
+    compositorFastPathCounters: {
+      fastPathFrames: 0,
+      slowPathFramesWithDirty: 0,
+      noDirtyFrames: 0,
+    },
     pollEventsCount: 0,
     renderCount: 0,
     skippedCount: 0,
@@ -383,9 +389,15 @@ EM_JS(void, DonnerTestHooksInstall, (), {
     readyTimestampMs: 0,
   };
 
-  window.__donner_recordLoopTick = function(renderedFlag, frameTimeMs) {
+  window.__donner_recordLoopTick = function(
+      renderedFlag, frameTimeMs, fastPathFrames, slowPathFramesWithDirty, noDirtyFrames) {
     const m = window.__donner_metrics;
     m.pollEventsCount += 1;
+    m.compositorFastPathCounters = {
+      fastPathFrames,
+      slowPathFramesWithDirty,
+      noDirtyFrames,
+    };
     if (renderedFlag) {
       m.renderCount += 1;
       if (frameTimeMs >= 0) {
@@ -406,27 +418,50 @@ EM_JS(void, DonnerTestHooksInstall, (), {
     }
   };
 
-  // Synthesized-event injection. Keyed off pointer events so we exercise
-  // the exact CSS touch-events / pointer-events wiring the real browser
-  // uses — the whole reason this harness exists.
+  // Synthesized-event injection. The public payload uses pointer-like names
+  // (`pointerdown`/`pointermove`/`pointerup`), but emscripten-glfw registers
+  // DOM mouse listeners under the hood, so translate to MouseEvent before
+  // dispatch. Programmatic PointerEvents do not generate compatibility mouse
+  // events in Chromium.
   window.__donner_simulate = function(events) {
     const canvas = Module.canvas || document.getElementById("canvas");
     if (!canvas) { return false; }
     const rect = canvas.getBoundingClientRect();
-    for (const ev of events) {
-      const init = {
-        bubbles: true,
+
+    const makeMouseEvent = function(type, ev, button, buttons, bubbles) {
+      return new MouseEvent(type, {
+        bubbles,
         cancelable: true,
         composed: true,
-        pointerId: ev.pointerId || 1,
-        pointerType: "mouse",
-        isPrimary: true,
+        view: window,
         clientX: rect.left + ev.x,
         clientY: rect.top + ev.y,
-        button: (ev.type === "pointerdown" || ev.type === "pointerup") ? 0 : -1,
-        buttons: (ev.buttons === undefined) ? 1 : ev.buttons,
-      };
-      canvas.dispatchEvent(new PointerEvent(ev.type, init));
+        screenX: window.screenX + rect.left + ev.x,
+        screenY: window.screenY + rect.top + ev.y,
+        button,
+        buttons,
+        altKey: ev.altKey === true,
+        ctrlKey: ev.ctrlKey === true,
+        metaKey: ev.metaKey === true,
+        shiftKey: ev.shiftKey === true,
+      });
+    };
+
+    for (const ev of events) {
+      const mouseType =
+          ev.type === "pointerdown" ? "mousedown" :
+          ev.type === "pointermove" ? "mousemove" :
+          ev.type === "pointerup" ? "mouseup" :
+          ev.type;
+      const buttons = ev.buttons === undefined ? (mouseType === "mouseup" ? 0 : 1) : ev.buttons;
+
+      if (mouseType === "mousedown") {
+        canvas.dispatchEvent(makeMouseEvent("mouseenter", ev, 0, 0, false));
+        canvas.dispatchEvent(makeMouseEvent("mousemove", ev, 0, 0, true));
+        canvas.focus();
+      }
+
+      canvas.dispatchEvent(makeMouseEvent(mouseType, ev, 0, buttons, true));
     }
     return true;
   };
@@ -438,9 +473,45 @@ EM_JS(void, DonnerTestHooksMarkReady, (), {
   window.__donner_ready = true;
 });
 
-EM_JS(void, DonnerTestHooksRecordLoopTick, (int rendered, double frameTimeMs), {
+EM_JS(void, DonnerTestHooksRecordDocumentImageRect,
+      (double left, double top, double right, double bottom), {
   if (!window.__donner_test_hooks_installed) { return; }
-  window.__donner_recordLoopTick(rendered !== 0, frameTimeMs);
+  window.__donner_metrics.documentImageRect = {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
+});
+
+EM_JS(void, DonnerTestHooksRecordSelectionState, (int selectionCount, int marqueeActive), {
+  if (!window.__donner_test_hooks_installed) { return; }
+  window.__donner_metrics.selectionCount = selectionCount;
+  window.__donner_metrics.marqueeActive = marqueeActive !== 0;
+});
+
+EM_JS(void, DonnerTestHooksRecordUploadState,
+      (int flatBitmapUploaded, int compositedPreviewActive, int compositedPreviewBitmapsUploaded), {
+  if (!window.__donner_test_hooks_installed) { return; }
+  const m = window.__donner_metrics;
+  if (flatBitmapUploaded !== 0) {
+    m.flatBitmapUploads += 1;
+  }
+  if (compositedPreviewBitmapsUploaded !== 0) {
+    m.compositedPreviewBitmapUploads += 1;
+  }
+  m.compositedPreviewActive = compositedPreviewActive !== 0;
+});
+
+EM_JS(void, DonnerTestHooksRecordLoopTick,
+      (int rendered, double frameTimeMs, double fastPathFrames, double slowPathFramesWithDirty,
+       double noDirtyFrames),
+      {
+  if (!window.__donner_test_hooks_installed) { return; }
+  window.__donner_recordLoopTick(
+      rendered !== 0, frameTimeMs, fastPathFrames, slowPathFramesWithDirty, noDirtyFrames);
 });
 #endif
 // clang-format on
@@ -475,10 +546,77 @@ std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
   return text;
 }
 
+struct TextureUploadState {
+  GLuint texture = 0;
+  int width = 0;
+  int height = 0;
+};
+
+struct CompositedPreviewTextureState {
+  TextureUploadState background;
+  TextureUploadState promoted;
+  TextureUploadState foreground;
+  TextureUploadState overlay;
+  donner::Vector2d promotedTranslationDoc = donner::Vector2d::Zero();
+  bool active = false;
+  bool texturesReady = false;
+};
+
+[[nodiscard]] bool ShouldPostDragMove(const donner::Vector2d& screenPoint,
+                                      const std::optional<donner::Vector2d>& lastScreenPoint) {
+  if (!lastScreenPoint.has_value()) {
+    return true;
+  }
+
+  const double epsilonSquared = kDragMoveScreenEpsilonPx * kDragMoveScreenEpsilonPx;
+  return (screenPoint - *lastScreenPoint).lengthSquared() > epsilonSquared;
+}
+
+void EnsureTextureInitialized(TextureUploadState& state) {
+  if (state.texture != 0) {
+    return;
+  }
+  glGenTextures(1, &state.texture);
+  glBindTexture(GL_TEXTURE_2D, state.texture);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+}
+
+bool UploadBitmapToTexture(const donner::svg::RendererBitmap& bitmap, TextureUploadState& state) {
+  if (bitmap.empty()) {
+    state.width = 0;
+    state.height = 0;
+    return false;
+  }
+
+  const uint8_t* pixels = bitmap.pixels.data();
+  std::vector<uint8_t> straightAlphaPixels;
+  if (bitmap.alphaType == donner::svg::AlphaType::Premultiplied) {
+    straightAlphaPixels = bitmap.pixels;
+    donner::svg::UnpremultiplyRgbaInPlace(straightAlphaPixels);
+    pixels = straightAlphaPixels.data();
+  }
+
+  EnsureTextureInitialized(state);
+  glBindTexture(GL_TEXTURE_2D, state.texture);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+  if (bitmap.dimensions.x == state.width && bitmap.dimensions.y == state.height) {
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, bitmap.dimensions.x, bitmap.dimensions.y, GL_RGBA,
+                    GL_UNSIGNED_BYTE, pixels);
+  } else {
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, pixels);
+  }
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  state.width = bitmap.dimensions.x;
+  state.height = bitmap.dimensions.y;
+  return true;
+}
+
 /// Process a FrameResult: upload bitmap to texture, apply writebacks to
 /// text editor, update error markers. Returns true if a bitmap was uploaded.
-bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint texture,
-                        int& textureWidth, int& textureHeight,
+bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUploadState& flatTexture,
+                        CompositedPreviewTextureState& compositedPreview,
                         donner::editor::ViewportState& viewport,
                         donner::editor::TextEditor& textEditor, int& lastShownErrorLine,
                         std::string& lastShownErrorReason) {
@@ -487,9 +625,28 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint textur
   }
 
   bool bitmapUploaded = false;
+  bool compositedPreviewBitmapsUploaded = false;
+  if (result.compositedPreview.has_value()) {
+    const auto& preview = *result.compositedPreview;
+    if (preview.includesBitmapUploads) {
+      const bool promotedUploaded =
+          UploadBitmapToTexture(preview.promotedBitmap, compositedPreview.promoted);
+      const bool overlayUploaded =
+          preview.overlayBitmap.empty()
+              ? true
+              : UploadBitmapToTexture(preview.overlayBitmap, compositedPreview.overlay);
+      (void)UploadBitmapToTexture(preview.backgroundBitmap, compositedPreview.background);
+      (void)UploadBitmapToTexture(preview.foregroundBitmap, compositedPreview.foreground);
+      compositedPreview.texturesReady = promotedUploaded && overlayUploaded;
+      compositedPreviewBitmapsUploaded = promotedUploaded;
+    }
+    compositedPreview.promotedTranslationDoc = preview.promotedTranslationDoc;
+    compositedPreview.active = preview.active && compositedPreview.texturesReady;
+  } else {
+    compositedPreview.active = false;
+  }
+
   if (!result.bitmap.empty()) {
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(result.bitmap.rowBytes / 4u));
     // `glTexImage2D` reallocates the GPU-side texture storage on every
     // call, even when the dimensions haven't changed. On retina macOS
     // (1784×1024×4 = 7 MB/frame) that allocation has been measured at
@@ -499,19 +656,8 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint textur
     // `glTexSubImage2D` reuses the existing storage and just pushes
     // pixel bytes, which drops the upload to sub-millisecond. Match
     // the outer allocation path on first-render and resize.
-    if (result.bitmap.dimensions.x == textureWidth &&
-        result.bitmap.dimensions.y == textureHeight) {
-      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, result.bitmap.dimensions.x,
-                      result.bitmap.dimensions.y, GL_RGBA, GL_UNSIGNED_BYTE,
-                      result.bitmap.pixels.data());
-    } else {
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, result.bitmap.dimensions.x,
-                   result.bitmap.dimensions.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                   result.bitmap.pixels.data());
-    }
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    textureWidth = result.bitmap.dimensions.x;
-    textureHeight = result.bitmap.dimensions.y;
+    bitmapUploaded = UploadBitmapToTexture(result.bitmap, flatTexture);
+    compositedPreview.active = false;
     // Keep `documentViewBox` in step with the SVG's own viewBox as
     // reported by the backend. This is what makes screen↔document
     // math — `imageScreenRect`, `screenToDocument` (for pointer
@@ -523,7 +669,6 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint textur
     if (result.documentViewBox.has_value()) {
       viewport.documentViewBox = *result.documentViewBox;
     }
-    bitmapUploaded = true;
   }
 
   // Apply source writebacks (e.g. from drag completion).
@@ -540,6 +685,13 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, GLuint textur
   if (result.sourceReplaceAll.has_value()) {
     textEditor.setText(*result.sourceReplaceAll, /*preserveScroll=*/true);
   }
+
+#ifdef __EMSCRIPTEN__
+  DonnerTestHooksRecordSelectionState(static_cast<int>(result.selection.selections.size()),
+                                      result.selection.marquee.has_value() ? 1 : 0);
+  DonnerTestHooksRecordUploadState(bitmapUploaded ? 1 : 0, compositedPreview.active ? 1 : 0,
+                                   compositedPreviewBitmapsUploaded ? 1 : 0);
+#endif
 
   // Error markers.
   constexpr int kNoErrorLine = -1;
@@ -759,7 +911,7 @@ int main(int argc, char** argv) {
   glfwSetWindowUserPointer(window, &pendingScrollEvents);
   pendingScrollEvents.previousCallback = glfwSetScrollCallback(window, EditorScrollCallback);
   (void)donner::editor::InstallPinchEventMonitor(window, &pendingScrollEvents.events,
-                                                  kWheelZoomStep);
+                                                 kWheelZoomStep);
 #ifdef __EMSCRIPTEN__
   InstallBrowserDropHandler(kMaxWasmUploadBytes);
 #endif
@@ -779,10 +931,9 @@ int main(int argc, char** argv) {
   // everything else — WASM and macOS desktops — falls back to the in-process
   // client, which statically links the backend core into this address space.
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
-  donner::editor::sandbox::SandboxSession session(
-      donner::editor::sandbox::SandboxSessionOptions{
-          .childBinaryPath = "donner/editor/sandbox/donner_editor_backend",
-      });
+  donner::editor::sandbox::SandboxSession session(donner::editor::sandbox::SandboxSessionOptions{
+      .childBinaryPath = "donner/editor/sandbox/donner_editor_backend",
+  });
   auto backend = donner::editor::EditorBackendClient::MakeSessionBacked(session);
 #else
   auto backend = donner::editor::EditorBackendClient::MakeInProcess();
@@ -810,8 +961,8 @@ int main(int argc, char** argv) {
       if (sharedTextureHost) {
         auto attachFuture = backend->attachSharedTexture(sharedTextureHost->handle());
         (void)attachFuture.get();
-        std::cerr << "[startup] +" << msSinceStart() << "ms attached shared IOSurface ("
-                  << fbW << "x" << fbH << ")\n";
+        std::cerr << "[startup] +" << msSinceStart() << "ms attached shared IOSurface (" << fbW
+                  << "x" << fbH << ")\n";
       }
     }
   }
@@ -870,25 +1021,15 @@ int main(int argc, char** argv) {
   textEditor.setActiveAutocomplete(true);
   std::string editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText);
 
-  GLuint texture = 0;
-  glGenTextures(1, &texture);
-  glBindTexture(GL_TEXTURE_2D, texture);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  int textureWidth = 0;
-  int textureHeight = 0;
+  TextureUploadState flatTexture;
+  EnsureTextureInitialized(flatTexture);
+  CompositedPreviewTextureState compositedPreview;
 
   // Upload the initial frame bitmap if available.
   {
     const auto& bitmap = backend->latestBitmap();
     if (!bitmap.empty()) {
-      glBindTexture(GL_TEXTURE_2D, texture);
-      glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
-                   GL_UNSIGNED_BYTE, bitmap.pixels.data());
-      glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-      textureWidth = bitmap.dimensions.x;
-      textureHeight = bitmap.dimensions.y;
+      UploadBitmapToTexture(bitmap, flatTexture);
     }
   }
 
@@ -940,6 +1081,7 @@ int main(int argc, char** argv) {
 
   // Pending async results from backend.
   std::optional<std::future<donner::editor::FrameResult>> pendingFrame;
+  std::optional<donner::Vector2d> lastPostedDragMoveScreenPoint;
 
   // Tracks the last canvas size we told the backend about, so we only
   // re-post `setViewport` when the UI pane actually resizes rather than
@@ -1013,8 +1155,7 @@ int main(int argc, char** argv) {
     // document source and the rendering intact on failure.
     if (auto sniff = donner::editor::DescribeNonSvgBytes(bytes); sniff.has_value()) {
       openFileError = *sniff;
-      addressBar.setStatus(
-          {donner::editor::AddressBarStatus::kParseError, *sniff, originUri});
+      addressBar.setStatus({donner::editor::AddressBarStatus::kParseError, *sniff, originUri});
       std::cerr << "[load] rejected (sniffer): " << originUri << " — " << *sniff << "\n";
       return false;
     }
@@ -1041,8 +1182,7 @@ int main(int argc, char** argv) {
         errorMsg = "Failed to parse SVG.";
       }
       openFileError = errorMsg;
-      addressBar.setStatus(
-          {donner::editor::AddressBarStatus::kParseError, errorMsg, originUri});
+      addressBar.setStatus({donner::editor::AddressBarStatus::kParseError, errorMsg, originUri});
       std::cerr << "[load] parse failed: " << originUri << " — " << errorMsg << "\n";
       return false;
     }
@@ -1053,8 +1193,8 @@ int main(int argc, char** argv) {
     // Display-friendly form: files inside the editor's cwd read as
     // `./donner_splash.svg`, not the full absolute path. Remote URIs
     // and paths outside cwd pass through unchanged.
-    const std::string displayUri = donner::editor::PrettifyLocalPath(
-        originUri, std::filesystem::current_path());
+    const std::string displayUri =
+        donner::editor::PrettifyLocalPath(originUri, std::filesystem::current_path());
     currentFilePath = resolvedPath.has_value() ? *resolvedPath : displayUri;
     documentDirty = false;
     textChangePending = false;
@@ -1077,7 +1217,7 @@ int main(int argc, char** argv) {
     // on the next loop iteration for the new document dimensions.
     lastPostedCanvasSize = donner::Vector2i(-1, -1);
 
-    ProcessFrameResult(loadResult, texture, textureWidth, textureHeight, viewport, textEditor,
+    ProcessFrameResult(loadResult, flatTexture, compositedPreview, viewport, textEditor,
                        lastShownErrorLine, lastShownErrorReason);
     std::cerr << "[load] ok uri=" << originUri << "\n";
     return true;
@@ -1113,6 +1253,7 @@ int main(int argc, char** argv) {
   // equivalent idle path is: skip the render/swap path and don't push
   // a sample into the frame-time ring. The RAF tick still fires, but
   // we avoid pushing the canvas + the FPS graph forward.
+#ifndef __EMSCRIPTEN__
   constexpr double kIdleWaitTimeoutSeconds = 1.0;
   // Cursor-blink cadence for the source pane — re-render every ~200ms
   // while the text editor has focus so the blink cycle (800ms period,
@@ -1120,6 +1261,7 @@ int main(int argc, char** argv) {
   // timeout gates how often we wake, and the blink only needs a few
   // frames per second.
   constexpr double kCursorBlinkWakeSeconds = 0.2;
+#endif
   // Set to true at the bottom of each iteration when ImGui's post-frame
   // signals indicate continuing work (active drag, popup open, input
   // focus with blinking cursor). Read at the top of the next iteration
@@ -1129,7 +1271,9 @@ int main(int argc, char** argv) {
   // Independent of `lastFrameWasActive`: true when the only reason to
   // keep rendering is the cursor blink. Uses a short timeout instead of
   // full-speed polling — the editor idles between blinks.
+#ifndef __EMSCRIPTEN__
   bool lastFrameNeededBlinkWake = false;
+#endif
   while (!glfwWindowShouldClose(window)) {
     ZoneScopedN("main_loop");
 
@@ -1177,6 +1321,17 @@ int main(int argc, char** argv) {
         addressBar.isLoadingAnimationActive() || addressBarDispatcher.isFetchInFlight();
     const bool scrollEventsQueued = !pendingScrollEvents.events.empty();
     const bool reproActive = reproRecorder.has_value();
+    // Startup and document-load viewport sync needs at least one render-pane
+    // frame with a settled non-zero content size. On WASM, going idle before
+    // that frame means the loop stops recomputing layout until an input event
+    // (usually a click) wakes it, which makes page load look stuck.
+    const bool viewportSyncPending =
+        !viewportInitialized || lastPostedCanvasSize.x < 0 || lastPostedCanvasSize.y < 0;
+#ifdef __EMSCRIPTEN__
+    const bool browserUploadPending = gPendingBrowserUploadPath.has_value();
+#else
+    constexpr bool browserUploadPending = false;
+#endif
     // pendingFrame forces a poll so the future completion (handoff
     // from the backend/worker thread) is observed without waiting out
     // the idle timeout. The initial `loadBytes` path runs synchronously
@@ -1184,7 +1339,7 @@ int main(int argc, char** argv) {
     // values only come from the input-driven or viewport-resize paths.
     const bool needsActive = pendingFrame.has_value() || mouseOrModHeld || debounceTicking ||
                              fetchAnimating || scrollEventsQueued || reproActive ||
-                             lastFrameWasActive;
+                             viewportSyncPending || browserUploadPending || lastFrameWasActive;
 
 #ifndef __EMSCRIPTEN__
     // `enteredIdlePath` means this iteration unblocked via the idle
@@ -1209,8 +1364,8 @@ int main(int argc, char** argv) {
     if (experimentalMode) {
       static bool lastReportedIdle = false;
       if (enteredIdlePath != lastReportedIdle) {
-        std::fprintf(stderr, "[loop] %s\n", enteredIdlePath ? "idle (waitEvents)"
-                                                             : "active (pollEvents)");
+        std::fprintf(stderr, "[loop] %s\n",
+                     enteredIdlePath ? "idle (waitEvents)" : "active (pollEvents)");
         lastReportedIdle = enteredIdlePath;
       }
     }
@@ -1231,7 +1386,10 @@ int main(int argc, char** argv) {
       // even though we're doing "nothing").
       if (testHooksEnabled) {
         // `rendered=0` so test harness sees the skip cadence, not a frame.
-        DonnerTestHooksRecordLoopTick(0, -1.0);
+        const auto counters = backend->compositorFastPathCountersForTesting();
+        DonnerTestHooksRecordLoopTick(0, -1.0, static_cast<double>(counters.fastPathFrames),
+                                      static_cast<double>(counters.slowPathFramesWithDirty),
+                                      static_cast<double>(counters.noDirtyFrames));
       }
       emscripten_sleep(0);
       continue;
@@ -1267,7 +1425,7 @@ int main(int argc, char** argv) {
         const auto processStart = std::chrono::steady_clock::now();
         auto result = pendingFrame->get();
         const auto gotResult = std::chrono::steady_clock::now();
-        ProcessFrameResult(result, texture, textureWidth, textureHeight, viewport, textEditor,
+        ProcessFrameResult(result, flatTexture, compositedPreview, viewport, textEditor,
                            lastShownErrorLine, lastShownErrorReason);
         const auto processEnd = std::chrono::steady_clock::now();
         pendingFrame.reset();
@@ -1428,13 +1586,13 @@ int main(int argc, char** argv) {
     const auto triggerUndo = [&]() {
       auto future = backend->undo();
       auto result = future.get();
-      ProcessFrameResult(result, texture, textureWidth, textureHeight, viewport, textEditor,
+      ProcessFrameResult(result, flatTexture, compositedPreview, viewport, textEditor,
                          lastShownErrorLine, lastShownErrorReason);
     };
     const auto triggerRedo = [&]() {
       auto future = backend->redo();
       auto result = future.get();
-      ProcessFrameResult(result, texture, textureWidth, textureHeight, viewport, textEditor,
+      ProcessFrameResult(result, flatTexture, compositedPreview, viewport, textEditor,
                          lastShownErrorLine, lastShownErrorReason);
     };
     const auto triggerQuit = [&]() { glfwSetWindowShouldClose(window, GLFW_TRUE); };
@@ -1856,9 +2014,9 @@ int main(int argc, char** argv) {
       donner::Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
       const double dpr = viewport.devicePixelRatio > 0.0 ? viewport.devicePixelRatio : 1.0;
       if (desiredCanvasSize.x <= 1 || desiredCanvasSize.y <= 1) {
-        desiredCanvasSize = donner::Vector2i(
-            std::max(1, static_cast<int>(std::round(viewport.paneSize.x * dpr))),
-            std::max(1, static_cast<int>(std::round(viewport.paneSize.y * dpr))));
+        desiredCanvasSize =
+            donner::Vector2i(std::max(1, static_cast<int>(std::round(viewport.paneSize.x * dpr))),
+                             std::max(1, static_cast<int>(std::round(viewport.paneSize.y * dpr))));
       }
       // Guard against the "pane layout not settled" state — on the very
       // first ImGui frame the content region is occasionally clamped to
@@ -1866,14 +2024,14 @@ int main(int argc, char** argv) {
       // initial bitmap. Pick a small-but-reasonable floor; any real
       // pane is at least tens of pixels.
       constexpr int kMinUsefulCanvasDim = 16;
-      const bool canvasSizeIsReasonable = desiredCanvasSize.x >= kMinUsefulCanvasDim &&
-                                          desiredCanvasSize.y >= kMinUsefulCanvasDim;
+      const bool canvasSizeIsReasonable =
+          desiredCanvasSize.x >= kMinUsefulCanvasDim && desiredCanvasSize.y >= kMinUsefulCanvasDim;
       if (canvasSizeIsReasonable && desiredCanvasSize != lastPostedCanvasSize) {
         lastPostedCanvasSize = desiredCanvasSize;
         if (pendingFrame.has_value() &&
             pendingFrame->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-          ProcessFrameResult(pendingFrame->get(), texture, textureWidth, textureHeight,
-                             viewport, textEditor, lastShownErrorLine, lastShownErrorReason);
+          ProcessFrameResult(pendingFrame->get(), flatTexture, compositedPreview, viewport,
+                             textEditor, lastShownErrorLine, lastShownErrorReason);
           pendingFrame.reset();
         }
         if (!pendingFrame.has_value()) {
@@ -1939,12 +2097,18 @@ int main(int argc, char** argv) {
     pendingScrollEvents.events.clear();
 
     // Draw the document image and selection chrome.
-    if (textureWidth > 0 && textureHeight > 0) {
+    if (flatTexture.width > 0 && flatTexture.height > 0) {
       const donner::Box2d screenRect = viewport.imageScreenRect();
       const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
                                static_cast<float>(screenRect.topLeft.y));
       const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
                                     static_cast<float>(screenRect.bottomRight.y));
+#ifdef __EMSCRIPTEN__
+      if (testHooksEnabled) {
+        DonnerTestHooksRecordDocumentImageRect(screenRect.topLeft.x, screenRect.topLeft.y,
+                                               screenRect.bottomRight.x, screenRect.bottomRight.y);
+      }
+#endif
 
       ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
 
@@ -1974,8 +2138,32 @@ int main(int argc, char** argv) {
         drawList->PopClipRect();
       };
       DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
-      paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(texture)),
-                             imageOrigin, imageBottomRight);
+      const auto addTextureImage = [](ImDrawList* drawList, const TextureUploadState& state,
+                                      const ImVec2& topLeft, const ImVec2& bottomRight) {
+        if (state.texture == 0 || state.width <= 0 || state.height <= 0) {
+          return;
+        }
+        drawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.texture)),
+                           topLeft, bottomRight);
+      };
+      if (compositedPreview.active) {
+        paneDrawList->PushClipRect(imageOrigin, imageBottomRight, true);
+        addTextureImage(paneDrawList, compositedPreview.background, imageOrigin, imageBottomRight);
+        const donner::Vector2d promotedOffset =
+            compositedPreview.promotedTranslationDoc * viewport.pixelsPerDocUnit();
+        const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(promotedOffset.x),
+                                    imageOrigin.y + static_cast<float>(promotedOffset.y));
+        const ImVec2 promotedBottomRight(imageBottomRight.x + static_cast<float>(promotedOffset.x),
+                                         imageBottomRight.y + static_cast<float>(promotedOffset.y));
+        addTextureImage(paneDrawList, compositedPreview.promoted, promotedOrigin,
+                        promotedBottomRight);
+        addTextureImage(paneDrawList, compositedPreview.foreground, imageOrigin, imageBottomRight);
+        addTextureImage(paneDrawList, compositedPreview.overlay, promotedOrigin,
+                        promotedBottomRight);
+        paneDrawList->PopClipRect();
+      } else {
+        addTextureImage(paneDrawList, flatTexture, imageOrigin, imageBottomRight);
+      }
 
       const auto screenToDocument = [&](const ImVec2& screenPoint) -> donner::Vector2d {
         return viewport.screenToDocument(donner::Vector2d(screenPoint.x, screenPoint.y));
@@ -1984,7 +2172,9 @@ int main(int argc, char** argv) {
       // Pointer events → backend.
       const bool toolEligible = paneHovered && !panning && !spaceHeld;
       if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const donner::Vector2d docPoint = screenToDocument(ImGui::GetMousePos());
+        const ImVec2 mousePos = ImGui::GetMousePos();
+        lastPostedDragMoveScreenPoint = donner::Vector2d(mousePos.x, mousePos.y);
+        const donner::Vector2d docPoint = screenToDocument(mousePos);
         uint32_t mods = 0;
         if (ImGui::GetIO().KeyShift) {
           mods |= 1;  // Shift modifier bit.
@@ -2001,37 +2191,45 @@ int main(int argc, char** argv) {
       }
       if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !panning && !spaceHeld &&
           ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        const donner::Vector2d docPoint = screenToDocument(ImGui::GetMousePos());
-        const auto dragPostStart = std::chrono::steady_clock::now();
-        pendingFrame = backend->pointerEvent(donner::editor::PointerEventPayload{
-            .phase = donner::editor::sandbox::PointerPhase::kMove,
-            .documentPoint = docPoint,
-            .buttons = 1,
-        });
-        if (experimentalMode) {
-          const auto dragPostEnd = std::chrono::steady_clock::now();
-          const double postMs =
-              std::chrono::duration<double, std::milli>(dragPostEnd - dragPostStart).count();
-          std::fprintf(stderr, "[drag] kMove post=%.3f ms (docPoint=%.1f,%.1f)\n", postMs,
-                       docPoint.x, docPoint.y);
+        const ImVec2 mousePos = ImGui::GetMousePos();
+        const donner::Vector2d screenPoint(mousePos.x, mousePos.y);
+        if (ShouldPostDragMove(screenPoint, lastPostedDragMoveScreenPoint)) {
+          lastPostedDragMoveScreenPoint = screenPoint;
+          const donner::Vector2d docPoint = screenToDocument(mousePos);
+          const auto dragPostStart = std::chrono::steady_clock::now();
+          pendingFrame = backend->pointerEvent(donner::editor::PointerEventPayload{
+              .phase = donner::editor::sandbox::PointerPhase::kMove,
+              .documentPoint = docPoint,
+              .buttons = 1,
+          });
+          if (experimentalMode) {
+            const auto dragPostEnd = std::chrono::steady_clock::now();
+            const double postMs =
+                std::chrono::duration<double, std::milli>(dragPostEnd - dragPostStart).count();
+            std::fprintf(stderr, "[drag] kMove post=%.3f ms (docPoint=%.1f,%.1f)\n", postMs,
+                         docPoint.x, docPoint.y);
+          }
         }
       }
       if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !panning) {
+        lastPostedDragMoveScreenPoint.reset();
         const donner::Vector2d docPoint = screenToDocument(ImGui::GetMousePos());
         pendingFrame = backend->pointerEvent(donner::editor::PointerEventPayload{
             .phase = donner::editor::sandbox::PointerPhase::kUp,
             .documentPoint = docPoint,
         });
+      } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        lastPostedDragMoveScreenPoint.reset();
       }
 
       // Selection chrome (path outlines + AABB + marquee + hover rect)
       // is drawn into the document bitmap on the backend via
       // `OverlayRenderer::drawChromeWithTransform`, so it's pixel-
-      // locked to the rasterized content. We intentionally do NOT
-      // draw chrome via the ImGui draw list here: doing that produces
-      // shear during drag (the chrome follows the mouse while the
-      // rendered image lags by one backend frame), and it skips the
-      // path-outline stroke that the overlay renderer draws.
+      // locked to the rasterized content. During active drag preview
+      // frames the backend intentionally skips the overlay readback, so
+      // the host draws lightweight AABB chrome above the cached preview
+      // textures until the mouse-up settle frame restores the full
+      // backend-rendered path outline.
     } else {
       ImGui::TextUnformatted("(no rendered image)");
     }
@@ -2071,18 +2269,17 @@ int main(int argc, char** argv) {
             --prevDepth;
           }
 
-          ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-                                     ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                                     ImGuiTreeNodeFlags_SpanAvailWidth |
-                                     ImGuiTreeNodeFlags_DefaultOpen;
+          ImGuiTreeNodeFlags flags =
+              ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+              ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
 
           if (node.selected) {
             flags |= ImGuiTreeNodeFlags_Selected;
           }
 
           // Check if this node has children (next node is deeper).
-          bool hasChildren = (i + 1 < treeSummary.nodes.size() &&
-                              treeSummary.nodes[i + 1].depth > node.depth);
+          bool hasChildren =
+              (i + 1 < treeSummary.nodes.size() && treeSummary.nodes[i + 1].depth > node.depth);
           if (!hasChildren) {
             flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
           }
@@ -2164,7 +2361,11 @@ int main(int argc, char** argv) {
       // Record the rendered frame time in ms. We use ImGui's `DeltaTime`
       // (seconds) — same source as the in-editor FPS graph — so the test
       // harness and the on-screen diag are reading from the same clock.
-      DonnerTestHooksRecordLoopTick(1, static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0);
+      const auto counters = backend->compositorFastPathCountersForTesting();
+      DonnerTestHooksRecordLoopTick(1, static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0,
+                                    static_cast<double>(counters.fastPathFrames),
+                                    static_cast<double>(counters.slowPathFramesWithDirty),
+                                    static_cast<double>(counters.noDirtyFrames));
       // Flip `__donner_ready` on the first successfully rendered frame
       // that followed the initial (synchronous) `loadBytes`. Done once,
       // cheaply: the JS side guards `__donner_ready` itself.
@@ -2187,7 +2388,6 @@ int main(int argc, char** argv) {
     // timer, repro recorder) are complementary: they capture everything
     // that doesn't flow through ImGui's focus model.
     {
-      const ImGuiIO& lastIo = ImGui::GetIO();
       const bool anyItemActive = ImGui::IsAnyItemActive();
       // Use `IsAnyMouseDown` rather than `IsMouseDragging`: the latter
       // gates on a ~6px displacement threshold, so the first handful
@@ -2199,12 +2399,14 @@ int main(int argc, char** argv) {
       // the next frame replays them all at once, jump. Any mouse
       // button held is sufficient signal to keep the loop polling.
       const bool anyMouseDragging = ImGui::IsAnyMouseDown();
-      const bool wantTextInput = lastIo.WantTextInput;
       const bool popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
       // "Active" = something other than a blinking cursor needs a
       // render next frame. Drag, popups, and any-item-active all poll
       // at full speed.
       lastFrameWasActive = anyItemActive || anyMouseDragging || popupOpen;
+#ifndef __EMSCRIPTEN__
+      const ImGuiIO& lastIo = ImGui::GetIO();
+      const bool wantTextInput = lastIo.WantTextInput;
       // Blink-only path: pure focus-without-interaction. A full 60 FPS
       // wouldn't be wrong but would defeat the on-demand loop for any
       // SVG author who leaves the source pane focused between edits —
@@ -2212,6 +2414,7 @@ int main(int argc, char** argv) {
       // fixed. The shorter wake cadence (`kCursorBlinkWakeSeconds`)
       // keeps the blink animated without pinning CPU.
       lastFrameNeededBlinkWake = wantTextInput && !lastFrameWasActive;
+#endif
     }
   }
 
@@ -2221,8 +2424,8 @@ int main(int argc, char** argv) {
   if (reproRecorder.has_value()) {
     const std::size_t frames = reproRecorder->frameCount();
     if (reproRecorder->flush()) {
-      std::cerr << "[repro] wrote " << frames << " frames to "
-                << reproOutputPath.value_or("") << "\n";
+      std::cerr << "[repro] wrote " << frames << " frames to " << reproOutputPath.value_or("")
+                << "\n";
     } else {
       std::cerr << "[repro] failed to write " << reproOutputPath.value_or("") << "\n";
     }
@@ -2230,7 +2433,15 @@ int main(int argc, char** argv) {
 
   glfwSetScrollCallback(window, pendingScrollEvents.previousCallback);
   glfwSetWindowUserPointer(window, nullptr);
-  glDeleteTextures(1, &texture);
+  const GLuint texturesToDelete[] = {
+      flatTexture.texture,
+      compositedPreview.background.texture,
+      compositedPreview.promoted.texture,
+      compositedPreview.foreground.texture,
+      compositedPreview.overlay.texture,
+  };
+  glDeleteTextures(static_cast<GLsizei>(sizeof(texturesToDelete) / sizeof(texturesToDelete[0])),
+                   texturesToDelete);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

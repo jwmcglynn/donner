@@ -332,6 +332,32 @@ TEST(EditorApiCodecTest, FrameRoundTripFull) {
   in.hasCursorHint = true;
   in.cursorHintSourceOffset = 42;
 
+  in.hasFinalBitmap = true;
+  in.finalBitmapWidth = 2;
+  in.finalBitmapHeight = 1;
+  in.finalBitmapRowBytes = 8;
+  in.finalBitmapAlphaType = 1;
+  in.finalBitmapPixels = {1, 2, 3, 4, 5, 6, 7, 8};
+
+  const auto makeBitmap = [](uint8_t seed) {
+    FrameBitmapPayload bitmap;
+    bitmap.width = 1;
+    bitmap.height = 1;
+    bitmap.rowBytes = 4;
+    bitmap.alphaType = 1;
+    bitmap.pixels = {seed, static_cast<uint8_t>(seed + 1), static_cast<uint8_t>(seed + 2), 255};
+    return bitmap;
+  };
+  in.hasCompositedPreview = true;
+  in.compositedPreviewActive = true;
+  in.hasCompositedPreviewBitmaps = true;
+  in.compositedPreviewTranslationDoc[0] = 3.5;
+  in.compositedPreviewTranslationDoc[1] = -2.25;
+  in.compositedPreviewBackground = makeBitmap(10);
+  in.compositedPreviewPromoted = makeBitmap(20);
+  in.compositedPreviewForeground = makeBitmap(30);
+  in.compositedPreviewOverlay = makeBitmap(40);
+
   auto encoded = EncodeFrame(in);
   FramePayload out;
   ASSERT_TRUE(DecodeFrame(encoded, out));
@@ -362,6 +388,16 @@ TEST(EditorApiCodecTest, FrameRoundTripFull) {
   EXPECT_EQ(out.diagnostics[0].message, "unexpected attribute");
   EXPECT_TRUE(out.hasCursorHint);
   EXPECT_EQ(out.cursorHintSourceOffset, 42u);
+  EXPECT_TRUE(out.hasFinalBitmap);
+  EXPECT_EQ(out.finalBitmapWidth, 2);
+  EXPECT_EQ(out.finalBitmapPixels, in.finalBitmapPixels);
+  EXPECT_TRUE(out.hasCompositedPreview);
+  EXPECT_TRUE(out.compositedPreviewActive);
+  EXPECT_TRUE(out.hasCompositedPreviewBitmaps);
+  EXPECT_DOUBLE_EQ(out.compositedPreviewTranslationDoc[0], 3.5);
+  EXPECT_DOUBLE_EQ(out.compositedPreviewTranslationDoc[1], -2.25);
+  EXPECT_EQ(out.compositedPreviewPromoted.pixels, in.compositedPreviewPromoted.pixels);
+  EXPECT_EQ(out.compositedPreviewOverlay.pixels, in.compositedPreviewOverlay.pixels);
 }
 
 // ===========================================================================

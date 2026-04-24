@@ -1,15 +1,15 @@
 # WASM editor end-to-end tests (Playwright)
 
 This directory holds a headless-Chromium harness that drives the served
-Donner WASM editor through the same pointer-event / CSS / emscripten-glfw
+Donner WASM editor through the same mouse-event / CSS / emscripten-glfw
 path a real browser user hits. It exists because the native desktop tests
 (GLFW/Cocoa) don't exercise any of the regressions we keep seeing on the
 WASM build:
 
-- drag lag caused by emscripten-glfw pointer-handler wiring
+- drag lag caused by emscripten-glfw mouse-handler wiring
 - slow-load stalls from COOP/COEP misconfig or pthread-pool issues
 - clipboard routing differences (focus, DOM event order)
-- CSS `touch-action` / pointer-events interactions
+- CSS pointer-capture / event-routing interactions
 
 ## What's covered today
 
@@ -18,8 +18,9 @@ WASM build:
 - `smoke.spec.ts` — loads the page, waits on `window.__donner_ready`,
   asserts the canvas is non-zero-sized and renders something, checks there
   are no console errors on startup.
-- `drag_perf.spec.ts` — synthesizes a 60-step pointer drag and asserts
-  median frame time &le; 20 ms and worst frame &le; 50 ms (budgets
+- `drag_perf.spec.ts` — synthesizes 60-step mouse drags against both a
+  filtered subtree fixture and the `donner_icon.svg` lightning bolt, then
+  asserts median frame time &le; 20 ms and worst frame &le; 50 ms (budgets
   deliberately generous for a CI Chromium runner — we're gating "is drag
   catastrophic", not "is it 120 FPS").
 
@@ -39,11 +40,11 @@ claiming a bug class is regression-proof.
 `main.cc` installs these on `window` only when the page URL contains
 `?test=1`:
 
-| hook | description |
-| ---- | ----------- |
-| `window.__donner_ready` | `true` once the first rendered frame has swapped after the initial `loadBytes`. |
-| `window.__donner_metrics` | `{ frameTimesMs: number[], pollEventsCount, renderCount, skippedCount, lastFrameTimestampMs, readyTimestampMs }`. Rolling buffer (capacity 240). |
-| `window.__donner_simulate([{type,x,y,buttons}, ...])` | Dispatches synthesized `PointerEvent`s to the canvas (with canvas-local coords converted to client coords). Types: `pointerdown`, `pointermove`, `pointerup`. |
+| hook                                                  | description                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `window.__donner_ready`                               | `true` once the first rendered frame has swapped after the initial `loadBytes`.                                                                                                                                                                                                                                |
+| `window.__donner_metrics`                             | `{ frameTimesMs: number[], documentImageRect, selectionCount, marqueeActive, compositorFastPathCounters, flatBitmapUploads, compositedPreviewBitmapUploads, compositorTileBitmapUploads, pollEventsCount, renderCount, skippedCount, lastFrameTimestampMs, readyTimestampMs }`. Rolling buffer (capacity 240). |
+| `window.__donner_simulate([{type,x,y,buttons}, ...])` | Dispatches synthesized mouse events to the canvas (with canvas-local coords converted to client coords). Types: `pointerdown`, `pointermove`, `pointerup` are accepted and mapped to mouse events.                                                                                                             |
 
 The hooks are strictly additive and gated on the URL flag, so a normal
 page launch is byte-for-byte unchanged.
@@ -59,12 +60,19 @@ bazel run //donner/editor/wasm/tests:playwright_tests
 The wrapper (`run_tests.sh`):
 
 1. Builds `//donner/editor/wasm:wasm_web_package` (skip with
-   `DONNER_WASM_SKIP_BUILD=1`).
+   `DONNER_WASM_SKIP_BUILD=1`). The default Bazel config is `editor-wasm`;
+   set `DONNER_WASM_BAZEL_CONFIG=editor-wasm-geode` to exercise WebGPU.
+   Set `DONNER_WASM_BAZEL_MODE=opt` to match an optimized manual serve.
+   Set `DONNER_WASM_HTTPS=1` to launch the same HTTPS server path used for
+   LAN/WebGPU testing.
+   Set `DONNER_WASM_DEVICE_SCALE_FACTOR=2` to reproduce Retina-scale canvas
+   costs in headless Chromium.
 2. Runs `npm install` in this directory if `node_modules/@playwright/test`
    is missing.
 3. Runs `npx playwright install chromium` (idempotent; fast when cached).
 4. Starts `//donner/editor/wasm:serve_http --no-https` in the background
-   and parses its "Serving at …" line for the URL.
+   and parses its URL line. With `DONNER_WASM_HTTPS=1`, starts
+   `serve_http --https` and targets the printed TLS endpoint.
 5. Runs `npx playwright test`, then tears down the server.
 
 ### Standalone
@@ -81,6 +89,15 @@ cd donner/editor/wasm/tests
 DONNER_WASM_BASE_URL=http://127.0.0.1:8000 \
   DONNER_WASM_SKIP_WEBSERVER=1 \
   npx playwright test
+```
+
+To match the manual Geode opt HTTPS command:
+
+```sh
+DONNER_WASM_BAZEL_CONFIG=editor-wasm-geode \
+  DONNER_WASM_BAZEL_MODE=opt \
+  DONNER_WASM_HTTPS=1 \
+  bash donner/editor/wasm/tests/run_tests.sh --reporter=list
 ```
 
 ### Running a single spec / updating traces

@@ -13,63 +13,6 @@ namespace donner::editor::sandbox {
 
 namespace {
 
-/// Straight-alpha "source-over" composite: writes each pixel of
-/// @p overlay onto @p base in place. Both buffers are assumed to be
-/// **straight (unpremultiplied)** RGBA — that's what
-/// `RendererTinySkia::takeSnapshot` and `RendererGeode::takeSnapshot`
-/// both produce (see the "straight-alpha RGBA" note in
-/// `RendererGeode.cc::takeSnapshot`). Treating straight data as
-/// premultiplied (or vice versa) shifts the hue on partially
-/// transparent overlay pixels, which is what produced the wrong-color
-/// selection chrome during bring-up.
-///
-/// Mismatched dimensions are silently skipped so a stale overlay
-/// frame doesn't crash the backend.
-void CompositeOverlayOnto(donner::svg::RendererBitmap& base,
-                          const donner::svg::RendererBitmap& overlay) {
-  if (overlay.empty() || base.empty()) {
-    return;
-  }
-  if (overlay.dimensions != base.dimensions) {
-    return;
-  }
-  const auto height = static_cast<size_t>(base.dimensions.y);
-  const auto width = static_cast<size_t>(base.dimensions.x);
-  for (size_t y = 0; y < height; ++y) {
-    uint8_t* baseRow = base.pixels.data() + y * base.rowBytes;
-    const uint8_t* overlayRow = overlay.pixels.data() + y * overlay.rowBytes;
-    for (size_t x = 0; x < width; ++x) {
-      const uint32_t sa = overlayRow[x * 4 + 3];
-      if (sa == 0u) {
-        continue;
-      }
-      if (sa == 255u) {
-        baseRow[x * 4 + 0] = overlayRow[x * 4 + 0];
-        baseRow[x * 4 + 1] = overlayRow[x * 4 + 1];
-        baseRow[x * 4 + 2] = overlayRow[x * 4 + 2];
-        baseRow[x * 4 + 3] = 255u;
-        continue;
-      }
-      // Porter–Duff source-over for straight-alpha inputs:
-      //   outA   = sa + da*(1-sa)
-      //   outRGB = (sRGB*sa + dRGB*da*(1-sa)) / outA
-      // Integer math: work in /255 fixed-point with round-nearest.
-      const uint32_t da = baseRow[x * 4 + 3];
-      const uint32_t invA = 255u - sa;
-      const uint32_t daInv = (da * invA + 127u) / 255u;  // = da*(1-sa) in 0..255
-      const uint32_t outA = sa + daInv;                   // can't overflow: max 255
-      const auto blend = [sa, daInv, outA](uint32_t s, uint32_t d) -> uint8_t {
-        const uint32_t num = s * sa + d * daInv;  // in 0..255*255
-        return static_cast<uint8_t>((num + (outA >> 1u)) / outA);
-      };
-      baseRow[x * 4 + 0] = blend(overlayRow[x * 4 + 0], baseRow[x * 4 + 0]);
-      baseRow[x * 4 + 1] = blend(overlayRow[x * 4 + 1], baseRow[x * 4 + 1]);
-      baseRow[x * 4 + 2] = blend(overlayRow[x * 4 + 2], baseRow[x * 4 + 2]);
-      baseRow[x * 4 + 3] = static_cast<uint8_t>(outA);
-    }
-  }
-}
-
 /// Premul-alpha "source-over": premultiplied src over premultiplied
 /// dst. `out_premul = src_premul + dst_premul * (1 - src.a)`. No
 /// division — that's why the compositor caches its bitmaps in premul.
@@ -91,8 +34,7 @@ void CompositePremulOntoPremul(donner::svg::RendererBitmap& dst,
   }
   for (int y = yStart; y < yEnd; ++y) {
     uint8_t* dstRow = dst.pixels.data() + static_cast<size_t>(y) * dst.rowBytes;
-    const uint8_t* srcRow =
-        src.pixels.data() + static_cast<size_t>(y - offsetY) * src.rowBytes;
+    const uint8_t* srcRow = src.pixels.data() + static_cast<size_t>(y - offsetY) * src.rowBytes;
     for (int x = xStart; x < xEnd; ++x) {
       const size_t dstOff = static_cast<size_t>(x) * 4;
       const size_t srcOff = static_cast<size_t>(x - offsetX) * 4;
@@ -139,6 +81,16 @@ void UnpremultiplyInPlace(donner::svg::RendererBitmap& bitmap) {
   bitmap.alphaType = donner::svg::AlphaType::Unpremultiplied;
 }
 
+FrameBitmapPayload MakeFrameBitmapPayload(const donner::svg::RendererBitmap& bitmap) {
+  FrameBitmapPayload payload;
+  payload.width = bitmap.dimensions.x;
+  payload.height = bitmap.dimensions.y;
+  payload.rowBytes = static_cast<uint32_t>(bitmap.rowBytes);
+  payload.alphaType = static_cast<uint8_t>(bitmap.alphaType);
+  payload.pixels = bitmap.pixels;
+  return payload;
+}
+
 }  // namespace
 
 EditorBackendCore::EditorBackendCore() {
@@ -164,6 +116,9 @@ void EditorBackendCore::bumpEntityGeneration() {
   // rebuilds it against the new document on the next render.
   compositor_.reset();
   compositorEntity_ = entt::null;
+  compositedPreviewUploadsPrimed_ = false;
+  compositedPreviewUploadEntity_ = entt::null;
+  compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
 }
 
 uint64_t EditorBackendCore::entityIdFor(entt::entity entity, const svg::SVGElement& element) {
@@ -177,8 +132,8 @@ uint64_t EditorBackendCore::entityIdFor(entt::entity entity, const svg::SVGEleme
   return id;
 }
 
-std::optional<svg::SVGElement> EditorBackendCore::resolveElement(
-    uint64_t entityId, uint64_t entityGeneration) const {
+std::optional<svg::SVGElement> EditorBackendCore::resolveElement(uint64_t entityId,
+                                                                 uint64_t entityGeneration) const {
   if (entityGeneration != entityGeneration_) {
     return std::nullopt;
   }
@@ -250,19 +205,16 @@ void EditorBackendCore::populateTreeSummary(FrameTreeSummary& tree) {
     if (xmlNode.has_value()) {
       auto loc = xmlNode->getNodeLocation();
       if (loc.has_value()) {
-        entry.sourceStart =
-            static_cast<uint32_t>(loc->start.offset.value_or(0));
+        entry.sourceStart = static_cast<uint32_t>(loc->start.offset.value_or(0));
         entry.sourceEnd = static_cast<uint32_t>(loc->end.offset.value_or(0));
       }
     }
 
     // Selected?
     entry.selected =
-        std::find_if(selectedElems.begin(), selectedElems.end(),
-                     [&](const svg::SVGElement& sel) {
-                       return sel.entityHandle().entity() ==
-                              element.entityHandle().entity();
-                     }) != selectedElems.end();
+        std::find_if(selectedElems.begin(), selectedElems.end(), [&](const svg::SVGElement& sel) {
+          return sel.entityHandle().entity() == element.entityHandle().entity();
+        }) != selectedElems.end();
 
     tree.nodes.push_back(std::move(entry));
 
@@ -272,8 +224,7 @@ void EditorBackendCore::populateTreeSummary(FrameTreeSummary& tree) {
 
     // Push children in reverse order so first child is processed first.
     std::vector<svg::SVGElement> children;
-    for (auto child = element.firstChild(); child.has_value();
-         child = child->nextSibling()) {
+    for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
       children.push_back(*child);
     }
     for (auto it = children.rbegin(); it != children.rend(); ++it) {
@@ -332,8 +283,9 @@ FramePayload EditorBackendCore::buildFramePayload() {
     Entity desiredEntity = entt::null;
     donner::svg::compositor::InteractionHint desiredKind =
         donner::svg::compositor::InteractionHint::Selection;
-    if (auto preview = selectTool_.activeDragPreview()) {
-      desiredEntity = preview->entity;
+    const auto activeDragPreview = selectTool_.activeDragPreview();
+    if (activeDragPreview.has_value()) {
+      desiredEntity = activeDragPreview->entity;
       desiredKind = donner::svg::compositor::InteractionHint::ActiveDrag;
     } else if (!editor_.selectedElements().empty()) {
       desiredEntity = editor_.selectedElements().front().entityHandle().entity();
@@ -344,8 +296,7 @@ FramePayload EditorBackendCore::buildFramePayload() {
         compositor_->demoteEntity(compositorEntity_);
       }
       compositorEntity_ = entt::null;
-      if (desiredEntity != entt::null &&
-          compositor_->promoteEntity(desiredEntity, desiredKind)) {
+      if (desiredEntity != entt::null && compositor_->promoteEntity(desiredEntity, desiredKind)) {
         compositorEntity_ = desiredEntity;
       }
     }
@@ -370,7 +321,80 @@ FramePayload EditorBackendCore::buildFramePayload() {
     viewport.size = Vector2d(canvasSize.x, canvasSize.y);
     viewport.devicePixelRatio = 1.0;
 
+    const auto countersBefore = compositor_->fastPathCountersForTesting();
     compositor_->renderFrame(viewport);
+    const auto countersAfter = compositor_->fastPathCountersForTesting();
+    const bool fastPathOrCleanFrame =
+        countersAfter.fastPathFrames > countersBefore.fastPathFrames ||
+        countersAfter.noDirtyFrames > countersBefore.noDirtyFrames;
+
+    const bool activeDrag = activeDragPreview.has_value();
+    const bool splitPreviewAvailable =
+        compositorEntity_ != entt::null && compositor_->hasSplitStaticLayers();
+    if (splitPreviewAvailable) {
+      const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
+      const Transform2d canvasFromDoc = doc.canvasFromDocumentTransform();
+      const double docPerCanvasX = canvasFromDoc.data[0] != 0.0 ? 1.0 / canvasFromDoc.data[0] : 1.0;
+      const double docPerCanvasY = canvasFromDoc.data[3] != 0.0 ? 1.0 / canvasFromDoc.data[3] : 1.0;
+      Vector2d composeOffsetDoc = Vector2d::Zero();
+      if (composeOffset.isTranslation()) {
+        const Vector2d composeOffsetCanvas = composeOffset.translation();
+        composeOffsetDoc =
+            Vector2d(composeOffsetCanvas.x * docPerCanvasX, composeOffsetCanvas.y * docPerCanvasY);
+      }
+
+      const bool previewUploadNeeded =
+          !compositedPreviewUploadsPrimed_ || compositedPreviewUploadEntity_ != compositorEntity_ ||
+          compositedPreviewUploadCanvasSize_ != canvasSize || (activeDrag && !fastPathOrCleanFrame);
+
+      frame.hasCompositedPreview = true;
+      frame.compositedPreviewActive = activeDrag;
+      frame.compositedPreviewTranslationDoc[0] = composeOffsetDoc.x;
+      frame.compositedPreviewTranslationDoc[1] = composeOffsetDoc.y;
+      frame.hasCompositedPreviewBitmaps = previewUploadNeeded;
+
+      if (previewUploadNeeded) {
+        const auto renderPreviewOverlay = [&]() -> donner::svg::RendererBitmap {
+          if (editor_.selectedElements().empty()) {
+            return {};
+          }
+          if (!overlayRenderer_.has_value()) {
+            overlayRenderer_.emplace();
+          }
+          donner::svg::RenderViewport overlayViewport;
+          overlayViewport.size = Vector2d(canvasSize.x, canvasSize.y);
+          overlayViewport.devicePixelRatio = 1.0;
+
+          Transform2d overlayCanvasFromDoc = canvasFromDoc;
+          if (composeOffset.isTranslation()) {
+            const Vector2d composeOffsetCanvas = composeOffset.translation();
+            overlayCanvasFromDoc = canvasFromDoc * Transform2d::Translate(-composeOffsetCanvas.x,
+                                                                          -composeOffsetCanvas.y);
+          }
+
+          donner::svg::Renderer& overlayRenderer = *overlayRenderer_;
+          overlayRenderer.beginFrame(overlayViewport);
+          donner::editor::OverlayRenderer::drawChromeWithTransform(
+              overlayRenderer, editor_.selectedElements(), /*marqueeRectDoc=*/std::nullopt,
+              overlayCanvasFromDoc);
+          overlayRenderer.endFrame();
+          return overlayRenderer.takeSnapshot();
+        };
+
+        frame.compositedPreviewBackground = MakeFrameBitmapPayload(compositor_->backgroundBitmap());
+        frame.compositedPreviewPromoted =
+            MakeFrameBitmapPayload(compositor_->layerBitmapOf(compositorEntity_));
+        frame.compositedPreviewForeground = MakeFrameBitmapPayload(compositor_->foregroundBitmap());
+        frame.compositedPreviewOverlay = MakeFrameBitmapPayload(renderPreviewOverlay());
+        compositedPreviewUploadsPrimed_ = true;
+        compositedPreviewUploadEntity_ = compositorEntity_;
+        compositedPreviewUploadCanvasSize_ = canvasSize;
+      }
+    } else {
+      compositedPreviewUploadsPrimed_ = false;
+      compositedPreviewUploadEntity_ = entt::null;
+      compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
+    }
 
     // Fast-path: when the compositor has a single promoted layer with
     // cached bg/drag/fg bitmaps, skip the GPU main compose AND its
@@ -385,13 +409,16 @@ FramePayload EditorBackendCore::buildFramePayload() {
     // this CPU path is feasible.
     donner::svg::RendererBitmap snapshot;
     const bool cpuComposeActive = cpuComposeEnabledForTesting_ &&
-                                   compositor_->hasSplitStaticLayers() &&
-                                   compositorEntity_ != entt::null;
-    if (cpuComposeActive) {
+                                  compositor_->hasSplitStaticLayers() &&
+                                  compositorEntity_ != entt::null && !activeDrag;
+    if (activeDrag && splitPreviewAvailable) {
+      // The host already has bg/drag/fg textures. For steady active-drag
+      // frames, ship only the updated translation in `compositedPreview`
+      // and avoid building/uploading a full composed bitmap.
+    } else if (cpuComposeActive) {
       const donner::svg::RendererBitmap& bg = compositor_->backgroundBitmap();
       const donner::svg::RendererBitmap& fg = compositor_->foregroundBitmap();
-      const donner::svg::RendererBitmap& dragBitmap =
-          compositor_->layerBitmapOf(compositorEntity_);
+      const donner::svg::RendererBitmap& dragBitmap = compositor_->layerBitmapOf(compositorEntity_);
       const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
       int dragOffsetX = 0;
       int dragOffsetY = 0;
@@ -447,11 +474,16 @@ FramePayload EditorBackendCore::buildFramePayload() {
 
     // Rasterize selection chrome into a dedicated transparent bitmap
     // via `overlayRenderer_`, then software-composite onto the
-    // compositor's snapshot. The chrome can't share `renderer_`'s
-    // frame because the compositor has already called `endFrame`
-    // before returning; on Geode, post-`endFrame` draws are no-ops
-    // against a finished command buffer. A separate renderer opens
-    // its own frame lifecycle, so the chrome draws are real.
+    // compositor's snapshot. Skip this while a drag preview is active:
+    // the moving content already communicates the gesture, and on
+    // Geode the extra overlay frame + readback is pure per-move tax.
+    // The chrome comes back on the mouse-up settle frame.
+    //
+    // The chrome can't share `renderer_`'s frame because the compositor
+    // has already called `endFrame` before returning; on Geode,
+    // post-`endFrame` draws are no-ops against a finished command
+    // buffer. A separate renderer opens its own frame lifecycle, so the
+    // chrome draws are real.
     //
     // Render the overlay into a TIGHT bitmap sized around the selection's
     // canvas-space AABB (plus stroke + AA padding) instead of the full
@@ -460,9 +492,14 @@ FramePayload EditorBackendCore::buildFramePayload() {
     // every frame — ~20 ms on `donner_splash.svg`. A tight overlay on
     // a single letter is ~100×140 pixels, roughly 30× smaller, which
     // drops the overlay cost into the single-digit-ms range.
-    const bool hasSelectionOrMarquee = !editor_.selectedElements().empty() ||
-                                        selectTool_.marqueeRect().has_value();
-    if (hasSelectionOrMarquee && !snapshot.empty()) {
+    const bool hasSelectionOrMarquee =
+        !editor_.selectedElements().empty() || selectTool_.marqueeRect().has_value();
+    const bool shouldDrawOverlay = hasSelectionOrMarquee && !activeDragPreview.has_value();
+    if (shouldDrawOverlay && !snapshot.empty()) {
+      if (!overlayRenderer_.has_value()) {
+        overlayRenderer_.emplace();
+      }
+      donner::svg::Renderer& overlayRenderer = *overlayRenderer_;
       const Transform2d canvasFromDoc = doc.canvasFromDocumentTransform();
       const auto selectionBoundsDoc =
           donner::editor::SnapshotSelectionWorldBounds(editor_.selectedElements());
@@ -490,13 +527,12 @@ FramePayload EditorBackendCore::buildFramePayload() {
         constexpr double kPadPx = 8.0;
         Vector2d tl(std::floor(std::max(0.0, canvasBounds.topLeft.x - kPadPx)),
                     std::floor(std::max(0.0, canvasBounds.topLeft.y - kPadPx)));
-        Vector2d br(std::ceil(std::min<double>(viewportWidth_, canvasBounds.bottomRight.x + kPadPx)),
-                    std::ceil(std::min<double>(viewportHeight_,
-                                                canvasBounds.bottomRight.y + kPadPx)));
+        Vector2d br(
+            std::ceil(std::min<double>(viewportWidth_, canvasBounds.bottomRight.x + kPadPx)),
+            std::ceil(std::min<double>(viewportHeight_, canvasBounds.bottomRight.y + kPadPx)));
         if (br.x > tl.x && br.y > tl.y) {
           tightTopLeftPx = Vector2i(static_cast<int>(tl.x), static_cast<int>(tl.y));
-          tightSizePx =
-              Vector2i(static_cast<int>(br.x - tl.x), static_cast<int>(br.y - tl.y));
+          tightSizePx = Vector2i(static_cast<int>(br.x - tl.x), static_cast<int>(br.y - tl.y));
         }
       }
 
@@ -513,12 +549,12 @@ FramePayload EditorBackendCore::buildFramePayload() {
       const Transform2d tightCanvasFromDoc =
           canvasFromDoc * Transform2d::Translate(-tightTopLeftPx.x, -tightTopLeftPx.y);
 
-      overlayRenderer_.beginFrame(overlayViewport);
+      overlayRenderer.beginFrame(overlayViewport);
       donner::editor::OverlayRenderer::drawChromeWithTransform(
-          overlayRenderer_, editor_.selectedElements(), selectTool_.marqueeRect(),
+          overlayRenderer, editor_.selectedElements(), selectTool_.marqueeRect(),
           tightCanvasFromDoc);
-      overlayRenderer_.endFrame();
-      donner::svg::RendererBitmap overlay = overlayRenderer_.takeSnapshot();
+      overlayRenderer.endFrame();
+      donner::svg::RendererBitmap overlay = overlayRenderer.takeSnapshot();
       // Composite the tight overlay bitmap at its offset. Re-use
       // `CompositeOverlayOnto` but applied row-by-row with the offset
       // — inline the straight-alpha source-over here to avoid an
@@ -690,9 +726,7 @@ FramePayload EditorBackendCore::handlePointerEvent(const PointerEventPayload& pt
     MouseModifiers modifiers;
     modifiers.shift = (ptr.modifiers & 0x1u) != 0;
     switch (ptr.phase) {
-      case PointerPhase::kDown:
-        selectTool_.onMouseDown(editor_, docPoint, modifiers);
-        break;
+      case PointerPhase::kDown: selectTool_.onMouseDown(editor_, docPoint, modifiers); break;
       case PointerPhase::kMove:
         // `buttonHeld` is only meaningful while a drag is in flight.
         // `ptr.buttons` bit 0 = primary; default-treat any held
@@ -741,8 +775,7 @@ FramePayload EditorBackendCore::handleSelectElement(const SelectElementPayload& 
       case 2:  // Add
         editor_.addToSelection(*element);
         break;
-      default:
-        break;
+      default: break;
     }
   }
   return buildFramePayload();

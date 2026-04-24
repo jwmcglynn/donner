@@ -1,9 +1,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <fstream>
+#include <sstream>
+
+#include "donner/editor/ViewportState.h"
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/backend_lib/SelectTool.h"
-#include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
@@ -82,6 +85,38 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyDpr) {
     ASSERT_TRUE(hit.has_value()) << "  dpr=" << dpr;
     EXPECT_EQ(hit->id(), "r1") << "  dpr=" << dpr;
   }
+}
+
+TEST(RenderPaneClickTest, DonnerIconLightningProbeHitsGeometry) {
+  std::ifstream iconStream("donner_icon.svg");
+  if (!iconStream.is_open()) {
+    GTEST_SKIP() << "donner_icon.svg not found in runfiles";
+  }
+  std::ostringstream iconBuf;
+  iconBuf << iconStream.rdbuf();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(iconBuf.str()));
+
+  const std::vector<Vector2d> probes = {
+      Vector2d(126.0, 154.0), Vector2d(120.0, 160.0), Vector2d(130.0, 145.0),
+      Vector2d(115.0, 166.0), Vector2d(140.0, 140.0), Vector2d(100.0, 200.0),
+  };
+
+  std::ostringstream misses;
+  for (const Vector2d& probe : probes) {
+    auto hit = app.hitTest(probe);
+    if (hit.has_value()) {
+      SelectTool tool;
+      tool.setCompositedDragPreviewEnabled(true);
+      tool.onMouseDown(app, probe, MouseModifiers{});
+      EXPECT_TRUE(app.hasSelection());
+      return;
+    }
+    misses << " (" << probe.x << "," << probe.y << ")";
+  }
+
+  FAIL() << "no Donner icon lightning probe hit geometry. Misses:" << misses.str();
 }
 
 // `desiredCanvasSize` should grow with both zoom and DPR, capped at

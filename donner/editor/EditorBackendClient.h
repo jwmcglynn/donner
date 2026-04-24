@@ -57,9 +57,9 @@ struct PointerEventPayload {
 
 struct KeyEventPayload {
   sandbox::KeyPhase phase = sandbox::KeyPhase::kDown;
-  int32_t keyCode = 0;       ///< Platform-independent scancode (GLFW keycode on desktop).
+  int32_t keyCode = 0;  ///< Platform-independent scancode (GLFW keycode on desktop).
   uint32_t modifiers = 0;
-  std::string textInput;     ///< Populated for `kChar`; empty otherwise.
+  std::string textInput;  ///< Populated for `kChar`; empty otherwise.
 };
 
 struct WheelEventPayload {
@@ -67,6 +67,16 @@ struct WheelEventPayload {
   double deltaX = 0.0;
   double deltaY = 0.0;
   uint32_t modifiers = 0;
+};
+
+/// Diagnostic counters for the compositor translation-only fast path.
+/// Exposed through the backend client so the WASM Playwright harness can
+/// report whether drag frames are missing the fast path or bottlenecking
+/// after the fast path has already engaged.
+struct CompositorFastPathCounters {
+  uint64_t fastPathFrames = 0;
+  uint64_t slowPathFramesWithDirty = 0;
+  uint64_t noDirtyFrames = 0;
 };
 
 struct ExportPayload {
@@ -86,6 +96,18 @@ struct SourceWriteback {
 
 /// Unified per-event reply. Produced by every mutating API call.
 struct FrameResult {
+  struct CompositedPreview {
+    svg::RendererBitmap backgroundBitmap;
+    svg::RendererBitmap promotedBitmap;
+    svg::RendererBitmap foregroundBitmap;
+    svg::RendererBitmap overlayBitmap;
+    Vector2d promotedTranslationDoc = Vector2d::Zero();
+    bool active = false;
+    bool includesBitmapUploads = false;
+
+    [[nodiscard]] bool valid() const { return !promotedBitmap.empty() || !includesBitmapUploads; }
+  };
+
   bool ok = false;
   /// Sequence number. Monotonic within a session.
   uint64_t frameId = 0;
@@ -97,6 +119,10 @@ struct FrameResult {
   svg::RendererBitmap bitmap;
   /// Updated selection chrome.
   SelectionOverlay selection;
+  /// Split-layer compositor preview. During active drag the backend may
+  /// omit `bitmap` and send only a new `promotedTranslationDoc` here,
+  /// allowing the host to reuse already-uploaded bg/drag/fg textures.
+  std::optional<CompositedPreview> compositedPreview;
   /// Source writebacks to apply to the host's TextEditor in order.
   std::vector<SourceWriteback> writebacks;
   /// When present, the host's TextEditor should adopt these bytes
@@ -142,8 +168,7 @@ class EditorBackendClient {
 public:
   /// Desktop ctor — uses `SandboxSession` as the transport. The session
   /// must outlive this client.
-  static std::unique_ptr<EditorBackendClient> MakeSessionBacked(
-      sandbox::SandboxSession& session);
+  static std::unique_ptr<EditorBackendClient> MakeSessionBacked(sandbox::SandboxSession& session);
 
   /// WASM ctor — runs the backend library in-process. Never linked on
   /// desktop (and vice versa).
@@ -157,30 +182,25 @@ public:
   // ------------ document / source ------------
 
   [[nodiscard]] virtual std::future<FrameResult> loadBytes(
-      std::span<const uint8_t> bytes,
-      std::optional<std::string> originUri) = 0;
+      std::span<const uint8_t> bytes, std::optional<std::string> originUri) = 0;
 
-  [[nodiscard]] virtual std::future<FrameResult> replaceSource(
-      std::string bytes, bool preserveUndoOnReparse) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> replaceSource(std::string bytes,
+                                                               bool preserveUndoOnReparse) = 0;
 
-  [[nodiscard]] virtual std::future<FrameResult> applySourcePatch(
-      uint32_t sourceStart, uint32_t sourceEnd, std::string newText) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> applySourcePatch(uint32_t sourceStart,
+                                                                  uint32_t sourceEnd,
+                                                                  std::string newText) = 0;
 
   // ------------ input events ------------
 
-  [[nodiscard]] virtual std::future<FrameResult> pointerEvent(
-      const PointerEventPayload& ev) = 0;
-  [[nodiscard]] virtual std::future<FrameResult> keyEvent(
-      const KeyEventPayload& ev) = 0;
-  [[nodiscard]] virtual std::future<FrameResult> wheelEvent(
-      const WheelEventPayload& ev) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> pointerEvent(const PointerEventPayload& ev) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> keyEvent(const KeyEventPayload& ev) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> wheelEvent(const WheelEventPayload& ev) = 0;
 
   // ------------ tool + viewport + history ------------
 
-  [[nodiscard]] virtual std::future<FrameResult> setTool(
-      sandbox::ToolKind kind) = 0;
-  [[nodiscard]] virtual std::future<FrameResult> setViewport(
-      int width, int height) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> setTool(sandbox::ToolKind kind) = 0;
+  [[nodiscard]] virtual std::future<FrameResult> setViewport(int width, int height) = 0;
 
   /// Hand a host-allocated shared GPU texture descriptor to the
   /// backend so subsequent renders can target it directly (zero-copy
@@ -197,13 +217,12 @@ public:
   // ------------ tree selection ------------
 
   [[nodiscard]] virtual std::future<FrameResult> selectElement(uint64_t entityId,
-                                                                uint64_t entityGeneration,
-                                                                uint8_t mode) = 0;
+                                                               uint64_t entityGeneration,
+                                                               uint8_t mode) = 0;
 
   // ------------ export ------------
 
-  [[nodiscard]] virtual std::future<ExportResult> exportDocument(
-      const ExportPayload& payload) = 0;
+  [[nodiscard]] virtual std::future<ExportResult> exportDocument(const ExportPayload& payload) = 0;
 
   // ------------ async-push callbacks ------------
 
@@ -226,6 +245,7 @@ public:
   [[nodiscard]] virtual std::optional<Box2d> latestDocumentViewBox() const = 0;
   [[nodiscard]] virtual std::optional<ParseDiagnostic> lastParseError() const = 0;
   [[nodiscard]] virtual const sandbox::FrameTreeSummary& tree() const = 0;
+  [[nodiscard]] virtual CompositorFastPathCounters compositorFastPathCountersForTesting() const = 0;
 
 protected:
   EditorBackendClient() = default;

@@ -41,6 +41,7 @@ _EDITOR_WASM_RUNTIME_DEPS = [
     "//donner/editor/repro:repro_recorder",
     "//donner/svg",
     "//donner/svg/renderer",
+    "//donner/svg/renderer:pixel_format_utils",
     "//third_party/emscripten-glfw",
     "//third_party/fira-code",
     "//third_party/roboto",

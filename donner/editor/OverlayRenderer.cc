@@ -5,9 +5,9 @@
 
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
-#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -29,11 +29,28 @@ constexpr double kSelectionStrokePixels = 1.0;
 /// Marquee stroke thickness — matches the prior ImGui chrome exactly.
 constexpr double kMarqueeStrokePixels = 1.5;
 
+/// On-screen resize handle size in canvas pixels.
+constexpr double kSelectionHandleSizePixels = 6.0;
+
 svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   // Bright cyan stroke, no fill.
   paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xff)));
   paint.fill = svg::PaintServer::None{};
+  paint.strokeOpacity = 1.0;
+  paint.strokeParams.strokeWidth = worldStrokeWidth;
+  paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
+  paint.strokeParams.lineJoin = svg::StrokeLinejoin::Miter;
+  paint.strokeParams.miterLimit = 4.0;
+  return paint;
+}
+
+svg::PaintParams MakeSelectionHandlePaint(double worldStrokeWidth) {
+  svg::PaintParams paint;
+  // White fill with the same cyan outline as the rest of selection chrome.
+  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0xff, 0xff, 0xff)));
+  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xff)));
+  paint.fillOpacity = 1.0;
   paint.strokeOpacity = 1.0;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
@@ -105,6 +122,28 @@ void DrawElementPathOutline(svg::Renderer& renderer, const svg::SVGGeometryEleme
   }
 }
 
+void DrawSelectionHandles(svg::Renderer& renderer, const Box2d& aabb,
+                          const svg::PaintParams& handlePaint, double handleSizeWorld) {
+  if (aabb.topLeft.x >= aabb.bottomRight.x || aabb.topLeft.y >= aabb.bottomRight.y) {
+    return;
+  }
+
+  const double cx = (aabb.topLeft.x + aabb.bottomRight.x) * 0.5;
+  const double cy = (aabb.topLeft.y + aabb.bottomRight.y) * 0.5;
+  const std::array<Vector2d, 8> handles = {
+      Vector2d(aabb.topLeft.x, aabb.topLeft.y),         Vector2d(cx, aabb.topLeft.y),
+      Vector2d(aabb.bottomRight.x, aabb.topLeft.y),     Vector2d(aabb.bottomRight.x, cy),
+      Vector2d(aabb.bottomRight.x, aabb.bottomRight.y), Vector2d(cx, aabb.bottomRight.y),
+      Vector2d(aabb.topLeft.x, aabb.bottomRight.y),     Vector2d(aabb.topLeft.x, cy),
+  };
+  const double halfHandle = handleSizeWorld * 0.5;
+  for (const Vector2d& center : handles) {
+    renderer.drawRect(Box2d(Vector2d(center.x - halfHandle, center.y - halfHandle),
+                            Vector2d(center.x + halfHandle, center.y + halfHandle)),
+                      handlePaint.strokeParams);
+  }
+}
+
 }  // namespace
 
 void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
@@ -170,7 +209,9 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
   };
   const double selectionStrokeWidth = pixelToWorld(kSelectionStrokePixels);
   const double marqueeStrokeWidth = pixelToWorld(kMarqueeStrokePixels);
+  const double selectionHandleSize = pixelToWorld(kSelectionHandleSizePixels);
   const svg::PaintParams selectionStrokePaint = MakeSelectionStrokePaint(selectionStrokeWidth);
+  const svg::PaintParams selectionHandlePaint = MakeSelectionHandlePaint(selectionStrokeWidth);
 
   // Per-element path outlines first — the user sees the exact shape of
   // every selected element regardless of how many are picked. Group-like
@@ -205,6 +246,11 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
         combined.addBox(selectionBoundsDoc[i]);
       }
       renderer.drawRect(combined, selectionStrokePaint.strokeParams);
+    }
+
+    renderer.setPaint(selectionHandlePaint);
+    for (const Box2d& aabb : selectionBoundsDoc) {
+      DrawSelectionHandles(renderer, aabb, selectionHandlePaint, selectionHandleSize);
     }
   }
 

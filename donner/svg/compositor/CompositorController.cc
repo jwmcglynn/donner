@@ -126,9 +126,8 @@ ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   img.width = bitmap.dimensions.x;
   img.height = bitmap.dimensions.y;
   img.data = bitmap.pixels;
-  img.alphaType = bitmap.alphaType == AlphaType::Premultiplied
-                       ? ImageAlphaType::Premultiplied
-                       : ImageAlphaType::Unpremultiplied;
+  img.alphaType = bitmap.alphaType == AlphaType::Premultiplied ? ImageAlphaType::Premultiplied
+                                                               : ImageAlphaType::Unpremultiplied;
   return img;
 }
 
@@ -1000,7 +999,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // pointer — the regression
   // `ScaledCanvasTranslationOnlyDragProducesCorrectPixels` guards
   // this.
-  const Transform2d canvasFromDoc = components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+  const Transform2d canvasFromDoc =
+      components::LayoutSystem().getCanvasFromDocumentTransform(registry);
   const Transform2d docFromCanvas = canvasFromDoc.inverse();
   for (auto& layer : layers_) {
     if (!layer.hasValidBitmap() || !layer.bitmapEntityFromWorldTransform().has_value()) {
@@ -1635,7 +1635,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
         .paintOrderIndex = paintIdx++,
         .bitmap = segBitmap,
         .layerEntity = entt::null,
-        .canvasFromBitmap = Transform2d(),
+        .canvasFromBitmap = Transform2d::Translate(
+            i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i].x : 0.0,
+            i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i].y : 0.0),
     });
     // Layer tile.
     const auto& layer = layers_[i];
@@ -1666,7 +1668,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
       .paintOrderIndex = paintIdx,
       .bitmap = tailBitmap,
       .layerEntity = entt::null,
-      .canvasFromBitmap = Transform2d(),
+      .canvasFromBitmap = Transform2d::Translate(
+          tailIdx < staticSegmentOffsets_.size() ? staticSegmentOffsets_[tailIdx].x : 0.0,
+          tailIdx < staticSegmentOffsets_.size() ? staticSegmentOffsets_[tailIdx].y : 0.0),
   });
   return tiles;
 }
@@ -1855,8 +1859,10 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
   // (flat-texture upload, unit tests) get valid pixels. After the
   // first full compose lands, subsequent drag frames can safely skip
   // because `frame_` retains the prior pixmap.
+  const bool hasTiledCompositorOutput = !staticSegments_.empty();
   const bool skipMainCompose = skipMainComposeDuringSplit_ && hasActiveDrag &&
-                               hasSplitStaticLayers() && mainRendererHasCachedFrame_;
+                               mainRendererHasCachedFrame_ &&
+                               (hasSplitStaticLayers() || hasTiledCompositorOutput);
   if (skipMainCompose) {
     return;
   }

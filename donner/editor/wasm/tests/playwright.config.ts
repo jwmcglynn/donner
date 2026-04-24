@@ -14,6 +14,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const baseURL = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const skipWebServer = process.env.DONNER_WASM_SKIP_WEBSERVER === "1";
+const deviceScaleFactor = Number(process.env.DONNER_WASM_DEVICE_SCALE_FACTOR || "1");
 
 export default defineConfig({
   testDir: ".",
@@ -24,9 +25,9 @@ export default defineConfig({
   reporter: process.env.CI ? [["list"], ["github"]] : [["list"]],
   use: {
     baseURL,
-    // Chromium's headless pointer event path is what we're actually trying
+    // Chromium's headless mouse event path is what we're actually trying
     // to exercise. Don't switch to Firefox / WebKit without validating that
-    // `PointerEvent` dispatch flows the same way — emscripten-glfw's
+    // synthesized mouse dispatch flows the same way — emscripten-glfw's
     // handlers are bound with specific event-listener options.
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: true,
@@ -36,20 +37,29 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        deviceScaleFactor,
+        launchOptions: {
+          args: [
+            // Required for local/headless WebGPU runs of --config=editor-wasm-geode.
+            "--enable-unsafe-webgpu",
+          ],
+        },
+      },
     },
   ],
   webServer: skipWebServer
     ? undefined
     : {
-        // If unset, assume the caller started `serve_http` manually.
-        // `DONNER_WASM_SERVE_CMD` is how the Bazel wrapper injects its
-        // serve command (runfiles-resolved path).
-        command: process.env.DONNER_WASM_SERVE_CMD || "true",
-        url: baseURL,
-        reuseExistingServer: true,
-        timeout: 60_000,
-        stdout: "pipe",
-        stderr: "pipe",
-      },
+      // If unset, assume the caller started `serve_http` manually.
+      // `DONNER_WASM_SERVE_CMD` is how the Bazel wrapper injects its
+      // serve command (runfiles-resolved path).
+      command: process.env.DONNER_WASM_SERVE_CMD || "true",
+      url: baseURL,
+      reuseExistingServer: true,
+      timeout: 60_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
 });

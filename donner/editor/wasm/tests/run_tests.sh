@@ -14,6 +14,10 @@
 # Environment knobs (all optional):
 #   DONNER_WASM_BASE_URL     Skip bazel-serve and target an already-running
 #                            server at this URL. (Implies SKIP_WEBSERVER=1.)
+#   DONNER_WASM_BAZEL_CONFIG Bazel config to build/serve. Defaults to
+#                            editor-wasm; set editor-wasm-geode for WebGPU.
+#   DONNER_WASM_BAZEL_MODE   Optional Bazel compilation mode, e.g. opt.
+#   DONNER_WASM_HTTPS        Set to 1 to launch serve_http with --https.
 #   DONNER_WASM_SKIP_BUILD   Don't rebuild //donner/editor/wasm:wasm first.
 
 set -euo pipefail
@@ -28,11 +32,22 @@ fi
 cd "${REPO_ROOT}"
 
 log() { printf "[wasm-e2e] %s\n" "$*" >&2; }
+BAZEL_CONFIG="${DONNER_WASM_BAZEL_CONFIG:-editor-wasm}"
+BAZEL_ARGS=(--config="${BAZEL_CONFIG}")
+if [[ -n "${DONNER_WASM_BAZEL_MODE:-}" ]]; then
+  BAZEL_ARGS+=(-c "${DONNER_WASM_BAZEL_MODE}")
+fi
+SERVE_HTTPS="${DONNER_WASM_HTTPS:-0}"
+if [[ "${SERVE_HTTPS}" == "1" ]]; then
+  SERVE_FLAG="--https"
+else
+  SERVE_FLAG="--no-https"
+fi
 
 # 1. Build the WASM bundle (unless opted out).
 if [[ "${DONNER_WASM_SKIP_BUILD:-0}" != "1" ]]; then
-  log "Building //donner/editor/wasm:wasm_web_package ..."
-  bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package >&2
+  log "Building //donner/editor/wasm:wasm_web_package with bazel args: ${BAZEL_ARGS[*]} ..."
+  bazel build "${BAZEL_ARGS[@]}" //donner/editor/wasm:wasm_web_package >&2
 fi
 
 # 2. Install node_modules for the test package if needed. We keep the
@@ -68,20 +83,34 @@ trap cleanup EXIT INT TERM
 if [[ -z "${DONNER_WASM_BASE_URL:-}" ]]; then
   SERVE_LOG="$(mktemp -t donner-wasm-serve.XXXXXX)"
   log "Starting serve_http (log: ${SERVE_LOG}) ..."
-  # `--no-https` avoids the local-CA prompt; Playwright is happy talking to
-  # plain-HTTP localhost (which is a secure context for SharedArrayBuffer).
+  # Default to `--no-https` to avoid local-CA prompts. Set DONNER_WASM_HTTPS=1
+  # to mirror the manual LAN/WebGPU path:
+  #   bazel run --config=editor-wasm-geode -c opt //donner/editor/wasm:serve_http -- --https
   (
     cd "${REPO_ROOT}"
-    bazel run --config=editor-wasm //donner/editor/wasm:serve_http -- --no-https
+    bazel run "${BAZEL_ARGS[@]}" //donner/editor/wasm:serve_http -- "${SERVE_FLAG}"
   ) >"${SERVE_LOG}" 2>&1 &
   SERVE_PID=$!
 
-  # Wait for the "Serving at http://..." line and capture the URL.
+  # Wait for serve_http to print a usable URL. In HTTPS mode it prints a
+  # localhost HTTP fallback plus either "HTTPS URL:" or "LAN URL:" for the
+  # TLS endpoint. Prefer the TLS endpoint when requested.
   BASE_URL=""
   for _ in $(seq 1 120); do
-    if grep -Eo 'Serving at http://[^ ]+' "${SERVE_LOG}" >/dev/null 2>&1; then
-      BASE_URL="$(grep -Eo 'Serving at http://[^ ]+' "${SERVE_LOG}" | head -n 1 | sed 's|^Serving at ||')"
-      break
+    if [[ "${SERVE_HTTPS}" == "1" ]]; then
+      if grep -Eo 'HTTPS URL:[[:space:]]+https://[^ ]+' "${SERVE_LOG}" >/dev/null 2>&1; then
+        BASE_URL="$(grep -Eo 'HTTPS URL:[[:space:]]+https://[^ ]+' "${SERVE_LOG}" | head -n 1 | sed -E 's|^HTTPS URL:[[:space:]]+||')"
+        break
+      fi
+      if grep -Eo 'LAN URL:[[:space:]]+https://[^ ]+' "${SERVE_LOG}" >/dev/null 2>&1; then
+        BASE_URL="$(grep -Eo 'LAN URL:[[:space:]]+https://[^ ]+' "${SERVE_LOG}" | head -n 1 | sed -E 's|^LAN URL:[[:space:]]+||')"
+        break
+      fi
+    else
+      if grep -Eo 'Serving at http://[^ ]+' "${SERVE_LOG}" >/dev/null 2>&1; then
+        BASE_URL="$(grep -Eo 'Serving at http://[^ ]+' "${SERVE_LOG}" | head -n 1 | sed 's|^Serving at ||')"
+        break
+      fi
     fi
     if ! kill -0 "${SERVE_PID}" 2>/dev/null; then
       log "serve_http exited early; dumping log:"

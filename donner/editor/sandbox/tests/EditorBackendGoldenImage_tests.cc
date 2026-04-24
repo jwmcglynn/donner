@@ -44,6 +44,8 @@
 /// `EditorBackendCore` directly, not `SandboxSession` — so macOS
 /// developers can iterate on the pipeline without a Linux box.
 
+#include <gtest/gtest.h>
+
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -55,16 +57,14 @@
 #include <string>
 #include <vector>
 
-#include <gtest/gtest.h>
-
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
-#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
 #include "donner/editor/sandbox/ReplayingRenderer.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -117,8 +117,7 @@ std::string DescribeSelection(const FramePayload& frame) {
     const double w = sel.bbox[2] - sel.bbox[0];
     const double h = sel.bbox[3] - sel.bbox[1];
     char buf[256];
-    std::snprintf(buf, sizeof(buf),
-                  " [aabb %.1f,%.1f → %.1f,%.1f | %.0f×%.0f doc-units]",
+    std::snprintf(buf, sizeof(buf), " [aabb %.1f,%.1f → %.1f,%.1f | %.0f×%.0f doc-units]",
                   sel.bbox[0], sel.bbox[1], sel.bbox[2], sel.bbox[3], w, h);
     out += buf;
   } else {
@@ -160,9 +159,9 @@ std::string AttemptTagPrefix() {
 /// without the PNG inspection a bright-pixel heuristic forces. Logs
 /// `DescribeSelection` on failure so the reviewer sees WHICH ancestor
 /// swallowed the click.
-::testing::AssertionResult SelectionAabbWithinDocBudget(
-    const FramePayload& frame, double docViewBoxW, double docViewBoxH,
-    double maxFraction = 0.50) {
+::testing::AssertionResult SelectionAabbWithinDocBudget(const FramePayload& frame,
+                                                        double docViewBoxW, double docViewBoxH,
+                                                        double maxFraction = 0.50) {
   if (frame.selections.empty()) {
     return ::testing::AssertionSuccess() << "no selection (skipped)";
   }
@@ -178,9 +177,9 @@ std::string AttemptTagPrefix() {
     return ::testing::AssertionSuccess();
   }
   return ::testing::AssertionFailure()
-         << "selection " << DescribeSelection(frame) << " covers "
-         << std::fixed << std::setprecision(1) << (fraction * 100.0) << "% of the "
-         << docViewBoxW << "×" << docViewBoxH << " document — "
+         << "selection " << DescribeSelection(frame) << " covers " << std::fixed
+         << std::setprecision(1) << (fraction * 100.0) << "% of the " << docViewBoxW << "×"
+         << docViewBoxH << " document — "
          << "elevation escalated past the intended composite group. "
          << "Issue #582 attempt2 / attempt4 signature.";
 }
@@ -243,16 +242,16 @@ void DumpBitmapForDebug(const svg::RendererBitmap& bitmap, const char* name) {
   if (bitmap.empty()) {
     return;
   }
-  const std::filesystem::path path = std::filesystem::temp_directory_path() /
-                                     (std::string(name) + ".png");
-  svg::RendererImageIO::writeRgbaPixelsToPngFile(
-      path.string().c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4);
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() / (std::string(name) + ".png");
+  svg::RendererImageIO::writeRgbaPixelsToPngFile(path.string().c_str(), bitmap.pixels,
+                                                 bitmap.dimensions.x, bitmap.dimensions.y,
+                                                 bitmap.rowBytes / 4);
   std::fprintf(stderr, "[EditorBackendGoldenImage] wrote debug PNG: %s\n", path.string().c_str());
 }
 
 class EditorBackendGoldenImageTest : public ::testing::Test {
- protected:
+protected:
   /// Run the SVG through the sandbox pipeline end-to-end. The backend
   /// now ships the pre-composed bitmap directly via
   /// `FramePayload.finalBitmap` (compositor-mode rendering); we
@@ -274,10 +273,9 @@ class EditorBackendGoldenImageTest : public ::testing::Test {
     EXPECT_EQ(frame.statusKind, FrameStatusKind::kRendered)
         << "backend reported non-rendered status for a well-formed SVG — "
            "parse failed or the render step was skipped";
-    EXPECT_TRUE(frame.hasFinalBitmap)
-        << "compositor-mode backend didn't ship a finalBitmap for a "
-           "well-formed SVG — the compositor wasn't driven or the "
-           "snapshot came back empty";
+    EXPECT_TRUE(frame.hasFinalBitmap) << "compositor-mode backend didn't ship a finalBitmap for a "
+                                         "well-formed SVG — the compositor wasn't driven or the "
+                                         "snapshot came back empty";
 
     svg::RendererBitmap bitmap;
     if (frame.hasFinalBitmap) {
@@ -296,8 +294,7 @@ class EditorBackendGoldenImageTest : public ::testing::Test {
   svg::RendererBitmap renderDirectly(std::string_view svg, int width, int height) {
     ParseWarningSink disabled = ParseWarningSink::Disabled();
     auto parseResult = svg::parser::SVGParser::ParseSVG(svg, disabled);
-    EXPECT_FALSE(parseResult.hasError())
-        << "test SVG failed to parse: " << parseResult.error();
+    EXPECT_FALSE(parseResult.hasError()) << "test SVG failed to parse: " << parseResult.error();
     if (parseResult.hasError()) {
       return {};
     }
@@ -330,7 +327,7 @@ TEST_F(EditorBackendGoldenImageTest, SandboxPipelineProducesOpaquePixels) {
     DumpBitmapForDebug(bitmap, "sandbox_opaque_zero");
   }
   EXPECT_GT(opaque, 0u) << "sandbox output is entirely transparent — "
-                          "this is the 'nothing renders' bug";
+                           "this is the 'nothing renders' bug";
 
   // The SVG describes an 80×80 rect (6400 px). Allow for AA fringes
   // inflating the opaque count slightly; reject obvious underdraws.
@@ -356,10 +353,8 @@ TEST_F(EditorBackendGoldenImageTest, SandboxPipelineProducesOpaquePixels) {
 /// the host-side `ReplayingRenderer` that the editor binary
 /// instantiates isn't being driven, isn't on this bitmap path, etc.).
 TEST_F(EditorBackendGoldenImageTest, SandboxPixelOutputMatchesDirectRenderer) {
-  const svg::RendererBitmap sandbox =
-      renderViaSandbox(kRedRectSvg, kCanvasWidth, kCanvasHeight);
-  const svg::RendererBitmap direct =
-      renderDirectly(kRedRectSvg, kCanvasWidth, kCanvasHeight);
+  const svg::RendererBitmap sandbox = renderViaSandbox(kRedRectSvg, kCanvasWidth, kCanvasHeight);
+  const svg::RendererBitmap direct = renderDirectly(kRedRectSvg, kCanvasWidth, kCanvasHeight);
 
   ASSERT_FALSE(sandbox.empty());
   ASSERT_FALSE(direct.empty());
@@ -376,8 +371,7 @@ TEST_F(EditorBackendGoldenImageTest, SandboxPixelOutputMatchesDirectRenderer) {
     // offset (AlphaType confusion), a geometric miss (wrong transform),
     // or a total blank (no draws).
     for (size_t i = 0; i + 3 < sandbox.pixels.size(); i += 4) {
-      if (sandbox.pixels[i] != direct.pixels[i] ||
-          sandbox.pixels[i + 1] != direct.pixels[i + 1] ||
+      if (sandbox.pixels[i] != direct.pixels[i] || sandbox.pixels[i + 1] != direct.pixels[i + 1] ||
           sandbox.pixels[i + 2] != direct.pixels[i + 2] ||
           sandbox.pixels[i + 3] != direct.pixels[i + 3]) {
         const size_t pixelIdx = i / 4;
@@ -534,8 +528,7 @@ TEST_F(EditorBackendClientHostFlowTest,
 /// would stay frozen without an explicit fix. Must fail on pre-fix code;
 /// passes only once main.cc starts awaiting setViewport's FrameResult
 /// (or re-reads latestBitmap() whose identity / generation changed).
-TEST_F(EditorBackendClientHostFlowTest,
-       DiscardedSetViewportLeavesHostUploadFrozenAtInitialBitmap) {
+TEST_F(EditorBackendClientHostFlowTest, DiscardedSetViewportLeavesHostUploadFrozenAtInitialBitmap) {
   auto client = EditorBackendClient::MakeInProcess();
 
   // Simulates main.cc:637 — load the doc.
@@ -588,8 +581,7 @@ TEST_F(EditorBackendClientHostFlowTest,
 /// uploaded to GL is 512×384 of a 892×512 document — a top-left crop the
 /// user reads as "nothing visible" if the interesting content lives
 /// further into the canvas.
-TEST_F(EditorBackendClientHostFlowTest,
-       LargerDocumentRendersAtFullViewportAfterSetViewport) {
+TEST_F(EditorBackendClientHostFlowTest, LargerDocumentRendersAtFullViewportAfterSetViewport) {
   // Mirrors the real editor workload: a document whose natural canvas
   // exceeds the backend's default viewport. The content at (600, 400)
   // lives outside the 512×384 default crop, so if setViewport is dropped
@@ -652,7 +644,7 @@ TEST_F(EditorBackendClientHostFlowTest,
 /// After calling `present(...)`, `lastUploadedBitmap()` holds the
 /// bitmap the real editor would have in the GL texture.
 class ThinClientSimulator {
- public:
+public:
   explicit ThinClientSimulator(std::unique_ptr<EditorBackendClient> client)
       : client_(std::move(client)) {}
 
@@ -682,7 +674,7 @@ class ThinClientSimulator {
   const svg::RendererBitmap& lastUploadedBitmap() const { return lastUploaded_; }
   EditorBackendClient& client() { return *client_; }
 
- private:
+private:
   std::unique_ptr<EditorBackendClient> client_;
   svg::RendererBitmap lastUploaded_;
   Vector2i lastPostedViewport_{-1, -1};
@@ -719,9 +711,9 @@ TEST_F(ThinClientUiFlowTest, LoadPlusPresentUploadsNonDegenerateBitmap) {
   const svg::RendererBitmap& up = sim.lastUploadedBitmap();
   ASSERT_FALSE(up.empty()) << "thin-client texture upload is empty — nothing on screen";
   EXPECT_GT(up.dimensions.x, 16) << "uploaded bitmap dims=" << up.dimensions.x << "x"
-                                  << up.dimensions.y
-                                  << " — degenerate placeholder. setViewport's result "
-                                     "wasn't picked up.";
+                                 << up.dimensions.y
+                                 << " — degenerate placeholder. setViewport's result "
+                                    "wasn't picked up.";
   EXPECT_GT(up.dimensions.y, 16);
   EXPECT_GT(CountOpaquePixels(up), 0u) << "uploaded bitmap is entirely transparent — "
                                           "the texture would render as whatever is "
@@ -767,8 +759,7 @@ TEST_F(ThinClientUiFlowTest, ThinClientUploadMatchesDirectRenderGolden) {
     DumpBitmapForDebug(up, "thin_client_uploaded");
     DumpBitmapForDebug(reference, "direct_reference");
     for (size_t i = 0; i + 3 < up.pixels.size(); i += 4) {
-      if (up.pixels[i] != reference.pixels[i] ||
-          up.pixels[i + 1] != reference.pixels[i + 1] ||
+      if (up.pixels[i] != reference.pixels[i] || up.pixels[i + 1] != reference.pixels[i + 1] ||
           up.pixels[i + 2] != reference.pixels[i + 2] ||
           up.pixels[i + 3] != reference.pixels[i + 3]) {
         const size_t pixelIdx = i / 4;
@@ -820,9 +811,8 @@ TEST_F(ThinClientUiFlowTest, DocumentCenterMapsToPaneCenter) {
 
   const svg::RendererBitmap& up = sim.lastUploadedBitmap();
   ASSERT_FALSE(up.empty());
-  viewport.documentViewBox =
-      Box2d::FromXYWH(0.0, 0.0, static_cast<double>(up.dimensions.x),
-                      static_cast<double>(up.dimensions.y));
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(up.dimensions.x),
+                                             static_cast<double>(up.dimensions.y));
   viewport.resetTo100Percent();
 
   const Vector2d docCenter =
@@ -832,7 +822,8 @@ TEST_F(ThinClientUiFlowTest, DocumentCenterMapsToPaneCenter) {
 
   EXPECT_NEAR(screenDocCenter.x, paneCenter.x, 0.5)
       << "doc center maps to screen x=" << screenDocCenter.x << ", expected pane center "
-      << paneCenter.x << " — likely `documentViewBox` was left as Box2d::Zero so "
+      << paneCenter.x
+      << " — likely `documentViewBox` was left as Box2d::Zero so "
          "panDocPoint defaulted to (0, 0) and the doc's top-left got centered.";
   EXPECT_NEAR(screenDocCenter.y, paneCenter.y, 0.5);
 
@@ -879,11 +870,11 @@ TEST_F(ThinClientUiFlowTest, FramePayloadReportsSvgOwnViewBox) {
       R"(</svg>)";
 
   auto client = EditorBackendClient::MakeInProcess();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()),
-                                                kSvg.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   ASSERT_TRUE(load.documentViewBox.has_value())
@@ -926,11 +917,11 @@ TEST_F(ThinClientUiFlowTest, ClickOnScreenHitsCorrectElementInDocumentSpace) {
       R"(</svg>)";
 
   auto client = EditorBackendClient::MakeInProcess();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()),
-                                                kSvg.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
   ASSERT_TRUE(load.documentViewBox.has_value());
 
@@ -967,8 +958,8 @@ TEST_F(ThinClientUiFlowTest, ClickOnScreenHitsCorrectElementInDocumentSpace) {
 
   // Selection must contain exactly one entry — the right rect.
   ASSERT_EQ(clickFrame.selection.selections.size(), 1u)
-      << "click at doc point " << rightRectRoundTripDoc
-      << " selected " << clickFrame.selection.selections.size()
+      << "click at doc point " << rightRectRoundTripDoc << " selected "
+      << clickFrame.selection.selections.size()
       << " elements. Likely hit-test received the wrong-space "
          "coordinates and missed the document geometry entirely.";
 
@@ -982,9 +973,8 @@ TEST_F(ThinClientUiFlowTest, ClickOnScreenHitsCorrectElementInDocumentSpace) {
 
   // Negative side: the left rect is NOT what got selected. Its
   // x-span is (10, 50) so doc point (160, 40) must not sit inside it.
-  EXPECT_LT(50.0, bbox.topLeft.x)
-      << "the backend selected the LEFT rect for a RIGHT-rect click — "
-         "coordinate space is still wrong.";
+  EXPECT_LT(50.0, bbox.topLeft.x) << "the backend selected the LEFT rect for a RIGHT-rect click — "
+                                     "coordinate space is still wrong.";
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,11 +1008,11 @@ TEST_F(ThinClientUiFlowTest, CompositorModeSteadyStateDragIsFast) {
   svg += "</svg>";
 
   auto client = EditorBackendClient::MakeInProcess();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(svg.data()),
-                                                svg.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(svg.data()), svg.size()),
+                      std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // Press down on the drag target.
@@ -1064,8 +1054,8 @@ TEST_F(ThinClientUiFlowTest, CompositorModeSteadyStateDragIsFast) {
   }
   const double avg = total / static_cast<double>(ms.size());
   std::fprintf(stderr,
-               "[CompositorDrag] steady-state drag: avg=%.3f ms, max=%.3f ms over %d frames\n",
-               avg, worst, kDragFrames);
+               "[CompositorDrag] steady-state drag: avg=%.3f ms, max=%.3f ms over %d frames\n", avg,
+               worst, kDragFrames);
 
   // Budget: 60 ms avg, 120 ms max. Loose enough for slow remote-
   // execution workers (the bazel-re1 Linux aarch64 worker lands
@@ -1076,11 +1066,10 @@ TEST_F(ThinClientUiFlowTest, CompositorModeSteadyStateDragIsFast) {
   // regression gate" pattern — we don't yet have compositor
   // counters exposed on this branch, so budget is the only gate
   // until G6b phase 2 lands.
-  EXPECT_LT(avg, 60.0)
-      << "steady-state drag is re-rasterizing the whole document per frame. "
-         "Compositor translation fast path isn't engaging — check that the "
-         "backend is instantiating `CompositorController` and routing "
-         "promote/demote through it on drag.";
+  EXPECT_LT(avg, 60.0) << "steady-state drag is re-rasterizing the whole document per frame. "
+                          "Compositor translation fast path isn't engaging — check that the "
+                          "backend is instantiating `CompositorController` and routing "
+                          "promote/demote through it on drag.";
 }
 
 // User-reported regression: dragging shapes in real splash content causes
@@ -1103,11 +1092,12 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
 
   auto client = EditorBackendClient::MakeInProcess();
   (void)client->setViewport(892, 512).get();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
-                                                splashSource.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(
+              std::span(reinterpret_cast<const uint8_t*>(splashSource.data()), splashSource.size()),
+              std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // Click a Donner letter (simple path, no filter).
@@ -1120,9 +1110,8 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
   // Some splash click locations land on the background rather than a
   // letter; bail out with a helpful skip rather than a confusing crash.
   if (downFrame.selection.selections.empty()) {
-    GTEST_SKIP()
-        << "expected click to land on a Donner letter — splash geometry may "
-           "have shifted";
+    GTEST_SKIP() << "expected click to land on a Donner letter — splash geometry may "
+                    "have shifted";
   }
 
   // Warm-up move.
@@ -1158,24 +1147,21 @@ TEST_F(ThinClientUiFlowTest, RealSplashSteadyStateDragHasNoFrameSpikes) {
     if (v > kSpikeThresholdMs) ++spikeCount;
   }
   const double avg = total / static_cast<double>(ms.size());
-  std::fprintf(stderr,
-               "[SplashDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
+  std::fprintf(stderr, "[SplashDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
                avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
 
   // Budget on avg catches "slow path engaged throughout".
-  EXPECT_LT(avg, 60.0)
-      << "real-splash drag steady-state avg is too high — the compositor fast "
-         "path isn't engaging. Check that `consumeDirtyFlags` sees "
-         "translation-only deltas on the dragged entity and that the "
-         "overlay/software-composite pair isn't dominating frame time.";
+  EXPECT_LT(avg, 60.0) << "real-splash drag steady-state avg is too high — the compositor fast "
+                          "path isn't engaging. Check that `consumeDirtyFlags` sees "
+                          "translation-only deltas on the dragged entity and that the "
+                          "overlay/software-composite pair isn't dominating frame time.";
   // Budget on spikes catches "occasional full re-raster" — the user's
   // reported symptom. A single frame hitting 2× budget is a spike the
   // user sees as jank.
-  EXPECT_EQ(spikeCount, 0)
-      << spikeCount << " of " << kDragFrames << " steady-state drag frames "
-      << "spiked past " << kSpikeThresholdMs
-      << " ms. Spikes indicate intermittent cache invalidation — look at "
-         "`rootDirty_`, `needsFullRebuild`, and segment-cache wipes.";
+  EXPECT_EQ(spikeCount, 0) << spikeCount << " of " << kDragFrames << " steady-state drag frames "
+                           << "spiked past " << kSpikeThresholdMs
+                           << " ms. Spikes indicate intermittent cache invalidation — look at "
+                              "`rootDirty_`, `needsFullRebuild`, and segment-cache wipes.";
 }
 
 // Editor-reported regression: dragging a `<g filter>` should hit the
@@ -1222,8 +1208,8 @@ TEST(EditorBackendCoreFilterDragTest, BigLightningGlowSurvivesDragReleaseCycle) 
   // (approx. (450, 180) in canvas = doc coords on the 892×512 splash
   // at 1:1 scale). The bolt is yellow-white, painted under the blur.
   const size_t rowBytes = loadFrame.finalBitmapRowBytes > 0
-                               ? loadFrame.finalBitmapRowBytes
-                               : static_cast<size_t>(loadFrame.finalBitmapWidth) * 4u;
+                              ? loadFrame.finalBitmapRowBytes
+                              : static_cast<size_t>(loadFrame.finalBitmapWidth) * 4u;
   const auto samplePixel = [&rowBytes](const FramePayload& frame, int x, int y) {
     const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
     struct Rgba {
@@ -1238,9 +1224,8 @@ TEST(EditorBackendCoreFilterDragTest, BigLightningGlowSurvivesDragReleaseCycle) 
   // target before continuing.
   const auto preDrag = samplePixel(loadFrame, 450, 180);
   if (!(preDrag.r > 50 || preDrag.g > 50)) {
-    GTEST_SKIP()
-        << "pre-drag pixel at (450, 180) doesn't contain lightning-bolt "
-           "content — splash geometry may have shifted";
+    GTEST_SKIP() << "pre-drag pixel at (450, 180) doesn't contain lightning-bolt "
+                    "content — splash geometry may have shifted";
   }
 
   // Click inside Big_lightning_glow; SelectTool elevates to the
@@ -1294,10 +1279,9 @@ TEST(EditorBackendCoreFilterDragTest, BigLightningGlowSurvivesDragReleaseCycle) 
       }
     }
   }
-  EXPECT_GE(brightHits, 5)
-      << "after drag + release, Big_lightning_glow content is missing from "
-         "the post-release frame. Expected bright lightning-bolt pixels "
-         "around (480, 180); got mostly dark.";
+  EXPECT_GE(brightHits, 5) << "after drag + release, Big_lightning_glow content is missing from "
+                              "the post-release frame. Expected bright lightning-bolt pixels "
+                              "around (480, 180); got mostly dark.";
 }
 
 // User-reported regression (filter_elm_disappear-2.rnr): drag a
@@ -1321,8 +1305,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-2.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-2.rnr");
   ASSERT_TRUE(reproOpt.has_value()) << "failed to parse repro";
   const auto& repro = *reproOpt;
 
@@ -1344,10 +1328,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   SetViewportPayload vp;
@@ -1387,7 +1369,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         (void)core.handlePointerEvent(ptr);
-      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp && ev.mouseButton == 0) {
+      } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
+                 ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
         ptr.buttons = 0;
         (void)core.handlePointerEvent(ptr);
@@ -1420,8 +1403,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
 
   // Dump the mid-drag-2 frame for inspection.
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
-                             "rnr_host_mid_drag2.png";
+    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() + "rnr_host_mid_drag2.png";
     donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
         path.c_str(), midDrag2Frame->finalBitmapPixels, bmpW, bmpH,
         static_cast<uint32_t>(rowBytes / 4u));
@@ -1432,11 +1414,12 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
   // reverts to the dark navy background (R+G < 60).
   const auto samplePx = [&](int x, int y) {
     const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
-    struct Rgba { uint8_t r, g, b, a; };
-    return Rgba{midDrag2Frame->finalBitmapPixels[off + 0],
-                midDrag2Frame->finalBitmapPixels[off + 1],
-                midDrag2Frame->finalBitmapPixels[off + 2],
-                midDrag2Frame->finalBitmapPixels[off + 3]};
+    struct Rgba {
+      uint8_t r, g, b, a;
+    };
+    return Rgba{
+        midDrag2Frame->finalBitmapPixels[off + 0], midDrag2Frame->finalBitmapPixels[off + 1],
+        midDrag2Frame->finalBitmapPixels[off + 2], midDrag2Frame->finalBitmapPixels[off + 3]};
   };
 
   int brightHits = 0;
@@ -1454,8 +1437,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragFromRecording) {
 
   EXPECT_GE(brightHits, 20)
       << "filter_elm_disappear-2.rnr replay through host/sandbox path: at mid-drag-2, "
-      << "the Big_lightning_glow filter's canvas region has only "
-      << brightHits << " bright (R+G>120) pixels out of " << totalSamples << " probed "
+      << "the Big_lightning_glow filter's canvas region has only " << brightHits
+      << " bright (R+G>120) pixels out of " << totalSamples << " probed "
       << "across the " << bmpW << "x" << bmpH << " canvas. "
       << "The filter appears to have disappeared from the composited output — the "
       << "user-reported regression is still live.";
@@ -1478,8 +1461,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-4.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-4.rnr");
   ASSERT_TRUE(reproOpt.has_value());
   const auto& repro = *reproOpt;
 
@@ -1489,10 +1472,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   SetViewportPayload vp;
@@ -1519,14 +1500,12 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
       PointerEventPayload ptr;
       ptr.documentX = docX;
       ptr.documentY = docY;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
-        std::fprintf(stderr, "[rnr4] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount + 1, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr4] mdown#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount + 1,
+                     docX, docY, DescribeSelection(*lastFrame).c_str());
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
@@ -1534,9 +1513,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro4DumpFramesForInspecti
         lastFrame = core.handlePointerEvent(ptr);
         if (mouseUpCount < 4) afterMup[mouseUpCount] = *lastFrame;
         ++mouseUpCount;
-        std::fprintf(stderr, "[rnr4] mup#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr4] mup#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount, docX,
+                     docY, DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -1596,8 +1574,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-5.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-5.rnr");
   ASSERT_TRUE(reproOpt.has_value());
   const auto& repro = *reproOpt;
 
@@ -1607,10 +1585,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   SetViewportPayload vp;
@@ -1640,14 +1616,12 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
       PointerEventPayload ptr;
       ptr.documentX = docX;
       ptr.documentY = docY;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
-        std::fprintf(stderr, "[rnr5] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount + 1, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr5] mdown#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount + 1,
+                     docX, docY, DescribeSelection(*lastFrame).c_str());
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
@@ -1655,9 +1629,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
         lastFrame = core.handlePointerEvent(ptr);
         afterMup.push_back(*lastFrame);
         ++mouseUpCount;
-        std::fprintf(stderr, "[rnr5] mup#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr5] mup#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount, docX,
+                     docY, DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -1704,8 +1677,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro5ReplaysWithoutErasing
     int hits = 0;
     for (int cy = 0; cy < bmpH; cy += 8) {
       for (int cx = 0; cx < bmpW; cx += 8) {
-        const std::size_t off = static_cast<std::size_t>(cy) * rowBytes +
-                                static_cast<std::size_t>(cx) * 4u;
+        const std::size_t off =
+            static_cast<std::size_t>(cy) * rowBytes + static_cast<std::size_t>(cx) * 4u;
         const uint8_t r = fp.finalBitmapPixels[off + 0];
         const uint8_t g = fp.finalBitmapPixels[off + 1];
         const uint8_t b = fp.finalBitmapPixels[off + 2];
@@ -1741,8 +1714,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspecti
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-6.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-6.rnr");
   ASSERT_TRUE(reproOpt.has_value());
   const auto& repro = *reproOpt;
 
@@ -1752,10 +1725,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspecti
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   SetViewportPayload vp;
@@ -1782,14 +1753,12 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspecti
       PointerEventPayload ptr;
       ptr.documentX = docX;
       ptr.documentY = docY;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
-        std::fprintf(stderr, "[rnr6] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount + 1, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr6] mdown#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount + 1,
+                     docX, docY, DescribeSelection(*lastFrame).c_str());
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
@@ -1797,9 +1766,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro6DumpFramesForInspecti
         lastFrame = core.handlePointerEvent(ptr);
         afterMup.push_back(*lastFrame);
         ++mouseUpCount;
-        std::fprintf(stderr, "[rnr6] mup#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr6] mup#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount, docX,
+                     docY, DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -1859,8 +1827,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7DumpFramesForInspecti
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-7.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-7.rnr");
   ASSERT_TRUE(reproOpt.has_value());
   const auto& repro = *reproOpt;
 
@@ -1870,10 +1838,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7DumpFramesForInspecti
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   SetViewportPayload vp;
@@ -1903,8 +1869,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7DumpFramesForInspecti
       ptr.documentX = docX;
       ptr.documentY = docY;
       ptr.modifiers = ptrModifiers;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
@@ -1918,9 +1883,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7DumpFramesForInspecti
         lastFrame = core.handlePointerEvent(ptr);
         afterMup.push_back(*lastFrame);
         ++mouseUpCount;
-        std::fprintf(stderr, "[rnr7] mup#%zu @ (%.1f, %.1f) mod=%u: selection = %s\n",
-                     mouseUpCount, docX, docY, ptrModifiers,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr7] mup#%zu @ (%.1f, %.1f) mod=%u: selection = %s\n", mouseUpCount,
+                     docX, docY, ptrModifiers, DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -2004,8 +1968,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-7.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-7.rnr");
   ASSERT_TRUE(reproOpt.has_value());
   const auto& repro = *reproOpt;
 
@@ -2015,10 +1979,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   SetViewportPayload vp;
@@ -2067,7 +2029,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
     ASSERT_EQ(coldBackend.dimensions, coldExpected.dimensions)
         << "cold-load dimensions disagree — test setup bug, not the real #582";
     donner::editor::tests::CompareBitmapToBitmap(coldBackend, coldExpected,
-                                                  "rnr7_coldload_backend_vs_direct", params);
+                                                 "rnr7_coldload_backend_vs_direct", params);
     if (::testing::Test::HasFatalFailure()) {
       FAIL() << "cold-load backend bitmap already diverges from direct render — "
                 "the comparison is invalid; fix the test before trusting the replay results";
@@ -2091,8 +2053,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
       ptr.documentX = docX;
       ptr.documentY = docY;
       ptr.modifiers = ptrModifiers;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         (void)core.handlePointerEvent(ptr);
@@ -2115,31 +2076,25 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
         ASSERT_FALSE(backend.empty()) << "backend bitmap empty at mup#" << mouseUpCount;
         ASSERT_FALSE(expected.empty()) << "direct-render reference empty at mup#" << mouseUpCount;
         if (backend.dimensions != expected.dimensions) {
-          ADD_FAILURE() << "rnr7 mup#" << mouseUpCount << ": backend "
-                        << backend.dimensions.x << "x" << backend.dimensions.y
-                        << " vs direct-render " << expected.dimensions.x << "x"
-                        << expected.dimensions.y
+          ADD_FAILURE() << "rnr7 mup#" << mouseUpCount << ": backend " << backend.dimensions.x
+                        << "x" << backend.dimensions.y << " vs direct-render "
+                        << expected.dimensions.x << "x" << expected.dimensions.y
                         << " — size mismatch in backend bitmap vs direct render. "
                            "Selection: "
                         << DescribeSelection(mupFrame);
           continue;
         }
 
-        const std::string label = "rnr7_mup" + std::to_string(mouseUpCount) +
-                                  "_backend_vs_direct";
+        const std::string label = "rnr7_mup" + std::to_string(mouseUpCount) + "_backend_vs_direct";
         // Count failures before the call so we can tell per-mup if this
         // one diverged (ADD_FAILURE doesn't return a value).
-        const int beforeFailures = ::testing::UnitTest::GetInstance()->failed_test_count() +
-                                    ::testing::UnitTest::GetInstance()
-                                        ->current_test_info()
-                                        ->result()
-                                        ->total_part_count();
+        const int beforeFailures =
+            ::testing::UnitTest::GetInstance()->failed_test_count() +
+            ::testing::UnitTest::GetInstance()->current_test_info()->result()->total_part_count();
         donner::editor::tests::CompareBitmapToBitmap(backend, expected, label, params);
-        const int afterFailures = ::testing::UnitTest::GetInstance()->failed_test_count() +
-                                   ::testing::UnitTest::GetInstance()
-                                       ->current_test_info()
-                                       ->result()
-                                       ->total_part_count();
+        const int afterFailures =
+            ::testing::UnitTest::GetInstance()->failed_test_count() +
+            ::testing::UnitTest::GetInstance()->current_test_info()->result()->total_part_count();
         if (afterFailures > beforeFailures) {
           ++divergedCheckpoints;
           std::fprintf(stderr,
@@ -2175,8 +2130,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7BackendBitmapMatchesD
 // If this variant ALSO fails, the bug is upstream — in the
 // compositor's cached state or in whatever the main compose is
 // doing with that state.
-TEST(EditorBackendCoreFilterDragTest,
-     FilterDisappearRepro7WithoutCpuComposeMatchesDirectRender) {
+TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro7WithoutCpuComposeMatchesDirectRender) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -2189,8 +2143,8 @@ TEST(EditorBackendCoreFilterDragTest,
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-7.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-7.rnr");
   ASSERT_TRUE(reproOpt.has_value());
   const auto& repro = *reproOpt;
 
@@ -2200,10 +2154,8 @@ TEST(EditorBackendCoreFilterDragTest,
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr);
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
 
   sandbox::EditorBackendCore core;
   // FLIP THE KILL-SWITCH: route through main compose, not CPU compose.
@@ -2256,8 +2208,7 @@ TEST(EditorBackendCoreFilterDragTest,
       ptr.documentX = docX;
       ptr.documentY = docY;
       ptr.modifiers = ptrModifiers;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         (void)core.handlePointerEvent(ptr);
@@ -2275,17 +2226,13 @@ TEST(EditorBackendCoreFilterDragTest,
         ASSERT_FALSE(expected.empty());
         if (backend.dimensions != expected.dimensions) continue;
 
-        const std::string label = "rnr7_mup" + std::to_string(mouseUpCount) +
-                                  "_noCpuCompose_vs_direct";
-        const int before = ::testing::UnitTest::GetInstance()
-                                ->current_test_info()
-                                ->result()
-                                ->total_part_count();
+        const std::string label =
+            "rnr7_mup" + std::to_string(mouseUpCount) + "_noCpuCompose_vs_direct";
+        const int before =
+            ::testing::UnitTest::GetInstance()->current_test_info()->result()->total_part_count();
         donner::editor::tests::CompareBitmapToBitmap(backend, expected, label, params);
-        const int after = ::testing::UnitTest::GetInstance()
-                               ->current_test_info()
-                               ->result()
-                               ->total_part_count();
+        const int after =
+            ::testing::UnitTest::GetInstance()->current_test_info()->result()->total_part_count();
         if (after > before) {
           ++divergedCheckpoints;
         }
@@ -2337,11 +2284,10 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
   const std::size_t rowBytes = loadFrame.finalBitmapRowBytes;
 
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
-                             "cold_load_sanity.png";
-    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
-        path.c_str(), loadFrame.finalBitmapPixels, bmpW, bmpH,
-        static_cast<uint32_t>(rowBytes / 4u));
+    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() + "cold_load_sanity.png";
+    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(path.c_str(),
+                                                           loadFrame.finalBitmapPixels, bmpW, bmpH,
+                                                           static_cast<uint32_t>(rowBytes / 4u));
   }
 
   // Same probe rectangle as SingleDragOnLightningGlowDarkMovesOnlyThatGroup,
@@ -2359,8 +2305,8 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
   int brightHits = 0;
   for (int cy = rectMinY; cy < rectMaxY; ++cy) {
     for (int cx = rectMinX; cx < rectMaxX; ++cx) {
-      const std::size_t off = static_cast<std::size_t>(cy) * rowBytes +
-                              static_cast<std::size_t>(cx) * 4u;
+      const std::size_t off =
+          static_cast<std::size_t>(cy) * rowBytes + static_cast<std::size_t>(cx) * 4u;
       const uint8_t r = loadFrame.finalBitmapPixels[off + 0];
       const uint8_t g = loadFrame.finalBitmapPixels[off + 1];
       const uint8_t b = loadFrame.finalBitmapPixels[off + 2];
@@ -2370,11 +2316,11 @@ TEST(EditorBackendCoreFilterDragTest, ColdLoadFilterOutputHasBrightHighlights) {
     }
   }
 
-  std::fprintf(stderr, "[cold_load brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits,
-               rectMinX, rectMinY, rectMaxX, rectMaxY);
+  std::fprintf(stderr, "[cold_load brightHits] %d in probe (%d,%d)-(%d,%d)\n", brightHits, rectMinX,
+               rectMinY, rectMaxX, rectMaxY);
   EXPECT_GT(brightHits, 100)
-      << "Cold load at (" << rectMinX << "," << rectMinY << ")→(" << rectMaxX << ","
-      << rectMaxY << ") has only " << brightHits << " bright (any channel > 180) "
+      << "Cold load at (" << rectMinX << "," << rectMinY << ")→(" << rectMaxX << "," << rectMaxY
+      << ") has only " << brightHits << " bright (any channel > 180) "
       << "pixels. The Lightning_glow_dark filter region should have hundreds of "
       << "bright highlights at cold load — if this fails, the filter pipeline "
       << "is broken even at rest.";
@@ -2420,15 +2366,13 @@ TEST(EditorBackendCoreFilterDragTest, SelectingNextFilterDoesNotEraseTheFirst) {
   // filter-g.
   const auto afterA = sendPointer(PointerPhase::kDown, 455.0, 160.0, 1);
   (void)sendPointer(PointerPhase::kUp, 455.0, 160.0, 0);
-  std::fprintf(stderr, "[next-filter] after click A: %s\n",
-               DescribeSelection(afterA).c_str());
+  std::fprintf(stderr, "[next-filter] after click A: %s\n", DescribeSelection(afterA).c_str());
 
   // Click B: Lightning_glow_dark at (474.5, 406.5). Triggers
   // demote(A) + promote(B).
   const auto afterB = sendPointer(PointerPhase::kDown, 474.5, 406.5, 1);
   const auto afterBUp = sendPointer(PointerPhase::kUp, 474.5, 406.5, 0);
-  std::fprintf(stderr, "[next-filter] after click B: %s\n",
-               DescribeSelection(afterB).c_str());
+  std::fprintf(stderr, "[next-filter] after click B: %s\n", DescribeSelection(afterB).c_str());
 
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     const std::string prefix = AttemptTagPrefix();
@@ -2463,25 +2407,25 @@ TEST(EditorBackendCoreFilterDragTest, SelectingNextFilterDoesNotEraseTheFirst) {
   int diverged = 0;
   for (int cy = rectMinY; cy < rectMaxY; ++cy) {
     for (int cx = rectMinX; cx < rectMaxX; ++cx) {
-      const std::size_t off = static_cast<std::size_t>(cy) * rowBytes +
-                              static_cast<std::size_t>(cx) * 4u;
-      const int dr = std::abs(int(cold.finalBitmapPixels[off + 0]) -
-                              int(afterBUp.finalBitmapPixels[off + 0]));
-      const int dg = std::abs(int(cold.finalBitmapPixels[off + 1]) -
-                              int(afterBUp.finalBitmapPixels[off + 1]));
-      const int db = std::abs(int(cold.finalBitmapPixels[off + 2]) -
-                              int(afterBUp.finalBitmapPixels[off + 2]));
+      const std::size_t off =
+          static_cast<std::size_t>(cy) * rowBytes + static_cast<std::size_t>(cx) * 4u;
+      const int dr =
+          std::abs(int(cold.finalBitmapPixels[off + 0]) - int(afterBUp.finalBitmapPixels[off + 0]));
+      const int dg =
+          std::abs(int(cold.finalBitmapPixels[off + 1]) - int(afterBUp.finalBitmapPixels[off + 1]));
+      const int db =
+          std::abs(int(cold.finalBitmapPixels[off + 2]) - int(afterBUp.finalBitmapPixels[off + 2]));
       if (std::max({dr, dg, db}) > 20) ++diverged;
     }
   }
   const int rectArea = (rectMaxX - rectMinX) * (rectMaxY - rectMinY);
-  std::fprintf(stderr, "[next-filter] Big_lightning_glow region: %d / %d px diverged\n",
-               diverged, rectArea);
+  std::fprintf(stderr, "[next-filter] Big_lightning_glow region: %d / %d px diverged\n", diverged,
+               rectArea);
 
   EXPECT_LT(diverged, rectArea / 10)
       << "after selecting the next element, `Big_lightning_glow`'s region "
-      << "diverged from the cold baseline by " << diverged << " px (out of "
-      << rectArea << ") — >10% drift means A's filter output got erased by "
+      << "diverged from the cold baseline by " << diverged << " px (out of " << rectArea
+      << ") — >10% drift means A's filter output got erased by "
       << "the subsequent promote/demote cycle. See `next_filter_cold.png` "
       << "and `next_filter_after_B.png`.";
 }
@@ -2617,11 +2561,10 @@ TEST(EditorBackendCoreFilterDragTest, SingleDragOnLightningGlowDarkMovesOnlyThat
   const std::size_t rowBytes = post.finalBitmapRowBytes;
 
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
-                             "single_drag_lgd_post.png";
+    const std::string path =
+        std::string(dir) + "/" + AttemptTagPrefix() + "single_drag_lgd_post.png";
     donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
-        path.c_str(), post.finalBitmapPixels, bmpW, bmpH,
-        static_cast<uint32_t>(rowBytes / 4u));
+        path.c_str(), post.finalBitmapPixels, bmpW, bmpH, static_cast<uint32_t>(rowBytes / 4u));
   }
 
   // Pin the post-drag pixels against a committed golden. Catches any
@@ -2662,8 +2605,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
   splashBuf << splashStream.rdbuf();
   const std::string splashSource = splashBuf.str();
 
-  auto reproOpt = donner::editor::repro::ReadReproFile(
-      "donner/editor/tests/filter_elm_disappear-3.rnr");
+  auto reproOpt =
+      donner::editor::repro::ReadReproFile("donner/editor/tests/filter_elm_disappear-3.rnr");
   ASSERT_TRUE(reproOpt.has_value()) << "failed to parse repro-3";
   const auto& repro = *reproOpt;
 
@@ -2675,10 +2618,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
     return nullptr;
   }();
   ASSERT_NE(firstVp, nullptr) << "repro-3 has no viewport block";
-  const int canvasW =
-      static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
-  const int canvasH =
-      static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
+  const int canvasW = static_cast<int>(std::round(firstVp->paneSizeW * firstVp->devicePixelRatio));
+  const int canvasH = static_cast<int>(std::round(firstVp->paneSizeH * firstVp->devicePixelRatio));
   ASSERT_GT(canvasW, 0);
   ASSERT_GT(canvasH, 0);
 
@@ -2706,8 +2647,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
   // the post-drag position) in the post-settle frame.
   const std::size_t rowBytes = loadFrame.finalBitmapRowBytes;
   const auto samplePx = [&](const FramePayload& fp, int x, int y) {
-    const std::size_t off = static_cast<std::size_t>(y) * rowBytes +
-                            static_cast<std::size_t>(x) * 4u;
+    const std::size_t off =
+        static_cast<std::size_t>(y) * rowBytes + static_cast<std::size_t>(x) * 4u;
     struct Rgba {
       uint8_t r, g, b, a;
     };
@@ -2743,17 +2684,15 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
       PointerEventPayload ptr;
       ptr.documentX = docX;
       ptr.documentY = docY;
-      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown &&
-          ev.mouseButton == 0) {
+      if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseDown && ev.mouseButton == 0) {
         if (mouseUpCount == 1) {
           mdown2Seen = true;
         }
         ptr.phase = PointerPhase::kDown;
         ptr.buttons = 1;
         lastFrame = core.handlePointerEvent(ptr);
-        std::fprintf(stderr, "[rnr3] mdown#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount + 1, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr3] mdown#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount + 1,
+                     docX, docY, DescribeSelection(*lastFrame).c_str());
       } else if (ev.kind == donner::editor::repro::ReproEvent::Kind::MouseUp &&
                  ev.mouseButton == 0) {
         ptr.phase = PointerPhase::kUp;
@@ -2761,9 +2700,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterDisappearRepro3PostSettleMatchesDire
         lastFrame = core.handlePointerEvent(ptr);
         ++mouseUpCount;
         if (mouseUpCount == 2) afterMup2 = *lastFrame;
-        std::fprintf(stderr, "[rnr3] mup#%zu @ (%.1f, %.1f): selection = %s\n",
-                     mouseUpCount, docX, docY,
-                     DescribeSelection(*lastFrame).c_str());
+        std::fprintf(stderr, "[rnr3] mup#%zu @ (%.1f, %.1f): selection = %s\n", mouseUpCount, docX,
+                     docY, DescribeSelection(*lastFrame).c_str());
       }
     }
     if (nowHeld && leftHeld) {
@@ -2884,10 +2822,10 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
 
   // Dump the mid-drag-2 frame for inspection.
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
-    const std::string path = std::string(dir) + "/" + AttemptTagPrefix() +
-                             "mid_drag2_hidpi_host.png";
-    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(
-        path.c_str(), midDrag2.finalBitmapPixels, 1784, 1024, 1784u);
+    const std::string path =
+        std::string(dir) + "/" + AttemptTagPrefix() + "mid_drag2_hidpi_host.png";
+    donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(path.c_str(), midDrag2.finalBitmapPixels,
+                                                           1784, 1024, 1784u);
   }
 
   // Drag 1 moved Big_lightning_glow by (33, 4) doc units from its
@@ -2899,7 +2837,9 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
   // reverts to dark navy background.
   const auto samplePx = [&](int x, int y) {
     const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
-    struct Rgba { uint8_t r, g, b, a; };
+    struct Rgba {
+      uint8_t r, g, b, a;
+    };
     return Rgba{midDrag2.finalBitmapPixels[off + 0], midDrag2.finalBitmapPixels[off + 1],
                 midDrag2.finalBitmapPixels[off + 2], midDrag2.finalBitmapPixels[off + 3]};
   };
@@ -2923,8 +2863,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
   EXPECT_GE(brightHits, totalSamples / 4)
       << "mid-drag-2 composite is missing the filter element at its post-drag-1 "
       << "canvas bounds. Probed " << totalSamples << " pixels for warm (R+G>120) "
-      << "lightning-glow content; got " << brightHits << " hits; expected ≥"
-      << (totalSamples / 4) << ". If the live editor shows the filter "
+      << "lightning-glow content; got " << brightHits << " hits; expected ≥" << (totalSamples / 4)
+      << ". If the live editor shows the filter "
       << "vanishing mid-second-drag, that regression presents here too.";
 }
 
@@ -2943,8 +2883,7 @@ TEST(EditorBackendCoreFilterDragTest, FilterSurvivesFollowUpDragAtHiDpi) {
 // mutating compositor state in a way that doesn't match direct
 // render. If it FAILS, the issue is in how filter rasterization
 // handles the post-mutation DOM vs. a fresh single-pass render.
-TEST(EditorBackendCoreFilterDragTest,
-     SplashDirectDomMutationMatchesDirectRender) {
+TEST(EditorBackendCoreFilterDragTest, SplashDirectDomMutationMatchesDirectRender) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -2969,8 +2908,7 @@ TEST(EditorBackendCoreFilterDragTest,
   svg::SVGDocument& doc = core.editor().document().document();
   auto filterG = doc.querySelector("#Big_lightning_glow");
   ASSERT_TRUE(filterG.has_value());
-  filterG->cast<svg::SVGGraphicsElement>().setTransform(
-      Transform2d::Translate(Vector2d(9.0, 4.0)));
+  filterG->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(9.0, 4.0)));
 
   // Force a re-render by calling handleSetViewport with same dims.
   // (Any opcode triggers `buildFramePayload`.)
@@ -2985,8 +2923,8 @@ TEST(EditorBackendCoreFilterDragTest,
   donner::editor::tests::BitmapGoldenCompareParams params;
   params.threshold = 0.03f;
   params.maxMismatchedPixels = 500;  // no chrome, no drag noise
-  donner::editor::tests::CompareBitmapToBitmap(
-      backend, expected, "splash_direct_dom_mutation_vs_direct", params);
+  donner::editor::tests::CompareBitmapToBitmap(backend, expected,
+                                               "splash_direct_dom_mutation_vs_direct", params);
 }
 
 // Tightest possible #582 reproducer: after mdown on filter-g (but
@@ -3027,7 +2965,7 @@ TEST(EditorBackendCoreFilterDragTest, SplashMdownFilterGJustRasterizedMatchesDir
     params.threshold = 0.03f;
     params.maxMismatchedPixels = 100;
     donner::editor::tests::CompareBitmapToBitmap(backend, expected, "splash_cold_vs_direct",
-                                                  params);
+                                                 params);
   }
 
   // mdown only — no moves, no drag. This promotes filter-g into a
@@ -3061,8 +2999,8 @@ TEST(EditorBackendCoreFilterDragTest, SplashMdownFilterGJustRasterizedMatchesDir
   // any real structural drift through — even one missing filter
   // layer overwhelms this budget.
   params.maxMismatchedPixels = 10000;  // chrome absorbs here too
-  donner::editor::tests::CompareBitmapToBitmap(backend, expected,
-                                                "splash_mdown_only_vs_direct", params);
+  donner::editor::tests::CompareBitmapToBitmap(backend, expected, "splash_mdown_only_vs_direct",
+                                               params);
 }
 
 // Per-frame bisection of #582: replay the filter-g drag on splash
@@ -3116,8 +3054,7 @@ TEST(EditorBackendCoreFilterDragTest, SplashFilterDragPerFrameDivergence) {
         const std::size_t p = rowOff + static_cast<std::size_t>(x) * 4u;
         int dMax = 0;
         for (int c = 0; c < 3; ++c) {
-          dMax = std::max(dMax,
-                           std::abs(int(a.pixels[p + c]) - int(b.pixels[p + c])));
+          dMax = std::max(dMax, std::abs(int(a.pixels[p + c]) - int(b.pixels[p + c])));
         }
         if (dMax > 8) ++diff;  // 8/255 ≈ 0.03 threshold
       }
@@ -3131,8 +3068,7 @@ TEST(EditorBackendCoreFilterDragTest, SplashFilterDragPerFrameDivergence) {
   down.documentY = 189.5;
   down.buttons = 1;
   const auto downFrame = core.handlePointerEvent(down);
-  const int downDivergence = countDiverged(BitmapFromFrame(downFrame),
-                                            directRenderCurrentDom());
+  const int downDivergence = countDiverged(BitmapFromFrame(downFrame), directRenderCurrentDom());
   std::fprintf(stderr, "[frame-by-frame] mdown: divergence=%d px\n", downDivergence);
 
   constexpr int kMoves = 50;
@@ -3199,8 +3135,8 @@ TEST(EditorBackendCoreFilterDragTest, SplashFilterDragFirstReleaseMatchesDirectR
     donner::editor::tests::BitmapGoldenCompareParams params;
     params.threshold = 0.03f;
     params.maxMismatchedPixels = 100;
-    donner::editor::tests::CompareBitmapToBitmap(backend, expected,
-                                                  "splash_cold_vs_direct", params);
+    donner::editor::tests::CompareBitmapToBitmap(backend, expected, "splash_cold_vs_direct",
+                                                 params);
   }
 
   // Exactly the rnr7 mup#1 sequence: click filter-g, drag ~9/4 pixels,
@@ -3250,8 +3186,8 @@ TEST(EditorBackendCoreFilterDragTest, SplashFilterDragFirstReleaseMatchesDirectR
   // any real structural drift through — even one missing filter
   // layer overwhelms this budget.
   params.maxMismatchedPixels = 10000;
-  donner::editor::tests::CompareBitmapToBitmap(backend, expected,
-                                                "splash_postrelease_vs_direct", params);
+  donner::editor::tests::CompareBitmapToBitmap(backend, expected, "splash_postrelease_vs_direct",
+                                               params);
 }
 
 // Minimal reproducer for #582. A single `<g filter>` element, clicked
@@ -3260,7 +3196,8 @@ TEST(EditorBackendCoreFilterDragTest, SplashFilterDragFirstReleaseMatchesDirectR
 // fixture should isolate the failure away from splash-specific details
 // (multiple filters, nested groups, complex compositing).
 TEST(EditorBackendCoreFilterDragTest, MinimalFilterDragProducesCorrectBackendPixels) {
-  constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
   <defs>
     <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
   </defs>
@@ -3297,8 +3234,8 @@ TEST(EditorBackendCoreFilterDragTest, MinimalFilterDragProducesCorrectBackendPix
     LoadBytesPayload noop;  // handleLoadBytes already produced a frame
     svg::RendererBitmap backend = BitmapFromFrame(core.buildFramePayload());
     svg::RendererBitmap expected = directRenderCurrentDom();
-    donner::editor::tests::CompareBitmapToBitmap(backend, expected,
-                                                  "minimal_preclick_vs_direct", params);
+    donner::editor::tests::CompareBitmapToBitmap(backend, expected, "minimal_preclick_vs_direct",
+                                                 params);
   }
 
   // Click on the filter group (SelectTool elevates to `<g filter>`).
@@ -3333,12 +3270,13 @@ TEST(EditorBackendCoreFilterDragTest, MinimalFilterDragProducesCorrectBackendPix
   donner::editor::tests::BitmapGoldenCompareParams postParams;
   postParams.threshold = 0.03f;
   postParams.maxMismatchedPixels = 600;  // chrome for 40×40 rect + AA
-  donner::editor::tests::CompareBitmapToBitmap(backend, expected,
-                                                "minimal_postrelease_vs_direct", postParams);
+  donner::editor::tests::CompareBitmapToBitmap(backend, expected, "minimal_postrelease_vs_direct",
+                                               postParams);
 }
 
 TEST(EditorBackendCoreFilterDragTest, FilterGroupSurvivesDragReleaseCycle) {
-  constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
   <defs>
     <filter id="blur"><feGaussianBlur stdDeviation="1"/></filter>
   </defs>
@@ -3399,25 +3337,22 @@ TEST(EditorBackendCoreFilterDragTest, FilterGroupSurvivesDragReleaseCycle) {
   // Reconstruct the bitmap from the wire payload and probe where the
   // red rect should be. Drag was 10 × 3 = 30 doc units right.
   // Original rect center: (70, 100). Post-drag center: (100, 100).
-  ASSERT_TRUE(postReleaseFrame.hasFinalBitmap)
-      << "post-release frame must produce a final bitmap";
+  ASSERT_TRUE(postReleaseFrame.hasFinalBitmap) << "post-release frame must produce a final bitmap";
   ASSERT_FALSE(postReleaseFrame.finalBitmapPixels.empty());
 
   // `finalBitmapAlphaType` is the straight/premul flag that flows
   // with the bitmap; we don't care for this probe.
   const size_t width = static_cast<size_t>(postReleaseFrame.finalBitmapWidth);
-  const size_t rowBytes = postReleaseFrame.finalBitmapRowBytes > 0
-                               ? postReleaseFrame.finalBitmapRowBytes
-                               : width * 4u;
+  const size_t rowBytes =
+      postReleaseFrame.finalBitmapRowBytes > 0 ? postReleaseFrame.finalBitmapRowBytes : width * 4u;
   const auto samplePixel = [&](int x, int y) {
     const size_t off = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
     struct Rgba {
       uint8_t r, g, b, a;
     };
-    return Rgba{postReleaseFrame.finalBitmapPixels[off + 0],
-                postReleaseFrame.finalBitmapPixels[off + 1],
-                postReleaseFrame.finalBitmapPixels[off + 2],
-                postReleaseFrame.finalBitmapPixels[off + 3]};
+    return Rgba{
+        postReleaseFrame.finalBitmapPixels[off + 0], postReleaseFrame.finalBitmapPixels[off + 1],
+        postReleaseFrame.finalBitmapPixels[off + 2], postReleaseFrame.finalBitmapPixels[off + 3]};
   };
 
   // Probe a 5×5 grid around the post-drag center. At least one pixel
@@ -3432,12 +3367,11 @@ TEST(EditorBackendCoreFilterDragTest, FilterGroupSurvivesDragReleaseCycle) {
       }
     }
   }
-  EXPECT_GE(redHits, 5)
-      << "dragged filter group's red rect is missing from the post-release "
-         "frame. Expected some red around canvas pixel (100, 100); got none. "
-         "Likely causes: `propagateFastPathTranslationToSubtree` corrupting "
-         "descendant `worldFromEntityTransform`, or the compositor re-"
-         "rasterizing the layer with stale descendant positions.";
+  EXPECT_GE(redHits, 5) << "dragged filter group's red rect is missing from the post-release "
+                           "frame. Expected some red around canvas pixel (100, 100); got none. "
+                           "Likely causes: `propagateFastPathTranslationToSubtree` corrupting "
+                           "descendant `worldFromEntityTransform`, or the compositor re-"
+                           "rasterizing the layer with stale descendant positions.";
 
   // Also sanity-check that the ORIGINAL position is now vacated —
   // otherwise the test passes with a red streak that never moved.
@@ -3473,7 +3407,8 @@ TEST(EditorBackendCoreFilterDragTest, FilterGroupSurvivesDragReleaseCycle) {
 // the baseline for what "healthy" looks like — any filter-group /
 // HiDPI variant should land within the same order of magnitude.
 TEST(EditorUiFlowPerfTest, RegularObjectDragHitsSixtyFpsBudget) {
-  constexpr std::string_view kSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
   <rect width="800" height="600" fill="white"/>
   <rect id="target" x="100" y="100" width="80" height="60" fill="red"/>
 </svg>)svg";
@@ -3521,8 +3456,7 @@ TEST(EditorUiFlowPerfTest, RegularObjectDragHitsSixtyFpsBudget) {
   }
   const double avg = totalMs / kSteadyFrames;
   std::fprintf(stderr, "[UIPerf regular 800x600] avg=%.2f ms\n", avg);
-  EXPECT_LT(avg, 20.0)
-      << "regular-object drag should trivially hit 60 fps; avg=" << avg << " ms";
+  EXPECT_LT(avg, 20.0) << "regular-object drag should trivially hit 60 fps; avg=" << avg << " ms";
 }
 
 // Compare filter-group drag to the regular-object baseline: if the
@@ -3533,11 +3467,13 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragMatchesRegularObjectBaseline) {
   // `<g filter>` with a rect child. Same viewport, same pointer
   // events, same steady-state frame count. Report the ratio; fail
   // if filter drag is more than 2× slower than rect drag.
-  constexpr std::string_view kRectSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  constexpr std::string_view kRectSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
   <rect width="800" height="600" fill="white"/>
   <rect id="target" x="100" y="100" width="80" height="60" fill="red"/>
 </svg>)svg";
-  constexpr std::string_view kFilterSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  constexpr std::string_view kFilterSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
   <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
   <rect width="800" height="600" fill="white"/>
   <g id="target" filter="url(#blur)">
@@ -3602,8 +3538,8 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragMatchesRegularObjectBaseline) {
   // 2× slower than the rect drag.
   EXPECT_LT(filterAvg, rectAvg * 2.0 + 2.0)
       << "filter-group drag is substantially slower than regular-object "
-         "drag at the same canvas size. rect=" << rectAvg
-      << " ms, filter=" << filterAvg
+         "drag at the same canvas size. rect="
+      << rectAvg << " ms, filter=" << filterAvg
       << " ms. Check whether `propagateFastPathTranslationToSubtree` "
          "scales with descendant count or whether the overlay render "
          "path costs more for filter groups.";
@@ -3693,8 +3629,7 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
     }
     const auto tUploadEnd = Clock::now();
 
-    const double backendMs =
-        std::chrono::duration<double, std::milli>(tBackendEnd - t0).count();
+    const double backendMs = std::chrono::duration<double, std::milli>(tBackendEnd - t0).count();
     const double uploadMs =
         std::chrono::duration<double, std::milli>(tUploadEnd - tBackendEnd).count();
     backendTotalMs += backendMs;
@@ -3720,8 +3655,8 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
   std::fprintf(stderr,
                "[UIPerf %dx%d] frames avg=%.2f ms (backend=%.2f + upload=%.2f), "
                "max=%.2f, >60fps=%d/%d, >30fps=%d, >20fps=%d\n",
-               kCanvasW, kCanvasH, avg, backendAvg, uploadAvg, worst, overSixtyFps,
-               kSteadyFrames, overThirtyFps, overTwentyFps);
+               kCanvasW, kCanvasH, avg, backendAvg, uploadAvg, worst, overSixtyFps, kSteadyFrames,
+               overThirtyFps, overTwentyFps);
 
   // 20 ms/frame budget: inside a 60 Hz vsync window, with slack for
   // the driver work the stand-in copy doesn't model. If avg > 20
@@ -3729,17 +3664,15 @@ TEST(EditorUiFlowPerfTest, FilterGroupDragHitsSixtyFpsBudgetAtHiDpi) {
   // to 20 fps (the user-reported cap). The specific sub-budgets
   // below are diagnostic so the failure message points at the
   // stage that regressed.
-  EXPECT_LT(avg, 20.0)
-      << "HiDPI filter-group drag can't hit 60 fps: backend avg=" << backendAvg
-      << " ms, upload avg=" << uploadAvg
-      << " ms. If backend is the big number, the compositor fast path "
-         "isn't engaging; check fast-path counters + "
-         "`SelectTool::elevateToCompositingGroupAncestor`. If upload is "
-         "the big number, the overlay fell back to full-canvas rendering "
-         "(check `SnapshotSelectionWorldBounds` / tight-bound sizing).";
-  EXPECT_EQ(overTwentyFps, 0)
-      << overTwentyFps << " of " << kSteadyFrames
-      << " frames exceeded 50 ms (the user-reported 20 fps cap).";
+  EXPECT_LT(avg, 20.0) << "HiDPI filter-group drag can't hit 60 fps: backend avg=" << backendAvg
+                       << " ms, upload avg=" << uploadAvg
+                       << " ms. If backend is the big number, the compositor fast path "
+                          "isn't engaging; check fast-path counters + "
+                          "`SelectTool::elevateToCompositingGroupAncestor`. If upload is "
+                          "the big number, the overlay fell back to full-canvas rendering "
+                          "(check `SnapshotSelectionWorldBounds` / tight-bound sizing).";
+  EXPECT_EQ(overTwentyFps, 0) << overTwentyFps << " of " << kSteadyFrames
+                              << " frames exceeded 50 ms (the user-reported 20 fps cap).";
 }
 
 // Direct `EditorBackendCore` check: after SelectTool elevates a click
@@ -3802,8 +3735,7 @@ TEST(EditorBackendCoreFastPathTest, FilterGroupDragCountsAsFastPath) {
   }
 
   const auto afterCounters = core.compositorFastPathCountersForTesting();
-  const uint64_t fastPathDelta =
-      afterCounters.fastPathFrames - beforeCounters.fastPathFrames;
+  const uint64_t fastPathDelta = afterCounters.fastPathFrames - beforeCounters.fastPathFrames;
   const uint64_t slowPathDelta =
       afterCounters.slowPathFramesWithDirty - beforeCounters.slowPathFramesWithDirty;
 
@@ -3815,14 +3747,15 @@ TEST(EditorBackendCoreFastPathTest, FilterGroupDragCountsAsFastPath) {
   //   - the compositor's subtree fast-path gate rejecting the dragged
   //     entity (single-entity-layer gate regression),
   //   - non-translation delta (shouldn't happen on pointer drag).
-  EXPECT_EQ(slowPathDelta, 0u)
-      << "drag hit slow path " << slowPathDelta << " times out of "
-      << kSteadyFrames << " steady-state frames. Fast-path delta="
-      << fastPathDelta << ". Check `SelectTool::onMouseDown` elevation and "
-         "`CompositorController::renderFrame` subtree-layer eligibility.";
+  EXPECT_EQ(slowPathDelta, 0u) << "drag hit slow path " << slowPathDelta << " times out of "
+                               << kSteadyFrames
+                               << " steady-state frames. Fast-path delta=" << fastPathDelta
+                               << ". Check `SelectTool::onMouseDown` elevation and "
+                                  "`CompositorController::renderFrame` subtree-layer eligibility.";
   EXPECT_GE(fastPathDelta, static_cast<uint64_t>(kSteadyFrames))
       << "expected every steady-state drag frame to hit the fast path; "
-         "fastPathDelta=" << fastPathDelta << " slowPathDelta=" << slowPathDelta;
+         "fastPathDelta="
+      << fastPathDelta << " slowPathDelta=" << slowPathDelta;
 }
 
 TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
@@ -3836,11 +3769,12 @@ TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
 
   auto client = EditorBackendClient::MakeInProcess();
   (void)client->setViewport(892, 512).get();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
-                                                splashSource.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(
+              std::span(reinterpret_cast<const uint8_t*>(splashSource.data()), splashSource.size()),
+              std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // `#Big_lightning_glow` contains a `<path class="cls-79">` with a
@@ -3855,9 +3789,8 @@ TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
   FrameResult downFrame = client->pointerEvent(down).get();
   ASSERT_TRUE(downFrame.ok);
   if (downFrame.selection.selections.empty()) {
-    GTEST_SKIP()
-        << "expected click to hit the cls-79 path inside Big_lightning_glow — "
-           "splash geometry may have shifted";
+    GTEST_SKIP() << "expected click to hit the cls-79 path inside Big_lightning_glow — "
+                    "splash geometry may have shifted";
   }
 
   // Warm-up + 30 steady-state drag frames, same shape as
@@ -3892,18 +3825,15 @@ TEST_F(ThinClientUiFlowTest, ClickingPathInsideFilterGroupStillHitsFastPath) {
     if (v > kSpikeThresholdMs) ++spikeCount;
   }
   const double avg = total / static_cast<double>(ms.size());
-  std::fprintf(stderr,
-               "[PathInFilter] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
+  std::fprintf(stderr, "[PathInFilter] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
                avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
 
-  EXPECT_LT(avg, 60.0)
-      << "clicking inside a filter group and dragging is slow — "
-         "`SelectTool::onMouseDown` likely isn't elevating to the filter "
-         "group, so `promoteEntity` refuses the leaf and every frame "
-         "takes the full-document slow path.";
-  EXPECT_EQ(spikeCount, 0)
-      << spikeCount << " of " << kDragFrames << " drag frames spiked past "
-      << kSpikeThresholdMs << " ms.";
+  EXPECT_LT(avg, 60.0) << "clicking inside a filter group and dragging is slow — "
+                          "`SelectTool::onMouseDown` likely isn't elevating to the filter "
+                          "group, so `promoteEntity` refuses the leaf and every frame "
+                          "takes the full-document slow path.";
+  EXPECT_EQ(spikeCount, 0) << spikeCount << " of " << kDragFrames << " drag frames spiked past "
+                           << kSpikeThresholdMs << " ms.";
 }
 
 // HiDPI scenario (DPR ≈ 2) matters because the user's editor runs at
@@ -3924,11 +3854,12 @@ TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragAtHiDpiViewport) {
 
   auto client = EditorBackendClient::MakeInProcess();
   (void)client->setViewport(1784, 1024).get();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
-                                                splashSource.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(
+              std::span(reinterpret_cast<const uint8_t*>(splashSource.data()), splashSource.size()),
+              std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // Click inside `#Big_lightning_glow` at the HiDPI equivalent of
@@ -3942,9 +3873,8 @@ TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragAtHiDpiViewport) {
   FrameResult downFrame = client->pointerEvent(down).get();
   ASSERT_TRUE(downFrame.ok);
   if (downFrame.selection.selections.empty()) {
-    GTEST_SKIP()
-        << "expected click to hit Big_lightning_glow — splash geometry may "
-           "have shifted";
+    GTEST_SKIP() << "expected click to hit Big_lightning_glow — splash geometry may "
+                    "have shifted";
   }
 
   ::donner::editor::PointerEventPayload warmup;
@@ -3979,14 +3909,13 @@ TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragAtHiDpiViewport) {
   }
   const double avg = total / static_cast<double>(ms.size());
   std::fprintf(stderr,
-               "[HiDpiFilterDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
-               avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
-  EXPECT_LT(avg, 60.0)
-      << "HiDPI filter-group drag is slow. If avg > 30 ms, the overlay "
-         "probably fell back to full-canvas rendering because "
-         "`SnapshotSelectionWorldBounds` returned empty for the filter "
-         "group and the tight-bound sizing code in "
-         "`EditorBackendCore::buildFramePayload` hit its fallback branch.";
+               "[HiDpiFilterDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n", avg,
+               worst, kSpikeThresholdMs, spikeCount, kDragFrames);
+  EXPECT_LT(avg, 60.0) << "HiDPI filter-group drag is slow. If avg > 30 ms, the overlay "
+                          "probably fell back to full-canvas rendering because "
+                          "`SnapshotSelectionWorldBounds` returned empty for the filter "
+                          "group and the tight-bound sizing code in "
+                          "`EditorBackendCore::buildFramePayload` hit its fallback branch.";
   EXPECT_EQ(spikeCount, 0);
 }
 
@@ -4002,11 +3931,12 @@ TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragEngagesFastPath) {
 
   auto client = EditorBackendClient::MakeInProcess();
   (void)client->setViewport(892, 512).get();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(splashSource.data()),
-                                                splashSource.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(
+              std::span(reinterpret_cast<const uint8_t*>(splashSource.data()), splashSource.size()),
+              std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // Click a point inside `#Big_lightning_glow` (filter group). The
@@ -4020,9 +3950,8 @@ TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragEngagesFastPath) {
   FrameResult downFrame = client->pointerEvent(down).get();
   ASSERT_TRUE(downFrame.ok);
   if (downFrame.selection.selections.empty()) {
-    GTEST_SKIP()
-        << "expected click to land on the Big_lightning_glow filter group — "
-           "splash geometry may have shifted";
+    GTEST_SKIP() << "expected click to land on the Big_lightning_glow filter group — "
+                    "splash geometry may have shifted";
   }
 
   // Warm-up move so the first frame's promotion cost doesn't poison
@@ -4058,18 +3987,15 @@ TEST_F(ThinClientUiFlowTest, RealSplashFilterGroupDragEngagesFastPath) {
     if (v > kSpikeThresholdMs) ++spikeCount;
   }
   const double avg = total / static_cast<double>(ms.size());
-  std::fprintf(stderr,
-               "[FilterDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
+  std::fprintf(stderr, "[FilterDrag] frames: avg=%.2f ms, max=%.2f ms, spikes (>%.0f ms)=%d/%d\n",
                avg, worst, kSpikeThresholdMs, spikeCount, kDragFrames);
 
-  EXPECT_LT(avg, 60.0)
-      << "dragging a `<g filter>` is slow — the subtree fast path isn't "
-         "engaging. Check the `firstEntity == lastEntity == e` gate in "
-         "`CompositorController::renderFrame` and that "
-         "`propagateFastPathTranslationToSubtree` is wired up.";
-  EXPECT_EQ(spikeCount, 0)
-      << spikeCount << " of " << kDragFrames << " filter-group drag frames "
-      << "spiked past " << kSpikeThresholdMs << " ms.";
+  EXPECT_LT(avg, 60.0) << "dragging a `<g filter>` is slow — the subtree fast path isn't "
+                          "engaging. Check the `firstEntity == lastEntity == e` gate in "
+                          "`CompositorController::renderFrame` and that "
+                          "`propagateFastPathTranslationToSubtree` is wired up.";
+  EXPECT_EQ(spikeCount, 0) << spikeCount << " of " << kDragFrames << " filter-group drag frames "
+                           << "spiked past " << kSpikeThresholdMs << " ms.";
   EXPECT_LT(worst, 120.0) << "drag frame spiked above budget";
 }
 
@@ -4083,11 +4009,11 @@ TEST_F(ThinClientUiFlowTest, DragMovesSelectedElementAndCommitsWriteback) {
       R"(</svg>)";
 
   auto client = EditorBackendClient::MakeInProcess();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()),
-                                                kSvg.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // kDown at the center of the rect — picks it up.
@@ -4114,7 +4040,8 @@ TEST_F(ThinClientUiFlowTest, DragMovesSelectedElementAndCommitsWriteback) {
   const Box2d duringDrag = moveFrame.selection.selections[0].worldBBox;
   EXPECT_NEAR(duringDrag.topLeft.x, 80.0, 0.01)
       << "during-drag bbox didn't move 30px in X; drag dispatch is a no-op. "
-         "Observed topLeft.x=" << duringDrag.topLeft.x;
+         "Observed topLeft.x="
+      << duringDrag.topLeft.x;
   EXPECT_NEAR(duringDrag.topLeft.y, 50.0, 0.01) << "drag leaked into Y axis";
 
   // kUp at the same point — commit.
@@ -4146,16 +4073,17 @@ TEST_F(ThinClientUiFlowTest, DragMovesSelectedElementAndCommitsWriteback) {
 TEST_F(ThinClientUiFlowTest, SelectionChromeAppearsInBackendRenderedBitmap) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
-      R"(<rect id="target" x="50" y="50" width="100" height="100" fill="white"/>)"
+      R"(<rect width="200" height="200" fill="black"/>)"
+      R"(<rect id="target" x="50" y="50" width="100" height="100" fill="red"/>)"
       R"(</svg>)";
 
   auto client = EditorBackendClient::MakeInProcess();
   (void)client->setViewport(200, 200).get();
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()),
-                                                kSvg.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
 
   // Click the rect to select it.
@@ -4167,6 +4095,9 @@ TEST_F(ThinClientUiFlowTest, SelectionChromeAppearsInBackendRenderedBitmap) {
   ASSERT_TRUE(clickFrame.ok);
   ASSERT_EQ(clickFrame.selection.selections.size(), 1u) << "rect was not selected";
   ASSERT_TRUE(clickFrame.documentViewBox.has_value());
+  ASSERT_TRUE(clickFrame.compositedPreview.has_value());
+  ASSERT_TRUE(clickFrame.compositedPreview->includesBitmapUploads);
+  ASSERT_FALSE(clickFrame.compositedPreview->overlayBitmap.empty());
 
   // Release so we get a non-dragging frame (drag state masks chrome).
   ::donner::editor::PointerEventPayload up;
@@ -4184,9 +4115,14 @@ TEST_F(ThinClientUiFlowTest, SelectionChromeAppearsInBackendRenderedBitmap) {
   // the stroke should land. White fill is inside; pure white means
   // chrome never painted.
   const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
-    const uint8_t* row =
-        bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
+    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
     return {row[x * 4 + 0], row[x * 4 + 1], row[x * 4 + 2], row[x * 4 + 3]};
+  };
+  const auto hasCyan = [](const std::array<uint8_t, 4>& px) {
+    return px[2] >= 0xc0 && px[0] <= 0x80 && px[3] > 0;
+  };
+  const auto hasWhite = [](const std::array<uint8_t, 4>& px) {
+    return px[0] >= 0xe0 && px[1] >= 0xe0 && px[2] >= 0xe0 && px[3] > 0;
   };
 
   // Look along the AABB edges for any pixel whose blue channel is
@@ -4197,21 +4133,48 @@ TEST_F(ThinClientUiFlowTest, SelectionChromeAppearsInBackendRenderedBitmap) {
   for (int scan = 45; scan <= 55 && !cyanFound; ++scan) {
     for (int x = 45; x <= 155 && !cyanFound; ++x) {
       const auto px = pixelAt(x, scan);
-      if (px[2] >= 0xc0 && px[0] <= 0x80 && px[3] > 0) {
+      if (hasCyan(px)) {
         cyanFound = true;
         worstOffending = px;
       }
     }
   }
-  EXPECT_TRUE(cyanFound)
-      << "no cyan selection-chrome pixel found along the AABB edge — "
-         "`OverlayRenderer::drawChromeWithTransform` isn't drawing into "
-         "the backend's composited bitmap (likely frame-state issue "
-         "between compositor endFrame and overlay draws). Sampled last: ("
-      << static_cast<int>(worstOffending[0]) << ", "
-      << static_cast<int>(worstOffending[1]) << ", "
-      << static_cast<int>(worstOffending[2]) << ", "
-      << static_cast<int>(worstOffending[3]) << ")";
+  EXPECT_TRUE(cyanFound) << "no cyan selection-chrome pixel found along the AABB edge — "
+                            "`OverlayRenderer::drawChromeWithTransform` isn't drawing into "
+                            "the backend's composited bitmap (likely frame-state issue "
+                            "between compositor endFrame and overlay draws). Sampled last: ("
+                         << static_cast<int>(worstOffending[0]) << ", "
+                         << static_cast<int>(worstOffending[1]) << ", "
+                         << static_cast<int>(worstOffending[2]) << ", "
+                         << static_cast<int>(worstOffending[3]) << ")";
+
+  bool whiteHandleFound = false;
+  for (int y = 47; y <= 53 && !whiteHandleFound; ++y) {
+    for (int x = 47; x <= 53 && !whiteHandleFound; ++x) {
+      whiteHandleFound = hasWhite(pixelAt(x, y));
+    }
+  }
+  EXPECT_TRUE(whiteHandleFound) << "selection handles should be filled white";
+
+  const svg::RendererBitmap& previewOverlay = clickFrame.compositedPreview->overlayBitmap;
+  const auto previewPixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
+    const uint8_t* row =
+        previewOverlay.pixels.data() + static_cast<size_t>(y) * previewOverlay.rowBytes;
+    return {row[x * 4 + 0], row[x * 4 + 1], row[x * 4 + 2], row[x * 4 + 3]};
+  };
+  bool previewCyanFound = false;
+  bool previewWhiteHandleFound = false;
+  for (int y = 45; y <= 55 && (!previewCyanFound || !previewWhiteHandleFound); ++y) {
+    for (int x = 45; x <= 155 && (!previewCyanFound || !previewWhiteHandleFound); ++x) {
+      const auto px = previewPixelAt(x, y);
+      previewCyanFound = previewCyanFound || hasCyan(px);
+      previewWhiteHandleFound = previewWhiteHandleFound || hasWhite(px);
+    }
+  }
+  EXPECT_TRUE(previewCyanFound)
+      << "cached drag-preview overlay should include the cyan path/AABB chrome";
+  EXPECT_TRUE(previewWhiteHandleFound)
+      << "cached drag-preview overlay should include the same white handles as the settled frame";
 }
 
 /// Marquee rubber-band selection populates `FramePayload.hasMarquee` +
@@ -4228,9 +4191,10 @@ TEST_F(ThinClientUiFlowTest, MarqueeRectSurfacesOnFramePayload) {
       R"(</svg>)";
 
   auto client = EditorBackendClient::MakeInProcess();
-  (void)client->loadBytes(
-      std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
-      std::nullopt).get();
+  (void)client
+      ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                  std::nullopt)
+      .get();
 
   // kDown in empty space at (10, 10) → starts marquee.
   ::donner::editor::PointerEventPayload down;
@@ -4290,25 +4254,23 @@ TEST_F(ThinClientUiFlowTest, AttachSharedTextureFallsBackGracefully) {
   bogusHandle.dimensions = Vector2i(100, 100);
 
   FrameResult ack = client->attachSharedTexture(bogusHandle).get();
-  EXPECT_TRUE(ack.ok)
-      << "backend rejected an unknown-kind handle instead of falling "
-         "back to the stub. Linux (or any non-mac / non-linux) host "
-         "would see its `attachSharedTexture` call return !ok on "
-         "startup.";
+  EXPECT_TRUE(ack.ok) << "backend rejected an unknown-kind handle instead of falling "
+                         "back to the stub. Linux (or any non-mac / non-linux) host "
+                         "would see its `attachSharedTexture` call return !ok on "
+                         "startup.";
 
   // Subsequent loadBytes / render continues through the CPU bitmap
   // path without the bridge engaging — the stub reports
   // `ready() == false` so `buildFramePayload` keeps shipping
   // `finalBitmapPixels`.
-  FrameResult load = client
-                         ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()),
-                                                kSvg.size()),
-                                     std::nullopt)
-                         .get();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
   ASSERT_TRUE(load.ok);
-  EXPECT_FALSE(load.bitmap.empty())
-      << "CPU fallback bitmap missing after attachSharedTexture — "
-         "the stub path shouldn't disable the normal rendering.";
+  EXPECT_FALSE(load.bitmap.empty()) << "CPU fallback bitmap missing after attachSharedTexture — "
+                                       "the stub path shouldn't disable the normal rendering.";
 }
 
 /// Backend exports the last-loaded SVG source on kExport(kSvgText).
@@ -4321,9 +4283,10 @@ TEST_F(ThinClientUiFlowTest, ExportSvgTextReturnsLoadedSource) {
       R"(</svg>)";
 
   auto client = EditorBackendClient::MakeInProcess();
-  (void)client->loadBytes(
-      std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
-      std::nullopt).get();
+  (void)client
+      ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                  std::nullopt)
+      .get();
 
   ::donner::editor::ExportPayload req;
   req.format = ExportFormat::kSvgText;
