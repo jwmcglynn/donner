@@ -281,11 +281,18 @@ enum class SandboxInstallResult {
   kFailed,            ///< Hard failure (bad profile, kernel refusal, etc.).
 };
 
-/// Installs the `kSBXProfilePureComputation` profile via the legacy
-/// `sandbox_init` API. This is the macOS analogue of the Linux seccomp
-/// allowlist: the child keeps its already-open stdin/stdout/stderr pipes
-/// and its heap, but new file opens, network sockets, and IPC attempts
-/// get denied by the kernel.
+/// Installs the `kSBXProfileNoWriteExceptTemporary` profile via the
+/// legacy `sandbox_init` API. This is the macOS analogue of the Linux
+/// seccomp allowlist: the child keeps its already-open stdin/stdout/
+/// stderr pipes, may read/compute freely, but new filesystem writes
+/// outside of temp/cache are denied.
+///
+/// `kSBXProfilePureComputation` is strictly tighter and is what we'd
+/// pick in the abstract, but it blocks the mach-service lookups the
+/// Geode renderer's wgpu-native → Metal pipeline makes during live
+/// rendering (SIGSEGV inside `libMetal` on first pipeline compile).
+/// `kSBXProfileNoWriteExceptTemporary` keeps Metal functional while
+/// still closing the door on arbitrary disk writes from a parser bug.
 ///
 /// Returns `kAlreadySandboxed` (EPERM) when the parent process already
 /// sandboxed us — the primary path that hits this is Bazel's macOS
@@ -303,7 +310,7 @@ SandboxInstallResult InstallMacOSSandboxProfile(std::string& errOut) {
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
   char* errorBuf = nullptr;
   errno = 0;
-  const int rc = ::sandbox_init(kSBXProfilePureComputation, SANDBOX_NAMED, &errorBuf);
+  const int rc = ::sandbox_init(kSBXProfileNoWriteExceptTemporary, SANDBOX_NAMED, &errorBuf);
   if (rc == 0) {
     if (errorBuf != nullptr) ::sandbox_free_error(errorBuf);
     return SandboxInstallResult::kApplied;
@@ -321,7 +328,7 @@ SandboxInstallResult InstallMacOSSandboxProfile(std::string& errOut) {
 #pragma clang diagnostic pop
   if (savedErrno == EPERM) {
     // Already inside a sandbox (bazel darwin-sandbox, SIP-tight shells,
-    // or an enclosing profile) — our `kSBXProfilePureComputation` request
+    // or an enclosing profile) — our `kSBXProfileNoWriteExceptTemporary` request
     // is strictly tighter than any realistic outer profile, so we treat
     // this as "hardening already in force" rather than a fatal error.
     errOut = err;
@@ -415,11 +422,20 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
       return result;
     }
   }
+  // RLIMIT_FSIZE on macOS interacts badly with the Geode renderer:
+  // wgpu-native's Metal backend writes shader pipeline caches to
+  // `~/Library/Caches`, and a 0-byte FSIZE cap triggers SIGXFSZ on the
+  // first render. The macOS `sandbox_init` profile already constrains
+  // new filesystem writes (allowing only inherited FDs + temp/cache
+  // paths), so the rlimit is redundant there. On Linux it stays as
+  // the belt-and-suspenders check alongside seccomp.
+#if !defined(__APPLE__)
   if (!SetRlimit(RLIMIT_FSIZE, static_cast<rlim_t>(options.maxFileBytes), errMessage)) {
     result.status = HardeningStatus::kResourceLimitFailed;
     result.message = "RLIMIT_FSIZE: " + errMessage;
     return result;
   }
+#endif
   if (options.maxOpenFiles > 0) {
     if (!SetRlimit(RLIMIT_NOFILE, static_cast<rlim_t>(options.maxOpenFiles), errMessage)) {
       result.status = HardeningStatus::kResourceLimitFailed;

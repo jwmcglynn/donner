@@ -93,12 +93,17 @@ struct HardeningOptions {
   };
   SeccompDenyAction seccompDenyAction = SeccompDenyAction::kKillProcess;
 
-  /// Install a macOS `sandbox_init` profile (`kSBXProfilePureComputation`)
-  /// as the analogous defense-in-depth layer on macOS. Denies filesystem
-  /// writes, new network connections, mach lookups, etc. — the child
-  /// keeps its inherited stdin/stdout/stderr pipes and heap. On non-macOS
+  /// Install a macOS `sandbox_init` profile as a defense-in-depth
+  /// layer. Default **off** because every shipped Apple builtin profile
+  /// either leaves obvious gaps (e.g. `kSBXProfileNoWrite` doesn't deny
+  /// network) or silently breaks the Metal pipeline the Geode renderer
+  /// needs (e.g. `kSBXProfilePureComputation` causes SIGSEGV the first
+  /// time wgpu-native compiles a pipeline). The primary hardening on
+  /// macOS is still the session process boundary; this field is a knob
+  /// for deployments that ship with a tightly-scoped custom profile or
+  /// on tiny_skia builds where Metal isn't in the loop. On non-macOS
   /// platforms this field is silently ignored.
-  bool installSandboxProfile = true;
+  bool installSandboxProfile = false;
 };
 
 /// Classifies the outcome of `ApplyHardening`. On any non-kOk status the
