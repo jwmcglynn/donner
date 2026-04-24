@@ -2635,7 +2635,19 @@ int main(int argc, char** argv) {
           ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         const ImVec2 mousePos = ImGui::GetMousePos();
         const donner::Vector2d screenPoint(mousePos.x, mousePos.y);
-        if (ShouldPostDragMove(screenPoint, lastPostedDragMoveScreenPoint)) {
+        // Coalesce: only post a new kMove if the previous one's future
+        // has already been consumed. With the session-backed client a
+        // backend round-trip can take 20–60 ms (Geode rebuild + IPC);
+        // posting on every ImGui frame fills SandboxSession's FIFO
+        // with stale positions and the host then discards every
+        // future except the last one (`pendingFrame =` overwrite),
+        // so the user sees no preview updates until the queue drains
+        // — the "drag freezes mid-stroke, then snaps to release
+        // position" symptom. By gating on `!pendingFrame.has_value()`
+        // we rate-limit drag posts to the backend's actual cadence
+        // and the LATEST mouse position is captured at post time.
+        if (!pendingFrame.has_value() &&
+            ShouldPostDragMove(screenPoint, lastPostedDragMoveScreenPoint)) {
           lastPostedDragMoveScreenPoint = screenPoint;
           const donner::Vector2d docPoint = screenToDocument(mousePos);
           const auto dragPostStart = std::chrono::steady_clock::now();
