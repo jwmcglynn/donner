@@ -885,22 +885,33 @@ int main(int argc, char** argv) {
       loadBytesIntoDocument = [&](const std::string& originUri, std::span<const uint8_t> bytes,
                                   const std::optional<std::string>& resolvedPath) -> bool {
     std::cerr << "[load] bytes=" << bytes.size() << " uri=" << originUri << "\n";
+
+    // Pre-filter: if the bytes obviously aren't SVG (HTML page, JSON,
+    // empty body), fail BEFORE touching the backend. The parser can
+    // otherwise accept non-SVG XML-shaped content as a "successful"
+    // empty document, which silently overwrites `textEditor` with the
+    // non-SVG source and leaves the previous render frozen on screen
+    // — user sees HTML in the editor pane and the old SVG in the
+    // canvas with no visible error. Sniffing first keeps both the
+    // document source and the rendering intact on failure.
+    if (auto sniff = donner::editor::DescribeNonSvgBytes(bytes); sniff.has_value()) {
+      openFileError = *sniff;
+      addressBar.setStatus(
+          {donner::editor::AddressBarStatus::kParseError, *sniff, originUri});
+      std::cerr << "[load] rejected (sniffer): " << originUri << " — " << *sniff << "\n";
+      return false;
+    }
+
     auto loadFuture = backend->loadBytes(bytes, resolvedPath.has_value()
                                                     ? std::optional<std::string>(*resolvedPath)
                                                     : std::optional<std::string>(originUri));
     auto loadResult = loadFuture.get();
     if (!loadResult.ok) {
-      // Prefer a content-type hint over the parser's raw complaint when
-      // the bytes aren't SVG at all — pasting a Wikipedia file-description
-      // URL (`/wiki/File:Foo.svg`) returns the HTML page, not the SVG, and
-      // "Got an HTML page, not an SVG" is a vastly more useful chip than
-      // "unexpected token '<!DOCTYPE'" at column 10. For everything that
-      // looks XML-shaped, fall back to the parser's first diagnostic so
-      // the user sees the line / column of a real SVG error.
+      // Parser-level failure: XML-shaped bytes that didn't parse as SVG.
+      // Surface the first diagnostic with its line number so the user
+      // can jump to the offending spot in the text editor.
       std::string errorMsg;
-      if (auto sniff = donner::editor::DescribeNonSvgBytes(bytes); sniff.has_value()) {
-        errorMsg = std::move(*sniff);
-      } else if (!loadResult.parseDiagnostics.empty()) {
+      if (!loadResult.parseDiagnostics.empty()) {
         const auto& diag = loadResult.parseDiagnostics.front();
         errorMsg = "Parse error: ";
         errorMsg.append(std::string_view(diag.reason));
