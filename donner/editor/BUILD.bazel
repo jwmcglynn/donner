@@ -226,6 +226,20 @@ donner_cc_library(
 donner_cc_binary(
     name = "editor",
     srcs = ["main.cc"],
+    # The session-backed client spawns `donner_editor_backend` as a child
+    # process; declaring it as `data` (per platform) ensures it lands in
+    # the editor's runfiles tree so `bazel run //donner/editor` actually
+    # locates it. See `RunBackendSmokeTest` + `MakeSessionBacked` in
+    # main.cc.
+    data = select({
+        "@platforms//os:linux": [
+            "//donner/editor/sandbox:donner_editor_backend",
+        ],
+        "@platforms//os:macos": [
+            "//donner/editor/sandbox:donner_editor_backend",
+        ],
+        "//conditions:default": [],
+    }),
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -237,7 +251,13 @@ donner_cc_binary(
         # The sandboxed backend binary deliberately does NOT depend on this
         # (see the tracy_wrapper_enabled comment in this file).
         ":tracy_wrapper_enabled",
-    ],
+    ] + select({
+        # Runfiles helper used to locate `donner_editor_backend` next to
+        # the editor binary. WASM has no runfiles concept.
+        "@platforms//os:linux": ["@rules_cc//cc/runfiles"],
+        "@platforms//os:macos": ["@rules_cc//cc/runfiles"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(

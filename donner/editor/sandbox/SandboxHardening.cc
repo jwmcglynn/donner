@@ -40,8 +40,10 @@ bool SetRlimit(int resource, rlim_t value, std::string& err) {
 
 /// Close all file descriptors strictly greater than FD 2 (stderr). Uses
 /// the Linux-specific `close_range` syscall when available; falls back to
-/// an explicit loop that uses `sysconf(_SC_OPEN_MAX)` as an upper bound.
-/// Either path is best-effort — an already-closed FD is fine.
+/// an explicit loop bounded by the current `RLIMIT_NOFILE` soft cap (or
+/// a hard 4096 ceiling — whichever is smaller) because `sysconf(_SC_OPEN_MAX)`
+/// returns `INT64_MAX` on macOS, which would take effectively forever to
+/// sweep. Either path is best-effort — an already-closed FD is fine.
 bool CloseFdsAboveStderr() {
 #if defined(__linux__) && defined(SYS_close_range)
   // Close FDs [3, uint32_max) in one syscall. Returns 0 on success.
@@ -54,8 +56,17 @@ bool CloseFdsAboveStderr() {
   }
 #endif
 
-  long maxFd = ::sysconf(_SC_OPEN_MAX);
-  if (maxFd <= 0) maxFd = 1024;
+  // Pick an upper bound that's both safe (won't take forever) and
+  // conservative (high enough to catch anything a parser child would
+  // realistically have open). 4096 is well above the tens-of-FDs seen
+  // in practice and still finishes instantly.
+  constexpr long kHardCeiling = 4096;
+  long maxFd = kHardCeiling;
+  rlimit r;
+  if (::getrlimit(RLIMIT_NOFILE, &r) == 0 && r.rlim_cur != RLIM_INFINITY) {
+    const long softCur = static_cast<long>(r.rlim_cur);
+    if (softCur > 0 && softCur < maxFd) maxFd = softCur;
+  }
   for (long fd = 3; fd < maxFd; ++fd) {
     // Ignore EBADF — "not open" is the outcome we want anyway.
     (void)::close(static_cast<int>(fd));

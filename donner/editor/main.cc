@@ -69,7 +69,13 @@
 // those two OSes in BUILD.bazel. WASM falls through to the in-process
 // client because the browser tab already isolates untrusted content.
 #if !defined(__EMSCRIPTEN__)
+#include <unistd.h>  // getpid
+
+#include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/SandboxSession.h"
+#include "donner/editor/sandbox/SessionCodec.h"
+#include "donner/editor/sandbox/SessionProtocol.h"
+#include "rules_cc/cc/runfiles/runfiles.h"
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -1015,6 +1021,97 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUpload
   return bitmapUploaded;
 }
 
+#if !defined(__EMSCRIPTEN__)
+/// Resolve the absolute path to `donner_editor_backend` via Bazel
+/// runfiles. Returns the relative bazel-bin path (the pre-runfiles
+/// fallback) if the runfiles helper can't initialize — callers can
+/// still attempt a `posix_spawn` against it and will get a clear
+/// "spawn_failed" diagnostic from `SandboxSession`.
+std::string ResolveBackendBinaryPath(const char* argv0) {
+  constexpr const char* kBackendRepoPath = "donner/editor/sandbox/donner_editor_backend";
+  std::string error;
+  std::unique_ptr<rules_cc::cc::runfiles::Runfiles> runfiles(
+      rules_cc::cc::runfiles::Runfiles::Create(argv0 ? argv0 : "", &error));
+  if (!runfiles) {
+    return kBackendRepoPath;
+  }
+  // rules_cc runfiles resolve the canonical repo mapping; for the main
+  // repo, prepending "_main/" gives us the bazel-built binary path.
+  std::string resolved = runfiles->Rlocation(std::string("_main/") + kBackendRepoPath);
+  if (resolved.empty()) {
+    resolved = runfiles->Rlocation(kBackendRepoPath);
+  }
+  return resolved.empty() ? kBackendRepoPath : resolved;
+}
+
+/// Verifies that the editor's session-sandbox transport is wired up and
+/// that the backend runs in a separate process. Returns an exit code:
+/// 0 on success, 1 on failure. Prints a single-line result to stdout so
+/// CI can assert on substring matches.
+///
+/// The design doc calls this out as P0 verification for both Linux and
+/// macOS — the easiest way to catch a regression where `main.cc` or
+/// BUILD.bazel accidentally falls back to the in-process backend is a
+/// headless `--backend-smoke-test` run that fails loudly if
+/// `transport != "session"` or `backend_pid == host_pid`.
+int RunBackendSmokeTest(const char* argv0) {
+  const uint64_t hostPid = static_cast<uint64_t>(::getpid());
+  const std::string backendPath = ResolveBackendBinaryPath(argv0);
+
+  donner::editor::sandbox::SandboxSession session(donner::editor::sandbox::SandboxSessionOptions{
+      .childBinaryPath = backendPath,
+  });
+  if (!session.childAlive()) {
+    std::cout << "smoke-test: transport=session status=fail reason=spawn_failed "
+                 "host_pid="
+              << hostPid << " backend_path=" << backendPath << std::endl;
+    return 1;
+  }
+
+  donner::editor::sandbox::SessionFrame handshake;
+  handshake.requestId = 1;
+  handshake.opcode = donner::editor::sandbox::SessionOpcode::kHandshake;
+  handshake.payload = donner::editor::sandbox::EncodeHandshake(
+      {donner::editor::sandbox::kSessionProtocolVersion, "smoke-test"});
+
+  donner::editor::sandbox::WireRequest req;
+  req.bytes = donner::editor::sandbox::EncodeFrame(handshake);
+  auto future = session.submit(std::move(req));
+
+  if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    std::cout << "smoke-test: transport=session status=fail reason=handshake_timeout "
+                 "host_pid="
+              << hostPid << "\n";
+    return 1;
+  }
+
+  auto resp = future.get();
+  if (resp.status != donner::editor::sandbox::SandboxStatus::kOk) {
+    std::cout << "smoke-test: transport=session status=fail reason=handshake_status_"
+              << static_cast<int>(resp.status) << " host_pid=" << hostPid << "\n";
+    return 1;
+  }
+
+  donner::editor::sandbox::HandshakeAckPayload ack;
+  if (!donner::editor::sandbox::DecodeHandshakeAck(resp.bytes, ack)) {
+    std::cout << "smoke-test: transport=session status=fail reason=ack_decode_failed "
+                 "host_pid="
+              << hostPid << "\n";
+    return 1;
+  }
+
+  if (ack.pid == 0 || ack.pid == hostPid) {
+    std::cout << "smoke-test: transport=session status=fail reason=pid_same host_pid=" << hostPid
+              << " backend_pid=" << ack.pid << "\n";
+    return 1;
+  }
+
+  std::cout << "smoke-test: transport=session status=ok host_pid=" << hostPid
+            << " backend_pid=" << ack.pid << " protocol_version=" << ack.protocolVersion << "\n";
+  return 0;
+}
+#endif  // !defined(__EMSCRIPTEN__)
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1052,8 +1149,10 @@ int main(int argc, char** argv) {
   const std::optional<std::string> initialPath = std::string("donner_icon.svg");
 #else
   constexpr std::string_view kUsage =
-      "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";
+      "Usage: donner-editor [--experimental] [--save-repro <path>] "
+      "[--backend-smoke-test] <filename>\n";
   std::optional<std::string> svgPath;
+  bool smokeTestRequested = false;
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
@@ -1068,11 +1167,22 @@ int main(int argc, char** argv) {
       reproOutputPath = std::string(argv[++i]);
       continue;
     }
+    if (arg == "--backend-smoke-test") {
+      // Headless verification that the session-sandbox transport is
+      // functional and the backend runs in a different process. Does
+      // NOT open a window, does NOT require a filename. Exits with
+      // the smoke test's status code.
+      smokeTestRequested = true;
+      continue;
+    }
     if (svgPath.has_value()) {
       std::cerr << kUsage;
       return 1;
     }
     svgPath = std::string(arg);
+  }
+  if (smokeTestRequested) {
+    return RunBackendSmokeTest(argv[0]);
   }
   if (!svgPath.has_value()) {
     std::cerr << kUsage;
@@ -1236,7 +1346,7 @@ int main(int argc, char** argv) {
   // isolation boundary.
 #if !defined(__EMSCRIPTEN__)
   donner::editor::sandbox::SandboxSession session(donner::editor::sandbox::SandboxSessionOptions{
-      .childBinaryPath = "donner/editor/sandbox/donner_editor_backend",
+      .childBinaryPath = ResolveBackendBinaryPath(argv[0]),
   });
   auto backend = donner::editor::EditorBackendClient::MakeSessionBacked(session);
 #else
