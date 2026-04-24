@@ -93,14 +93,17 @@ bool CloseFdsAboveStderr() {
 #endif
 
 /// Installs a seccomp-bpf filter that allows only the syscalls the parser
-/// child needs. Disallowed syscalls return -EACCES (fail-open mode for
-/// initial deployment; to be tightened to SECCOMP_RET_KILL_PROCESS once the
-/// allowlist is proven stable).
+/// child needs. The default-deny action is chosen by the caller:
+/// `SECCOMP_RET_KILL_PROCESS` (production) immediately terminates the
+/// child on any unlisted syscall, and `SECCOMP_RET_ERRNO | EACCES`
+/// (debug) lets the syscall return -EACCES so developers can extend
+/// the allowlist without crashing the whole child.
 ///
 /// Returns true on success, false if prctl/seccomp setup failed.
-bool InstallSeccompFilter() {
+bool InstallSeccompFilter(HardeningOptions::SeccompDenyAction denyAction) {
 #if DONNER_SECCOMP_ARCH == 0
   // Architecture not supported — silently skip.
+  (void)denyAction;
   return true;
 #else
   // PR_SET_NO_NEW_PRIVS is required before installing a seccomp filter
@@ -242,9 +245,16 @@ bool InstallSeccompFilter() {
     filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   }
 
-  // [4+2*N] Default deny: return -EACCES instead of killing, so we can
-  // detect false positives during initial deployment.
-  filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA));
+  // [4+2*N] Default deny. `kKillProcess` is the production action —
+  // an unlisted syscall gets SIGSYS immediately. `kErrno` is available
+  // for ad-hoc allowlist exploration; it returns -EACCES so the
+  // program can continue and hit the next missing entry. Don't ship
+  // with `kErrno`.
+  const __u32 denyReturn =
+      (denyAction == HardeningOptions::SeccompDenyAction::kErrno)
+          ? (SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA))
+          : SECCOMP_RET_KILL_PROCESS;
+  filter[idx++] = BPF_STMT(BPF_RET | BPF_K, denyReturn);
 
   struct sock_fprog prog {};
   prog.len = static_cast<unsigned short>(idx);
@@ -324,12 +334,16 @@ void LogSummary(const HardeningOptions& options) {
   // Keep this single-line and stable — tests grep for the "sandbox
   // hardening:" prefix. Anything on stderr is captured by the host as
   // diagnostics and surfaced through `RenderResult::diagnostics`.
+  const char* denyAction =
+      (options.seccompDenyAction == HardeningOptions::SeccompDenyAction::kKillProcess) ? "kill"
+                                                                                       : "errno";
   std::fprintf(stderr,
                "sandbox hardening: as=%zu cpu=%u fsize=%zu nofile=%u chdir=%d fdsweep=%d "
-               "seccomp=%d sbxprof=%d\n",
+               "seccomp=%d seccomp_deny=%s sbxprof=%d\n",
                options.addressSpaceBytes, options.cpuSeconds, options.maxFileBytes,
                options.maxOpenFiles, options.chdirRoot ? 1 : 0, options.closeExtraFds ? 1 : 0,
-               options.installSeccompFilter ? 1 : 0, options.installSandboxProfile ? 1 : 0);
+               options.installSeccompFilter ? 1 : 0, denyAction,
+               options.installSandboxProfile ? 1 : 0);
 }
 
 }  // namespace
@@ -416,7 +430,7 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
   // filter would deny, so it must not be active until setup is complete.
 #if defined(__linux__)
   if (options.installSeccompFilter) {
-    if (!InstallSeccompFilter()) {
+    if (!InstallSeccompFilter(options.seccompDenyAction)) {
       result.status = HardeningStatus::kSeccompFailed;
       result.message = std::string("seccomp-bpf installation failed: ") + std::strerror(errno);
       return result;

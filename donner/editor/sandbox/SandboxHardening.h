@@ -76,10 +76,22 @@ struct HardeningOptions {
   bool logSummaryToStderr = true;
 
   /// Install a seccomp-bpf syscall allowlist (Linux only). Denied syscalls
-  /// return -EACCES in the current "fail-open" mode; future hardening will
-  /// switch to SECCOMP_RET_KILL_PROCESS. On non-Linux platforms this field
-  /// is silently ignored.
+  /// are handled according to `seccompDenyAction` (below). On non-Linux
+  /// platforms this field is silently ignored.
   bool installSeccompFilter = true;
+
+  /// How a denied syscall is handled when the seccomp-bpf filter is
+  /// active. `kKillProcess` is the production default — an unexpected
+  /// syscall kills the child immediately with `SIGSYS`, making it
+  /// impossible for a parser bug to silently succeed under the
+  /// denial. `kErrno` returns `-EACCES` instead, which is softer but
+  /// permits programs to recover; use it only for ad-hoc debugging
+  /// when fleshing out the allowlist. Ignored on non-Linux.
+  enum class SeccompDenyAction {
+    kKillProcess,  ///< SECCOMP_RET_KILL_PROCESS — SIGSYS terminates the child.
+    kErrno,        ///< SECCOMP_RET_ERRNO | EACCES — syscall fails with -EACCES.
+  };
+  SeccompDenyAction seccompDenyAction = SeccompDenyAction::kKillProcess;
 
   /// Install a macOS `sandbox_init` profile (`kSBXProfilePureComputation`)
   /// as the analogous defense-in-depth layer on macOS. Denies filesystem
