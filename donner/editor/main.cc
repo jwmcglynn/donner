@@ -38,6 +38,7 @@
 #include "donner/editor/AddressBarDispatcher.h"
 #include "donner/editor/ContentSniffer.h"
 #include "donner/editor/EditorBackendClient.h"
+#include "donner/editor/LocalPathDisplay.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
 #include "donner/editor/Notice.h"
@@ -717,8 +718,12 @@ int main(int argc, char** argv) {
   auto fetcher = donner::editor::MakeWasmFetcher();
 #endif
   donner::editor::AddressBar addressBar;
+  const std::string initialDisplayUri =
+      initialPath.has_value()
+          ? donner::editor::PrettifyLocalPath(*initialPath, std::filesystem::current_path())
+          : std::string();
   if (initialPath.has_value()) {
-    addressBar.setInitialUri(*initialPath);
+    addressBar.setInitialUri(initialDisplayUri);
   }
   // The `AddressBarDispatcher` that drives this widget is constructed further
   // down, once the `loadBytesIntoDocument` helper it needs is in scope.
@@ -737,8 +742,7 @@ int main(int argc, char** argv) {
       std::cerr << "\n";
     }
     addressBar.setStatus({donner::editor::AddressBarStatus::kRendered,
-                          loadResult.ok ? "OK" : "Parse error",
-                          initialPath.value_or(std::string())});
+                          loadResult.ok ? "OK" : "Parse error", initialDisplayUri});
   }
   std::cerr << "[startup] +" << msSinceStart() << "ms loadBytes done\n";
 
@@ -918,15 +922,20 @@ int main(int argc, char** argv) {
     const std::string contents(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     textEditor.setText(contents);
     textEditor.resetTextChanged();
-    currentFilePath = resolvedPath.has_value() ? *resolvedPath : originUri;
+    // Display-friendly form: files inside the editor's cwd read as
+    // `./donner_splash.svg`, not the full absolute path. Remote URIs
+    // and paths outside cwd pass through unchanged.
+    const std::string displayUri = donner::editor::PrettifyLocalPath(
+        originUri, std::filesystem::current_path());
+    currentFilePath = resolvedPath.has_value() ? *resolvedPath : displayUri;
     documentDirty = false;
     textChangePending = false;
     textDispatchThrottled = false;
     textChangeIdleTimer = 0.0f;
     pendingFrame.reset();
     openFileError.clear();
-    addressBar.setInitialUri(originUri);
-    addressBar.setStatus({donner::editor::AddressBarStatus::kRendered, "OK", originUri});
+    addressBar.setInitialUri(displayUri);
+    addressBar.setStatus({donner::editor::AddressBarStatus::kRendered, "OK", displayUri});
     // Re-center the viewport for the new document. Without this, the old
     // zoom/pan leaks across documents and the new SVG (which may have
     // very different viewBox dimensions) can render offscreen or at a

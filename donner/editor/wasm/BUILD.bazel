@@ -28,6 +28,7 @@ _EDITOR_WASM_RUNTIME_DEPS = [
     "//donner/editor:editor_backend_client_inprocess",
     "//donner/editor:editor_icon",
     "//donner/editor:editor_splash",
+    "//donner/editor:local_path_display",
     "//donner/editor:pinch_event_monitor",
     "//donner/editor:resource_policy",
     "//donner/editor:selection_aabb",

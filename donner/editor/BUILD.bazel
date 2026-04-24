@@ -168,6 +168,7 @@ _EDITOR_RUNTIME_DEPS = [
     ":editor_backend_client",
     ":editor_icon",
     ":editor_splash",
+    ":local_path_display",
     ":pinch_event_monitor",
     ":resource_policy",
     ":svg_fetcher",
@@ -368,6 +369,15 @@ donner_cc_library(
     name = "content_sniffer",
     srcs = ["ContentSniffer.cc"],
     hdrs = ["ContentSniffer.h"],
+    deps = [],
+)
+
+# Cosmetic URI → display-string helper. Rewrites absolute paths inside
+# the editor's cwd to `./relative`, leaves http(s)/data URIs alone.
+donner_cc_library(
+    name = "local_path_display",
+    srcs = ["LocalPathDisplay.cc"],
+    hdrs = ["LocalPathDisplay.h"],
     deps = [],
 )
 
