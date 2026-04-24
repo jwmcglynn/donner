@@ -1,4 +1,4 @@
-#include "donner/editor/LocalPathDisplay.h"
+#include "donner/editor/LocalPathDisplay.h"  // IWYU pragma: keep
 
 #include <gtest/gtest.h>
 

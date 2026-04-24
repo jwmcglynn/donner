@@ -3,6 +3,10 @@
 #include <iostream>
 #include <utility>
 
+#include "donner/editor/AddressBar.h"
+#include "donner/editor/AddressBarStatus.h"
+#include "donner/editor/SvgFetcher.h"
+
 namespace donner::editor {
 
 namespace {

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "donner/editor/AddressBar.h"
+#include "donner/editor/AddressBarStatus.h"
 #include "imgui.h"
 
 namespace donner::editor {

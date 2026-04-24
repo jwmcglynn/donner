@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "imgui.h"
 
 namespace donner::editor::repro {
 

@@ -1,7 +1,7 @@
 #include "donner/editor/backend_lib/SourceSync.h"
 
-#include "donner/editor/backend_lib/ChangeClassifier.h"
-#include "donner/editor/backend_lib/EditorCommand.h"
+#include "donner/editor/backend_lib/ChangeClassifier.h"  // IWYU pragma: keep
+#include "donner/editor/backend_lib/EditorCommand.h"     // IWYU pragma: keep
 
 namespace donner::editor {
 

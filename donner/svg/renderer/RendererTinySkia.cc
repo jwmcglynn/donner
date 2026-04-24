@@ -22,6 +22,7 @@
 #endif
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/resources/FontManager.h"

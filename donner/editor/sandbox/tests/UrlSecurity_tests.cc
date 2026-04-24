@@ -1,7 +1,9 @@
 #include "donner/editor/sandbox/UrlSecurity.h"
 
-#include <arpa/inet.h>
+#include <arpa/inet.h>  // IWYU pragma: keep
 #include <gtest/gtest.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 namespace donner::editor::sandbox::url_security {
 namespace {

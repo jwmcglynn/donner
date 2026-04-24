@@ -1,6 +1,8 @@
 #include "donner/editor/backend_lib/SelectTool.h"
 
+#include "donner/base/Box.h"
 #include "donner/editor/backend_lib/EditorApp.h"
+#include "donner/editor/backend_lib/Tool.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "gtest/gtest.h"

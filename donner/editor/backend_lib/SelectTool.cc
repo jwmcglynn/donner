@@ -6,17 +6,21 @@
 #include <span>
 #include <vector>
 
-#include "donner/base/RcString.h"
+#include "donner/base/Box.h"
+#include "donner/base/RcString.h"  // IWYU pragma: keep
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/editor/SelectionAabb.h"
-#include "donner/editor/backend_lib/AttributeWriteback.h"
+#include "donner/editor/SelectionAabb.h"                   // IWYU pragma: keep
+#include "donner/editor/backend_lib/AttributeWriteback.h"  // IWYU pragma: keep
 #include "donner/editor/backend_lib/EditorApp.h"
-#include "donner/editor/backend_lib/EditorCommand.h"
+#include "donner/editor/backend_lib/EditorCommand.h"  // IWYU pragma: keep
+#include "donner/editor/backend_lib/Tool.h"
 #include "donner/editor/backend_lib/UndoTimeline.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGGeometryElement.h"  // IWYU pragma: keep
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/SVGSVGElement.h"  // IWYU pragma: keep
 
 namespace donner::editor {
 

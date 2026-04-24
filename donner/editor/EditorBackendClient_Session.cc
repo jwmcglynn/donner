@@ -10,10 +10,15 @@
 #include <mutex>
 #include <thread>
 
+#include "donner/base/Vector2.h"
+#include "donner/editor/AddressBarStatus.h"
 #include "donner/editor/EditorBackendClient.h"
+#include "donner/editor/SelectionOverlay.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/SandboxSession.h"
 #include "donner/editor/sandbox/SessionCodec.h"
+#include "donner/editor/sandbox/SessionProtocol.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {

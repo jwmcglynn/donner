@@ -33,6 +33,7 @@
 
 #include <cstring>
 
+#include "donner/base/Vector2.h"
 #include "donner/editor/sandbox/bridge/BridgeTexture.h"
 
 namespace donner::editor::sandbox::bridge {

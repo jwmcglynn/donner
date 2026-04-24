@@ -1,6 +1,5 @@
 #include "donner/editor/backend_lib/UndoTimeline.h"
 
-#include "donner/editor/backend_lib/AttributeWriteback.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {

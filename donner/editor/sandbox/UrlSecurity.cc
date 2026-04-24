@@ -1,5 +1,7 @@
 #include "donner/editor/sandbox/UrlSecurity.h"
 
+#include <netinet/in.h>
+
 namespace donner::editor::sandbox::url_security {
 
 bool IsPrivateIPv4(std::uint32_t h) {

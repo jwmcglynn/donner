@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "donner/editor/ViewportState.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGGeometryElement.h"
 

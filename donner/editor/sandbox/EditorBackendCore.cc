@@ -6,17 +6,25 @@
 #include <span>
 #include <sstream>
 
+#include "donner/base/Box.h"
+#include "donner/base/EcsRegistry.h"
+#include "donner/base/RcString.h"
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/OverlayRenderer.h"
-#include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SelectionAabb.h"  // IWYU pragma: keep
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/backend_lib/AttributeWriteback.h"
-#include "donner/editor/backend_lib/EditorCommand.h"
+#include "donner/editor/backend_lib/SelectTool.h"
+#include "donner/editor/backend_lib/Tool.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/SessionProtocol.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/SVGGeometryElement.h"
-#include "donner/svg/properties/Property.h"
+#include "donner/svg/compositor/ScopedCompositorHint.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor::sandbox {
 

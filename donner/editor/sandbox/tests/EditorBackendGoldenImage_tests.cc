@@ -61,19 +61,23 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
-#include "donner/editor/sandbox/ReplayingRenderer.h"
+#include "donner/editor/sandbox/SessionProtocol.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/SVGGraphicsElement.h"  // IWYU pragma: keep
+#include "donner/svg/parser/SVGParser.h"    // IWYU pragma: keep
 #include "donner/svg/renderer/Renderer.h"
-#include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererImageIO.h"  // IWYU pragma: keep
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor::sandbox {
 namespace {

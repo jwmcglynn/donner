@@ -15,6 +15,7 @@
 #include <linux/bpf_common.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
+#include <linux/types.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 

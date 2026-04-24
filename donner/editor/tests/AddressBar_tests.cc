@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/editor/AddressBar.h"
+#include "donner/editor/AddressBarStatus.h"
 
 namespace donner::editor {
 namespace {

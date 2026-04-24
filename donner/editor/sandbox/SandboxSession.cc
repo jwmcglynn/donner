@@ -4,6 +4,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <thread>
 
+#include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SessionCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"
 

@@ -8,7 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererImageIO.h"  // IWYU pragma: keep
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "gtest/gtest.h"
 

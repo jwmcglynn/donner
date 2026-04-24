@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
@@ -28,25 +29,31 @@
 #include <future>
 #include <iostream>
 #include <optional>
+#include <ratio>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/ParseDiagnostic.h"
-#include "donner/base/Transform.h"
 #include "donner/base/Utf8.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/AddressBar.h"
 #include "donner/editor/AddressBarDispatcher.h"
-#include "donner/editor/ContentSniffer.h"
+#include "donner/editor/AddressBarStatus.h"
+#include "donner/editor/ContentSniffer.h"  // IWYU pragma: keep
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
-#include "donner/editor/LocalPathDisplay.h"
+#include "donner/editor/LocalPathDisplay.h"  // IWYU pragma: keep
 #include "donner/editor/Notice.h"
-#include "donner/editor/PinchEventMonitor.h"
+#include "donner/editor/PinchEventMonitor.h"  // IWYU pragma: keep
+#include "donner/editor/backend_lib/RenderPaneGesture.h"
+#include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/repro/ReproRecorder.h"
-#include "donner/editor/sandbox/bridge/BridgeTexture.h"
+#include "donner/editor/sandbox/SandboxHost.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"  // IWYU pragma: keep
 #ifndef __EMSCRIPTEN__
 // The desktop address-bar stack uses `SvgSource` + `ResourceGatekeeper` to
 // enforce the local resource policy before shelling out to `curl`. On WASM
@@ -56,13 +63,13 @@
 #include "donner/editor/ResourcePolicy.h"
 #include "donner/editor/sandbox/SvgSource.h"
 #endif
-#include "donner/editor/SelectionOverlay.h"
 #include "donner/editor/SvgFetcher.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditor.h"
-#include "donner/editor/TracyWrapper.h"
 #include "donner/editor/ViewportState.h"
-#include "donner/svg/renderer/PixelFormatUtils.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep
+#include "donner/svg/renderer/RendererInterface.h"
+#include "tracy/Tracy.hpp"
 
 // The session-backed (subprocess sandbox) backend ships on both desktop
 // platforms (Linux + macOS). `donner/editor/sandbox:session` is gated to

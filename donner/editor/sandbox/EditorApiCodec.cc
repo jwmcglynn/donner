@@ -8,6 +8,9 @@
 
 #include <cstring>
 
+#include "donner/editor/sandbox/SessionProtocol.h"
+#include "donner/editor/sandbox/Wire.h"
+
 namespace donner::editor::sandbox {
 
 namespace {

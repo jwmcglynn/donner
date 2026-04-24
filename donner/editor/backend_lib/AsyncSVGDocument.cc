@@ -3,7 +3,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/compositor/CompositorController.h"  // IWYU pragma: keep
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {

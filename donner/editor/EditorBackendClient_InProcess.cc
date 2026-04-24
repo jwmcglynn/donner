@@ -7,8 +7,14 @@
 ///
 /// See docs/design_docs/0023-editor_sandbox.md §S9.
 
+#include "donner/base/Vector2.h"
+#include "donner/editor/AddressBarStatus.h"
 #include "donner/editor/EditorBackendClient.h"
+#include "donner/editor/SelectionOverlay.h"
+#include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
+#include "donner/editor/sandbox/SessionProtocol.h"
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {

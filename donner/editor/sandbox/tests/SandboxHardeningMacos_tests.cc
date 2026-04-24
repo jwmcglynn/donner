@@ -23,7 +23,7 @@
 /// editor host (not by bazel), so the profile applies cleanly and the
 /// syscall deny-list this file documents is what users actually get.
 
-#include "donner/editor/sandbox/SandboxHardening.h"
+#include "donner/editor/sandbox/SandboxHardening.h"  // IWYU pragma: keep
 
 #if defined(__APPLE__)
 

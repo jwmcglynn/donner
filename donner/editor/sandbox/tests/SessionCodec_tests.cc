@@ -6,8 +6,11 @@
 #include "donner/editor/sandbox/SessionCodec.h"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <cstring>
+
+#include "donner/editor/sandbox/SessionProtocol.h"
 
 namespace donner::editor::sandbox {
 namespace {

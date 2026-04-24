@@ -5,6 +5,9 @@
 #include <utility>
 #include <vector>
 
+#include "donner/editor/AddressBar.h"
+#include "donner/editor/SvgFetcher.h"
+
 namespace donner::editor {
 namespace {
 

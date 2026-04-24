@@ -4,9 +4,12 @@
 
 #include <cmath>
 
+#include "donner/base/Box.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/backend_lib/SelectTool.h"
+#include "donner/editor/backend_lib/Tool.h"
 
 namespace donner::editor {
 namespace {

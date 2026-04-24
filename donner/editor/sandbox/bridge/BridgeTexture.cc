@@ -1,5 +1,7 @@
 #include "donner/editor/sandbox/bridge/BridgeTexture.h"
 
+#include "donner/base/Vector2.h"
+
 /// @file
 ///
 /// Phase-A CPU-stub implementation. Always reports `ready() == false`

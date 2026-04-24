@@ -17,7 +17,6 @@
 
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/SessionCodec.h"
-#include "donner/editor/sandbox/SessionProtocol.h"
 
 namespace donner::editor::sandbox {
 

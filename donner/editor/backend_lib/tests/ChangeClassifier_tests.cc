@@ -1,4 +1,4 @@
-#include "donner/editor/backend_lib/ChangeClassifier.h"
+#include "donner/editor/backend_lib/ChangeClassifier.h"  // IWYU pragma: keep
 
 #include <gtest/gtest.h>
 

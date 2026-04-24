@@ -3,8 +3,10 @@
 #include <array>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TracyWrapper.h"

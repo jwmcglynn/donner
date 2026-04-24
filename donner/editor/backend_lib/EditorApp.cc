@@ -1,7 +1,5 @@
 #include "donner/editor/backend_lib/EditorApp.h"
 
-#include "donner/editor/backend_lib/AttributeWriteback.h"
-
 namespace donner::editor {
 
 namespace {
