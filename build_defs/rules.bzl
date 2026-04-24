@@ -119,15 +119,16 @@ def libc_compat_deps():
     Returns extra deps needed when linking against the hermetic LLVM toolchain
     on Linux.
 
-    Chromium's Debian Bullseye sysroot (wired into `llvm_toolchain` via
-    `//third_party/bazel/non_bcr_deps.bzl`) exports `copy_file_range@GLIBC_2.27`
-    as a non-default-versioned symbol, so unversioned references from
-    `toolchains_llvm`'s prebuilt libc++.a don't auto-resolve. The tiny shim in
-    `//third_party/libc_compat` provides an unversioned `copy_file_range`
-    that forwards to the versioned glibc entry point.
+    The LLVM 21 toolchain (`@llvm_linux_x86_64` / `@llvm_linux_aarch64`) is
+    registered unconditionally in `MODULE.bazel` — the historical
+    `--config=latest_llvm` flag no longer gates it. Its prebuilt `libc++.a`
+    references `copy_file_range` as an unversioned symbol, and Chromium's
+    Debian Bullseye sysroot only exports `copy_file_range@GLIBC_2.27`, so
+    the link fails without this shim. Always inject it on Linux regardless
+    of the legacy `llvm_latest` flag state.
     """
     return select({
-        "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
+        "@platforms//os:linux": ["//third_party/libc_compat:libc_compat"],
         "//conditions:default": [],
     })
 
