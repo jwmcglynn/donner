@@ -163,5 +163,54 @@ TEST_F(AddressBarDispatcherTest, PumpIsNoOpWhenNothingPending) {
   EXPECT_TRUE(loads_.empty());
 }
 
+// Regression gate for the on-demand render loop: the editor's main loop
+// reads `isFetchInFlight()` to decide whether to keep polling while a
+// URI fetch is in progress. If this returned false during a pending
+// fetch the loop would go idle, the completion callback would land on
+// a tick no one was listening to, and the loading chip would stall.
+TEST_F(AddressBarDispatcherTest, IsFetchInFlightReflectsActiveHandle) {
+  EXPECT_FALSE(dispatcher_.isFetchInFlight());
+
+  // Kick off a fetch that the fake fetcher leaves pending.
+  bar_.notifyDropPayload("https://slow.example/foo.svg", {});
+  dispatcher_.pump();
+  EXPECT_TRUE(dispatcher_.isFetchInFlight());
+
+  // Now resolve it by firing the stored callback with some bytes.
+  ASSERT_EQ(fetcher_.pendingCallbacks.size(), 1u);
+  auto cb = std::move(fetcher_.pendingCallbacks.begin()->second);
+  fetcher_.pendingCallbacks.clear();
+  cb(FetchBytes{{0x3C, 0x73, 0x76, 0x67}, {}, "https://slow.example/foo.svg"}, std::nullopt);
+  EXPECT_FALSE(dispatcher_.isFetchInFlight());
+}
+
+TEST_F(AddressBarDispatcherTest, IsFetchInFlightClearsAfterAsyncSuccess) {
+  // Async success path: fetch leaves callback pending, then we resolve it
+  // later — mirrors the real WASM / HTTP fetcher where bytes arrive on a
+  // later tick.
+  bar_.notifyDropPayload("https://slow.example/ok.svg", {});
+  dispatcher_.pump();
+  EXPECT_TRUE(dispatcher_.isFetchInFlight());
+
+  ASSERT_EQ(fetcher_.pendingCallbacks.size(), 1u);
+  auto cb = std::move(fetcher_.pendingCallbacks.begin()->second);
+  fetcher_.pendingCallbacks.clear();
+  cb(FetchBytes{{0x3C, 0x73, 0x76, 0x67}, {}, "https://slow.example/ok.svg"}, std::nullopt);
+  EXPECT_FALSE(dispatcher_.isFetchInFlight());
+}
+
+TEST_F(AddressBarDispatcherTest, IsFetchInFlightClearsAfterAsyncError) {
+  // Async error path — same reasoning as the success case.
+  bar_.notifyDropPayload("https://slow.example/err.svg", {});
+  dispatcher_.pump();
+  EXPECT_TRUE(dispatcher_.isFetchInFlight());
+
+  ASSERT_EQ(fetcher_.pendingCallbacks.size(), 1u);
+  auto cb = std::move(fetcher_.pendingCallbacks.begin()->second);
+  fetcher_.pendingCallbacks.clear();
+  cb(std::nullopt, FetchError{FetchError::Kind::kNetworkError, "timed out", {}});
+  EXPECT_FALSE(dispatcher_.isFetchInFlight());
+}
+
 }  // namespace
 }  // namespace donner::editor

@@ -46,6 +46,17 @@ public:
   /// Update the status chip shown next to the URL input.
   void setStatus(AddressBarStatusChip chip);
 
+  /// True while the widget is drawing a continuously-animating indicator
+  /// (the indeterminate load-progress slider below the input row). The
+  /// editor's on-demand render loop reads this to decide whether the
+  /// frame counts as "busy" — animated widgets must re-render every frame
+  /// even without input, otherwise the animation freezes. Returns false
+  /// for determinate progress (a static percentage bar) and for every
+  /// terminal chip state.
+  [[nodiscard]] bool isLoadingAnimationActive() const {
+    return statusChip_.status == AddressBarStatus::kLoading && !loadProgress_.has_value();
+  }
+
   /// Set the current load progress, rendered as a thin bar below the
   /// input row while the chip status is `kLoading`. `nullopt` means
   /// indeterminate (animated slider) — the server didn't announce a

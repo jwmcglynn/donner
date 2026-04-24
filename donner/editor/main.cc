@@ -986,11 +986,125 @@ int main(int argc, char** argv) {
   // ---------------------------------------------------------------------------
   // Main loop
   // ---------------------------------------------------------------------------
+  //
+  // On-demand render loop (restored from commit 07dcd4e0).
+  //
+  // On desktop we block inside `glfwWaitEventsTimeout` while nothing is
+  // happening (no drag, no async frame in flight, no debounced source
+  // change, no address-bar fetch) so the editor idles at ~0 FPS instead
+  // of burning a full 60/120 FPS worth of GL + ImGui + frame-graph
+  // churn. Any mouse / keyboard / focus event wakes the timeout, and
+  // the pinch monitor / any explicit `glfwPostEmptyEvent()` does the
+  // same for event sources that live outside GLFW's own callback
+  // surface. A generous 1-second idle timeout still lets slow polling
+  // work (stalled futures, pending address-bar fetch on WASM where the
+  // completion callback reaches us on a later tick).
+  //
+  // On Emscripten `glfwWaitEvents*` and `glfwPostEmptyEvent` are no-ops
+  // (the browser drives the loop via `requestAnimationFrame`), so the
+  // equivalent idle path is: skip the render/swap path and don't push
+  // a sample into the frame-time ring. The RAF tick still fires, but
+  // we avoid pushing the canvas + the FPS graph forward.
+  constexpr double kIdleWaitTimeoutSeconds = 1.0;
+  // Cursor-blink cadence for the source pane — re-render every ~200ms
+  // while the text editor has focus so the blink cycle (800ms period,
+  // 50% duty) stays animated. Not a full-FPS loop — the waitEvents
+  // timeout gates how often we wake, and the blink only needs a few
+  // frames per second.
+  constexpr double kCursorBlinkWakeSeconds = 0.2;
+  // Set to true at the bottom of each iteration when ImGui's post-frame
+  // signals indicate continuing work (active drag, popup open, input
+  // focus with blinking cursor). Read at the top of the next iteration
+  // so we skip the `waitEventsTimeout` block. Starts true so the first
+  // iteration always renders.
+  bool lastFrameWasActive = true;
+  // Independent of `lastFrameWasActive`: true when the only reason to
+  // keep rendering is the cursor blink. Uses a short timeout instead of
+  // full-speed polling — the editor idles between blinks.
+  bool lastFrameNeededBlinkWake = false;
   while (!glfwWindowShouldClose(window)) {
     ZoneScopedN("main_loop");
-    frameHistory.push(ImGui::GetIO().DeltaTime * 1000.0f);
 
+    // Compute whether anything time-dependent is happening BEFORE we
+    // decide between poll/wait. Signals read here are either external
+    // to ImGui (futures, dispatcher state, the repro recorder) or
+    // physical input state via direct GLFW queries (mouse buttons,
+    // space-to-pan). ImGui-derived focus/drag signals come from the
+    // previous frame via `lastFrameWasActive`.
+    const bool leftMouseHeld = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    const bool middleMouseHeld = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+    const bool rightMouseHeld = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    const bool spaceHeldNow = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+    const bool mouseOrModHeld =
+        leftMouseHeld || middleMouseHeld || rightMouseHeld || spaceHeldNow;
+    // Text-change debounce must keep ticking without user input —
+    // `textDispatchThrottled` stays true from first keystroke through
+    // the debounce expiry, gating the "send the tail edit" replay. If
+    // we went idle mid-debounce the delayed replay would wait forever.
+    const bool debounceTicking =
+        textChangePending || textDispatchThrottled || textChangeIdleTimer > 0.0f;
+    const bool fetchAnimating =
+        addressBar.isLoadingAnimationActive() || addressBarDispatcher.isFetchInFlight();
+    const bool scrollEventsQueued = !pendingScrollEvents.events.empty();
+    const bool reproActive = reproRecorder.has_value();
+    // pendingFrame forces a poll so the future completion (handoff
+    // from the backend/worker thread) is observed without waiting out
+    // the idle timeout. The initial `loadBytes` path runs synchronously
+    // below before the loop starts, so steady-state `pendingFrame`
+    // values only come from the input-driven or viewport-resize paths.
+    const bool needsActive = pendingFrame.has_value() || mouseOrModHeld || debounceTicking ||
+                             fetchAnimating || scrollEventsQueued || reproActive ||
+                             lastFrameWasActive;
+
+#ifndef __EMSCRIPTEN__
+    // `enteredIdlePath` means this iteration unblocked via the idle
+    // wait (timeout or wake from empty-event). We still run the frame
+    // body — any wake may have processed input that needs a re-paint —
+    // but skip the frame-time graph sample so the FPS counter shows
+    // a quiescent low reading instead of a 1000ms "spike" every idle
+    // tick.
+    bool enteredIdlePath = false;
+    if (needsActive) {
+      ZoneScopedN("pollEvents");
+      glfwPollEvents();
+    } else if (lastFrameNeededBlinkWake) {
+      ZoneScopedN("waitEventsTimeout_blink");
+      glfwWaitEventsTimeout(kCursorBlinkWakeSeconds);
+      enteredIdlePath = true;
+    } else {
+      ZoneScopedN("waitEventsTimeout");
+      glfwWaitEventsTimeout(kIdleWaitTimeoutSeconds);
+      enteredIdlePath = true;
+    }
+    if (experimentalMode) {
+      static bool lastReportedIdle = false;
+      if (enteredIdlePath != lastReportedIdle) {
+        std::fprintf(stderr, "[loop] %s\n", enteredIdlePath ? "idle (waitEvents)"
+                                                             : "active (pollEvents)");
+        lastReportedIdle = enteredIdlePath;
+      }
+    }
+#else
+    // WASM: waitEventsTimeout is a no-op; the browser runs us at RAF
+    // cadence regardless. Drop the frame entirely on idle (and on idle-
+    // with-cursor-blink — the browser's own animation frame cadence
+    // takes care of blink cadence for us) so the FPS counter doesn't
+    // tick. Re-rendering a blink at 60 FPS on idle would defeat the
+    // whole point of the on-demand loop.
     glfwPollEvents();
+    if (!needsActive) {
+      // Still yield so emscripten's ASYNCIFY doesn't starve the
+      // browser event loop (would manifest as the canvas freezing
+      // even though we're doing "nothing").
+      emscripten_sleep(0);
+      continue;
+    }
+    constexpr bool enteredIdlePath = false;
+#endif
+
+    if (!enteredIdlePath) {
+      frameHistory.push(ImGui::GetIO().DeltaTime * 1000.0f);
+    }
 
     // Window title.
     {
@@ -1911,6 +2025,36 @@ int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
     emscripten_sleep(0);
 #endif
+
+    // Decide whether the next iteration should poll (fully active),
+    // wake on the cursor-blink cadence (idle-with-focused-source-pane),
+    // or sleep on the full idle timeout (truly idle). We read ImGui's
+    // post-frame interaction state here because these signals aren't
+    // available before `NewFrame` — mouse dragging, active items,
+    // want-text-input, popup-open. The top-of-loop physical-state
+    // signals (mouse buttons, pendingFrame, fetch in flight, debounce
+    // timer, repro recorder) are complementary: they capture everything
+    // that doesn't flow through ImGui's focus model.
+    {
+      const ImGuiIO& lastIo = ImGui::GetIO();
+      const bool anyItemActive = ImGui::IsAnyItemActive();
+      const bool anyMouseDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                                    ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
+                                    ImGui::IsMouseDragging(ImGuiMouseButton_Right);
+      const bool wantTextInput = lastIo.WantTextInput;
+      const bool popupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+      // "Active" = something other than a blinking cursor needs a
+      // render next frame. Drag, popups, and any-item-active all poll
+      // at full speed.
+      lastFrameWasActive = anyItemActive || anyMouseDragging || popupOpen;
+      // Blink-only path: pure focus-without-interaction. A full 60 FPS
+      // wouldn't be wrong but would defeat the on-demand loop for any
+      // SVG author who leaves the source pane focused between edits —
+      // that would trigger the same "idle burn" the historical commit
+      // fixed. The shorter wake cadence (`kCursorBlinkWakeSeconds`)
+      // keeps the blink animated without pinning CPU.
+      lastFrameNeededBlinkWake = wantTextInput && !lastFrameWasActive;
+    }
   }
 
   // ---------------------------------------------------------------------------

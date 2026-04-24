@@ -98,5 +98,43 @@ TEST(AddressBarTest, NotifyDropPayloadOverwritesPrevious) {
   EXPECT_EQ(nav->bytes, (std::vector<uint8_t>{4, 5, 6}));
 }
 
+// Regression gate for the on-demand render loop: `isLoadingAnimationActive()`
+// is read every frame by main.cc to decide whether to keep polling.
+// Default / terminal / determinate-progress chips must NOT register as
+// animating — otherwise the UI would burn CPU at 60 FPS whenever the
+// chip sits on `kRendered` or whenever a downloading chip has a real
+// percentage.
+TEST(AddressBarTest, IsLoadingAnimationActiveFalseByDefault) {
+  AddressBar bar;
+  EXPECT_FALSE(bar.isLoadingAnimationActive());
+}
+
+TEST(AddressBarTest, IsLoadingAnimationActiveTrueForIndeterminateLoading) {
+  AddressBar bar;
+  bar.setStatus({AddressBarStatus::kLoading, "Fetching…", "http://example.com/foo.svg"});
+  bar.setLoadProgress(std::nullopt);
+  EXPECT_TRUE(bar.isLoadingAnimationActive());
+}
+
+TEST(AddressBarTest, IsLoadingAnimationActiveFalseForDeterminateLoading) {
+  AddressBar bar;
+  bar.setStatus({AddressBarStatus::kLoading, "Fetching…", "http://example.com/foo.svg"});
+  bar.setLoadProgress(0.5f);
+  EXPECT_FALSE(bar.isLoadingAnimationActive());
+}
+
+TEST(AddressBarTest, IsLoadingAnimationActiveClearsOnTerminalChip) {
+  AddressBar bar;
+  bar.setStatus({AddressBarStatus::kLoading, "Fetching…", "http://example.com/foo.svg"});
+  bar.setLoadProgress(std::nullopt);
+  EXPECT_TRUE(bar.isLoadingAnimationActive());
+
+  bar.setStatus({AddressBarStatus::kRendered, "OK", "http://example.com/foo.svg"});
+  EXPECT_FALSE(bar.isLoadingAnimationActive());
+
+  bar.setStatus({AddressBarStatus::kFetchError, "timed out", "http://example.com/foo.svg"});
+  EXPECT_FALSE(bar.isLoadingAnimationActive());
+}
+
 }  // namespace
 }  // namespace donner::editor

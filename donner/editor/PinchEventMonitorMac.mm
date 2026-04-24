@@ -53,6 +53,14 @@ bool InstallPinchEventMonitor(GLFWwindow* window, std::vector<RenderPaneScrollEv
                                            .cursorScreen = Vector2d(cursorX, cursorY),
                                            .zoomModifierHeld = true,
                                        });
+                                       // NSEvent magnify events arrive on the Cocoa
+                                       // event loop outside GLFW's input path, so
+                                       // the main thread's `glfwWaitEvents*` won't
+                                       // wake on them on its own. Post an empty
+                                       // GLFW event so the on-demand render loop
+                                       // picks up the enqueued scroll immediately
+                                       // rather than waiting out the idle timeout.
+                                       glfwPostEmptyEvent();
                                      }
 
                                      return nil;

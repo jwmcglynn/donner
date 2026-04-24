@@ -66,6 +66,14 @@ public:
   /// `kParseError` and the message is shown as-is.
   void markParseError(std::string uri, std::string message);
 
+  /// True while a fetch started via `pump()` hasn't resolved (result or
+  /// cancellation) yet. Used by the editor's on-demand render loop so
+  /// the UI keeps polling (instead of blocking on `waitEvents`) while
+  /// bytes are in flight — otherwise the WASM / HTTP async completion
+  /// callback runs on a tick the main thread isn't listening to, and
+  /// the loading chip would sit stale until the next user input.
+  [[nodiscard]] bool isFetchInFlight() const { return activeHandle_.has_value(); }
+
 private:
   void startFetch(std::string uri);
   void onFetchResult(const std::string& uri, std::optional<FetchBytes> bytes,
