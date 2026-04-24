@@ -250,10 +250,9 @@ bool InstallSeccompFilter(HardeningOptions::SeccompDenyAction denyAction) {
   // for ad-hoc allowlist exploration; it returns -EACCES so the
   // program can continue and hit the next missing entry. Don't ship
   // with `kErrno`.
-  const __u32 denyReturn =
-      (denyAction == HardeningOptions::SeccompDenyAction::kErrno)
-          ? (SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA))
-          : SECCOMP_RET_KILL_PROCESS;
+  const __u32 denyReturn = (denyAction == HardeningOptions::SeccompDenyAction::kErrno)
+                               ? (SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA))
+                               : SECCOMP_RET_KILL_PROCESS;
   filter[idx++] = BPF_STMT(BPF_RET | BPF_K, denyReturn);
 
   struct sock_fprog prog {};
