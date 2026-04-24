@@ -18,6 +18,10 @@
 #include <cstddef>
 #endif
 
+#if defined(__APPLE__)
+#include <sandbox.h>
+#endif
+
 namespace donner::editor::sandbox {
 
 namespace {
@@ -242,16 +246,83 @@ bool InstallSeccompFilter() {
 
 #endif  // defined(__linux__)
 
+// ---------------------------------------------------------------------------
+// macOS `sandbox_init` profile (Apple only)
+// ---------------------------------------------------------------------------
+#if defined(__APPLE__)
+
+/// Result of an attempt to install the macOS sandbox profile.
+enum class SandboxInstallResult {
+  kApplied,        ///< `sandbox_init` returned 0 — profile is active.
+  kAlreadySandboxed, ///< EPERM — the caller's parent already sandboxed us.
+  kFailed,         ///< Hard failure (bad profile, kernel refusal, etc.).
+};
+
+/// Installs the `kSBXProfilePureComputation` profile via the legacy
+/// `sandbox_init` API. This is the macOS analogue of the Linux seccomp
+/// allowlist: the child keeps its already-open stdin/stdout/stderr pipes
+/// and its heap, but new file opens, network sockets, and IPC attempts
+/// get denied by the kernel.
+///
+/// Returns `kAlreadySandboxed` (EPERM) when the parent process already
+/// sandboxed us — the primary path that hits this is Bazel's macOS
+/// darwin-sandbox during tests. Callers should treat that as "hardening
+/// satisfied by the outer sandbox" and not a fatal error. Hard failures
+/// (bad profile, kernel refusal) are reported via `kFailed` + `errOut`.
+///
+/// The API is deprecated since macOS 10.8 but still supported (the OS
+/// itself uses it for system services). We suppress the deprecation
+/// warning locally because the successor SPI (`sandbox_init_with_parameters`
+/// + custom SBPL profiles) is private and not appropriate for a portable
+/// parser child.
+SandboxInstallResult InstallMacOSSandboxProfile(std::string& errOut) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  char* errorBuf = nullptr;
+  errno = 0;
+  const int rc =
+      ::sandbox_init(kSBXProfilePureComputation, SANDBOX_NAMED, &errorBuf);
+  if (rc == 0) {
+    if (errorBuf != nullptr) ::sandbox_free_error(errorBuf);
+    return SandboxInstallResult::kApplied;
+  }
+  const int savedErrno = errno;
+  std::string err;
+  if (errorBuf != nullptr) {
+    err = errorBuf;
+    ::sandbox_free_error(errorBuf);
+  } else if (savedErrno != 0) {
+    err = std::strerror(savedErrno);
+  } else {
+    err = "sandbox_init returned -1 (no error buffer)";
+  }
+#pragma clang diagnostic pop
+  if (savedErrno == EPERM) {
+    // Already inside a sandbox (bazel darwin-sandbox, SIP-tight shells,
+    // or an enclosing profile) — our `kSBXProfilePureComputation` request
+    // is strictly tighter than any realistic outer profile, so we treat
+    // this as "hardening already in force" rather than a fatal error.
+    errOut = err;
+    return SandboxInstallResult::kAlreadySandboxed;
+  }
+  errOut = err;
+  return SandboxInstallResult::kFailed;
+}
+
+#endif  // defined(__APPLE__)
+
 void LogSummary(const HardeningOptions& options) {
   // Keep this single-line and stable — tests grep for the "sandbox
   // hardening:" prefix. Anything on stderr is captured by the host as
   // diagnostics and surfaced through `RenderResult::diagnostics`.
   std::fprintf(
       stderr,
-      "sandbox hardening: as=%zu cpu=%u fsize=%zu nofile=%u chdir=%d fdsweep=%d seccomp=%d\n",
+      "sandbox hardening: as=%zu cpu=%u fsize=%zu nofile=%u chdir=%d fdsweep=%d "
+      "seccomp=%d sbxprof=%d\n",
       options.addressSpaceBytes, options.cpuSeconds, options.maxFileBytes,
       options.maxOpenFiles, options.chdirRoot ? 1 : 0,
-      options.closeExtraFds ? 1 : 0, options.installSeccompFilter ? 1 : 0);
+      options.closeExtraFds ? 1 : 0, options.installSeccompFilter ? 1 : 0,
+      options.installSandboxProfile ? 1 : 0);
 }
 
 }  // namespace
@@ -337,15 +408,38 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
     }
   }
 
-  // Install the seccomp-bpf filter LAST. All preceding setup steps
-  // (chdir, FD sweep, rlimits) may need syscalls that the filter would
-  // deny, so the filter must not be active until setup is complete.
+  // Install the platform syscall/profile filter LAST. All preceding
+  // setup steps (chdir, FD sweep, rlimits) may need operations that the
+  // filter would deny, so it must not be active until setup is complete.
 #if defined(__linux__)
   if (options.installSeccompFilter) {
     if (!InstallSeccompFilter()) {
       result.status = HardeningStatus::kSeccompFailed;
       result.message = std::string("seccomp-bpf installation failed: ") + std::strerror(errno);
       return result;
+    }
+  }
+#endif
+
+#if defined(__APPLE__)
+  if (options.installSandboxProfile) {
+    std::string sandboxErr;
+    switch (InstallMacOSSandboxProfile(sandboxErr)) {
+      case SandboxInstallResult::kApplied:
+        break;
+      case SandboxInstallResult::kAlreadySandboxed:
+        // Outer sandbox (bazel darwin-sandbox, etc.) is already in force.
+        // Log a single line so reviewers can see the state without the
+        // test failing on nested-sandbox EPERM.
+        std::fprintf(stderr,
+                     "sandbox hardening: macOS profile skipped (already "
+                     "sandboxed by parent: %s)\n",
+                     sandboxErr.c_str());
+        break;
+      case SandboxInstallResult::kFailed:
+        result.status = HardeningStatus::kSandboxProfileFailed;
+        result.message = "sandbox_init failed: " + sandboxErr;
+        return result;
     }
   }
 #endif

@@ -80,6 +80,13 @@ struct HardeningOptions {
   /// switch to SECCOMP_RET_KILL_PROCESS. On non-Linux platforms this field
   /// is silently ignored.
   bool installSeccompFilter = true;
+
+  /// Install a macOS `sandbox_init` profile (`kSBXProfilePureComputation`)
+  /// as the analogous defense-in-depth layer on macOS. Denies filesystem
+  /// writes, new network connections, mach lookups, etc. — the child
+  /// keeps its inherited stdin/stdout/stderr pipes and heap. On non-macOS
+  /// platforms this field is silently ignored.
+  bool installSandboxProfile = true;
 };
 
 /// Classifies the outcome of `ApplyHardening`. On any non-kOk status the
@@ -91,6 +98,7 @@ enum class HardeningStatus {
   kCloseFdsFailed,        ///< FD sweep failed in a way we can't recover from.
   kResourceLimitFailed,   ///< One of the setrlimit calls failed.
   kSeccompFailed,         ///< seccomp-bpf filter installation failed.
+  kSandboxProfileFailed,  ///< macOS `sandbox_init` returned non-zero.
 };
 
 struct HardeningResult {
