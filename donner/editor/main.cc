@@ -342,6 +342,106 @@ EM_JS(void, InstallBrowserDropHandler, (int maxBytes), {
 
   canvas.__donnerDropInstalled = true;
 });
+
+// --- Test-hook instrumentation (opt-in via `?test=1` in the URL). ---
+//
+// Exists so a Playwright harness can drive the WASM editor deterministically:
+//   - `__donner_ready`   — set once the first frame has rendered.
+//   - `__donner_metrics` — rolling frame-time buffer + poll / render counters.
+//   - `__donner_simulate([{type,x,y,buttons}, ...])` — dispatches synthesized
+//     PointerEvents at canvas-local coords, used by the drag-perf test.
+//
+// The hooks are strictly additive and behind a URL flag, so a normal page
+// launch is byte-for-byte unchanged. See `donner/editor/wasm/tests/README.md`.
+EM_JS(int, DonnerTestHooksEnabled, (), {
+  try {
+    return (new URLSearchParams(location.search).get("test") === "1") ? 1 : 0;
+  } catch (e) {
+    return 0;
+  }
+});
+
+EM_JS(void, DonnerTestHooksInstall, (), {
+  if (window.__donner_test_hooks_installed) {
+    return;
+  }
+  window.__donner_test_hooks_installed = true;
+
+  // Rolling frame-time ring (capacity 240 ~= 4s @ 60 FPS — enough for our
+  // drag-perf window without unbounded growth).
+  const kCapacity = 240;
+  const frameTimesMs = new Float64Array(kCapacity);
+  let frameTimesCount = 0;
+  let frameTimesNext = 0;
+  window.__donner_metrics = {
+    // Arrays are rebuilt on read so callers get a stable snapshot.
+    frameTimesMs: [],
+    pollEventsCount: 0,
+    renderCount: 0,
+    skippedCount: 0,
+    lastFrameTimestampMs: 0,
+    readyTimestampMs: 0,
+  };
+
+  window.__donner_recordLoopTick = function(renderedFlag, frameTimeMs) {
+    const m = window.__donner_metrics;
+    m.pollEventsCount += 1;
+    if (renderedFlag) {
+      m.renderCount += 1;
+      if (frameTimeMs >= 0) {
+        frameTimesMs[frameTimesNext] = frameTimeMs;
+        frameTimesNext = (frameTimesNext + 1) % kCapacity;
+        if (frameTimesCount < kCapacity) { frameTimesCount += 1; }
+        // Rebuild the flat array so reads are O(n) on snapshot, not the hot path.
+        const out = new Array(frameTimesCount);
+        for (let i = 0; i < frameTimesCount; ++i) {
+          const idx = (frameTimesNext - frameTimesCount + i + kCapacity) % kCapacity;
+          out[i] = frameTimesMs[idx];
+        }
+        m.frameTimesMs = out;
+      }
+      m.lastFrameTimestampMs = performance.now();
+    } else {
+      m.skippedCount += 1;
+    }
+  };
+
+  // Synthesized-event injection. Keyed off pointer events so we exercise
+  // the exact CSS touch-events / pointer-events wiring the real browser
+  // uses — the whole reason this harness exists.
+  window.__donner_simulate = function(events) {
+    const canvas = Module.canvas || document.getElementById("canvas");
+    if (!canvas) { return false; }
+    const rect = canvas.getBoundingClientRect();
+    for (const ev of events) {
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: ev.pointerId || 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        clientX: rect.left + ev.x,
+        clientY: rect.top + ev.y,
+        button: (ev.type === "pointerdown" || ev.type === "pointerup") ? 0 : -1,
+        buttons: (ev.buttons === undefined) ? 1 : ev.buttons,
+      };
+      canvas.dispatchEvent(new PointerEvent(ev.type, init));
+    }
+    return true;
+  };
+});
+
+EM_JS(void, DonnerTestHooksMarkReady, (), {
+  if (!window.__donner_test_hooks_installed) { return; }
+  window.__donner_metrics.readyTimestampMs = performance.now();
+  window.__donner_ready = true;
+});
+
+EM_JS(void, DonnerTestHooksRecordLoopTick, (int rendered, double frameTimeMs), {
+  if (!window.__donner_test_hooks_installed) { return; }
+  window.__donner_recordLoopTick(rendered !== 0, frameTimeMs);
+});
 #endif
 // clang-format on
 
@@ -488,6 +588,14 @@ int main(int argc, char** argv) {
   std::optional<std::string> reproOutputPath;
 
 #ifdef __EMSCRIPTEN__
+  // Opt-in Playwright test harness hooks (`?test=1` in the URL). Installing
+  // here (before GLFW / ImGui / canvas attach) means `window.__donner_*` is
+  // visible to the test runner from the first tick; `__donner_ready` flips
+  // to true once the first frame has been swapped (see the main loop).
+  const bool testHooksEnabled = DonnerTestHooksEnabled() != 0;
+  if (testHooksEnabled) {
+    DonnerTestHooksInstall();
+  }
   const std::string initialSource = EmbeddedBytesToString(donner::embedded::kEditorIconSvg);
   const std::optional<std::string> initialPath = std::string("donner_icon.svg");
 #else
@@ -1096,6 +1204,10 @@ int main(int argc, char** argv) {
       // Still yield so emscripten's ASYNCIFY doesn't starve the
       // browser event loop (would manifest as the canvas freezing
       // even though we're doing "nothing").
+      if (testHooksEnabled) {
+        // `rendered=0` so test harness sees the skip cadence, not a frame.
+        DonnerTestHooksRecordLoopTick(0, -1.0);
+      }
       emscripten_sleep(0);
       continue;
     }
@@ -2023,6 +2135,20 @@ int main(int argc, char** argv) {
     glfwSwapBuffers(window);
     FrameMark;
 #ifdef __EMSCRIPTEN__
+    if (testHooksEnabled) {
+      // Record the rendered frame time in ms. We use ImGui's `DeltaTime`
+      // (seconds) — same source as the in-editor FPS graph — so the test
+      // harness and the on-screen diag are reading from the same clock.
+      DonnerTestHooksRecordLoopTick(1, static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0);
+      // Flip `__donner_ready` on the first successfully rendered frame
+      // that followed the initial (synchronous) `loadBytes`. Done once,
+      // cheaply: the JS side guards `__donner_ready` itself.
+      static bool markedReady = false;
+      if (!markedReady) {
+        DonnerTestHooksMarkReady();
+        markedReady = true;
+      }
+    }
     emscripten_sleep(0);
 #endif
 
