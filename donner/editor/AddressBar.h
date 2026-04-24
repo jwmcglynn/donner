@@ -46,6 +46,12 @@ public:
   /// Update the status chip shown next to the URL input.
   void setStatus(AddressBarStatusChip chip);
 
+  /// Set the current load progress, rendered as a thin bar below the
+  /// input row while the chip status is `kLoading`. `nullopt` means
+  /// indeterminate (animated slider) — the server didn't announce a
+  /// Content-Length. Otherwise a fraction in [0, 1].
+  void setLoadProgress(std::optional<float> fraction);
+
   /// Seed the input with a URI (e.g. argv[1] on desktop launch). The
   /// caller is expected to immediately dispatch a navigation for it.
   void setInitialUri(std::string_view uri);
@@ -68,6 +74,9 @@ private:
 
   std::vector<char> inputBuffer_;
   AddressBarStatusChip statusChip_;
+  /// Current load fraction, or `nullopt` for indeterminate. Read each
+  /// frame when rendering the progress bar; written by callers.
+  std::optional<float> loadProgress_;
   std::deque<std::string> history_;
   std::optional<AddressBarNavigation> pending_;
   bool focusNextFrame_ = false;

@@ -32,7 +32,11 @@ public:
                  bool autoGrantFirstUse)
       : gatekeeper_(gatekeeper), source_(source), autoGrantFirstUse_(autoGrantFirstUse) {}
 
-  FetchHandle fetch(std::string_view uri, FetchCallback cb) override {
+  FetchHandle fetch(std::string_view uri, FetchCallback cb,
+                    FetchProgressCallback /*progressCb*/ = {}) override {
+    // The desktop fetcher is synchronous (shell-out curl); per-chunk
+    // progress updates aren't available. Progress observers will see
+    // `kLoading` flip to done atomically.
     const FetchHandle handle = nextHandle_.fetch_add(1, std::memory_order_relaxed);
 
     // Step 1: Policy check.

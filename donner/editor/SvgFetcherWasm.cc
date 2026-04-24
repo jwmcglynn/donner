@@ -38,6 +38,7 @@ class WasmSvgFetcher;
 struct FetchCtx {
   FetchHandle handle = 0;
   FetchCallback cb;
+  FetchProgressCallback progressCb;
   std::string uri;
   /// Weak back-pointer to the owning fetcher. Set to `nullptr` on destruction
   /// of the fetcher to make late-firing callbacks safe (defensive; close should
@@ -60,7 +61,8 @@ public:
     }
   }
 
-  FetchHandle fetch(std::string_view uri, FetchCallback cb) override {
+  FetchHandle fetch(std::string_view uri, FetchCallback cb,
+                    FetchProgressCallback progressCb = {}) override {
     const FetchHandle handle = nextHandle_++;
 
     // Validate scheme: only http:// and https:// are allowed in the WASM
@@ -77,6 +79,7 @@ public:
     auto ctx = std::make_unique<FetchCtx>();
     ctx->handle = handle;
     ctx->cb = std::move(cb);
+    ctx->progressCb = std::move(progressCb);
     ctx->uri = std::string(uri);
     ctx->owner = this;
     FetchCtx* rawCtx = ctx.get();
@@ -87,6 +90,7 @@ public:
     attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_REPLACE;
     attr.onsuccess = &WasmSvgFetcher::OnSuccess;
     attr.onerror = &WasmSvgFetcher::OnError;
+    attr.onprogress = &WasmSvgFetcher::OnProgress;
     attr.userData = rawCtx;
 
     emscripten_fetch_t* emFetch = emscripten_fetch(&attr, rawCtx->uri.c_str());
@@ -154,6 +158,20 @@ private:
     }
 
     emscripten_fetch_close(emFetch);
+  }
+
+  /// C-callable trampoline: per-chunk progress tick from emscripten_fetch.
+  /// `emFetch->dataOffset + emFetch->numBytes` is the running byte count
+  /// (dataOffset is 0 under LOAD_TO_MEMORY, but staying explicit keeps
+  /// this correct if the mode ever changes). `emFetch->totalBytes` is
+  /// zero when Content-Length is absent — surfaced verbatim so the
+  /// observer renders an indeterminate bar.
+  static void OnProgress(emscripten_fetch_t* emFetch) {
+    auto* ctx = static_cast<FetchCtx*>(emFetch->userData);
+    if (ctx->owner && ctx->progressCb) {
+      const uint64_t received = emFetch->dataOffset + emFetch->numBytes;
+      ctx->progressCb(received, emFetch->totalBytes);
+    }
   }
 
   /// C-callable trampoline: failed fetch.

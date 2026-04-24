@@ -13,13 +13,20 @@ namespace {
 /// success/error branches are covered without network I/O.
 class FakeFetcher : public SvgFetcher {
 public:
-  FetchHandle fetch(std::string_view uri, FetchCallback cb) override {
+  FetchHandle fetch(std::string_view uri, FetchCallback cb,
+                    FetchProgressCallback progressCb = {}) override {
     ++fetchCalls;
     lastUri.assign(uri);
     const FetchHandle handle = nextHandle_++;
     if (nextBytes.has_value()) {
       FetchBytes payload = std::move(*nextBytes);
       nextBytes.reset();
+      // Emit a simulated "fully downloaded" progress tick right before
+      // completion so tests of the progress pathway have something to
+      // observe.
+      if (progressCb && nextProgressTotal > 0) {
+        progressCb(nextProgressTotal, nextProgressTotal);
+      }
       cb(std::move(payload), std::nullopt);
     } else if (nextError.has_value()) {
       FetchError err = std::move(*nextError);
@@ -28,6 +35,7 @@ public:
     } else {
       // Leave the handle live so cancellation paths can be tested.
       pendingCallbacks[handle] = std::move(cb);
+      pendingProgressCallbacks[handle] = std::move(progressCb);
     }
     return handle;
   }
@@ -36,6 +44,7 @@ public:
     ++cancelCalls;
     lastCancelledHandle = h;
     pendingCallbacks.erase(h);
+    pendingProgressCallbacks.erase(h);
   }
 
   int fetchCalls = 0;
@@ -44,7 +53,9 @@ public:
   FetchHandle lastCancelledHandle = 0;
   std::optional<FetchBytes> nextBytes;
   std::optional<FetchError> nextError;
+  uint64_t nextProgressTotal = 0;
   std::unordered_map<FetchHandle, FetchCallback> pendingCallbacks;
+  std::unordered_map<FetchHandle, FetchProgressCallback> pendingProgressCallbacks;
 
 private:
   FetchHandle nextHandle_ = 1;

@@ -5,6 +5,7 @@
 #include "donner/editor/AddressBar.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -66,6 +67,47 @@ bool AddressBar::draw() {
     }
   }
 
+  // Load progress bar. Rendered on its own thin strip below the input
+  // row while `kLoading`. Fraction in [0,1] → fills left-to-right.
+  // `nullopt` → indeterminate mode: a sliding segment animates across
+  // the bar so users get "something is happening" feedback when the
+  // server didn't announce a Content-Length (or on desktop where the
+  // fetcher is synchronous and we never get intermediate progress).
+  if (statusChip_.status == AddressBarStatus::kLoading) {
+    constexpr float kBarHeight = 3.0f;
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const ImU32 bgColor = IM_COL32(40, 44, 52, 255);
+    const ImU32 fgColor = IM_COL32(80, 180, 240, 255);
+
+    drawList->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + kBarHeight), bgColor);
+
+    if (loadProgress_.has_value()) {
+      const float frac = std::clamp(*loadProgress_, 0.0f, 1.0f);
+      drawList->AddRectFilled(
+          origin, ImVec2(origin.x + width * frac, origin.y + kBarHeight), fgColor);
+    } else {
+      // Indeterminate: 30%-wide segment sliding across on a 1.5s cycle.
+      constexpr float kCycleSeconds = 1.5f;
+      constexpr float kSegmentFrac = 0.3f;
+      const float t = std::fmod(static_cast<float>(ImGui::GetTime()), kCycleSeconds) / kCycleSeconds;
+      const float segmentWidth = width * kSegmentFrac;
+      // Travel from -segmentWidth to `width` so the segment fully enters
+      // and fully exits, giving a cleaner "wiping across" feel than a
+      // clamped slide.
+      const float xStart = t * (width + segmentWidth) - segmentWidth;
+      const float x0 = std::max(xStart, 0.0f);
+      const float x1 = std::min(xStart + segmentWidth, width);
+      if (x1 > x0) {
+        drawList->AddRectFilled(ImVec2(origin.x + x0, origin.y),
+                                ImVec2(origin.x + x1, origin.y + kBarHeight), fgColor);
+      }
+    }
+
+    ImGui::Dummy(ImVec2(width, kBarHeight + 2.0f));
+  }
+
   // Status chip. Rendered on its own line below the input / button row
   // with text wrapping. The previous right-of-button layout truncated
   // on narrow windows — long messages like "Got an HTML page, not an
@@ -106,6 +148,10 @@ std::optional<AddressBarNavigation> AddressBar::consumeNavigation() {
 
 void AddressBar::setStatus(AddressBarStatusChip chip) {
   statusChip_ = std::move(chip);
+}
+
+void AddressBar::setLoadProgress(std::optional<float> fraction) {
+  loadProgress_ = fraction;
 }
 
 void AddressBar::setInitialUri(std::string_view uri) {

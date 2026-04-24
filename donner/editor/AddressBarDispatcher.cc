@@ -72,11 +72,22 @@ void AddressBarDispatcher::startFetch(std::string uri) {
   }
 
   addressBar_.setStatus({AddressBarStatus::kLoading, "Fetching…", uri});
+  // Indeterminate while the first progress tick (or completion) arrives.
+  addressBar_.setLoadProgress(std::nullopt);
 
-  const FetchHandle handle =
-      fetcher_.fetch(uri, [this, uri](std::optional<FetchBytes> bytes,
-                                      std::optional<FetchError> err) {
+  const FetchHandle handle = fetcher_.fetch(
+      uri,
+      [this, uri](std::optional<FetchBytes> bytes, std::optional<FetchError> err) {
         onFetchResult(uri, std::move(bytes), std::move(err));
+      },
+      [this](uint64_t received, uint64_t total) {
+        // Only switch to determinate mode once the server confirms a
+        // total. Some servers stream without a Content-Length — keep
+        // the indeterminate slider for those rather than pinning to 0.
+        if (total > 0) {
+          addressBar_.setLoadProgress(static_cast<float>(received) /
+                                       static_cast<float>(total));
+        }
       });
   activeHandle_ = handle;
 }
@@ -84,6 +95,11 @@ void AddressBarDispatcher::startFetch(std::string uri) {
 void AddressBarDispatcher::onFetchResult(const std::string& uri, std::optional<FetchBytes> bytes,
                                          std::optional<FetchError> err) {
   activeHandle_.reset();
+  // Clear the progress bar — the chip is about to transition to a
+  // terminal status (kRendered / kFetchError / etc.), which hides the
+  // bar regardless, but clearing here keeps the next `startFetch` from
+  // inheriting a stale value.
+  addressBar_.setLoadProgress(std::nullopt);
 
   if (bytes.has_value()) {
     std::cerr << "[addrbar] fetch ok bytes=" << bytes->bytes.size() << " uri=" << uri << "\n";

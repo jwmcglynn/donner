@@ -56,15 +56,24 @@ struct FetchError {
 /// Callback invoked when a fetch completes. Exactly one of the optionals is populated.
 using FetchCallback = std::function<void(std::optional<FetchBytes>, std::optional<FetchError>)>;
 
+/// Progress hint invoked zero-or-more times during a fetch. `totalBytes`
+/// is `0` when the server didn't announce a Content-Length and the total
+/// is unknown — observers should render indeterminate progress in that
+/// case. Called on the same thread as `FetchCallback`.
+using FetchProgressCallback = std::function<void(uint64_t bytesReceived, uint64_t totalBytes)>;
+
 /// Abstract interface for fetching SVG resources from a URI.
 class SvgFetcher {
 public:
   virtual ~SvgFetcher() = default;
 
   /// Initiates a fetch for `uri`. The `cb` is invoked with the result
-  /// (possibly synchronously). Returns a handle that can be passed to
-  /// `cancel()`.
-  virtual FetchHandle fetch(std::string_view uri, FetchCallback cb) = 0;
+  /// (possibly synchronously). Optional `progressCb` receives per-chunk
+  /// byte-counter updates for async fetchers; synchronous fetchers may
+  /// ignore it (their callers see progress as 0 → done atomically).
+  /// Returns a handle that can be passed to `cancel()`.
+  virtual FetchHandle fetch(std::string_view uri, FetchCallback cb,
+                            FetchProgressCallback progressCb = {}) = 0;
 
   /// Cancel a previously-issued fetch. No-op if the handle is invalid or
   /// the fetch has already completed.
