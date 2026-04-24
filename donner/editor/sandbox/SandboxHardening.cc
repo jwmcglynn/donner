@@ -1,11 +1,12 @@
 #include "donner/editor/sandbox/SandboxHardening.h"
 
+#include <sys/resource.h>
+#include <unistd.h>
+
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <sys/resource.h>
-#include <unistd.h>
 
 #if defined(__linux__)
 #include <linux/audit.h>
@@ -147,14 +148,14 @@ bool InstallSeccompFilter() {
       __NR_set_robust_list,
       __NR_rseq,
 
-      // x86_64-specific: arch_prctl is used by glibc for TLS/FS base setup.
-      // Not present on aarch64.
+  // x86_64-specific: arch_prctl is used by glibc for TLS/FS base setup.
+  // Not present on aarch64.
 #if defined(__NR_arch_prctl)
       __NR_arch_prctl,
 #endif
-      // x86_64 glibc may use access/openat/stat during CRT init (locale,
-      // NSS) even after our FD sweep. Allow them so the child doesn't get
-      // stuck during early init on CI runners.
+  // x86_64 glibc may use access/openat/stat during CRT init (locale,
+  // NSS) even after our FD sweep. Allow them so the child doesn't get
+  // stuck during early init on CI runners.
 #if defined(__NR_access)
       __NR_access,
 #endif
@@ -164,25 +165,24 @@ bool InstallSeccompFilter() {
 #if defined(__NR_stat)
       __NR_stat,
 #endif
-      // poll/ppoll needed by some glibc I/O paths (e.g. stdio locking).
+  // poll/ppoll needed by some glibc I/O paths (e.g. stdio locking).
 #if defined(__NR_poll)
       __NR_poll,
 #endif
 #if defined(__NR_ppoll)
       __NR_ppoll,
 #endif
-      // ioctl(TIOCGWINSZ) may be called by glibc on stderr.
+  // ioctl(TIOCGWINSZ) may be called by glibc on stderr.
 #if defined(__NR_ioctl)
       __NR_ioctl,
 #endif
-      // sched_getaffinity used by some allocators for arena sizing.
+  // sched_getaffinity used by some allocators for arena sizing.
 #if defined(__NR_sched_getaffinity)
       __NR_sched_getaffinity,
 #endif
   };
 
-  static constexpr size_t kNumAllowed =
-      sizeof(kAllowedSyscalls) / sizeof(kAllowedSyscalls[0]);
+  static constexpr size_t kNumAllowed = sizeof(kAllowedSyscalls) / sizeof(kAllowedSyscalls[0]);
 
   // BPF program layout:
   //   [0]   Load arch from seccomp_data
@@ -207,34 +207,30 @@ bool InstallSeccompFilter() {
   size_t idx = 0;
 
   // [0] Load architecture field from seccomp_data.
-  filter[idx++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
-                            offsetof(struct seccomp_data, arch));
+  filter[idx++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch));
 
   // [1] Check architecture matches expected. Skip next instruction if match.
-  filter[idx++] = BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, DONNER_SECCOMP_ARCH,
-                            1, 0);
+  filter[idx++] = BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, DONNER_SECCOMP_ARCH, 1, 0);
 
   // [2] Architecture mismatch: kill the process.
   filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
 
   // [3] Load syscall number from seccomp_data.
-  filter[idx++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
-                            offsetof(struct seccomp_data, nr));
+  filter[idx++] = BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr));
 
   // [4..4+2*N-1] For each allowed syscall, emit a JEQ + RET ALLOW pair.
   for (size_t i = 0; i < kNumAllowed; ++i) {
     // JEQ: if syscall == kAllowedSyscalls[i], jump to next instruction
     // (jt=0 means skip 0, landing on the RET ALLOW); otherwise skip 1
     // to jump over the RET ALLOW to the next JEQ pair.
-    filter[idx++] = BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
-                              static_cast<__u32>(kAllowedSyscalls[i]), 0, 1);
+    filter[idx++] =
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, static_cast<__u32>(kAllowedSyscalls[i]), 0, 1);
     filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   }
 
   // [4+2*N] Default deny: return -EACCES instead of killing, so we can
   // detect false positives during initial deployment.
-  filter[idx++] = BPF_STMT(BPF_RET | BPF_K,
-                            SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA));
+  filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA));
 
   struct sock_fprog prog {};
   prog.len = static_cast<unsigned short>(idx);
@@ -253,9 +249,9 @@ bool InstallSeccompFilter() {
 
 /// Result of an attempt to install the macOS sandbox profile.
 enum class SandboxInstallResult {
-  kApplied,        ///< `sandbox_init` returned 0 — profile is active.
-  kAlreadySandboxed, ///< EPERM — the caller's parent already sandboxed us.
-  kFailed,         ///< Hard failure (bad profile, kernel refusal, etc.).
+  kApplied,           ///< `sandbox_init` returned 0 — profile is active.
+  kAlreadySandboxed,  ///< EPERM — the caller's parent already sandboxed us.
+  kFailed,            ///< Hard failure (bad profile, kernel refusal, etc.).
 };
 
 /// Installs the `kSBXProfilePureComputation` profile via the legacy
@@ -280,8 +276,7 @@ SandboxInstallResult InstallMacOSSandboxProfile(std::string& errOut) {
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
   char* errorBuf = nullptr;
   errno = 0;
-  const int rc =
-      ::sandbox_init(kSBXProfilePureComputation, SANDBOX_NAMED, &errorBuf);
+  const int rc = ::sandbox_init(kSBXProfilePureComputation, SANDBOX_NAMED, &errorBuf);
   if (rc == 0) {
     if (errorBuf != nullptr) ::sandbox_free_error(errorBuf);
     return SandboxInstallResult::kApplied;
@@ -315,14 +310,12 @@ void LogSummary(const HardeningOptions& options) {
   // Keep this single-line and stable — tests grep for the "sandbox
   // hardening:" prefix. Anything on stderr is captured by the host as
   // diagnostics and surfaced through `RenderResult::diagnostics`.
-  std::fprintf(
-      stderr,
-      "sandbox hardening: as=%zu cpu=%u fsize=%zu nofile=%u chdir=%d fdsweep=%d "
-      "seccomp=%d sbxprof=%d\n",
-      options.addressSpaceBytes, options.cpuSeconds, options.maxFileBytes,
-      options.maxOpenFiles, options.chdirRoot ? 1 : 0,
-      options.closeExtraFds ? 1 : 0, options.installSeccompFilter ? 1 : 0,
-      options.installSandboxProfile ? 1 : 0);
+  std::fprintf(stderr,
+               "sandbox hardening: as=%zu cpu=%u fsize=%zu nofile=%u chdir=%d fdsweep=%d "
+               "seccomp=%d sbxprof=%d\n",
+               options.addressSpaceBytes, options.cpuSeconds, options.maxFileBytes,
+               options.maxOpenFiles, options.chdirRoot ? 1 : 0, options.closeExtraFds ? 1 : 0,
+               options.installSeccompFilter ? 1 : 0, options.installSandboxProfile ? 1 : 0);
 }
 
 }  // namespace
@@ -369,8 +362,7 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
     // docs/design_docs/0023-editor_sandbox.md §S6.2 for the hardening
     // matrix per platform.
 #if !defined(__APPLE__)
-    if (!SetRlimit(RLIMIT_AS,
-                   static_cast<rlim_t>(options.addressSpaceBytes), errMessage)) {
+    if (!SetRlimit(RLIMIT_AS, static_cast<rlim_t>(options.addressSpaceBytes), errMessage)) {
       result.status = HardeningStatus::kResourceLimitFailed;
       result.message = "RLIMIT_AS: " + errMessage;
       return result;
@@ -378,8 +370,7 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
 #else
     // Best-effort data-segment cap on macOS — softer than AS but still
     // bounds runaway `brk()` / `sbrk()` growth from a parser bug.
-    if (!SetRlimit(RLIMIT_DATA,
-                   static_cast<rlim_t>(options.addressSpaceBytes), errMessage)) {
+    if (!SetRlimit(RLIMIT_DATA, static_cast<rlim_t>(options.addressSpaceBytes), errMessage)) {
       // Don't fail startup if DATA can't be set either — the sandbox
       // profile is the primary backstop on macOS.
       result.message = "RLIMIT_DATA (non-fatal on macOS): " + errMessage;
@@ -393,15 +384,13 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
       return result;
     }
   }
-  if (!SetRlimit(RLIMIT_FSIZE, static_cast<rlim_t>(options.maxFileBytes),
-                 errMessage)) {
+  if (!SetRlimit(RLIMIT_FSIZE, static_cast<rlim_t>(options.maxFileBytes), errMessage)) {
     result.status = HardeningStatus::kResourceLimitFailed;
     result.message = "RLIMIT_FSIZE: " + errMessage;
     return result;
   }
   if (options.maxOpenFiles > 0) {
-    if (!SetRlimit(RLIMIT_NOFILE, static_cast<rlim_t>(options.maxOpenFiles),
-                   errMessage)) {
+    if (!SetRlimit(RLIMIT_NOFILE, static_cast<rlim_t>(options.maxOpenFiles), errMessage)) {
       result.status = HardeningStatus::kResourceLimitFailed;
       result.message = "RLIMIT_NOFILE: " + errMessage;
       return result;
@@ -425,8 +414,7 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
   if (options.installSandboxProfile) {
     std::string sandboxErr;
     switch (InstallMacOSSandboxProfile(sandboxErr)) {
-      case SandboxInstallResult::kApplied:
-        break;
+      case SandboxInstallResult::kApplied: break;
       case SandboxInstallResult::kAlreadySandboxed:
         // Outer sandbox (bazel darwin-sandbox, etc.) is already in force.
         // Log a single line so reviewers can see the state without the
