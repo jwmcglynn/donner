@@ -89,6 +89,27 @@ donner_cc_test(
     ],
 )
 
+# macOS counterpart: deny-operation probes against the
+# `sandbox_init(kSBXProfilePureComputation)` profile. Tagged
+# `no-sandbox` because macOS refuses nested sandbox profiles — the
+# test needs to run *outside* bazel's darwin-sandbox or all probes
+# GTEST_SKIP. The test self-detects and skips gracefully rather than
+# false-passing when the outer environment won't let the profile
+# apply.
+donner_cc_test(
+    name = "sandbox_hardening_macos_tests",
+    srcs = ["SandboxHardeningMacos_tests.cc"],
+    tags = ["no-sandbox"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/editor/sandbox:sandbox_hardening",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "svg_source_tests",
     srcs = ["SvgSource_tests.cc"],
