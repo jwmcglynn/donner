@@ -254,8 +254,12 @@ donner_cc_library(
     name = "session",
     srcs = ["SandboxSession.cc"],
     hdrs = ["SandboxSession.h"],
+    # The session machinery is pure POSIX (posix_spawn, pipe, poll,
+    # waitpid); both Linux and macOS can host it. Other platforms
+    # (Windows, WASM) fall through to the in-process backend.
     target_compatible_with = select({
         "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//donner/editor:__subpackages__"],
@@ -291,8 +295,11 @@ donner_cc_library(
 donner_cc_binary(
     name = "donner_editor_backend",
     srcs = ["editor_backend_main.cc"],
+    # The backend binary is POSIX; Linux + macOS both ship it so their
+    # editors can run the session-sandboxed path end to end.
     target_compatible_with = select({
         "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//donner/editor:__subpackages__"],

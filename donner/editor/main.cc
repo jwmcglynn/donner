@@ -64,11 +64,11 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 
-// The session-backed (subprocess sandbox) backend only links on Linux —
-// `donner/editor/sandbox:session` is gated to `@platforms//os:linux` in
-// BUILD.bazel. WASM and non-Linux desktops (macOS) pick up the in-process
-// client instead, which doesn't need `SandboxSession`.
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+// The session-backed (subprocess sandbox) backend ships on both desktop
+// platforms (Linux + macOS). `donner/editor/sandbox:session` is gated to
+// those two OSes in BUILD.bazel. WASM falls through to the in-process
+// client because the browser tab already isolates untrusted content.
+#if !defined(__EMSCRIPTEN__)
 #include "donner/editor/sandbox/SandboxSession.h"
 #endif
 
@@ -1229,11 +1229,12 @@ int main(int argc, char** argv) {
         .count();
   };
 
-  // Create the backend client. The subprocess-sandboxed client only exists on
-  // Linux (see BUILD.bazel's select on `editor_backend_client_session`);
-  // everything else — WASM and macOS desktops — falls back to the in-process
-  // client, which statically links the backend core into this address space.
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  // Create the backend client. Both desktop platforms (Linux and macOS)
+  // now run the session-sandboxed client — a child `donner_editor_backend`
+  // process owns the parser and renderer; the editor stays trusted. WASM
+  // remains in-process because the browser tab already provides the
+  // isolation boundary.
+#if !defined(__EMSCRIPTEN__)
   donner::editor::sandbox::SandboxSession session(donner::editor::sandbox::SandboxSessionOptions{
       .childBinaryPath = "donner/editor/sandbox/donner_editor_backend",
   });

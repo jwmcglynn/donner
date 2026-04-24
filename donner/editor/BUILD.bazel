@@ -191,7 +191,14 @@ _EDITOR_RUNTIME_DEPS = [
     "@glfw",
     "@imgui",
 ] + select({
+    # Desktop Linux + macOS both speak to a subprocess sandbox via the
+    # session-backed client. WASM stays in-process because the browser
+    # tab is already the isolation boundary.
     "@platforms//os:linux": [
+        ":editor_backend_client_session",
+        "//donner/editor/sandbox:session",
+    ],
+    "@platforms//os:macos": [
         ":editor_backend_client_session",
         "//donner/editor/sandbox:session",
     ],
@@ -403,11 +410,14 @@ donner_cc_library(
 )
 
 # Desktop (session-backed) implementation of EditorBackendClient.
+# Ships on both Linux and macOS; WASM falls through to the in-process
+# variant below.
 donner_cc_library(
     name = "editor_backend_client_session",
     srcs = ["EditorBackendClient_Session.cc"],
     target_compatible_with = select({
         "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [

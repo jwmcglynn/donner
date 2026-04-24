@@ -291,12 +291,29 @@ HardeningResult ApplyHardening(const HardeningOptions& options) {
 
   std::string errMessage;
   if (options.addressSpaceBytes > 0) {
+    // macOS exposes `RLIMIT_AS` as an alias for `RLIMIT_RSS`, and the
+    // kernel rejects user-mode attempts to lower it with `EINVAL`. We
+    // leave the cap unset there and rely on the sandbox profile (when
+    // wired) + RLIMIT_DATA to bound memory growth. See
+    // docs/design_docs/0023-editor_sandbox.md §S6.2 for the hardening
+    // matrix per platform.
+#if !defined(__APPLE__)
     if (!SetRlimit(RLIMIT_AS,
                    static_cast<rlim_t>(options.addressSpaceBytes), errMessage)) {
       result.status = HardeningStatus::kResourceLimitFailed;
       result.message = "RLIMIT_AS: " + errMessage;
       return result;
     }
+#else
+    // Best-effort data-segment cap on macOS — softer than AS but still
+    // bounds runaway `brk()` / `sbrk()` growth from a parser bug.
+    if (!SetRlimit(RLIMIT_DATA,
+                   static_cast<rlim_t>(options.addressSpaceBytes), errMessage)) {
+      // Don't fail startup if DATA can't be set either — the sandbox
+      // profile is the primary backstop on macOS.
+      result.message = "RLIMIT_DATA (non-fatal on macOS): " + errMessage;
+    }
+#endif
   }
   if (options.cpuSeconds > 0) {
     if (!SetRlimit(RLIMIT_CPU, static_cast<rlim_t>(options.cpuSeconds), errMessage)) {

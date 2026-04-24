@@ -170,8 +170,10 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_editor_backend",
     ],
+    # SandboxSession is pure POSIX; both Linux and macOS can exercise it.
     target_compatible_with = select({
         "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
@@ -200,8 +202,11 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_editor_backend",
     ],
+    # End-to-end session + EditorBackendCore round-trip. Both desktop
+    # OSes now ship the backend binary, so both gate through this test.
     target_compatible_with = select({
         "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
