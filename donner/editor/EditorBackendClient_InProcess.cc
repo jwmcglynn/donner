@@ -9,15 +9,17 @@
 
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/sandbox/EditorBackendCore.h"
-#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 
 namespace {
 
-/// Converts a `FramePayload` into a `FrameResult` by replaying the render wire
-/// into a local renderer.
-FrameResult MakeFrameResult(const sandbox::FramePayload& frame, svg::Renderer& renderer) {
+/// Converts a `FramePayload` into a `FrameResult`. Historically this
+/// replayed the backend's render wire into a local `Renderer`; the
+/// thin-client architecture instead ships pre-composed bitmap bytes in
+/// `frame.finalBitmapPixels` which we just re-wrap. No renderer needed.
+FrameResult MakeFrameResult(const sandbox::FramePayload& frame) {
   FrameResult result;
   result.ok = true;
   result.frameId = frame.frameId;
@@ -263,7 +265,7 @@ public:
 private:
   /// Processes a FramePayload synchronously and returns an already-ready future.
   std::future<FrameResult> makeReadyFuture(const sandbox::FramePayload& framePayload) {
-    FrameResult result = MakeFrameResult(framePayload, renderer_);
+    FrameResult result = MakeFrameResult(framePayload);
     cacheResult(result);
 
     std::promise<FrameResult> promise;
@@ -287,7 +289,6 @@ private:
   }
 
   sandbox::EditorBackendCore core_;
-  svg::Renderer renderer_;
 
   uint64_t lastFrameId_ = 0;
   SelectionOverlay selection_;

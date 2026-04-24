@@ -14,7 +14,7 @@
 #include "donner/editor/sandbox/EditorApiCodec.h"
 #include "donner/editor/sandbox/SandboxSession.h"
 #include "donner/editor/sandbox/SessionCodec.h"
-#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 
@@ -28,9 +28,11 @@ using sandbox::SessionOpcode;
 using sandbox::WireRequest;
 using sandbox::WireResponse;
 
-/// Converts a decoded `FramePayload` into a `FrameResult`, replaying the
-/// render wire into the given renderer to produce a bitmap.
-FrameResult DecodeFrameResult(const FramePayload& frame, svg::Renderer& renderer) {
+/// Converts a decoded `FramePayload` into a `FrameResult`. Historically
+/// this replayed the backend's render wire into a local `Renderer`; the
+/// thin-client architecture instead ships pre-composed bitmap bytes in
+/// `frame.finalBitmapPixels` which we just re-wrap. No renderer needed.
+FrameResult DecodeFrameResult(const FramePayload& frame) {
   FrameResult result;
   result.ok = true;
   result.frameId = frame.frameId;
@@ -368,8 +370,7 @@ private:
       // resp.bytes is the raw payload (session already stripped the frame header).
       FramePayload framePayload;
       if (sandbox::DecodeFrame(resp.bytes, framePayload)) {
-        std::lock_guard lock(rendererMutex_);
-        result = DecodeFrameResult(framePayload, renderer_);
+        result = DecodeFrameResult(framePayload);
         cacheResult(result);
       } else {
         result.ok = false;
@@ -398,10 +399,6 @@ private:
   }
 
   sandbox::SandboxSession& session_;
-
-  // Renderer must be accessed from only one thread at a time.
-  mutable std::mutex rendererMutex_;
-  svg::Renderer renderer_;
 
   // Cached state from the latest frame.
   mutable std::mutex stateMutex_;
