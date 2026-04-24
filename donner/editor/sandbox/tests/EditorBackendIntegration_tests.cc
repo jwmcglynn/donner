@@ -4,14 +4,13 @@
 /// kLoadBytes with a valid SVG produces a kFrame response with a non-empty
 /// render wire, and that kSetViewport works.
 
-#include "donner/editor/sandbox/SandboxSession.h"
-
 #include <gtest/gtest.h>
 
 #include <cstring>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/SandboxSession.h"
 #include "donner/editor/sandbox/SessionCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"
 
@@ -29,7 +28,7 @@ std::vector<uint8_t> MakeRequest(uint64_t requestId, SessionOpcode opcode,
 }
 
 class EditorBackendIntegrationTest : public ::testing::Test {
- protected:
+protected:
   std::string BackendPath() {
     return Runfiles::instance().Rlocation("donner/editor/sandbox/donner_editor_backend");
   }

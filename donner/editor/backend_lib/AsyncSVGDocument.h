@@ -19,7 +19,6 @@
 #include <unordered_map>
 
 #include "donner/base/EcsRegistry.h"
-
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/backend_lib/CommandQueue.h"
 #include "donner/svg/SVGDocument.h"

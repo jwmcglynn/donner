@@ -62,8 +62,8 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
 /// On mismatch, writes `actual_<testLabel>.png`, `expected_<testLabel>.png`,
 /// and `diff_<testLabel>.png` to `$TEST_UNDECLARED_OUTPUTS_DIR` (or
 /// `/tmp`) so a failing replay can be inspected immediately.
-void CompareBitmapToBitmap(const svg::RendererBitmap& actual,
-                           const svg::RendererBitmap& expected, std::string_view testLabel,
+void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::RendererBitmap& expected,
+                           std::string_view testLabel,
                            const BitmapGoldenCompareParams& params = {});
 
 }  // namespace donner::editor::tests

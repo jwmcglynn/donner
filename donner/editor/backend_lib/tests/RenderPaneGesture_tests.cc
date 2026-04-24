@@ -1,4 +1,3 @@
-#include "donner/editor/PinchEventMonitor.h"
 #include "donner/editor/backend_lib/RenderPaneGesture.h"
 
 #include <gmock/gmock.h>
@@ -6,6 +5,8 @@
 
 #include <cmath>
 #include <vector>
+
+#include "donner/editor/PinchEventMonitor.h"
 
 namespace donner::editor {
 namespace {
@@ -16,9 +17,8 @@ namespace {
   const double dy = std::abs(actual.y - expected.y);
   if (dx > tolerance || dy > tolerance) {
     return ::testing::AssertionFailure()
-           << "actual=(" << actual.x << ", " << actual.y << ") expected=(" << expected.x
-           << ", " << expected.y << ") |dx|=" << dx << " |dy|=" << dy
-           << " tolerance=" << tolerance;
+           << "actual=(" << actual.x << ", " << actual.y << ") expected=(" << expected.x << ", "
+           << expected.y << ") |dx|=" << dx << " |dy|=" << dy << " tolerance=" << tolerance;
   }
   return ::testing::AssertionSuccess();
 }
@@ -48,9 +48,8 @@ TEST(RenderPaneGestureTest, PlainScrollInsidePaneBecomesPan) {
       .zoomModifierHeld = false,
   };
 
-  const auto action =
-      ClassifyRenderPaneScrollGesture(event, MakeContext(), /*wheelZoomStep=*/1.1,
-                                      /*panPixelsPerScrollUnit=*/10.0);
+  const auto action = ClassifyRenderPaneScrollGesture(event, MakeContext(), /*wheelZoomStep=*/1.1,
+                                                      /*panPixelsPerScrollUnit=*/10.0);
   ASSERT_TRUE(action.has_value());
   EXPECT_EQ(action->type, RenderPaneGestureActionType::Pan);
   EXPECT_NEAR_VEC(action->panScreenDelta, Vector2d(15.0, -20.0), 1e-9);
@@ -63,9 +62,8 @@ TEST(RenderPaneGestureTest, ModifiedVerticalScrollBecomesZoomAroundCursor) {
       .zoomModifierHeld = true,
   };
 
-  const auto action =
-      ClassifyRenderPaneScrollGesture(event, MakeContext(), /*wheelZoomStep=*/1.1,
-                                      /*panPixelsPerScrollUnit=*/10.0);
+  const auto action = ClassifyRenderPaneScrollGesture(event, MakeContext(), /*wheelZoomStep=*/1.1,
+                                                      /*panPixelsPerScrollUnit=*/10.0);
   ASSERT_TRUE(action.has_value());
   EXPECT_EQ(action->type, RenderPaneGestureActionType::Zoom);
   EXPECT_NEAR(action->zoomFactor, 1.21, 1e-12);
@@ -138,9 +136,8 @@ TEST(RenderPaneGestureTest, GestureSequenceMutatesViewportToExpectedEndState) {
       .cursorScreen = Vector2d(420.0, 290.0),
       .zoomModifierHeld = false,
   };
-  const auto panAction =
-      ClassifyRenderPaneScrollGesture(panEvent, context, /*wheelZoomStep=*/1.1,
-                                      /*panPixelsPerScrollUnit=*/10.0);
+  const auto panAction = ClassifyRenderPaneScrollGesture(panEvent, context, /*wheelZoomStep=*/1.1,
+                                                         /*panPixelsPerScrollUnit=*/10.0);
   ASSERT_TRUE(panAction.has_value());
   ApplyRenderPaneGesture(viewport, *panAction);
 
@@ -151,9 +148,8 @@ TEST(RenderPaneGestureTest, GestureSequenceMutatesViewportToExpectedEndState) {
   };
   const Vector2d focalScreen = zoomEvent.cursorScreen;
   const Vector2d focalDocBeforeZoom = viewport.screenToDocument(focalScreen);
-  const auto zoomAction =
-      ClassifyRenderPaneScrollGesture(zoomEvent, context, /*wheelZoomStep=*/1.1,
-                                      /*panPixelsPerScrollUnit=*/10.0);
+  const auto zoomAction = ClassifyRenderPaneScrollGesture(zoomEvent, context, /*wheelZoomStep=*/1.1,
+                                                          /*panPixelsPerScrollUnit=*/10.0);
   ASSERT_TRUE(zoomAction.has_value());
   ApplyRenderPaneGesture(viewport, *zoomAction);
 

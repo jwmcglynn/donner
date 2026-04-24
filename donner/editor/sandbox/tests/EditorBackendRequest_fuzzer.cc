@@ -33,9 +33,7 @@ void FuzzRequestPayload(uint8_t selector, std::span<const uint8_t> payload) {
       (void)DecodeHandshake(payload, out);
       break;
     }
-    case 1:
-      (void)DecodeShutdown(payload);
-      break;
+    case 1: (void)DecodeShutdown(payload); break;
     case 2: {
       SetViewportPayload out;
       (void)DecodeSetViewport(payload, out);
@@ -81,12 +79,8 @@ void FuzzRequestPayload(uint8_t selector, std::span<const uint8_t> payload) {
       (void)DecodeSelectElement(payload, out);
       break;
     }
-    case 11:
-      (void)DecodeUndo(payload);
-      break;
-    case 12:
-      (void)DecodeRedo(payload);
-      break;
+    case 11: (void)DecodeUndo(payload); break;
+    case 12: (void)DecodeRedo(payload); break;
     case 13: {
       ExportRequestPayload out;
       (void)DecodeExport(payload, out);

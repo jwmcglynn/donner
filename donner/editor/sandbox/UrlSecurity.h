@@ -31,7 +31,7 @@ namespace donner::editor::sandbox::url_security {
 /// is `false` when the input couldn't be parsed — callers should
 /// reject the fetch in that case.
 struct ParsedHttpUrl {
-  std::string host;      ///< Hostname, brackets stripped for IPv6 literals.
+  std::string host;  ///< Hostname, brackets stripped for IPv6 literals.
   std::uint16_t port = 0;
   bool isHttps = false;
   bool ipv6Literal = false;

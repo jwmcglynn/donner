@@ -22,7 +22,7 @@ namespace {
 
 void IgnoreSigpipeOnce() {
   static const bool kInstalled = [] {
-    struct sigaction sa{};
+    struct sigaction sa {};
     sa.sa_handler = SIG_IGN;
     sigemptyset(&sa.sa_mask);
     (void)::sigaction(SIGPIPE, &sa, nullptr);

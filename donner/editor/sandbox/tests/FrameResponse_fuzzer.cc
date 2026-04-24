@@ -25,9 +25,7 @@ void FuzzResponsePayload(uint8_t selector, std::span<const uint8_t> payload) {
       (void)DecodeHandshakeAck(payload, out);
       break;
     }
-    case 1:
-      (void)DecodeShutdownAck(payload);
-      break;
+    case 1: (void)DecodeShutdownAck(payload); break;
     case 2: {
       FramePayload out;
       (void)DecodeFrame(payload, out);

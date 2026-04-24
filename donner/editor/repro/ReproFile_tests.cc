@@ -317,9 +317,7 @@ TEST(ReproFileTest, RoundTripsMouseDownHitCheckpoint) {
 
 TEST(ReproFileTest, RejectsMissingMetadata) {
   const auto path = TempFile("no_meta");
-  {
-    std::ofstream os(path);
-  }
+  { std::ofstream os(path); }
   auto loaded = ReadReproFile(path);
   EXPECT_FALSE(loaded.has_value());
   std::error_code ec;

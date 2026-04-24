@@ -2,13 +2,12 @@
 #include <cstdint>
 // NOLINTEND(llvm-include-order)
 
-#include "donner/editor/AddressBar.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <utility>
 
+#include "donner/editor/AddressBar.h"
 #include "imgui.h"
 
 namespace donner::editor {
@@ -85,13 +84,14 @@ bool AddressBar::draw() {
 
     if (loadProgress_.has_value()) {
       const float frac = std::clamp(*loadProgress_, 0.0f, 1.0f);
-      drawList->AddRectFilled(
-          origin, ImVec2(origin.x + width * frac, origin.y + kBarHeight), fgColor);
+      drawList->AddRectFilled(origin, ImVec2(origin.x + width * frac, origin.y + kBarHeight),
+                              fgColor);
     } else {
       // Indeterminate: 30%-wide segment sliding across on a 1.5s cycle.
       constexpr float kCycleSeconds = 1.5f;
       constexpr float kSegmentFrac = 0.3f;
-      const float t = std::fmod(static_cast<float>(ImGui::GetTime()), kCycleSeconds) / kCycleSeconds;
+      const float t =
+          std::fmod(static_cast<float>(ImGui::GetTime()), kCycleSeconds) / kCycleSeconds;
       const float segmentWidth = width * kSegmentFrac;
       // Travel from -segmentWidth to `width` so the segment fully enters
       // and fully exits, giving a cleaner "wiping across" feel than a

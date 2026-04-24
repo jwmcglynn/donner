@@ -148,13 +148,13 @@ bool OuterEnvironmentAlreadySandboxed() {
   return WIFEXITED(status) && WEXITSTATUS(status) == kProbeAllowed;
 }
 
-#define SKIP_IF_ALREADY_SANDBOXED()                                       \
-  do {                                                                    \
-    if (OuterEnvironmentAlreadySandboxed()) {                             \
-      GTEST_SKIP() << "outer sandbox (bazel darwin-sandbox or similar) "  \
-                      "prevents `sandbox_init` from applying its own "    \
-                      "profile; deny-op probes can't be exercised here";  \
-    }                                                                     \
+#define SKIP_IF_ALREADY_SANDBOXED()                                      \
+  do {                                                                   \
+    if (OuterEnvironmentAlreadySandboxed()) {                            \
+      GTEST_SKIP() << "outer sandbox (bazel darwin-sandbox or similar) " \
+                      "prevents `sandbox_init` from applying its own "   \
+                      "profile; deny-op probes can't be exercised here"; \
+    }                                                                    \
   } while (0)
 
 // ---------------------------------------------------------------------------
@@ -288,6 +288,8 @@ TEST(SandboxInitProfileDenyOps, ForkAndExecAreDenied) {
 // simple — the `target_compatible_with` gate already keeps it out of
 // the Linux test execution, but source-level compilation happens
 // regardless of gating in some lint modes.
-int SandboxHardeningMacos_tests_NotApplicable() { return 0; }
+int SandboxHardeningMacos_tests_NotApplicable() {
+  return 0;
+}
 
 #endif  // __APPLE__
