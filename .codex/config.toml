@@ -5,5 +5,9 @@ would otherwise perturb Bazel's effective client environment and action cache
 keys. When writing commands in docs and to the user, use `bazel` instead.
 """
 
+sandbox_mode = "workspace-write"
 [shell_environment_policy.set]
 LLM = "1"
+
+[sandbox_workspace_write]
+network_access = true

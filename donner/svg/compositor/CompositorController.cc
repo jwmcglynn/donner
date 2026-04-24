@@ -306,6 +306,11 @@ Transform2d CompositorController::layerComposeOffset(Entity entity) const {
   return layer ? layer->canvasFromBitmap() : Transform2d();
 }
 
+uint64_t CompositorController::layerGenerationOf(Entity entity) const {
+  const CompositorLayer* layer = findLayer(entity);
+  return layer ? layer->generation() : 0;
+}
+
 FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
   const CompositorLayer* layer = findLayer(entity);
   return layer ? layer->fallbackReasons() : FallbackReason::None;

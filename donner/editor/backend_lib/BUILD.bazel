@@ -130,6 +130,7 @@ donner_cc_library(
         ":tool",
         ":undo_timeline",
         "//donner/base",
+        "//donner/editor:selection_aabb",
         "//donner/svg",
     ],
 )
@@ -139,7 +140,7 @@ donner_cc_library(
     srcs = ["RenderPaneGesture.cc"],
     hdrs = ["RenderPaneGesture.h"],
     deps = [
-        "//donner/editor:viewport_state",
         "//donner/base",
+        "//donner/editor:viewport_state",
     ],
 )

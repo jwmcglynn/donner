@@ -227,6 +227,34 @@ TEST_F(CompositorControllerTest, LayerComposeOffsetTracksDomTranslationDelta) {
   EXPECT_NEAR(result.translation().y, 10.0, 1e-10);
 }
 
+TEST_F(CompositorControllerTest, LayerGenerationChangesAfterNonTranslationTransform) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(100, 100);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+  const uint64_t initialGeneration = compositor.layerGenerationOf(entity);
+  ASSERT_NE(initialGeneration, 0u);
+
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(2.0, 2.0));
+  compositor.renderFrame(viewport);
+
+  EXPECT_GT(compositor.layerGenerationOf(entity), initialGeneration)
+      << "non-translation edits such as resize must re-rasterize the promoted layer so split "
+         "preview clients do not keep drawing a stale bitmap";
+}
+
 TEST_F(CompositorControllerTest, LayerComposeOffsetOfNonPromotedReturnsIdentity) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />

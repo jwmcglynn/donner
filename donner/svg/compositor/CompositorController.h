@@ -246,6 +246,17 @@ public:
   [[nodiscard]] Transform2d layerComposeOffset(Entity entity) const;
 
   /**
+   * Returns the promoted layer bitmap generation, or zero if the entity is not promoted or has no
+   * cached layer.
+   *
+   * The generation increments whenever the promoted layer is re-rasterized. Split-preview clients
+   * use this to know when a previously uploaded promoted bitmap is stale.
+   *
+   * @param entity The entity to query.
+   */
+  [[nodiscard]] uint64_t layerGenerationOf(Entity entity) const;
+
+  /**
    * Prepare and render a composited frame.
    *
    * This method:

@@ -3,6 +3,7 @@
 #include <array>
 #include <vector>
 
+#include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
 #include "donner/editor/SelectionAabb.h"
@@ -91,32 +92,59 @@ double LinearScale(const Transform2d& canvasFromDoc) {
   return canvasFromDoc.transformVector(Vector2d(1.0, 0.0)).length();
 }
 
+Path TransformPath(const Path& path, const Transform2d& transform) {
+  PathBuilder builder;
+  const auto& points = path.points();
+
+  for (const auto& command : path.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::LineTo:
+        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
+                       transform.transformPosition(points[command.pointIndex + 1]));
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
+                        transform.transformPosition(points[command.pointIndex + 1]),
+                        transform.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  }
+
+  return builder.build();
+}
+
 /// Inner helper that draws *just* the path outline for a single
 /// geometry element. The AABB is drawn separately by the caller —
 /// per the design doc, multi-select chrome shows one combined AABB
 /// across the whole selection, not one box per element.
 void DrawElementPathOutline(svg::Renderer& renderer, const svg::SVGGeometryElement& geometry,
                             const Transform2d& canvasFromDoc, const svg::PaintParams& paint) {
-  // The spline is in the element's local coordinate space. To draw
-  // it at the right on-screen position we chain local → world →
-  // canvas. Per Donner's row-vector `A * B = apply A first, then B`
-  // semantics, that's `elementFromWorld * canvasFromDoc` (the name
-  // `elementFromWorld` is a legacy misnomer — the actual behavior,
-  // verified by reading `RendererDriver::traverse`, is local→world,
-  // same transform the main renderer feeds into `setTransform` for
-  // each element's own draw calls). The composition's destFromSource
-  // name is `canvasFromElement`.
+  // The spline is in the element's local coordinate space. Transform
+  // it into document space first, then draw it under only
+  // `canvasFromDoc`. Keeping the element's own transform out of the
+  // renderer state is important for editor chrome: the overlay stroke
+  // must stay one screen pixel wide during object resize, and curve
+  // flattening should run against the resized document-space curve
+  // instead of flattening a tiny local curve and magnifying the
+  // segments.
   //
   // An earlier version of this code had an extra `.inverse()` which
-  // silently flipped the sign of every element transform — dragging
-  // a selected element right moved the path outline left. The AABB
-  // path below didn't have the bug because it goes through
-  // `worldBounds()` which already returns world-space coordinates.
+  // silently flipped the sign of every element transform. That
+  // regression is still covered by overlay tests; this path-space
+  // transform preserves the same local→world behavior without
+  // inheriting object scale into stroke width.
   if (const auto spline = geometry.computedSpline(); spline.has_value()) {
-    const Transform2d canvasFromElement = geometry.elementFromWorld() * canvasFromDoc;
-    renderer.setTransform(canvasFromElement);
+    Path documentPath = TransformPath(*spline, geometry.elementFromWorld());
+    renderer.setTransform(canvasFromDoc);
     svg::PathShape shape;
-    shape.path = *spline;
+    shape.path = std::move(documentPath);
     shape.parentFromEntity = Transform2d();
     renderer.drawPath(shape, paint.strokeParams);
   }

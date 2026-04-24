@@ -15,6 +15,35 @@ constexpr std::string_view kTrivialSvg =
          <rect id="r1" x="20" y="30" width="40" height="50" fill="red"/>
        </svg>)";
 
+svg::RendererBitmap RenderOverlayForSelectedElement(std::string_view svg, std::string_view selector,
+                                                    int width, int height) {
+  EditorApp app;
+  if (!app.loadFromString(svg)) {
+    ADD_FAILURE() << "SVG failed to load";
+    return {};
+  }
+  app.document().document().setCanvasSize(width, height);
+
+  auto element = app.document().document().querySelector(selector);
+  if (!element.has_value()) {
+    ADD_FAILURE() << "no element matching " << selector;
+    return {};
+  }
+  app.setSelection(*element);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(width, height);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  return overlayRenderer.takeSnapshot();
+}
+
 // OverlayRenderer is hard to unit-test in isolation because the canvas
 // primitives end up in a renderer-owned frame buffer that we don't read
 // back at the unit-test layer. The test plan in `editor.md` calls these
@@ -330,6 +359,56 @@ TEST(OverlayRendererTest, PathOutlineDrawnAtTransformedLocationNotInverted) {
   EXPECT_EQ(alphaAt(0, 10), 0)
       << "Pixel at the inverted-translate location is non-empty — overlay is drawing "
          "the path at the sign-flipped transform location.";
+}
+
+TEST(OverlayRendererTest, PathOutlineStrokeDoesNotScaleWithElementTransform) {
+  constexpr std::string_view kScaledSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <path id="line" d="M10 10 L30 30" fill="none" stroke="red"
+                    transform="scale(4)"/>
+            </svg>)svg";
+  constexpr std::string_view kDocumentSpaceSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <path id="line" d="M40 40 L120 120" fill="none" stroke="red"/>
+            </svg>)svg";
+
+  const svg::RendererBitmap scaled = RenderOverlayForSelectedElement(kScaledSvg, "#line", 200, 200);
+  const svg::RendererBitmap documentSpace =
+      RenderOverlayForSelectedElement(kDocumentSpaceSvg, "#line", 200, 200);
+
+  ASSERT_FALSE(scaled.empty());
+  ASSERT_FALSE(documentSpace.empty());
+  ASSERT_EQ(scaled.dimensions, documentSpace.dimensions);
+  ASSERT_EQ(scaled.rowBytes, documentSpace.rowBytes);
+  EXPECT_EQ(scaled.pixels, documentSpace.pixels)
+      << "Selection chrome should be invariant between a scaled local path and the same path "
+         "pre-transformed into document space. A diff here usually means the overlay stroke or "
+         "curve flattening inherited the selected object's scale.";
+}
+
+TEST(OverlayRendererTest, CurvedPathOutlineIsSampledInDocumentSpaceAfterScale) {
+  constexpr std::string_view kScaledSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+              <path id="curve" d="M10 50 C20 10 40 90 50 50" fill="none" stroke="red"
+                    transform="scale(3)"/>
+            </svg>)svg";
+  constexpr std::string_view kDocumentSpaceSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+              <path id="curve" d="M30 150 C60 30 120 270 150 150" fill="none" stroke="red"/>
+            </svg>)svg";
+
+  const svg::RendererBitmap scaled =
+      RenderOverlayForSelectedElement(kScaledSvg, "#curve", 300, 300);
+  const svg::RendererBitmap documentSpace =
+      RenderOverlayForSelectedElement(kDocumentSpaceSvg, "#curve", 300, 300);
+
+  ASSERT_FALSE(scaled.empty());
+  ASSERT_FALSE(documentSpace.empty());
+  ASSERT_EQ(scaled.dimensions, documentSpace.dimensions);
+  ASSERT_EQ(scaled.rowBytes, documentSpace.rowBytes);
+  EXPECT_EQ(scaled.pixels, documentSpace.pixels)
+      << "Curve outline chrome should be rendered from the post-transform document-space curve, "
+         "not from a local-space curve whose flattened segments are magnified by resize scale.";
 }
 
 // ---------------------------------------------------------------------------

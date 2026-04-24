@@ -46,6 +46,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cinttypes>
@@ -57,6 +58,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -683,6 +685,20 @@ private:
 };
 
 class ThinClientUiFlowTest : public ::testing::Test {};
+
+std::string ApplySourceWritebacks(std::string source,
+                                  const std::vector<SourceWriteback>& writebacks) {
+  for (const SourceWriteback& writeback : writebacks) {
+    EXPECT_LE(writeback.sourceStart, source.size());
+    EXPECT_LE(writeback.sourceEnd, source.size());
+    EXPECT_LE(writeback.sourceStart, writeback.sourceEnd);
+    if (writeback.sourceStart <= writeback.sourceEnd && writeback.sourceEnd <= source.size()) {
+      source.replace(writeback.sourceStart, writeback.sourceEnd - writeback.sourceStart,
+                     writeback.newText);
+    }
+  }
+  return source;
+}
 
 /// Reproduces the exact "all black pane" symptom: after `loadBytes` and
 /// a subsequent `present(paneW, paneH)`, the uploaded bitmap must match
@@ -2488,6 +2504,85 @@ TEST(EditorBackendCoreFilterDragTest, SelectingNextFilterDoesNotEraseTheFirst) {
       << "and `next_filter_after_B.png`.";
 }
 
+TEST(EditorBackendCoreFilterDragTest, DeleteSelectedFilterGroupInvalidatesNextDragStaticLayer) {
+  constexpr std::string_view kSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
+  <defs>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.5"/>
+    </filter>
+  </defs>
+  <rect id="bg" x="0" y="0" width="200" height="100" fill="black"/>
+  <g id="Lightning_glow_dark" filter="url(#soft)">
+    <rect x="20" y="20" width="30" height="30" fill="red"/>
+  </g>
+  <g id="Big_lightning_glow" filter="url(#soft)">
+    <rect x="120" y="20" width="30" height="30" fill="yellow"/>
+  </g>
+</svg>
+)svg";
+
+  sandbox::EditorBackendCore core;
+  SetViewportPayload vp;
+  vp.width = 200;
+  vp.height = 100;
+  (void)core.handleSetViewport(vp);
+
+  LoadBytesPayload load;
+  load.bytes = std::string(kSvg);
+  ASSERT_TRUE(core.handleLoadBytes(load).hasFinalBitmap);
+
+  const auto sendPointer = [&](PointerPhase phase, double x, double y, uint32_t buttons) {
+    PointerEventPayload ev;
+    ev.phase = phase;
+    ev.documentX = x;
+    ev.documentY = y;
+    ev.buttons = buttons;
+    return core.handlePointerEvent(ev);
+  };
+
+  const auto firstDown = sendPointer(PointerPhase::kDown, 35.0, 35.0, 1);
+  const TreeNodeEntry* firstSelection = FindSelectedNode(firstDown);
+  ASSERT_NE(firstSelection, nullptr);
+  ASSERT_EQ(firstSelection->idAttr, "Lightning_glow_dark");
+  (void)sendPointer(PointerPhase::kUp, 35.0, 35.0, 0);
+
+  KeyEventPayload deleteKey;
+  deleteKey.phase = KeyPhase::kDown;
+  deleteKey.keyCode = 261;  // GLFW_KEY_DELETE.
+  (void)core.handleKeyEvent(deleteKey);
+
+  const auto secondDown = sendPointer(PointerPhase::kDown, 135.0, 35.0, 1);
+  const TreeNodeEntry* secondSelection = FindSelectedNode(secondDown);
+  ASSERT_NE(secondSelection, nullptr);
+  ASSERT_EQ(secondSelection->idAttr, "Big_lightning_glow");
+  ASSERT_TRUE(secondDown.hasCompositedPreview);
+  ASSERT_TRUE(secondDown.hasCompositedPreviewBitmaps);
+  ASSERT_EQ(secondDown.compositedPreviewBackground.width, 200);
+  ASSERT_EQ(secondDown.compositedPreviewBackground.height, 100);
+
+  const auto& bg = secondDown.compositedPreviewBackground;
+  int yellowPixelsInStaticBackground = 0;
+  for (int y = 22; y < 49; ++y) {
+    for (int x = 122; x < 149; ++x) {
+      const size_t off =
+          static_cast<size_t>(y) * static_cast<size_t>(bg.rowBytes) + static_cast<size_t>(x) * 4u;
+      const uint8_t r = bg.pixels[off + 0];
+      const uint8_t g = bg.pixels[off + 1];
+      const uint8_t b = bg.pixels[off + 2];
+      const uint8_t a = bg.pixels[off + 3];
+      if (a > 200 && r > 180 && g > 180 && b < 80) {
+        ++yellowPixelsInStaticBackground;
+      }
+    }
+  }
+
+  EXPECT_EQ(yellowPixelsInStaticBackground, 0)
+      << "after deleting a selected filter group, the next drag's static "
+         "background still contains `Big_lightning_glow`; the host will "
+         "draw that stale copy plus the promoted drag layer.";
+}
+
 // Pins the elevation contract: clicking a path inside a `<g filter>`
 // selects the filter group — not the clicked path (too narrow for a
 // filter whose output is a composite of its subtree) nor an ancestor
@@ -4181,6 +4276,451 @@ TEST_F(ThinClientUiFlowTest, DragMovesSelectedElementAndCommitsWriteback) {
   ASSERT_EQ(upFrame.selection.selections.size(), 1u);
   const Box2d afterDrag = upFrame.selection.selections[0].worldBBox;
   EXPECT_NEAR(afterDrag.topLeft.x, 80.0, 0.01);
+
+  ASSERT_EQ(upFrame.writebacks.size(), 1u);
+  EXPECT_EQ(upFrame.writebacks[0].reason, WritebackReason::kAttributeEdit);
+  const std::string source = ApplySourceWritebacks(std::string(kSvg), upFrame.writebacks);
+  EXPECT_NE(source.find(R"(id="target")"), std::string::npos);
+  EXPECT_NE(source.find("transform=\"translate(30)\""), std::string::npos);
+}
+
+TEST_F(ThinClientUiFlowTest, DragWritebackEchoPreservesSelection) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
+      R"(<rect id="target" x="50" y="50" width="40" height="40" fill="red"/>)"
+      R"(</svg>)";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(70.0, 70.0);
+  down.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(down).get().ok);
+
+  ::donner::editor::PointerEventPayload move;
+  move.phase = PointerPhase::kMove;
+  move.documentPoint = Vector2d(100.0, 70.0);
+  move.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(move).get().ok);
+
+  ::donner::editor::PointerEventPayload up;
+  up.phase = PointerPhase::kUp;
+  up.documentPoint = Vector2d(100.0, 70.0);
+  FrameResult upFrame = client->pointerEvent(up).get();
+  ASSERT_TRUE(upFrame.ok);
+  ASSERT_EQ(upFrame.selection.selections.size(), 1u);
+
+  const std::string source = ApplySourceWritebacks(std::string(kSvg), upFrame.writebacks);
+  FrameResult echoFrame = client->replaceSource(source, false).get();
+  ASSERT_TRUE(echoFrame.ok);
+  ASSERT_EQ(echoFrame.selection.selections.size(), 1u)
+      << "programmatic source writeback echoed through replaceSource should not deselect";
+  const auto selectedIt = std::find_if(echoFrame.tree.nodes.begin(), echoFrame.tree.nodes.end(),
+                                       [](const TreeNodeEntry& node) { return node.selected; });
+  ASSERT_NE(selectedIt, echoFrame.tree.nodes.end());
+  EXPECT_EQ(selectedIt->idAttr, "target");
+}
+
+TEST_F(ThinClientUiFlowTest, ResizeHandleScalesSelectedElementAndCommitsWriteback) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
+      R"(<rect id="target" x="50" y="50" width="40" height="40" fill="red"/>)"
+      R"(</svg>)";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload selectDown;
+  selectDown.phase = PointerPhase::kDown;
+  selectDown.documentPoint = Vector2d(70.0, 70.0);
+  selectDown.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(selectDown).get().ok);
+
+  ::donner::editor::PointerEventPayload selectUp;
+  selectUp.phase = PointerPhase::kUp;
+  selectUp.documentPoint = Vector2d(70.0, 70.0);
+  ASSERT_TRUE(client->pointerEvent(selectUp).get().ok);
+
+  ::donner::editor::PointerEventPayload resizeDown;
+  resizeDown.phase = PointerPhase::kDown;
+  resizeDown.documentPoint = Vector2d(90.0, 90.0);
+  resizeDown.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(resizeDown).get().ok);
+
+  ::donner::editor::PointerEventPayload resizeMove;
+  resizeMove.phase = PointerPhase::kMove;
+  resizeMove.documentPoint = Vector2d(130.0, 130.0);
+  resizeMove.buttons = 1;
+  FrameResult moveFrame = client->pointerEvent(resizeMove).get();
+  ASSERT_TRUE(moveFrame.ok);
+  ASSERT_TRUE(moveFrame.compositedPreview.has_value());
+  EXPECT_TRUE(moveFrame.compositedPreview->includesBitmapUploads)
+      << "resize changes the promoted layer bitmap; the backend must send a fresh promoted "
+         "preview upload instead of reusing the stale pre-resize texture";
+  ASSERT_EQ(moveFrame.selection.selections.size(), 1u);
+  const Box2d duringResize = moveFrame.selection.selections[0].worldBBox;
+  EXPECT_NEAR(duringResize.topLeft.x, 50.0, 0.01);
+  EXPECT_NEAR(duringResize.topLeft.y, 50.0, 0.01);
+  EXPECT_NEAR(duringResize.bottomRight.x, 130.0, 0.01);
+  EXPECT_NEAR(duringResize.bottomRight.y, 130.0, 0.01);
+
+  ::donner::editor::PointerEventPayload resizeUp;
+  resizeUp.phase = PointerPhase::kUp;
+  resizeUp.documentPoint = Vector2d(130.0, 130.0);
+  FrameResult upFrame = client->pointerEvent(resizeUp).get();
+  ASSERT_TRUE(upFrame.ok);
+  ASSERT_EQ(upFrame.selection.selections.size(), 1u);
+  const Box2d afterResize = upFrame.selection.selections[0].worldBBox;
+  EXPECT_NEAR(afterResize.topLeft.x, 50.0, 0.01);
+  EXPECT_NEAR(afterResize.bottomRight.x, 130.0, 0.01);
+
+  ASSERT_EQ(upFrame.writebacks.size(), 1u);
+  EXPECT_EQ(upFrame.writebacks[0].reason, WritebackReason::kAttributeEdit);
+  const std::string source = ApplySourceWritebacks(std::string(kSvg), upFrame.writebacks);
+  EXPECT_NE(source.find(R"(id="target")"), std::string::npos);
+  EXPECT_NE(source.find("transform=\"matrix(2, 0, 0, 2, -50, -50)\""), std::string::npos);
+}
+
+TEST_F(ThinClientUiFlowTest, ShiftResizeHandleConstrainsAspectRatio) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
+      R"(<rect id="target" x="50" y="50" width="40" height="40" fill="red"/>)"
+      R"(</svg>)";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload selectDown;
+  selectDown.phase = PointerPhase::kDown;
+  selectDown.documentPoint = Vector2d(70.0, 70.0);
+  selectDown.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(selectDown).get().ok);
+
+  ::donner::editor::PointerEventPayload selectUp;
+  selectUp.phase = PointerPhase::kUp;
+  selectUp.documentPoint = Vector2d(70.0, 70.0);
+  ASSERT_TRUE(client->pointerEvent(selectUp).get().ok);
+
+  ::donner::editor::PointerEventPayload resizeDown;
+  resizeDown.phase = PointerPhase::kDown;
+  resizeDown.documentPoint = Vector2d(90.0, 90.0);
+  resizeDown.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(resizeDown).get().ok);
+
+  ::donner::editor::PointerEventPayload resizeMove;
+  resizeMove.phase = PointerPhase::kMove;
+  resizeMove.documentPoint = Vector2d(130.0, 110.0);
+  resizeMove.buttons = 1;
+  resizeMove.modifiers = 1u;  // Shift.
+  FrameResult moveFrame = client->pointerEvent(resizeMove).get();
+  ASSERT_TRUE(moveFrame.ok);
+  ASSERT_EQ(moveFrame.selection.selections.size(), 1u);
+  const Box2d duringResize = moveFrame.selection.selections[0].worldBBox;
+  EXPECT_NEAR(duringResize.topLeft.x, 50.0, 0.01);
+  EXPECT_NEAR(duringResize.topLeft.y, 50.0, 0.01);
+  EXPECT_NEAR(duringResize.bottomRight.x, 120.0, 0.01);
+  EXPECT_NEAR(duringResize.bottomRight.y, 120.0, 0.01);
+
+  ::donner::editor::PointerEventPayload resizeUp;
+  resizeUp.phase = PointerPhase::kUp;
+  resizeUp.documentPoint = Vector2d(130.0, 110.0);
+  resizeUp.modifiers = 1u;  // Shift.
+  FrameResult upFrame = client->pointerEvent(resizeUp).get();
+  ASSERT_TRUE(upFrame.ok);
+  ASSERT_EQ(upFrame.selection.selections.size(), 1u);
+  const Box2d afterResize = upFrame.selection.selections[0].worldBBox;
+  EXPECT_NEAR(afterResize.bottomRight.x, 120.0, 0.01);
+  EXPECT_NEAR(afterResize.bottomRight.y, 120.0, 0.01);
+}
+
+TEST_F(ThinClientUiFlowTest, DraggingAfterResizePreservesResizedBounds) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">)"
+      R"(<rect id="target" x="50" y="50" width="40" height="40" fill="red"/>)"
+      R"(</svg>)";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(70.0, 70.0);
+  down.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(down).get().ok);
+
+  ::donner::editor::PointerEventPayload up;
+  up.phase = PointerPhase::kUp;
+  up.documentPoint = Vector2d(70.0, 70.0);
+  ASSERT_TRUE(client->pointerEvent(up).get().ok);
+
+  ::donner::editor::PointerEventPayload resizeDown;
+  resizeDown.phase = PointerPhase::kDown;
+  resizeDown.documentPoint = Vector2d(90.0, 90.0);
+  resizeDown.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(resizeDown).get().ok);
+
+  ::donner::editor::PointerEventPayload resizeMove;
+  resizeMove.phase = PointerPhase::kMove;
+  resizeMove.documentPoint = Vector2d(130.0, 130.0);
+  resizeMove.buttons = 1;
+  FrameResult resizeMoveFrame = client->pointerEvent(resizeMove).get();
+  ASSERT_TRUE(resizeMoveFrame.ok);
+  ASSERT_TRUE(resizeMoveFrame.compositedPreview.has_value());
+  EXPECT_TRUE(resizeMoveFrame.compositedPreview->includesBitmapUploads)
+      << "resizing a promoted element must refresh the split-preview texture before the next "
+         "drag frame can use translation-only updates";
+
+  ::donner::editor::PointerEventPayload resizeUp;
+  resizeUp.phase = PointerPhase::kUp;
+  resizeUp.documentPoint = Vector2d(130.0, 130.0);
+  FrameResult resizedFrame = client->pointerEvent(resizeUp).get();
+  ASSERT_TRUE(resizedFrame.ok);
+  ASSERT_EQ(resizedFrame.selection.selections.size(), 1u);
+  const Box2d resized = resizedFrame.selection.selections[0].worldBBox;
+  ASSERT_NEAR(resized.topLeft.x, 50.0, 0.01);
+  ASSERT_NEAR(resized.topLeft.y, 50.0, 0.01);
+  ASSERT_NEAR(resized.bottomRight.x, 130.0, 0.01);
+  ASSERT_NEAR(resized.bottomRight.y, 130.0, 0.01);
+
+  ::donner::editor::PointerEventPayload dragDown;
+  dragDown.phase = PointerPhase::kDown;
+  dragDown.documentPoint = Vector2d(70.0, 70.0);
+  dragDown.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(dragDown).get().ok);
+
+  ::donner::editor::PointerEventPayload dragMove;
+  dragMove.phase = PointerPhase::kMove;
+  dragMove.documentPoint = Vector2d(90.0, 70.0);
+  dragMove.buttons = 1;
+  FrameResult moveFrame = client->pointerEvent(dragMove).get();
+  ASSERT_TRUE(moveFrame.ok);
+  ASSERT_EQ(moveFrame.selection.selections.size(), 1u);
+  const Box2d moved = moveFrame.selection.selections[0].worldBBox;
+  EXPECT_NEAR(moved.topLeft.x, 70.0, 0.01);
+  EXPECT_NEAR(moved.topLeft.y, 50.0, 0.01);
+  EXPECT_NEAR(moved.bottomRight.x, 150.0, 0.01);
+  EXPECT_NEAR(moved.bottomRight.y, 130.0, 0.01);
+
+  ::donner::editor::PointerEventPayload dragUp;
+  dragUp.phase = PointerPhase::kUp;
+  dragUp.documentPoint = Vector2d(90.0, 70.0);
+  FrameResult upFrame = client->pointerEvent(dragUp).get();
+  ASSERT_TRUE(upFrame.ok);
+  ASSERT_EQ(upFrame.selection.selections.size(), 1u);
+  const Box2d settled = upFrame.selection.selections[0].worldBBox;
+  EXPECT_NEAR(settled.topLeft.x, 70.0, 0.01);
+  EXPECT_NEAR(settled.bottomRight.x, 150.0, 0.01);
+}
+
+TEST_F(ThinClientUiFlowTest, ClickSelectionReportsSourceRangeForSelectedElement) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)"
+      R"(<rect id="before" x="0" y="0" width="10" height="10"/>)"
+      R"(<circle id="target" cx="40" cy="40" r="10"/>)"
+      R"(</svg>)";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(40.0, 40.0);
+  down.buttons = 1;
+  FrameResult selectedFrame = client->pointerEvent(down).get();
+  ASSERT_TRUE(selectedFrame.ok);
+
+  const auto selectedIt = std::find_if(
+      selectedFrame.tree.nodes.begin(), selectedFrame.tree.nodes.end(),
+      [](const TreeNodeEntry& node) { return node.selected && node.idAttr == "target"; });
+  ASSERT_NE(selectedIt, selectedFrame.tree.nodes.end());
+  ASSERT_LE(selectedIt->sourceStart, selectedIt->sourceEnd);
+  ASSERT_LE(selectedIt->sourceEnd, kSvg.size());
+  EXPECT_EQ(kSvg.substr(selectedIt->sourceStart, selectedIt->sourceEnd - selectedIt->sourceStart),
+            R"(<circle id="target" cx="40" cy="40" r="10"/>)");
+}
+
+TEST_F(ThinClientUiFlowTest, TransformWritebackShiftsLaterTreeSourceRanges) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n"
+      "  <rect id=\"first\" x=\"10\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+      "  <rect id=\"later\" x=\"60\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+      "</svg>\n";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(20.0, 20.0);
+  down.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(down).get().ok);
+
+  ::donner::editor::PointerEventPayload move;
+  move.phase = PointerPhase::kMove;
+  move.documentPoint = Vector2d(30.0, 20.0);
+  move.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(move).get().ok);
+
+  ::donner::editor::PointerEventPayload up;
+  up.phase = PointerPhase::kUp;
+  up.documentPoint = Vector2d(30.0, 20.0);
+  FrameResult upFrame = client->pointerEvent(up).get();
+  ASSERT_TRUE(upFrame.ok);
+  ASSERT_EQ(upFrame.writebacks.size(), 1u);
+  std::string source = ApplySourceWritebacks(std::string(kSvg), upFrame.writebacks);
+
+  ::donner::editor::PointerEventPayload laterDown;
+  laterDown.phase = PointerPhase::kDown;
+  laterDown.documentPoint = Vector2d(70.0, 20.0);
+  laterDown.buttons = 1;
+  FrameResult laterFrame = client->pointerEvent(laterDown).get();
+  ASSERT_TRUE(laterFrame.ok);
+
+  const auto selectedIt = std::find_if(
+      laterFrame.tree.nodes.begin(), laterFrame.tree.nodes.end(),
+      [](const TreeNodeEntry& node) { return node.selected && node.idAttr == "later"; });
+  ASSERT_NE(selectedIt, laterFrame.tree.nodes.end());
+  ASSERT_LE(selectedIt->sourceStart, selectedIt->sourceEnd);
+  ASSERT_LE(selectedIt->sourceEnd, source.size());
+  EXPECT_EQ(source.substr(selectedIt->sourceStart, selectedIt->sourceEnd - selectedIt->sourceStart),
+            R"(<rect id="later" x="60" y="10" width="20" height="20"/>)");
+}
+
+TEST_F(ThinClientUiFlowTest, DeleteKeyRemovesSelectedElementAndEmitsSourceWriteback) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n"
+      "  <rect id=\"target\" x=\"10\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+      "  <rect id=\"survivor\" x=\"50\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+      "</svg>\n";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(20.0, 20.0);
+  down.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(down).get().ok);
+
+  ::donner::editor::PointerEventPayload up;
+  up.phase = PointerPhase::kUp;
+  up.documentPoint = Vector2d(20.0, 20.0);
+  ASSERT_TRUE(client->pointerEvent(up).get().ok);
+
+  constexpr int32_t kGlfwKeyDelete = 261;
+  FrameResult deleteFrame = client
+                                ->keyEvent(::donner::editor::KeyEventPayload{
+                                    .phase = KeyPhase::kDown,
+                                    .keyCode = kGlfwKeyDelete,
+                                })
+                                .get();
+  ASSERT_TRUE(deleteFrame.ok);
+
+  EXPECT_TRUE(std::none_of(deleteFrame.tree.nodes.begin(), deleteFrame.tree.nodes.end(),
+                           [](const TreeNodeEntry& node) { return node.idAttr == "target"; }));
+  EXPECT_TRUE(std::any_of(deleteFrame.tree.nodes.begin(), deleteFrame.tree.nodes.end(),
+                          [](const TreeNodeEntry& node) { return node.idAttr == "survivor"; }));
+  ASSERT_EQ(deleteFrame.writebacks.size(), 1u);
+  EXPECT_EQ(deleteFrame.writebacks[0].reason, WritebackReason::kElementRemoval);
+
+  const std::string source = ApplySourceWritebacks(std::string(kSvg), deleteFrame.writebacks);
+  EXPECT_EQ(source.find("id=\"target\""), std::string::npos);
+  EXPECT_NE(source.find("id=\"survivor\""), std::string::npos);
+  EXPECT_EQ(source,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n"
+            "  <rect id=\"survivor\" x=\"50\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+            "</svg>\n");
+}
+
+TEST_F(ThinClientUiFlowTest, DeleteWritebackShiftsLaterTreeSourceRanges) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\n"
+      "  <rect id=\"first\" x=\"10\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+      "  <rect id=\"later\" x=\"60\" y=\"10\" width=\"20\" height=\"20\"/>\n"
+      "</svg>\n";
+
+  auto client = EditorBackendClient::MakeInProcess();
+  FrameResult load =
+      client
+          ->loadBytes(std::span(reinterpret_cast<const uint8_t*>(kSvg.data()), kSvg.size()),
+                      std::nullopt)
+          .get();
+  ASSERT_TRUE(load.ok);
+
+  ::donner::editor::PointerEventPayload down;
+  down.phase = PointerPhase::kDown;
+  down.documentPoint = Vector2d(20.0, 20.0);
+  down.buttons = 1;
+  ASSERT_TRUE(client->pointerEvent(down).get().ok);
+
+  ::donner::editor::PointerEventPayload up;
+  up.phase = PointerPhase::kUp;
+  up.documentPoint = Vector2d(20.0, 20.0);
+  ASSERT_TRUE(client->pointerEvent(up).get().ok);
+
+  constexpr int32_t kGlfwKeyDelete = 261;
+  FrameResult deleteFrame = client
+                                ->keyEvent(::donner::editor::KeyEventPayload{
+                                    .phase = KeyPhase::kDown,
+                                    .keyCode = kGlfwKeyDelete,
+                                })
+                                .get();
+  ASSERT_TRUE(deleteFrame.ok);
+  ASSERT_EQ(deleteFrame.writebacks.size(), 1u);
+  std::string source = ApplySourceWritebacks(std::string(kSvg), deleteFrame.writebacks);
+
+  ::donner::editor::PointerEventPayload laterDown;
+  laterDown.phase = PointerPhase::kDown;
+  laterDown.documentPoint = Vector2d(70.0, 20.0);
+  laterDown.buttons = 1;
+  FrameResult laterFrame = client->pointerEvent(laterDown).get();
+  ASSERT_TRUE(laterFrame.ok);
+
+  const auto selectedIt = std::find_if(
+      laterFrame.tree.nodes.begin(), laterFrame.tree.nodes.end(),
+      [](const TreeNodeEntry& node) { return node.selected && node.idAttr == "later"; });
+  ASSERT_NE(selectedIt, laterFrame.tree.nodes.end());
+  ASSERT_LE(selectedIt->sourceStart, selectedIt->sourceEnd);
+  ASSERT_LE(selectedIt->sourceEnd, source.size());
+  EXPECT_EQ(source.substr(selectedIt->sourceStart, selectedIt->sourceEnd - selectedIt->sourceStart),
+            R"(<rect id="later" x="60" y="10" width="20" height="20"/>)");
 }
 
 /// Regression: selection chrome (AABB + path outlines) must appear in the

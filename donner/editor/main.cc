@@ -35,6 +35,7 @@
 
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utf8.h"
 #include "donner/editor/AddressBar.h"
 #include "donner/editor/AddressBarDispatcher.h"
 #include "donner/editor/ContentSniffer.h"
@@ -151,6 +152,172 @@ struct PendingScrollEvents {
   GLFWscrollfun previousCallback = nullptr;
   std::vector<donner::editor::RenderPaneScrollEvent> events;
 };
+
+struct SourceSelectionSyncState {
+  bool hasSelection = false;
+  uint64_t treeGeneration = 0;
+  uint64_t entityId = 0;
+  uint64_t entityGeneration = 0;
+  uint32_t sourceStart = 0;
+  uint32_t sourceEnd = 0;
+
+  void reset() { *this = {}; }
+};
+
+struct SourceSelectionRange {
+  uint32_t start = 0;
+  uint32_t end = 0;
+};
+
+donner::editor::Coordinates CoordinatesFromByteOffset(std::string_view source,
+                                                      std::size_t byteOffset, int tabSize) {
+  const std::size_t target = std::min(byteOffset, source.size());
+  int line = 0;
+  int column = 0;
+  tabSize = std::max(tabSize, 1);
+
+  for (std::size_t i = 0; i < target;) {
+    const char ch = source[i];
+    if (ch == '\r') {
+      if (i + 1 < target && source[i + 1] == '\n') {
+        ++i;
+      }
+      ++line;
+      column = 0;
+      ++i;
+      continue;
+    }
+    if (ch == '\n') {
+      ++line;
+      column = 0;
+      ++i;
+      continue;
+    }
+    if (ch == '\t') {
+      column = (column / tabSize) * tabSize + tabSize;
+      ++i;
+      continue;
+    }
+
+    const int sequenceLength = donner::Utf8::SequenceLength(ch);
+    if (sequenceLength <= 0) {
+      ++i;
+    } else {
+      i += std::min<std::size_t>(static_cast<std::size_t>(sequenceLength), target - i);
+    }
+    ++column;
+  }
+
+  return donner::editor::Coordinates(line, column);
+}
+
+std::optional<SourceSelectionRange> SelectedSourceRangeFromFrame(
+    const donner::editor::FrameResult& result) {
+  const auto selectedIt = std::find_if(result.tree.nodes.begin(), result.tree.nodes.end(),
+                                       [](const donner::editor::sandbox::TreeNodeEntry& node) {
+                                         return node.selected && node.sourceEnd > node.sourceStart;
+                                       });
+  if (selectedIt == result.tree.nodes.end()) {
+    return std::nullopt;
+  }
+
+  return SourceSelectionRange{
+      .start = selectedIt->sourceStart,
+      .end = selectedIt->sourceEnd,
+  };
+}
+
+std::optional<SourceSelectionRange> AdjustRangeForWritebacks(
+    SourceSelectionRange range, const std::vector<donner::editor::SourceWriteback>& writebacks) {
+  int64_t start = range.start;
+  int64_t end = range.end;
+  for (const auto& writeback : writebacks) {
+    if (writeback.sourceStart > writeback.sourceEnd) {
+      return std::nullopt;
+    }
+
+    const int64_t patchStart = writeback.sourceStart;
+    const int64_t patchEnd = writeback.sourceEnd;
+    const int64_t oldLength = patchEnd - patchStart;
+    const int64_t newLength = static_cast<int64_t>(writeback.newText.size());
+    const int64_t delta = newLength - oldLength;
+
+    if (patchEnd <= start) {
+      start += delta;
+      end += delta;
+    } else if (patchStart >= end) {
+      continue;
+    } else if (patchStart >= start && patchEnd <= end) {
+      end += delta;
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  if (start < 0 || end < start || start > UINT32_MAX || end > UINT32_MAX) {
+    return std::nullopt;
+  }
+
+  return SourceSelectionRange{
+      .start = static_cast<uint32_t>(start),
+      .end = static_cast<uint32_t>(end),
+  };
+}
+
+void SyncSourceSelectionFromFrame(const donner::editor::FrameResult& result,
+                                  donner::editor::TextEditor& textEditor,
+                                  SourceSelectionSyncState& state,
+                                  std::optional<SourceSelectionRange> sourceRangeOverride,
+                                  std::optional<uint32_t> collapseOffset) {
+  const auto selectedIt = std::find_if(result.tree.nodes.begin(), result.tree.nodes.end(),
+                                       [](const donner::editor::sandbox::TreeNodeEntry& node) {
+                                         return node.selected && node.sourceEnd > node.sourceStart;
+                                       });
+  if (selectedIt == result.tree.nodes.end()) {
+    if (state.hasSelection || collapseOffset.has_value()) {
+      const std::string source = textEditor.getText();
+      const uint32_t offset =
+          std::min<uint32_t>(collapseOffset.value_or(0), static_cast<uint32_t>(source.size()));
+      const donner::editor::Coordinates collapsed =
+          CoordinatesFromByteOffset(source, offset, textEditor.getTabSize());
+      textEditor.setSelection(collapsed, collapsed);
+      textEditor.setCursorPosition(collapsed);
+    }
+    state.hasSelection = false;
+    return;
+  }
+
+  const donner::editor::sandbox::TreeNodeEntry& selected = *selectedIt;
+  const SourceSelectionRange range = sourceRangeOverride.value_or(SourceSelectionRange{
+      .start = selected.sourceStart,
+      .end = selected.sourceEnd,
+  });
+  if (state.hasSelection && state.treeGeneration == result.tree.generation &&
+      state.entityId == selected.entityId && state.entityGeneration == selected.entityGeneration &&
+      state.sourceStart == range.start && state.sourceEnd == range.end) {
+    return;
+  }
+
+  const std::string source = textEditor.getText();
+  if (range.start > range.end || range.end > source.size()) {
+    state.hasSelection = false;
+    return;
+  }
+
+  const donner::editor::Coordinates start =
+      CoordinatesFromByteOffset(source, range.start, textEditor.getTabSize());
+  const donner::editor::Coordinates end =
+      CoordinatesFromByteOffset(source, range.end, textEditor.getTabSize());
+  textEditor.selectAndFocus(start, end);
+  state = SourceSelectionSyncState{
+      .hasSelection = true,
+      .treeGeneration = result.tree.generation,
+      .entityId = selected.entityId,
+      .entityGeneration = selected.entityGeneration,
+      .sourceStart = range.start,
+      .sourceEnd = range.end,
+  };
+}
 
 #ifdef __EMSCRIPTEN__
 EM_JS(int, BrowserWheelZoomModifierHeld, (), {
@@ -719,9 +886,24 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUpload
                         CompositedPreviewTextureState& compositedPreview,
                         donner::editor::ViewportState& viewport,
                         donner::editor::TextEditor& textEditor, int& lastShownErrorLine,
-                        std::string& lastShownErrorReason) {
+                        std::string& lastShownErrorReason,
+                        SourceSelectionSyncState& sourceSelectionSyncState,
+                        bool syncSourceSelection) {
   if (!result.ok) {
     return false;
+  }
+
+  std::optional<SourceSelectionRange> selectedSourceRange = SelectedSourceRangeFromFrame(result);
+  std::optional<uint32_t> collapseSourceSelectionOffset;
+  if (!selectedSourceRange.has_value() && syncSourceSelection) {
+    for (const auto& wb : result.writebacks) {
+      if (wb.reason == donner::editor::sandbox::WritebackReason::kElementRemoval) {
+        collapseSourceSelectionOffset =
+            collapseSourceSelectionOffset.has_value()
+                ? std::min(*collapseSourceSelectionOffset, wb.sourceStart)
+                : std::optional<uint32_t>(wb.sourceStart);
+      }
+    }
   }
 
   bool bitmapUploaded = false;
@@ -772,18 +954,36 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUpload
   }
 
   // Apply source writebacks (e.g. from drag completion).
+  if (selectedSourceRange.has_value() && !result.writebacks.empty()) {
+    selectedSourceRange = AdjustRangeForWritebacks(*selectedSourceRange, result.writebacks);
+  }
+  bool programmaticTextUpdate = false;
   for (const auto& wb : result.writebacks) {
     std::string source = textEditor.getText();
     if (wb.sourceStart <= source.size() && wb.sourceEnd <= source.size() &&
         wb.sourceStart <= wb.sourceEnd) {
       source.replace(wb.sourceStart, wb.sourceEnd - wb.sourceStart, wb.newText);
       textEditor.setText(source, /*preserveScroll=*/true);
+      programmaticTextUpdate = true;
     }
   }
 
   // Full source replacement (undo/redo).
   if (result.sourceReplaceAll.has_value()) {
     textEditor.setText(*result.sourceReplaceAll, /*preserveScroll=*/true);
+    programmaticTextUpdate = true;
+  }
+
+  if (programmaticTextUpdate) {
+    textEditor.resetTextChanged();
+  }
+
+  const bool frameHasSelection =
+      std::any_of(result.tree.nodes.begin(), result.tree.nodes.end(),
+                  [](const donner::editor::sandbox::TreeNodeEntry& node) { return node.selected; });
+  if (syncSourceSelection || !frameHasSelection) {
+    SyncSourceSelectionFromFrame(result, textEditor, sourceSelectionSyncState, selectedSourceRange,
+                                 collapseSourceSelectionOffset);
   }
 
 #ifdef __EMSCRIPTEN__
@@ -1184,7 +1384,9 @@ int main(int argc, char** argv) {
 
   // Pending async results from backend.
   std::optional<std::future<donner::editor::FrameResult>> pendingFrame;
+  bool pendingFrameShouldSyncSourceSelection = false;
   std::optional<donner::Vector2d> lastPostedDragMoveScreenPoint;
+  SourceSelectionSyncState sourceSelectionSyncState;
 
   // Tracks the last canvas size we told the backend about, so we only
   // re-post `setViewport` when the UI pane actually resizes rather than
@@ -1304,6 +1506,7 @@ int main(int argc, char** argv) {
     textDispatchThrottled = false;
     textChangeIdleTimer = 0.0f;
     pendingFrame.reset();
+    pendingFrameShouldSyncSourceSelection = false;
     openFileError.clear();
     addressBar.setInitialUri(displayUri);
     addressBar.setStatus({donner::editor::AddressBarStatus::kRendered, "OK", displayUri});
@@ -1320,8 +1523,10 @@ int main(int argc, char** argv) {
     // on the next loop iteration for the new document dimensions.
     lastPostedCanvasSize = donner::Vector2i(-1, -1);
 
+    sourceSelectionSyncState.reset();
     ProcessFrameResult(loadResult, flatTexture, compositedPreview, viewport, textEditor,
-                       lastShownErrorLine, lastShownErrorReason);
+                       lastShownErrorLine, lastShownErrorReason, sourceSelectionSyncState,
+                       /*syncSourceSelection=*/false);
     std::cerr << "[load] ok uri=" << originUri << "\n";
     return true;
   };
@@ -1529,9 +1734,11 @@ int main(int argc, char** argv) {
         auto result = pendingFrame->get();
         const auto gotResult = std::chrono::steady_clock::now();
         ProcessFrameResult(result, flatTexture, compositedPreview, viewport, textEditor,
-                           lastShownErrorLine, lastShownErrorReason);
+                           lastShownErrorLine, lastShownErrorReason, sourceSelectionSyncState,
+                           pendingFrameShouldSyncSourceSelection);
         const auto processEnd = std::chrono::steady_clock::now();
         pendingFrame.reset();
+        pendingFrameShouldSyncSourceSelection = false;
         if (experimentalMode) {
           const double getMs =
               std::chrono::duration<double, std::milli>(gotResult - processStart).count();
@@ -1690,13 +1897,15 @@ int main(int argc, char** argv) {
       auto future = backend->undo();
       auto result = future.get();
       ProcessFrameResult(result, flatTexture, compositedPreview, viewport, textEditor,
-                         lastShownErrorLine, lastShownErrorReason);
+                         lastShownErrorLine, lastShownErrorReason, sourceSelectionSyncState,
+                         /*syncSourceSelection=*/false);
     };
     const auto triggerRedo = [&]() {
       auto future = backend->redo();
       auto result = future.get();
       ProcessFrameResult(result, flatTexture, compositedPreview, viewport, textEditor,
-                         lastShownErrorLine, lastShownErrorReason);
+                         lastShownErrorLine, lastShownErrorReason, sourceSelectionSyncState,
+                         /*syncSourceSelection=*/false);
     };
     const auto triggerQuit = [&]() { glfwSetWindowShouldClose(window, GLFW_TRUE); };
     const auto triggerZoomIn = [&]() { applyZoom(kKeyboardZoomStep, viewport.paneCenter()); };
@@ -1753,16 +1962,19 @@ int main(int argc, char** argv) {
             .phase = donner::editor::sandbox::PointerPhase::kDown,
             .documentPoint = donner::Vector2d(-9999.0, -9999.0),
         });
+        pendingFrameShouldSyncSourceSelection = true;
       }
 
       // Delete / Backspace: send key event to backend.
-      const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
-                             ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
+      const bool pressedDelete = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false);
+      const bool pressedBackspace = ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
+      const bool deleteKey = pressedDelete || pressedBackspace;
       if (deleteKey && !anyPopupOpen && !ImGui::GetIO().WantCaptureKeyboard) {
         pendingFrame = backend->keyEvent(donner::editor::KeyEventPayload{
             .phase = donner::editor::sandbox::KeyPhase::kDown,
-            .keyCode = GLFW_KEY_DELETE,
+            .keyCode = pressedBackspace ? GLFW_KEY_BACKSPACE : GLFW_KEY_DELETE,
         });
+        pendingFrameShouldSyncSourceSelection = true;
       }
     }
 
@@ -2020,6 +2232,7 @@ int main(int argc, char** argv) {
       documentDirty = true;
       // Fire-and-forget: send to backend, next frame picks up result.
       pendingFrame = backend->replaceSource(std::string(newSource), false);
+      pendingFrameShouldSyncSourceSelection = false;
     };
 
     if (textEditor.isTextChanged()) {
@@ -2134,11 +2347,14 @@ int main(int argc, char** argv) {
         if (pendingFrame.has_value() &&
             pendingFrame->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
           ProcessFrameResult(pendingFrame->get(), flatTexture, compositedPreview, viewport,
-                             textEditor, lastShownErrorLine, lastShownErrorReason);
+                             textEditor, lastShownErrorLine, lastShownErrorReason,
+                             sourceSelectionSyncState, pendingFrameShouldSyncSourceSelection);
           pendingFrame.reset();
+          pendingFrameShouldSyncSourceSelection = false;
         }
         if (!pendingFrame.has_value()) {
           pendingFrame = backend->setViewport(desiredCanvasSize.x, desiredCanvasSize.y);
+          pendingFrameShouldSyncSourceSelection = false;
         } else {
           // An input-driven frame is still in flight; let it land first
           // and pick up the new viewport on the next main-loop tick.
@@ -2272,12 +2488,7 @@ int main(int argc, char** argv) {
         return viewport.screenToDocument(donner::Vector2d(screenPoint.x, screenPoint.y));
       };
 
-      // Pointer events → backend.
-      const bool toolEligible = paneHovered && !panning && !spaceHeld;
-      if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        const ImVec2 mousePos = ImGui::GetMousePos();
-        lastPostedDragMoveScreenPoint = donner::Vector2d(mousePos.x, mousePos.y);
-        const donner::Vector2d docPoint = screenToDocument(mousePos);
+      const auto currentPointerModifiers = []() -> uint32_t {
         uint32_t mods = 0;
         if (ImGui::GetIO().KeyShift) {
           mods |= 1;  // Shift modifier bit.
@@ -2285,12 +2496,22 @@ int main(int argc, char** argv) {
         if (ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper) {
           mods |= 2;  // Ctrl/Cmd modifier bit.
         }
+        return mods;
+      };
+
+      // Pointer events → backend.
+      const bool toolEligible = paneHovered && !panning && !spaceHeld;
+      if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 mousePos = ImGui::GetMousePos();
+        lastPostedDragMoveScreenPoint = donner::Vector2d(mousePos.x, mousePos.y);
+        const donner::Vector2d docPoint = screenToDocument(mousePos);
         pendingFrame = backend->pointerEvent(donner::editor::PointerEventPayload{
             .phase = donner::editor::sandbox::PointerPhase::kDown,
             .documentPoint = docPoint,
             .buttons = 1,
-            .modifiers = mods,
+            .modifiers = currentPointerModifiers(),
         });
+        pendingFrameShouldSyncSourceSelection = true;
       }
       if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !panning && !spaceHeld &&
           ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
@@ -2304,7 +2525,9 @@ int main(int argc, char** argv) {
               .phase = donner::editor::sandbox::PointerPhase::kMove,
               .documentPoint = docPoint,
               .buttons = 1,
+              .modifiers = currentPointerModifiers(),
           });
+          pendingFrameShouldSyncSourceSelection = true;
           if (experimentalMode) {
             const auto dragPostEnd = std::chrono::steady_clock::now();
             const double postMs =
@@ -2320,7 +2543,9 @@ int main(int argc, char** argv) {
         pendingFrame = backend->pointerEvent(donner::editor::PointerEventPayload{
             .phase = donner::editor::sandbox::PointerPhase::kUp,
             .documentPoint = docPoint,
+            .modifiers = currentPointerModifiers(),
         });
+        pendingFrameShouldSyncSourceSelection = true;
       } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         lastPostedDragMoveScreenPoint.reset();
       }
@@ -2399,7 +2624,8 @@ int main(int argc, char** argv) {
             } else if (ImGui::GetIO().KeyShift) {
               mode = 2;  // Add.
             }
-            (void)backend->selectElement(node.entityId, node.entityGeneration, mode);
+            pendingFrame = backend->selectElement(node.entityId, node.entityGeneration, mode);
+            pendingFrameShouldSyncSourceSelection = true;
           }
 
           // Scroll to selected node.

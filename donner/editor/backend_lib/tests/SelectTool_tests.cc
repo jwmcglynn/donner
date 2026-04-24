@@ -1,6 +1,7 @@
 #include "donner/editor/backend_lib/SelectTool.h"
 
 #include "donner/editor/backend_lib/EditorApp.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "gtest/gtest.h"
 
@@ -27,6 +28,14 @@ protected:
     auto element = app.document().document().querySelector(id);
     EXPECT_TRUE(element.has_value());
     return element->cast<svg::SVGGraphicsElement>().transform();
+  }
+
+  Box2d worldBoundsOf(std::string_view id) {
+    auto element = app.document().document().querySelector(id);
+    EXPECT_TRUE(element.has_value());
+    auto bounds = element->cast<svg::SVGGeometryElement>().worldBounds();
+    EXPECT_TRUE(bounds.has_value());
+    return bounds.value_or(Box2d());
   }
 
   bool selectionIs(std::string_view id) {
@@ -185,6 +194,143 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
   const Transform2d after = transformOf("#r1");
   EXPECT_DOUBLE_EQ(after.data[4], 25.0);
   EXPECT_DOUBLE_EQ(after.data[5], 20.0);
+}
+
+TEST_F(SelectToolTest, DragReleasePreservesSelection) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+}
+
+TEST_F(SelectToolTest, DragBottomRightHandleScalesSelectedElement) {
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(30.0, 30.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(50.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#r1");
+  EXPECT_NEAR(bounds.topLeft.x, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.topLeft.y, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.x, 50.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.y, 50.0, 1e-6);
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Scale element");
+}
+
+TEST_F(SelectToolTest, DragRightHandleScalesOnlyX) {
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(30.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseMove(app, Vector2d(50.0, 20.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(50.0, 20.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#r1");
+  EXPECT_NEAR(bounds.topLeft.x, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.topLeft.y, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.x, 50.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.y, 30.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, ShiftDuringCornerResizeConstrainsAspectRatio) {
+  app.setSelection(elementById("#r1"));
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(30.0, 30.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseMove(app, Vector2d(50.0, 40.0), /*buttonHeld=*/true, shift);
+  tool.onMouseUp(app, Vector2d(50.0, 40.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#r1");
+  EXPECT_NEAR(bounds.topLeft.x, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.topLeft.y, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.x, 45.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.y, 45.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, ShiftResizeCanStartOnHandleWithoutTogglingSelection) {
+  app.setSelection(elementById("#r1"));
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(30.0, 30.0), shift);
+  ASSERT_TRUE(tool.isDragging());
+  EXPECT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+
+  tool.onMouseMove(app, Vector2d(50.0, 40.0), /*buttonHeld=*/true, shift);
+  tool.onMouseUp(app, Vector2d(50.0, 40.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#r1");
+  EXPECT_NEAR(bounds.bottomRight.x, 45.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.y, 45.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, ShiftDuringSideResizeConstrainsAspectRatioAroundOppositeEdgeCenter) {
+  app.setSelection(elementById("#r1"));
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(30.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseMove(app, Vector2d(50.0, 20.0), /*buttonHeld=*/true, shift);
+  tool.onMouseUp(app, Vector2d(50.0, 20.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#r1");
+  EXPECT_NEAR(bounds.topLeft.x, 10.0, 1e-6);
+  EXPECT_NEAR(bounds.topLeft.y, 0.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.x, 50.0, 1e-6);
+  EXPECT_NEAR(bounds.bottomRight.y, 40.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, DraggingResizedElementPreservesScaleAndMovesByDocumentDelta) {
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(30.0, 30.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(50.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+  const Box2d resizedBounds = worldBoundsOf("#r1");
+  ASSERT_NEAR(resizedBounds.topLeft.x, 10.0, 1e-6);
+  ASSERT_NEAR(resizedBounds.bottomRight.x, 50.0, 1e-6);
+
+  tool.onMouseDown(app, Vector2d(25.0, 25.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(35.0, 25.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(35.0, 25.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d movedBounds = worldBoundsOf("#r1");
+  EXPECT_NEAR(movedBounds.topLeft.x, 20.0, 1e-6);
+  EXPECT_NEAR(movedBounds.topLeft.y, 10.0, 1e-6);
+  EXPECT_NEAR(movedBounds.bottomRight.x, 60.0, 1e-6);
+  EXPECT_NEAR(movedBounds.bottomRight.y, 50.0, 1e-6);
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+}
+
+TEST_F(SelectToolTest, ResizeHandleDragDoesNotUseCompositedPreview) {
+  tool.setCompositedDragPreviewEnabled(true);
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(30.0, 30.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
+
+  EXPECT_FALSE(tool.activeDragPreview().has_value())
+      << "resize changes scale, so the translation-only compositor preview cannot represent it";
 }
 
 TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
@@ -804,10 +950,8 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   // Expected drag delta: (55, 55) - (15, 15) = (40, 40).
   const Transform2d finalTransform = transformOf("#r1");
   const Vector2d translation = finalTransform.translation();
-  EXPECT_NEAR(translation.x, 40.0, 0.01)
-      << "drag delta corrupted by mid-drag canvas resize";
-  EXPECT_NEAR(translation.y, 40.0, 0.01)
-      << "drag delta corrupted by mid-drag canvas resize";
+  EXPECT_NEAR(translation.x, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
+  EXPECT_NEAR(translation.y, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
 }
 
 }  // namespace

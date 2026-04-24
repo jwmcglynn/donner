@@ -19,12 +19,11 @@ namespace donner::editor {
 class EditorApp;
 
 /// Modifier-key state captured at the moment a mouse event was
-/// dispatched. Tools use this for shift-add-to-selection, alt-clone,
-/// etc. Default-constructed = no modifiers, which keeps existing
+/// dispatched. Tools use this for shift-add-to-selection, constrained
+/// resize, alt-clone, etc. Default-constructed = no modifiers, which keeps existing
 /// callsites that don't care about modifiers source-compatible.
 struct MouseModifiers {
-  /// Shift held — used by `SelectTool` to toggle/extend selection
-  /// rather than replacing it.
+  /// Shift held — used by `SelectTool` to toggle/extend selection or constrain resize.
   bool shift = false;
 };
 

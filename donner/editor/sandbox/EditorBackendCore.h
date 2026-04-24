@@ -99,8 +99,14 @@ private:
   /// Bump entity-handle generation, invalidating all outstanding wire handles.
   void bumpEntityGeneration();
 
+  /// Drop compositor and split-preview state after document structure changes.
+  void resetCompositorState();
+
   /// Walk the document tree and populate \p tree.
   void populateTreeSummary(FrameTreeSummary& tree);
+
+  /// Drain pending DOM-to-source writebacks into \p frame.
+  void appendPendingSourceWritebacks(FramePayload& frame);
 
   /// Get or assign a stable wire id for the given entity. Also records the
   /// SVGElement so it can be resolved later.
@@ -209,10 +215,12 @@ private:
 
   /// Split-preview texture upload state. During an active drag we ship
   /// bg/drag/fg bitmaps once, then send only a translation until the
-  /// promoted entity or canvas size changes.
+  /// promoted entity, canvas size, or promoted-layer bitmap generation
+  /// changes.
   bool compositedPreviewUploadsPrimed_ = false;
   Entity compositedPreviewUploadEntity_ = entt::null;
   Vector2i compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
+  uint64_t compositedPreviewUploadGeneration_ = 0;
 
   /// Entity handle bimap state.
   uint64_t entityGeneration_ = 1;

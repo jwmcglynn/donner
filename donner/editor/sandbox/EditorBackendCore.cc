@@ -1,10 +1,16 @@
 #include "donner/editor/sandbox/EditorBackendCore.h"
 
 #include <algorithm>
+#include <limits>
+#include <numeric>
+#include <span>
 
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/editor/TextPatch.h"
+#include "donner/editor/backend_lib/AttributeWriteback.h"
+#include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -91,6 +97,164 @@ FrameBitmapPayload MakeFrameBitmapPayload(const donner::svg::RendererBitmap& bit
   return payload;
 }
 
+std::optional<TextPatch> BuildTransformWritebackPatch(
+    std::string_view source, const donner::editor::AttributeWritebackTarget& target,
+    const Transform2d& transform, const std::optional<RcString>& sourceTransformAttributeValue,
+    bool restoreSourceTransformAttributeValue) {
+  if (restoreSourceTransformAttributeValue && sourceTransformAttributeValue.has_value()) {
+    return buildAttributeWriteback(source, target, "transform",
+                                   std::string_view(*sourceTransformAttributeValue));
+  }
+
+  const RcString serialized = toSVGTransformString(transform);
+  if (std::string_view(serialized).empty()) {
+    return buildAttributeRemoveWriteback(source, target, "transform");
+  }
+
+  return buildAttributeWriteback(source, target, "transform", std::string_view(serialized));
+}
+
+FrameWritebackEntry MakeWritebackEntry(const TextPatch& patch, WritebackReason reason) {
+  FrameWritebackEntry entry;
+  entry.start = static_cast<uint32_t>(patch.offset);
+  entry.end = static_cast<uint32_t>(patch.offset + patch.length);
+  entry.newText = patch.replacement;
+  entry.reason = reason;
+  return entry;
+}
+
+std::optional<std::size_t> ShiftOffset(std::size_t offset, int64_t delta) {
+  if (delta < 0) {
+    const auto magnitude = static_cast<std::size_t>(-delta);
+    if (offset < magnitude) {
+      return std::nullopt;
+    }
+    return offset - magnitude;
+  }
+
+  const auto magnitude = static_cast<std::size_t>(delta);
+  if (offset > std::numeric_limits<std::size_t>::max() - magnitude) {
+    return std::nullopt;
+  }
+  return offset + magnitude;
+}
+
+bool AdjustSourceRangeForPatch(std::size_t* start, std::size_t* end, const TextPatch& patch) {
+  if (patch.offset > std::numeric_limits<std::size_t>::max() - patch.length) {
+    return false;
+  }
+
+  const std::size_t patchStart = patch.offset;
+  const std::size_t patchEnd = patch.offset + patch.length;
+  const int64_t delta =
+      static_cast<int64_t>(patch.replacement.size()) - static_cast<int64_t>(patch.length);
+
+  if (*end <= patchStart) {
+    return true;
+  }
+
+  if (*start >= patchEnd) {
+    auto shiftedStart = ShiftOffset(*start, delta);
+    auto shiftedEnd = ShiftOffset(*end, delta);
+    if (!shiftedStart.has_value() || !shiftedEnd.has_value()) {
+      return false;
+    }
+    *start = *shiftedStart;
+    *end = *shiftedEnd;
+    return true;
+  }
+
+  if (patchStart >= *start && patchEnd <= *end) {
+    auto shiftedEnd = ShiftOffset(*end, delta);
+    if (!shiftedEnd.has_value()) {
+      return false;
+    }
+    *end = *shiftedEnd;
+    return true;
+  }
+
+  return false;
+}
+
+void AdjustXmlNodeSourceRangesForPatch(xml::XMLNode node, const TextPatch& patch) {
+  if (auto loc = node.getNodeLocation();
+      loc.has_value() && loc->start.offset.has_value() && loc->end.offset.has_value()) {
+    std::size_t start = loc->start.offset.value();
+    std::size_t end = loc->end.offset.value();
+    if (AdjustSourceRangeForPatch(&start, &end, patch)) {
+      node.setSourceStartOffset(FileOffset::Offset(start));
+      node.setSourceEndOffset(FileOffset::Offset(end));
+    }
+  }
+
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
+    AdjustXmlNodeSourceRangesForPatch(*child, patch);
+  }
+}
+
+void AdjustLiveSourceRangesForPatches(EditorApp& editor, std::span<const TextPatch> patches) {
+  if (!editor.hasDocument() || patches.empty()) {
+    return;
+  }
+
+  auto root = xml::XMLNode::TryCast(editor.document().document().svgElement().entityHandle());
+  if (!root.has_value()) {
+    return;
+  }
+
+  std::vector<std::size_t> indices(patches.size());
+  std::iota(indices.begin(), indices.end(), 0);
+  std::sort(indices.begin(), indices.end(), [&](std::size_t lhs, std::size_t rhs) {
+    return patches[lhs].offset > patches[rhs].offset;
+  });
+
+  for (const std::size_t index : indices) {
+    AdjustXmlNodeSourceRangesForPatch(*root, patches[index]);
+  }
+}
+
+bool IsDeleteKey(const KeyEventPayload& key) {
+  // GLFW key codes. Duplicated here rather than depending on GLFW from
+  // the backend core: the session protocol already defines keyCode as
+  // the host-side GLFW value.
+  constexpr int32_t kGlfwKeyBackspace = 259;
+  constexpr int32_t kGlfwKeyDelete = 261;
+  return key.phase == KeyPhase::kDown &&
+         (key.keyCode == kGlfwKeyBackspace || key.keyCode == kGlfwKeyDelete);
+}
+
+std::vector<donner::editor::AttributeWritebackTarget> CaptureSelectionTargets(EditorApp& editor) {
+  std::vector<donner::editor::AttributeWritebackTarget> targets;
+  if (!editor.hasDocument()) {
+    return targets;
+  }
+
+  targets.reserve(editor.selectedElements().size());
+  for (const auto& element : editor.selectedElements()) {
+    if (auto target = captureAttributeWritebackTarget(element); target.has_value()) {
+      targets.push_back(std::move(*target));
+    }
+  }
+  return targets;
+}
+
+void RestoreSelectionTargets(EditorApp& editor,
+                             std::span<const donner::editor::AttributeWritebackTarget> targets) {
+  if (!editor.hasDocument() || targets.empty()) {
+    return;
+  }
+
+  std::vector<svg::SVGElement> restoredSelection;
+  restoredSelection.reserve(targets.size());
+  for (const auto& target : targets) {
+    if (auto element = resolveAttributeWritebackTarget(editor.document().document(), target);
+        element.has_value()) {
+      restoredSelection.push_back(*element);
+    }
+  }
+  editor.setSelection(std::move(restoredSelection));
+}
+
 }  // namespace
 
 EditorBackendCore::EditorBackendCore() {
@@ -110,16 +274,20 @@ void EditorBackendCore::bumpEntityGeneration() {
   entityToId_.clear();
   idToElement_.clear();
   nextEntityId_ = 1;
-  // Any entity id the compositor was tracking is now dead — its
-  // internal layer / segment caches are keyed on the old registry's
-  // entity ids. Drop the whole compositor so `buildFramePayload`
-  // rebuilds it against the new document on the next render.
+  resetCompositorState();
+}
+
+void EditorBackendCore::resetCompositorState() {
+  // Layer / segment caches are snapshots of the current DOM structure.
+  // Drop the whole compositor so `buildFramePayload` rebuilds split
+  // static layers against the post-mutation document on the next render.
   compositor_.reset();
   compositorEntity_ = entt::null;
   compositorInteractionKind_ = donner::svg::compositor::InteractionHint::Selection;
   compositedPreviewUploadsPrimed_ = false;
   compositedPreviewUploadEntity_ = entt::null;
   compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
+  compositedPreviewUploadGeneration_ = 0;
 }
 
 uint64_t EditorBackendCore::entityIdFor(entt::entity entity, const svg::SVGElement& element) {
@@ -234,6 +402,66 @@ void EditorBackendCore::populateTreeSummary(FrameTreeSummary& tree) {
   }
 }
 
+void EditorBackendCore::appendPendingSourceWritebacks(FramePayload& frame) {
+  std::vector<std::pair<TextPatch, WritebackReason>> patches;
+  std::string source = editor_.cleanSourceText();
+
+  if (auto dragWriteback = selectTool_.consumeCompletedDragWriteback(); dragWriteback.has_value()) {
+    const auto appendDragPatch = [&](const SelectTool::CompletedDragWriteback& writeback) {
+      auto patch = BuildTransformWritebackPatch(source, writeback.target, writeback.transform,
+                                                /*sourceTransformAttributeValue=*/std::nullopt,
+                                                /*restoreSourceTransformAttributeValue=*/false);
+      if (patch.has_value()) {
+        patches.push_back({std::move(*patch), WritebackReason::kAttributeEdit});
+      }
+    };
+    appendDragPatch(*dragWriteback);
+    for (const auto& extra : dragWriteback->extras) {
+      appendDragPatch(extra);
+    }
+  }
+
+  if (auto transformWriteback = editor_.consumeTransformWriteback();
+      transformWriteback.has_value()) {
+    auto patch = BuildTransformWritebackPatch(
+        source, transformWriteback->target, transformWriteback->transform,
+        transformWriteback->sourceTransformAttributeValue,
+        transformWriteback->restoreSourceTransformAttributeValue);
+    if (patch.has_value()) {
+      patches.push_back({std::move(*patch), WritebackReason::kAttributeEdit});
+    }
+  }
+
+  for (const auto& removeWriteback : editor_.consumeElementRemoveWritebacks()) {
+    auto patch = buildElementRemoveWriteback(source, removeWriteback.target);
+    if (patch.has_value()) {
+      patches.push_back({std::move(*patch), WritebackReason::kElementRemoval});
+    }
+  }
+
+  std::sort(patches.begin(), patches.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.first.offset > rhs.first.offset; });
+
+  std::vector<TextPatch> textPatches;
+  textPatches.reserve(patches.size());
+  for (const auto& [patch, reason] : patches) {
+    if (patch.offset > UINT32_MAX || patch.length > UINT32_MAX ||
+        patch.offset + patch.length > UINT32_MAX) {
+      continue;
+    }
+    frame.writebacks.push_back(MakeWritebackEntry(patch, reason));
+    textPatches.push_back(patch);
+  }
+
+  if (!textPatches.empty()) {
+    const ApplyPatchesResult result = applyPatches(source, textPatches);
+    if (result.applied == textPatches.size() && result.rejectedBounds == 0u) {
+      editor_.setCleanSourceText(source);
+      AdjustLiveSourceRangesForPatches(editor_, textPatches);
+    }
+  }
+}
+
 FramePayload EditorBackendCore::buildFramePayload() {
   FramePayload frame;
   frame.frameId = frameIdCounter_++;
@@ -342,6 +570,7 @@ FramePayload EditorBackendCore::buildFramePayload() {
         compositorEntity_ != entt::null && compositor_->hasSplitStaticLayers();
     if (splitPreviewAvailable) {
       const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
+      const uint64_t layerGeneration = compositor_->layerGenerationOf(compositorEntity_);
       const Transform2d canvasFromDoc = doc.canvasFromDocumentTransform();
       const double docPerCanvasX = canvasFromDoc.data[0] != 0.0 ? 1.0 / canvasFromDoc.data[0] : 1.0;
       const double docPerCanvasY = canvasFromDoc.data[3] != 0.0 ? 1.0 / canvasFromDoc.data[3] : 1.0;
@@ -352,9 +581,11 @@ FramePayload EditorBackendCore::buildFramePayload() {
             Vector2d(composeOffsetCanvas.x * docPerCanvasX, composeOffsetCanvas.y * docPerCanvasY);
       }
 
-      const bool previewUploadNeeded =
-          !compositedPreviewUploadsPrimed_ || compositedPreviewUploadEntity_ != compositorEntity_ ||
-          compositedPreviewUploadCanvasSize_ != canvasSize || (activeDrag && !fastPathOrCleanFrame);
+      const bool previewUploadNeeded = !compositedPreviewUploadsPrimed_ ||
+                                       compositedPreviewUploadEntity_ != compositorEntity_ ||
+                                       compositedPreviewUploadCanvasSize_ != canvasSize ||
+                                       compositedPreviewUploadGeneration_ != layerGeneration ||
+                                       (activeDrag && !fastPathOrCleanFrame);
 
       frame.hasCompositedPreview = true;
       frame.compositedPreviewActive = activeDrag;
@@ -398,11 +629,13 @@ FramePayload EditorBackendCore::buildFramePayload() {
         compositedPreviewUploadsPrimed_ = true;
         compositedPreviewUploadEntity_ = compositorEntity_;
         compositedPreviewUploadCanvasSize_ = canvasSize;
+        compositedPreviewUploadGeneration_ = layerGeneration;
       }
     } else {
       compositedPreviewUploadsPrimed_ = false;
       compositedPreviewUploadEntity_ = entt::null;
       compositedPreviewUploadCanvasSize_ = Vector2i(-1, -1);
+      compositedPreviewUploadGeneration_ = 0;
     }
 
     // Fast-path: when the compositor has a single promoted layer with
@@ -648,12 +881,10 @@ FramePayload EditorBackendCore::buildFramePayload() {
       frame.selections.push_back(entry);
     }
 
-    // Drain writebacks to prevent unbounded growth.
-    (void)editor_.consumeTransformWriteback();
-    (void)editor_.consumeElementRemoveWritebacks();
-
     // Tree summary.
     populateTreeSummary(frame.tree);
+
+    appendPendingSourceWritebacks(frame);
 
     // Document viewBox — the coordinate space every bbox / marquee /
     // pointer event on this frame is in. The host needs it to map
@@ -718,12 +949,35 @@ FramePayload EditorBackendCore::handleLoadBytes(const LoadBytesPayload& load) {
 }
 
 FramePayload EditorBackendCore::handleReplaceSource(const ReplaceSourcePayload& rep) {
+  if (editor_.hasDocument() && rep.bytes == editor_.cleanSourceText()) {
+    return buildFramePayload();
+  }
+
+  const auto selectionTargets = CaptureSelectionTargets(editor_);
   bumpEntityGeneration();
-  (void)editor_.loadFromString(rep.bytes);
+  const bool loaded = editor_.loadFromString(rep.bytes);
+  if (loaded) {
+    RestoreSelectionTargets(editor_, selectionTargets);
+  }
+  editor_.setCleanSourceText(rep.bytes);
   return buildFramePayload();
 }
 
-FramePayload EditorBackendCore::handleApplySourcePatch(const ApplySourcePatchPayload& /*patch*/) {
+FramePayload EditorBackendCore::handleApplySourcePatch(const ApplySourcePatchPayload& patch) {
+  std::string source = editor_.cleanSourceText();
+  if (patch.start <= patch.end && patch.end <= source.size()) {
+    source.replace(patch.start, patch.end - patch.start, patch.newText);
+    if (editor_.hasDocument() && source == editor_.cleanSourceText()) {
+      return buildFramePayload();
+    }
+    const auto selectionTargets = CaptureSelectionTargets(editor_);
+    bumpEntityGeneration();
+    const bool loaded = editor_.loadFromString(source);
+    if (loaded) {
+      RestoreSelectionTargets(editor_, selectionTargets);
+    }
+    editor_.setCleanSourceText(source);
+  }
   return buildFramePayload();
 }
 
@@ -741,7 +995,7 @@ FramePayload EditorBackendCore::handlePointerEvent(const PointerEventPayload& pt
         // `ptr.buttons` bit 0 = primary; default-treat any held
         // button as drag continuation since the host only forwards
         // moves during a drag anyway.
-        selectTool_.onMouseMove(editor_, docPoint, /*buttonHeld=*/ptr.buttons != 0);
+        selectTool_.onMouseMove(editor_, docPoint, /*buttonHeld=*/ptr.buttons != 0, modifiers);
         break;
       case PointerPhase::kUp:
       case PointerPhase::kCancel:
@@ -759,7 +1013,26 @@ FramePayload EditorBackendCore::handlePointerEvent(const PointerEventPayload& pt
   return buildFramePayload();
 }
 
-FramePayload EditorBackendCore::handleKeyEvent(const KeyEventPayload& /*key*/) {
+FramePayload EditorBackendCore::handleKeyEvent(const KeyEventPayload& key) {
+  if (IsDeleteKey(key) && editor_.hasDocument() && editor_.hasSelection()) {
+    const std::vector<svg::SVGElement> selection = editor_.selectedElements();
+    bool deletedAny = false;
+    for (const auto& element : selection) {
+      if (!element.parentElement().has_value()) {
+        continue;
+      }
+      if (auto target = captureAttributeWritebackTarget(element); target.has_value()) {
+        editor_.enqueueElementRemoveWriteback(
+            EditorApp::CompletedElementRemoveWriteback{.target = std::move(*target)});
+      }
+      editor_.applyMutation(EditorCommand::DeleteElementCommand(element));
+      deletedAny = true;
+    }
+    editor_.clearSelection();
+    if (deletedAny) {
+      resetCompositorState();
+    }
+  }
   return buildFramePayload();
 }
 

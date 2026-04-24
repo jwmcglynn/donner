@@ -1,10 +1,14 @@
 #include "donner/editor/backend_lib/SelectTool.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <span>
 #include <vector>
 
 #include "donner/base/RcString.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/backend_lib/AttributeWriteback.h"
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/backend_lib/EditorCommand.h"
@@ -17,6 +21,158 @@
 namespace donner::editor {
 
 namespace {
+
+/// Click target radius for resize handles, in canvas pixels. The
+/// rendered handles are 6 px square; this adds a small amount of
+/// tolerance so they are usable without making nearby shape clicks
+/// unpredictable.
+constexpr double kResizeHandleHitRadiusPixels = 5.0;
+
+/// Minimum scale allowed during handle drag. Crossing the opposite
+/// edge would flip the element; clamp just above zero until explicit
+/// flip support exists.
+constexpr double kMinResizeScale = 0.01;
+
+struct ResizeHandleHit {
+  Vector2d anchorDocumentPoint;
+  bool scaleX = false;
+  bool scaleY = false;
+};
+
+struct ResizeHandleCandidate {
+  Vector2d center;
+  Vector2d anchor;
+  bool scaleX = false;
+  bool scaleY = false;
+};
+
+std::optional<Box2d> CombinedBounds(std::span<const Box2d> bounds) {
+  if (bounds.empty()) {
+    return std::nullopt;
+  }
+
+  Box2d combined = bounds.front();
+  for (std::size_t i = 1; i < bounds.size(); ++i) {
+    combined.addBox(bounds[i]);
+  }
+  return combined;
+}
+
+double CanvasPixelsToDocumentUnits(EditorApp& editor, double pixels) {
+  if (!editor.hasDocument()) {
+    return pixels;
+  }
+
+  const Transform2d canvasFromDoc = editor.document().document().canvasFromDocumentTransform();
+  const double canvasPerDoc = canvasFromDoc.transformVector(Vector2d(1.0, 0.0)).length();
+  return canvasPerDoc > 1e-9 ? pixels / canvasPerDoc : pixels;
+}
+
+std::optional<ResizeHandleHit> HitTestResizeHandle(EditorApp& editor,
+                                                   const Vector2d& documentPoint) {
+  const auto& selection = editor.selectedElements();
+  if (selection.size() != 1u || !selection.front().isa<svg::SVGGraphicsElement>()) {
+    return std::nullopt;
+  }
+
+  const auto bounds = SnapshotSelectionWorldBounds(selection);
+  const std::optional<Box2d> aabb = CombinedBounds(bounds);
+  if (!aabb.has_value() || aabb->isEmpty()) {
+    return std::nullopt;
+  }
+
+  const double cx = (aabb->topLeft.x + aabb->bottomRight.x) * 0.5;
+  const double cy = (aabb->topLeft.y + aabb->bottomRight.y) * 0.5;
+  const std::array<ResizeHandleCandidate, 8> handles = {
+      ResizeHandleCandidate{Vector2d(aabb->topLeft.x, aabb->topLeft.y),
+                            Vector2d(aabb->bottomRight.x, aabb->bottomRight.y), true, true},
+      ResizeHandleCandidate{Vector2d(cx, aabb->topLeft.y), Vector2d(cx, aabb->bottomRight.y), false,
+                            true},
+      ResizeHandleCandidate{Vector2d(aabb->bottomRight.x, aabb->topLeft.y),
+                            Vector2d(aabb->topLeft.x, aabb->bottomRight.y), true, true},
+      ResizeHandleCandidate{Vector2d(aabb->bottomRight.x, cy), Vector2d(aabb->topLeft.x, cy), true,
+                            false},
+      ResizeHandleCandidate{Vector2d(aabb->bottomRight.x, aabb->bottomRight.y),
+                            Vector2d(aabb->topLeft.x, aabb->topLeft.y), true, true},
+      ResizeHandleCandidate{Vector2d(cx, aabb->bottomRight.y), Vector2d(cx, aabb->topLeft.y), false,
+                            true},
+      ResizeHandleCandidate{Vector2d(aabb->topLeft.x, aabb->bottomRight.y),
+                            Vector2d(aabb->bottomRight.x, aabb->topLeft.y), true, true},
+      ResizeHandleCandidate{Vector2d(aabb->topLeft.x, cy), Vector2d(aabb->bottomRight.x, cy), true,
+                            false},
+  };
+
+  const double hitRadiusDoc = CanvasPixelsToDocumentUnits(editor, kResizeHandleHitRadiusPixels);
+  double bestDistanceSq = hitRadiusDoc * hitRadiusDoc;
+  std::optional<ResizeHandleHit> bestHit;
+  for (const ResizeHandleCandidate& handle : handles) {
+    const double distanceSq = documentPoint.distanceSquared(handle.center);
+    if (distanceSq <= bestDistanceSq) {
+      bestDistanceSq = distanceSq;
+      bestHit = ResizeHandleHit{
+          .anchorDocumentPoint = handle.anchor,
+          .scaleX = handle.scaleX,
+          .scaleY = handle.scaleY,
+      };
+    }
+  }
+  return bestHit;
+}
+
+double ResizeScaleFactor(double current, double start, double anchor) {
+  const double denominator = start - anchor;
+  if (std::abs(denominator) < 1e-9) {
+    return 1.0;
+  }
+
+  return std::max(kMinResizeScale, (current - anchor) / denominator);
+}
+
+double UniformResizeScaleFactor(bool scaleXEnabled, bool scaleYEnabled,
+                                const Vector2d& startDocumentPoint,
+                                const Vector2d& currentDocumentPoint, const Vector2d& anchor) {
+  const Vector2d startVector = startDocumentPoint - anchor;
+  const Vector2d currentVector = currentDocumentPoint - anchor;
+  if (scaleXEnabled && scaleYEnabled) {
+    const double denominator = startVector.lengthSquared();
+    if (denominator < 1e-9) {
+      return 1.0;
+    }
+
+    return std::max(kMinResizeScale, currentVector.dot(startVector) / denominator);
+  }
+
+  if (scaleXEnabled) {
+    return ResizeScaleFactor(currentDocumentPoint.x, startDocumentPoint.x, anchor.x);
+  }
+
+  if (scaleYEnabled) {
+    return ResizeScaleFactor(currentDocumentPoint.y, startDocumentPoint.y, anchor.y);
+  }
+
+  return 1.0;
+}
+
+Transform2d ResizeDocumentTransform(const Vector2d& anchor, bool scaleXEnabled, bool scaleYEnabled,
+                                    const Vector2d& startDocumentPoint,
+                                    const Vector2d& currentDocumentPoint,
+                                    bool constrainAspectRatio) {
+  const double scaleX =
+      scaleXEnabled ? ResizeScaleFactor(currentDocumentPoint.x, startDocumentPoint.x, anchor.x)
+                    : 1.0;
+  const double scaleY =
+      scaleYEnabled ? ResizeScaleFactor(currentDocumentPoint.y, startDocumentPoint.y, anchor.y)
+                    : 1.0;
+  if (constrainAspectRatio && (scaleXEnabled || scaleYEnabled)) {
+    const double uniformScale = UniformResizeScaleFactor(
+        scaleXEnabled, scaleYEnabled, startDocumentPoint, currentDocumentPoint, anchor);
+    return Transform2d::Translate(-anchor) * Transform2d::Scale(uniformScale, uniformScale) *
+           Transform2d::Translate(anchor);
+  }
+
+  return Transform2d::Translate(-anchor) * Transform2d::Scale(scaleX, scaleY) *
+         Transform2d::Translate(anchor);
+}
 
 /// Elements that don't contribute geometry to the rendered tree.
 /// `<defs>` / `<title>` / `<desc>` / `<metadata>` / `<style>` / `<script>`
@@ -118,6 +274,33 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // silently.
   dragState_.reset();
   marqueeState_.reset();
+
+  if (auto resizeHit = HitTestResizeHandle(editor, documentPoint); resizeHit.has_value()) {
+    const auto& selection = editor.selectedElements();
+    svg::SVGElement element = selection.front();
+    const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
+    const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
+
+    dragState_ = DragState{
+        .primary =
+            PerElementDrag{
+                .element = element,
+                .startTransform = primaryStartTransform,
+                .currentTransform = primaryStartTransform,
+                .writebackTarget = primaryWritebackTarget,
+                .sourceTransformAttributeValue = element.getAttribute("transform"),
+            },
+        .kind = DragKind::Resize,
+        .startDocumentPoint = documentPoint,
+        .resize =
+            ResizeDrag{
+                .anchorDocumentPoint = resizeHit->anchorDocumentPoint,
+                .scaleX = resizeHit->scaleX,
+                .scaleY = resizeHit->scaleY,
+            },
+    };
+    return;
+  }
 
   auto hit = editor.hitTest(documentPoint);
 
@@ -225,6 +408,11 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 }
 
 void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
+  onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
+}
+
+void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                             MouseModifiers modifiers) {
   if (!buttonHeld) {
     return;
   }
@@ -254,15 +442,23 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     return;
   }
 
-  // donner's Transform2 uses "row-major post-multiply" semantics: in
-  // `R * T * A`, A is applied first and R last. To translate the element
-  // in *parent* space (document space, since we assume top-level
-  // elements), the new local transform is the old local transform
-  // followed by a parent-space translation:
-  //
-  //   new_local = Translate(delta) * old_local
-  const Transform2d primaryNewTransform =
-      Transform2d::Translate(deltaDoc) * dragState_->primary.startTransform;
+  Transform2d primaryNewTransform;
+  Transform2d resizeDocumentTransform;
+  if (dragState_->kind == DragKind::Resize) {
+    resizeDocumentTransform = ResizeDocumentTransform(
+        dragState_->resize.anchorDocumentPoint, dragState_->resize.scaleX,
+        dragState_->resize.scaleY, dragState_->startDocumentPoint, documentPoint, modifiers.shift);
+    primaryNewTransform = dragState_->primary.startTransform * resizeDocumentTransform;
+  } else {
+    // donner's Transform2 composes left-to-right: `A * B` applies `A`
+    // first, then `B`. To translate an already-transformed element in
+    // document space, append the translation after the starting element
+    // transform. Prepending would scale the drag delta for elements
+    // resized via handles, causing the next move to jump.
+    //
+    //   new_local = old_local * Translate(delta)
+    primaryNewTransform = dragState_->primary.startTransform * Transform2d::Translate(deltaDoc);
+  }
 
   dragState_->currentDocumentDelta = deltaDoc;
   dragState_->primary.currentTransform = primaryNewTransform;
@@ -281,7 +477,11 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   editor.applyMutation(
       EditorCommand::SetTransformCommand(dragState_->primary.element, primaryNewTransform));
   for (auto& extra : dragState_->extras) {
-    extra.currentTransform = Transform2d::Translate(deltaDoc) * extra.startTransform;
+    if (dragState_->kind == DragKind::Resize) {
+      extra.currentTransform = extra.startTransform * resizeDocumentTransform;
+    } else {
+      extra.currentTransform = extra.startTransform * Transform2d::Translate(deltaDoc);
+    }
     editor.applyMutation(EditorCommand::SetTransformCommand(extra.element, extra.currentTransform));
   }
 }
@@ -339,8 +539,11 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     UndoSnapshot after{.element = dragState_->primary.element,
                        .transform = dragState_->primary.currentTransform,
                        .writebackTarget = dragState_->primary.writebackTarget};
-    editor.undoTimeline().record(dragState_->extras.empty() ? "Move element" : "Move elements",
-                                 std::move(before), std::move(after));
+    const bool isResize = dragState_->kind == DragKind::Resize;
+    editor.undoTimeline().record(
+        isResize ? "Scale element"
+                 : (dragState_->extras.empty() ? "Move element" : "Move elements"),
+        std::move(before), std::move(after));
 
     // Record undo for each extra element so a single Ctrl+Z reverts the
     // whole multi-element drag — one timeline entry per element keeps the
@@ -355,7 +558,8 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
       UndoSnapshot extraAfter{.element = extra.element,
                               .transform = extra.currentTransform,
                               .writebackTarget = extra.writebackTarget};
-      editor.undoTimeline().record("Move elements", std::move(extraBefore), std::move(extraAfter));
+      editor.undoTimeline().record(isResize ? "Scale elements" : "Move elements",
+                                   std::move(extraBefore), std::move(extraAfter));
     }
 
     if (dragState_->primary.writebackTarget.has_value()) {
@@ -382,6 +586,9 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() const {
   if (!compositedDragPreviewEnabled_ || !dragState_.has_value() || !dragState_->hasMoved) {
+    return std::nullopt;
+  }
+  if (dragState_->kind != DragKind::Move) {
     return std::nullopt;
   }
   // Multi-element drags run through the mutation path (not compositor)

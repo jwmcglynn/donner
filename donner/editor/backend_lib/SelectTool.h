@@ -2,10 +2,13 @@
 /// @file
 ///
 /// `SelectTool` is the editor's first and (in this milestone) only tool.
-/// It dispatches three different gestures off `onMouseDown`:
+/// It dispatches four different gestures off `onMouseDown`:
 ///
 ///   - **Click on an element** → replace the selection with that
 ///     element and start a drag (move on subsequent `onMouseMove`).
+///   - **Drag a selection handle** → scale the selected element from
+///     the opposite handle/edge. Holding Shift during the drag constrains
+///     aspect ratio.
 ///   - **Shift+click on an element** → toggle that element in the
 ///     current selection (no drag).
 ///   - **Click on empty space** → start a marquee drag. Subsequent
@@ -53,6 +56,10 @@ public:
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
+  /// Mouse move with current modifier state. Used by the editor backend so Shift can dynamically
+  /// constrain an in-progress resize.
+  void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                   MouseModifiers modifiers);
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
   /// Enable the experimental compositor-backed drag preview path.
@@ -85,8 +92,19 @@ public:
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
 private:
+  enum class DragKind {
+    Move,
+    Resize,
+  };
+
+  struct ResizeDrag {
+    Vector2d anchorDocumentPoint;
+    bool scaleX = false;
+    bool scaleY = false;
+  };
+
   /// Per-element bookkeeping for one participant in a drag. Carries the
-  /// start transform (for computing `startTransform * translate(delta)`
+  /// start transform (for computing `startTransform * Translate(delta)`
   /// on each mouse move), the current preview transform, and the stable
   /// locator for later canvas→text writeback.
   struct PerElementDrag {
@@ -110,6 +128,8 @@ private:
     /// (when a single-element drag is composited) runs against this one.
     PerElementDrag primary;
 
+    DragKind kind = DragKind::Move;
+
     /// Additional elements that move in lockstep with the primary. Empty
     /// for a single-element drag. Populated when mouse-down hits an
     /// already-selected element and the current selection has more than
@@ -118,6 +138,7 @@ private:
     std::vector<PerElementDrag> extras;
 
     Vector2d startDocumentPoint;
+    ResizeDrag resize;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A

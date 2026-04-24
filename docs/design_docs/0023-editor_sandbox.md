@@ -1,124 +1,602 @@
 # Design: Editor Sandbox, Renderer-IPC, and Record/Replay
 
-**Status:** Implementing — S1–S4 + S6.1 landed, S6.2 pending, **S7–S11 in flight (single PR to remove parser from host entirely)**
+**Status:** P0 incomplete — macOS desktop still falls back to the in-process backend, and the
+Linux editor binary's default sandbox path is not covered by an end-to-end editor-binary test.
+The sandbox is not done until both desktop platforms default to a process-backed backend and CI
+proves that selection.
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-11
-**Last updated:** 2026-04-20
+**Last updated:** 2026-04-24
 
 ## Progress snapshot
 
 | Milestone | State | Notes |
 |-----------|-------|-------|
-| S1 — byte-in / PNG-out child | ✅ Landed (#506/#518) | `donner_parser_child`, `SandboxHost`, fuzzer-corpus crash test. |
-| S2 — RendererInterface wire format | ✅ Landed (#506/#518) | `Wire.h`, `SerializingRenderer`, `ReplayingRenderer`, `SandboxCodecs`, round-trip + structural fuzzer tests. libFuzzer harness in flight (#528). |
-| S3 — partial pipeline + partial address bar | ✅ Landed (#506/#518) | `PipelinedRenderer` (in-process, thread-level), slim `app::EditorApp`, `gui/EditorWindow` shell, `SvgSource` (file + curl HTTPS), slim address bar on the MVP shell only. **Note**: despite the original doc text, `SandboxHost` today spawns *per render*, not long-lived; the full editor (`donner/editor/main.cc`) still parses in-process. Both gaps close in S7 / S9. |
-| S4 — record/replay + frame inspector | ✅ Landed (#506/#518) | `.rnr` file format, `FrameInspector`, scrub-slider replay, `sandbox_inspect`/`sandbox_replay` CLIs. Structural-diff CLI in flight (#527). |
+| S1 — byte-in / PNG-out child | ✅ Landed | `donner_parser_child`, `SandboxHost`, and Linux subprocess tests exist. This remains the one-shot CLI/debug path, not the live editor transport. |
+| S2 — RendererInterface wire format | ✅ Landed for debug/replay | `Wire.h`, `SerializingRenderer`, `ReplayingRenderer`, `SandboxCodecs`, `sandbox_wire_fuzzer`, and record/replay tests exist. The live editor no longer uses DRNR as its primary frame payload; it receives `FramePayload.finalBitmapPixels` plus split-preview bitmaps. Pattern paint servers and the full filter primitive chain are still stubbed in the DRNR codec. |
+| S3 — partial pipeline + partial address bar | ✅ Superseded | The early `PipelinedRenderer`/slim-shell path has been replaced by the S7–S11 thin-client architecture. `SvgSource` is still used by the desktop fetcher and sandbox CLI tools. |
+| S4 — record/replay + frame inspector | ✅ Landed | `.rnr`, `FrameInspector`, `sandbox_inspect`, `sandbox_replay`, and `sandbox_diff` are present. This stack is still DRNR-based and separate from the live editor's bitmap frame payload. |
 | S5 — C++26 reflection | ⏸ Parked | Gated on toolchain support; hand-rolled codecs still in place. |
-| S6.1 — portable hardening | ✅ Landed (#506/#518) | `SandboxHardening` (env gate, chdir, FD sweep, `setrlimit` caps, Linux seccomp-bpf fail-open). Tests Linux-only via `target_compatible_with` (5f66ea4f) + in-source `GTEST_SKIP` defense-in-depth (469bf576). |
-| S6.2 — platform jails | ⏳ Pending | macOS `sandbox_init`, Linux seccomp flipped to `KILL_PROCESS`, optional per-UID isolation. |
-| **S7 — long-lived `SandboxSession`** | ⏳ **In flight** | Replaces per-render `posix_spawn` with a persistent child, reader/writer threads, respawn-on-crash, and a `std::future`-shaped request API. Foundation for S8–S11. |
-| **S8 — editor-API wire protocol** | ⏳ **In flight** | The IPC boundary is the editor's public API — pointer/keyboard events, `Load`, `Undo`, `SetTool` — not the DOM. A new `donner_editor_backend` binary owns the parser, `SVGDocument`, selection, undo, tool dispatch, and driver. Host sends events; backend ships `Frame{render wire, selection chrome, source writebacks, diagnostics}` bundles back. |
-| **S9 — Host editor becomes a thin client** | ⏳ **In flight** | `donner/editor/main.cc` is refactored to own only text editor, viewport, address bar, chrome; the document + mutation logic move into the backend binary. Banned-pattern lint forbids `SVGParser::ParseSVG` outside the backend. `donner_editor_gui_main.cc` is deleted. |
-| **S10 — Unified address bar (desktop + WASM)** | ⏳ **In flight** | One ImGui widget with URL input, history, load/reload/stop, file picker, drag-and-drop, status chip. Desktop routes to `SvgSource` + sandbox; WASM routes to `emscripten_fetch` + in-process parser (browser is the sandbox). |
-| **S11 — `ResourcePolicy` + curl diagnostics** | ⏳ **In flight** | Typed policy gating every desktop fetch (schemes, host allow/deny, size/time caps, sub-resource policy, first-use host prompt). Clear actionable error when `http(s)://` is typed but `curl` is not on `PATH`. WASM build ignores the policy — browser enforces it. |
+| S6.1 — portable hardening | ✅ Landed | `SandboxHardening` applies the env gate, `chdir("/")`, FD sweep, `setrlimit` caps, and Linux seccomp-bpf in fail-open (`EACCES`) mode. Linux tests cover env/rlimit/seccomp subprocess behavior. |
+| S6.2 — platform jails | 🚨 P0 incomplete | Linux still returns `EACCES` for denied syscalls instead of `KILL_PROCESS`; macOS `sandbox_init` and per-UID isolation are not implemented. Closing S6.2 requires deny-operation tests on both desktop platforms and fail-closed backend startup. |
+| S7 — long-lived `SandboxSession` | 🟡 Linux transport implemented; macOS missing | Persistent child, reader/writer threads, FIFO futures, and auto-respawn code exist behind Linux-only Bazel targets. `sandbox_session_tests` covers the transport on Linux; macOS has no session target yet, and respawn-after-crash is implemented but not currently pinned by a test. |
+| S8 — editor-API wire protocol | ✅ Core implemented | `SessionProtocol`, `SessionCodec`, and `EditorApiCodec` cover editor API messages. Current `kFrame` carries final bitmap / composited preview / tree / selection / writebacks / diagnostics, not `renderWire`. `applySourcePatch`, `keyEvent`, `wheelEvent`, and non-select `setTool` are still placeholders. |
+| S9 — host editor becomes a thin client | 🚨 P0 gap | `donner/editor/main.cc` drives `EditorBackendClient`, but macOS currently links `EditorBackendClient_InProcess`, so desktop macOS still parses in the host process. Linux links `EditorBackendClient_Session`, but no CI target exercises the actual `//donner/editor:editor` binary and proves its default backend is session-backed. This milestone is not complete. |
+| S10 — unified address bar | ✅ Mostly implemented | Shared `AddressBar`, dispatcher, desktop fetcher, WASM fetcher, history, drag/drop payload path, progress chip, and status chip exist. Native desktop file picker and a true async/cancelable desktop curl fetch are not implemented. |
+| S11 — `ResourcePolicy` + curl diagnostics | ✅ Implemented with MVP consent semantics | `ResourcePolicy`, `ResourceGatekeeper`, `CurlAvailability`, and tests exist. Typed address-bar navigations set `autoGrantFirstUse=true`, so first-use host consent is implicit for a user-entered URL instead of a modal prompt. `SvgSource` also added SSRF and hardened-curl defenses beyond the original plan. |
+| S12 — parity + compositor follow-ups | 🟡 Partially complete | ViewBox plumbing, `setViewport` pipelining, select-drag correctness, source writebacks, composited final bitmaps, split-preview uploads, SVG text export, marquee metadata, tree summary, and texture-bridge stubs are present. Rich element inspector, hover metadata, source-patch fast path, keyboard/wheel/tool behavior, PNG export, and real zero-copy GPU bridge remain open. |
+
+## Completion audit (2026-04-24)
+
+**Verdict:** the design is **not complete as originally written**, and the remaining platform gap
+is P0. The Linux session/backend plumbing exists: URL/file bytes are intended to flow through the
+host fetcher into `donner_editor_backend`, and the host drives the document through
+`EditorBackendClient` futures. However, the current tests exercise lower-level session/client
+targets, not the actual `//donner/editor:editor` binary's default backend selection. The macOS
+desktop build still links the in-process backend, so it definitely does not satisfy the
+process-boundary goal. S6.2 platform confinement is also incomplete.
+
+The implementation deliberately changed the live rendering contract. The original design treated
+`RendererInterface`/DRNR as the only sandbox-to-host data flow for every live frame. Current
+`EditorBackendCore::buildFramePayload()` instead rasterizes in the backend with
+`svg::Renderer` + `CompositorController` and ships:
+
+- `FramePayload.finalBitmapPixels` for the normal frame bitmap.
+- `FramePayload.compositedPreview*` bitmaps plus a document-space translation during active
+  single-element drags.
+- Metadata for selection, marquee, tree summary, source writebacks, diagnostics, status, and
+  `documentViewBox`.
+
+That change is justified by the compositor work: layer caching and translation-only drag previews
+only save work if the backend owns rasterization and can preserve compositor state across frames.
+DRNR is still valuable, but it is now the debug/record/replay protocol rather than the live
+editor's primary presentation protocol.
+
+### Satisfied design goals
+
+- **Linux session/backend plumbing.** `EditorBackendClient_Session`,
+  `SandboxSession`, and `donner_editor_backend` exist and the backend binary owns parsing,
+  the `SVGDocument`, selection, undo, and tool dispatch. CI coverage:
+  `//donner/editor/tests:editor_backend_client_tests` and
+  `//donner/editor/sandbox/tests:editor_backend_integration_tests`. This is not enough to claim
+  the Linux editor binary is sandboxed by default; add the P0 editor-binary smoke test below.
+- **No production host parse calls in non-exempt editor files.** Enforced by the
+  `SVGParser::ParseSVG` rule in `build_defs/check_banned_patterns.py`, which is emitted as the
+  per-target `*_lint` tests.
+- **Long-lived backend transport.** `SandboxSession` keeps a persistent child and exposes the
+  future-shaped request API. CI coverage: `//donner/editor/sandbox/tests:sandbox_session_tests`.
+- **Editor API protocol.** Request/response codecs exist for the API-shaped session protocol.
+  CI coverage: `//donner/editor/sandbox/tests:session_codec_tests` and
+  `//donner/editor/sandbox/tests:editor_api_codec_tests`.
+- **Address-bar fetch policy.** Desktop fetches go through `ResourceGatekeeper` and `SvgSource`;
+  WASM uses browser fetch rules. CI coverage:
+  `//donner/editor/tests:resource_policy_tests`,
+  `//donner/editor/tests:curl_availability_tests`,
+  `//donner/editor/tests:desktop_fetcher_tests`, and
+  `//donner/editor/tests:address_bar_dispatcher_tests`.
+- **Record/replay and render-wire debug tools.** DRNR, `.rnr`, frame inspection, replay, diff,
+  and the render-wire fuzzer exist. CI coverage:
+  `//donner/editor/sandbox/tests:wire_format_tests`,
+  `//donner/editor/sandbox/tests:record_replay_tests`,
+  `//donner/editor/sandbox/tests:sandbox_diff_tests`, and
+  `//donner/editor/sandbox/tests:sandbox_wire_fuzzer`.
+
+### Open gaps before declaring the design complete
+
+- **P0: macOS process sandbox.** The macOS desktop editor still uses the in-process backend, and
+  `donner_editor_backend` / `SandboxSession` are Linux-only Bazel targets. Implement the macOS
+  session path and apply a `sandbox_init` profile before claiming desktop-wide parser isolation.
+- **P0: actual editor-binary verification.** Existing tests prove the session and backend client
+  can work, but they do not prove that the shipped editor binary defaults to the session-backed
+  backend on Linux, and there is no equivalent macOS target. Add an editor-binary smoke test that
+  runs before GUI initialization and fails if the selected desktop backend is in-process.
+- **P0: host/parser dependency fence.** Desktop host code must be structurally unable to parse.
+  The shipped editor host must not link `EditorBackendCore`, `EditorApp`, `backend_lib`,
+  `SVGParser`, or any target that can call `SVGParser::ParseSVG`. The in-process backend is a
+  WASM/test-only implementation, not a desktop fallback.
+- **S6.2 syscall policy.** Linux seccomp still uses `SECCOMP_RET_ERRNO | EACCES` for denied
+  syscalls; flip to `SECCOMP_RET_KILL_PROCESS` only after adding explicit tests for the final
+  allowlist. macOS has no platform jail yet.
+- **Frame-protocol fuzzing.** `sandbox_wire_fuzzer` covers DRNR, but there is no
+  `editor_backend_request_fuzzer` or `frame_response_fuzzer` for `SessionCodec` /
+  `EditorApiCodec` payloads. The malformed-codec unit tests are useful but not a substitute for
+  fuzzing the live trust boundary.
+- **Backend API placeholders.** `EditorBackendCore::handleApplySourcePatch`,
+  `handleKeyEvent`, `handleWheelEvent`, and non-select `handleSetTool` return a fresh frame
+  without implementing the requested behavior. SVG text export is implemented; PNG export is not.
+- **Editor parity.** The tree summary and selection flow are present, but the rich element
+  inspector still needs a flattened attribute/computed-style snapshot. Hover metadata is present
+  in the wire shape but not populated. Source-pane patch debouncing/fast-path classification still
+  needs completion.
+- **Zero-copy bridge.** `BridgeTexture` stubs and macOS IOSurface allocation/import plumbing exist,
+  but backend readiness remains false and the editor still relies on `finalBitmapPixels`.
+  Linux dmabuf and Windows shared-handle paths are not implemented.
+- **Enforcement of “ResourceGatekeeper is the only fetch gate.”** Production address-bar fetches
+  use it, but this is not a banned-dependency/lint invariant today. CLI tools and tests may still
+  call `SvgSource` directly by design.
+
+## P0 Closure Plan: Make Desktop Host Parsing Impossible
+
+The macOS miss happened because the architecture allowed a desktop fallback from
+`EditorBackendClient_Session` to `EditorBackendClient_InProcess`. That fallback must not exist for
+desktop builds. The next sandbox PR should treat this as the release blocker and reshape the build
+graph so a platform-selection mistake cannot silently reintroduce parser code into the trusted
+editor process.
+
+### P0-A: Split targets by process role
+
+- Move the desktop UI binary and host-only libraries into a host package boundary, for example
+  `//donner/editor/host/...`. Host targets may depend on:
+  - the `EditorBackendClient` interface,
+  - `EditorBackendClient_Session`,
+  - `SandboxSession`,
+  - fetch/policy/UI/viewport/text-editor libraries.
+- Keep parser-owning code behind a backend-only boundary:
+  - `//donner/editor/backend_lib/...`,
+  - `//donner/editor/sandbox:editor_backend_core`,
+  - `//donner/editor/sandbox:donner_editor_backend`,
+  - `//donner/svg/parser`.
+- Use Bazel `visibility` as the primary enforcement mechanism. Backend/parser targets should be
+  visible only to the backend binary, backend tests, fuzzers, and the WASM backend package. They
+  should not be visible to `//donner/editor/host/...`.
+- Move desktop-only overlay/selection helpers that currently depend on `backend_lib:editor_app`
+  behind backend-owned frame metadata or into parser-free host helpers. A host overlay renderer may
+  consume `SelectionOverlay`, `FrameTreeSummary`, and `documentViewBox`, but not `SVGDocument`,
+  `SVGElement`, `EditorApp`, or `SelectTool`.
+
+### P0-B: Remove desktop in-process fallback
+
+- Change `EditorBackendClient_InProcess` to be compatible only with WASM and selected tests. It
+  must not be a dependency of the desktop editor binary on Linux or macOS.
+- Replace the current `#if defined(__linux__) ... #else MakeInProcess()` selection in
+  `main.cc` with a desktop-only session factory:
+
+```cpp
+#if defined(__EMSCRIPTEN__)
+  auto backend = EditorBackendClient::MakeInProcess();
+#else
+  auto session = sandbox::SandboxSession({
+      .childBinaryPath = runfiles::Resolve("donner_editor_backend"),
+  });
+  auto backend = EditorBackendClient::MakeSessionBacked(session);
+#endif
+```
+
+- Failure to launch the backend child is a startup/load failure with an actionable diagnostic; it
+  is not an automatic fallback to in-process parsing. Any `--unsafe-in-process-backend` debug flag,
+  if added, must be test-only or explicitly excluded from release/editor CI.
+
+### P0-C: Add macOS session backend
+
+- Make `//donner/editor/sandbox:session` and
+  `//donner/editor/sandbox:donner_editor_backend` compatible with macOS as well as Linux.
+- Audit `SandboxSession` for POSIX portability: `posix_spawn` file actions, pipe setup,
+  close-on-exec/FD sweep, runfiles resolution, child shutdown, and abnormal-exit reporting.
+- Add a macOS `SandboxHardening` path that applies a deny-by-default `sandbox_init` profile before
+  parsing. The profile should allow only the already-open stdio pipes, memory allocation,
+  required dynamic-loader/runtime operations, and process exit. File reads, writes, and networking
+  should be denied after startup.
+- Add macOS hardening tests that run in a child process and assert denied filesystem/network
+  operations fail after the sandbox profile is applied.
+
+### P0-D: Test the shipped editor binary selection
+
+Lower-level session tests are not enough. Add a parser-free startup smoke mode to the real editor
+binary, before GLFW/ImGui initialization, for example:
+
+```sh
+donner/editor/editor --backend-smoke-test
+```
+
+The smoke mode should create the same backend factory the GUI would use, load a tiny SVG, wait for
+one frame, and print machine-readable diagnostics:
+
+```json
+{
+  "transport": "session",
+  "host_pid": 123,
+  "backend_pid": 456,
+  "frame_status": "rendered"
+}
+```
+
+Add CI tests that invoke the real binary as data:
+
+- `//donner/editor/tests:editor_binary_backend_smoke_test_linux`
+- `//donner/editor/tests:editor_binary_backend_smoke_test_macos`
+
+Both tests fail unless `transport == "session"` and `backend_pid != host_pid`. These are the
+targets that make "the desktop editor does not parse in the host process" an enforceable claim.
+
+### P0-E: Acceptance criteria
+
+The sandbox design can be called complete for desktop only when all of these are true:
+
+- `//donner/editor:editor` builds on Linux and macOS without depending on
+  `EditorBackendClient_InProcess`, `EditorBackendCore`, `backend_lib`, or `//donner/svg/parser`.
+- The editor-binary smoke tests above pass on Linux and macOS.
+- `//donner/editor/sandbox/tests:sandbox_session_tests`,
+  `//donner/editor/sandbox/tests:editor_backend_integration_tests`, and
+  `//donner/editor/tests:editor_backend_client_tests` run on both Linux and macOS, or have
+  separate platform-specific equivalents with the same coverage.
+- A macOS `SandboxHardening` test proves the backend child cannot read arbitrary files or open
+  network sockets after applying its profile.
+- The only remaining in-process parser path is WASM or explicitly test-only code. No desktop
+  production target can select it by platform accident.
+
+## S6.2 Closure Plan: Platform Jails Must Fail Closed
+
+S6.2 is also a completion blocker. Process separation without a real OS policy still leaves a
+compromised parser child with whatever ambient authority the child process retains. The closure
+work is not just "turn on stricter flags"; it must add tests that prove denied operations cannot
+silently succeed on Linux or macOS.
+
+### S6.2-A: Make denied-syscall behavior explicit
+
+- Replace the implicit Linux fail-open behavior with an explicit option:
+
+```cpp
+enum class DeniedSyscallAction {
+  kReturnErrnoForTests,
+  kKillProcess,
+};
+
+struct HardeningOptions {
+  DeniedSyscallAction deniedSyscallAction = DeniedSyscallAction::kKillProcess;
+  // ...
+};
+```
+
+- Production backend children use `kKillProcess`. Tests may opt into
+  `kReturnErrnoForTests` only when they are intentionally auditing a new
+  allowlist.
+- `ApplyHardening()` failure remains fatal. The host reports a sandbox startup
+  error; it does not retry in-process.
+
+### S6.2-B: Close Linux seccomp
+
+- Flip the Linux seccomp default action from `SECCOMP_RET_ERRNO | EACCES` to
+  `SECCOMP_RET_KILL_PROCESS` for production hardening.
+- Add a dedicated probe helper that applies hardening and then attempts exactly
+  one forbidden operation per subprocess. With kill-on-deny, one child cannot
+  test multiple probes.
+- Probe and assert termination for at least:
+  - opening an arbitrary filesystem path for read,
+  - opening/creating a filesystem path for write,
+  - `socket(AF_INET, SOCK_STREAM, 0)` / network creation,
+  - `execve` or `posix_spawn`,
+  - `fork` / `clone`,
+  - `ptrace`.
+- Keep a normal-render test under the final kill policy so allowlist mistakes
+  fail by breaking `donner_editor_backend`, not by silently weakening the
+  policy.
+- Required CI target:
+  `//donner/editor/sandbox/tests:sandbox_hardening_linux_kill_tests`.
+
+### S6.2-C: Add macOS `sandbox_init`
+
+- Add a macOS hardening implementation that applies a checked-in
+  deny-by-default `sandbox_init` profile after the backend child has completed
+  startup setup and before it reads untrusted SVG bytes.
+- The profile should deny filesystem writes, arbitrary filesystem reads,
+  network sockets, subprocess creation, Mach service lookup beyond what the
+  already-started process needs, and other IPC outside stdio pipes.
+- Any required read-only runtime allowances must be named and justified in the
+  profile comments. Broad home-directory, current-working-directory, or
+  network allowances are not acceptable.
+- Add macOS probe tests mirroring the Linux denied-operation tests. On macOS
+  these probes should assert the operation fails under the profile without
+  granting the child usable authority.
+- Required CI target:
+  `//donner/editor/sandbox/tests:sandbox_hardening_macos_profile_tests`.
+
+### S6.2-D: Wire hardening into the live backend path
+
+- `donner_editor_backend` must call `ApplyHardening()` on Linux and macOS before
+  request decoding and before `EditorBackendCore` sees untrusted bytes.
+- `SandboxSession` must set the environment marker and launch with a curated
+  environment on both platforms.
+- The editor-binary smoke test should fail if the backend reports that hardening
+  was skipped or degraded. Include a `hardening` field in the smoke JSON:
+
+```json
+{
+  "transport": "session",
+  "hardening": "platform-jail",
+  "host_pid": 123,
+  "backend_pid": 456,
+  "frame_status": "rendered"
+}
+```
+
+### S6.2-E: Acceptance criteria
+
+- Linux denied-operation probes terminate under seccomp kill mode.
+- macOS denied-operation probes fail under `sandbox_init`.
+- Normal backend render/integration tests pass under the final hardening mode on
+  both desktop platforms.
+- `donner_editor_backend` cannot start without `DONNER_SANDBOX=1` and cannot
+  continue if platform hardening fails.
+- The editor host has no code path that downgrades from failed platform
+  hardening to in-process parsing.
+
+## P0 Red-Team Hook: Sandbox Escape Canary
+
+We also need a deterministic way to prove the full editor path is actually using
+the sandbox and that a compromised child cannot escape its OS policy. Add a
+test/dev-only red-team canary hook that is exercised through the same
+`EditorBackendClient` / `SandboxSession` path as a normal load. The canary is
+not a parser fuzz test. It intentionally assumes arbitrary code execution
+inside the backend child, attempts escape-style operations, and lets the host
+verify those attempts cannot succeed.
+
+### Canary shape
+
+- Add a backend-only `SandboxProbeAction` enum, encoded either as a dedicated
+  `kSandboxProbe` request or as smoke-test-only metadata attached to a
+  `LoadBytes` request:
+
+```cpp
+enum class SandboxProbeAction {
+  kCrashSigsegv,
+  kAbort,
+  kReadForbiddenPath,
+  kWriteForbiddenPath,
+  kOpenNetworkSocket,
+  kSpawnProcess,
+  kReadEnvironment,
+  kConnectToHostIpc,
+};
+```
+
+- The probe executes **inside `donner_editor_backend` after `ApplyHardening()`
+  succeeds** and before any fallback or host-side parser path can run.
+- The host may provide a checked-in probe fixture such as
+  `donner/editor/sandbox/tests/probes/crash.svg`, but the marker must be
+  consumed by the backend child, not by the host. The host's role is only to
+  pass bytes and expected probe metadata through the normal backend client.
+- The hook is gated by an explicit test/dev flag such as
+  `--enable-sandbox-probes` or `DONNER_ENABLE_SANDBOX_PROBES=1`. Normal editor
+  loads must ignore probe-looking SVG comments or metadata.
+- The probe code lives in a small backend-only target such as
+  `//donner/editor/sandbox:red_team_probes`. It must not be linked into host
+  targets or normal parser/renderer libraries.
+
+### Expected outcomes
+
+- `kCrashSigsegv` and `kAbort`: backend child dies, the host process survives,
+  reports a sandbox crash, keeps or clears the current document according to the
+  normal crash policy, respawns a fresh child, and can render a normal SVG after
+  the probe. Any host crash is a test failure. Any in-process retry is a test
+  failure.
+- `kReadForbiddenPath`: host creates a temporary sentinel file outside the
+  sandbox contract and asks the child to read it. Success is a test failure.
+  Acceptable outcomes are child termination under Linux kill-on-deny or an
+  explicit denied result under macOS `sandbox_init`.
+- `kWriteForbiddenPath`: child attempts to create or overwrite a host-provided
+  sentinel path. The host asserts the path was not created or modified.
+- `kOpenNetworkSocket`: child attempts to create/connect a TCP socket. The host
+  may run a local listener and asserts no connection is accepted.
+- `kSpawnProcess`: child attempts `posix_spawn` / `execve`. Success is a test
+  failure.
+- `kReadEnvironment`: child tries to read sensitive environment variables such
+  as `HOME`, `SSH_AUTH_SOCK`, `AWS_*`, and `GITHUB_TOKEN`. The curated child
+  environment should not contain them.
+- `kConnectToHostIpc`: child attempts to connect to a host-controlled Unix
+  domain socket or named pipe that is not one of the already-open sandbox
+  stdio/session pipes. Success is a test failure.
+
+### Red-team scenario bundle
+
+In addition to one-probe-per-test coverage, add a bundled scenario that behaves
+like a mini exploit chain:
+
+1. Load a canary SVG through the real editor smoke path.
+2. Backend probe code assumes arbitrary code execution and tries, in order:
+   read a host sentinel file, write a marker file, open a TCP socket, spawn
+   `/bin/sh`, read sensitive env vars, connect to a host IPC socket, then crash.
+3. Host asserts:
+   - the editor process survives,
+   - no sentinel file contents were returned,
+   - no marker file was created or modified,
+   - no network or IPC connection was accepted,
+   - no subprocess side effect occurred,
+   - sensitive env vars were not present,
+   - the backend child either died under policy or reported denied operations,
+   - a fresh backend child can still render a normal SVG,
+   - `fallback_used == false`.
+
+This scenario is the red-team proof that "parser compromise inside the child"
+does not become "host compromise."
+
+### Editor smoke interface
+
+Extend the real editor binary's parser-free smoke path:
+
+```sh
+donner/editor/editor \
+  --backend-smoke-test \
+  --enable-sandbox-probes \
+  --sandbox-probe=crash-sigsegv
+```
+
+For crash probes, the editor smoke command should exit 0 only when it observes
+the expected backend death and then successfully renders a follow-up normal SVG
+through a new backend child. For denied-operation probes, it should exit 0 only
+when the forbidden operation fails and the sentinel checks prove no host
+resource was accessed.
+
+Machine-readable output should include:
+
+```json
+{
+  "transport": "session",
+  "hardening": "platform-jail",
+  "probe": "read-forbidden-path",
+  "probe_result": "denied",
+  "host_pid": 123,
+  "backend_pid_before": 456,
+  "backend_pid_after": 789,
+  "fallback_used": false
+}
+```
+
+### Required canary CI targets
+
+- `//donner/editor/tests:editor_binary_sandbox_canary_crash_linux`
+- `//donner/editor/tests:editor_binary_sandbox_canary_crash_macos`
+- `//donner/editor/tests:editor_binary_sandbox_canary_escape_linux`
+- `//donner/editor/tests:editor_binary_sandbox_canary_escape_macos`
+- `//donner/editor/tests:editor_binary_sandbox_red_team_linux`
+- `//donner/editor/tests:editor_binary_sandbox_red_team_macos`
+
+These targets are the acceptance tests for the claim: "loading a hostile or
+probe SVG can crash or compromise only the sandbox child, not the trusted editor
+host, and the child cannot read/write files, open network sockets, or spawn
+processes outside its policy."
+
+### Fuzzable red-team surfaces
+
+Yes, this should also be fuzzed, but split the fuzzing into fast in-process
+targets and slower subprocess targets:
+
+- **Fast codec fuzzers**:
+  - `//donner/editor/sandbox/tests:session_codec_fuzzer` mutates DRNS frame
+    headers, request ids, opcodes, payload lengths, and truncation patterns.
+  - `//donner/editor/sandbox/tests:editor_backend_request_fuzzer` mutates live
+    backend request payloads and asserts decode/dispatch returns `kError` or a
+    valid response without crashing.
+  - `//donner/editor/sandbox/tests:frame_response_fuzzer` mutates
+    `FramePayload` bytes and asserts host-side decode plus `FrameResult`
+    conversion never crashes or allocates beyond caps.
+  - `//donner/editor/sandbox/tests:sandbox_probe_plan_fuzzer` mutates the
+    canary/probe metadata and validates plan parsing, gating, enum handling,
+    max step count, path canonicalization, and sentinel binding. This target
+    must not perform real syscalls beyond normal fuzzer process activity.
+- **Subprocess red-team fuzzer / corpus replay**:
+  - `//donner/editor/tests:editor_binary_sandbox_red_team_fuzzer` maps fuzzer
+    bytes to a bounded `SandboxProbePlan` (for example max four steps, no
+    arbitrary host paths, timeouts per child) and runs the real editor smoke
+    path in a subprocess. Each generated plan can crash or kill only the backend
+    child; the fuzzer harness asserts the editor host survives and no sentinel
+    escape succeeds.
+  - Because this spawns hardened children and some inputs intentionally kill
+    them, it should run as a nightly/continuous fuzz target or corpus replay in
+    PR CI rather than an unbounded per-PR libFuzzer job.
+
+Seed corpora should include:
+
+- one input per `SandboxProbeAction`,
+- malformed/truncated DRNS frames,
+- oversized `FramePayload` lengths,
+- probe plans with repeated crash steps,
+- probe plans that interleave deny operations with normal SVG loads,
+- platform-specific path/socket cases for Linux and macOS.
 
 ## Summary
 
-Donner's editor today parses and renders untrusted SVG in-process. As the editor
-grows a user-facing **address bar** that loads arbitrary `https://` URLs and local
-`file://` paths, the parser — Donner's largest fuzzer-exposed surface — becomes
-the single most attractive target in the binary. A parser crash or memory
-corruption would take the editor (and the user's unsaved work) with it.
+Donner's editor loads arbitrary `https://`, `http://`, and `file://` SVGs from a
+user-facing address bar. The parser is the largest fuzzer-exposed surface in the
+editor, so the security goal is to keep parser, DOM, selection, undo, tool
+dispatch, and rendering state out of the trusted UI host process.
 
-This design puts the parser, DOM, and `RendererDriver` in a **separate
-sandboxed child process**, mirroring the browser process model. The clever
-part: we already have `RendererInterface` — a pure-virtual, value-typed,
-stateful-but-LIFO command surface with 28 methods — and `RendererRecorder` is
-already planned as a tee wrapper. **Those two facts together mean the
-`RendererInterface` is already an RPC protocol in disguise.** We make it
-literal:
+The implemented architecture now has two related protocols:
 
-1. Sandbox process runs parser + `RendererDriver` + a `SerializingRenderer`
-   that encodes each virtual call as a wire message.
-2. Editor host runs `ReplayingRenderer` that decodes the wire stream and
-   invokes the **real** backend (Skia, TinySkia, Geode).
-3. The on-wire format is the same format `RendererRecorder` writes, so
-   **record/replay is free** — it's just "tee the IPC socket into a file."
-4. Because every render command is addressable by index in the stream, the
-   editor gets a **frame inspector**: pause the IPC pump, show the recorded
-   command list in an ImGui panel, scrub a slider, replay commands `[0..N)`
-   to a headless backend, blit the result.
+1. **Live editor protocol (`DRNS`)**: the host calls the editor API remotely
+   through `EditorBackendClient` and `SandboxSession`. The backend owns
+   `EditorBackendCore`, `EditorApp`, `SVGDocument`, `SelectTool`, undo, and
+   rasterization. Every mutating request returns a `FramePayload` with final
+   bitmap data, composited-preview data, tree/selection metadata, source
+   writebacks, diagnostics, and status.
+2. **Render-wire protocol (`DRNR`)**: the debug/record/replay path serializes
+   `RendererInterface` calls via `SerializingRenderer` and replays them through
+   `ReplayingRenderer`. `.rnr`, `FrameInspector`, `sandbox_replay`, and
+   `sandbox_diff` use this protocol.
 
-The C++26-reflection angle is specifically about the marshalling layer: with
-reflection, we can derive the serializer for each method's parameter struct
-mechanically instead of writing 28 hand-rolled `Encode*`/`Decode*` pairs. Today
-that's aspirational (tree is on C++20); we land the hand-rolled version first
-and plan the reflection migration as a follow-up that deletes boilerplate
-rather than changes behavior.
-
-Address bar is the motivating UX: "type a URL, see it render, crash the child
-process if it's malicious, recover transparently." It is the forcing function
-for the sandbox; the sandbox is the forcing function for the IPC layer; the IPC
-layer is the forcing function for record/replay and the frame inspector. The
-whole stack falls out of one decision.
+Linux has the live subprocess backend plumbing, but the shipped editor binary
+still needs a smoke test proving it selects that path by default. macOS desktop
+currently uses the in-process backend implementation; that is the P0 gap. WASM
+also uses the in-process backend, but there the browser is the sandbox. C++26
+reflection remains an aspirational code-reduction milestone for the hand-written
+codecs and is not required for the shipped behavior.
 
 ## Goals
 
-- **Isolate parsing**: `SVGParser::ParseSVG` runs in a child process with no
-  filesystem, network, or IPC access beyond its stdin/stdout pipes. A crash or
-  memory corruption in the parser never takes the editor down.
+- **Make desktop host parsing impossible**: `SVGParser::ParseSVG` runs only in a backend child
+  process for desktop builds. Linux and macOS desktop host binaries must not link parser-owning
+  code, backend implementation code, or the in-process backend. Bazel visibility, target
+  compatibility, and editor-binary smoke tests enforce this.
 - **Address bar**: editor gains a URL bar that accepts `https://`, `http://`,
-  and `file://` URIs. Loads are always routed through the sandbox.
-- **RendererInterface as IPC**: the 28-method `RendererInterface` becomes the
-  wire protocol between sandbox and host. No other IPC surface exists between
-  the two processes.
+  and `file://` URIs. Desktop loads route through `ResourceGatekeeper` and
+  `SvgSource`; Linux then hands bytes to the sandbox backend.
+- **Editor API as IPC**: the desktop process boundary is the editor API
+  (`LoadBytes`, `ReplaceSource`, input events, undo/redo, export), not a DOM
+  mirror. The host never materializes `SVGDocument` state in Linux or macOS
+  desktop builds.
+- **RendererInterface as debug/replay wire**: the 28-method `RendererInterface`
+  remains the `.rnr` and frame-inspector protocol. It is no longer the live
+  editor frame transport.
 - **RendererRecorder → file format**: promote the planned in-memory
   `RendererRecorder` into a serializable format (`.rnr`, "Renderer Recording")
   that round-trips across the IPC boundary and to disk.
 - **Frame inspector**: ImGui panel inside the editor that shows the command
   stream for the current frame, allows pausing before `endFrame()`, scrubbing
   to command index `N`, and inspecting individual command arguments.
-- **Determinism**: replaying a `.rnr` file against the same backend at the
-  same viewport must be pixel-identical to the original render.
+- **Determinism**: replaying a `.rnr` file against the same backend at the same
+  viewport must be pixel-identical for the feature subset the DRNR codec
+  actually serializes. Live editor bitmap output is separately checked against
+  direct renders by the sandbox golden-image tests.
 - **No C++26 dependency on day one**: hand-rolled marshallers ship first;
   reflection is a follow-up that preserves the wire format.
 
 ## Non-Goals
 
-- **Not a full browser sandbox.** We're not using `seccomp-bpf`, AppArmor, or
-  SELinux policies in the initial milestone — just OS process separation,
-  closed file descriptors, and a dropped working directory. Hardening is
-  staged.
+- **Not a full browser sandbox yet.** Linux has process separation, FD cleanup,
+  resource limits, and fail-open seccomp. macOS `sandbox_init`, Linux
+  kill-on-deny seccomp, AppArmor/SELinux-style profiles, and per-UID isolation
+  are still staged work.
 - **Not cross-origin CSS/font/image fetches.** The sandbox child parses SVG
   *bytes*; it never initiates network requests. The host fetches the bytes
   over HTTPS and hands them to the sandbox. Sub-resource URL fetching (e.g.
   `<image href="https://...">`) is Future Work.
-- **Not WASM-compatible.** The sandbox uses Unix pipes and `posix_spawn`; the
-  editor's WASM build (M6) continues to run the parser in-process, with the
-  browser's own sandbox as the trust boundary. The IPC abstraction exists,
-  but `SandboxedParseSVG` is a direct call in WASM builds.
+- **Not an OS subprocess in WASM.** The WASM build runs the backend in-process
+  and relies on the browser sandbox as the trust boundary. The same
+  `EditorBackendClient` surface is used so host UI code stays shared.
 - **Not Windows in milestone 1.** Editor M3 targets macOS + Linux; the
   sandbox follows the same platform cut. Windows is Future Work.
 - **Not a replacement for the fuzzer.** `SVGParser_fuzzer` continues to find
   bugs at the parser level. The sandbox is defense-in-depth, not defense-in-first.
-- **Not a general-purpose IPC framework.** This is one protocol
-  (`RendererInterface`), not a reusable RPC system. No service discovery, no
-  versioning handshake beyond a magic-number header, no bidirectional method
-  calls (the sandbox is strictly a producer of commands).
+- **Not a general-purpose IPC framework.** This is one editor-session protocol
+  plus the existing DRNR replay protocol. No service discovery and no host-side
+  DOM reflection.
 
 ## Next Steps
 
-- [ ] Land Editor M2 (mutation seam, `AsyncSVGDocument` command queue) —
-  sandbox depends on the host-side command queue as the insertion point.
-- [ ] Land `RendererRecorder` as specified in
-  [renderer_interface_design.md:242](./0003-renderer_interface_design.md) — the
-  in-memory variant is the foundation for the wire format.
-- [x] Prototype **Milestone S1** (byte-level sandbox loopback, no IPC yet):
-  parse in a child process, return rendered PNG bytes over stdout. This
-  proves the process model before committing to the RendererInterface wire
-  protocol. *Landed in #506; S2 superseded it with the framed wire format.*
+- [ ] **P0:** Split host/backend Bazel packages and visibility so desktop host
+  targets cannot depend on parser-owning backend code.
+- [ ] **P0:** Make `EditorBackendClient_InProcess` WASM/test-only and remove
+  the desktop fallback from `main.cc`.
+- [ ] **P0:** Implement the macOS `SandboxSession` / `donner_editor_backend`
+  path and apply a `sandbox_init` profile so macOS desktop stops using the
+  in-process parser.
+- [ ] **P0:** Add editor-binary backend smoke tests for Linux and macOS that
+  run `//donner/editor:editor --backend-smoke-test` and assert
+  `transport=session` plus `backend_pid != host_pid`.
+- [ ] **P0:** Close S6.2: Linux seccomp kill-on-deny, macOS
+  `sandbox_init`, denied-operation probe tests, and no hardening downgrade path.
+- [ ] Add live-protocol fuzzers: `editor_backend_request_fuzzer` for backend
+  request decoding and `frame_response_fuzzer` for host frame decoding.
+- [ ] Finish the remaining backend API handlers: `ApplySourcePatch`,
+  keyboard/wheel behavior, non-select tools, and PNG export.
+- [ ] Fill the remaining parity gaps: rich inspector snapshots, hover metadata,
+  and source-pane debounce / fast-path classification.
+- [ ] Complete or explicitly defer the zero-copy GPU bridge. Until then,
+  `finalBitmapPixels` remains the authoritative live frame payload.
 
-## Implementation Plan
+## Historical Implementation Plan
+
+This checklist preserves the original S1-S6 plan. The progress snapshot and
+completion audit above are authoritative for the current implementation state.
 
 - [x] **Milestone S1: Byte-in, PNG-out child process (proof of model)** — landed in #506/#518
   - [x] New binary `//donner/editor/sandbox:donner_parser_child`, no ImGui,
@@ -151,13 +629,11 @@ whole stack falls out of one decision.
         `ResolvedClip`, `ImageParams`, `TextParams`, `FilterGraph`,
         `StrokeParams`, `ResolvedPaintServer`, `ResolvedMask` in
         `SandboxCodecs.cc` (~2 kLOC — the number S5 reflection will delete).
-  - [~] Fuzz the deserializer. New target `sandbox_wire_fuzzer` that feeds
+  - [x] Fuzz the deserializer. Target `sandbox_wire_fuzzer` feeds
         random bytes into `ReplayingRenderer` and asserts it never crashes
         — only returns `kError`. This is non-negotiable: the deserializer is
-        the trust boundary. *In review in #528* — `SandboxWire_fuzzer.cc`
-        drives `ReplayingRenderer::pumpFrame` against a `RendererTinySkia`
-        sink; initial seed corpus produced from `SerializingRenderer` on a
-        trivial SVG.
+        the DRNR debug/replay trust boundary. `SandboxWire_fuzzer.cc` drives
+        `ReplayingRenderer::pumpFrame` against a `RendererTinySkia` sink.
 
 - [x] **Milestone S3: Long-lived child + address bar** — landed in #506/#518
   - [x] Long-lived `donner_parser_child` that reads a `ParseRequest` and
@@ -170,17 +646,19 @@ whole stack falls out of one decision.
         - ImGui `InputText` at the top of the viewport.
         - Accepts `https://`, `http://`, `file://`, and bare paths via
           `SvgSource`.
-        - Dispatch: file reads on the host; HTTPS fetched by shelling out
-          to the system `curl` CLI (no `libcurl` link dep). The sandbox
-          only ever sees raw bytes.
+        - Dispatch: file reads on the host; HTTPS fetched by launching
+          the system `curl` CLI through `posix_spawnp` with a fixed argv and
+          curated environment (no `libcurl` link dep). The sandbox only ever
+          sees raw bytes.
         - Status chip: `Loading…`, `Rendered`, `Crashed (sandbox)`,
           `Parse error`, etc.
   - [x] **Crash recovery**: if the sandbox child exits non-zero, show the
         error chip, keep the previously-rendered document on screen, and
         respawn the child on the next navigation.
-  - [ ] Wire the address bar into `fuzz_replay_cli` from editor M5: every
-        fuzzer corpus entry gets fed through the address bar code path,
-        asserting host-process liveness. **Still TODO** (waiting on M5).
+  - [ ] Add parser-corpus replay through the address-bar/session path so every
+        parser fuzzer corpus entry is classified as either a successful backend
+        frame, a parse diagnostic, or a child crash. No `fuzz_replay_cli`
+        integration exists yet.
 
 - [x] **Milestone S4: Record/replay + frame inspector** — landed in #506/#518
   - [x] `.rnr` file format in `RnrFile.{h,cc}` — Wire framing + header
@@ -199,9 +677,9 @@ whole stack falls out of one decision.
         parity for full and partial prefixes.
   - [x] CLI inspection: `//donner/editor/sandbox:sandbox_inspect_main`
         dumps a decoded wire stream as text.
-  - [~] Structural-diff mode: load two `.rnr` files, show a diff of their
-        command streams side-by-side. *In review in #527* — new
-        `sandbox_diff` CLI plus a reusable `SandboxDiff` library that
+  - [x] Structural-diff mode: load two `.rnr` files, show a diff of their
+        command streams side-by-side. The `sandbox_diff` CLI plus reusable
+        `SandboxDiff` library
         compares `RnrHeader` fields and aligns the two decoded command
         streams with a plain LCS. Four unit tests cover identical,
         differing draw call, header mismatch, and inserted command.
@@ -283,11 +761,9 @@ the API.
 │  Text editor ───┤                      │          │   ├── AsyncSVGDocument + SVGParser   │
 │  Viewport   ─── │─ events ───┐         │ events   │   ├── Tools (SelectTool, …)          │
 │  Status     ────┘            │         ├─────────▶│   ├── UndoTimeline                   │
-│  Chrome ◀── overlay payload ─│─ Frame ◀┤          │   ├── AttributeWriteback             │
-│                              │         │  Frame   │   └── RendererDriver                 │
-│                              │         │          │         │                            │
-│                              │         │          │         ▼                            │
-│                              │         │          │    SerializingRenderer               │
+│  Chrome ◀── metadata/bmp ────│─ Frame ◀┤          │   ├── AttributeWriteback             │
+│                              │         │  Frame   │   ├── svg::Renderer                 │
+│                              │         │          │   └── CompositorController          │
 │                              │         │          │                                      │
 └──────────────────────────────┴─────────┘          └──────────────────────────────────────┘
 ```
@@ -301,24 +777,25 @@ the API.
 | **Hit test / tools (`SelectTool`, path tools)** | Backend | A `PointerEvent` routed to the backend is processed by the active tool and updates the document + selection atomically. Host's mouse handler just forwards events. |
 | **Undo / redo timeline** | Backend | `Undo()` / `Redo()` are API messages. The backend replays against its document, ships back a frame + source-writeback if the undone change touched the source. |
 | **Attribute writeback (canvas → source)** | Backend (compute) + Host (apply) | Backend computes the `{source_range, new_text}` patch when a drag commits and ships it as part of the next `Frame`. Host splices it into its `TextEditor` so the source pane stays in sync. |
-| **Render driver + wire stream** | Backend | Existing `SerializingRenderer` continues to produce the DRNR stream. The host `ReplayingRenderer` stays on host. `.rnr` is literally the rendering wire stream, unchanged. |
+| **Live render output** | Backend | The backend owns `svg::Renderer` + `CompositorController` and sends `FramePayload.finalBitmapPixels` plus split-preview bitmap fields. The host uploads those pixels or cached preview textures; it does not replay DRNR for live frames. |
+| **DRNR render wire** | Backend (producer) + Host/tools (consumer) | `SerializingRenderer` / `ReplayingRenderer` remain the record/replay and frame-inspector protocol. `.rnr` is still the rendering wire stream, but it is not the live editor frame payload. |
 | **Text editor (`TextEditor`, `TextBuffer`, `TextPatch`)** | Host | Cursor, scroll, text-pane undo — all host-local. On text edits the host sends `ReplaceSource(bytes)` or `ApplySourcePatch(range, new_bytes)` to the backend. |
 | **Address bar, resource policy, fetchers** | Host | Orthogonal to backend; host fetches bytes and hands them off as `LoadBytes(bytes)`. |
-| **Frame inspector / `.rnr` record + replay** | Host (UI) + Backend (producer) | Inspector pane decodes the frame's render wire locally. Export writes the same wire to disk. Replay is unchanged — it's a `.rnr` file playing through `ReplayingRenderer` on the host. |
+| **Frame inspector / `.rnr` record + replay** | Host/tools + DRNR producer | Inspector and replay decode DRNR streams locally. Live editor export currently returns SVG text; `.rnr` export remains a debug-tool concern. |
 
 ### Why one PR
 
-Splitting this across four PRs would leave the editor in hybrid states
+The original implementation plan expected one PR because splitting this across four PRs would leave
+the editor in hybrid states
 where *some* operations go over IPC and others don't, with no
 enforcement mechanism preventing new host-side parse calls. A single PR
 lets the banned-pattern lint land on the first commit and makes every
 call site visibly trace through the new API.
 
-The PR is large but structurally simple: almost every editor file loses
-its direct document access and gains an `EditorBackendClient&`. The
-backend side is *just the existing `donner::editor::EditorApp` class
-run in a new binary*, driven by a request loop that unpacks API
-messages. No new editor behavior — just a new process boundary.
+Current status: the split exists in Linux-only transport/backend targets, but it is not yet
+enforced as the desktop architecture. macOS still uses the in-process backend, and Linux lacks an
+editor-binary smoke test proving the shipped binary selects the session path. Closing those P0 gaps
+takes precedence over the remaining S12 parity work.
 
 ## S7: Long-lived `SandboxSession` (transport layer)
 
@@ -391,12 +868,13 @@ Internals:
 
 ### Back-compat
 
-`SandboxHost::renderToBackend` stays as a thin shim over
-`SandboxSession::submit(kRenderRequest{…}).get()` so existing tests and
-the `sandbox_render_main` / `sandbox_replay_main` CLIs keep working
-without changes. The one-shot semantics continue to be available via an
-explicit `SandboxSession::renderOnce` helper that spawns a throwaway
-session — useful for the fuzzer harnesses.
+Current implementation note: `SandboxHost::renderToBackend` remains the
+one-shot DRNR path used by the sandbox CLI/debug tools and tests. It was not
+rewired as a shim over `SandboxSession`; the live desktop editor should create a
+separate `SandboxSession` and talk to `donner_editor_backend` through the S8
+editor API. Today that is implemented only in the Linux selection path and is
+not proven by an editor-binary smoke test. This keeps the historical `.rnr`
+tooling independent from the live editor frame protocol.
 
 ### Tests
 
@@ -415,9 +893,11 @@ session — useful for the fuzzer harnesses.
 The protocol is shaped by the editor's existing public API, not by the
 DOM underneath. Every request corresponds to something an editor UI
 already does today — "I clicked at (x,y)", "load these bytes", "undo".
-Every response is *the same frame bundle*: the render wire stream plus
-whatever extra info the host needs to update its chrome / source pane /
-status strip.
+Every response is *the same frame bundle*: the backend-rasterized final bitmap,
+optional composited-preview payloads, selection overlays, tree/source metadata,
+diagnostics, and status data the host needs to update its chrome / source pane /
+status strip. DRNR render-wire bytes are now limited to `.rnr`, replay, diff,
+and inspector tooling.
 
 ### Session-layer framing
 
@@ -445,7 +925,9 @@ u8  payload[payloadLength]
 | `kWheelEvent` | `{documentPoint, deltaX, deltaY, modifiers}` | Pan/zoom when the viewport tool isn't the Select tool. |
 | `kSetTool` | `{toolKind}` | SelectTool / RectTool / PathTool / etc. Backend's active tool is the only place new editor logic lives. |
 | `kUndo` / `kRedo` | `{}` | Pass-through to `EditorApp::undo()` / `redo()`. Reply includes a `SourceReplaceAll` if the restored state's source differs from the host's buffer. |
+| `kSelectElement` | `{entityId, entityGeneration, mode}` | Tree-pane selection using opaque backend-assigned entity handles. |
 | `kExport` | `{format}` | Request the current source bytes (SVG) or a rendered raster. Reply is `kExportResponse{bytes}`. |
+| `kAttachSharedTexture` | `{kind, handle, width, height, rowBytes}` | Optional texture-bridge setup. Currently falls back to CPU bitmap payloads because bridge backends report not-ready. |
 | `kShutdown` | `{}` | Graceful exit. Backend replies with `kShutdownAck` then exits. |
 
 ### Response opcodes (backend → host)
@@ -453,7 +935,7 @@ u8  payload[payloadLength]
 | Opcode | Payload | When sent |
 |---|---|---|
 | `kHandshakeAck` | `{protocolVersion, buildId, backendCapabilities}` | Once, after `kHandshake`. Buildid mismatch → host closes session. |
-| `kFrame` | `{frameId, renderWire, selectionOverlay, sourceWritebacks, statusChip, parseDiagnostics}` | **The default response** to every request that mutates the document or viewport. One frame per logical user action. |
+| `kFrame` | `{frameId, finalBitmap, compositedPreview, tree, selectionOverlay, sourceWritebacks, statusChip, parseDiagnostics, documentViewBox}` | **The default response** to every request that mutates the document or viewport. One frame per logical user action. |
 | `kSourceReplaceAll` | `{bytes}` | Sent alongside a `kFrame` when the backend's source has diverged from the host's (e.g. after `Undo`, after an unsolicited canonicalization). Host's `TextEditor` must adopt these bytes as the new baseline. |
 | `kExportResponse` | `{format, bytes}` | Only in reply to `kExport`. |
 | `kToast` | `{severity, message}` | Unsolicited async push. Host shows a one-line chip. |
@@ -469,13 +951,32 @@ mutating request (pointer event, load, undo, …) and optionally pushed
 unsolicited if the backend has an async update (e.g. the fuzzer harness
 pushing frames on a timer). The fields:
 
-```
+```text
 u64 frameId
-u32 renderWireLength
-u8  renderWire[renderWireLength]    // DRNR stream, same as today.
 
-// Selection overlay the host must draw on top of the render. Bboxes are
-// in document space; host applies its viewport transform.
+// Final pre-composed RGBA frame. Present when a document is loaded and
+// the backend is not relying solely on split-preview texture reuse.
+u8  hasFinalBitmap
+FrameBitmap finalBitmap {
+  i32 width
+  i32 height
+  u32 rowBytes
+  u8  alphaType
+  u32 pixelLength
+  u8  pixels[pixelLength]
+}
+
+// Split compositor preview for active single-element drags. The backend
+// may send bg/promoted/fg/overlay bitmaps once, then only update the
+// document-space translation on subsequent drag frames.
+u8  hasCompositedPreview
+u8  compositedPreviewActive
+u8  hasCompositedPreviewBitmaps
+f64 compositedPreviewTranslationDoc[2]
+FrameBitmap background/promoted/foreground/overlay  // when bitmaps present
+
+// Selection overlay metadata. Bboxes are in document space; the host
+// applies its viewport transform when it needs UI-only chrome.
 u32 selectionCount
 Selection selections[selectionCount] {
   f64 worldBBox[4]                  // minX, minY, maxX, maxY.
@@ -520,10 +1021,24 @@ Diagnostic diagnostics[parseDiagnosticCount] {
 // <tag> span in the source pane without a second round trip.
 u8  hasCursorHint
 u32 cursorHintSourceOffset
+
+// Flattened tree summary for the sidebar. Entity ids are opaque and
+// generation-checked by the backend; they are not DOM handles.
+u64 treeGeneration
+u32 rootIndex
+u32 treeNodeCount
+TreeNode treeNodes[treeNodeCount]
+
+// SVG user-space coordinate system used by selection bboxes, marquee,
+// hover rect, and pointer-event round trips.
+u8  hasDocumentViewBox
+f64 documentViewBox[4]
 ```
 
-All fields are length-prefixed. The decoder on the host caps every
-length field against the S2 `kMax*` constants.
+All variable-length fields are length-prefixed. The decoder on the host caps
+lengths through `EditorApiCodec` / `SessionCodec`. The DRNR `kMax*` constants
+still apply to `.rnr` / render-wire decoding, not to the live frame bitmap
+payload directly.
 
 ### The backend's request loop
 
@@ -535,11 +1050,11 @@ The backend binary (`donner_editor_backend`) runs a single thread that:
    - `kLoadBytes` / `kReplaceSource` → `AsyncSVGDocument::loadFromString`.
    - `kUndo` → `EditorApp::undo()`.
    - `kExport` → serialize + reply.
-3. After the mutation settles, drains `applyPending*Writeback()` queues
-   into `Frame.writebacks`.
-4. Runs `RendererDriver` with a `SerializingRenderer` to emit
-   `Frame.renderWire`.
-5. Encodes the `Frame` and writes it to stdout.
+3. After the mutation settles, drains writeback queues into `Frame.writebacks`.
+4. Runs the backend `svg::Renderer` / `CompositorController`, including the
+   split-preview fast path for active drags.
+5. Encodes final bitmap / preview bitmaps plus metadata into the `Frame` and
+   writes it to stdout.
 6. Loops.
 
 Only one request is processed at a time. Concurrent requests from the
@@ -578,8 +1093,9 @@ Two new fuzzers replace the mirror-era plan:
    `Frame` decoder + `EditorBackendClient::onFrame` handlers. Same
    non-crash invariant; this is the trust boundary on the host side.
 
-`sandbox_wire_fuzzer` (#528) still covers the inner render wire; it
-becomes a component fuzzer for the `renderWire` field inside `kFrame`.
+`sandbox_wire_fuzzer` still covers the DRNR render wire used by `.rnr` tools.
+It does not cover the live `FramePayload` trust boundary; add the two fuzzers
+above before treating S8's host/child boundary as fuzz-complete.
 
 ## S9: Host editor becomes a thin client
 
@@ -588,15 +1104,16 @@ becomes a component fuzzer for the `renderWire` field inside `kFrame`.
 A new Bazel target `//donner/editor/sandbox:donner_editor_backend`
 links:
 
-- `donner/editor:editor_lib` — the existing `donner::editor::EditorApp`,
-  `AsyncSVGDocument`, tools, undo, writeback, change-classifier —
-  **unchanged**.
-- `donner/editor/sandbox:serializing_renderer` — the already-landed
-  `SerializingRenderer` producing the DRNR stream.
-- `donner/editor/sandbox:session_codecs` (new) — encoders/decoders
-  for the S8 messages.
-- `donner/editor/sandbox:hardening` — existing `ApplyHardening()`
+- `//donner/editor/backend_lib:editor_app` and `:select_tool` — parser,
+  document, undo, writeback, and tool behavior live in the backend-side library.
+- `//donner/editor/sandbox:editor_backend_core` — transport-independent
+  dispatch core that builds `FramePayload`s.
+- `//donner/editor/sandbox:editor_api_codec` and `:session_codec` —
+  encoders/decoders for the S8 messages.
+- `//donner/editor/sandbox:sandbox_hardening` — existing `ApplyHardening()`
   so the backend inherits the same S6 jail.
+- `//donner/svg/renderer` and `//donner/svg/compositor` through
+  `editor_backend_core` — the backend now owns live rasterization.
 
 `main()` applies hardening, runs the request-loop from §S8, and
 `EditorApp` is a regular C++ object inside the binary. No ECS or
@@ -625,9 +1142,12 @@ class EditorBackendClient {
   std::future<FrameResult> wheelEvent(const WheelEventPayload&);
   std::future<FrameResult> setTool(ToolKind);
   std::future<FrameResult> setViewport(int width, int height);
+  std::future<FrameResult> attachSharedTexture(const bridge::BridgeTextureHandle& handle);
   std::future<FrameResult> undo();
   std::future<FrameResult> redo();
-  std::future<ExportResult> exportSource();
+  std::future<FrameResult> selectElement(uint64_t entityId, uint64_t entityGeneration,
+                                         uint8_t mode);
+  std::future<ExportResult> exportDocument(const ExportPayload&);
 
   // Callbacks for unsolicited backend pushes.
   using ToastCallback = std::function<void(ToastPayload)>;
@@ -638,15 +1158,18 @@ class EditorBackendClient {
   // Runtime state surfaced from the last Frame.
   [[nodiscard]] const SelectionOverlay& selection() const;
   [[nodiscard]] const svg::RendererBitmap& latestBitmap() const;
+  [[nodiscard]] std::optional<Box2d> latestDocumentViewBox() const;
+  [[nodiscard]] const sandbox::FrameTreeSummary& tree() const;
   [[nodiscard]] std::optional<ParseDiagnostic> lastParseError() const;
 };
 
 }  // namespace donner::editor
 ```
 
-The client consumes exactly one `SandboxSession` and owns the
-host-side replay surface (`ReplayingRenderer` + `Renderer`) so each
-incoming `Frame` produces a `RendererBitmap` for the viewport.
+The session-backed client consumes one `SandboxSession`. The in-process client
+owns an `EditorBackendCore` directly. Both decode the same `FramePayload` and
+wrap `finalBitmapPixels` as the host's `RendererBitmap`; no host-side
+`ReplayingRenderer` participates in the live editor path.
 
 ### `FrameResult`
 
@@ -654,9 +1177,11 @@ incoming `Frame` produces a `RendererBitmap` for the viewport.
 struct FrameResult {
   bool ok = false;
   uint64_t frameId = 0;
-  // Host view of the bitmap produced by replaying Frame.renderWire.
+  // Bitmap produced by backend rasterization and carried in Frame.finalBitmap.
   svg::RendererBitmap bitmap;
-  // Updated selection chrome — host's OverlayRenderer draws from this.
+  // Optional split-layer preview for active drags.
+  std::optional<CompositedPreview> compositedPreview;
+  // Updated selection chrome metadata.
   SelectionOverlay selection;
   // Source writebacks that arrived with this frame; host's TextEditor
   // applies them to stay in sync with the backend.
@@ -667,6 +1192,8 @@ struct FrameResult {
   // Status chip override for the address bar (optional).
   std::optional<AddressBarStatusChip> statusChip;
   std::vector<ParseDiagnostic> diagnostics;
+  sandbox::FrameTreeSummary tree;
+  std::optional<Box2d> documentViewBox;
 };
 ```
 
@@ -701,16 +1228,22 @@ target** and deleted from the host editor library:
 
 ### The `main.cc` refactor
 
-`donner/editor/main.cc` today hosts the document directly via
-`AsyncSVGDocument`. Post-S9:
+`donner/editor/main.cc` hosts the address bar, text editor, viewport, texture
+uploads, and frame polling. The current implementation constructs a
+session-backed backend on Linux and an in-process backend elsewhere; that is the
+P0 bug this document now calls out. The intended desktop structure is:
 
 ```cpp
 int main(int argc, char** argv) {
   auto gatekeeper = ResourceGatekeeper(DefaultDesktopPolicy());
-  auto session = sandbox::SandboxSession({
-      .childBinaryPath = runfiles::Resolve("donner_editor_backend"),
-  });
-  EditorBackendClient backend(session);
+  #if defined(__EMSCRIPTEN__)
+    auto backend = EditorBackendClient::MakeInProcess();
+  #else
+    auto session = sandbox::SandboxSession({
+        .childBinaryPath = runfiles::Resolve("donner_editor_backend"),
+    });
+    auto backend = EditorBackendClient::MakeSessionBacked(session);
+  #endif
   AddressBar addressBar;
   TextEditor textEditor;
 
@@ -732,9 +1265,11 @@ int main(int argc, char** argv) {
 }
 ```
 
-The loop is ~100 lines. All the former editor complexity lives in
-the backend; the host is a relay and a renderer of frames the backend
-ships back.
+The real loop is larger because it includes texture upload state, drag preview
+textures, source-pane debounce, repro capture, and platform glue, but document
+state still flows through `EditorBackendClient`. Desktop builds must fail
+closed if the child cannot launch; they must not silently instantiate
+`EditorBackendClient_InProcess`.
 
 ### The WASM build
 
@@ -742,12 +1277,12 @@ WASM can't `posix_spawn`. Instead:
 
 - `EditorBackendClient` has two implementations behind the same header:
   `EditorBackendClient_Session.cc` (desktop, talks to `SandboxSession`)
-  and `EditorBackendClient_InProcess.cc` (WASM, calls an in-process
-  `donner::editor::EditorApp` directly).
-- The **in-process WASM variant statically links the backend
-  library** — same `EditorApp`, same tools, same codecs — but skips
-  the wire encode/decode. It's the "backend running in the same
-  address space as the client" case.
+  and `EditorBackendClient_InProcess.cc` (WASM and selected tests only,
+  calls an in-process `EditorBackendCore` directly).
+- The **in-process variant statically links the backend library** — same
+  `EditorBackendCore`, `EditorApp`, tools, and codecs — but skips the OS
+  process boundary. It's the "backend running in the same address space as the
+  client" case.
 - The browser is the sandbox. `SVGParser::ParseSVG` runs in the WASM
   module, which is exactly what the browser's sandboxing was
   designed for.
@@ -755,10 +1290,11 @@ WASM can't `posix_spawn`. Instead:
 This means:
 
 - The WASM build compiles the banned-pattern lint-exempt
-  `EditorBackendClient_InProcess.cc` (which *is* allowed to call into
-  the backend library, which in turn calls `SVGParser::ParseSVG`).
-- The desktop build compiles `EditorBackendClient_Session.cc` (no
-  parser access).
+  `EditorBackendClient_InProcess.cc`, which is allowed to call into the backend
+  library because the browser is the process sandbox.
+- Linux and macOS desktop builds compile `EditorBackendClient_Session.cc` and
+  must not depend on `EditorBackendClient_InProcess.cc`, `EditorBackendCore`,
+  `backend_lib`, or `//donner/svg/parser`.
 - Both builds ship the same `EditorBackendClient` header surface, so
   `donner/editor/main.cc` is shared verbatim between desktop and WASM.
 
@@ -789,41 +1325,48 @@ _Rule(
     pattern=re.compile(r"SVGParser::ParseSVG"),
     description="SVGParser::ParseSVG call outside allowed hosts",
     remediation=(
-        "Desktop editor host code must route every parse through "
-        "EditorBackendClient (which talks to donner_editor_backend). "
-        "Only the backend binary, the parser/engine itself, the "
-        "EditorBackendClient_InProcess path (WASM), and tests may "
-        "call SVGParser::ParseSVG directly."
+        "Desktop editor host code must route every parse through EditorBackendClient. "
+        "Only the backend library, parser/engine code, the EditorBackendClient_InProcess "
+        "path (WASM/test-only), and tests may call SVGParser::ParseSVG directly."
     ),
     exempt_path_prefixes=(
-        "donner/svg/",                              # Parser + engine.
-        "donner/editor/sandbox/parser_child_main.cc",   # Existing one-shot child.
-        "donner/editor/sandbox/editor_backend_main.cc", # The new backend binary.
-        "donner/editor/backend_lib/",                # Backend-side editor code (moved from donner/editor).
-        "donner/editor/EditorBackendClient_InProcess.cc",  # WASM path.
+        "donner/svg/",
+        "donner/benchmarks/",
+        "donner/editor/sandbox/parser_child_main.cc",
+        "donner/editor/sandbox/editor_backend_main.cc",
+        "donner/editor/sandbox/EditorBackendCore.",
+        "donner/editor/backend_lib/",
+        "donner/editor/EditorBackendClient_InProcess.cc",  # WASM/test-only target.
         "donner/editor/sandbox/tests/",
         "donner/editor/tests/",
+        "donner/editor/backend_lib/tests/",
+        "donner/editor/repro/tests/",
         "examples/",
         "tools/",
     ),
 )
 ```
 
-The desktop editor's production code path (`donner/editor/*.cc` minus
-the exempt list) has zero `SVGParser::ParseSVG` calls after S9. CI
-enforces.
+This source-pattern lint is necessary but not sufficient: it prevents obvious
+host-side parse calls, but it does not prevent the host binary from
+transitively linking parser-owning backend targets. The P0 dependency fence
+must add Bazel visibility/target-compatibility constraints so desktop host
+targets cannot depend on `EditorBackendClient_InProcess`, `EditorBackendCore`,
+`backend_lib`, or `//donner/svg/parser` in the first place.
 
 ### Tests
 
 - `EditorBackendClient_tests.cc`: round-trip every API message through
-  both implementations (`_Session` and `_InProcess`); assert identical
-  `FrameResult`s.
+  `_Session` and test-only/WASM `_InProcess`; assert identical `FrameResult`s.
 - `editor_backend_integration_tests.cc`: spawn a real backend,
   reproduce the scenarios covered by today's `EditorApp_tests.cc`
   (hit-test, multi-select, drag writeback, undo) through the wire.
 - `editor_backend_request_fuzzer.cc`: see §S8 fuzzing.
 - Existing `EditorApp_tests.cc` continues to live in
   `donner/editor/backend_lib/tests/` (moved alongside the class).
+- `editor_binary_backend_smoke_test_{linux,macos}`: P0 additions that run the
+  real editor binary with `--backend-smoke-test` and prove the selected desktop
+  backend is session-backed.
 
 ## S10: Unified address bar (desktop + WASM)
 
@@ -863,26 +1406,23 @@ class AddressBar {
 ```
 
 - Ctrl/Cmd+L focuses the input.
-- Enter loads; Esc cancels in-flight fetch (sends `kCancel` to the
-  sandbox or aborts the emscripten_fetch handle).
-- The file picker button opens a native dialog on desktop (via `nfd`,
-  a dev-only dep) and an `<input type=file>` on WASM — WASM already
-  has the plumbing (`gPendingBrowserUploadPath`) so this is a UI
-  reskin on that build.
-- Drag target accepts files (GLFW drop callback on desktop, HTML5
-  drop on WASM) and URL strings (desktop only; WASM can't drag
-  arbitrary URLs from the browser chrome).
+- Enter or the Load button navigates.
+- The implemented widget has an LRU history menu, load-progress indicator,
+  status chip, and drag/drop byte-payload entry point.
+- Native desktop file picker and a real cancelable desktop fetch are still
+  open. Desktop `SvgFetcher` currently completes synchronously; its `cancel`
+  method is a no-op.
+- Drag/drop is wired through `AddressBar::notifyDropPayload`; platform shells
+  decide whether they can provide bytes or only a URI.
 - Status chip: `Loading…`, `Rendered`, `Crashed (sandbox)`,
   `Parse error (line N)`, `Fetch error`, `Policy denied`. Colors
   match the existing slim-shell chip.
 
 ### Layout
 
-`donner/editor/main.cc` has a top dock area that today hosts the file
-menu + document title. The address bar slots in as the first child of
-that area, full-width, with the status chip right-aligned. The frame
-inspector (previously only in `gui_main.cc`) becomes a bottom-dock
-pane toggled from the View menu.
+`donner/editor/main.cc` renders the address bar above the editor panes. The
+status chip wraps below the URL input so long fetch / parse diagnostics stay
+readable on narrow windows.
 
 ### Fetch plumbing
 
@@ -898,9 +1438,9 @@ class SvgFetcher {
 ```
 
 - **`SvgFetcherDesktop`** — wraps the existing `SvgSource` +
-  `ResourceGatekeeper` (S11). HTTPS fetches still go through
-  `popen("curl …")`; the curl-missing check (S11) fires before any
-  fetch is attempted.
+  `ResourceGatekeeper` (S11). HTTPS fetches use `posix_spawnp("curl", argv)`
+  with a curated environment, protocol restrictions, DNS pre-resolution, and
+  private-address rejection.
 - **`SvgFetcherWasm`** — uses `emscripten_fetch_t` with async
   completion. Relies on CORS, HTTPS-only context rules, and the
   browser's mixed-content blocking for security. No `ResourcePolicy`
@@ -966,9 +1506,11 @@ class ResourceGatekeeper {
 }  // namespace donner::editor
 ```
 
-`ResourceGatekeeper::resolve` is the *only* legal caller of
-`SvgSource::fetch`; a compile-time audit of `svg_source` dependents
-enforces that.
+Production address-bar fetches call `ResourceGatekeeper::resolve` before
+`SvgSource::fetch`. This is a code-structure convention today, not a
+banned-dependency invariant: CLI tools and tests still call `SvgSource`
+directly, and no lint currently proves that every future production fetch path
+uses the gatekeeper.
 
 ### Default policy
 
@@ -998,25 +1540,20 @@ Rationale for the defaults:
 - File roots empty: the user is typing into an address bar; that is
   explicit consent. A future "workspace mode" can tighten this to a
   project root.
-- Prompt on first use: this is the only cross-origin consent gate in
-  the MVP — an ImGui modal showing the host, a 1-line explanation,
-  and `Allow for this session` / `Cancel`. No persistence.
+- Prompt on first use: the policy type can return `kNeedsUserConsent`, but the
+  implemented address-bar fetcher passes `autoGrantFirstUse=true`. A URL typed
+  into the bar is treated as the user's consent for that host in this MVP; no
+  ImGui modal is implemented yet. Sub-resource fetchers should leave
+  auto-grant off when that feature exists.
 - Sub-resources blocked: matches original Non-Goals. Turning this on
   requires the subresource-fetch protocol which is still Future Work.
 
 ### Curl-missing diagnostic
 
-Today `SvgSource::fetchFromUrl` shells out to `popen("curl -sS …")`.
-If `curl` isn't on `PATH`:
-
-- `popen` still succeeds (the shell is what runs the command).
-- The shell reports `curl: command not found` on stderr, merged into
-  stdout via `2>&1`, and exits non-zero.
-- `SvgSource` today surfaces that as a generic `kNetworkError` with
-  `diagnostics = "curl exited with code 127: /bin/sh: curl: not found"`.
-
-That's not *wrong*, but it's not actionable. S11 adds a one-shot
-availability probe:
+`SvgSource::fetchFromUrl` now uses `posix_spawnp` with an argv vector and a
+curated environment rather than `popen` through a shell. `CurlAvailability`
+adds a one-shot availability probe so a missing `curl` becomes an actionable
+policy denial before a fetch starts:
 
 ```cpp
 class CurlAvailability {
@@ -1067,11 +1604,16 @@ install hint inline rather than opening a log file.
 - `CurlAvailability_tests.cc`: stubbable probe — inject a fake `PATH`
   that doesn't contain curl; assert `installHint()` mentions the
   current OS correctly.
-- `ResourceGatekeeper_integration_tests.cc`: end-to-end, fires an
-  actual curl against a fixture HTTPS server; separately, wipes PATH
-  and asserts the denied-chip message.
+- `DesktopFetcher_tests.cc`: verifies consent handling through the desktop
+  fetcher with and without auto-grant.
+- There is no end-to-end fixture HTTPS server test yet; network fetch behavior
+  is covered by `SvgSource_tests.cc` and the URL-security unit tests.
 
-## Implementation order inside the single PR
+## Historical implementation order inside the single PR
+
+This list records the intended review order from the S7–S11 planning phase.
+It is no longer a current TODO list; use the completion audit and S12 remaining
+work above for current status.
 
 To make the diff reviewable, commits within the PR land in this order:
 
@@ -1132,13 +1674,13 @@ where necessary. New protocol fields are allowed but kept minimal.
 | G2 | Top-left corner of the document is centered in the pane instead of the document's center; clicks land in the wrong document-space region; AABB overlay appears in the wrong position | Same as G1. With `documentViewBox = Box2d::Zero`, `documentViewBoxCenter()` returns `(0, 0)` so `resetTo100Percent` anchors the doc's origin to the pane center; `screenToDocument(click)` yields coordinates in the rasterized-bitmap pixel space (when G1 was tactically seeded from bitmap dims) or garbage (when left zero), which the backend hit-tests against its own SVG-viewBox-space geometry and either misses or picks the wrong element. | **Fixed with G1.** Pinned by `ThinClientUiFlowTest.FramePayloadReportsSvgOwnViewBox`, `ClickOnScreenHitsCorrectElementInDocumentSpace`, and `DocumentCenterMapsToPaneCenter`. |
 | G3 | `setViewport` is fired on every UI frame and its `FrameResult` is discarded via `(void)-`cast — backend re-rasterizes every frame for nothing, and the new bitmap never reaches the GL texture | Thin-client `main.cc` never pipelined `setViewport`'s future through `ProcessFrameResult` | `main.cc` tracks the last posted canvas size, only re-posts on change, and threads the returned future through `pendingFrame` so the bitmap gets uploaded. Pinned by `EditorBackendClientHostFlowTest.DiscardedSetViewportLeavesHostUploadFrozenAtInitialBitmap`. |
 | G4 | **Element inspector pane shows only a tree list; no per-node attribute table, computed-style dump, or edit affordances** | `SidebarPresenter::renderInspector` in the main-branch library dereferences host-side `SVGElement` handles to format the attribute table — the thin client has no such handle, only the backend's opaque `entityId` | Either (a) add `InspectedElementSnapshot` to `FrameResult` (attribute name/value pairs + computed-style summary for the current selection), or (b) expose a new `inspectElement(entityId)` API that returns the snapshot on demand. (b) is cleaner since the inspector only opens when the user looks at it. |
-| G5 | No `--experimental` (composited drag preview) or `--save-repro` wiring on the sandbox thin-client | Both depend on `SelectTool` / `ReproRecorder` in `EditorShell` that the thin-client shell omits entirely. Flags are CLI-parsed and ignored with a stderr diagnostic. | Port `SelectTool` into the backend and add `setExperimentalMode(bool)` to `EditorBackendClient`; host-side `ReproRecorder` records pointer/key events pre-forward to the backend. |
+| G5 | ~~No `--experimental` (composited drag preview) or `--save-repro` wiring on the sandbox thin-client~~ | Flags existed in the old shell but were not wired through the thin client. | **Fixed.** `--experimental` enables diagnostics around the compositor path; `--save-repro` records host-side input/frame state through the existing repro recorder. |
 | G6 | ~~No drag feedback — click, see AABB, but dragging doesn't move the selection~~ **Drag now correct; see G6b for the perf story.** | Backend's `handlePointerEvent` did only hit-test + setSelection; `SelectTool` lived in `backend_lib` but wasn't instantiated by `EditorBackendCore` | **Fixed in this PR.** `EditorBackendCore` owns a `SelectTool` member; `handlePointerEvent` dispatches `kDown`/`kMove`/`kUp` (and folds `kCancel` → up) through it. Writebacks from drag-end flow through `FrameResult.writebacks`. Pinned by `ThinClientUiFlowTest.DragMovesSelectedElementAndCommitsWriteback`. |
 | G6b | ~~Dragging is slow~~ **Partially fixed in this PR** (35ms → 16ms avg). Composited rendering ported to backend; tile-level host caching is the remaining phase-2 win. | Every `kMove` previously triggered a full `buildFramePayload` → full `SerializingRenderer` tree walk → full `ReplayingRenderer` re-raster on the host. | **Phase 1 done in this PR.** Backend now owns a real `svg::Renderer` + `CompositorController`; `buildFramePayload` runs `compositor_->renderFrame(viewport)` and ships the final pre-composed bitmap via new `FramePayload.finalBitmap` fields. Drag events route through `SelectTool` which mutates the drag target's transform; the compositor's translation-only fast path detects the pure-translation delta and reuses the cached layer bitmap instead of re-rasterizing. Additional fix along the way: `SVGDocument::setCanvasSize` unconditionally `invalidateRenderTree()`s, so `EditorBackendCore` now skips the call when the requested dimensions haven't changed (comparing against a local shadow, not `doc.canvasSize()` which reports the aspect-fit-scaled result). Pinned by `ThinClientUiFlowTest.CompositorModeSteadyStateDragIsFast` with a 30 ms budget against a 100-shape document. **Phase 2 (follow-up):** add per-tile fields to `FramePayload` so the host can cache individual layer bitmaps across frames and skip re-uploading the static bg/fg tiles on every drag frame — the compositor's `snapshotTilesForUpload()` already exposes the tile list with stable `tileId` + `generation`. |
-| G7 | No marquee, no hover rect, no multi-select shortcuts | Host forwards the pointer event but the backend's default pointer handler doesn't implement marquee state or hover tracking | `SelectTool` in the backend already tracks marquee state via `marqueeRect()` (`std::optional<Box2d>`). Gap is the serialization: backend doesn't populate `FramePayload.hasMarquee / marquee[4]` from SelectTool. Small addition — marquee field already exists in the payload. |
-| G8 | Zoom / pan gestures adjust `ViewportState` locally but the backend keeps rendering at its own `viewportWidth/Height` — on zoom-in the rasterized image is still pane-sized and stretches | Thin-client zoom adjusts `viewport.zoom`, which changes `desiredCanvasSize()`, but the current `main.cc` computes canvas from `paneSize * dpr` directly (bypassing zoom) so that the `documentViewBox`-unpopulated state doesn't explode | Fold back to `desiredCanvasSize()` once G1's `documentViewBox` plumbing lands. |
+| G7 | ~~No marquee metadata or multi-select shortcuts~~ Hover rect still missing | `SelectTool` was not originally instantiated by the backend. | **Mostly fixed.** Backend `SelectTool` handles shift-click, marquee, and multi-select drag. `FramePayload.hasMarquee / marquee[4]` is populated. `hasHoverRect / hoverRect` exists in the wire shape but is not populated yet. |
+| G8 | ~~Zoom / pan gestures adjust `ViewportState` locally but the backend keeps rendering at its own `viewportWidth/Height`~~ | Thin-client zoom originally bypassed `desiredCanvasSize()` because `documentViewBox` was missing. | **Fixed with G1.** `main.cc` posts `setViewport(desiredCanvasSize())` only when the target canvas size changes and processes the returned frame. |
 | G9 | Source-pane typos produce backend reparses per keystroke — no debounce | `main.cc` has `textChangePending` debounce logic inherited from main but `ApplySourcePatch` payload is sent too eagerly | Tune the debounce threshold / hold condition. Not load-bearing, but noticeable. |
-| G10 | Export dialog / Save-As uses a thin-wrapper `gh`/nfd path but doesn't round-trip through the backend for "serialize current state" | Thin-client's `backend->exportDocument(kSvgText)` returns empty — `EditorBackendCore::handleExport` is a placeholder | Implement `handleExport` in backend. Small; the SVG serializer already lives next to `SVGDocument`. |
+| G10 | ~~SVG Save-As returns empty bytes~~ PNG export still missing | `EditorBackendCore::handleExport` was initially a placeholder. | **Partially fixed.** SVG text export returns `EditorApp::cleanSourceText()` through `kExportResponse`. PNG export is still not wired. |
 
 ### S12 PR structure — landed, in progress, remaining
 
@@ -1213,16 +1755,16 @@ of this commit:
 5. **G4 element inspector.** `inspectElement(entityId)` API +
     host sidebar UI. Needs a flattened name/value snapshot per
     element (no DOM mirror — see Invariants).
-6. **G7 marquee/hover serialization.** `SelectTool`'s
-    `marqueeRect()` + hover tracking already populated backend-
-    side; add `FramePayload.hasMarquee / marquee` fields if they
-    aren't already (they are — just need to wire the populate).
+6. **G7 hover serialization.** `FramePayload.hasMarquee / marquee` is now
+    populated from `SelectTool::marqueeRect()`. Hover tracking still needs a
+    backend source of truth and `FramePayload.hasHoverRect / hoverRect`
+    population.
 7. **G9 source-pane debounce tuning.** Host-only. Tune
     `kTextChangeDebounceSeconds` so keystroke storms don't spam
     `kReplaceSource`.
-8. **G10 backend export handler.** `EditorBackendCore::
-    handleExport` currently returns empty bytes. Serialize
-    `editor_.document()` via the existing SVG writer.
+8. **G10 PNG export handler.** SVG text export now returns
+    `EditorApp::cleanSourceText()`. PNG export should encode the latest
+    `finalBitmapPixels` or render on demand through the backend renderer.
 9. **Bridging phase C — Linux dmabuf.** Blocked on seccomp
     audit for `SCM_RIGHTS` receive during handshake. The Rust
     patch from phase B part 2 also needs the Vulkan-hal variant
@@ -1296,28 +1838,34 @@ Prior art in tree:
   Already `noexcept`; already produces a `ParseResult`. Already the right
   seam.
 
-No existing IPC, process separation, shared memory, or sandboxing code in
-the tree (grep confirmed). This is greenfield.
+At the time this design started there was no existing IPC, process separation,
+shared-memory, or sandboxing code in the tree. The current implementation now
+has `SandboxHost`, `SandboxSession`, `donner_editor_backend`, `SandboxHardening`,
+and `BridgeTexture` scaffolding.
 
 ## Requirements and Constraints
 
 **Functional:**
-- Every SVG load through the address bar, file dialog, or programmatic
-  `EditorApp::loadSvgString()` is routed through the sandbox.
-- The host process never executes `SVGParser::ParseSVG` directly (except in
-  WASM builds, where the browser is the sandbox).
+- Linux and macOS desktop SVG loads route through a session-backed backend
+  process. No desktop fallback to `EditorBackendClient_InProcess` is allowed.
+- Desktop host targets cannot link parser-owning code (`EditorBackendCore`,
+  `backend_lib`, `SVGParser`, or any target that can call
+  `SVGParser::ParseSVG`). Enforce with Bazel visibility and target
+  compatibility, not only source-pattern lint.
+- The shipped editor binary has a parser-free `--backend-smoke-test` path that
+  proves the selected desktop backend is `session` and the backend PID differs
+  from the host PID on Linux and macOS.
 - Wire format is stable within a milestone; breaking changes bump the
   4-byte version header.
-- Record/replay files are portable across Skia/TinySkia/Geode backends with
-  pixel identity on the same backend, best-effort parity across backends.
+- Record/replay files are DRNR-based and validated on the same backend for
+  the codec-supported feature subset.
 
 **Quality:**
-- Sandbox roundtrip (parse + render + IPC + replay) adds no more than
-  **2× the in-process render time** at p50 for the existing test corpus.
+- Desktop sandbox roundtrip (parse + render + IPC + bitmap upload) should add
+  no more than **2× the in-process render time** at p50 for the existing test corpus.
   The goal is "you don't notice"; a 2× budget leaves room to optimize.
-- Child process spawn + first-render latency ≤ 80 ms at p95 on the M1 target
-  machines (Linux dev laptop, macOS dev laptop). If it's higher, we switch
-  to a warm-pool model.
+- Child process spawn + first-render latency ≤ 80 ms at p95 on Linux and macOS
+  desktop dev machines.
 - Frame inspector pause → unpause → next render ≤ 16 ms (one frame) so the
   inspector doesn't drop frames when engaged.
 
@@ -1330,7 +1878,13 @@ the tree (grep confirmed). This is greenfield.
 - No `fork()` without `exec()` — we don't want to inherit the host's entt
   registry, GL context, or malloc arena into the child.
 
-## Proposed Architecture
+## Historical DRNR-first proposed architecture
+
+The sections below preserve the original DRNR-first architecture proposal for
+context. They are not authoritative for the current live editor path where they
+conflict with the completion audit, S7-S12 status, or `FramePayload.finalBitmap`
+design above. In particular, claims that `RendererInterface` is the only
+sandbox-to-host live data flow now apply only to the `.rnr`/debug path.
 
 ### Trust boundary
 
@@ -2091,6 +2645,11 @@ block S3.
 
 ## API / Interfaces
 
+Historical DRNR-first API sketch. The current live editor APIs are
+`SandboxSession`, `SessionProtocol`, `EditorApiCodec`, `EditorBackendCore`, and
+`EditorBackendClient` as described in S7-S9 above. `SandboxHost` still exists as
+the one-shot `donner_parser_child` CLI/debug path.
+
 ```cpp
 namespace donner::editor::sandbox {
 
@@ -2158,6 +2717,11 @@ class ReplayingRenderer {
 
 ## Data and State
 
+Historical DRNR streaming model. The live desktop editor is intended to use a
+`SandboxSession` writer thread and reader thread around session frames, and the
+backend returns whole `FramePayload`s with bitmap payloads rather than a
+per-command `WireMessage` queue for the UI frame.
+
 **Threading model**:
 - Host main thread: ImGui, event loop, address bar, `SandboxHost::render()`
   (synchronous).
@@ -2186,6 +2750,10 @@ class ReplayingRenderer {
 
 ## Error Handling
 
+This table reflects the original DRNR transport. The live editor reports most
+backend outcomes through `FramePayload.statusKind` / diagnostics on the DRNS
+session response; DRNR-specific rows apply to `.rnr` replay and debug tools.
+
 | Class | Detection | Response |
 |---|---|---|
 | HTTPS fetch failure | curl return code | Address bar chip, no sandbox round-trip. |
@@ -2194,13 +2762,14 @@ class ReplayingRenderer {
 | Parse warnings | `kDiagnostic` opcodes | Logged to editor console pane; non-blocking. |
 | Sandbox crash (SIGSEGV, SIGABRT, OOM) | Child exit non-zero, `read()` returns 0 | `SandboxCrashed` raised, address bar chip, child respawned on next request. Crashing corpus entry logged for fuzzer ingestion. |
 | Sandbox hang | Host-side 30 s deadline on `kEndFrame` arrival | Host sends SIGKILL, treats as crash. Deadline is generous; real renders should complete in <1 s. |
-| Wire format error (host sees an opcode it doesn't recognize, length overrun, invalid variant tag) | Deserializer check | Host raises `WireProtocolError`, kills child, respawns. **This path is fuzzed.** |
+| Wire format error (host sees an opcode it doesn't recognize, length overrun, invalid variant tag) | Deserializer check | DRNR replay fails without host crash. **The DRNR path is fuzzed; the live DRNS request/frame path still needs fuzzers.** |
 | Backend reports an error during replay | `ReplayingRenderer` catches | Logged, frame completes on best-effort basis. Host never crashes on a replay error. |
 
 **Non-negotiable invariant**: *the host process never crashes due to any
 input from the sandbox child, including maliciously-crafted wire messages
-targeting the host's deserializer*. The `sandbox_wire_fuzzer` target in S2
-exists specifically to hold this line.
+targeting the host's deserializer*. `sandbox_wire_fuzzer` holds this line for
+DRNR. The open completion item is to add equivalent fuzz coverage for
+`SessionCodec` / `EditorApiCodec`.
 
 ## Performance
 
@@ -2258,7 +2827,8 @@ must not be able to:
 
 - Read or write the user's filesystem (other than the SVG bytes piped in).
 - Open network connections.
-- Send IPC to the editor host beyond the `RendererInterface` wire stream.
+- Send IPC to the editor host beyond the session protocol (`DRNS`) and, for
+  debug/replay tools, the render-wire protocol (`DRNR`).
 - Escalate to persist beyond its process lifetime.
 - Trigger host-side crashes via malformed wire messages.
 
@@ -2280,17 +2850,19 @@ must not be able to:
    user-agent customization.
 2. **Host fetch → sandbox child**: raw bytes only. No filenames, no URLs,
    no host metadata crosses the pipe.
-3. **Sandbox child → host (wire messages)**: deserializer is the trust
-   boundary. Every length field is bounds-checked against the remaining
-   payload before allocation; every variant tag is range-checked; every
-   `std::vector` count is capped at a sensible maximum (e.g., 10M path ops
-   per `PathShape`, 1024 clip paths per `ResolvedClip`). **The deserializer
-   is fuzzed (`sandbox_wire_fuzzer`).**
-4. **Sandbox child → OS**: seccomp-bpf (Linux) or `sandbox_init` (macOS)
-   deny-by-default, allowing only the syscalls required to read stdin,
-   write stdout, allocate memory, and exit. Enforced after child
-   initialization completes (the parser allocator may warm up before the
-   filter activates).
+3. **Sandbox child → host (session frames)**: `SessionCodec` and
+   `EditorApiCodec` are the live trust boundary. They bounds-check payload
+   lengths and reject malformed enum tags. They currently have unit tests, but
+   no fuzzer; add `editor_backend_request_fuzzer` and `frame_response_fuzzer`
+   before treating this as fully fuzzed.
+4. **Sandbox child → host (DRNR debug/replay)**: `ReplayingRenderer` and
+   `SandboxCodecs` are the render-wire trust boundary. This path is fuzzed by
+   `sandbox_wire_fuzzer`, but it is no longer the live editor frame transport.
+5. **Sandbox child → OS**: Linux applies seccomp-bpf in fail-open `EACCES`
+   mode plus resource limits. macOS has no `sandbox_init` profile yet because
+   the desktop build still uses the in-process backend. S6.2 is not closed
+   until Linux uses kill-on-deny, macOS applies a deny-by-default profile, and
+   denied-operation probes cover both platforms.
 
 ### Defensive measures
 
@@ -2300,7 +2872,7 @@ must not be able to:
   - `RLIMIT_FSIZE` = 0. No file writes, belt-and-braces.
   - `RLIMIT_NOFILE` = 16. Enough for stdin/stdout/stderr and a handful of
     internal FDs; no extra file descriptors possible.
-- **Wire message caps** (enforced in `ReplayingRenderer`):
+- **DRNR wire message caps** (enforced in `ReplayingRenderer`):
   - Max frame size: 256 MB. Larger frames are treated as a protocol violation.
   - Max path ops per `PathShape`: 10M.
   - Max clip paths per `ResolvedClip`: 1024.
@@ -2310,25 +2882,23 @@ must not be able to:
   locale + `PATH`, no file descriptors beyond pipes, no working directory
   beyond `/`, no signal handlers, no `LD_PRELOAD` (wiped from environment),
   no privilege.
-- **Opaque forwarding**: if the deserializer cannot fully understand a
-  message (unknown opcode from a future child version), it treats the
-  connection as corrupt and kills the child. No graceful degradation.
+- **Opaque forwarding**: unknown or malformed session opcodes produce
+  `kError` or fail the request; unknown or malformed DRNR opcodes fail replay.
+  The live session boundary still needs fuzz coverage.
 
 ### Fuzzing plan
 
-Three new fuzzers:
+Implemented and planned fuzzers:
 
-1. **`sandbox_wire_fuzzer`**: feeds random bytes into `ReplayingRenderer`
-   operating against a `MockRendererInterface` (planned in the renderer
-   interface design). Asserts the host never crashes. **The single most
-   important fuzzer in this design.** Corpus seeded with real recorded
-   frames from the resvg test suite.
-2. **`drnr_replay_fuzzer`**: same deserializer, but file-shaped inputs
-   with a header. Catches header-specific bugs.
-3. **Reuse `SVGParser_fuzzer` end-to-end**: every corpus entry is fed
-   through `SandboxHost::render` as part of CI. Any host crash is a
-   test failure. This is the `fuzz_replay_cli` path from editor M5, with
-   sandbox enabled.
+1. **Implemented: `sandbox_wire_fuzzer`** feeds random bytes into
+   `ReplayingRenderer` and asserts the DRNR decoder never crashes.
+2. **Planned: `editor_backend_request_fuzzer`** feeds random session payloads
+   into backend request decoding and dispatch.
+3. **Planned: `frame_response_fuzzer`** feeds random `FramePayload`s into host
+   frame decoding and `EditorBackendClient` state updates.
+4. **Planned: parser corpus replay through the address-bar/session path** so
+   crashes found by parser fuzzing are classified as child crashes, not host
+   crashes.
 
 ### Sensitive data handling
 
@@ -2343,73 +2913,88 @@ Three new fuzzers:
 
 ### Invariants enforced post-launch
 
-1. **Host never crashes on sandbox input.** Enforced by `sandbox_wire_fuzzer`
-   in CI.
-2. **Parser never executes in the host process (non-WASM builds).**
-   Enforced by `check_banned_patterns.py` extension: forbid
-   `SVGParser::ParseSVG` imports outside `donner/editor/sandbox/child/**`
-   and existing non-editor callers. The editor host code is not allowed
-   to reach the parser directly.
-3. **Wire format is versioned.** Breaking changes bump the version field;
+1. **DRNR replay never crashes on malformed render wire.** Enforced by
+   `//donner/editor/sandbox/tests:sandbox_wire_fuzzer`.
+2. **Live `FramePayload` decoding should never crash on malformed session
+   payloads.** Not yet enforced by a fuzzer; currently covered only by
+   codec unit tests.
+3. **Desktop host parser isolation is not yet enforced.** The intended
+   invariant is: Linux and macOS editor host binaries never link parser-owning
+   code and always select `EditorBackendClient_Session`. That is currently not
+   proven by CI and is false on macOS. The P0 closure targets are the
+   editor-binary backend smoke tests plus Bazel visibility that prevents host
+   targets from depending on backend/parser implementation targets.
+4. **Platform jails are not yet enforced.** The intended invariant is: backend
+   children on Linux and macOS cannot read arbitrary files, write files, create
+   network sockets, spawn subprocesses, or continue if hardening fails. Current
+   Linux seccomp is fail-open `EACCES`, and macOS has no profile. The P0 closure
+   targets are `sandbox_hardening_linux_kill_tests` and
+   `sandbox_hardening_macos_profile_tests`.
+5. **Wire format is versioned.** Breaking changes bump the version field;
    a version mismatch between host and child is a fatal error on handshake.
 
 ## Testing and Validation
 
-- **Unit**: `SerializingRenderer` / `ReplayingRenderer` round-trips for
-  every `RendererInterface` method. One test per opcode, table-driven.
-  Asserts encoded bytes + decoded state match.
-- **Integration**: the resvg test suite, run once in-process and once
-  through the sandbox; pixel-identical assertion on same backend. This is
-  the single most important test — it proves end-to-end correctness.
-- **Golden**: record `.rnr` files for a curated subset of the resvg suite,
-  check them in under `donner/editor/sandbox/tests/goldens/*.rnr`. On CI,
-  replay them and assert pixel equality. Regenerate via the standard
-  `UPDATE_GOLDEN_IMAGES_DIR` workflow.
+- **Unit**: `session_codec_tests`, `editor_api_codec_tests`, and
+  `wire_format_tests` cover frame/DRNR codec round trips and malformed inputs.
+- **Integration**: `sandbox_session_tests`, `editor_backend_integration_tests`,
+  and `editor_backend_client_tests` cover the long-lived child, backend binary,
+  and backend-client implementations on the platforms where those targets are
+  enabled. They do not prove the shipped editor binary selects the session
+  backend.
+- **P0 editor-binary smoke**:
+  - Missing: `editor_binary_backend_smoke_test_linux`.
+  - Missing: `editor_binary_backend_smoke_test_macos`.
+  - Both tests should invoke the real editor binary's `--backend-smoke-test`
+    path and assert `transport=session` and `backend_pid != host_pid`.
+- **P0 dependency fence**:
+  - Missing: Bazel visibility/target-compatibility refactor that prevents
+    desktop host targets from linking parser-owning backend implementation
+    targets.
+  - Missing: CI coverage that fails if `//donner/editor:editor` depends on
+    `EditorBackendClient_InProcess`, `EditorBackendCore`, `backend_lib`, or
+    `//donner/svg/parser` on Linux or macOS.
+- **P0 S6.2 hardening**:
+  - Existing: `sandbox_hardening_tests` covers the env gate, resource limits,
+    Linux seccomp installation, and normal rendering under the current fail-open
+    filter.
+  - Missing: `sandbox_hardening_linux_kill_tests` for denied-operation probes
+    under `SECCOMP_RET_KILL_PROCESS`.
+  - Missing: `sandbox_hardening_macos_profile_tests` for the macOS
+    deny-by-default `sandbox_init` profile.
+- **Golden/pixel**: `editor_backend_golden_image_tests` compares backend
+  `finalBitmapPixels` against direct renderer output for simple documents and
+  reproduces the thin-client filter/drag regressions.
+- **Record/replay**: `record_replay_tests`, `sandbox_diff_tests`, and the
+  `sandbox_replay` / `sandbox_inspect` tools cover the DRNR `.rnr` path.
 - **Fuzzing**:
-  - `sandbox_wire_fuzzer` runs on every PR via existing fuzzer CI plumbing.
-  - `SVGParser_fuzzer` corpus replays through `fuzz_replay_cli` with
-    `--sandbox` enabled as a release gate.
-- **Crash recovery**: deliberately-crashing corpus entries (SIGSEGV, SIGABRT,
-  infinite loops) fed through `SandboxHost`; assertions on host liveness
-  and child respawn count.
-- **Frame inspector**: headless test that enters buffered mode, captures a
-  frame, scrubs from 0 to N, asserts the off-screen replay matches the
-  in-stream replay at each index.
-- **Address bar**: integration test with a local HTTP server serving curated
-  payloads (valid SVG, malformed SVG, 404, slow response, oversized body).
-  Asserts the UI chip transitions and the previous document survives every
-  failure mode.
+  - Implemented: `sandbox_wire_fuzzer` for DRNR.
+  - Missing: request/frame fuzzers for the live `DRNS` / `FramePayload` path.
+- **Address bar / fetch**: `address_bar_tests`, `address_bar_dispatcher_tests`,
+  `desktop_fetcher_tests`, `resource_policy_tests`, `curl_availability_tests`,
+  `svg_source_tests`, and `url_security_tests` cover the implemented fetch and
+  policy behavior. There is no local HTTPS fixture-server integration test yet.
 
 ## Dependencies
 
-- **New dev dependency**: `curl` (or `libcurl`) for HTTPS fetching in the
-  address bar. Added as `dev_dependency = True` in `MODULE.bazel`, same
-  pattern as imgui/glfw. Not added to the BCR consumer graph. Alternative:
-  hand-rolled HTTP client — rejected as out of scope for an editor
-  milestone.
-- **No new runtime dependencies** for the parser child binary — it's just
-  `//donner/svg:parser` + `//donner/svg/renderer:renderer_tiny_skia` +
-  the new `:sandbox_wire_lib`.
-- **Bazel `banned-patterns`**: new rule preventing `SVGParser::ParseSVG`
-  calls from `//donner/editor:core` and its transitive deps. Editor core
-  uses `SandboxHost::render` exclusively.
+- **curl CLI**: used by `SvgSource` for desktop HTTP(S) fetches. It is not a
+  Bazel module dependency; `CurlAvailability` probes for it at runtime and
+  surfaces install guidance when missing.
+- **rules_rust / patched wgpu-native source build**: present for the texture
+  bridge patch. The exported functions are still stubs until the Rust HAL
+  extraction is completed.
+- **Bazel `banned-patterns`**: prevents non-exempt editor host code from
+  calling `SVGParser::ParseSVG` directly.
 
 ## Rollout Plan
 
-- **Milestone S1** ships behind nothing — it's a new binary and a new test,
-  no user-visible behavior change.
-- **Milestone S3** (address bar + sandbox) ships with the address bar
-  enabled by default. Users get the sandbox transparently.
-- **`--in-process-parser`** debug flag remains for the entire S1–S5 period:
-  routes parsing back through the host for performance comparison and
-  debugging of sandbox issues. Default off. Removed after S6.
-- **WASM build (editor M6)**: the sandbox code compiles out; `SandboxHost`
-  becomes a direct call into `SVGParser::ParseSVG`. The browser is the
-  sandbox.
-- **`.rnr` format**: version 1 in S4. No migration path for version bumps
-  in the S4–S6 window; a format change invalidates existing files. This
-  is acceptable because `.rnr` files are not user-authored assets, only
-  debug artifacts.
+- **Linux desktop**: must ship the session-backed backend path and the
+  editor-binary smoke test that proves the shipped binary selects it.
+- **macOS desktop**: must not ship the in-process backend fallback as the
+  default. The P0 rollout gate is `SandboxSession` + `donner_editor_backend` +
+  `sandbox_init` + editor-binary smoke coverage.
+- **WASM**: ships the in-process backend and relies on browser sandboxing.
+- **`.rnr` format**: remains a debug artifact tied to the DRNR wire version.
 
 ## Alternatives Considered
 
@@ -2457,10 +3042,10 @@ Three new fuzzers:
   persistent `SandboxSession` per editor, transparent respawn on crash.
   The per-render `posix_spawn` path survives only as `renderOnce()` for
   fuzzer harnesses.
-- **HTTPS client**: **Resolved for the MVP** — `popen("curl …")` is
-  adequate for typical editor use and avoids pulling in libcurl as a
-  runtime dep. S11 adds the missing-curl diagnostic. A libcurl upgrade
-  remains Future Work.
+- **HTTPS client**: **Resolved for the MVP** — desktop fetch launches
+  `curl` through `posix_spawnp` with a fixed argv and curated environment,
+  avoiding both a shell and a libcurl runtime dependency. S11 adds the
+  missing-curl diagnostic. A libcurl upgrade remains Future Work.
 - **Sub-resource fetching** (`<image href="https://...">` inside an SVG):
   still out of scope. `ResourcePolicy::subresources` is reserved so the
   shape is ready when the request-from-sandbox protocol lands. Not
