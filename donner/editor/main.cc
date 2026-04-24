@@ -705,7 +705,13 @@ int main(int argc, char** argv) {
 #ifndef __EMSCRIPTEN__
   donner::editor::sandbox::SvgSource svgSource;
   donner::editor::ResourceGatekeeper resourceGatekeeper(donner::editor::DefaultDesktopPolicy());
-  auto fetcher = donner::editor::MakeDesktopFetcher(resourceGatekeeper, svgSource);
+  // `autoGrantFirstUse = true`: a URL typed into the address bar is the
+  // user's consent to hit that host. No first-use prompt fires for
+  // direct URL entry. The gatekeeper still enforces scheme / deny-list /
+  // size + timeout limits — it just treats the typed URL as the gesture
+  // that would otherwise require an explicit click-through.
+  auto fetcher = donner::editor::MakeDesktopFetcher(resourceGatekeeper, svgSource,
+                                                    /*autoGrantFirstUse=*/true);
 #else
   auto fetcher = donner::editor::MakeWasmFetcher();
 #endif

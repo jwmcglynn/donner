@@ -28,14 +28,26 @@ FetchError::Kind MapStatus(sandbox::SvgFetchStatus status) {
 
 class DesktopFetcher : public SvgFetcher {
 public:
-  DesktopFetcher(ResourceGatekeeper& gatekeeper, sandbox::SvgSource& source)
-      : gatekeeper_(gatekeeper), source_(source) {}
+  DesktopFetcher(ResourceGatekeeper& gatekeeper, sandbox::SvgSource& source,
+                 bool autoGrantFirstUse)
+      : gatekeeper_(gatekeeper), source_(source), autoGrantFirstUse_(autoGrantFirstUse) {}
 
   FetchHandle fetch(std::string_view uri, FetchCallback cb) override {
     const FetchHandle handle = nextHandle_.fetch_add(1, std::memory_order_relaxed);
 
     // Step 1: Policy check.
     auto decision = gatekeeper_.resolve(uri);
+
+    // The address bar uses `autoGrantFirstUse_ = true`: a URL typed into
+    // the bar is itself the user's consent to hit that host, so we grant
+    // the host in-place and re-resolve rather than surfacing a prompt.
+    // Derived / sub-resource fetchers (none yet, see §S11 Future Work)
+    // would leave this off so consent stays an explicit user gesture.
+    if (decision.outcome == ResourceGatekeeper::Decision::Outcome::kNeedsUserConsent &&
+        autoGrantFirstUse_) {
+      gatekeeper_.grantHost(decision.pendingHost);
+      decision = gatekeeper_.resolve(uri);
+    }
 
     switch (decision.outcome) {
       case ResourceGatekeeper::Decision::Outcome::kDeny: {
@@ -84,14 +96,16 @@ public:
 private:
   ResourceGatekeeper& gatekeeper_;
   sandbox::SvgSource& source_;
+  bool autoGrantFirstUse_;
   std::atomic<FetchHandle> nextHandle_{1};
 };
 
 }  // namespace
 
 std::unique_ptr<SvgFetcher> MakeDesktopFetcher(ResourceGatekeeper& gatekeeper,
-                                               sandbox::SvgSource& source) {
-  return std::make_unique<DesktopFetcher>(gatekeeper, source);
+                                               sandbox::SvgSource& source,
+                                               bool autoGrantFirstUse) {
+  return std::make_unique<DesktopFetcher>(gatekeeper, source, autoGrantFirstUse);
 }
 
 }  // namespace donner::editor

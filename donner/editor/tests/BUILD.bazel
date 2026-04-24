@@ -111,6 +111,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "desktop_fetcher_tests",
+    srcs = ["DesktopFetcher_tests.cc"],
+    deps = [
+        "//donner/editor:resource_policy",
+        "//donner/editor:svg_fetcher",
+        "//donner/editor/sandbox:svg_source",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resource_policy_tests",
     srcs = ["ResourcePolicy_tests.cc"],
     deps = [

@@ -74,8 +74,18 @@ public:
 /// Creates the desktop fetcher implementation backed by `SvgSource` and
 /// gated by `ResourceGatekeeper`. The gatekeeper and source must outlive
 /// the returned fetcher.
+///
+/// @param autoGrantFirstUse when `true`, a `kNeedsUserConsent` verdict on
+///        the first fetch for a host is treated as implicit user consent:
+///        the fetcher calls `ResourceGatekeeper::grantHost(...)` and
+///        retries the resolve in-place, never surfacing the prompt to
+///        the caller. Intended for user-initiated flows like the address
+///        bar, where typing a URL *is* the consent. Keep the default
+///        (`false`) for derived / sub-resource fetches where consent
+///        must remain an explicit user gesture.
 std::unique_ptr<SvgFetcher> MakeDesktopFetcher(ResourceGatekeeper& gatekeeper,
-                                               sandbox::SvgSource& source);
+                                               sandbox::SvgSource& source,
+                                               bool autoGrantFirstUse = false);
 
 #ifdef __EMSCRIPTEN__
 /// Creates the WASM fetcher implementation backed by `emscripten_fetch`.
