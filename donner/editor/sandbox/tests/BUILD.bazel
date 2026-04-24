@@ -220,12 +220,28 @@ donner_cc_test(
     data = [
         "//donner/editor/sandbox:donner_editor_backend",
     ],
-    # SandboxSession is pure POSIX; both Linux and macOS can exercise it.
+    # `no-sandbox` on macOS: without it, our sandbox_init in the
+    # spawned `donner_editor_backend` hits EPERM (nested sandbox) and
+    # our wrapper treats that as "already hardened" → the profile
+    # never actually applies. Which means the backend-startup-
+    # ordering bug (sandbox_init before GPU init) slips right past
+    # the test. Running outside darwin-sandbox lets sandbox_init
+    # apply for real, so the geode-variant handshake deadlocks if
+    # the ordering regresses.
+    tags = ["no-sandbox"],
     target_compatible_with = select({
         "@platforms//os:linux": [],
         "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    # Spawn + handshake the `donner_editor_backend` under the Geode
+    # renderer too. The extra variant catches classes of bugs where
+    # the backend startup path depends on the renderer backend —
+    # e.g., applying the macOS sandbox_init profile BEFORE the Geode
+    # renderer initializes wgpu-native blocks Metal `mach_lookup`,
+    # deadlocking the handshake. Missing this variant is how the
+    # initial macOS+geode hang escaped the default `tiny_skia` lane.
+    variants = ["geode"],
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
@@ -254,6 +270,12 @@ donner_cc_test(
     ],
     # End-to-end session + EditorBackendCore round-trip. Both desktop
     # OSes now ship the backend binary, so both gate through this test.
+    # Geode lane is intentionally not variant'd here: `LoadBytes`
+    # triggers a real render, and under bazel's macOS darwin-sandbox
+    # wgpu-native cannot reach Metal (no display context), so the child
+    # crashes with `SandboxStatus::kCrashed`. The handshake-only
+    # `sandbox_session_tests_geode` covers the backend-startup-under-
+    # geode shape that our macOS sandbox_init ordering needs.
     target_compatible_with = select({
         "@platforms//os:linux": [],
         "@platforms//os:macos": [],

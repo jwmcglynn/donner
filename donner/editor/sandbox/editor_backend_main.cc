@@ -95,15 +95,27 @@ int main(int /*argc*/, char** /*argv*/) {
     }
   }
 
-  // Apply sandbox hardening.
+  // Construct the backend core BEFORE applying the sandbox profile. The
+  // Geode renderer lazily initializes wgpu-native (Metal on macOS,
+  // Vulkan on Linux) inside the `EditorBackendCore` ctor chain; on macOS
+  // that path hits `mach_lookup("com.apple.sandbox.metal")` which
+  // `sandbox_init(kSBXProfilePureComputation)` denies. Hardening AFTER
+  // the GPU handles are already open keeps those handles usable while
+  // still closing the door on arbitrary new mach/network/file opens
+  // during the render loop. Pattern matches the standard "open resources
+  // first, drop privileges second" shape for macOS sandbox apps.
+  //
+  // Safe because nothing the ctor touches is untrusted input yet — the
+  // loop below is where `kLoadBytes` enters, long after hardening.
+  EditorBackendCore core;
+
+  // Apply sandbox hardening now that the renderer has its GPU handles.
   donner::editor::sandbox::HardeningOptions opts;
   auto result = donner::editor::sandbox::ApplyHardening(opts);
   if (result.status != HardeningStatus::kOk) {
     std::fprintf(stderr, "editor_backend: hardening failed: %s\n", result.message.c_str());
     return 1;
   }
-
-  EditorBackendCore core;
 
   for (;;) {
     SessionFrame request;
