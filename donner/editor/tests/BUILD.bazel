@@ -122,6 +122,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "content_sniffer_tests",
+    srcs = ["ContentSniffer_tests.cc"],
+    deps = [
+        "//donner/editor:content_sniffer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "resource_policy_tests",
     srcs = ["ResourcePolicy_tests.cc"],
     deps = [

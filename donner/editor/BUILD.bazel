@@ -164,6 +164,7 @@ embed_resources(
 _EDITOR_RUNTIME_DEPS = [
     ":address_bar",
     ":address_bar_dispatcher",
+    ":content_sniffer",
     ":editor_backend_client",
     ":editor_icon",
     ":editor_splash",
@@ -358,6 +359,16 @@ donner_cc_library(
         ":address_bar_status",
         ":svg_fetcher",
     ],
+)
+
+# Byte-prefix heuristic used by the address-bar load flow to convert the
+# common "that wasn't SVG, that was an HTML file-description page" failure
+# mode into a specific, actionable error chip. See `ContentSniffer.h`.
+donner_cc_library(
+    name = "content_sniffer",
+    srcs = ["ContentSniffer.cc"],
+    hdrs = ["ContentSniffer.h"],
+    deps = [],
 )
 
 # Header-only target for the EditorBackendClient abstract interface.

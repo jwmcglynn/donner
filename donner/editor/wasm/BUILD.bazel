@@ -23,6 +23,7 @@ _EDITOR_WASM_RUNTIME_DEPS = [
     "//donner/base",
     "//donner/editor:address_bar",
     "//donner/editor:address_bar_dispatcher",
+    "//donner/editor:content_sniffer",
     "//donner/editor:editor_backend_client",
     "//donner/editor:editor_backend_client_inprocess",
     "//donner/editor:editor_icon",

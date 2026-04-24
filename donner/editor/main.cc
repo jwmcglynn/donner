@@ -36,6 +36,7 @@
 #include "donner/base/Transform.h"
 #include "donner/editor/AddressBar.h"
 #include "donner/editor/AddressBarDispatcher.h"
+#include "donner/editor/ContentSniffer.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorSplash.h"
@@ -885,10 +886,32 @@ int main(int argc, char** argv) {
                                                     : std::optional<std::string>(originUri));
     auto loadResult = loadFuture.get();
     if (!loadResult.ok) {
-      openFileError = "Failed to parse SVG.";
+      // Prefer a content-type hint over the parser's raw complaint when
+      // the bytes aren't SVG at all — pasting a Wikipedia file-description
+      // URL (`/wiki/File:Foo.svg`) returns the HTML page, not the SVG, and
+      // "Got an HTML page, not an SVG" is a vastly more useful chip than
+      // "unexpected token '<!DOCTYPE'" at column 10. For everything that
+      // looks XML-shaped, fall back to the parser's first diagnostic so
+      // the user sees the line / column of a real SVG error.
+      std::string errorMsg;
+      if (auto sniff = donner::editor::DescribeNonSvgBytes(bytes); sniff.has_value()) {
+        errorMsg = std::move(*sniff);
+      } else if (!loadResult.parseDiagnostics.empty()) {
+        const auto& diag = loadResult.parseDiagnostics.front();
+        errorMsg = "Parse error: ";
+        errorMsg.append(std::string_view(diag.reason));
+        if (diag.range.start.lineInfo.has_value()) {
+          errorMsg += " (line ";
+          errorMsg += std::to_string(diag.range.start.lineInfo->line);
+          errorMsg += ")";
+        }
+      } else {
+        errorMsg = "Failed to parse SVG.";
+      }
+      openFileError = errorMsg;
       addressBar.setStatus(
-          {donner::editor::AddressBarStatus::kParseError, "Failed to parse SVG.", originUri});
-      std::cerr << "[load] parse failed: " << originUri << "\n";
+          {donner::editor::AddressBarStatus::kParseError, errorMsg, originUri});
+      std::cerr << "[load] parse failed: " << originUri << " — " << errorMsg << "\n";
       return false;
     }
 
