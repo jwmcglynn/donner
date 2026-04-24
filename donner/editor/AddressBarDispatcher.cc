@@ -1,5 +1,6 @@
 #include "donner/editor/AddressBarDispatcher.h"
 
+#include <iostream>
 #include <utility>
 
 namespace donner::editor {
@@ -43,6 +44,9 @@ void AddressBarDispatcher::pump() {
     return;
   }
 
+  std::cerr << "[addrbar] navigation uri=" << nav->uri
+            << " droppedBytes=" << nav->bytes.size() << "\n";
+
   // Drop / picker short-circuit: bytes are already in hand, no fetch.
   if (!nav->bytes.empty()) {
     addressBar_.setStatus({AddressBarStatus::kLoading, "Loading dropped file…", nav->uri});
@@ -82,6 +86,7 @@ void AddressBarDispatcher::onFetchResult(const std::string& uri, std::optional<F
   activeHandle_.reset();
 
   if (bytes.has_value()) {
+    std::cerr << "[addrbar] fetch ok bytes=" << bytes->bytes.size() << " uri=" << uri << "\n";
     AddressBarLoadRequest req;
     req.originUri = uri;
     req.bytes = std::move(bytes->bytes);
@@ -98,6 +103,7 @@ void AddressBarDispatcher::onFetchResult(const std::string& uri, std::optional<F
   const std::string msg = err.has_value() ? err->message : std::string("unknown fetch error");
   const AddressBarStatus status =
       err.has_value() ? StatusForFetchError(err->kind) : AddressBarStatus::kFetchError;
+  std::cerr << "[addrbar] fetch err=" << msg << " uri=" << uri << "\n";
   addressBar_.setStatus({status, msg, uri});
 }
 

@@ -879,6 +879,7 @@ int main(int argc, char** argv) {
                            const std::optional<std::string>&)>
       loadBytesIntoDocument = [&](const std::string& originUri, std::span<const uint8_t> bytes,
                                   const std::optional<std::string>& resolvedPath) -> bool {
+    std::cerr << "[load] bytes=" << bytes.size() << " uri=" << originUri << "\n";
     auto loadFuture = backend->loadBytes(bytes, resolvedPath.has_value()
                                                     ? std::optional<std::string>(*resolvedPath)
                                                     : std::optional<std::string>(originUri));
@@ -887,6 +888,7 @@ int main(int argc, char** argv) {
       openFileError = "Failed to parse SVG.";
       addressBar.setStatus(
           {donner::editor::AddressBarStatus::kParseError, "Failed to parse SVG.", originUri});
+      std::cerr << "[load] parse failed: " << originUri << "\n";
       return false;
     }
 
@@ -902,9 +904,22 @@ int main(int argc, char** argv) {
     openFileError.clear();
     addressBar.setInitialUri(originUri);
     addressBar.setStatus({donner::editor::AddressBarStatus::kRendered, "OK", originUri});
+    // Re-center the viewport for the new document. Without this, the old
+    // zoom/pan leaks across documents and the new SVG (which may have
+    // very different viewBox dimensions) can render offscreen or at a
+    // confusing scale. The flag is consumed by the `if
+    // (!viewportInitialized && renderPaneUsable) { resetTo100Percent(); }`
+    // block in the main loop; we clear it here so the next stable-pane
+    // frame re-centers once the backend's new `documentViewBox` has
+    // flowed through `ProcessFrameResult`.
+    viewportInitialized = false;
+    // Also invalidate the last-posted canvas size so `setViewport` fires
+    // on the next loop iteration for the new document dimensions.
+    lastPostedCanvasSize = donner::Vector2i(-1, -1);
 
     ProcessFrameResult(loadResult, texture, textureWidth, textureHeight, viewport, textEditor,
                        lastShownErrorLine, lastShownErrorReason);
+    std::cerr << "[load] ok uri=" << originUri << "\n";
     return true;
   };
 
