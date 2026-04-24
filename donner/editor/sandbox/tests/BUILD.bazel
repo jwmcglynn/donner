@@ -270,17 +270,22 @@ donner_cc_test(
     ],
     # End-to-end session + EditorBackendCore round-trip. Both desktop
     # OSes now ship the backend binary, so both gate through this test.
-    # Geode lane is intentionally not variant'd here: `LoadBytes`
-    # triggers a real render, and under bazel's macOS darwin-sandbox
-    # wgpu-native cannot reach Metal (no display context), so the child
-    # crashes with `SandboxStatus::kCrashed`. The handshake-only
-    # `sandbox_session_tests_geode` covers the backend-startup-under-
-    # geode shape that our macOS sandbox_init ordering needs.
     target_compatible_with = select({
         "@platforms//os:linux": [],
         "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    # Geode variant exercises the full `LoadBytes` → render path against
+    # a backend built with the Geode renderer, catching regressions like:
+    #   - RLIMIT_FSIZE=0 SIGXFSZ-killing wgpu-native when Metal writes a
+    #     shader pipeline cache.
+    #   - sandbox_init profiles that block mach-service lookups Metal
+    #     needs during live rendering.
+    # Tagged `no-sandbox` so our `sandbox_init` (when installed) isn't
+    # EPERM-skipped by bazel's darwin-sandbox — otherwise profile-vs-
+    # renderer regressions stay invisible to the test fleet.
+    variants = ["geode"],
+    tags = ["no-sandbox"],
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
