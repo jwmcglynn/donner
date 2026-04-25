@@ -108,15 +108,21 @@ jobs:
           retry_wait_seconds: 15
           command: |
             sudo apt-get update
-            # `libstdc++-13-dev` installs the GCC 13 C++ stdlib headers
-            # at `/usr/include/c++/13/`. clang-tidy-19's default driver
-            # auto-detects GCC 13 (its sibling release) and resolves
-            # `<cstddef>` / `<optional>` / `<memory>` from there. The
-            # ubuntu-24.04 runner ships with GCC 14 by default but
-            # clang-tidy-19 doesn't fall back to GCC 14 when 13 isn't
-            # present, hence the long-running "'cstddef' file not
-            # found" cascade on this lint job.
-            sudo apt-get install -y clang-tidy-19 libstdc++-13-dev
+            # The `'cstddef' file not found` cascade on this job is
+            # clang-tidy-19's GCC autodetection failing to register the
+            # available GCC toolchain. The ubuntu-24.04 runner image
+            # ships with `libstdc++-13-dev` already installed (just
+            # headers) but no matching `g++-13` binary, so clang-tidy's
+            # driver has nothing to lock onto when scanning for a
+            # default stdlib root. Installing `g++-13` makes the
+            # toolchain visible to the autodetector and resolves
+            # `<cstddef>` / `<optional>` / `<memory>` lookups.
+            #
+            # Stay on g++-13 (not 14) because clang-tidy-19's preferred
+            # sibling is GCC 13 — pairing 19 with 14 occasionally trips
+            # `__has_builtin` checks that the older clang doesn't
+            # recognize.
+            sudo apt-get install -y clang-tidy-19 g++-13
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
