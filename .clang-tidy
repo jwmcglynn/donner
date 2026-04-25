@@ -26,18 +26,3 @@ Checks: >
 HeaderFilterRegex: "donner"
 
 WarningsAsErrors: "*"
-
-# Force clang-tidy's frontend to resolve the C++ standard library through
-# libc++. The compile_commands.json emitted by Bazel doesn't include
-# `-isystem` paths for the stdlib (it relies on the compiler driver's
-# defaults), so when the lint job runs clang-tidy-19 against the file
-# its driver searches for a system GCC's libstdc++ — which on the CI
-# runner image resolves inconsistently and ends up failing on
-# `<cstddef>` / `<optional>` / `<memory>` etc.
-#
-# `-stdlib=libc++` plus `libc++-19-dev` (installed by the lint workflow)
-# routes lookups to `/usr/include/c++/v1/`, which is reliably present.
-# The flag is harmless on macOS and on local Linux developer setups
-# where libc++ is also the default.
-ExtraArgsBefore:
-    - '-stdlib=libc++'
