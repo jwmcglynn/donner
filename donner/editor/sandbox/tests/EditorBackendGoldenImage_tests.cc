@@ -50,20 +50,27 @@
 #include <array>
 #include <chrono>
 #include <cinttypes>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <ios>
+#include <memory>
 #include <optional>
+#include <ratio>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/ViewportState.h"

@@ -7,11 +7,12 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
+#include <cstdint>
 #include <cstring>
-#include <thread>
+#include <string>
 
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SessionCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"
 

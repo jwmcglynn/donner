@@ -1,6 +1,10 @@
 #include "donner/editor/SvgFetcher.h"
 
 #include <atomic>
+#include <memory>
+#include <optional>
+#include <string_view>
+#include <utility>
 
 #include "donner/editor/ResourcePolicy.h"
 #include "donner/editor/sandbox/SvgSource.h"

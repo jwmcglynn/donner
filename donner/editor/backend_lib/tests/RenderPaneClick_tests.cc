@@ -3,10 +3,12 @@
 
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/backend_lib/EditorApp.h"
 #include "donner/editor/backend_lib/SelectTool.h"
+#include "donner/editor/backend_lib/Tool.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {

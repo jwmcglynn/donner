@@ -4,15 +4,26 @@
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
-#include <sys/types.h>
+#include <sys/types.h>  // IWYU pragma: keep
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SessionCodec.h"

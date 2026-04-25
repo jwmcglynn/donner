@@ -7,6 +7,16 @@
 ///
 /// See docs/design_docs/0023-editor_sandbox.md §S9.
 
+#include <cstdint>
+#include <future>
+#include <memory>
+#include <optional>
+#include <span>
+#include <utility>
+
+#include "donner/base/FileOffset.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AddressBarStatus.h"
 #include "donner/editor/EditorBackendClient.h"

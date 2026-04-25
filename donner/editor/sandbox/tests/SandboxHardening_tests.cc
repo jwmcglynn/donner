@@ -24,9 +24,11 @@
 #include <unistd.h>
 
 #include <array>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/SandboxProtocol.h"

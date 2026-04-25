@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>

@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <span>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/Vector2.h"

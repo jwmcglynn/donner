@@ -8,7 +8,12 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <span>
+#include <string>
+#include <vector>
 
 #include "donner/editor/sandbox/SessionProtocol.h"
 

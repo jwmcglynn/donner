@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"

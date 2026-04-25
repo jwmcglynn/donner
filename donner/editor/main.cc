@@ -22,10 +22,12 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <optional>

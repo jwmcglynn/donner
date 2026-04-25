@@ -242,7 +242,7 @@ bool InstallSeccompFilter(HardeningOptions::SeccompDenyAction denyAction) {
     // (jt=0 means skip 0, landing on the RET ALLOW); otherwise skip 1
     // to jump over the RET ALLOW to the next JEQ pair.
     filter[idx++] =
-        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, static_cast<__u32>(kAllowedSyscalls[i]), 0, 1);
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, static_cast<uint32_t>(kAllowedSyscalls[i]), 0, 1);
     filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
   }
 

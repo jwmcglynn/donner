@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "donner/editor/ResourcePolicy.h"
 
 namespace donner::editor {

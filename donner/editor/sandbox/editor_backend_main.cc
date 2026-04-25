@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/editor/sandbox/EditorApiCodec.h"

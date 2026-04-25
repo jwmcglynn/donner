@@ -1,9 +1,16 @@
 #include "donner/editor/sandbox/SessionCodec.h"
 
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <span>
+#include <string>
+#include <vector>
 
 #include "donner/editor/sandbox/SessionProtocol.h"
 

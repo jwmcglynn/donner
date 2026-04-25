@@ -2,6 +2,9 @@
 
 #include <netinet/in.h>
 
+#include <cstdint>
+#include <string_view>
+
 namespace donner::editor::sandbox::url_security {
 
 bool IsPrivateIPv4(std::uint32_t h) {

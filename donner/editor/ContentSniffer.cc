@@ -1,6 +1,11 @@
 #include "donner/editor/ContentSniffer.h"
 
 #include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string>
 #include <string_view>
 
 namespace donner::editor {

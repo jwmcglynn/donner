@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
+#include <string>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"

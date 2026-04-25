@@ -2,10 +2,12 @@
 
 #include <pixelmatch/pixelmatch.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/svg/renderer/RendererImageIO.h"  // IWYU pragma: keep

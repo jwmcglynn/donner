@@ -1,6 +1,8 @@
 #include "donner/editor/AddressBarDispatcher.h"
 
+#include <cstdint>
 #include <iostream>
+#include <optional>
 #include <utility>
 
 #include "donner/editor/AddressBar.h"

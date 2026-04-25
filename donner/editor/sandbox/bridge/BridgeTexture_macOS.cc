@@ -33,8 +33,8 @@
 
 #include <cstring>
 
-#include "donner/base/Vector2.h"
-#include "donner/editor/sandbox/bridge/BridgeTexture.h"
+#include "donner/base/Vector2.h"                         // IWYU pragma: keep
+#include "donner/editor/sandbox/bridge/BridgeTexture.h"  // IWYU pragma: keep
 
 namespace donner::editor::sandbox::bridge {
 

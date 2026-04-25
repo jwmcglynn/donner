@@ -1,5 +1,8 @@
 #include "donner/editor/sandbox/bridge/BridgeTexture.h"
 
+#include <cstdint>
+#include <memory>
+
 #include "donner/base/Vector2.h"
 
 /// @file

@@ -1,12 +1,20 @@
 #include "donner/editor/sandbox/EditorBackendCore.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <entt/entity/entity.hpp>  // entt::null
 #include <entt/entity/fwd.hpp>     // entt::entity
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <span>
 #include <sstream>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
@@ -18,6 +26,7 @@
 #include "donner/editor/SelectionAabb.h"  // IWYU pragma: keep
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/backend_lib/AttributeWriteback.h"
+#include "donner/editor/backend_lib/EditorCommand.h"
 #include "donner/editor/backend_lib/SelectTool.h"
 #include "donner/editor/backend_lib/Tool.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"

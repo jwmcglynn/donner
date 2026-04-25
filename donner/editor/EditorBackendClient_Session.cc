@@ -7,14 +7,26 @@
 ///
 /// See docs/design_docs/0023-editor_sandbox.md §S9.
 
+#include <cstdint>
+#include <future>
+#include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
+#include "donner/base/FileOffset.h"
+#include "donner/base/ParseDiagnostic.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AddressBarStatus.h"
 #include "donner/editor/EditorBackendClient.h"
 #include "donner/editor/SelectionOverlay.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SandboxSession.h"
 #include "donner/editor/sandbox/SessionCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"

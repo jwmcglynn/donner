@@ -1,7 +1,13 @@
 #include "donner/editor/ResourcePolicy.h"
 
 #include <algorithm>
-#include <mutex>
+#include <cstddef>
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 namespace donner::editor {
 

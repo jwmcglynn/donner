@@ -6,7 +6,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstring>
+#include <optional>
 
 #include "donner/editor/sandbox/SessionProtocol.h"
 

@@ -5,7 +5,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "donner/editor/AddressBar.h"
 #include "donner/editor/AddressBarStatus.h"

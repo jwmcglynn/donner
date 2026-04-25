@@ -1,6 +1,8 @@
 #include "donner/editor/LocalPathDisplay.h"
 
-#include <algorithm>
+#include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace donner::editor {
 

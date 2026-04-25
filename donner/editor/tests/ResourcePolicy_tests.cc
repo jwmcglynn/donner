@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
+
 namespace donner::editor {
 namespace {
 

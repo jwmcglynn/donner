@@ -6,10 +6,13 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstring>
+#include <string>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SandboxSession.h"
 #include "donner/editor/sandbox/SessionCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"

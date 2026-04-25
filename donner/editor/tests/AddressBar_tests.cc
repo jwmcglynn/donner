@@ -4,6 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "donner/editor/AddressBar.h"
 #include "donner/editor/AddressBarStatus.h"
 

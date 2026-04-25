@@ -5,6 +5,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
+#include <cstdint>
+#include <string>
+
 namespace donner::editor::sandbox::url_security {
 namespace {
 

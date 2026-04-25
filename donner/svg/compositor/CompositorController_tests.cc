@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"

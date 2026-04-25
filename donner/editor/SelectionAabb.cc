@@ -1,7 +1,10 @@
 #include "donner/editor/SelectionAabb.h"
 
+#include <cstddef>
 #include <optional>
+#include <span>
 
+#include "donner/base/Box.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGGeometryElement.h"

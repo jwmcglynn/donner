@@ -6,7 +6,11 @@
 
 #include "donner/editor/sandbox/EditorApiCodec.h"
 
+#include <cstdint>
 #include <cstring>
+#include <span>
+#include <utility>
+#include <vector>
 
 #include "donner/editor/sandbox/SessionProtocol.h"
 #include "donner/editor/sandbox/Wire.h"

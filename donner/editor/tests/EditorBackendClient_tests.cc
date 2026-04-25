@@ -8,14 +8,15 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <cstring>
+#include <optional>
 #include <string>
-#include <thread>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SandboxSession.h"
 #include "donner/editor/sandbox/SessionCodec.h"
 #include "donner/editor/sandbox/SessionProtocol.h"
