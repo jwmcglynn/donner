@@ -29,6 +29,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/SandboxProtocol.h"

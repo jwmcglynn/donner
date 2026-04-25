@@ -47,10 +47,10 @@
 #include "donner/editor/ContentSniffer.h"  // IWYU pragma: keep
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorBackendClient.h"
-#include "donner/editor/EditorIcon.h"
-#include "donner/editor/EditorSplash.h"
+#include "donner/editor/EditorIcon.h"   // IWYU pragma: keep
+#include "donner/editor/EditorSplash.h"  // IWYU pragma: keep
 #include "donner/editor/LocalPathDisplay.h"  // IWYU pragma: keep
-#include "donner/editor/Notice.h"
+#include "donner/editor/Notice.h"  // IWYU pragma: keep
 #include "donner/editor/PinchEventMonitor.h"  // IWYU pragma: keep
 #include "donner/editor/backend_lib/RenderPaneGesture.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -832,6 +832,7 @@ struct TextureUploadState {
   GLuint texture = 0;
   int width = 0;
   int height = 0;
+  std::optional<donner::Box2d> documentRect;
 };
 
 struct CompositedPreviewTextureState {
@@ -885,6 +886,26 @@ bool UploadBitmapToTexture(const donner::svg::RendererBitmap& bitmap, TextureUpl
   return true;
 }
 
+bool NearEqual(double a, double b) {
+  return std::abs(a - b) <= 1e-6;
+}
+
+bool SameBox(const donner::Box2d& a, const donner::Box2d& b) {
+  return NearEqual(a.topLeft.x, b.topLeft.x) && NearEqual(a.topLeft.y, b.topLeft.y) &&
+         NearEqual(a.bottomRight.x, b.bottomRight.x) && NearEqual(a.bottomRight.y, b.bottomRight.y);
+}
+
+bool SameRenderWindow(const std::optional<donner::editor::ViewportRenderWindow>& a,
+                      const std::optional<donner::editor::ViewportRenderWindow>& b) {
+  if (a.has_value() != b.has_value()) {
+    return false;
+  }
+  if (!a.has_value()) {
+    return true;
+  }
+  return a->virtualCanvasSize == b->virtualCanvasSize && SameBox(a->documentRect, b->documentRect);
+}
+
 /// Process a FrameResult: upload bitmap to texture, apply writebacks to
 /// text editor, update error markers. Returns true if a bitmap was uploaded.
 bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUploadState& flatTexture,
@@ -933,6 +954,18 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUpload
     compositedPreview.active = false;
   }
 
+  // Keep `documentViewBox` in step with the SVG's own viewBox as
+  // reported by the backend. This is what makes screen↔document
+  // math — `imageScreenRect`, `screenToDocument` (for pointer
+  // hit-tests), `documentToScreen` (for selection chrome) — line
+  // up with the actual bitmap that was just uploaded. Unlike the
+  // rasterized bitmap dimensions, the document viewBox is invariant
+  // under setViewport: zoom/pan don't change which doc coordinates
+  // the user is clicking in, only how they map to screen pixels.
+  if (result.documentViewBox.has_value()) {
+    viewport.documentViewBox = *result.documentViewBox;
+  }
+
   if (!result.bitmap.empty()) {
     // `glTexImage2D` reallocates the GPU-side texture storage on every
     // call, even when the dimensions haven't changed. On retina macOS
@@ -944,18 +977,8 @@ bool ProcessFrameResult(const donner::editor::FrameResult& result, TextureUpload
     // pixel bytes, which drops the upload to sub-millisecond. Match
     // the outer allocation path on first-render and resize.
     bitmapUploaded = UploadBitmapToTexture(result.bitmap, flatTexture);
+    flatTexture.documentRect = result.bitmapDocumentRect.value_or(viewport.documentViewBox);
     compositedPreview.active = false;
-    // Keep `documentViewBox` in step with the SVG's own viewBox as
-    // reported by the backend. This is what makes screen↔document
-    // math — `imageScreenRect`, `screenToDocument` (for pointer
-    // hit-tests), `documentToScreen` (for selection chrome) — line
-    // up with the actual bitmap that was just uploaded. Unlike the
-    // rasterized bitmap dimensions, the document viewBox is invariant
-    // under setViewport: zoom/pan don't change which doc coordinates
-    // the user is clicking in, only how they map to screen pixels.
-    if (result.documentViewBox.has_value()) {
-      viewport.documentViewBox = *result.documentViewBox;
-    }
   }
 
   // Apply source writebacks (e.g. from drag completion).
@@ -1504,6 +1527,7 @@ int main(int argc, char** argv) {
   // usable-pane frame (matches the initial implicit render from
   // `loadBytes`).
   donner::Vector2i lastPostedCanvasSize(-1, -1);
+  std::optional<donner::editor::ViewportRenderWindow> lastPostedRenderWindow;
 
   // Text change debounce state.
   bool textChangePending = false;
@@ -1632,6 +1656,7 @@ int main(int argc, char** argv) {
     // Also invalidate the last-posted canvas size so `setViewport` fires
     // on the next loop iteration for the new document dimensions.
     lastPostedCanvasSize = donner::Vector2i(-1, -1);
+    lastPostedRenderWindow.reset();
 
     sourceSelectionSyncState.reset();
     ProcessFrameResult(loadResult, flatTexture, compositedPreview, viewport, textEditor,
@@ -2429,20 +2454,36 @@ int main(int argc, char** argv) {
     //      inline would stall the UI; pipelining through
     //      `pendingFrame` keeps input/paint cadence intact.
     if (renderPaneUsable) {
-      // Prefer `ViewportState::desiredCanvasSize()` (which reads
-      // `documentViewBox * zoom * dpr`) now that documentViewBox is
-      // seeded from the backend's authoritative SVG viewBox. That
-      // keeps zoom working correctly — raw pane-size bypass would
-      // always render at 1:1 regardless of zoom. Fall through to
-      // pane-size when documentViewBox is still empty (e.g. a
-      // zero-sized document or the brief window between load and
-      // first backend viewBox report).
-      donner::Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
+      // Prefer `ViewportState::desiredRenderWindow()` now that documentViewBox
+      // is seeded from the backend's authoritative SVG viewBox. It preserves
+      // current zoom/DPR resolution through `virtualCanvasSize`, but caps the
+      // actual bitmap to bounded viewport overdraw so trackpad zoom cannot
+      // allocate a full-document texture far larger than the visible pane. Fall
+      // through to pane-size when documentViewBox is still empty (e.g. a
+      // zero-sized document or the brief window between load and first backend
+      // viewBox report).
+      const donner::editor::ViewportState::RenderWindow desiredRenderWindow =
+          viewport.desiredRenderWindow();
+      donner::Vector2i desiredCanvasSize = desiredRenderWindow.bitmapSize;
+      std::optional<donner::editor::ViewportRenderWindow> backendRenderWindow;
       const double dpr = viewport.devicePixelRatio > 0.0 ? viewport.devicePixelRatio : 1.0;
-      if (desiredCanvasSize.x <= 1 || desiredCanvasSize.y <= 1) {
+      const bool hasUsableDocumentViewBox =
+          viewport.documentViewBox.width() > 0.0 && viewport.documentViewBox.height() > 0.0;
+      if ((desiredCanvasSize.x <= 1 || desiredCanvasSize.y <= 1) && !hasUsableDocumentViewBox) {
         desiredCanvasSize =
             donner::Vector2i(std::max(1, static_cast<int>(std::round(viewport.paneSize.x * dpr))),
                              std::max(1, static_cast<int>(std::round(viewport.paneSize.y * dpr))));
+      } else if (desiredCanvasSize.x > 1 && desiredCanvasSize.y > 1) {
+        const bool renderWindowCoversFullDocument =
+            SameBox(desiredRenderWindow.documentRect, viewport.documentViewBox);
+        const bool renderWindowUsesFullBitmap =
+            desiredRenderWindow.bitmapSize == desiredRenderWindow.virtualCanvasSize;
+        if (!renderWindowCoversFullDocument || !renderWindowUsesFullBitmap) {
+          backendRenderWindow = donner::editor::ViewportRenderWindow{
+              .virtualCanvasSize = desiredRenderWindow.virtualCanvasSize,
+              .documentRect = desiredRenderWindow.documentRect,
+          };
+        }
       }
       // Guard against the "pane layout not settled" state — on the very
       // first ImGui frame the content region is occasionally clamped to
@@ -2452,8 +2493,12 @@ int main(int argc, char** argv) {
       constexpr int kMinUsefulCanvasDim = 16;
       const bool canvasSizeIsReasonable =
           desiredCanvasSize.x >= kMinUsefulCanvasDim && desiredCanvasSize.y >= kMinUsefulCanvasDim;
-      if (canvasSizeIsReasonable && desiredCanvasSize != lastPostedCanvasSize) {
+      const bool renderWindowChanged =
+          !SameRenderWindow(backendRenderWindow, lastPostedRenderWindow);
+      if (canvasSizeIsReasonable &&
+          (desiredCanvasSize != lastPostedCanvasSize || renderWindowChanged)) {
         lastPostedCanvasSize = desiredCanvasSize;
+        lastPostedRenderWindow = backendRenderWindow;
         if (pendingFrame.has_value() &&
             pendingFrame->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
           ProcessFrameResult(pendingFrame->get(), flatTexture, compositedPreview, viewport,
@@ -2463,13 +2508,15 @@ int main(int argc, char** argv) {
           pendingFrameShouldSyncSourceSelection = false;
         }
         if (!pendingFrame.has_value()) {
-          pendingFrame = backend->setViewport(desiredCanvasSize.x, desiredCanvasSize.y);
+          pendingFrame =
+              backend->setViewport(desiredCanvasSize.x, desiredCanvasSize.y, backendRenderWindow);
           pendingFrameShouldSyncSourceSelection = false;
         } else {
           // An input-driven frame is still in flight; let it land first
           // and pick up the new viewport on the next main-loop tick.
           // Reset `lastPostedCanvasSize` so we try again next frame.
           lastPostedCanvasSize = donner::Vector2i(-1, -1);
+          lastPostedRenderWindow.reset();
         }
       }
     }
@@ -2528,10 +2575,17 @@ int main(int argc, char** argv) {
     // Draw the document image and selection chrome.
     if (flatTexture.width > 0 && flatTexture.height > 0) {
       const donner::Box2d screenRect = viewport.imageScreenRect();
+      const donner::Box2d textureDocumentRect =
+          flatTexture.documentRect.value_or(viewport.documentViewBox);
+      const donner::Box2d textureScreenRect = viewport.documentToScreen(textureDocumentRect);
       const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
                                static_cast<float>(screenRect.topLeft.y));
       const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
                                     static_cast<float>(screenRect.bottomRight.y));
+      const ImVec2 textureOrigin(static_cast<float>(textureScreenRect.topLeft.x),
+                                 static_cast<float>(textureScreenRect.topLeft.y));
+      const ImVec2 textureBottomRight(static_cast<float>(textureScreenRect.bottomRight.x),
+                                      static_cast<float>(textureScreenRect.bottomRight.y));
 #ifdef __EMSCRIPTEN__
       if (testHooksEnabled) {
         DonnerTestHooksRecordDocumentImageRect(screenRect.topLeft.x, screenRect.topLeft.y,
@@ -2591,7 +2645,7 @@ int main(int argc, char** argv) {
                         promotedBottomRight);
         paneDrawList->PopClipRect();
       } else {
-        addTextureImage(paneDrawList, flatTexture, imageOrigin, imageBottomRight);
+        addTextureImage(paneDrawList, flatTexture, textureOrigin, textureBottomRight);
       }
 
       const auto screenToDocument = [&](const ImVec2& screenPoint) -> donner::Vector2d {

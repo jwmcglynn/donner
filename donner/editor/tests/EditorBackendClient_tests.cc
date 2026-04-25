@@ -8,10 +8,13 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"

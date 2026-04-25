@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/SandboxHost.h"
