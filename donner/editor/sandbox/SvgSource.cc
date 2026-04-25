@@ -453,7 +453,8 @@ SvgFetchResult SvgSource::fetchFromUrl(std::string_view url) const {
     return result;
   }
 
-  const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  const int exitCode =
+      WIFEXITED(status) ? WEXITSTATUS(status) : -1;  // NOLINT(misc-include-cleaner)
   if (exitCode != 0) {
     // Merged stderr: the bytes buffer likely holds curl's error message.
     std::string curlOutput(result.bytes.begin(), result.bytes.end());

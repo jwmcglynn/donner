@@ -5,7 +5,9 @@
 #include <signal.h>
 #include <spawn.h>
 #include <sys/types.h>  // IWYU pragma: keep
-#include <sys/wait.h>
+#include <sys/wait.h>   // IWYU pragma: keep — clang-tidy-19's include-cleaner
+                        // doesn't map WIFEXITED/WEXITSTATUS/etc. macros to
+                        // this header; suppression markers below pin them.
 #include <unistd.h>
 
 #include <array>
@@ -45,13 +47,13 @@ void IgnoreSigpipeOnce() {
 }
 
 SandboxStatus ClassifyExit(int rawStatus, int& outExit) {
-  if (WIFEXITED(rawStatus)) {
-    outExit = WEXITSTATUS(rawStatus);
+  if (WIFEXITED(rawStatus)) {  // NOLINT(misc-include-cleaner)
+    outExit = WEXITSTATUS(rawStatus);  // NOLINT(misc-include-cleaner)
     if (outExit == 0) return SandboxStatus::kOk;
     return SandboxStatus::kUnknownExit;
   }
-  if (WIFSIGNALED(rawStatus)) {
-    outExit = -WTERMSIG(rawStatus);
+  if (WIFSIGNALED(rawStatus)) {  // NOLINT(misc-include-cleaner)
+    outExit = -WTERMSIG(rawStatus);  // NOLINT(misc-include-cleaner)
     return SandboxStatus::kCrashed;
   }
   outExit = rawStatus;
@@ -98,7 +100,7 @@ Pipe MakePipe() {
 
 class SandboxSession::ChildProcess {
 public:
-  pid_t pid = -1;
+  pid_t pid = -1;  // NOLINT(misc-include-cleaner)
   int stdinFd = -1;
   int stdoutFd = -1;
   int stderrFd = -1;
@@ -130,7 +132,7 @@ public:
 
     if (pid > 0) {
       int rawStatus = 0;
-      pid_t ret = ::waitpid(pid, &rawStatus, WNOHANG);
+      pid_t ret = ::waitpid(pid, &rawStatus, WNOHANG);  // NOLINT(misc-include-cleaner)
       if (ret == 0) {
         while (::waitpid(pid, &rawStatus, 0) < 0) {
           if (errno == EINTR) continue;
@@ -206,7 +208,7 @@ SandboxSession::~SandboxSession() {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     for (;;) {
       int status = 0;
-      pid_t ret = ::waitpid(child_->pid, &status, WNOHANG);
+      pid_t ret = ::waitpid(child_->pid, &status, WNOHANG);  // NOLINT(misc-include-cleaner)
       if (ret != 0) break;
       if (std::chrono::steady_clock::now() >= deadline) {
         ::kill(child_->pid, SIGKILL);
