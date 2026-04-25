@@ -30,6 +30,17 @@ donner_cc_library(
     srcs = ["SvgSource.cc"],
     hdrs = ["SvgSource.h"],
     visibility = ["//donner/editor:__subpackages__"],
+    deps = [":url_security"],
+)
+
+# URL-parsing + private-IP classifier used by SvgSource's curl path for
+# SSRF defense. Broken out so the security-critical helpers carry their
+# own table-driven unit tests.
+donner_cc_library(
+    name = "url_security",
+    srcs = ["UrlSecurity.cc"],
+    hdrs = ["UrlSecurity.h"],
+    visibility = ["//donner/editor:__subpackages__"],
 )
 
 donner_cc_library(
@@ -116,21 +127,6 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
-)
-
-donner_cc_library(
-    name = "pipelined_renderer",
-    srcs = ["PipelinedRenderer.cc"],
-    hdrs = ["PipelinedRenderer.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
-    visibility = ["//donner/editor:__subpackages__"],
-    deps = [
-        ":replaying_renderer",
-        ":serializing_renderer",
-        "//donner/svg",
-        "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer",
-    ],
 )
 
 donner_cc_library(
@@ -224,5 +220,97 @@ donner_cc_binary(
         ":frame_inspector",
         ":rnr_file",
         ":sandbox_diff_lib",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_api_codec",
+    srcs = ["EditorApiCodec.cc"],
+    hdrs = ["EditorApiCodec.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":session_protocol",
+        ":wire",
+    ],
+)
+
+donner_cc_library(
+    name = "session_codec",
+    srcs = ["SessionCodec.cc"],
+    hdrs = ["SessionCodec.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":session_protocol",
+    ],
+)
+
+donner_cc_library(
+    name = "session_protocol",
+    hdrs = ["SessionProtocol.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "session",
+    srcs = ["SandboxSession.cc"],
+    hdrs = ["SandboxSession.h"],
+    # The session machinery is pure POSIX (posix_spawn, pipe, poll,
+    # waitpid); both Linux and macOS can host it. Other platforms
+    # (Windows, WASM) fall through to the in-process backend.
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":sandbox_host",
+        ":session_codec",
+        ":session_protocol",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_backend_core",
+    srcs = ["EditorBackendCore.cc"],
+    hdrs = ["EditorBackendCore.h"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":editor_api_codec",
+        "//donner/base/xml",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:text_patch",
+        "//donner/editor/backend_lib:attribute_writeback",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/editor/backend_lib:select_tool",
+        "//donner/editor/sandbox/bridge:bridge_texture",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_binary(
+    name = "donner_editor_backend",
+    srcs = ["editor_backend_main.cc"],
+    # The backend binary is POSIX; Linux + macOS both ship it so their
+    # editors can run the session-sandboxed path end to end.
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":editor_api_codec",
+        ":editor_backend_core",
+        ":sandbox_hardening",
+        ":session_codec",
+        ":session_protocol",
+        "//donner/editor/backend_lib:editor_app",
+        "//donner/svg",
+        "//donner/svg/parser",
     ],
 )

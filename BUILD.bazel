@@ -48,6 +48,29 @@ config_setting(
     values = {"compilation_mode": "opt"},
 )
 
+# Explicit platform targets for `--config=re-linux` / `--config=re-macos`
+# in the developer's `~/.bazelrc`. The bazel-re1 remote-execution worker
+# runs Linux aarch64; when Bazel sees `--platforms=//:linux_aarch64`
+# + `--extra_execution_platforms=//:linux_aarch64` it pairs that with
+# the hermetic llvm_toolchain sysroot registered in MODULE.bazel and
+# dispatches actions to the remote worker. Kept in the root BUILD so
+# the reference path matches what the bazelrc expects.
+platform(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
 filegroup(
     name = "docs_files",
     srcs = glob([

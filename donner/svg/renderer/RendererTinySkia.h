@@ -192,6 +192,7 @@ public:
    * @return A snapshot of the rendered frame.
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+  [[nodiscard]] RendererBitmap takeSnapshotPremultiplied() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
   /**

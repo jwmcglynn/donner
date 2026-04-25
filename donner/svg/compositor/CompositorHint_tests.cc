@@ -1,5 +1,3 @@
-#include "donner/svg/compositor/ScopedCompositorHint.h"
-
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -8,6 +6,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
+#include "donner/svg/compositor/ScopedCompositorHint.h"
 
 namespace donner::svg::compositor {
 
@@ -65,6 +64,22 @@ TEST_F(CompositorHintTest, InteractionFactoryPreservesActiveDragKind) {
       ScopedCompositorHint::Interaction(registry_, entity, InteractionHint::ActiveDrag);
   ASSERT_TRUE(hint.interactionKind().has_value());
   EXPECT_EQ(*hint.interactionKind(), InteractionHint::ActiveDrag);
+}
+
+TEST_F(CompositorHintTest, InteractionKindCanBeUpdatedWithoutRepublishingHint) {
+  const Entity entity = registry_.create();
+  ScopedCompositorHint hint =
+      ScopedCompositorHint::Interaction(registry_, entity, InteractionHint::Selection);
+  const auto& component = registry_.get<CompositorHintComponent>(entity);
+  ASSERT_EQ(component.entries.size(), 1u);
+
+  hint.setInteractionKind(InteractionHint::ActiveDrag);
+
+  ASSERT_TRUE(hint.interactionKind().has_value());
+  EXPECT_EQ(*hint.interactionKind(), InteractionHint::ActiveDrag);
+  ASSERT_TRUE(registry_.all_of<CompositorHintComponent>(entity));
+  EXPECT_EQ(registry_.get<CompositorHintComponent>(entity).entries.size(), 1u)
+      << "changing Selection to ActiveDrag must not churn hint entries";
 }
 
 TEST_F(CompositorHintTest, NonInteractionHintsReportNoInteractionKind) {

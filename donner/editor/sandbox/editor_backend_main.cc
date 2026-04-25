@@ -1,0 +1,375 @@
+/// @file
+///
+/// `donner_editor_backend` — long-lived sandbox child for the Donner editor.
+///
+/// This is the persistent child process that `SandboxSession` manages. It reads
+/// session-framed requests from stdin, dispatches them via `EditorBackendCore`,
+/// renders via `SerializingRenderer`, and writes responses to stdout.
+/// See docs/design_docs/0023-editor_sandbox.md §S8 for the protocol.
+
+#include <poll.h>    // IWYU pragma: keep — clang-tidy include-cleaner doesn't
+                     // map `pollfd` / `POLLIN` / `poll` symbols to this header.
+#include <unistd.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "donner/editor/sandbox/EditorApiCodec.h"
+#include "donner/editor/sandbox/EditorBackendCore.h"
+#include "donner/editor/sandbox/SandboxHardening.h"
+#include "donner/editor/sandbox/SessionCodec.h"
+#include "donner/editor/sandbox/SessionProtocol.h"
+
+namespace {
+
+using donner::editor::sandbox::DecodeApplySourcePatch;
+using donner::editor::sandbox::DecodeExport;
+using donner::editor::sandbox::DecodeKeyEvent;
+using donner::editor::sandbox::DecodeLoadBytes;
+using donner::editor::sandbox::DecodePointerEvent;
+using donner::editor::sandbox::DecodeReplaceSource;
+using donner::editor::sandbox::DecodeSetTool;
+using donner::editor::sandbox::DecodeSetViewport;
+using donner::editor::sandbox::DecodeWheelEvent;
+using donner::editor::sandbox::EditorBackendCore;
+using donner::editor::sandbox::EncodeError;
+using donner::editor::sandbox::EncodeExportResponse;
+using donner::editor::sandbox::EncodeHandshakeAck;
+using donner::editor::sandbox::EncodeShutdownAck;
+using donner::editor::sandbox::ErrorPayload;
+using donner::editor::sandbox::FramePayload;
+using donner::editor::sandbox::HandshakeAckPayload;
+using donner::editor::sandbox::HardeningOptions;
+using donner::editor::sandbox::HardeningStatus;
+using donner::editor::sandbox::kSessionProtocolVersion;
+using donner::editor::sandbox::ReadNextFrame;
+using donner::editor::sandbox::SessionErrorKind;
+using donner::editor::sandbox::SessionFrame;
+using donner::editor::sandbox::SessionOpcode;
+using donner::editor::sandbox::WriteFrame;
+
+/// Writes a response frame to stdout.
+bool Respond(const SessionFrame& frame) {
+  std::string err;
+  if (!WriteFrame(STDOUT_FILENO, frame, err)) {
+    std::fprintf(stderr, "editor_backend: write error: %s\n", err.c_str());
+    return false;
+  }
+  return true;
+}
+
+/// Sends a kFrame response for the given FramePayload.
+bool RespondFrame(const FramePayload& framePayload, uint64_t requestId) {
+  std::vector<uint8_t> payload = donner::editor::sandbox::EncodeFrame(framePayload);
+
+  SessionFrame response;
+  response.requestId = requestId;
+  response.opcode = SessionOpcode::kFrame;
+  response.payload = std::move(payload);
+  return Respond(response);
+}
+
+/// Sends a kError response.
+bool RespondError(uint64_t requestId, SessionErrorKind kind, std::string_view message = {}) {
+  ErrorPayload err;
+  err.errorKind = kind;
+  err.message = std::string(message);
+  std::vector<uint8_t> payload = EncodeError(err);
+
+  SessionFrame response;
+  response.requestId = requestId;
+  response.opcode = SessionOpcode::kError;
+  response.payload = std::move(payload);
+  return Respond(response);
+}
+
+/// Returns true if stdin has data ready to read without blocking. Used by
+/// the setViewport-coalescing path to peek at the next pending request.
+bool StdinHasPendingData() {
+  pollfd pfd{};                       // NOLINT(misc-include-cleaner)
+  pfd.fd = STDIN_FILENO;
+  pfd.events = POLLIN;                // NOLINT(misc-include-cleaner)
+  const int rv = ::poll(&pfd, 1, /*timeout_ms=*/0);  // NOLINT(misc-include-cleaner)
+  return rv > 0 && (pfd.revents & POLLIN) != 0;      // NOLINT(misc-include-cleaner)
+}
+
+}  // namespace
+
+int main(int /*argc*/, char** /*argv*/) {
+  // Check for crash-on-handshake testing env var.
+  if (const char* crashEnv = std::getenv("DONNER_BACKEND_CRASH_ON_HANDSHAKE")) {
+    if (std::strcmp(crashEnv, "1") == 0) {
+      std::abort();
+    }
+  }
+
+  // Construct the backend core BEFORE applying the sandbox profile. The
+  // Geode renderer lazily initializes wgpu-native (Metal on macOS,
+  // Vulkan on Linux) inside the `EditorBackendCore` ctor chain; on macOS
+  // that path hits `mach_lookup("com.apple.sandbox.metal")` which
+  // `sandbox_init(kSBXProfilePureComputation)` denies. Hardening AFTER
+  // the GPU handles are already open keeps those handles usable while
+  // still closing the door on arbitrary new mach/network/file opens
+  // during the render loop. Pattern matches the standard "open resources
+  // first, drop privileges second" shape for macOS sandbox apps.
+  //
+  // Safe because nothing the ctor touches is untrusted input yet — the
+  // loop below is where `kLoadBytes` enters, long after hardening.
+  EditorBackendCore core;
+
+  // Apply sandbox hardening now that the renderer has its GPU handles.
+  donner::editor::sandbox::HardeningOptions opts;
+  auto result = donner::editor::sandbox::ApplyHardening(opts);
+  if (result.status != HardeningStatus::kOk) {
+    std::fprintf(stderr, "editor_backend: hardening failed: %s\n", result.message.c_str());
+    return 1;
+  }
+
+  // Coalesce contiguous `kSetViewport` requests: the host's pinch-zoom
+  // path can post hundreds of these in rapid succession, but only the
+  // LATEST one's pixel result matters. Apply the final viewport once
+  // and respond to every coalesced requestId with the same frame
+  // payload so all of the host's wire futures resolve.
+  //
+  // See `EditorBackendIntegrationTest.BurstSetViewportThenPointerEvent
+  // Coalesces` for the regression pin.
+  for (;;) {
+    SessionFrame request;
+    std::string err;
+
+    if (!ReadNextFrame(STDIN_FILENO, request, err)) {
+      break;
+    }
+
+    if (request.opcode == SessionOpcode::kSetViewport) {
+      donner::editor::sandbox::SetViewportPayload latest;
+      if (!DecodeSetViewport(request.payload, latest)) {
+        if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+        continue;
+      }
+      std::vector<uint64_t> coalescedIds;
+      coalescedIds.push_back(request.requestId);
+
+      // Drain consecutive setViewports from the read side. Stop on
+      // the first non-setViewport frame and carry it over to the
+      // normal dispatch below. The poll() peek is non-blocking; pipe
+      // writes < PIPE_BUF (4 KB) are atomic, and a setViewport frame
+      // is ~32 bytes, so any data poll() reports as ready is a full
+      // setViewport frame ready to read without blocking on partial
+      // bytes.
+      std::optional<SessionFrame> carryOver;
+      while (StdinHasPendingData()) {
+        SessionFrame next;
+        std::string nextErr;
+        if (!ReadNextFrame(STDIN_FILENO, next, nextErr)) {
+          // Read failure — the outer loop will catch this on the next
+          // iteration via the same `ReadNextFrame` path, surfacing the
+          // same error path.
+          break;
+        }
+        if (next.opcode == SessionOpcode::kSetViewport) {
+          donner::editor::sandbox::SetViewportPayload nextVp;
+          if (DecodeSetViewport(next.payload, nextVp)) {
+            latest = nextVp;
+            coalescedIds.push_back(next.requestId);
+          } else if (!RespondError(next.requestId, SessionErrorKind::kPayloadMalformed)) {
+            return 1;
+          }
+        } else {
+          carryOver = std::move(next);
+          break;
+        }
+      }
+
+      const FramePayload framePayload = core.handleSetViewport(latest);
+
+      // Each coalesced setViewport requestId still needs SOMETHING on the
+      // wire so the host's wire future resolves. Sending the full
+      // FramePayload (with bitmap) for every requestId is the path that
+      // re-introduced the stall — 100 coalesced requests × ~360 KB
+      // bitmap = ~36 MB through the pipe even though we only rendered
+      // once. Send the full payload for the LATEST requestId (the one
+      // the host most likely still has a future for) and a minimal
+      // "skipped" payload (no bitmap, no tree) for the rest.
+      const uint64_t latestRequestId = coalescedIds.back();
+      FramePayload skipped;
+      skipped.frameId = framePayload.frameId;
+      skipped.statusKind = framePayload.statusKind;
+      // Everything else stays default-empty — `hasFinalBitmap = false`,
+      // no tree, no compositor preview — so the encoded skipped frame
+      // is on the order of tens of bytes.
+      for (const uint64_t reqId : coalescedIds) {
+        const FramePayload& payload = (reqId == latestRequestId) ? framePayload : skipped;
+        if (!RespondFrame(payload, reqId)) return 1;
+      }
+
+      if (!carryOver.has_value()) {
+        continue;
+      }
+      request = std::move(*carryOver);
+    }
+
+    switch (request.opcode) {
+      case SessionOpcode::kHandshake: {
+        HandshakeAckPayload ack;
+        ack.protocolVersion = kSessionProtocolVersion;
+        ack.pid = static_cast<uint64_t>(::getpid());
+
+        SessionFrame response;
+        response.requestId = request.requestId;
+        response.opcode = SessionOpcode::kHandshakeAck;
+        response.payload = EncodeHandshakeAck(ack);
+        if (!Respond(response)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kShutdown: {
+        SessionFrame response;
+        response.requestId = request.requestId;
+        response.opcode = SessionOpcode::kShutdownAck;
+        response.payload = EncodeShutdownAck();
+        if (!Respond(response)) return 1;
+        return 0;
+      }
+
+      case SessionOpcode::kSetViewport: {
+        // Unreachable: setViewport is handled by the coalescing block
+        // above before reaching this switch. Kept for completeness so
+        // an enum-add doesn't silently fall through to default.
+        donner::editor::sandbox::SetViewportPayload vp;
+        if (!DecodeSetViewport(request.payload, vp)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleSetViewport(vp), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kLoadBytes: {
+        donner::editor::sandbox::LoadBytesPayload load;
+        if (!DecodeLoadBytes(request.payload, load)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleLoadBytes(load), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kReplaceSource: {
+        donner::editor::sandbox::ReplaceSourcePayload rep;
+        if (!DecodeReplaceSource(request.payload, rep)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleReplaceSource(rep), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kApplySourcePatch: {
+        donner::editor::sandbox::ApplySourcePatchPayload patch;
+        if (!DecodeApplySourcePatch(request.payload, patch)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleApplySourcePatch(patch), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kPointerEvent: {
+        donner::editor::sandbox::PointerEventPayload ptr;
+        if (!DecodePointerEvent(request.payload, ptr)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handlePointerEvent(ptr), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kKeyEvent: {
+        donner::editor::sandbox::KeyEventPayload key;
+        if (!DecodeKeyEvent(request.payload, key)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleKeyEvent(key), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kWheelEvent: {
+        donner::editor::sandbox::WheelEventPayload wheel;
+        if (!DecodeWheelEvent(request.payload, wheel)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleWheelEvent(wheel), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kSetTool: {
+        donner::editor::sandbox::SetToolPayload tool;
+        if (!DecodeSetTool(request.payload, tool)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleSetTool(tool), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kSelectElement: {
+        donner::editor::sandbox::SelectElementPayload sel;
+        if (!DecodeSelectElement(request.payload, sel)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleSelectElement(sel), request.requestId)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kUndo:
+        if (!RespondFrame(core.handleUndo(), request.requestId)) return 1;
+        break;
+
+      case SessionOpcode::kRedo:
+        if (!RespondFrame(core.handleRedo(), request.requestId)) return 1;
+        break;
+
+      case SessionOpcode::kExport: {
+        donner::editor::sandbox::ExportRequestPayload exportReq;
+        if (!DecodeExport(request.payload, exportReq)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        auto exportResp = core.handleExport(exportReq);
+        SessionFrame response;
+        response.requestId = request.requestId;
+        response.opcode = SessionOpcode::kExportResponse;
+        response.payload = EncodeExportResponse(exportResp);
+        if (!Respond(response)) return 1;
+        break;
+      }
+
+      case SessionOpcode::kAttachSharedTexture: {
+        donner::editor::sandbox::AttachSharedTexturePayload attach;
+        if (!DecodeAttachSharedTexture(request.payload, attach)) {
+          if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+          break;
+        }
+        if (!RespondFrame(core.handleAttachSharedTexture(attach), request.requestId)) return 1;
+        break;
+      }
+
+      default:
+        if (!RespondError(request.requestId, SessionErrorKind::kUnknownOpcode)) return 1;
+        break;
+    }
+  }
+
+  return 0;
+}

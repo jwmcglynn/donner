@@ -1,0 +1,28 @@
+# Expose Cargo.Bazel.lock as a first-party source so
+# `@rules_rust//crate_universe:extension.bzl %crate.from_cargo` can
+# read it via `cargo_lockfile = "//third_party/bazel/wgpu_native_cargo:Cargo.Bazel.lock"`.
+# Repin with `CARGO_BAZEL_REPIN=1 bazel sync --only=wgpu_native_cargo`.
+
+exports_files(
+    [
+        "Cargo.Bazel.lock",
+        # bindings.rs is the output of wgpu-native's `build.rs`, which
+        # uses `bindgen` to turn `ffi/wgpu.h` + `ffi/webgpu-headers/
+        # webgpu.h` into a 4.5k-line Rust types module consumed by
+        # `include!(env!("OUT_DIR")/bindings.rs)` in the upstream
+        # `src/lib.rs`. Running bindgen under Bazel requires libclang
+        # to be on the host's library search path, which is fragile
+        # across dev machines and remote-execution workers. Instead
+        # we pre-generate once with real Cargo, check the result in
+        # here, and patch `src/lib.rs` to include it from a fixed
+        # path — see `third_party/patches/wgpu-native-iosurface-export.patch`.
+        # Regenerate by running
+        # `CARGO_TARGET_DIR=/tmp/wgpu-target cargo build --release
+        #   --features metal`
+        # inside `@wgpu_native_source` and copying
+        # `/tmp/wgpu-target/release/build/wgpu-native-*/out/bindings.rs`
+        # back to this path.
+        "bindings.rs",
+    ],
+    visibility = ["//visibility:public"],
+)

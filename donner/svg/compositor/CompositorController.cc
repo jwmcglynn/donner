@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,6 +23,7 @@
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -79,17 +82,6 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
   return false;
 }
 
-/// Convert premultiplied-alpha pixels to unpremultiplied-alpha pixels in
-/// place. Required before passing a `RendererBitmap` snapshot (which is
-/// premultiplied by convention) into `RendererInterface::drawImage` via
-/// `ImageResource` (which has no alpha-type field and is implicitly
-/// unpremultiplied). Without this conversion, semi-transparent pixels compose
-/// as though their RGB were already multiplied by alpha a *second* time —
-/// showing up as too-dark colors for opacity<1 content.
-///
-/// Fully-opaque pixels (alpha = 255) are unchanged; this step is only
-/// meaningful for semi-transparent content, which is why single-element
-/// drag of fully-opaque elements worked without the fix.
 /// True if @p maybeDescendant is a (non-strict) descendant of @p root in the
 /// DOM tree. Used by the translation-only fast path to check, defensively,
 /// that a subtree layer's cache-range doesn't overlap any other layer — if it
@@ -123,15 +115,22 @@ bool IsDomDescendantOf(Registry& registry, Entity maybeDescendant, Entity root) 
   return false;
 }
 
+/// Wrap a cached layer or segment bitmap for `RendererInterface::drawImage`
+/// consumption, preserving its alpha-storage convention. The compositor
+/// prefers premultiplied bytes (via `takeSnapshotPremultiplied()`) so the
+/// renderer's `drawImage` path can skip the shader-side straight→premul
+/// conversion — each round-trip of that conversion drops up to 1 channel
+/// unit of 8-bit precision and the drift accumulates across nested filter
+/// composes. For paths that still hand us straight-alpha bytes (e.g.
+/// tinyskia's native `takeSnapshot`, or external PNG decodes), forward
+/// the convention unchanged.
 ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   ImageResource img;
   img.width = bitmap.dimensions.x;
   img.height = bitmap.dimensions.y;
-  if (bitmap.alphaType == AlphaType::Premultiplied) {
-    img.data = UnpremultiplyRgba(bitmap.pixels);
-  } else {
-    img.data = bitmap.pixels;
-  }
+  img.data = bitmap.pixels;
+  img.alphaType = bitmap.alphaType == AlphaType::Premultiplied ? ImageAlphaType::Premultiplied
+                                                               : ImageAlphaType::Unpremultiplied;
   return img;
 }
 
@@ -174,13 +173,17 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
     return false;
   }
 
-  // Already promoted via the controller's `promoteEntity` path. `activeHints_`
-  // is the controller-owned hint ledger (Interaction under
-  // `autoPromoteInteractions`, Explicit otherwise). A future Mandatory or
-  // Animation hint from another source would also produce a
-  // `ComputedLayerAssignmentComponent` but doesn't count as "promoted by the
-  // controller" here.
-  if (activeHints_.contains(entity)) {
+  // Already promoted via the controller's `promoteEntity` path. Refresh the
+  // Interaction kind in place so a Selection prewarm can become an ActiveDrag
+  // without demoting the layer or dropping its cached bg/promoted/fg bitmaps.
+  auto activeHintIt = activeHints_.find(entity);
+  if (activeHintIt != activeHints_.end()) {
+    if (config_.autoPromoteInteractions) {
+      const std::optional<InteractionHint> activeKind = activeHintIt->second.interactionKind();
+      if (!activeKind.has_value() || *activeKind != interactionKind) {
+        activeHintIt->second.setInteractionKind(interactionKind);
+      }
+    }
     return true;
   }
 
@@ -304,6 +307,11 @@ bool CompositorController::isPromoted(Entity entity) const {
 Transform2d CompositorController::layerComposeOffset(Entity entity) const {
   const CompositorLayer* layer = findLayer(entity);
   return layer ? layer->canvasFromBitmap() : Transform2d();
+}
+
+uint64_t CompositorController::layerGenerationOf(Entity entity) const {
+  const CompositorLayer* layer = findLayer(entity);
+  return layer ? layer->generation() : 0;
 }
 
 FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
@@ -671,8 +679,27 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           components::LayoutSystem().getCanvasFromDocumentTransform(registry);
       const Transform2d newWorldFromEntity =
           abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+      // The delta is the canvas-from-canvas transform that maps
+      // bitmap-canvas-pixels (rasterized at the OLD `worldFromEntity`) to
+      // their CURRENT canvas position (under the NEW `worldFromEntity`).
+      //
+      // For a bitmap pixel at canvas position c_old, its corresponding
+      // entity-local point is `oldEntityFromWorld(c_old)`; its current
+      // canvas position is `newWorldFromEntity(<that local p>)`. Reading
+      // donner's left-to-right composition (`A * B` applied to v means
+      // "first A, then B"), the canvas-to-canvas mapping is therefore
+      // `oldEntityFromWorld * newWorldFromEntity`.
+      //
+      // The reverse order (`newWFE * oldEFW`) is an entity-local mapping,
+      // which collapses to the right answer ONLY when the old transform's
+      // linear part is identity. For a previously-resized element it
+      // misreports the canvas delta as `oldScale.inverse() * delta_doc`,
+      // so the cached bitmap moves at `delta_doc / scale` pixels per
+      // drag step while the overlay (driven by worldBounds) moves at
+      // `delta_doc`. See `LayerComposeOffsetReflectsDocumentDeltaForResized
+      // Element` for the regression pin.
       const Transform2d delta =
-          newWorldFromEntity * matchedLayer->bitmapEntityFromWorldTransform()->inverse();
+          matchedLayer->bitmapEntityFromWorldTransform()->inverse() * newWorldFromEntity;
 
       const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
       // Subtree layers require a pure-translation delta: only then can we
@@ -723,6 +750,26 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       unhandledDirtyEntities.reserve(resolutions.size());
       for (const auto& res : resolutions) {
         auto& instance = registry.get<components::RenderingInstanceComponent>(res.entity);
+        // Compute the per-frame delta BEFORE we overwrite the RIC:
+        // `instance.worldFromEntityTransform` at this moment is the
+        // PREVIOUS frame's value (set either by a prior fast-path
+        // iteration, by `prepareDocumentForRendering`, or by the
+        // initial tree instantiation). `res.delta` below, in contrast,
+        // is the cumulative delta since the bitmap was STAMPED —
+        // the right value for `setCanvasFromBitmap` (which operates
+        // against the stamped bitmap) but the WRONG value for
+        // `propagateFastPathTranslationToSubtree`, which left-composes
+        // it onto each descendant's already-translated
+        // `worldFromEntityTransform`. Using the stamp-delta there
+        // re-applies every prior frame's translation on top of
+        // itself, producing canvas pixels that drift further from
+        // the DOM's true position with every drag frame — the #582
+        // "filter element mispositioned after many drag frames"
+        // symptom. Per-frame delta is what the descendants actually
+        // need: layered over their current (already-post-previous-frame)
+        // transforms, it advances them exactly one drag step.
+        const Transform2d perFrameDelta =
+            res.newWorldFromEntity * instance.worldFromEntityTransform.inverse();
         instance.worldFromEntityTransform = res.newWorldFromEntity;
 
         if (res.delta.isTranslation()) {
@@ -735,7 +782,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           // rather than going back to the renderer.
           res.layer->setCanvasFromBitmap(res.delta);
           if (res.isSubtree) {
-            propagateFastPathTranslationToSubtree(registry, res.entity, res.delta);
+            propagateFastPathTranslationToSubtree(registry, res.entity, perFrameDelta);
           }
         } else {
           // Single-entity layer with non-translation delta (scale,
@@ -970,6 +1017,15 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // rasterize at the post-drag position, producing misalignment
   // crescents at the sub-layers' rendered edges (the
   // `#Clouds_with_gradients` splash artifact).
+  // `worldFromEntityTransform` is stamped by `RenderingContext` as
+  // `absoluteTransform × canvasFromDocument` (for worldIsCanvas
+  // entities). With the canvas-from-canvas delta formula below
+  // (`oldEFW * newWFE`), the result is already in canvas-pixel space
+  // and feeds straight into the `setTransform` + `drawImage` compose
+  // pipeline. `ScaledCanvasTranslationOnlyDragProducesCorrectPixels`
+  // pins the 2× canvas (retina/zoomed) drag delta and
+  // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` pins
+  // the previously-resized-element drag delta.
   for (auto& layer : layers_) {
     if (!layer.hasValidBitmap() || !layer.bitmapEntityFromWorldTransform().has_value()) {
       continue;
@@ -980,7 +1036,29 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
     const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
     const Transform2d& bitmapStamp = *layer.bitmapEntityFromWorldTransform();
-    const Transform2d delta = instance.worldFromEntityTransform * bitmapStamp.inverse();
+    // Canvas-to-canvas delta for the cached bitmap. Applied to a canvas
+    // pixel `c_old` (where the bitmap content currently appears under
+    // the OLD `worldFromEntity`), the composition first walks back to
+    // entity-local via `oldEFW = oldWFE.inverse()`, then forward through
+    // the NEW `worldFromEntity`. With donner's left-to-right convention
+    // (`A * B`(v) = B(A(v))`), that's `oldEFW * newWFE`.
+    //
+    // The previous formula was `newWFE * oldEFW` followed by a
+    // `docFromCanvas * ... * canvasFromDoc` conjugation. Algebraically
+    // that produced the correct canvas-space delta ONLY when the old
+    // transform's linear part was identity — `newWFE * oldEFW` then
+    // collapses to `T_new * T_old.inverse()` (doc-space) and the
+    // conjugation lifts it to canvas-space. For a previously-resized
+    // element the cancellation fails: the old scale's inverse leaks
+    // into the result, the conjugation re-applies canvasFromDoc on top
+    // of an already canvas-space value, and the cached bitmap moves at
+    // `delta_doc / oldScale` canvas pixels per drag step — visibly
+    // behind the cursor while the overlay tracks correctly. See
+    // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement`.
+    //
+    // The new composition produces canvas-from-canvas directly, so the
+    // conjugation has nothing to do and is gone.
+    const Transform2d delta = bitmapStamp.inverse() * instance.worldFromEntityTransform;
     if (delta.isTranslation()) {
       layer.setCanvasFromBitmap(delta);
     }
@@ -1264,13 +1342,18 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     worldFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
                           .worldFromEntityTransform;
   }
-  layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
-  // Don't reset `canvasFromBitmap_` here — a caller may have set it
-  // explicitly (tests, editor drag hand-off paths) and expect that
-  // additional offset to apply on top of the freshly-rasterized bitmap.
-  // The fast path in `renderFrame` is what updates `canvasFromBitmap_`
-  // for DOM-driven deltas; rasterization itself just refreshes the
-  // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
+  // Keep layer bitmaps premultiplied end-to-end — the compose-side
+  // `drawImage` will read `ImageAlphaType::Premultiplied` and skip the
+  // shader's straight→premul conversion, preserving full 8-bit precision
+  // across nested filter composes.
+  layer.setBitmap(offscreen->takeSnapshotPremultiplied(), worldFromEntity);
+  // `setBitmap` resets `canvasFromBitmap_` to identity — see its doc.
+  // Callers that want a specific compose offset on top of the fresh
+  // bitmap must call `setCanvasFromBitmap` AFTER this. Rasterization
+  // captures the entity AT its current world transform, so the natural
+  // compose is "draw at stamped pos + identity" — any stale offset left
+  // over from the pre-rasterize slow-path loop would double-stamp the
+  // element.
 }
 
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport) {
@@ -1443,14 +1526,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
                                Transform2d::Translate(-tightBoundsSnapped.topLeft));
-        staticSegments_[i] = offscreen->takeSnapshot();
+        staticSegments_[i] = offscreen->takeSnapshotPremultiplied();
         staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
                                Transform2d());
-        staticSegments_[i] = offscreen->takeSnapshot();
+        staticSegments_[i] = offscreen->takeSnapshotPremultiplied();
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
     }
@@ -1597,7 +1680,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
         .paintOrderIndex = paintIdx++,
         .bitmap = segBitmap,
         .layerEntity = entt::null,
-        .canvasFromBitmap = Transform2d(),
+        .canvasFromBitmap = Transform2d::Translate(
+            i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i].x : 0.0,
+            i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i].y : 0.0),
     });
     // Layer tile.
     const auto& layer = layers_[i];
@@ -1628,7 +1713,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
       .paintOrderIndex = paintIdx,
       .bitmap = tailBitmap,
       .layerEntity = entt::null,
-      .canvasFromBitmap = Transform2d(),
+      .canvasFromBitmap = Transform2d::Translate(
+          tailIdx < staticSegmentOffsets_.size() ? staticSegmentOffsets_[tailIdx].x : 0.0,
+          tailIdx < staticSegmentOffsets_.size() ? staticSegmentOffsets_[tailIdx].y : 0.0),
   });
   return tiles;
 }
@@ -1741,7 +1828,7 @@ void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLaye
     RendererBitmap snapshot;
     {
       ZoneScopedN("Compositor::composeRange::takeSnapshot");
-      snapshot = offscreen->takeSnapshot();
+      snapshot = offscreen->takeSnapshotPremultiplied();
     }
     return snapshot;
   };
@@ -1817,8 +1904,10 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
   // (flat-texture upload, unit tests) get valid pixels. After the
   // first full compose lands, subsequent drag frames can safely skip
   // because `frame_` retains the prior pixmap.
+  const bool hasTiledCompositorOutput = !staticSegments_.empty();
   const bool skipMainCompose = skipMainComposeDuringSplit_ && hasActiveDrag &&
-                               hasSplitStaticLayers() && mainRendererHasCachedFrame_;
+                               mainRendererHasCachedFrame_ &&
+                               (hasSplitStaticLayers() || hasTiledCompositorOutput);
   if (skipMainCompose) {
     return;
   }
@@ -1895,19 +1984,19 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
     //
     // EXCEPTION: if the entity is a promoted layer ROOT (non-zero
     // `ComputedLayerAssignmentComponent::layerId` and the layer is
-    // rooted at this entity), its content lives in the layer's cached
-    // bitmap — NOT in any segment. The layer's bitmap is either reused
-    // via a compose-transform (fast path) or re-rasterized via
-    // `rasterizeLayer` (slow path); the segment carries zero pixels
-    // that belong to this entity. Marking `findSegmentForEntity(entity)`
-    // dirty just forces an unnecessary canvas-sized re-rasterize of an
-    // adjacent segment on every drag frame — on the splash that's the
-    // tail segment (100+ paths), costing ~40 ms/frame. Skip it.
+    // rooted at this entity), its whole subtree lives in the layer's
+    // cached bitmap — NOT in any static segment. The layer's bitmap is
+    // either reused via a compose-transform (fast path) or re-rasterized
+    // via `rasterizeLayer` (slow path). Marking the root or descendants'
+    // segments dirty just forces unnecessary static-segment rasterize +
+    // bg/fg recomposition on every drag frame.
     const auto* selfAssignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
     const bool entityIsPromotedLayerRoot =
         selfAssignment != nullptr && selfAssignment->layerId != 0;
-    if (!entityIsPromotedLayerRoot &&
-        registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    if (entityIsPromotedLayerRoot) {
+      continue;
+    }
+    if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
       const size_t selfSegIdx = findSegmentForEntity(entity);
       if (selfSegIdx < staticSegmentDirty_.size()) {
         staticSegmentDirty_[selfSegIdx] = true;

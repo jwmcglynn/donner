@@ -89,6 +89,27 @@ donner_cc_test(
     ],
 )
 
+# macOS counterpart: deny-operation probes against the
+# `sandbox_init(kSBXProfilePureComputation)` profile. Tagged
+# `no-sandbox` because macOS refuses nested sandbox profiles — the
+# test needs to run *outside* bazel's darwin-sandbox or all probes
+# GTEST_SKIP. The test self-detects and skips gracefully rather than
+# false-passing when the outer environment won't let the profile
+# apply.
+donner_cc_test(
+    name = "sandbox_hardening_macos_tests",
+    srcs = ["SandboxHardeningMacos_tests.cc"],
+    tags = ["no-sandbox"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/editor/sandbox:sandbox_hardening",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "svg_source_tests",
     srcs = ["SvgSource_tests.cc"],
@@ -99,16 +120,10 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "pipelined_renderer_tests",
-    srcs = ["PipelinedRenderer_tests.cc"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    name = "url_security_tests",
+    srcs = ["UrlSecurity_tests.cc"],
     deps = [
-        "//donner/base",
-        "//donner/editor/sandbox:pipelined_renderer",
-        "//donner/svg",
-        "//donner/svg/parser",
-        "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer",
+        "//donner/editor/sandbox:url_security",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -122,6 +137,35 @@ donner_cc_fuzzer(
         "//donner/editor/sandbox:wire",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer",
+    ],
+)
+
+# Fuzzes the host→backend request path: `SessionCodec::DecodeFrame`
+# plus every per-opcode `Decode*` payload helper the backend loop
+# dispatches on. Adversarial inputs must return `false` (malformed) or
+# parse — they must never crash. See
+# docs/design_docs/0023-editor_sandbox.md §"Live-protocol fuzzing".
+donner_cc_fuzzer(
+    name = "editor_backend_request_fuzzer",
+    srcs = ["EditorBackendRequest_fuzzer.cc"],
+    corpus = "editor_backend_request_corpus",
+    deps = [
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+    ],
+)
+
+# Fuzzes the backend→host response path. A malformed response shouldn't
+# be able to crash the editor host — that would promote a backend bug
+# into a host-process DOS. Covers HandshakeAck, FramePayload, Export,
+# SourceReplaceAll, Toast, DialogRequest, Diagnostic, and Error.
+donner_cc_fuzzer(
+    name = "frame_response_fuzzer",
+    srcs = ["FrameResponse_fuzzer.cc"],
+    corpus = "frame_response_corpus",
+    deps = [
+        "//donner/editor/sandbox:editor_api_codec",
     ],
 )
 
@@ -155,6 +199,138 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "session_codec_tests",
+    srcs = ["SessionCodec_tests.cc"],
+    deps = [
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "sandbox_session_tests",
+    srcs = ["SandboxSession_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_editor_backend",
+    ],
+    # `no-sandbox` on macOS: without it, our sandbox_init in the
+    # spawned `donner_editor_backend` hits EPERM (nested sandbox) and
+    # our wrapper treats that as "already hardened" → the profile
+    # never actually applies. Which means the backend-startup-
+    # ordering bug (sandbox_init before GPU init) slips right past
+    # the test. Running outside darwin-sandbox lets sandbox_init
+    # apply for real, so the geode-variant handshake deadlocks if
+    # the ordering regresses.
+    tags = ["no-sandbox"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    # Spawn + handshake the `donner_editor_backend` under the Geode
+    # renderer too. The extra variant catches classes of bugs where
+    # the backend startup path depends on the renderer backend —
+    # e.g., applying the macOS sandbox_init profile BEFORE the Geode
+    # renderer initializes wgpu-native blocks Metal `mach_lookup`,
+    # deadlocking the handshake. Missing this variant is how the
+    # initial macOS+geode hang escaped the default `tiny_skia` lane.
+    variants = ["geode"],
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:session",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_api_codec_tests",
+    srcs = ["EditorApiCodec_tests.cc"],
+    deps = [
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_backend_integration_tests",
+    srcs = ["EditorBackendIntegration_tests.cc"],
+    data = [
+        "//donner/editor/sandbox:donner_editor_backend",
+    ],
+    # End-to-end session + EditorBackendCore round-trip. Both desktop
+    # OSes now ship the backend binary, so both gate through this test.
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    # Geode variant exercises the full `LoadBytes` → render path against
+    # a backend built with the Geode renderer, catching regressions like:
+    #   - RLIMIT_FSIZE=0 SIGXFSZ-killing wgpu-native when Metal writes a
+    #     shader pipeline cache.
+    #   - sandbox_init profiles that block mach-service lookups Metal
+    #     needs during live rendering.
+    # Tagged `no-sandbox` so our `sandbox_init` (when installed) isn't
+    # EPERM-skipped by bazel's darwin-sandbox — otherwise profile-vs-
+    # renderer regressions stay invisible to the test fleet.
+    variants = ["geode"],
+    tags = ["no-sandbox"],
+    deps = [
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Golden-image integration test: validates that the editor sandbox pipeline
+# produces the correct pixels end-to-end by replaying `FramePayload.renderWire`
+# into a real `svg::Renderer` and diffing against a direct-rendered reference.
+# Cross-platform because it uses `EditorBackendCore` in-process — no
+# subprocess sandbox / seccomp gate, so macOS developers can iterate on
+# rendering regressions without a Linux box.
+donner_cc_test(
+    name = "editor_backend_golden_image_tests",
+    srcs = ["EditorBackendGoldenImage_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/editor/tests:filter_elm_disappear-2.rnr",
+        "//donner/editor/tests:filter_elm_disappear-3.rnr",
+        "//donner/editor/tests:filter_elm_disappear-4.rnr",
+        "//donner/editor/tests:filter_elm_disappear-5.rnr",
+        "//donner/editor/tests:filter_elm_disappear-6.rnr",
+        "//donner/editor/tests:filter_elm_disappear-7.rnr",
+    ] + glob(
+        ["testdata/filter_disappear_*.png"],
+        allow_empty = True,
+    ),
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    deps = [
+        "//donner/base",
+        "//donner/editor:editor_backend_client",
+        "//donner/editor:editor_backend_client_inprocess",
+        "//donner/editor:viewport_state",
+        "//donner/editor/repro:repro_file",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:editor_backend_core",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/parser",
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],

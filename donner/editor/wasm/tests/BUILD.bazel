@@ -1,0 +1,34 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+package(default_visibility = ["//visibility:private"])
+
+# Playwright end-to-end harness for the WASM editor.
+#
+# Explicitly tagged `manual` so `bazel test //...` does not try to run it —
+# this target drives a real headless Chromium via `npx playwright test`,
+# which isn't cached on every contributor / CI runner. Once we've confirmed
+# local-green on macOS + Linux, a follow-up can wire `playwright install
+# chromium` into CI and move this off `manual`.
+#
+# Usage:
+#   bazel run //donner/editor/wasm/tests:playwright_tests
+#
+# The wrapper builds the wasm bundle, launches `serve_http` in the
+# background, and then invokes `npx playwright test`. All knobs are
+# environment-variable driven — see `run_tests.sh`.
+sh_binary(
+    name = "playwright_tests",
+    srcs = ["run_tests.sh"],
+    data = [
+        "drag_perf.spec.ts",
+        "package.json",
+        "playwright.config.ts",
+        "smoke.spec.ts",
+    ],
+    tags = [
+        "manual",
+        "no-sandbox",
+        "requires-network",
+        "wasm",
+    ],
+)

@@ -198,6 +198,14 @@ public:
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
   /**
+   * Capture the render target's premultiplied bytes directly, skipping the
+   * unpremultiply conversion `takeSnapshot()` applies for cross-backend
+   * parity. The compositor uses this to avoid a lossy 8-bit conversion
+   * round-trip through its internal layer bitmap cache.
+   */
+  [[nodiscard]] RendererBitmap takeSnapshotPremultiplied() const override;
+
+  /**
    * Enable or disable GPU timestamp capture. No-op today; reserved for
    * future work (design doc 0030, "Future Work"). When wired up, this
    * will drive the `renderPassNs` / `totalGpuNs` fields of

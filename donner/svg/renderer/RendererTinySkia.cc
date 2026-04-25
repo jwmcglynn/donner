@@ -22,6 +22,7 @@
 #endif
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererInterface.h"  // IWYU pragma: keep
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/resources/FontManager.h"
@@ -1339,7 +1340,14 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
     return;
   }
 
-  std::vector<std::uint8_t> premultiplied = PremultiplyRgba(image.data);
+  // tiny_skia::Pixmap stores pixels in premultiplied form. If the
+  // caller already gave us premul bytes (compositor layer cache path),
+  // skip `PremultiplyRgba` — running premultiplication twice on
+  // partial-alpha content shows up as a visible darkening halo.
+  std::vector<std::uint8_t> premultiplied =
+      image.alphaType == ImageAlphaType::Premultiplied
+          ? std::vector<std::uint8_t>(image.data.begin(), image.data.end())
+          : PremultiplyRgba(image.data);
   auto maybePixmap = tiny_skia::Pixmap::fromVec(
       std::move(premultiplied), tiny_skia::IntSize(static_cast<std::uint32_t>(image.width),
                                                    static_cast<std::uint32_t>(image.height)));
@@ -1930,6 +1938,30 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   (void)params;
   maybeWarnUnsupportedText();
 #endif
+}
+
+RendererBitmap RendererTinySkia::takeSnapshotPremultiplied() const {
+  // Frame buffer is stored unpremultiplied (see `takeSnapshot`). The
+  // compositor's split-bitmap cache + the editor's ImGui GPU compose
+  // both need premultiplied data (ImGui's default blend formula is
+  // `src + dst*(1 - srcA)`, which assumes premul). Premultiply once
+  // at snapshot time rather than every time a cached bitmap is
+  // drawn.
+  //
+  // Without this, the default virtual forwards to `takeSnapshot` and
+  // returns unpremul bytes under a `Premultiplied` label; downstream
+  // consumers (`compositor::recomposeSplitBitmaps`,
+  // `GlTextureCache::UploadBitmap`) treat them as premul and the
+  // editor's live drag display shows filter-heavy elements with
+  // wrong colors (the "filter disappears after second drag" symptom
+  // — see `FilterDisappearReplayTest::
+  // CompositedMidDrag2MatchesFullRerasterize`).
+  RendererBitmap snapshot = takeSnapshot();
+  if (snapshot.alphaType == AlphaType::Unpremultiplied && !snapshot.pixels.empty()) {
+    snapshot.pixels = PremultiplyRgba(snapshot.pixels);
+    snapshot.alphaType = AlphaType::Premultiplied;
+  }
+  return snapshot;
 }
 
 RendererBitmap RendererTinySkia::takeSnapshot() const {

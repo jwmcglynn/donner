@@ -359,6 +359,20 @@ public:
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
 
   /**
+   * Like `takeSnapshot`, but the returned bitmap retains the backend's internal
+   * premultiplied-alpha storage and sets `alphaType = Premultiplied`. The default
+   * implementation just calls `takeSnapshot` (which may already be premultiplied, or may
+   * unpremultiply on the way out depending on backend convention).
+   *
+   * Used by the compositor to avoid the `takeSnapshot` → unpremul → `drawImage` → re-premul
+   * round-trip through its internal layer bitmap cache: each 8-bit conversion drops up to
+   * 1 channel unit of precision and the drifts accumulate across nested filter-group
+   * composes (measured at up to 59 channel units on `donner_splash.svg` before the fix).
+   * Backends that can serve premultiplied bytes directly should override this.
+   */
+  [[nodiscard]] virtual RendererBitmap takeSnapshotPremultiplied() const { return takeSnapshot(); }
+
+  /**
    * Creates an independent offscreen renderer instance of the same type as this one.
    * Used for rendering sub-documents into intermediate pixmaps when a backend needs an isolated
    * offscreen pass (e.g., for feImage with SVG content).

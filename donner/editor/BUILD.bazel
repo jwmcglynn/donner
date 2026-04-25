@@ -13,7 +13,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "renderer_backend_compatible_with")
 
 # Editor libraries are public so the //examples:svg_viewer target (in the
 # separate examples Bazel module) can depend on `:text_editor`. BCR
@@ -27,15 +27,6 @@ exports_files(
     visibility = ["//donner/editor/wasm:__pkg__"],
 )
 
-donner_cc_library(
-    name = "viewport_geometry",
-    srcs = ["ViewportGeometry.cc"],
-    hdrs = ["ViewportGeometry.h"],
-    deps = [
-        "//donner/base",
-    ],
-)
-
 # Single source of truth for the editor render pane's screen↔document
 # coordinate mapping, including zoom, pan, DPR, and the focal-point-
 # preserving zoom math. See `docs/design_docs/0025-editor_ux.md`.
@@ -43,9 +34,22 @@ donner_cc_library(
     name = "viewport_state",
     srcs = ["ViewportState.cc"],
     hdrs = ["ViewportState.h"],
+    # Sandbox tests exercise this directly to reproduce the thin-client
+    # viewport-centering regression.
+    visibility = ["//donner/editor:__subpackages__"],
     deps = [
         "//donner/base",
     ],
+)
+
+# Drag input-coalescing policy for the editor's `kMove` post pipeline.
+# Header-only and tested in isolation so the regression that lets the
+# host overwrite `pendingFrame` faster than the backend can drain
+# stays caught (see DragCoalesce_tests.cc).
+donner_cc_library(
+    name = "drag_coalesce",
+    hdrs = ["DragCoalesce.h"],
+    visibility = ["//donner/editor:__subpackages__"],
 )
 
 donner_cc_library(
@@ -53,20 +57,13 @@ donner_cc_library(
     srcs = ["SelectionAabb.cc"],
     hdrs = ["SelectionAabb.h"],
     deps = [
+        ":viewport_state",
         "//donner/base",
         "//donner/svg",
     ],
 )
 
-donner_cc_library(
-    name = "render_pane_gesture",
-    srcs = ["RenderPaneGesture.cc"],
-    hdrs = ["RenderPaneGesture.h"],
-    deps = [
-        ":viewport_state",
-        "//donner/base",
-    ],
-)
+# render_pane_gesture moved to //donner/editor/backend_lib
 
 donner_cc_library(
     name = "pinch_event_monitor",
@@ -76,7 +73,7 @@ donner_cc_library(
     }),
     hdrs = ["PinchEventMonitor.h"],
     deps = [
-        ":render_pane_gesture",
+        "//donner/editor/backend_lib:render_pane_gesture",
     ],
 )
 
@@ -95,31 +92,7 @@ objc_library(
     ],
 )
 
-donner_cc_library(
-    name = "command_queue",
-    srcs = ["CommandQueue.cc"],
-    hdrs = [
-        "CommandQueue.h",
-        "EditorCommand.h",
-    ],
-    deps = [
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "async_svg_document",
-    srcs = ["AsyncSVGDocument.cc"],
-    hdrs = ["AsyncSVGDocument.h"],
-    deps = [
-        ":command_queue",
-        "//donner/base",
-        "//donner/svg",
-        "//donner/svg/compositor",
-        "//donner/svg/parser",
-    ],
-)
+# command_queue, async_svg_document moved to //donner/editor/backend_lib
 
 donner_cc_library(
     name = "text_patch",
@@ -130,306 +103,30 @@ donner_cc_library(
     ],
 )
 
-donner_cc_library(
-    name = "attribute_writeback",
-    srcs = ["AttributeWriteback.cc"],
-    hdrs = ["AttributeWriteback.h"],
-    deps = [
-        ":text_patch",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/svg",
-    ],
-)
+# attribute_writeback moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "async_renderer",
-    srcs = ["AsyncRenderer.cc"],
-    hdrs = ["AsyncRenderer.h"],
-    deps = [
-        ":overlay_renderer",
-        ":tracy_wrapper",
-        "//donner/base",
-        "//donner/svg",
-        "//donner/svg/compositor:compositor",
-        "//donner/svg/renderer",
-    ],
-)
+# async_renderer moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "gl_texture_cache",
-    srcs = ["GlTextureCache.cc"],
-    hdrs = ["GlTextureCache.h"],
-    deps = [
-        ":async_renderer",
-        ":tracy_wrapper",
-        "//donner/base",
-        "//donner/svg",
-    ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "//conditions:default": [
-            "//third_party/glad",
-        ],
-    }),
-)
+# change_classifier moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "editor_input_bridge",
-    srcs = ["EditorInputBridge.cc"],
-    hdrs = ["EditorInputBridge.h"],
-    deps = [
-        ":pinch_event_monitor",
-        ":render_pane_gesture",
-        "//donner/editor/gui:editor_window",
-    ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "@platforms//os:macos": [
-            ":pinch_event_monitor_macos",
-            "@glfw",
-        ],
-        "@platforms//os:linux": [
-            "@glfw",
-        ],
-        "//conditions:default": [],
-    }),
-)
+# source_sync moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "change_classifier",
-    srcs = ["ChangeClassifier.cc"],
-    hdrs = ["ChangeClassifier.h"],
-    deps = [
-        ":command_queue",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/svg",
-    ],
-)
+# editor_app moved to //donner/editor/backend_lib
 
-donner_cc_library(
-    name = "imgui_headers",
-    hdrs = [
-        "ImGuiBackendIncludes.h",
-        "ImGuiIncludes.h",
-        "ImGuiInternalIncludes.h",
-    ],
-    deps = [
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "keyboard_shortcut_policy",
-    hdrs = ["KeyboardShortcutPolicy.h"],
-    deps = [],
-)
-
-donner_cc_library(
-    name = "document_sync_controller",
-    srcs = ["DocumentSyncController.cc"],
-    hdrs = ["DocumentSyncController.h"],
-    deps = [
-        ":attribute_writeback",
-        ":editor_app",
-        ":imgui_headers",
-        ":select_tool",
-        ":source_sync",
-        ":text_editor",
-        ":text_patch",
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "viewport_interaction_controller",
-    srcs = ["ViewportInteractionController.cc"],
-    hdrs = ["ViewportInteractionController.h"],
-    deps = [
-        ":imgui_headers",
-        ":render_pane_gesture",
-        ":viewport_state",
-        ":tool",
-        "//donner/base",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "menu_bar_presenter",
-    srcs = ["MenuBarPresenter.cc"],
-    hdrs = ["MenuBarPresenter.h"],
-    deps = [
-        ":imgui_headers",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "sidebar_presenter",
-    srcs = ["SidebarPresenter.cc"],
-    hdrs = ["SidebarPresenter.h"],
-    deps = [
-        ":editor_app",
-        ":imgui_headers",
-        ":viewport_state",
-        "//donner/base",
-        "//donner/svg",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "dialog_presenter",
-    srcs = ["DialogPresenter.cc"],
-    hdrs = ["DialogPresenter.h"],
-    deps = [
-        ":imgui_headers",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "render_pane_presenter",
-    srcs = ["RenderPanePresenter.cc"],
-    hdrs = ["RenderPanePresenter.h"],
-    deps = [
-        ":experimental_drag_presentation",
-        ":gl_texture_cache",
-        ":imgui_headers",
-        ":selection_aabb",
-        ":viewport_interaction_controller",
-        "//donner/base",
-        "@imgui",
-    ],
-)
-
-donner_cc_library(
-    name = "render_coordinator",
-    srcs = ["RenderCoordinator.cc"],
-    hdrs = ["RenderCoordinator.h"],
-    deps = [
-        ":async_renderer",
-        ":experimental_drag_presentation",
-        ":gl_texture_cache",
-        ":overlay_renderer",
-        ":select_tool",
-        ":selection_aabb",
-        ":tracy_wrapper",
-        ":viewport_interaction_controller",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "editor_shell",
-    srcs = ["EditorShell.cc"],
-    hdrs = ["EditorShell.h"],
-    deps = [
-        ":dialog_presenter",
-        ":document_sync_controller",
-        ":editor_app",
-        ":editor_input_bridge",
-        ":gl_texture_cache",
-        ":keyboard_shortcut_policy",
-        ":imgui_headers",
-        ":menu_bar_presenter",
-        ":render_coordinator",
-        ":render_pane_presenter",
-        ":select_tool",
-        ":sidebar_presenter",
-        ":text_editor",
-        ":tracy_wrapper",
-        ":viewport_interaction_controller",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/editor/gui:editor_window",
-        "//donner/editor/repro:repro_recorder",
-        "//donner/svg",
-        "//third_party/fira-code",
-        "//third_party/roboto",
-        "@imgui",
-    ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
-            "//third_party/emscripten-glfw",
-        ],
-        "//conditions:default": [
-            "@glfw",
-        ],
-    }),
-)
-
-donner_cc_library(
-    name = "source_sync",
-    srcs = ["SourceSync.cc"],
-    hdrs = ["SourceSync.h"],
-    deps = [
-        ":change_classifier",
-        ":editor_app",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "editor_app",
-    srcs = ["EditorApp.cc"],
-    hdrs = ["EditorApp.h"],
-    deps = [
-        ":async_svg_document",
-        ":attribute_writeback",
-        ":command_queue",
-        ":undo_timeline",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
-
-donner_cc_library(
-    name = "tool",
-    hdrs = ["Tool.h"],
-    deps = [
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "experimental_drag_presentation",
-    hdrs = ["ExperimentalDragPresentation.h"],
-    deps = [
-        ":select_tool",
-        "//donner/base",
-    ],
-)
-
-donner_cc_library(
-    name = "select_tool",
-    srcs = ["SelectTool.cc"],
-    hdrs = ["SelectTool.h"],
-    deps = [
-        ":attribute_writeback",
-        ":command_queue",
-        ":editor_app",
-        ":imgui_headers",
-        ":tool",
-        ":undo_timeline",
-        "//donner/base",
-        "//donner/svg",
-    ],
-)
+# tool, select_tool moved to //donner/editor/backend_lib
 
 donner_cc_library(
     name = "overlay_renderer",
     srcs = ["OverlayRenderer.cc"],
     hdrs = ["OverlayRenderer.h"],
+    # Sandbox backend draws selection chrome into the composited
+    # bitmap via this helper — keeps the AABB + path outlines pixel-
+    # locked to the rendered content, no ImGui shear on drag.
+    visibility = ["//donner/editor:__subpackages__"],
     deps = [
-        ":editor_app",
         ":selection_aabb",
         ":tracy_wrapper",
+        "//donner/editor/backend_lib:editor_app",
         "//donner/base",
         "//donner/css",
         "//donner/svg",
@@ -474,6 +171,53 @@ embed_resources(
     },
 )
 
+_EDITOR_RUNTIME_DEPS = [
+    ":address_bar",
+    ":address_bar_dispatcher",
+    ":content_sniffer",
+    ":drag_coalesce",
+    ":editor_backend_client",
+    ":editor_icon",
+    ":editor_splash",
+    ":local_path_display",
+    ":pinch_event_monitor",
+    ":resource_policy",
+    ":svg_fetcher",
+    ":viewport_state",
+    "//donner/editor/sandbox:svg_source",
+] + select({
+    "@platforms//os:macos": [":pinch_event_monitor_macos"],
+    "//conditions:default": [],
+}) + [
+    ":text_editor",
+    ":text_patch",
+    ":tracy_wrapper",
+    "//donner/base",
+    "//donner/editor/repro:repro_recorder",
+    "//donner/svg/renderer:pixel_format_utils",
+    "//donner/svg/renderer:renderer_interface",
+    "//third_party/fira-code",
+    "//third_party/glad",
+    "//third_party/roboto",
+    "@glfw",
+    "@imgui",
+] + select({
+    # Desktop Linux + macOS both speak to a subprocess sandbox via the
+    # session-backed client. WASM stays in-process because the browser
+    # tab is already the isolation boundary.
+    "@platforms//os:linux": [
+        ":editor_backend_client_session",
+        "//donner/editor/sandbox:session",
+    ],
+    "@platforms//os:macos": [
+        ":editor_backend_client_session",
+        "//donner/editor/sandbox:session",
+    ],
+    "//conditions:default": [
+        ":editor_backend_client_inprocess",
+    ],
+})
+
 donner_cc_library(
     name = "editor_notice_inputs",
     target_compatible_with = select({
@@ -481,10 +225,7 @@ donner_cc_library(
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
-        ":editor_icon",
-        ":editor_shell",
-    ],
+    deps = _EDITOR_RUNTIME_DEPS,
 )
 
 # The full Donner editor binary. Wires EditorApp + SelectTool +
@@ -496,20 +237,38 @@ donner_cc_library(
 donner_cc_binary(
     name = "editor",
     srcs = ["main.cc"],
+    # The session-backed client spawns `donner_editor_backend` as a child
+    # process; declaring it as `data` (per platform) ensures it lands in
+    # the editor's runfiles tree so `bazel run //donner/editor` actually
+    # locates it. See `RunBackendSmokeTest` + `MakeSessionBacked` in
+    # main.cc.
+    data = select({
+        "@platforms//os:linux": [
+            "//donner/editor/sandbox:donner_editor_backend",
+        ],
+        "@platforms//os:macos": [
+            "//donner/editor/sandbox:donner_editor_backend",
+        ],
+        "//conditions:default": [],
+    }),
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = [
-        ":editor_icon",
+    deps = _EDITOR_RUNTIME_DEPS + [
         ":notice",
-        ":editor_shell",
-        ":tracy_wrapper",
-        "//donner/editor/gui:editor_window",
-        "//donner/base",
-        "//donner/base:failure_signal_handler",
-    ],
+        # Link the real Tracy client so the desktop editor can be profiled.
+        # The sandboxed backend binary deliberately does NOT depend on this
+        # (see the tracy_wrapper_enabled comment in this file).
+        ":tracy_wrapper_enabled",
+    ] + select({
+        # Runfiles helper used to locate `donner_editor_backend` next to
+        # the editor binary. WASM has no runfiles concept.
+        "@platforms//os:linux": ["@rules_cc//cc/runfiles"],
+        "@platforms//os:macos": ["@rules_cc//cc/runfiles"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_library(
@@ -520,38 +279,29 @@ donner_cc_library(
     ],
 )
 
-# Abstract clipboard interface + header-only InMemoryClipboard. No
-# ImGui dependency — safe to link from headless unit tests. See
-# docs/design_docs/text_editor_refactor.md for the split rationale.
+# Header-only Tracy macro wrapper. `TracyWrapper.h` expands the macros to
+# no-ops unless `ENABLE_TRACY` is defined in the translation unit's compile
+# context — which only happens for the main desktop editor binary via
+# `tracy_wrapper_enabled` below.
+#
+# Rationale: the sandboxed `donner_editor_backend` child process must not
+# link `@tracy//:tracy_client`, because Tracy's static initializers call
+# `InitKernelSymbols()` which reads `/proc/kallsyms` and asserts when
+# seccomp blocks the read. Making the wrapper header-only by default keeps
+# Tracy-linked translation units — profiling symbols and all — opt-in.
 donner_cc_library(
-    name = "clipboard_interface",
-    hdrs = [
-        "ClipboardInterface.h",
-        "InMemoryClipboard.h",
-    ],
+    name = "tracy_wrapper",
+    hdrs = ["TracyWrapper.h"],
     deps = [],
 )
 
-# Production ClipboardInterface implementation backed by
-# ImGui::GetClipboardText / SetClipboardText. This is the only
-# editor target that touches ImGui clipboard APIs.
+# Opt-in target that activates Tracy profiling. Depend on this instead of
+# `:tracy_wrapper` only from binaries that want the full Tracy runtime
+# linked (i.e. the desktop editor main binary). Intermediate libraries
+# should continue to depend on `:tracy_wrapper` so they can be reused in
+# the sandboxed backend.
 donner_cc_library(
-    name = "imgui_clipboard",
-    srcs = ["ImGuiClipboard.cc"],
-    hdrs = ["ImGuiClipboard.h"],
-    deps = [
-        ":clipboard_interface",
-        ":imgui_headers",
-        "@imgui",
-    ],
-)
-
-# Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
-# library pulls in the real Tracy client; otherwise the macros are no-ops.
-# Tracy is linked into every editor build (including release + WASM), runtime-
-# gated by a UI toggle — see the Security section of docs/design_docs/0020-editor.md.
-donner_cc_library(
-    name = "tracy_wrapper",
+    name = "tracy_wrapper_enabled",
     hdrs = ["TracyWrapper.h"],
     defines = selects.with_or({
         ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
@@ -580,7 +330,7 @@ donner_cc_library(
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
-        ":imgui_headers",
+        ":imgui_includes",
         ":text_buffer",
         ":text_editor_core",
         "//donner/base",
@@ -588,13 +338,168 @@ donner_cc_library(
     ],
 )
 
+# undo_timeline moved to //donner/editor/backend_lib
+
 donner_cc_library(
-    name = "undo_timeline",
-    srcs = ["UndoTimeline.cc"],
-    hdrs = ["UndoTimeline.h"],
+    name = "resource_policy",
+    srcs = [
+        "CurlAvailability.cc",
+        "ResourcePolicy.cc",
+    ],
+    hdrs = ["ResourcePolicy.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "address_bar",
+    srcs = ["AddressBar.cc"],
+    hdrs = ["AddressBar.h"],
     deps = [
-        ":attribute_writeback",
+        ":address_bar_status",
+        "@imgui",
+    ],
+)
+
+# Tiny header-only slice of `address_bar` that carries just the
+# `AddressBarStatus` enum + chip struct — no ImGui dependency so
+# headless backend-client consumers can ship the chip through
+# `FrameResult.statusChip` without pulling in GLFW / libX11 on
+# Linux remote-execution workers.
+donner_cc_library(
+    name = "address_bar_status",
+    hdrs = ["AddressBarStatus.h"],
+    visibility = ["//donner/editor:__subpackages__"],
+)
+
+donner_cc_library(
+    name = "svg_fetcher",
+    srcs = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): ["SvgFetcherWasm.cc"],
+        "//conditions:default": ["SvgFetcher.cc"],
+    }),
+    hdrs = ["SvgFetcher.h"],
+    deps = selects.with_or({
+        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
+        "//conditions:default": [
+            ":resource_policy",
+            "//donner/editor/sandbox:svg_source",
+        ],
+    }),
+)
+
+# Glue between `AddressBar` (UI widget) and `SvgFetcher` (I/O). Kept in its
+# own library so `main.cc` doesn't inline the logic and tests can drive the
+# navigation → fetch → loadBytes flow with a fake fetcher.
+donner_cc_library(
+    name = "address_bar_dispatcher",
+    srcs = ["AddressBarDispatcher.cc"],
+    hdrs = ["AddressBarDispatcher.h"],
+    deps = [
+        ":address_bar",
+        ":address_bar_status",
+        ":svg_fetcher",
+    ],
+)
+
+# Byte-prefix heuristic used by the address-bar load flow to convert the
+# common "that wasn't SVG, that was an HTML file-description page" failure
+# mode into a specific, actionable error chip. See `ContentSniffer.h`.
+donner_cc_library(
+    name = "content_sniffer",
+    srcs = ["ContentSniffer.cc"],
+    hdrs = ["ContentSniffer.h"],
+    deps = [],
+)
+
+# Cosmetic URI → display-string helper. Rewrites absolute paths inside
+# the editor's cwd to `./relative`, leaves http(s)/data URIs alone.
+donner_cc_library(
+    name = "local_path_display",
+    srcs = ["LocalPathDisplay.cc"],
+    hdrs = ["LocalPathDisplay.h"],
+    deps = [],
+)
+
+# Header-only target for the EditorBackendClient abstract interface.
+donner_cc_library(
+    name = "editor_backend_client",
+    hdrs = [
+        "EditorBackendClient.h",
+        "SelectionOverlay.h",
+    ],
+    # Sandbox tests drive the full host-side flow through this interface,
+    # so they need to link the header.
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":address_bar_status",
         "//donner/base",
-        "//donner/svg",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:session_protocol",
+        "//donner/editor/sandbox/bridge:bridge_texture",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+# Desktop (session-backed) implementation of EditorBackendClient.
+# Ships on both Linux and macOS; WASM falls through to the in-process
+# variant below.
+donner_cc_library(
+    name = "editor_backend_client_session",
+    srcs = ["EditorBackendClient_Session.cc"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":editor_backend_client",
+        "//donner/editor/sandbox:editor_api_codec",
+        "//donner/editor/sandbox:replaying_renderer",
+        "//donner/editor/sandbox:session",
+        "//donner/editor/sandbox:session_codec",
+        "//donner/svg/renderer",
+    ],
+)
+
+# In-process implementation of EditorBackendClient (WASM + desktop tests).
+# Statically links the backend core into the same address space — no OS-level
+# sandbox IPC — so it compiles on every platform that has a renderer backend.
+# The sibling `editor_backend_client_session` is the Linux-only desktop
+# variant that actually speaks to a subprocess sandbox.
+donner_cc_library(
+    name = "editor_backend_client_inprocess",
+    srcs = ["EditorBackendClient_InProcess.cc"],
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    # Sandbox tests drive this impl directly to reproduce the host-side
+    # thin-client flow under gtest.
+    visibility = ["//donner/editor:__subpackages__"],
+    deps = [
+        ":editor_backend_client",
+        "//donner/editor/sandbox:editor_backend_core",
+        "//donner/svg/renderer",
+    ],
+)
+
+# --- New composited-rendering presenter/controller targets (from #531) ---
+# These are library targets NOT linked into the thin-client main.cc.
+# They build and test against backend_lib deps and will be integrated
+# into the sandbox architecture in a follow-up.
+
+donner_cc_library(
+    name = "imgui_includes",
+    hdrs = [
+        "ImGuiBackendIncludes.h",
+        "ImGuiIncludes.h",
+        "ImGuiInternalIncludes.h",
+    ],
+    deps = ["@imgui"],
+)
+
+donner_cc_library(
+    name = "selection_overlay",
+    hdrs = ["SelectionOverlay.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/renderer:renderer_interface",
     ],
 )

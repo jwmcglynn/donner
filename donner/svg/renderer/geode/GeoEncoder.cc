@@ -1609,6 +1609,13 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   qp.filter =
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
   qp.clipMaskView = impl_->activeClipMaskView;
+  // Skip the shader's straight→premul conversion when the caller
+  // already supplied premul bytes (compositor layer cache path).
+  // Default-on conversion double-darkens partial-alpha filter edges
+  // during drag on real splash content — the fix eliminates the 1-
+  // channel-unit-per-conversion precision drift that accumulated
+  // across nested offscreen → takeSnapshot → drawImage round-trips.
+  qp.sourceIsPremultiplied = image.alphaType == svg::ImageAlphaType::Premultiplied;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);

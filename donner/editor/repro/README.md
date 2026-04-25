@@ -74,7 +74,7 @@ head -1 /tmp/my_bug.donner-repro | jq
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "svg": "donner_splash.svg",
   "wnd": [1600, 900],
   "scale": 2.0,
@@ -149,9 +149,16 @@ With the `.donner-repro` in hand, the maintainer can:
 See `ReproFile.h` for the data model. Compact summary:
 
 ```
-Line 1: {"v":1,"svg":"path.svg","wnd":[W,H],"scale":S,"exp":0|1,"at":"ISO8601"}
+Line 1: {"v":2,"svg":"path.svg","wnd":[W,H],"scale":S,"exp":0|1,"at":"ISO8601"}
 Line N: {"f":N,"t":seconds,"dt":milliseconds,"mx":X,"my":Y,
-         "btn":BUTTON_MASK,"mod":MODIFIER_MASK,"e":[Event, Event, ...]}
+         "btn":BUTTON_MASK,"mod":MODIFIER_MASK,
+         "mdx":DOC_X,"mdy":DOC_Y,
+         "vp":{"ox":PANE_ORIGIN_X,"oy":PANE_ORIGIN_Y,"pw":PANE_W,"ph":PANE_H,
+               "dpr":DPR,"z":ZOOM,
+               "pdx":PAN_DOC_X,"pdy":PAN_DOC_Y,
+               "psx":PAN_SCREEN_X,"psy":PAN_SCREEN_Y,
+               "vbx":VB_X,"vby":VB_Y,"vbw":VB_W,"vbh":VB_H},
+         "e":[Event, Event, ...]}
 ```
 
 **Button mask bits:** `1<<0`=left, `1<<1`=right, `1<<2`=middle.
@@ -162,7 +169,8 @@ Line N: {"f":N,"t":seconds,"dt":milliseconds,"mx":X,"my":Y,
 
 | Kind | Fields | Notes |
 |------|--------|-------|
-| `mdown` / `mup` | `b` (button 0-4) | Edge of a bit in the frame's button mask |
+| `mdown` | `b`, `hit` (see below) | Edge of a bit in the frame's button mask |
+| `mup`   | `b`                    | Edge of a bit in the frame's button mask |
 | `kdown` / `kup` | `key` (ImGuiKey int), `m` (modifier mask) | See the watchlist in `ReproRecorder.cc` |
 | `chr` | `c` (UTF-32 code point) | From `io.InputQueueCharacters` |
 | `wheel` | `dx`, `dy` (float) | Per-frame wheel delta when non-zero |
@@ -174,10 +182,44 @@ discrete events are emitted only on transitions. Replay logic can
 rely on the continuous signal as the source of truth and treat
 discrete events as hints — the next frame's state wins regardless.
 
+**`mdx` / `mdy` (v2):** mouse position in SVG-document coordinates,
+computed by the live editor from the current viewport. Replay should
+use these directly rather than reconstructing screen→doc math from
+pane-layout heuristics. Absent when the cursor was outside the render
+pane (e.g. hovering the source pane / sidebar), in which case
+document-space dispatch is a no-op.
+
+**`vp` block (v2):** full viewport snapshot — pane origin/size, zoom,
+pan anchor, viewBox, DPR. Delta-encoded: emitted only when different
+from the prior frame's snapshot. Readers carry the prior block
+forward so every frame sees a populated viewport.
+
+**`mdown.hit` (v2):** the element the editor hit-tested at mouse-down
+time. Schema: `{"tag":"g","id":"big_lightning_glow","idx":42}`, or
+`{"empty":1}` for a click on empty space. **Diagnostic only — not a
+load-bearing replay checkpoint.** Selection semantics downstream of
+hit-test (e.g. filter-group elevation) can legitimately change across
+code versions without invalidating the recording; use this field for
+human-readable "which element got clicked" reports, not for test
+assertions that would force a rerecord on every internals refactor.
+
+### v1 → v2
+
+v1 recordings had no viewport, no doc coords, and no hit checkpoint.
+The replayer had to reconstruct screen→doc math from hand-tuned
+pane-layout constants, which silently routed clicks to the wrong
+elements whenever the live ImGui layout drifted. The loader rejects
+v1 files with a diagnostic asking the user to rerecord.
+
 ## What is and isn't recorded
 
 **IS recorded:**
 - Mouse position + button state, every frame
+- Mouse position in SVG-document space (v2; when cursor is inside the
+  render pane)
+- Render-pane viewport state — pane origin/size, zoom, pan, viewBox,
+  DPR — delta-encoded (v2)
+- Hit-test result at left-mouse-down (v2; tag, id, doc-order index)
 - Mouse wheel deltas
 - Keyboard key transitions (for the curated watchlist — letters,
   digits, function keys, modifiers, nav, arrow keys, common symbols)

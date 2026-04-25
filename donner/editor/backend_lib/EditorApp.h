@@ -1,0 +1,321 @@
+#pragma once
+/// @file
+///
+/// `EditorApp` is the editor's top-level shell — the mutation-seam frontend
+/// that tools and the main loop interact with. Owns the `AsyncSVGDocument`,
+/// the active selection, and (eventually) the active tool dispatcher.
+///
+/// Per `docs/design_docs/editor.md`, all editor-initiated DOM writes flow
+/// through `EditorApp::applyMutation()`. Tools never call
+/// `SVGElement::setTransform()` directly — they build `EditorCommand`s and
+/// hand them to the editor.
+///
+/// This is deliberately **smaller** than the prototype's `SVGState` /
+/// `EditorApp` aggregates: no path-tool wiring, no overlay document, no
+/// canvas pan/zoom state (that lives at the main-loop layer where it
+/// belongs). It is just enough surface for `SelectTool` to do its job.
+
+#include <optional>
+#include <string_view>
+#include <vector>
+
+#include "donner/base/Box.h"
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
+#include "donner/editor/backend_lib/AsyncSVGDocument.h"
+#include "donner/editor/backend_lib/AttributeWriteback.h"
+#include "donner/editor/backend_lib/EditorCommand.h"
+#include "donner/editor/backend_lib/UndoTimeline.h"
+#include "donner/svg/DonnerController.h"
+#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGeometryElement.h"
+
+namespace donner::editor {
+
+/// Top-level editor shell.
+///
+/// Lifetime: typically one per window. All public methods are UI-thread only.
+class EditorApp {
+public:
+  EditorApp();
+  ~EditorApp() = default;
+
+  EditorApp(const EditorApp&) = delete;
+  EditorApp& operator=(const EditorApp&) = delete;
+  EditorApp(EditorApp&&) = delete;
+  EditorApp& operator=(EditorApp&&) = delete;
+
+  // ---------------------------------------------------------------------------
+  // Document
+  // ---------------------------------------------------------------------------
+
+  /// Load an SVG document from a string. Replaces any current document and
+  /// clears the current selection. Returns true on parse success.
+  [[nodiscard]] bool loadFromString(std::string_view svgBytes);
+
+  /// Whether a document has been loaded.
+  [[nodiscard]] bool hasDocument() const { return document_.hasDocument(); }
+
+  /// Direct access to the wrapped `AsyncSVGDocument`. Used by the main loop
+  /// for `flushFrame()` and `currentFrameVersion()`, and by tests.
+  [[nodiscard]] AsyncSVGDocument& document() { return document_; }
+  [[nodiscard]] const AsyncSVGDocument& document() const { return document_; }
+
+  // ---------------------------------------------------------------------------
+  // File I/O (M7: Save)
+  // ---------------------------------------------------------------------------
+
+  /// The file path this document was loaded from, or `std::nullopt` if it
+  /// was created from scratch. Populated by the main loop via
+  /// `setCurrentFilePath` after a successful `File → Open` / argv load.
+  [[nodiscard]] const std::optional<std::string>& currentFilePath() const {
+    return currentFilePath_;
+  }
+
+  /// Set the path associated with the current document. Called by the main
+  /// loop when a file is loaded. Clears the dirty flag.
+  void setCurrentFilePath(std::string path) {
+    currentFilePath_ = std::move(path);
+    isDirty_ = false;
+  }
+
+  /// Whether the document has unsaved changes. Set automatically on every
+  /// mutation via `applyMutation`; cleared by `setCurrentFilePath` /
+  /// `markClean`.
+  [[nodiscard]] bool isDirty() const { return isDirty_; }
+
+  /// Mark the document as clean (e.g. after a successful save).
+  void markClean() { isDirty_ = false; }
+
+  /// Mark the document as dirty. The main loop calls this when the user
+  /// types in the source pane, since text-pane edits don't go through
+  /// `applyMutation`.
+  void markDirty() { isDirty_ = true; }
+
+  /// Record the current source text as the "clean" baseline. Used after
+  /// loading or saving a document so later source edits can determine
+  /// whether the in-memory text has diverged from the last persisted bytes.
+  void setCleanSourceText(std::string_view sourceText) {
+    cleanSourceText_.assign(sourceText);
+    isDirty_ = false;
+  }
+
+  /// The last-persisted source bytes. Backend export path
+  /// (`EditorBackendCore::handleExport`) returns this so the host
+  /// can round-trip "save-as" without re-serializing the DOM. Writebacks
+  /// update this via `kReplaceSource` each time the host applies a
+  /// structural edit, so this is the authoritative view of the
+  /// parsed-then-edited document.
+  [[nodiscard]] const std::string& cleanSourceText() const { return cleanSourceText_; }
+
+  /// Recompute the dirty flag from the current source text. This allows the
+  /// editor to clear the dirty indicator when the user undoes or edits back
+  /// to the last clean baseline.
+  void syncDirtyFromSource(std::string_view currentSourceText) {
+    isDirty_ = currentSourceText != cleanSourceText_;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mutation seam
+  // ---------------------------------------------------------------------------
+
+  /// The single entry point for editor-initiated DOM writes. Tools and the
+  /// text pane both flow through here. Pushes the command onto the
+  /// document's command queue; nothing is applied until `flushFrame()`.
+  void applyMutation(EditorCommand command) {
+    document_.applyMutation(std::move(command));
+    isDirty_ = true;
+  }
+
+  /// Drain and apply any pending mutations. Called once per frame at the
+  /// start of the main loop. Returns true if any commands were applied.
+  bool flushFrame();
+
+  // ---------------------------------------------------------------------------
+  // Selection
+  // ---------------------------------------------------------------------------
+
+  /// All currently-selected elements, in selection order. Empty when
+  /// nothing is selected. Multi-element selections come from
+  /// shift+click and marquee-drag (Milestone 4 of the editor UX
+  /// design doc).
+  [[nodiscard]] const std::vector<svg::SVGElement>& selectedElements() const { return selection_; }
+
+  /// Single-element accessor for back-compat with single-select call
+  /// sites (overlay chrome, source-pane highlight, drag writeback,
+  /// inspector, etc.). Returns the *first* selected element, or
+  /// `std::nullopt` if nothing is selected. Cached so the
+  /// `const optional&` reference stays stable across calls.
+  [[nodiscard]] const std::optional<svg::SVGElement>& selectedElement() const {
+    return cachedFirstSelection_;
+  }
+
+  /// Whether anything is selected.
+  [[nodiscard]] bool hasSelection() const { return !selection_.empty(); }
+
+  /// Replace the current selection with a single element. Pass
+  /// `std::nullopt` to clear.
+  void setSelection(std::optional<svg::SVGElement> element);
+
+  /// Replace the current selection with the given list. Use this for
+  /// marquee-resolved multi-selects.
+  void setSelection(std::vector<svg::SVGElement> elements);
+
+  /// Add `element` to the current selection if it isn't already
+  /// selected; remove it if it is. The natural Shift+click handler.
+  void toggleInSelection(const svg::SVGElement& element);
+
+  /// Append `element` to the current selection without disturbing
+  /// existing entries. No-op if `element` is already selected.
+  void addToSelection(const svg::SVGElement& element);
+
+  /// Drop every entry from the selection. Equivalent to
+  /// `setSelection(std::nullopt)` but reads better at clear sites.
+  void clearSelection() { setSelection(std::nullopt); }
+
+  // ---------------------------------------------------------------------------
+  // Hit testing
+  // ---------------------------------------------------------------------------
+
+  /// Find the topmost geometry element at the given document-space point,
+  /// or `std::nullopt` if no element is hit. Coordinates are in the SVG
+  /// canvas space (the same space as the root `<svg>` viewBox).
+  [[nodiscard]] std::optional<svg::SVGGeometryElement> hitTest(const Vector2d& documentPoint);
+
+  /// Find every geometry element whose world-space bounding box
+  /// intersects `documentRect`. Used by marquee selection. Returns
+  /// elements in document order (root-to-leaf depth-first), so
+  /// callers that care about z-order can rely on a stable sequence.
+  [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
+
+  // ---------------------------------------------------------------------------
+  // Undo
+  // ---------------------------------------------------------------------------
+
+  /// Access the underlying `UndoTimeline`. Tools record begin/commit
+  /// transactions on it directly; `EditorApp::undo()` below is the
+  /// canonical way to *apply* undo entries because it routes them
+  /// through the command queue so the mutation seam is preserved.
+  [[nodiscard]] UndoTimeline& undoTimeline() { return undoTimeline_; }
+  [[nodiscard]] const UndoTimeline& undoTimeline() const { return undoTimeline_; }
+
+  /// Whether there is an entry to undo.
+  [[nodiscard]] bool canUndo() const { return undoTimeline_.canUndo(); }
+
+  /// Undo the most recent entry. Pops the timeline's next entry and
+  /// pushes the restored transform onto the command queue as a
+  /// `SetTransformCommand` — the actual DOM mutation happens on the
+  /// next `flushFrame()`, keeping every DOM write on the same path.
+  /// No-op if there is nothing to undo.
+  void undo();
+
+  /// Redo the most recently undone entry.
+  ///
+  /// In the non-destructive `UndoTimeline` model, "redo" is mechanically
+  /// identical to "undo the most recent undo-entry": breaking the
+  /// current undo chain and then calling `undo()` again pops the
+  /// undo-entry the previous `undo()` call appended, which restores
+  /// the post-drag state.
+  ///
+  /// Like `undo()`, the restored transform is routed through the
+  /// command queue so the mutation seam is preserved.
+  void redo();
+
+  // ---------------------------------------------------------------------------
+  // Structured editing (M5)
+  // ---------------------------------------------------------------------------
+
+  /// Enable or disable the structured-editing incremental path (M5).
+  /// When enabled, text edits that land inside a known attribute value
+  /// dispatch to `SetAttributeCommand` instead of `ReplaceDocumentCommand`,
+  /// preserving tree identity. Defaults to `false` — the flag is flipped
+  /// after the fuzzing soak (M8 in the design doc).
+  void setStructuredEditingEnabled(bool enabled) { structuredEditingEnabled_ = enabled; }
+
+  /// Whether the structured-editing incremental path is active.
+  [[nodiscard]] bool structuredEditingEnabled() const { return structuredEditingEnabled_; }
+
+  // ---------------------------------------------------------------------------
+  // Canvas → text writeback queue
+  // ---------------------------------------------------------------------------
+
+  /// Payload describing a completed DOM-side transform mutation that needs
+  /// to be spliced into the source text. `target` is a stable path-based
+  /// reference captured while the source was still in sync with the DOM;
+  /// `transform` is the local (parent-space) transform that should appear
+  /// in the element's `transform=` attribute.
+  struct CompletedTransformWriteback {
+    AttributeWritebackTarget target;
+    Transform2d transform;
+    std::optional<RcString> sourceTransformAttributeValue;
+    bool restoreSourceTransformAttributeValue = false;
+  };
+
+  struct CompletedElementRemoveWriteback {
+    AttributeWritebackTarget target;
+  };
+
+  /// Queue a transform writeback that `main.cc` will splice into the
+  /// source on its next `applyPendingTransformWriteback()` call. SelectTool
+  /// calls this when a drag completes; `undo()` / `redo()` call it so
+  /// undoing a canvas drag restores both the DOM transform *and* the
+  /// source text in lock-step. New entries overwrite any still-pending
+  /// writeback — coalescing is fine because the latest transform value
+  /// is always the one we want.
+  void enqueueTransformWriteback(CompletedTransformWriteback writeback) {
+    pendingTransformWriteback_ = std::move(writeback);
+  }
+
+  /// Drain the most recently queued transform writeback, if any. Called
+  /// once per frame by `main.cc`. The writeback payload is stable across
+  /// frames — callers latch it themselves if they need to retry on a
+  /// busy frame.
+  [[nodiscard]] std::optional<CompletedTransformWriteback> consumeTransformWriteback() {
+    auto result = std::move(pendingTransformWriteback_);
+    pendingTransformWriteback_.reset();
+    return result;
+  }
+
+  /// Queue an element-removal writeback that `main.cc` will splice into the
+  /// source on its next drain.
+  void enqueueElementRemoveWriteback(CompletedElementRemoveWriteback writeback) {
+    pendingElementRemoveWritebacks_.push_back(std::move(writeback));
+  }
+
+  /// Drain any queued element-removal writebacks.
+  [[nodiscard]] std::vector<CompletedElementRemoveWriteback> consumeElementRemoveWritebacks() {
+    auto result = std::move(pendingElementRemoveWritebacks_);
+    pendingElementRemoveWritebacks_.clear();
+    return result;
+  }
+
+private:
+  /// Refreshes `cachedFirstSelection_` after `selection_` changes so
+  /// the `selectedElement()` accessor can return a stable
+  /// `const optional&`. Centralized so we can't forget it on a new
+  /// mutation path.
+  void refreshFirstSelectionCache();
+
+  AsyncSVGDocument document_;
+  std::vector<svg::SVGElement> selection_;
+  /// Mirrors `selection_.front()` (or `std::nullopt`) so the
+  /// single-element compatibility accessor can hand out a reference.
+  std::optional<svg::SVGElement> cachedFirstSelection_;
+  UndoTimeline undoTimeline_;
+
+  // Lazily-rebuilt hit-test controller. Recreated whenever the document's
+  // version counter advances past the version we built the controller for.
+  std::optional<svg::DonnerController> controller_;
+  std::uint64_t controllerVersion_ = 0;
+
+  bool structuredEditingEnabled_ = false;
+
+  std::optional<CompletedTransformWriteback> pendingTransformWriteback_;
+  std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
+
+  std::optional<std::string> currentFilePath_;
+  std::string cleanSourceText_;
+  bool isDirty_ = false;
+};
+
+}  // namespace donner::editor

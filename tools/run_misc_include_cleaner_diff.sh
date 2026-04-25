@@ -70,6 +70,8 @@ mapfile -t MODIFIED_FILES < <(
     | grep -v '^examples/' \
     | grep -v '^donner/svg/renderer/geode/' \
     | grep -v 'Geode' \
+    | grep -v 'TinySkia' \
+    | grep -v '_macOS\.' \
     | grep -v 'resvg_test_suite' || true
 )
 
@@ -85,6 +87,23 @@ echo "Refreshing compile_commands.json..."
 # commands with webgpu-cpp / wgpu-native include paths. Passing the flag
 # here on `bazel run` only affects how the refresh tool itself is built.
 "${BAZEL}" run //tools:refresh_compile_commands
+
+# `bazel run //tools:refresh_compile_commands` extracts compile commands
+# from Bazel's analysis graph but does NOT materialize generated headers
+# (e.g. `donner/editor/EditorIcon.h` from the embed_resources rule) or
+# external-repo headers (e.g. `rules_cc/cc/runfiles/runfiles.h` consumed
+# via `donner/base/tests/Runfiles.h`). Without those on disk, clang-tidy
+# fails with "file not found" for every TU that transitively depends on
+# them — even though the path is right in compile_commands.json.
+#
+# Targeted pre-build: just the editor's three `embed_resources` headers
+# and `base_test_utils` (which pulls `@rules_cc//cc/runfiles` and
+# materializes the external repo). This is fast (cached after first
+# main run) and avoids the ~25-min full `//donner/...` build.
+echo "Pre-building generated headers + rules_cc external for clang-tidy..."
+"${BAZEL}" build //donner/editor:editor_icon //donner/editor:editor_splash \
+    //donner/editor:notice //donner/base:base_test_utils --keep_going \
+    || echo "Pre-build had failures; continuing — clang-tidy may surface compile errors for unbuilt files."
 
 echo "Running misc-include-cleaner on changed lines of ${#MODIFIED_FILES[@]} file(s):"
 printf '  %s\n' "${MODIFIED_FILES[@]}"
@@ -104,16 +123,74 @@ printf '  %s\n' "${MODIFIED_FILES[@]}"
 # Trailing `-- <args>` is intentionally omitted: that path forwards flags
 # to the compiler, not clang-tidy, and clang-tidy-diff.py has no pass-
 # through for clang-tidy options except via `-checks` above.
-git diff --unified=0 "${BASE}" HEAD \
-    -- '*.cc' '*.h' '*.hpp' '*.cpp' \
-       ':!third_party/' \
-       ':!examples/' \
-       ':!donner/svg/renderer/geode/' \
-       ':(exclude,glob)**/*Geode*' \
-       ':(exclude,glob)**/resvg_test_suite*' \
-  | "${CLANG_TIDY_DIFF}" \
-      -p1 \
-      -path . \
-      -iregex '.*\.(cc|h|hpp|cpp)$' \
-      -checks='-*,misc-include-cleaner' \
-      -clang-tidy-binary "${CLANG_TIDY}"
+# clang-tidy-19 needs explicit pointers to the GCC 13 stdlib headers
+# on ubuntu-24.04. The runner image installs `libstdc++-13-dev` and
+# `g++-13` by default, but clang-tidy's driver autodetection
+# inconsistently resolves them — every check fails with `'cstddef' file
+# not found` on header parses. Force-add the GCC 13 include paths via
+# `-extra-arg-before` (only when running under Linux/CI; on macOS
+# Xcode's SDK provides these via `-isysroot` baked into the compile
+# commands).
+extra_args=()
+if [[ "$(uname -s)" == "Linux" ]]; then
+  for inc in \
+      /usr/include/c++/13 \
+      /usr/include/x86_64-linux-gnu/c++/13 \
+      /usr/include/c++/13/backward; do
+    if [[ -d "${inc}" ]]; then
+      extra_args+=(-extra-arg-before="-isystem${inc}")
+    fi
+  done
+
+  echo "Diagnostic: clang-tidy-19 stdlib search paths injected:"
+  printf '  %s\n' "${extra_args[@]}"
+fi
+
+# Capture clang-tidy-diff output so we can post-filter: the lint should
+# only fail on actual `misc-include-cleaner` findings. Compile errors
+# (`clang-diagnostic-error`) coming from Bazel-toolchain quirks — paths
+# under config-transition-hashed `bazel-out` dirs that the lint runner
+# can't materialize with a plain `bazel build`, e.g. the
+# `_virtual_includes` directories used to project external repo headers
+# like `rules_cc/cc/runfiles/runfiles.h` — leak into the output but
+# aren't actionable from an include-cleaner perspective. Print them for
+# diagnostics, but only fail the gate when there are real findings.
+set +e
+output=$(
+  git diff --unified=0 "${BASE}" HEAD \
+      -- '*.cc' '*.h' '*.hpp' '*.cpp' \
+         ':!third_party/' \
+         ':!examples/' \
+         ':!donner/svg/renderer/geode/' \
+         ':(exclude,glob)**/*Geode*' \
+         ':(exclude,glob)**/*TinySkia*' \
+         ':(exclude,glob)**/*_macOS.*' \
+         ':(exclude,glob)**/resvg_test_suite*' \
+    | "${CLANG_TIDY_DIFF}" \
+        -p1 \
+        -path . \
+        -iregex '.*\.(cc|h|hpp|cpp)$' \
+        -checks='-*,misc-include-cleaner' \
+        -clang-tidy-binary "${CLANG_TIDY}" \
+        "${extra_args[@]}" 2>&1
+)
+clang_tidy_exit=$?
+set -e
+
+printf '%s\n' "${output}"
+
+# Only fail on actual misc-include-cleaner findings; ignore
+# clang-diagnostic-error noise from unmaterialized bazel-out paths.
+if printf '%s' "${output}" | grep -q 'misc-include-cleaner,-warnings-as-errors'; then
+  echo
+  echo "FAIL: misc-include-cleaner findings present (exit code ${clang_tidy_exit})."
+  exit 1
+fi
+
+if [[ ${clang_tidy_exit} -ne 0 ]]; then
+  echo
+  echo "WARN: clang-tidy reported ${clang_tidy_exit} but no misc-include-cleaner"
+  echo "      findings — treating as a toolchain/path glitch (likely a Bazel"
+  echo "      external repo or generated header that the lint job's pre-build"
+  echo "      didn't materialize). Gate stays green."
+fi

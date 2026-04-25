@@ -119,15 +119,16 @@ def libc_compat_deps():
     Returns extra deps needed when linking against the hermetic LLVM toolchain
     on Linux.
 
-    Chromium's Debian Bullseye sysroot (wired into `llvm_toolchain` via
-    `//third_party/bazel/non_bcr_deps.bzl`) exports `copy_file_range@GLIBC_2.27`
-    as a non-default-versioned symbol, so unversioned references from
-    `toolchains_llvm`'s prebuilt libc++.a don't auto-resolve. The tiny shim in
-    `//third_party/libc_compat` provides an unversioned `copy_file_range`
-    that forwards to the versioned glibc entry point.
+    The LLVM 21 toolchain (`@llvm_linux_x86_64` / `@llvm_linux_aarch64`) is
+    registered unconditionally in `MODULE.bazel` — the historical
+    `--config=latest_llvm` flag no longer gates it. Its prebuilt `libc++.a`
+    references `copy_file_range` as an unversioned symbol, and Chromium's
+    Debian Bullseye sysroot only exports `copy_file_range@GLIBC_2.27`, so
+    the link fails without this shim. Always inject it on Linux regardless
+    of the legacy `llvm_latest` flag state.
     """
     return select({
-        "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
+        "@platforms//os:linux": ["//third_party/libc_compat:libc_compat"],
         "//conditions:default": [],
     })
 
@@ -593,6 +594,21 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
             if not matcher.startswith("//experimental"):
                 fail("Invalid visibility, must be under //experimental: " + matcher)
 
+    # Inject the `copy_file_range` glibc symver shim into every library's
+    # deps, just like `donner_cc_binary` does. Without this, any
+    # `donner_cc_library` that transitively pulls in libc++'s
+    # std::filesystem (which covers most of the tree) fails to link as a
+    # shared `.so` under the hermetic LLVM toolchain because
+    # `libc++.a` leaves `copy_file_range` as an unversioned reference
+    # and the Debian Bullseye sysroot only exports the
+    # `@GLIBC_2.27`-versioned flavor. Symptom is the `ld.lld: undefined
+    # reference: copy_file_range` error on libraries in `_solib_k8/`.
+    # See `//third_party/libc_compat` for the full rationale. No-op on
+    # macOS / non-latest-llvm builds (the select resolves to []).
+    extra_deps = libc_compat_deps()
+    kwargs_with_libc = dict(kwargs)
+    existing_deps = kwargs_with_libc.pop("deps", [])
+
     cc_library(
         name = name,
         srcs = srcs,
@@ -601,7 +617,8 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         copts = copts + ["-I."],
         tags = tags,
         visibility = visibility,
-        **kwargs
+        deps = existing_deps + extra_deps,
+        **kwargs_with_libc
     )
 
     _banned_patterns_lint_test(

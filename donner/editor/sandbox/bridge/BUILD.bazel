@@ -1,0 +1,47 @@
+"""Cross-process GPU-texture bridging for the editor sandbox.
+
+Phase A lives here: the abstract `BridgeTextureHost` /
+`BridgeTextureBackend` interface plus a CPU-stub implementation that
+lets the session protocol carry a well-formed descriptor before real
+platform bridges (IOSurface / dmabuf / Windows shared handle) land.
+See `docs/design_docs/0023-editor_sandbox.md` §"Cross-process texture
+bridging" for the phased plan.
+"""
+
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+
+donner_cc_library(
+    name = "bridge_texture",
+    srcs = ["BridgeTexture.cc"] + select({
+        # macOS host picks up the real `IOSurface`-backed factories.
+        # Linux / Windows keep only the CPU stub until their platform
+        # impls (phases C and D) land.
+        "@platforms//os:macos": ["BridgeTexture_macOS.cc"],
+        "//conditions:default": [],
+    }),
+    hdrs = ["BridgeTexture.h"],
+    linkopts = select({
+        "@platforms//os:macos": [
+            "-framework",
+            "IOSurface",
+            "-framework",
+            "CoreFoundation",
+        ],
+        "//conditions:default": [],
+    }),
+    visibility = [
+        "//donner/editor:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_test(
+    name = "bridge_texture_tests",
+    srcs = ["BridgeTexture_tests.cc"],
+    deps = [
+        ":bridge_texture",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

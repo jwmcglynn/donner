@@ -94,7 +94,15 @@ jobs:
 
   misc-include-cleaner:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Bumped from 15 → 25: with the lint gate now actually working
+    # (clang-tidy resolves stdlib via the GCC 13 toolchain rather than
+    # bailing on `'cstddef' file not found`), each PR's full diff
+    # actually gets analyzed, and a 100+-file diff can take 15+ minutes
+    # for clang-tidy to chew through. The job emits "Suppressed N
+    # warnings due to line filter" for everything that's not on a
+    # changed line, so most of the runtime is the analyzer evaluating
+    # files it ultimately ignores.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
@@ -108,7 +116,21 @@ jobs:
           retry_wait_seconds: 15
           command: |
             sudo apt-get update
-            sudo apt-get install -y clang-tidy-19
+            # The `'cstddef' file not found` cascade on this job is
+            # clang-tidy-19's GCC autodetection failing to register the
+            # available GCC toolchain. The ubuntu-24.04 runner image
+            # ships with `libstdc++-13-dev` already installed (just
+            # headers) but no matching `g++-13` binary, so clang-tidy's
+            # driver has nothing to lock onto when scanning for a
+            # default stdlib root. Installing `g++-13` makes the
+            # toolchain visible to the autodetector and resolves
+            # `<cstddef>` / `<optional>` / `<memory>` lookups.
+            #
+            # Stay on g++-13 (not 14) because clang-tidy-19's preferred
+            # sibling is GCC 13 — pairing 19 with 14 occasionally trips
+            # `__has_builtin` checks that the older clang doesn't
+            # recognize.
+            sudo apt-get install -y clang-tidy-19 g++-13
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0

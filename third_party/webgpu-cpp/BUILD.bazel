@@ -5,10 +5,12 @@ handles and typed enum wrappers around wgpu-native's C API (webgpu.h +
 wgpu.h). It's a single generated header, checked in here alongside the
 project's MIT license file.
 
-The `wgpu_native_platform` select picks the correct pre-built wgpu-native
-archive for the current (os, cpu). Linux arm64 and macOS x86_64 are wired
-up in addition to the primary linux x86_64 / macOS arm64 combos so the
-same rule works across CI runners and local dev machines.
+The `wgpu_native_platform` select picks the active wgpu-native
+implementation for the target platform. On native (Linux, macOS) we
+build the patched wgpu-native crate from source via `rules_rust` + the
+checked-in `crate_universe` lockfile — the patch adds the
+IOSurface-export symbols the editor sandbox's cross-process texture
+bridge needs.
 
 For **Emscripten/WASM** builds the browser provides the WebGPU API natively
 via `-sUSE_WEBGPU=1`; no prebuilt archive is needed. The `wgpu_emscripten`
@@ -16,8 +18,6 @@ target supplies a stub `wgpu.h` (the wgpu-native extensions header that
 `webgpu.hpp` includes unconditionally) plus link-time stub implementations
 so the C++ wrapper compiles and links.
 """
-
-load("@bazel_skylib//lib:selects.bzl", "selects")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -34,17 +34,17 @@ cc_library(
     deps = [":wgpu_native_platform"],
 )
 
-# Alias the active wgpu-native archive for the current (os, cpu). Each
-# archive was published by the `non_bcr_deps` module extension in
-# //third_party/bazel/non_bcr_deps.bzl and carries the same target name
-# (`wgpu_native`).  Emscripten (wasm32/wasm64) uses a stub that delegates
-# to the browser's built-in WebGPU implementation.
+# Pick the wgpu-native implementation for the current platform:
+# Emscripten gets the browser-stub; everything native gets the patched
+# source build from `@wgpu_native_source//:wgpu_native` (unconditional —
+# the source build is the only supported path now, so the bridge
+# symbols are always in the ABI).
 alias(
     name = "wgpu_native_platform",
-    actual = selects.with_or({
-        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): ":wgpu_emscripten",
-        "@platforms//os:macos": ":wgpu_native_macos",
-        "@platforms//os:linux": ":wgpu_native_linux",
+    actual = select({
+        "@platforms//cpu:wasm32": ":wgpu_emscripten",
+        "@platforms//cpu:wasm64": ":wgpu_emscripten",
+        "//conditions:default": "@wgpu_native_source//:wgpu_native",
     }),
 )
 
@@ -75,18 +75,3 @@ cc_library(
     ],
 )
 
-alias(
-    name = "wgpu_native_macos",
-    actual = select({
-        "@platforms//cpu:aarch64": "@wgpu_native_macos_aarch64//:wgpu_native",
-        "@platforms//cpu:x86_64": "@wgpu_native_macos_x86_64//:wgpu_native",
-    }),
-)
-
-alias(
-    name = "wgpu_native_linux",
-    actual = select({
-        "@platforms//cpu:aarch64": "@wgpu_native_linux_aarch64//:wgpu_native",
-        "@platforms//cpu:x86_64": "@wgpu_native_linux_x86_64//:wgpu_native",
-    }),
-)

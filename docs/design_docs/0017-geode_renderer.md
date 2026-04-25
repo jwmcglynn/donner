@@ -295,44 +295,50 @@ cmake-from-source build to a prebuilt-binary drop.
 
 #### Bazel vendoring strategy (wgpu-native)
 
-wgpu-native publishes pre-built release archives on its GitHub Releases page
-for `{linux, macos, windows} × {x86_64, aarch64}`. We consume those directly
-via `http_archive`: one repository per platform tuple, each carrying an
-overlay `BUILD.wgpu_native_platform` file that exposes
-`lib/libwgpu_native.{so,dylib}` plus the `include/webgpu/{webgpu,wgpu}.h`
-headers as a single `cc_library`. `//third_party/webgpu-cpp` then `select()`s
-the matching archive for the current `(os, cpu)` and aggregates the C
-headers with the vendored `webgpu.hpp` C++ wrapper into one consumable
-`//third_party/webgpu-cpp:webgpu_cpp` target.
+wgpu-native is built from source via `rules_rust` +
+`crate_universe`. The clone lives at `@wgpu_native_source` (fetched by
+the `non_bcr_deps` module extension in
+`//third_party/bazel/non_bcr_deps.bzl`), and the overlay BUILD file at
+`//third_party:BUILD.wgpu_native_source` defines a `rust_static_library`
+that compiles the crate and its ~130 transitive deps. The compiled
+`.a` is wrapped in a `cc_library` named `wgpu_native` and re-exported
+through `//third_party/webgpu-cpp:wgpu_native_platform`, which
+`//third_party/webgpu-cpp:webgpu_cpp` depends on to expose the
+`wgpu::` C++ wrapper.
+
+The source build is unconditional on native platforms because the
+editor sandbox's cross-process texture bridge patches wgpu-native
+with C-ABI entry points
+(`wgpuDeviceGetMetalRawDevice`, `wgpuDeviceCreateTextureFromIOSurface`)
+that must be part of the ABI always — see
+`//third_party/patches/wgpu-native-iosurface-export.patch` and the
+editor-sandbox design doc §"Rust-side wgpu-native patch". For
+**Emscripten/WASM** builds the browser provides `webgpu.h` natively,
+so `wgpu_native_platform` selects a thin stub
+(`//third_party/webgpu-cpp:wgpu_emscripten`) instead.
 
 Pins (see `//third_party/bazel/non_bcr_deps.bzl`):
 
-- `wgpu-native` tag `v24.0.3.1` — the vendored `webgpu.hpp` tracks the v24
-  C API shape (see `wgpu-native-git-tag.txt` in the upstream distribution).
-  Bumping past v24 requires regenerating `webgpu.hpp` from the matching
-  `wgpu-native` schema.
-- SHAs for each zip are captured inline. Refresh them with `shasum -a 256`
-  against the release asset when bumping.
+- `wgpu-native` tag `v24.0.3.1` — the vendored `webgpu.hpp` tracks
+  the v24 C API shape. Bumping past v24 requires regenerating
+  `webgpu.hpp` from the matching wgpu-native schema AND regenerating
+  `Cargo.Bazel.lock` and `bindings.rs` under
+  `//third_party/bazel/wgpu_native_cargo/` — see that directory's
+  README for the refresh commands.
 
-This is opt-in: Geode's entire directory is gated behind
-`--//donner/svg/renderer/geode:enable_geode=true` (default: false; flag name
-is historical — kept stable to avoid churning command-line invocations).
-Default `bazel test //...` never fetches wgpu-native, so contributors not
-working on Geode pay zero time/disk cost for WebGPU.
+Geode's entire directory remains gated behind
+`--//donner/svg/renderer/geode:enable_geode=true`; the editor sandbox
+gates the same wgpu-native dep through its own build compatibility
+selectors. Default `bazel test //...` on a BCR consumer never
+materializes the Rust crate graph, so contributors outside the Geode
+/ editor-sandbox path pay nothing for WebGPU.
 
-**Fetch + build time:** the `http_archive` is a ~12 MB download; there is no
-compile step on the critical path. On a cold GitHub Actions cache the
-Dawn-from-source build previously cost ~1 h 45 m — the wgpu-native drop
-completes in seconds. Incremental Geode edits recompile only the `donner/`
-sources that include `webgpu.hpp`.
-
-**On-disk layout:** each archive unzips to
-`include/webgpu/{webgpu,wgpu}.h` plus `lib/libwgpu_native.{so,dylib,a}`
-plus an unused `wgpu-native-meta/webgpu.yml` schema file. The overlay BUILD
-file uses `glob(..., allow_empty = True)` so the same file works cleanly
-across all four per-platform archives (each archive only carries the
-`{.so, .dylib}` appropriate for its own platform; the glob is a no-op on
-the other three).
+**Fetch + build time:** first-run on a cold cache recompiles the
+Rust workspace (`wgpu-core` + `wgpu-hal` + `naga` + ~130 transitive
+crates) — expect ~15-20 min on a fresh CI node. With remote caching
+warm, subsequent builds drop under ~2 min because the toolchain and
+intermediate rlibs are deterministic as long as `Cargo.Bazel.lock`
+is stable.
 
 #### Historical: Dawn embedding strategy
 

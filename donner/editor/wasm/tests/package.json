@@ -1,0 +1,12 @@
+{
+  "name": "donner-editor-wasm-tests",
+  "private": true,
+  "description": "Playwright end-to-end tests for the Donner SVG editor WASM build.",
+  "scripts": {
+    "test": "playwright test",
+    "install-chromium": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
+  }
+}

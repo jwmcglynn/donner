@@ -74,57 +74,37 @@ HBEOF""",
         ],
     )
 
-    # wgpu-native (Rust/wgpu-based WebGPU implementation) for the Geode GPU
-    # renderer. Only fetched when
-    # --//donner/svg/renderer/geode:enable_geode=true.
+    # wgpu-native (Rust/wgpu-based WebGPU implementation) for the
+    # Geode renderer + the editor sandbox's cross-process texture
+    # bridge. Built from source via rules_rust + crate_universe, with
+    # the IOSurface-export patch applied. Pinned to v24.0.3.1 because
+    # eliemichel/WebGPU-distribution's vendored `webgpu.hpp` (at
+    # //third_party/webgpu-cpp/webgpu.hpp) tracks wgpu-native's v24 C
+    # API — bumping this tag requires a matching `webgpu.hpp`
+    # regeneration.
     #
-    # Previous iteration built Dawn from source via rules_foreign_cc's cmake()
-    # rule. On GitHub Actions that took ~1 h 45 m per run — too slow for the
-    # interactive merge cycle. Swapping to a pre-built wgpu-native tarball
-    # drops the "build Dawn" critical path to a ~12 MB download (single
-    # shared library + two headers), measured in seconds.
+    # Submodule init is load-bearing: `ffi/webgpu-headers/` is a
+    # submodule of the upstream Dawn headers repo, and `bindgen`
+    # during codegen needs its `webgpu.h`. Without `init_submodules`
+    # the directory is empty at fetch time.
     #
-    # One http_archive per supported (os, cpu) tuple; the wgpu_native alias
-    # in third_party/BUILD.wgpu_native picks the right one via `select()`.
-    # Tag `v24.0.3.1` is pinned because eliemichel/WebGPU-distribution's
-    # vendored `webgpu.hpp` tracks wgpu-native's v24 C API (see
-    # `wgpu-native-git-tag.txt` in their repo). Bumping wgpu-native past
-    # v24 needs a matching `webgpu.hpp` regeneration; bump deliberately.
-    # To refresh shasums, run `shasum -a 256` against the release zip and
-    # paste the result into the `sha256` below.
-    _WGPU_NATIVE_VERSION = "v24.0.3.1"
-    _WGPU_NATIVE_PLATFORMS = [
-        struct(
-            name = "wgpu_native_linux_x86_64",
-            asset = "wgpu-linux-x86_64-release.zip",
-            sha256 = "86f3eb9f74d7f1ac82ee52d9b2ab15e366ef86a932759c750b7472652836ee59",
-        ),
-        struct(
-            name = "wgpu_native_linux_aarch64",
-            asset = "wgpu-linux-aarch64-release.zip",
-            sha256 = "97786f622d6d4f9aaa87c27d165de8db65daf1d391e0bcc32a2dd9bb45fcd299",
-        ),
-        struct(
-            name = "wgpu_native_macos_aarch64",
-            asset = "wgpu-macos-aarch64-release.zip",
-            sha256 = "f140ff27234ebfa9fcca2b492d0cb499f2e197424b9edc45134bcbad0f8d3a78",
-        ),
-        struct(
-            name = "wgpu_native_macos_x86_64",
-            asset = "wgpu-macos-x86_64-release.zip",
-            sha256 = "1fbc6930e2811b7fde7f046e5300ae5dc20c451d0c3e42a10ff71efae1f565ac",
-        ),
-    ]
-    for p in _WGPU_NATIVE_PLATFORMS:
-        http_archive(
-            name = p.name,
-            url = "https://github.com/gfx-rs/wgpu-native/releases/download/{}/{}".format(
-                _WGPU_NATIVE_VERSION,
-                p.asset,
-            ),
-            sha256 = p.sha256,
-            build_file = "//third_party:BUILD.wgpu_native_platform",
-        )
+    # The patch is `//third_party/patches:wgpu-native-iosurface-export.patch`.
+    # It adds:
+    #   - `src/iosurface.rs`: macOS-only C-ABI entry points
+    #     (`wgpuDeviceGetMetalRawDevice`, `wgpuDeviceCreateTextureFromIOSurface`)
+    #   - `ffi/wgpu.h`: matching C header declarations
+    #   - `src/lib.rs`: `include!("bindings.rs")` so the crate picks
+    #     up the pre-generated bindings checked in under
+    #     `//third_party/bazel/wgpu_native_cargo/bindings.rs`.
+    new_git_repository(
+        name = "wgpu_native_source",
+        remote = "https://github.com/gfx-rs/wgpu-native.git",
+        tag = "v24.0.3.1",
+        init_submodules = True,
+        build_file = "//third_party:BUILD.wgpu_native_source",
+        patches = ["//third_party/patches:wgpu-native-iosurface-export.patch"],
+        patch_args = ["-p1"],
+    )
 
     # Tracy in-process profiler. Only consumed under //donner/editor/...
     # Donner uses a custom BUILD file (third_party/BUILD.tracy) because Tracy

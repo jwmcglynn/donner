@@ -8,8 +8,7 @@ donner_cc_test(
     ],
     deps = [
         "//donner/base",
-        "//donner/editor:editor_app",
-        "//donner/editor:viewport_state",
+        "//donner/editor/backend_lib:editor_app",
         "//donner/editor/repro:repro_file",
         "//donner/svg",
         "//donner/svg/parser",

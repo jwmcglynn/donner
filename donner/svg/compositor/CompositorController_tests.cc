@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
@@ -225,6 +227,85 @@ TEST_F(CompositorControllerTest, LayerComposeOffsetTracksDomTranslationDelta) {
   EXPECT_TRUE(result.isTranslation());
   EXPECT_NEAR(result.translation().x, 5.0, 1e-10);
   EXPECT_NEAR(result.translation().y, 10.0, 1e-10);
+}
+
+// Regression: when an element has a non-identity transform at rasterize
+// time (e.g. it was previously resized via drag handles to scale 2x),
+// dragging it by `delta_doc` in document space must move the cached
+// bitmap by `delta_doc` in canvas pixels — not by `delta_doc /
+// element_scale`. The bug was a left/right composition swap in the
+// fast-path delta:
+//
+//   delta = newWFE * oldEFW         // current — gives entity-local mapping
+//   delta = oldEFW * newWFE         // correct — gives canvas-to-canvas
+//
+// For a previously-resized element with scale=2, dragging by (10, 0) in
+// document space had the cached bitmap moving by (5, 0) canvas pixels,
+// while the overlay (rendered against the up-to-date worldBounds) moved
+// by (10, 0). User-visible symptom: shape and overlay drift apart, shape
+// moves at half cursor speed.
+TEST_F(CompositorControllerTest, LayerComposeOffsetReflectsDocumentDeltaForResizedElement) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+
+  // First frame: the bitmap is stamped against a 2x-scale transform —
+  // i.e. the element was resized to twice its base size and committed
+  // before this drag began.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(2.0, 2.0));
+  RenderViewport viewport;
+  viewport.size = Vector2d(100, 100);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  // Drag in document space by (5, 10): the new local transform is
+  // `Scale(2) * Translate(5, 10)`. The element's visual position in
+  // canvas pixels shifts by exactly (5, 10) — that's what the user's
+  // cursor moved by. The compose offset must match.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(2.0, 2.0) *
+                                                  Transform2d::Translate(5.0, 10.0));
+  compositor.renderFrame(viewport);
+
+  const Transform2d result = compositor.layerComposeOffset(entity);
+  EXPECT_TRUE(result.isTranslation());
+  EXPECT_NEAR(result.translation().x, 5.0, 1e-10);
+  EXPECT_NEAR(result.translation().y, 10.0, 1e-10);
+}
+
+TEST_F(CompositorControllerTest, LayerGenerationChangesAfterNonTranslationTransform) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.promoteEntity(entity);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(100, 100);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+  const uint64_t initialGeneration = compositor.layerGenerationOf(entity);
+  ASSERT_NE(initialGeneration, 0u);
+
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Scale(2.0, 2.0));
+  compositor.renderFrame(viewport);
+
+  EXPECT_GT(compositor.layerGenerationOf(entity), initialGeneration)
+      << "non-translation edits such as resize must re-rasterize the promoted layer so split "
+         "preview clients do not keep drawing a stale bitmap";
 }
 
 TEST_F(CompositorControllerTest, LayerComposeOffsetOfNonPromotedReturnsIdentity) {

@@ -246,6 +246,17 @@ public:
   [[nodiscard]] Transform2d layerComposeOffset(Entity entity) const;
 
   /**
+   * Returns the promoted layer bitmap generation, or zero if the entity is not promoted or has no
+   * cached layer.
+   *
+   * The generation increments whenever the promoted layer is re-rasterized. Split-preview clients
+   * use this to know when a previously uploaded promoted bitmap is stale.
+   *
+   * @param entity The entity to query.
+   */
+  [[nodiscard]] uint64_t layerGenerationOf(Entity entity) const;
+
+  /**
    * Prepare and render a composited frame.
    *
    * This method:
@@ -404,10 +415,31 @@ public:
   /// bucket layers keep their generation and their GL texture binding.
   [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload() const;
 
+  /// Read-only accessor for the layer bound to @p entity. Test-only —
+  /// lets regression tests inspect `compositionTransform` /
+  /// `bitmapEntityFromWorldTransform` after a drag frame to verify the
+  /// translation-only fast path engaged (bitmap stamp unchanged,
+  /// composition transform carries the delta). Production callers
+  /// should go through `isPromoted` / `promoteEntity` instead.
+  [[nodiscard]] const CompositorLayer* findLayerForTest(Entity entity) const {
+    return findLayer(entity);
+  }
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
   const CompositorLayer* findLayer(Entity entity) const;
+
+  /// Lift @p delta into every descendant of @p root by pre-multiplying
+  /// their cached `worldFromEntityTransform` and invalidating the
+  /// `ComputedAbsoluteTransformComponent`. Called from the subtree fast
+  /// path when a promoted group root moves by a pure translation — the
+  /// layer's bitmap is reused, but descendants still need their world
+  /// transforms refreshed so a subsequent fast-path frame rooted
+  /// deeper in the subtree computes its delta against the current DOM
+  /// instead of a pre-drag cache.
+  static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
+                                                    const Transform2d& delta);
 
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport);
@@ -500,16 +532,6 @@ private:
   /// Inspect a RenderingInstanceComponent and return which fallback reasons apply.
   static FallbackReason detectFallbackReasons(
       const components::RenderingInstanceComponent& instance);
-
-  /// Fast-path helper: a promoted subtree layer's root just shifted by a pure
-  /// world-space translation. Descendants' local transforms are unchanged, so
-  /// their world transforms shift by the same delta. Pre-multiply every
-  /// descendant RIC's `worldFromEntityTransform` by @p delta so subsequent
-  /// reads (e.g. a forced re-rasterize later in the session, or the next
-  /// frame's fast-path delta computation against a descendant-rooted layer)
-  /// see up-to-date world positions.
-  static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
-                                                    const Transform2d& delta);
 
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;

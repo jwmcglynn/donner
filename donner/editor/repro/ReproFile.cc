@@ -1,6 +1,7 @@
 #include "donner/editor/repro/ReproFile.h"
 
 #include <cerrno>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -8,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace donner::editor::repro {
 
@@ -21,27 +23,13 @@ void WriteQuotedJsonString(std::ostream& os, std::string_view s) {
   os << '"';
   for (char c : s) {
     switch (c) {
-      case '"':
-        os << "\\\"";
-        break;
-      case '\\':
-        os << "\\\\";
-        break;
-      case '\b':
-        os << "\\b";
-        break;
-      case '\f':
-        os << "\\f";
-        break;
-      case '\n':
-        os << "\\n";
-        break;
-      case '\r':
-        os << "\\r";
-        break;
-      case '\t':
-        os << "\\t";
-        break;
+      case '"': os << "\\\""; break;
+      case '\\': os << "\\\\"; break;
+      case '\b': os << "\\b"; break;
+      case '\f': os << "\\f"; break;
+      case '\n': os << "\\n"; break;
+      case '\r': os << "\\r"; break;
+      case '\t': os << "\\t"; break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char buf[8];
@@ -58,22 +46,14 @@ void WriteQuotedJsonString(std::ostream& os, std::string_view s) {
 
 const char* EventKindTag(ReproEvent::Kind kind) {
   switch (kind) {
-    case ReproEvent::Kind::MouseDown:
-      return "mdown";
-    case ReproEvent::Kind::MouseUp:
-      return "mup";
-    case ReproEvent::Kind::KeyDown:
-      return "kdown";
-    case ReproEvent::Kind::KeyUp:
-      return "kup";
-    case ReproEvent::Kind::Char:
-      return "chr";
-    case ReproEvent::Kind::Wheel:
-      return "wheel";
-    case ReproEvent::Kind::Resize:
-      return "resize";
-    case ReproEvent::Kind::Focus:
-      return "focus";
+    case ReproEvent::Kind::MouseDown: return "mdown";
+    case ReproEvent::Kind::MouseUp: return "mup";
+    case ReproEvent::Kind::KeyDown: return "kdown";
+    case ReproEvent::Kind::KeyUp: return "kup";
+    case ReproEvent::Kind::Char: return "chr";
+    case ReproEvent::Kind::Wheel: return "wheel";
+    case ReproEvent::Kind::Resize: return "resize";
+    case ReproEvent::Kind::Focus: return "focus";
   }
   return "unknown";
 }
@@ -90,29 +70,50 @@ std::optional<ReproEvent::Kind> ParseEventKind(std::string_view tag) {
   return std::nullopt;
 }
 
+void WriteHit(std::ostream& os, const ReproHit& hit) {
+  os << "\"hit\":{";
+  bool first = true;
+  const auto sep = [&]() {
+    if (!first) os << ',';
+    first = false;
+  };
+  if (hit.empty) {
+    sep();
+    os << "\"empty\":1";
+  } else {
+    sep();
+    os << "\"tag\":";
+    WriteQuotedJsonString(os, hit.tag);
+    if (!hit.id.empty()) {
+      sep();
+      os << "\"id\":";
+      WriteQuotedJsonString(os, hit.id);
+    }
+    if (hit.docOrderIndex >= 0) {
+      sep();
+      os << "\"idx\":" << hit.docOrderIndex;
+    }
+  }
+  os << '}';
+}
+
 void WriteEvent(std::ostream& os, const ReproEvent& ev) {
   os << "{\"k\":\"" << EventKindTag(ev.kind) << '"';
   switch (ev.kind) {
     case ReproEvent::Kind::MouseDown:
-    case ReproEvent::Kind::MouseUp:
-      os << ",\"b\":" << ev.mouseButton;
-      break;
+    case ReproEvent::Kind::MouseUp: os << ",\"b\":" << ev.mouseButton; break;
     case ReproEvent::Kind::KeyDown:
-    case ReproEvent::Kind::KeyUp:
-      os << ",\"key\":" << ev.key << ",\"m\":" << ev.modifiers;
-      break;
-    case ReproEvent::Kind::Char:
-      os << ",\"c\":" << ev.codepoint;
-      break;
+    case ReproEvent::Kind::KeyUp: os << ",\"key\":" << ev.key << ",\"m\":" << ev.modifiers; break;
+    case ReproEvent::Kind::Char: os << ",\"c\":" << ev.codepoint; break;
     case ReproEvent::Kind::Wheel:
       os << ",\"dx\":" << ev.wheelDeltaX << ",\"dy\":" << ev.wheelDeltaY;
       break;
-    case ReproEvent::Kind::Resize:
-      os << ",\"w\":" << ev.width << ",\"h\":" << ev.height;
-      break;
-    case ReproEvent::Kind::Focus:
-      os << ",\"on\":" << (ev.focusOn ? 1 : 0);
-      break;
+    case ReproEvent::Kind::Resize: os << ",\"w\":" << ev.width << ",\"h\":" << ev.height; break;
+    case ReproEvent::Kind::Focus: os << ",\"on\":" << (ev.focusOn ? 1 : 0); break;
+  }
+  if (ev.hit.has_value()) {
+    os << ',';
+    WriteHit(os, *ev.hit);
   }
   os << '}';
 }
@@ -129,10 +130,41 @@ void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
   os << "}\n";
 }
 
+void WriteViewport(std::ostream& os, const ReproViewport& vp) {
+  // clang-format off: clang-format 18.1.3 (CI) and 18.1.8 (local) disagree
+  // on how to pack this long `<<` chain — 18.1.3 wants one field per line,
+  // 18.1.8 collapses to many per line. Pinning the layout manually so
+  // both versions agree.
+  // clang-format off
+  os << "\"vp\":{"
+     << "\"ox\":" << vp.paneOriginX
+     << ",\"oy\":" << vp.paneOriginY
+     << ",\"pw\":" << vp.paneSizeW
+     << ",\"ph\":" << vp.paneSizeH
+     << ",\"dpr\":" << vp.devicePixelRatio
+     << ",\"z\":" << vp.zoom
+     << ",\"pdx\":" << vp.panDocX
+     << ",\"pdy\":" << vp.panDocY
+     << ",\"psx\":" << vp.panScreenX
+     << ",\"psy\":" << vp.panScreenY
+     << ",\"vbx\":" << vp.viewBoxX
+     << ",\"vby\":" << vp.viewBoxY
+     << ",\"vbw\":" << vp.viewBoxW
+     << ",\"vbh\":" << vp.viewBoxH << '}';
+  // clang-format on
+}
+
 void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {
-  os << "{\"f\":" << frame.index << ",\"t\":" << frame.timestampSeconds << ",\"dt\":" << frame.deltaMs
-     << ",\"mx\":" << frame.mouseX << ",\"my\":" << frame.mouseY
+  os << "{\"f\":" << frame.index << ",\"t\":" << frame.timestampSeconds
+     << ",\"dt\":" << frame.deltaMs << ",\"mx\":" << frame.mouseX << ",\"my\":" << frame.mouseY
      << ",\"btn\":" << frame.mouseButtonMask << ",\"mod\":" << frame.modifiers;
+  if (frame.mouseDocX.has_value() && frame.mouseDocY.has_value()) {
+    os << ",\"mdx\":" << *frame.mouseDocX << ",\"mdy\":" << *frame.mouseDocY;
+  }
+  if (frame.viewport.has_value()) {
+    os << ',';
+    WriteViewport(os, *frame.viewport);
+  }
   if (!frame.events.empty()) {
     os << ",\"e\":[";
     for (std::size_t i = 0; i < frame.events.size(); ++i) {
@@ -197,24 +229,12 @@ std::optional<std::string> ReadString(std::string_view& cursor) {
     if (c == '\\' && i + 1 < cursor.size()) {
       const char next = cursor[i + 1];
       switch (next) {
-        case '"':
-          out += '"';
-          break;
-        case '\\':
-          out += '\\';
-          break;
-        case 'n':
-          out += '\n';
-          break;
-        case 't':
-          out += '\t';
-          break;
-        case 'r':
-          out += '\r';
-          break;
-        default:
-          out += next;
-          break;
+        case '"': out += '"'; break;
+        case '\\': out += '\\'; break;
+        case 'n': out += '\n'; break;
+        case 't': out += '\t'; break;
+        case 'r': out += '\r'; break;
+        default: out += next; break;
       }
       i += 2;
       continue;
@@ -225,29 +245,69 @@ std::optional<std::string> ReadString(std::string_view& cursor) {
   return std::nullopt;
 }
 
-// Parses an event object starting at `cursor` pointing just past the `{`.
-// Advances `cursor` past the matching `}`. Returns nullopt on malformed input.
-std::optional<ReproEvent> ParseEventObject(std::string_view& cursor) {
-  // Find the closing brace respecting nested braces.
+// Finds the matching closing brace for a `{` that `cursor` points
+// immediately past, respecting string literals and nested objects.
+// On return, `body` is the span between (exclusive) the opening `{`
+// and (exclusive) the matching `}`, and `cursor` has been advanced
+// past the closing `}`. Returns false on unbalanced input.
+bool ExtractBalancedObject(std::string_view& cursor, std::string_view& body) {
   int depth = 1;
   std::size_t i = 0;
   while (i < cursor.size() && depth > 0) {
     if (cursor[i] == '"') {
       ++i;
       while (i < cursor.size() && cursor[i] != '"') {
-        if (cursor[i] == '\\' && i + 1 < cursor.size()) i += 2;
-        else ++i;
+        if (cursor[i] == '\\' && i + 1 < cursor.size())
+          i += 2;
+        else
+          ++i;
       }
       if (i < cursor.size()) ++i;
       continue;
     }
-    if (cursor[i] == '{') ++depth;
-    else if (cursor[i] == '}') --depth;
+    if (cursor[i] == '{')
+      ++depth;
+    else if (cursor[i] == '}')
+      --depth;
     ++i;
   }
-  if (depth != 0) return std::nullopt;
-  std::string_view body = cursor.substr(0, i - 1);
+  if (depth != 0) return false;
+  body = cursor.substr(0, i - 1);
   cursor.remove_prefix(i);
+  return true;
+}
+
+std::optional<ReproHit> ParseHitObject(std::string_view objectBody) {
+  ReproHit hit;
+
+  auto emptyRest = FindKey(objectBody, "empty");
+  if (!emptyRest.empty()) {
+    if (auto v = ReadNumber(emptyRest); v && *v != 0.0) {
+      hit.empty = true;
+      return hit;
+    }
+  }
+
+  auto tagRest = FindKey(objectBody, "tag");
+  if (!tagRest.empty()) {
+    if (auto s = ReadString(tagRest); s) hit.tag = std::move(*s);
+  }
+  auto idRest = FindKey(objectBody, "id");
+  if (!idRest.empty()) {
+    if (auto s = ReadString(idRest); s) hit.id = std::move(*s);
+  }
+  auto idxRest = FindKey(objectBody, "idx");
+  if (!idxRest.empty()) {
+    if (auto v = ReadNumber(idxRest); v) hit.docOrderIndex = static_cast<int>(*v);
+  }
+  return hit;
+}
+
+// Parses an event object starting at `cursor` pointing just past the `{`.
+// Advances `cursor` past the matching `}`. Returns nullopt on malformed input.
+std::optional<ReproEvent> ParseEventObject(std::string_view& cursor) {
+  std::string_view body;
+  if (!ExtractBalancedObject(cursor, body)) return std::nullopt;
 
   ReproEvent ev;
   auto rest = FindKey(body, "k");
@@ -293,7 +353,54 @@ std::optional<ReproEvent> ParseEventObject(std::string_view& cursor) {
   readIntField("h", ev.height);
   readBoolField("on", ev.focusOn);
 
+  auto hitRest = FindKey(body, "hit");
+  if (!hitRest.empty()) {
+    // Skip whitespace to the opening `{`.
+    std::size_t p = 0;
+    while (p < hitRest.size() && (hitRest[p] == ' ' || hitRest[p] == '\t')) ++p;
+    if (p < hitRest.size() && hitRest[p] == '{') {
+      std::string_view cursor2 = hitRest.substr(p + 1);
+      std::string_view hitBody;
+      if (ExtractBalancedObject(cursor2, hitBody)) {
+        auto parsed = ParseHitObject(hitBody);
+        if (parsed.has_value()) ev.hit = std::move(*parsed);
+      }
+    }
+  }
+
   return ev;
+}
+
+std::optional<ReproViewport> ParseViewportObject(std::string_view body) {
+  ReproViewport vp;
+  const auto read = [&](std::string_view key, double& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return false;
+    auto v = ReadNumber(r);
+    if (!v) return false;
+    out = *v;
+    return true;
+  };
+
+  // All 14 fields are required — the writer emits them all any time it
+  // emits a `vp` block at all. Missing fields indicate a corrupted or
+  // hand-edited viewport object; fail loudly rather than silently
+  // default-zeroing them.
+  if (!read("ox", vp.paneOriginX)) return std::nullopt;
+  if (!read("oy", vp.paneOriginY)) return std::nullopt;
+  if (!read("pw", vp.paneSizeW)) return std::nullopt;
+  if (!read("ph", vp.paneSizeH)) return std::nullopt;
+  if (!read("dpr", vp.devicePixelRatio)) return std::nullopt;
+  if (!read("z", vp.zoom)) return std::nullopt;
+  if (!read("pdx", vp.panDocX)) return std::nullopt;
+  if (!read("pdy", vp.panDocY)) return std::nullopt;
+  if (!read("psx", vp.panScreenX)) return std::nullopt;
+  if (!read("psy", vp.panScreenY)) return std::nullopt;
+  if (!read("vbx", vp.viewBoxX)) return std::nullopt;
+  if (!read("vby", vp.viewBoxY)) return std::nullopt;
+  if (!read("vbw", vp.viewBoxW)) return std::nullopt;
+  if (!read("vbh", vp.viewBoxH)) return std::nullopt;
+  return vp;
 }
 
 std::optional<ReproFrame> ParseFrameLine(std::string_view line) {
@@ -325,6 +432,36 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line) {
   if (!readIntField("mod", mod)) return std::nullopt;
   frame.mouseButtonMask = btn;
   frame.modifiers = mod;
+
+  double mdx = 0.0;
+  double mdy = 0.0;
+  const bool hasMdx = readDoubleField("mdx", mdx);
+  const bool hasMdy = readDoubleField("mdy", mdy);
+  if (hasMdx && hasMdy) {
+    frame.mouseDocX = mdx;
+    frame.mouseDocY = mdy;
+  }
+
+  // Viewport object — optional. When present, the writer emits all 14
+  // fields, so ParseViewportObject hard-fails on a missing field.
+  auto vpRest = FindKey(line, "vp");
+  if (!vpRest.empty()) {
+    std::size_t p = 0;
+    while (p < vpRest.size() && (vpRest[p] == ' ' || vpRest[p] == '\t')) ++p;
+    if (p < vpRest.size() && vpRest[p] == '{') {
+      std::string_view cursor2 = vpRest.substr(p + 1);
+      std::string_view vpBody;
+      if (ExtractBalancedObject(cursor2, vpBody)) {
+        auto parsed = ParseViewportObject(vpBody);
+        if (!parsed.has_value()) {
+          std::fprintf(stderr, "ReproFile: malformed `vp` block in frame %" PRIu64 "\n",
+                       static_cast<std::uint64_t>(frame.index));
+          return std::nullopt;
+        }
+        frame.viewport = std::move(*parsed);
+      }
+    }
+  }
 
   auto eventsStart = FindKey(line, "e");
   if (!eventsStart.empty()) {
@@ -387,6 +524,7 @@ std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path) {
   ReproFile file;
   std::string line;
   bool gotMeta = false;
+  std::optional<ReproViewport> carriedViewport;
   while (std::getline(is, line)) {
     if (line.empty()) continue;
     const std::string_view view(line);
@@ -401,6 +539,16 @@ std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path) {
       auto vn = ReadNumber(r);
       if (!vn) return std::nullopt;
       version = static_cast<int>(*vn);
+      if (version == 1) {
+        std::fprintf(stderr,
+                     "ReproFile: %s is v1 (pre-viewport). v1 recordings are "
+                     "not supported — the replayer cannot recover the screen↔"
+                     "document coordinate mapping from a v1 file, which "
+                     "silently lands clicks on the wrong elements. "
+                     "Please rerecord with the current editor.\n",
+                     path.string().c_str());
+        return std::nullopt;
+      }
       if (version != kReproFileVersion) {
         std::fprintf(stderr, "ReproFile: version %d, expected %d\n", version, kReproFileVersion);
         return std::nullopt;
@@ -451,7 +599,36 @@ std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path) {
       std::fprintf(stderr, "ReproFile: malformed frame line: %s\n", line.c_str());
       return std::nullopt;
     }
+    // Carry the viewport forward — the writer delta-encodes `vp`,
+    // emitting it only on change. Replay readers get the full
+    // viewport state on every frame regardless of what's written.
+    if (frame->viewport.has_value()) {
+      carriedViewport = *frame->viewport;
+    } else if (carriedViewport.has_value()) {
+      frame->viewport = carriedViewport;
+    }
     file.frames.push_back(*frame);
+  }
+  // Back-propagate the first known viewport to any leading frames
+  // that predate it. The live recorder defers emitting `vp` until
+  // the editor has laid out the pane — usually the first two or
+  // three frames before any visible UI exists go without one. Back-
+  // propagation means replay sees a complete, populated viewport on
+  // every frame, which is what the harness contract requires.
+  if (carriedViewport.has_value()) {
+    std::optional<ReproViewport> firstKnown;
+    for (const auto& f : file.frames) {
+      if (f.viewport.has_value()) {
+        firstKnown = *f.viewport;
+        break;
+      }
+    }
+    if (firstKnown.has_value()) {
+      for (auto& f : file.frames) {
+        if (f.viewport.has_value()) break;
+        f.viewport = *firstKnown;
+      }
+    }
   }
   if (!gotMeta) {
     std::fprintf(stderr, "ReproFile: empty file\n");

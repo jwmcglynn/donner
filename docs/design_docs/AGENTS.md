@@ -24,6 +24,18 @@ All design documents live under `docs/design_docs/`.
 - In-flight designs: `design_template.md` (Summary, Goals, Non-Goals, Next Steps, Implementation Plan, Security/Privacy, Testing/Validation).
 - Shipped features: `developer_template.md` (present tense, no TODOs, include guarantees/testing/security).
 
+## Invariants Must Point At CI Targets
+
+Every claimed invariant in a design doc ("cannot happen", "always holds", "the X can never silently produce wrong Y") must name a CI target that fails when the invariant breaks. If the enforcement mechanism is an off-by-default runtime assertion (`DCHECK`, a `--verify_*` flag, a test-only knob), describe it as *diagnostic tooling*, not as a guarantee — its existence does not make the invariant enforced.
+
+During design review, trace each "cannot happen" / "always holds" claim back to a named test target. If there isn't one, the options are:
+
+1. Add a CI target (test, lint, or fuzzer) that fails on violation.
+2. Rewrite the claim to describe what is actually enforced.
+3. List the gap under §"Open Questions" or §"Verification Strategy" with a follow-up action item.
+
+The #582 postmortem in [0025-composited_rendering.md](0025-composited_rendering.md) is the canonical example of what happens when this rule is skipped: the `verifyPixelIdentity` assertion was the only enforcement for the "compositor cannot silently produce wrong pixels" invariant, it was off by default, no CI target ever turned it on, and the invariant quietly broke for weeks.
+
 ## Resvg Test Integration
 
 When writing design docs for renderer features, reference relevant resvg tests that validate the feature, include a test plan listing which should pass after implementation, update test status as work progresses, and document skip removals with references to the fixing implementation.

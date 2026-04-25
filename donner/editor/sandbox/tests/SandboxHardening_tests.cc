@@ -14,19 +14,22 @@
 
 #include "donner/editor/sandbox/SandboxHardening.h"
 
-#include <gtest/gtest.h>
-
 #include <fcntl.h>
+#include <gtest/gtest.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <array>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/SandboxProtocol.h"
@@ -79,12 +82,12 @@ TEST(SandboxHardeningUnitTest, AppliesResourceLimitsWithSandboxEnv) {
   // machinery is unaffected.
   opts.chdirRoot = false;
   opts.closeExtraFds = false;
-  opts.addressSpaceBytes = 0;            // skip RLIMIT_AS
-  opts.cpuSeconds = 0;                   // skip RLIMIT_CPU
-  opts.maxFileBytes = 1u << 30;          // 1 GiB cap — far above any test output
-  opts.maxOpenFiles = 4096;              // generous
+  opts.addressSpaceBytes = 0;    // skip RLIMIT_AS
+  opts.cpuSeconds = 0;           // skip RLIMIT_CPU
+  opts.maxFileBytes = 1u << 30;  // 1 GiB cap — far above any test output
+  opts.maxOpenFiles = 4096;      // generous
   opts.logSummaryToStderr = false;
-  opts.installSeccompFilter = false;     // don't jail the test process
+  opts.installSeccompFilter = false;  // don't jail the test process
 
   const auto result = ApplyHardening(opts);
   EXPECT_EQ(result.status, HardeningStatus::kOk) << result.message;
@@ -131,8 +134,7 @@ protected:
   // drains its stderr, reaps the child, and returns the exit info. stdout
   // is redirected to /dev/null so we don't have to decode the wire bytes
   // for tests that only care about the exit code.
-  SpawnResult Spawn(std::string_view stdinBytes,
-                    const std::vector<std::string>& env) {
+  SpawnResult Spawn(std::string_view stdinBytes, const std::vector<std::string>& env) {
     SpawnResult out;
 
     int stdinFds[2] = {-1, -1};
@@ -220,16 +222,14 @@ TEST_F(HardenedChildTest, ChildRefusesWithoutSandboxEnvVar) {
   const auto result = Spawn("<svg/>", {});
   EXPECT_EQ(result.exitCode, kExitUsageError);
   EXPECT_EQ(result.termSignal, 0);
-  EXPECT_NE(result.stderrCaptured.find("DONNER_SANDBOX=1"),
-            std::string::npos)
+  EXPECT_NE(result.stderrCaptured.find("DONNER_SANDBOX=1"), std::string::npos)
       << "stderr was: " << result.stderrCaptured;
 }
 
 TEST_F(HardenedChildTest, ChildRefusesWhenSandboxEnvIsWrongValue) {
   const auto result = Spawn("<svg/>", {"DONNER_SANDBOX=0"});
   EXPECT_EQ(result.exitCode, kExitUsageError);
-  EXPECT_NE(result.stderrCaptured.find("DONNER_SANDBOX=1"),
-            std::string::npos);
+  EXPECT_NE(result.stderrCaptured.find("DONNER_SANDBOX=1"), std::string::npos);
 }
 
 TEST_F(HardenedChildTest, ChildRunsWithCuratedEnvpAndLogsProfile) {
@@ -246,10 +246,8 @@ TEST_F(HardenedChildTest, ChildRunsWithCuratedEnvpAndLogsProfile) {
   EXPECT_EQ(result.exitCode, kExitOk) << "stderr: " << result.stderrCaptured;
   EXPECT_EQ(result.termSignal, 0);
   // Hardening logs its profile — grep for the stable prefix.
-  EXPECT_NE(result.stderrCaptured.find("sandbox hardening:"),
-            std::string::npos)
-      << "expected hardening summary on stderr, got: "
-      << result.stderrCaptured;
+  EXPECT_NE(result.stderrCaptured.find("sandbox hardening:"), std::string::npos)
+      << "expected hardening summary on stderr, got: " << result.stderrCaptured;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,20 +268,112 @@ TEST_F(HardenedChildTest, ChildRendersSuccessfullyUnderSeccomp) {
   // The child must exit 0 — the seccomp filter must not block any syscall
   // that the normal parse+render path needs.
   EXPECT_EQ(result.exitCode, kExitOk)
-      << "Child failed under seccomp filter. stderr: "
-      << result.stderrCaptured;
-  EXPECT_EQ(result.termSignal, 0)
-      << "Child was killed by signal " << result.termSignal
-      << " — possible seccomp KILL_PROCESS or missing allowlist entry. "
-      << "stderr: " << result.stderrCaptured;
+      << "Child failed under seccomp filter. stderr: " << result.stderrCaptured;
+  EXPECT_EQ(result.termSignal, 0) << "Child was killed by signal " << result.termSignal
+                                  << " — possible seccomp KILL_PROCESS or missing allowlist entry. "
+                                  << "stderr: " << result.stderrCaptured;
 
 #if defined(__linux__)
-  // On Linux, confirm the hardening summary includes seccomp=1.
+  // On Linux, confirm the hardening summary includes seccomp=1 AND that
+  // the deny action is `kill` — a regression back to `errno` would mean
+  // a parser bug could silently succeed on a denied syscall.
   EXPECT_NE(result.stderrCaptured.find("seccomp=1"), std::string::npos)
-      << "expected seccomp=1 in hardening summary, got: "
+      << "expected seccomp=1 in hardening summary, got: " << result.stderrCaptured;
+  EXPECT_NE(result.stderrCaptured.find("seccomp_deny=kill"), std::string::npos)
+      << "expected seccomp_deny=kill (production default) in hardening "
+         "summary, got: "
       << result.stderrCaptured;
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// Seccomp fail-closed deny-op probe (Linux-only, in-process via fork).
+// Verifies that a denied syscall under the production filter terminates
+// the child with SIGSYS (signal 31). Uses `fork()` + direct
+// `ApplyHardening()` so we can pick the exact syscall to probe without
+// teaching the real child binary a new code path.
+// ---------------------------------------------------------------------------
+
+#if defined(__linux__)
+
+TEST(SandboxHardeningSeccompDenyOp, DeniedSyscallKillsChildWithSigsys) {
+  pid_t child = ::fork();
+  ASSERT_GE(child, 0) << "fork: " << std::strerror(errno);
+  if (child == 0) {
+    // Install the production seccomp filter with kKillProcess.
+    HardeningOptions opts;
+    opts.requireSandboxEnv = false;
+    opts.chdirRoot = false;
+    opts.closeExtraFds = false;
+    opts.addressSpaceBytes = 0;
+    opts.cpuSeconds = 0;
+    opts.maxFileBytes = 1uLL << 30;
+    opts.maxOpenFiles = 0;
+    opts.logSummaryToStderr = false;
+    opts.installSeccompFilter = true;
+    opts.seccompDenyAction = HardeningOptions::SeccompDenyAction::kKillProcess;
+    opts.installSandboxProfile = false;
+
+    const auto result = ApplyHardening(opts);
+    if (result.status != HardeningStatus::kOk) {
+      _exit(64);  // hardening setup failed — not what we're testing
+    }
+
+    // `socket()` is not on the allowlist; under kKillProcess this must
+    // terminate the process with SIGSYS. If we reach the `_exit(0)`
+    // below, the filter is broken.
+    (void)::socket(AF_INET, SOCK_STREAM, 0);
+    _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_GE(::waitpid(child, &status, 0), 0);
+  ASSERT_TRUE(WIFSIGNALED(status)) << "child exited normally with code " << WEXITSTATUS(status)
+                                   << " — expected SIGSYS from seccomp kKillProcess";
+  EXPECT_EQ(WTERMSIG(status), SIGSYS)
+      << "child killed by signal " << WTERMSIG(status) << "; expected SIGSYS";
+}
+
+TEST(SandboxHardeningSeccompDenyOp, ErrnoModeReturnsEaccesInsteadOfKilling) {
+  // Sanity check that the ad-hoc `kErrno` mode still works (for
+  // developers extending the allowlist). Same syscall, different
+  // deny action, must *not* SIGSYS-kill the child.
+  pid_t child = ::fork();
+  ASSERT_GE(child, 0) << "fork: " << std::strerror(errno);
+  if (child == 0) {
+    HardeningOptions opts;
+    opts.requireSandboxEnv = false;
+    opts.chdirRoot = false;
+    opts.closeExtraFds = false;
+    opts.addressSpaceBytes = 0;
+    opts.cpuSeconds = 0;
+    opts.maxFileBytes = 1uLL << 30;
+    opts.maxOpenFiles = 0;
+    opts.logSummaryToStderr = false;
+    opts.installSeccompFilter = true;
+    opts.seccompDenyAction = HardeningOptions::SeccompDenyAction::kErrno;
+    opts.installSandboxProfile = false;
+
+    const auto result = ApplyHardening(opts);
+    if (result.status != HardeningStatus::kOk) _exit(64);
+
+    errno = 0;
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+      ::close(fd);
+      _exit(1);  // seccomp didn't block socket — test failure
+    }
+    // Any errno denying the call is fine; we just care that we didn't die.
+    _exit(0);
+  }
+
+  int status = 0;
+  ASSERT_GE(::waitpid(child, &status, 0), 0);
+  ASSERT_TRUE(WIFEXITED(status)) << "child was signalled under kErrno mode; expected clean exit";
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+#endif  // __linux__
 
 }  // namespace
 }  // namespace donner::editor::sandbox

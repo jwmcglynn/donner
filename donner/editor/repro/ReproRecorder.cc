@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "imgui.h"
 
 namespace donner::editor::repro {
 
@@ -52,27 +53,91 @@ int CurrentMouseButtonMask() {
 // Adding more here is cheap — one line per key.
 constexpr ImGuiKey kWatchedKeys[] = {
     // Modifiers (for kdown/kup events beyond the mask).
-    ImGuiKey_LeftCtrl,   ImGuiKey_RightCtrl,   ImGuiKey_LeftShift,    ImGuiKey_RightShift,
-    ImGuiKey_LeftAlt,    ImGuiKey_RightAlt,    ImGuiKey_LeftSuper,    ImGuiKey_RightSuper,
+    ImGuiKey_LeftCtrl,
+    ImGuiKey_RightCtrl,
+    ImGuiKey_LeftShift,
+    ImGuiKey_RightShift,
+    ImGuiKey_LeftAlt,
+    ImGuiKey_RightAlt,
+    ImGuiKey_LeftSuper,
+    ImGuiKey_RightSuper,
     // Navigation + editing.
-    ImGuiKey_Tab,        ImGuiKey_Enter,       ImGuiKey_Space,        ImGuiKey_Escape,
-    ImGuiKey_Backspace,  ImGuiKey_Delete,      ImGuiKey_LeftArrow,    ImGuiKey_RightArrow,
-    ImGuiKey_UpArrow,    ImGuiKey_DownArrow,   ImGuiKey_Home,         ImGuiKey_End,
-    ImGuiKey_PageUp,     ImGuiKey_PageDown,
+    ImGuiKey_Tab,
+    ImGuiKey_Enter,
+    ImGuiKey_Space,
+    ImGuiKey_Escape,
+    ImGuiKey_Backspace,
+    ImGuiKey_Delete,
+    ImGuiKey_LeftArrow,
+    ImGuiKey_RightArrow,
+    ImGuiKey_UpArrow,
+    ImGuiKey_DownArrow,
+    ImGuiKey_Home,
+    ImGuiKey_End,
+    ImGuiKey_PageUp,
+    ImGuiKey_PageDown,
     // Alphabetic (for typing + shortcuts).
-    ImGuiKey_A, ImGuiKey_B, ImGuiKey_C, ImGuiKey_D, ImGuiKey_E, ImGuiKey_F, ImGuiKey_G,
-    ImGuiKey_H, ImGuiKey_I, ImGuiKey_J, ImGuiKey_K, ImGuiKey_L, ImGuiKey_M, ImGuiKey_N,
-    ImGuiKey_O, ImGuiKey_P, ImGuiKey_Q, ImGuiKey_R, ImGuiKey_S, ImGuiKey_T, ImGuiKey_U,
-    ImGuiKey_V, ImGuiKey_W, ImGuiKey_X, ImGuiKey_Y, ImGuiKey_Z,
+    ImGuiKey_A,
+    ImGuiKey_B,
+    ImGuiKey_C,
+    ImGuiKey_D,
+    ImGuiKey_E,
+    ImGuiKey_F,
+    ImGuiKey_G,
+    ImGuiKey_H,
+    ImGuiKey_I,
+    ImGuiKey_J,
+    ImGuiKey_K,
+    ImGuiKey_L,
+    ImGuiKey_M,
+    ImGuiKey_N,
+    ImGuiKey_O,
+    ImGuiKey_P,
+    ImGuiKey_Q,
+    ImGuiKey_R,
+    ImGuiKey_S,
+    ImGuiKey_T,
+    ImGuiKey_U,
+    ImGuiKey_V,
+    ImGuiKey_W,
+    ImGuiKey_X,
+    ImGuiKey_Y,
+    ImGuiKey_Z,
     // Digits.
-    ImGuiKey_0, ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4, ImGuiKey_5, ImGuiKey_6,
-    ImGuiKey_7, ImGuiKey_8, ImGuiKey_9,
+    ImGuiKey_0,
+    ImGuiKey_1,
+    ImGuiKey_2,
+    ImGuiKey_3,
+    ImGuiKey_4,
+    ImGuiKey_5,
+    ImGuiKey_6,
+    ImGuiKey_7,
+    ImGuiKey_8,
+    ImGuiKey_9,
     // Common symbols / function keys.
-    ImGuiKey_Minus,     ImGuiKey_Equal,      ImGuiKey_LeftBracket, ImGuiKey_RightBracket,
-    ImGuiKey_Backslash, ImGuiKey_Semicolon,  ImGuiKey_Apostrophe,  ImGuiKey_Comma,
-    ImGuiKey_Period,    ImGuiKey_Slash,      ImGuiKey_GraveAccent,
-    ImGuiKey_F1, ImGuiKey_F2, ImGuiKey_F3, ImGuiKey_F4, ImGuiKey_F5, ImGuiKey_F6,
-    ImGuiKey_F7, ImGuiKey_F8, ImGuiKey_F9, ImGuiKey_F10, ImGuiKey_F11, ImGuiKey_F12,
+    ImGuiKey_Minus,
+    ImGuiKey_Equal,
+    ImGuiKey_LeftBracket,
+    ImGuiKey_RightBracket,
+    ImGuiKey_Backslash,
+    ImGuiKey_Semicolon,
+    ImGuiKey_Apostrophe,
+    ImGuiKey_Comma,
+    ImGuiKey_Period,
+    ImGuiKey_Slash,
+    ImGuiKey_GraveAccent,
+    ImGuiKey_F1,
+    ImGuiKey_F2,
+    ImGuiKey_F3,
+    ImGuiKey_F4,
+    ImGuiKey_F5,
+    ImGuiKey_F6,
+    ImGuiKey_F7,
+    ImGuiKey_F8,
+    ImGuiKey_F9,
+    ImGuiKey_F10,
+    ImGuiKey_F11,
+    ImGuiKey_F12,
 };
 
 }  // namespace
@@ -88,7 +153,7 @@ ReproRecorder::ReproRecorder(ReproRecorderOptions options) : options_(std::move(
   prevWindowHeight_ = options_.windowHeight;
 }
 
-void ReproRecorder::snapshotFrame() {
+void ReproRecorder::snapshotFrame(const FrameContext& context) {
   ImGuiIO& io = ImGui::GetIO();
   if (!started_) {
     startTime_ = std::chrono::steady_clock::now();
@@ -100,8 +165,7 @@ void ReproRecorder::snapshotFrame() {
     prevWindowFocused_ = io.AppFocusLost == false;
   }
   const auto now = std::chrono::steady_clock::now();
-  const double elapsed =
-      std::chrono::duration<double>(now - startTime_).count();
+  const double elapsed = std::chrono::duration<double>(now - startTime_).count();
 
   ReproFrame frame;
   frame.index = file_.frames.size();
@@ -111,6 +175,25 @@ void ReproRecorder::snapshotFrame() {
   frame.mouseY = io.MousePos.y;
   frame.mouseButtonMask = CurrentMouseButtonMask();
   frame.modifiers = PackCurrentModifiers();
+
+  // Viewport snapshot — delta-encoded. Emit only on change so a long
+  // session with a stable viewport doesn't pay 14-double-per-frame
+  // overhead.
+  if (context.viewport.has_value()) {
+    if (!lastEmittedViewport_.has_value() || *context.viewport != *lastEmittedViewport_) {
+      frame.viewport = *context.viewport;
+      lastEmittedViewport_ = *context.viewport;
+    }
+  }
+
+  // Document-space mouse coord. The live editor computes this from the
+  // viewport for every tool dispatch; capturing it here pins down the
+  // replay coord without requiring the replayer to re-derive it from
+  // hand-tuned pane-layout constants.
+  if (context.mouseDoc.has_value()) {
+    frame.mouseDocX = context.mouseDoc->first;
+    frame.mouseDocY = context.mouseDoc->second;
+  }
 
   // Mouse button edges.
   const int prevMask = prevButtonMask_;
@@ -123,6 +206,12 @@ void ReproRecorder::snapshotFrame() {
       ReproEvent ev;
       ev.kind = ReproEvent::Kind::MouseDown;
       ev.mouseButton = b;
+      // Hit-test checkpoint — only left button (0), which is the one
+      // that matters for selection / drag. Right / middle clicks skip
+      // it since no tool uses them for element selection today.
+      if (b == 0 && context.hitTester && context.mouseDoc.has_value()) {
+        ev.hit = context.hitTester(context.mouseDoc->first, context.mouseDoc->second);
+      }
       frame.events.push_back(ev);
     } else if (wasDown && !isDown) {
       ReproEvent ev;

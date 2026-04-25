@@ -1,0 +1,150 @@
+"""Build wgpu-native from source, patched with the IOSurface export.
+
+Applied as an overlay over the `wgpu_native_source` `new_git_repository`
+(see `third_party/bazel/non_bcr_deps.bzl`). The upstream wgpu-native
+crate is a Cargo workspace; we build it as a static Rust library via
+rules_rust and surface the resulting `.a` + generated C header to the
+rest of Donner as a `cc_library` named `:wgpu_native`.
+
+Two important constraints:
+
+1. **Deterministic lockfile.** `Cargo.lock` is committed upstream at
+   this tag, so `crate_universe` can resolve the full dependency
+   graph without network access during the Bazel build. If we bump
+   the pinned tag we must also regenerate the lockfile annotations
+   checked in at `//third_party/bazel/wgpu_native_cargo/Cargo.Bazel.lock`.
+
+2. **Static link only.** The editor backend links one binary that
+   pulls wgpu-native in; no need for a shared library. Static `.a`
+   also simplifies symbol-versioning for the new
+   `wgpuTextureCreateFromIOSurfaceMTL` export — nothing to re-ABI
+   when the patch changes.
+
+Headers exposed: `include/webgpu/webgpu.h` and `include/webgpu/wgpu.h`
+are checked into the wgpu-native source tree under `ffi/`; the build
+copies them into the `include/webgpu/` path the rest of Donner
+expects, matching the prebuilt-tarball layout exactly so swapping
+back to prebuilt (or vice versa) is a one-line change at the top-
+level `cc_library` alias.
+
+See `docs/design_docs/0023-editor_sandbox.md` §"Rust-side wgpu-native
+patch" for the design rationale.
+"""
+
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+load("@wgpu_native_cargo//:defs.bzl", "all_crate_deps", "aliases")
+
+package(default_visibility = ["//visibility:public"])
+
+# ----------------------------------------------------------------
+# bindings.rs staging
+# ----------------------------------------------------------------
+#
+# Upstream `build.rs` runs `bindgen` against `ffi/wgpu.h` and emits a
+# ~4.5k-line `bindings.rs` into `OUT_DIR`. Running bindgen under
+# Bazel needs libclang on the host's search path, which is fragile
+# across dev machines and remote-execution workers. Instead we
+# pre-generate with real cargo, check the result in as
+# `//third_party/bazel/wgpu_native_cargo:bindings.rs`, and stage it
+# here next to `src/lib.rs` so the patched `include!("bindings.rs")`
+# statement resolves at compile time.
+genrule(
+    name = "bindings_rs",
+    srcs = ["@donner//third_party/bazel/wgpu_native_cargo:bindings.rs"],
+    outs = ["src/bindings.rs"],
+    cmd = "cp $< $@",
+)
+
+# ----------------------------------------------------------------
+# Rust static library
+# ----------------------------------------------------------------
+
+# Build `libwgpu_native.a` from the patched sources. Transitive
+# Rust deps (131 crates as of v24.0.3.1) come from crate_universe
+# via `all_crate_deps`. Repin with:
+#
+#   CARGO_BAZEL_REPIN=1 bazel fetch @wgpu_native_cargo//...
+#
+# The generated `Cargo.Bazel.lock` is checked in under
+# `//third_party/bazel/wgpu_native_cargo/` for reproducibility.
+rust_static_library(
+    name = "wgpu_native_rs",
+    srcs = glob([
+        "src/**/*.rs",
+    ]) + [":bindings_rs"],
+    crate_root = "src/lib.rs",
+    crate_features = [
+        # Donner's Geode backend compiles WGSL shaders at runtime
+        # (see //donner/svg/renderer/geode/shaders), so `wgsl` is
+        # load-bearing — without it `wgpuDeviceCreateShaderModule`
+        # panics with "Shader not provided" inside
+        # `conv.rs::map_shader_module_descriptor`. We deliberately
+        # skip `spirv` / `glsl` (we don't accept those source
+        # formats). `metal` gets us the Metal backend on macOS/iOS.
+        # On Linux the Vulkan backend is enabled transitively by
+        # `wgc`'s own target-scoped features (see upstream
+        # `Cargo.toml` `[target.'cfg(unix...)'.dependencies.wgc]`),
+        # so no extra feature is needed here. Skipping
+        # `vulkan-portability` keeps macOS from booting MoltenVK.
+        "wgsl",
+        "metal",
+    ],
+    edition = "2021",
+    aliases = aliases(),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = all_crate_deps(normal = True),
+)
+
+# ----------------------------------------------------------------
+# Headers + cc_library façade
+# ----------------------------------------------------------------
+
+# Copy the upstream headers into the `include/webgpu/` layout. Under
+# the prebuilt tarball, `include/webgpu/{webgpu.h,wgpu.h}` are
+# first-class files; matching that layout lets the consuming
+# `//third_party/webgpu-cpp:wgpu_native_platform` alias switch
+# between source and prebuilt without touching downstream include
+# paths.
+genrule(
+    name = "webgpu_headers",
+    srcs = [
+        "ffi/webgpu-headers/webgpu.h",
+        "ffi/wgpu.h",
+    ],
+    outs = [
+        "include/webgpu/webgpu.h",
+        "include/webgpu/wgpu.h",
+    ],
+    cmd = """
+        mkdir -p $(@D)/include/webgpu
+        cp $(location ffi/webgpu-headers/webgpu.h) $(location include/webgpu/webgpu.h)
+        cp $(location ffi/wgpu.h) $(location include/webgpu/wgpu.h)
+    """,
+)
+
+cc_library(
+    name = "wgpu_native",
+    hdrs = [
+        "include/webgpu/webgpu.h",
+        "include/webgpu/wgpu.h",
+    ],
+    includes = ["include"],
+    deps = [":wgpu_native_rs"],
+    # Matches the prebuilt tarball cc_library so callers are
+    # swap-compatible.
+    linkopts = select({
+        "@platforms//os:macos": [
+            # IOSurface + Metal for the patched export path.
+            "-framework", "IOSurface",
+            "-framework", "Metal",
+            "-framework", "Foundation",
+            "-framework", "QuartzCore",
+        ],
+        "@platforms//os:linux": [
+            # Vulkan is statically linked via wgpu-hal; no
+            # external -lvulkan needed because the crate itself
+            # links libloader-style.
+        ],
+        "//conditions:default": [],
+    }),
+)
