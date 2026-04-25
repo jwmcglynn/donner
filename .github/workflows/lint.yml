@@ -108,7 +108,13 @@ jobs:
           retry_wait_seconds: 15
           command: |
             sudo apt-get update
-            sudo apt-get install -y clang-tidy-19
+            # libc++-19-dev provides /usr/include/c++/v1/<cstddef|optional|...>,
+            # which clang-tidy-19 picks up via its built-in driver when the
+            # compile_commands.json (generated from Bazel's hermetic LLVM 21
+            # toolchain) doesn't expand to the bazel-internal libc++ paths.
+            # Without this, every check fails with "'cstddef' file not found"
+            # before misc-include-cleaner can run.
+            sudo apt-get install -y clang-tidy-19 libc++-19-dev libc++abi-19-dev
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0

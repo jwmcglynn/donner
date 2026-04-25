@@ -28,6 +28,8 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
+
 #include "donner/base/Vector2.h"
 
 namespace donner::editor {
