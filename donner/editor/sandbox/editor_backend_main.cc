@@ -7,12 +7,14 @@
 /// renders via `SerializingRenderer`, and writes responses to stdout.
 /// See docs/design_docs/0023-editor_sandbox.md §S8 for the protocol.
 
+#include <poll.h>
 #include <unistd.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -87,6 +89,16 @@ bool RespondError(uint64_t requestId, SessionErrorKind kind, std::string_view me
   return Respond(response);
 }
 
+/// Returns true if stdin has data ready to read without blocking. Used by
+/// the setViewport-coalescing path to peek at the next pending request.
+bool StdinHasPendingData() {
+  pollfd pfd{};
+  pfd.fd = STDIN_FILENO;
+  pfd.events = POLLIN;
+  const int rv = ::poll(&pfd, 1, /*timeout_ms=*/0);
+  return rv > 0 && (pfd.revents & POLLIN) != 0;
+}
+
 }  // namespace
 
 int main(int /*argc*/, char** /*argv*/) {
@@ -119,12 +131,88 @@ int main(int /*argc*/, char** /*argv*/) {
     return 1;
   }
 
+  // Coalesce contiguous `kSetViewport` requests: the host's pinch-zoom
+  // path can post hundreds of these in rapid succession, but only the
+  // LATEST one's pixel result matters. Apply the final viewport once
+  // and respond to every coalesced requestId with the same frame
+  // payload so all of the host's wire futures resolve.
+  //
+  // See `EditorBackendIntegrationTest.BurstSetViewportThenPointerEvent
+  // Coalesces` for the regression pin.
   for (;;) {
     SessionFrame request;
     std::string err;
 
     if (!ReadNextFrame(STDIN_FILENO, request, err)) {
       break;
+    }
+
+    if (request.opcode == SessionOpcode::kSetViewport) {
+      donner::editor::sandbox::SetViewportPayload latest;
+      if (!DecodeSetViewport(request.payload, latest)) {
+        if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
+        continue;
+      }
+      std::vector<uint64_t> coalescedIds;
+      coalescedIds.push_back(request.requestId);
+
+      // Drain consecutive setViewports from the read side. Stop on
+      // the first non-setViewport frame and carry it over to the
+      // normal dispatch below. The poll() peek is non-blocking; pipe
+      // writes < PIPE_BUF (4 KB) are atomic, and a setViewport frame
+      // is ~32 bytes, so any data poll() reports as ready is a full
+      // setViewport frame ready to read without blocking on partial
+      // bytes.
+      std::optional<SessionFrame> carryOver;
+      while (StdinHasPendingData()) {
+        SessionFrame next;
+        std::string nextErr;
+        if (!ReadNextFrame(STDIN_FILENO, next, nextErr)) {
+          // Read failure — the outer loop will catch this on the next
+          // iteration via the same `ReadNextFrame` path, surfacing the
+          // same error path.
+          break;
+        }
+        if (next.opcode == SessionOpcode::kSetViewport) {
+          donner::editor::sandbox::SetViewportPayload nextVp;
+          if (DecodeSetViewport(next.payload, nextVp)) {
+            latest = nextVp;
+            coalescedIds.push_back(next.requestId);
+          } else if (!RespondError(next.requestId, SessionErrorKind::kPayloadMalformed)) {
+            return 1;
+          }
+        } else {
+          carryOver = std::move(next);
+          break;
+        }
+      }
+
+      const FramePayload framePayload = core.handleSetViewport(latest);
+
+      // Each coalesced setViewport requestId still needs SOMETHING on the
+      // wire so the host's wire future resolves. Sending the full
+      // FramePayload (with bitmap) for every requestId is the path that
+      // re-introduced the stall — 100 coalesced requests × ~360 KB
+      // bitmap = ~36 MB through the pipe even though we only rendered
+      // once. Send the full payload for the LATEST requestId (the one
+      // the host most likely still has a future for) and a minimal
+      // "skipped" payload (no bitmap, no tree) for the rest.
+      const uint64_t latestRequestId = coalescedIds.back();
+      FramePayload skipped;
+      skipped.frameId = framePayload.frameId;
+      skipped.statusKind = framePayload.statusKind;
+      // Everything else stays default-empty — `hasFinalBitmap = false`,
+      // no tree, no compositor preview — so the encoded skipped frame
+      // is on the order of tens of bytes.
+      for (const uint64_t reqId : coalescedIds) {
+        const FramePayload& payload = (reqId == latestRequestId) ? framePayload : skipped;
+        if (!RespondFrame(payload, reqId)) return 1;
+      }
+
+      if (!carryOver.has_value()) {
+        continue;
+      }
+      request = std::move(*carryOver);
     }
 
     switch (request.opcode) {
@@ -151,6 +239,9 @@ int main(int /*argc*/, char** /*argv*/) {
       }
 
       case SessionOpcode::kSetViewport: {
+        // Unreachable: setViewport is handled by the coalescing block
+        // above before reaching this switch. Kept for completeness so
+        // an enum-add doesn't silently fall through to default.
         donner::editor::sandbox::SetViewportPayload vp;
         if (!DecodeSetViewport(request.payload, vp)) {
           if (!RespondError(request.requestId, SessionErrorKind::kPayloadMalformed)) return 1;
