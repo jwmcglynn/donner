@@ -94,7 +94,15 @@ jobs:
 
   misc-include-cleaner:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Bumped from 15 → 25: with the lint gate now actually working
+    # (clang-tidy resolves stdlib via the GCC 13 toolchain rather than
+    # bailing on `'cstddef' file not found`), each PR's full diff
+    # actually gets analyzed, and a 100+-file diff can take 15+ minutes
+    # for clang-tidy to chew through. The job emits "Suppressed N
+    # warnings due to line filter" for everything that's not on a
+    # changed line, so most of the runtime is the analyzer evaluating
+    # files it ultimately ignores.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
