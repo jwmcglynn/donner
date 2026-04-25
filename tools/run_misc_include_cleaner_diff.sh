@@ -70,6 +70,7 @@ mapfile -t MODIFIED_FILES < <(
     | grep -v '^examples/' \
     | grep -v '^donner/svg/renderer/geode/' \
     | grep -v 'Geode' \
+    | grep -v 'TinySkia' \
     | grep -v 'resvg_test_suite' || true
 )
 
@@ -133,6 +134,7 @@ git diff --unified=0 "${BASE}" HEAD \
        ':!examples/' \
        ':!donner/svg/renderer/geode/' \
        ':(exclude,glob)**/*Geode*' \
+       ':(exclude,glob)**/*TinySkia*' \
        ':(exclude,glob)**/resvg_test_suite*' \
   | "${CLANG_TIDY_DIFF}" \
       -p1 \
