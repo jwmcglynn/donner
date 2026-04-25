@@ -71,6 +71,7 @@ mapfile -t MODIFIED_FILES < <(
     | grep -v '^donner/svg/renderer/geode/' \
     | grep -v 'Geode' \
     | grep -v 'TinySkia' \
+    | grep -v '_macOS\.' \
     | grep -v 'resvg_test_suite' || true
 )
 
@@ -135,6 +136,7 @@ git diff --unified=0 "${BASE}" HEAD \
        ':!donner/svg/renderer/geode/' \
        ':(exclude,glob)**/*Geode*' \
        ':(exclude,glob)**/*TinySkia*' \
+       ':(exclude,glob)**/*_macOS.*' \
        ':(exclude,glob)**/resvg_test_suite*' \
   | "${CLANG_TIDY_DIFF}" \
       -p1 \

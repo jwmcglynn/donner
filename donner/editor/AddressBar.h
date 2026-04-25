@@ -13,6 +13,7 @@
 /// owner (typically `EditorApp`).
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <optional>
 #include <string>
