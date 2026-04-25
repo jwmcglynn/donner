@@ -698,8 +698,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       // drag step while the overlay (driven by worldBounds) moves at
       // `delta_doc`. See `LayerComposeOffsetReflectsDocumentDeltaForResized
       // Element` for the regression pin.
-      const Transform2d delta = matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
-                                newWorldFromEntity;
+      const Transform2d delta =
+          matchedLayer->bitmapEntityFromWorldTransform()->inverse() * newWorldFromEntity;
 
       const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
       // Subtree layers require a pure-translation delta: only then can we
