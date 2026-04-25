@@ -7,7 +7,8 @@
 /// renders via `SerializingRenderer`, and writes responses to stdout.
 /// See docs/design_docs/0023-editor_sandbox.md §S8 for the protocol.
 
-#include <poll.h>
+#include <poll.h>    // IWYU pragma: keep — clang-tidy include-cleaner doesn't
+                     // map `pollfd` / `POLLIN` / `poll` symbols to this header.
 #include <unistd.h>
 
 #include <cstdint>
@@ -92,11 +93,11 @@ bool RespondError(uint64_t requestId, SessionErrorKind kind, std::string_view me
 /// Returns true if stdin has data ready to read without blocking. Used by
 /// the setViewport-coalescing path to peek at the next pending request.
 bool StdinHasPendingData() {
-  pollfd pfd{};
+  pollfd pfd{};                       // NOLINT(misc-include-cleaner)
   pfd.fd = STDIN_FILENO;
-  pfd.events = POLLIN;
-  const int rv = ::poll(&pfd, 1, /*timeout_ms=*/0);
-  return rv > 0 && (pfd.revents & POLLIN) != 0;
+  pfd.events = POLLIN;                // NOLINT(misc-include-cleaner)
+  const int rv = ::poll(&pfd, 1, /*timeout_ms=*/0);  // NOLINT(misc-include-cleaner)
+  return rv > 0 && (pfd.revents & POLLIN) != 0;      // NOLINT(misc-include-cleaner)
 }
 
 }  // namespace

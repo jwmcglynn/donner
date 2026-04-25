@@ -9,10 +9,11 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <future>
+#include <future>  // IWYU pragma: keep
+#include <ratio>
 #include <string>
 #include <utility>
-#include <vector>
+#include <vector>  // IWYU pragma: keep
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/EditorApiCodec.h"
