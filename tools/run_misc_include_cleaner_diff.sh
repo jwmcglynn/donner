@@ -104,6 +104,29 @@ printf '  %s\n' "${MODIFIED_FILES[@]}"
 # Trailing `-- <args>` is intentionally omitted: that path forwards flags
 # to the compiler, not clang-tidy, and clang-tidy-diff.py has no pass-
 # through for clang-tidy options except via `-checks` above.
+# clang-tidy-19 needs explicit pointers to the GCC 13 stdlib headers
+# on ubuntu-24.04. The runner image installs `libstdc++-13-dev` and
+# `g++-13` by default, but clang-tidy's driver autodetection
+# inconsistently resolves them — every check fails with `'cstddef' file
+# not found` on header parses. Force-add the GCC 13 include paths via
+# `-extra-arg-before` (only when running under Linux/CI; on macOS
+# Xcode's SDK provides these via `-isysroot` baked into the compile
+# commands).
+extra_args=()
+if [[ "$(uname -s)" == "Linux" ]]; then
+  for inc in \
+      /usr/include/c++/13 \
+      /usr/include/x86_64-linux-gnu/c++/13 \
+      /usr/include/c++/13/backward; do
+    if [[ -d "${inc}" ]]; then
+      extra_args+=(-extra-arg-before="-isystem${inc}")
+    fi
+  done
+
+  echo "Diagnostic: clang-tidy-19 stdlib search paths injected:"
+  printf '  %s\n' "${extra_args[@]}"
+fi
+
 git diff --unified=0 "${BASE}" HEAD \
     -- '*.cc' '*.h' '*.hpp' '*.cpp' \
        ':!third_party/' \
@@ -116,4 +139,5 @@ git diff --unified=0 "${BASE}" HEAD \
       -path . \
       -iregex '.*\.(cc|h|hpp|cpp)$' \
       -checks='-*,misc-include-cleaner' \
-      -clang-tidy-binary "${CLANG_TIDY}"
+      -clang-tidy-binary "${CLANG_TIDY}" \
+      "${extra_args[@]}"
