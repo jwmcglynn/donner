@@ -88,6 +88,19 @@ echo "Refreshing compile_commands.json..."
 # here on `bazel run` only affects how the refresh tool itself is built.
 "${BAZEL}" run //tools:refresh_compile_commands
 
+# `bazel run //tools:refresh_compile_commands` extracts compile commands
+# from Bazel's analysis graph but does NOT materialize generated headers
+# (e.g. `donner/editor/EditorIcon.h` from the embed_resources rule) or
+# external-repo headers (e.g. `rules_cc/cc/runfiles/runfiles.h` consumed
+# by `donner/base/tests/Runfiles.h`). Without those on disk, clang-tidy
+# fails with "file not found" on the include line for every TU that
+# transitively depends on them — even though the path is right in
+# compile_commands.json. Build the universe targets we care about so
+# their genrule / external paths populate, then clang-tidy can resolve.
+echo "Pre-building //donner/... so generated headers + external repos are on disk..."
+"${BAZEL}" build //donner/... --build_tag_filters=-manual --keep_going \
+    || echo "Pre-build had failures; continuing — clang-tidy may surface compile errors for unbuilt files."
+
 echo "Running misc-include-cleaner on changed lines of ${#MODIFIED_FILES[@]} file(s):"
 printf '  %s\n' "${MODIFIED_FILES[@]}"
 
