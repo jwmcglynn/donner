@@ -92,13 +92,17 @@ echo "Refreshing compile_commands.json..."
 # from Bazel's analysis graph but does NOT materialize generated headers
 # (e.g. `donner/editor/EditorIcon.h` from the embed_resources rule) or
 # external-repo headers (e.g. `rules_cc/cc/runfiles/runfiles.h` consumed
-# by `donner/base/tests/Runfiles.h`). Without those on disk, clang-tidy
-# fails with "file not found" on the include line for every TU that
-# transitively depends on them — even though the path is right in
-# compile_commands.json. Build the universe targets we care about so
-# their genrule / external paths populate, then clang-tidy can resolve.
-echo "Pre-building //donner/... so generated headers + external repos are on disk..."
-"${BAZEL}" build //donner/... --build_tag_filters=-manual --keep_going \
+# via `donner/base/tests/Runfiles.h`). Without those on disk, clang-tidy
+# fails with "file not found" for every TU that transitively depends on
+# them — even though the path is right in compile_commands.json.
+#
+# Targeted pre-build: just the editor's three `embed_resources` headers
+# and `base_test_utils` (which pulls `@rules_cc//cc/runfiles` and
+# materializes the external repo). This is fast (cached after first
+# main run) and avoids the ~25-min full `//donner/...` build.
+echo "Pre-building generated headers + rules_cc external for clang-tidy..."
+"${BAZEL}" build //donner/editor:editor_icon //donner/editor:editor_splash \
+    //donner/editor:notice //donner/base:base_test_utils --keep_going \
     || echo "Pre-build had failures; continuing — clang-tidy may surface compile errors for unbuilt files."
 
 echo "Running misc-include-cleaner on changed lines of ${#MODIFIED_FILES[@]} file(s):"
