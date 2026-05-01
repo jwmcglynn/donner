@@ -123,4 +123,4 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: check typos
-        uses: crate-ci/typos@v1.45.0
+        uses: crate-ci/typos@v1.46.0
