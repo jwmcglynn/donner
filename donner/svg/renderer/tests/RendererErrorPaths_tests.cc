@@ -20,7 +20,8 @@ namespace {
 SVGDocument ParseDocument(std::string_view svgSource) {
   parser::SVGParser::Options options;
   ParseWarningSink parseSink;
-  ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource, parseSink, options);
+  ParseResult<SVGDocument> maybeDocument =
+      parser::SVGParser::ParseSVG(svgSource, parseSink, options);
   EXPECT_FALSE(maybeDocument.hasError());
   return std::move(maybeDocument.result());
 }
@@ -59,8 +60,7 @@ TEST(RendererErrorPathsTest, SaveToInvalidPathReturnsFalse) {
 
 TEST(RendererImageIOTest, WritePngToInvalidPath) {
   std::vector<uint8_t> pixels(4 * 4 * 4, 128);  // 4x4 RGBA
-  EXPECT_FALSE(
-      RendererImageIO::writeRgbaPixelsToPngFile("/no/such/dir/test.png", pixels, 4, 4, 0));
+  EXPECT_FALSE(RendererImageIO::writeRgbaPixelsToPngFile("/no/such/dir/test.png", pixels, 4, 4, 0));
 }
 
 TEST(RendererImageIOTest, WritePngToMemory) {

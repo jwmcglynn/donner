@@ -14,9 +14,9 @@ namespace {
 /// both ends. Returns `{startOffset, endOffsetInOld, endOffsetInNew}`.
 /// If the strings are identical, `startOffset == endOffsetInOld == endOffsetInNew`.
 struct DiffRange {
-  std::size_t changeStart = 0;    ///< First differing byte offset.
-  std::size_t changeEndOld = 0;   ///< End of changed region in old string.
-  std::size_t changeEndNew = 0;   ///< End of changed region in new string.
+  std::size_t changeStart = 0;   ///< First differing byte offset.
+  std::size_t changeEndOld = 0;  ///< End of changed region in old string.
+  std::size_t changeEndNew = 0;  ///< End of changed region in new string.
 };
 
 DiffRange computeDiffRange(std::string_view oldStr, std::string_view newStr) {
@@ -89,7 +89,7 @@ std::optional<QuotedRange> findEnclosingQuotedValue(std::string_view source, std
 /// Walks the SVG element tree (public API) and uses XMLNode::TryCast for
 /// source-range lookup. Returns the deepest matching element.
 std::optional<svg::SVGElement> findSvgElementAtOffset(const svg::SVGElement& root,
-                                                       std::size_t offset) {
+                                                      std::size_t offset) {
   for (auto child = root.firstChild(); child.has_value(); child = child->nextSibling()) {
     auto xmlNode = xml::XMLNode::TryCast(child->entityHandle());
     if (!xmlNode.has_value()) continue;
@@ -154,7 +154,7 @@ std::string_view extractAttributeName(std::string_view source, std::size_t attrV
 }  // namespace
 
 ClassifyResult classifyTextChange(svg::SVGDocument& document, std::string_view oldSource,
-                                   std::string_view newSource) {
+                                  std::string_view newSource) {
   // Step 1: find the changed byte range.
   const DiffRange diff = computeDiffRange(oldSource, newSource);
   if (diff.changeStart == diff.changeEndOld && diff.changeStart == diff.changeEndNew) {
@@ -207,8 +207,8 @@ ClassifyResult classifyTextChange(svg::SVGDocument& document, std::string_view o
   // length delta.
   const std::ptrdiff_t delta =
       static_cast<std::ptrdiff_t>(newSource.size()) - static_cast<std::ptrdiff_t>(oldSource.size());
-  const std::size_t newCloseQuote = static_cast<std::size_t>(
-      static_cast<std::ptrdiff_t>(quoted->closeQuote - 1) + delta);
+  const std::size_t newCloseQuote =
+      static_cast<std::size_t>(static_cast<std::ptrdiff_t>(quoted->closeQuote - 1) + delta);
   if (newCloseQuote >= newSource.size()) {
     return {};
   }

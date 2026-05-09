@@ -19,8 +19,8 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor::sandbox {
 namespace {

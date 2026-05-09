@@ -10,8 +10,8 @@ namespace {
 const char* BackendHintName(BackendHint hint) {
   switch (hint) {
     case BackendHint::kUnspecified: return "unspecified";
-    case BackendHint::kTinySkia:   return "tiny_skia";
-    case BackendHint::kGeode:      return "geode";
+    case BackendHint::kTinySkia: return "tiny_skia";
+    case BackendHint::kGeode: return "geode";
   }
   return "unknown";
 }
@@ -63,10 +63,8 @@ bool DiffHeaders(std::ostringstream& os, const RnrHeader& a, const RnrHeader& b)
 
 }  // namespace
 
-DiffResult ComputeRnrDiff(const RnrHeader& headerA,
-                          const std::vector<DecodedCommand>& cmdsA,
-                          const RnrHeader& headerB,
-                          const std::vector<DecodedCommand>& cmdsB) {
+DiffResult ComputeRnrDiff(const RnrHeader& headerA, const std::vector<DecodedCommand>& cmdsA,
+                          const RnrHeader& headerB, const std::vector<DecodedCommand>& cmdsB) {
   DiffResult result;
   std::ostringstream os;
 
@@ -97,7 +95,7 @@ DiffResult ComputeRnrDiff(const RnrHeader& headerA,
   // Back-trace to emit the unified diff.
   // Collect diff entries in reverse, then print in order.
   struct DiffEntry {
-    char prefix;      // ' ', '-', '+'
+    char prefix;  // ' ', '-', '+'
     int32_t depth;
     std::string summary;
   };

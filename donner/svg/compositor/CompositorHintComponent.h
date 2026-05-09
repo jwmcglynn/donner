@@ -39,7 +39,8 @@ enum class HintSource : uint8_t {
 struct HintEntry {
   /// Source subsystem that published this hint.
   HintSource source;
-  /// Weight (0..65535). `0xFFFF` combined with `HintSource::Mandatory` is the infinite-weight sentinel.
+  /// Weight (0..65535). `0xFFFF` combined with `HintSource::Mandatory` is the infinite-weight
+  /// sentinel.
   uint16_t weight;
 };
 
@@ -64,10 +65,9 @@ struct CompositorHintComponent {
   /// All hint entries currently attached to this entity.
   std::vector<HintEntry> entries;
 
-  /// Append a hint. Does not deduplicate — the same `(source, weight)` pair may appear more than once.
-  void addHint(HintSource source, uint16_t weight) {
-    entries.push_back(HintEntry{source, weight});
-  }
+  /// Append a hint. Does not deduplicate — the same `(source, weight)` pair may appear more than
+  /// once.
+  void addHint(HintSource source, uint16_t weight) { entries.push_back(HintEntry{source, weight}); }
 
   /**
    * Remove exactly one entry whose `source` and `weight` both match. Used

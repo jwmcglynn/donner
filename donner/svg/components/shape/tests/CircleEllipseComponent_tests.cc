@@ -1,5 +1,3 @@
-#include "donner/svg/components/shape/CircleComponent.h"
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -10,6 +8,7 @@
 #include "donner/svg/SVGCircleElement.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGEllipseElement.h"
+#include "donner/svg/components/shape/CircleComponent.h"
 #include "donner/svg/components/shape/EllipseComponent.h"
 
 namespace donner::svg::components {
@@ -22,9 +21,8 @@ std::map<RcString, parser::UnparsedProperty> ParseUnparsedProperties(std::string
   std::map<RcString, parser::UnparsedProperty> properties;
 
   for (const auto& declaration : css::CSS::ParseStyleAttribute(style)) {
-    properties.emplace(
-        declaration.name,
-        parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+    properties.emplace(declaration.name,
+                       parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
   }
 
   return properties;
@@ -70,10 +68,10 @@ TEST(CircleComponent, ParseCirclePresentationAttributeReturnsErrorForInvalidValu
   SVGDocument document;
   SVGCircleElement circle = SVGCircleElement::Create(document);
 
-  EXPECT_THAT(ParseCirclePresentationAttribute(
-                  circle.entityHandle(), "cy",
-                  parser::PropertyParseFnParams::CreateForAttribute("bogus")),
-              ParseErrorIs("Invalid length or percentage"));
+  EXPECT_THAT(
+      ParseCirclePresentationAttribute(circle.entityHandle(), "cy",
+                                       parser::PropertyParseFnParams::CreateForAttribute("bogus")),
+      ParseErrorIs("Invalid length or percentage"));
 
   const CircleProperties& properties = circle.entityHandle().get<CircleComponent>().properties;
   EXPECT_THAT(properties.cy.get(), Optional(Lengthd(0, Lengthd::Unit::None)));
@@ -83,10 +81,10 @@ TEST(CircleComponent, ParseCirclePresentationAttributeReturnsFalseForUnknownAttr
   SVGDocument document;
   SVGCircleElement circle = SVGCircleElement::Create(document);
 
-  EXPECT_THAT(ParseCirclePresentationAttribute(
-                  circle.entityHandle(), "width",
-                  parser::PropertyParseFnParams::CreateForAttribute("10")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseCirclePresentationAttribute(circle.entityHandle(), "width",
+                                       parser::PropertyParseFnParams::CreateForAttribute("10")),
+      ParseResultIs(false));
   EXPECT_FALSE(circle.entityHandle().all_of<CircleComponent>());
 }
 
@@ -118,10 +116,10 @@ TEST(EllipseComponent, ParseEllipsePresentationAttributeParsesKnownAttribute) {
   SVGDocument document;
   SVGEllipseElement ellipse = SVGEllipseElement::Create(document);
 
-  EXPECT_THAT(ParseEllipsePresentationAttribute(
-                  ellipse.entityHandle(), "rx",
-                  parser::PropertyParseFnParams::CreateForAttribute("12%")),
-              ParseResultIs(true));
+  EXPECT_THAT(
+      ParseEllipsePresentationAttribute(ellipse.entityHandle(), "rx",
+                                        parser::PropertyParseFnParams::CreateForAttribute("12%")),
+      ParseResultIs(true));
 
   const EllipseProperties& properties = ellipse.entityHandle().get<EllipseComponent>().properties;
   EXPECT_THAT(properties.rx.get(), Optional(Lengthd(12, Lengthd::Unit::Percent)));
@@ -131,10 +129,10 @@ TEST(EllipseComponent, ParseEllipsePresentationAttributeReturnsErrorForInvalidVa
   SVGDocument document;
   SVGEllipseElement ellipse = SVGEllipseElement::Create(document);
 
-  EXPECT_THAT(ParseEllipsePresentationAttribute(
-                  ellipse.entityHandle(), "ry",
-                  parser::PropertyParseFnParams::CreateForAttribute("bogus")),
-              ParseErrorIs("Invalid length or percentage"));
+  EXPECT_THAT(
+      ParseEllipsePresentationAttribute(ellipse.entityHandle(), "ry",
+                                        parser::PropertyParseFnParams::CreateForAttribute("bogus")),
+      ParseErrorIs("Invalid length or percentage"));
 
   const EllipseProperties& properties = ellipse.entityHandle().get<EllipseComponent>().properties;
   EXPECT_FALSE(properties.ry.hasValue());
@@ -144,10 +142,10 @@ TEST(EllipseComponent, ParseEllipsePresentationAttributeReturnsFalseForUnknownAt
   SVGDocument document;
   SVGEllipseElement ellipse = SVGEllipseElement::Create(document);
 
-  EXPECT_THAT(ParseEllipsePresentationAttribute(
-                  ellipse.entityHandle(), "width",
-                  parser::PropertyParseFnParams::CreateForAttribute("10")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseEllipsePresentationAttribute(ellipse.entityHandle(), "width",
+                                        parser::PropertyParseFnParams::CreateForAttribute("10")),
+      ParseResultIs(false));
   EXPECT_FALSE(ellipse.entityHandle().all_of<EllipseComponent>());
 }
 

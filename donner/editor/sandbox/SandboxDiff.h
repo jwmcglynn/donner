@@ -31,9 +31,7 @@ struct DiffResult {
 /// @param cmdsA    Decoded commands from the first recording.
 /// @param headerB  Header from the second recording.
 /// @param cmdsB    Decoded commands from the second recording.
-DiffResult ComputeRnrDiff(const RnrHeader& headerA,
-                          const std::vector<DecodedCommand>& cmdsA,
-                          const RnrHeader& headerB,
-                          const std::vector<DecodedCommand>& cmdsB);
+DiffResult ComputeRnrDiff(const RnrHeader& headerA, const std::vector<DecodedCommand>& cmdsA,
+                          const RnrHeader& headerB, const std::vector<DecodedCommand>& cmdsB);
 
 }  // namespace donner::editor::sandbox

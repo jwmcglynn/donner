@@ -165,8 +165,8 @@ MATCHER_P2(ParseErrorRange, startOffsetMatcher, endOffsetMatcher,
       *result_listener << "end offset is EndOfString (no offset)";
       return false;
     }
-    bool startOk =
-        testing::ExplainMatchResult(startOffsetMatcher, range.start.offset.value(), result_listener);
+    bool startOk = testing::ExplainMatchResult(startOffsetMatcher, range.start.offset.value(),
+                                               result_listener);
     if (!startOk) {
       *result_listener << " (start offset mismatch)";
       return false;

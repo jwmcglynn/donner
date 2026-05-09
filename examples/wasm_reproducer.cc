@@ -44,7 +44,8 @@ int main() {
   }
 
   ParseWarningSink renderWarningSink;
-  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(false, renderWarningSink);
+  registry.ctx().get<components::RenderingContext>().instantiateRenderTree(false,
+                                                                           renderWarningSink);
 
   // Count entities with RenderingInstanceComponent.
   int count = 0;

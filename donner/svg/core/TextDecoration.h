@@ -21,9 +21,9 @@ namespace donner::svg {
  * @see https://www.w3.org/TR/SVG2/text.html#TextDecorationProperties
  */
 enum class TextDecoration : uint8_t {
-  None = 0,             ///< [DEFAULT] No text decoration.
-  Underline = 1 << 0,   ///< Draw a line below the text.
-  Overline = 1 << 1,    ///< Draw a line above the text.
+  None = 0,              ///< [DEFAULT] No text decoration.
+  Underline = 1 << 0,    ///< Draw a line below the text.
+  Overline = 1 << 1,     ///< Draw a line above the text.
   LineThrough = 1 << 2,  ///< Draw a line through the middle of the text.
 };
 

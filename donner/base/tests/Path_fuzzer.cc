@@ -142,8 +142,7 @@ done:
 
     // Verify no CurveTo verbs remain.
     quadPath.forEach([](Path::Verb verb, std::span<const Vector2d> /*points*/) {
-      assert(verb != Path::Verb::CurveTo &&
-             "cubicToQuadratic should eliminate all CurveTo verbs");
+      assert(verb != Path::Verb::CurveTo && "cubicToQuadratic should eliminate all CurveTo verbs");
     });
   }
 

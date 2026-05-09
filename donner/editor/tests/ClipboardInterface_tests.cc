@@ -63,7 +63,9 @@ TEST(InMemoryClipboardTests, MultilineStringPreserved) {
 TEST(InMemoryClipboardTests, Utf8Preserved) {
   InMemoryClipboard clipboard;
   // Mix of ASCII, accented Latin, Japanese, and a four-byte emoji.
-  const std::string utf8 = "Hello, caf\xc3\xa9 \xe3\x81\x93\xe3\x82\x93\xe3\x81\xab\xe3\x81\xa1\xe3\x81\xaf \xf0\x9f\x8d\xa9";
+  const std::string utf8 =
+      "Hello, caf\xc3\xa9 \xe3\x81\x93\xe3\x82\x93\xe3\x81\xab\xe3\x81\xa1\xe3\x81\xaf "
+      "\xf0\x9f\x8d\xa9";
   clipboard.setText(utf8);
   EXPECT_EQ(clipboard.getText(), utf8)
       << "UTF-8 content should round-trip byte-for-byte through the clipboard.";

@@ -62,7 +62,7 @@ using GetInitialFn = std::optional<T> (*)();
  */
 template <typename T, PropertyCascade kCascade = PropertyCascade::None>
 struct Property {
-  using Type = T;  ///< Type of the property value.
+  using Type = T;                                            ///< Type of the property value.
   static constexpr PropertyCascade kCascadeMode = kCascade;  ///< Cascade mode metadata.
 
   /**

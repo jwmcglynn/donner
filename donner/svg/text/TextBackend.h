@@ -3,8 +3,8 @@
 
 #include <optional>
 
-#include "donner/svg/core/FontVariant.h"
 #include "donner/base/Path.h"
+#include "donner/svg/core/FontVariant.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {

@@ -59,8 +59,7 @@ class SVGFEOffsetElement : public SVGFilterPrimitiveStandardAttributes {
 
 protected:
   /// Create an SVGFEOffsetElement wrapper from an entity.
-  explicit SVGFEOffsetElement(EntityHandle handle)
-      : SVGFilterPrimitiveStandardAttributes(handle) {}
+  explicit SVGFEOffsetElement(EntityHandle handle) : SVGFilterPrimitiveStandardAttributes(handle) {}
 
   /**
    * Internal constructor to create the element on an existing \ref Entity.

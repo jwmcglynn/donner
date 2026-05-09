@@ -221,15 +221,13 @@ TEST(SVGStyleCascadeTests, DescendantSelector) {
   auto inside = doc.querySelector("#inside");
   ASSERT_TRUE(inside.has_value());
   EXPECT_THAT(inside->getComputedStyle().fill.get(),
-              Optional(PaintServer(
-                  PaintServer::Solid(Color(RGBA(0x80, 0, 0x80, 0xFF))))));
+              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0x80, 0, 0x80, 0xFF))))));
 
   // The rect outside the <g> should NOT match "g rect", so fill defaults to black.
   auto outside = doc.querySelector("#outside");
   ASSERT_TRUE(outside.has_value());
   EXPECT_THAT(outside->getComputedStyle().fill.get(),
-              Optional(PaintServer(
-                  PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))))));
+              Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))))));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 
+#include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/core/ClipRule.h"
-#include "donner/base/Path.h"
 
 namespace donner::svg::components {
 

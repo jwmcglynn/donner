@@ -48,8 +48,8 @@ std::string BuildTreeNodeLabel(const donner::svg::SVGElement& element) {
 }  // namespace
 
 void SidebarPresenter::captureTreeNode(const donner::svg::SVGElement& element,
-                                        std::span<const donner::svg::SVGElement> selection,
-                                        TreeNodeSnapshot& out) {
+                                       std::span<const donner::svg::SVGElement> selection,
+                                       TreeNodeSnapshot& out) {
   out.element = element;
   out.label = BuildTreeNodeLabel(element);
   out.isSelected = IsSelectedInTree(selection, element);
@@ -103,7 +103,7 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 }
 
 void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node,
-                                       TreeViewState& state) const {
+                                      TreeViewState& state) const {
   const bool hasChildren = !node.children.empty();
   const bool onSelectionPath = state.pendingScroll && state.scrollTarget.has_value() &&
                                IsAncestorOrSelf(*node.element, *state.scrollTarget);

@@ -5,13 +5,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Selector.h"
 #include "donner/css/Specificity.h"
+#include "donner/css/parser/SelectorParser.h"
 #include "donner/css/selectors/ComplexSelector.h"
 #include "donner/css/selectors/PseudoClassSelector.h"
-#include "donner/css/parser/SelectorParser.h"
-#include "donner/base/tests/BaseTestUtils.h"
 
 using testing::Eq;
 using testing::Ne;

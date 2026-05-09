@@ -15,7 +15,8 @@ using testing::ElementsAre;
 MATCHER_P3(ParseWarningIs, line, offset, errorMessageMatcher, "") {
   if (arg.range.start.lineInfo) {
     return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener) &&
-           arg.range.start.lineInfo->offsetOnLine == offset && arg.range.start.lineInfo->line == line;
+           arg.range.start.lineInfo->offsetOnLine == offset &&
+           arg.range.start.lineInfo->line == line;
   }
 
   return testing::ExplainMatchResult(errorMessageMatcher, arg.reason, result_listener) &&
@@ -181,7 +182,7 @@ TEST(SVGParser, InvalidXmlns) {
                            "Expected 'http://www.w3.org/2000/svg'"));
 
   EXPECT_THAT(warnings.warnings(), ElementsAre(AllOf(ParseErrorIs("Unexpected namespace 'invalid'"),
-                                          ParseErrorPos(1, 37))));
+                                                     ParseErrorPos(1, 37))));
 }
 
 TEST(SVGParser, DoubleXmlNs) {

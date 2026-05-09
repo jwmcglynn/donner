@@ -141,8 +141,7 @@ TEST(DeclarationListParser, SourceRangeSpansNameToLastValueToken) {
   //                   0    5    10   14
   // The !important tokens are popped off `values`; sourceRange.end should
   // stay at the last *value* token (`red`), not at `!` or `important`.
-  const auto importantDecls =
-      DeclarationListParser::ParseOnlyDeclarations("fill: red !important");
+  const auto importantDecls = DeclarationListParser::ParseOnlyDeclarations("fill: red !important");
   ASSERT_EQ(importantDecls.size(), 1u);
   EXPECT_TRUE(importantDecls[0].important);
   EXPECT_EQ(importantDecls[0].sourceRange.start.offset, 0u);
@@ -151,8 +150,7 @@ TEST(DeclarationListParser, SourceRangeSpansNameToLastValueToken) {
 
   // Multi-token value: `transform: translate(1, 2)`
   //                     0          11
-  const auto fnDecls =
-      DeclarationListParser::ParseOnlyDeclarations("transform: translate(1, 2)");
+  const auto fnDecls = DeclarationListParser::ParseOnlyDeclarations("transform: translate(1, 2)");
   ASSERT_EQ(fnDecls.size(), 1u);
   EXPECT_EQ(fnDecls[0].sourceRange.start.offset, 0u);
   EXPECT_EQ(fnDecls[0].sourceRange.end.offset, 11u)

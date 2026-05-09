@@ -153,8 +153,8 @@ TEST_F(LayerResolverTest, MandatoryAlwaysWinsUnderBudgetPressure) {
   EXPECT_FALSE(hasAssignment(mandatoryEntities[2]))
       << "over-budget mandatory should have no assignment";
   for (Entity e : explicitEntities) {
-    EXPECT_FALSE(hasAssignment(e)) << "explicit candidate " << e
-                                   << " should lose to mandatory under budget pressure";
+    EXPECT_FALSE(hasAssignment(e))
+        << "explicit candidate " << e << " should lose to mandatory under budget pressure";
   }
 
   EXPECT_EQ(resolver_.stats().candidatesEvaluated, 6u);
@@ -172,8 +172,8 @@ TEST_F(LayerResolverTest, DeterministicAcrossRepeatedCalls) {
     Entity e = registry_.create();
     entities.push_back(e);
     // Alternating weights.
-    hints.push_back(ScopedCompositorHint::Explicit(registry_, e,
-                                                   static_cast<uint16_t>(0x1000 + i * 0x0400)));
+    hints.push_back(
+        ScopedCompositorHint::Explicit(registry_, e, static_cast<uint16_t>(0x1000 + i * 0x0400)));
   }
 
   resolver_.resolve(registry_, kDefaultBudget);
@@ -196,10 +196,8 @@ TEST_F(LayerResolverTest, DeterministicAcrossRepeatedCalls) {
 TEST_F(LayerResolverTest, ReResolveAfterHintDropClearsAssignment) {
   const Entity a = registry_.create();
   const Entity b = registry_.create();
-  std::optional<ScopedCompositorHint> hintA(
-      ScopedCompositorHint::Explicit(registry_, a, 0x4000));
-  std::optional<ScopedCompositorHint> hintB(
-      ScopedCompositorHint::Explicit(registry_, b, 0x2000));
+  std::optional<ScopedCompositorHint> hintA(ScopedCompositorHint::Explicit(registry_, a, 0x4000));
+  std::optional<ScopedCompositorHint> hintB(ScopedCompositorHint::Explicit(registry_, b, 0x2000));
 
   resolver_.resolve(registry_, kDefaultBudget);
   ASSERT_EQ(layerIdOf(a), 1u);

@@ -97,7 +97,7 @@ ComputedRectComponent::ComputedRectComponent(
 }
 
 ParseResult<bool> ParseRectPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params) {
+                                                 const parser::PropertyParseFnParams& params) {
   const RectPresentationAttributeParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     RectProperties& properties = handle.get_or_emplace<RectComponent>().properties;

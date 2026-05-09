@@ -4,6 +4,8 @@
 /// recordings. All wire fixtures are built programmatically via
 /// `SerializingRenderer::draw()` and `EncodeRnrBuffer` / `ParseRnrBuffer`.
 
+#include "donner/editor/sandbox/SandboxDiff.h"
+
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -14,7 +16,6 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/sandbox/FrameInspector.h"
 #include "donner/editor/sandbox/RnrFile.h"
-#include "donner/editor/sandbox/SandboxDiff.h"
 #include "donner/editor/sandbox/SerializingRenderer.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererInterface.h"

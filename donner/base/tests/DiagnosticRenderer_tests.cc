@@ -51,8 +51,7 @@ TEST(DiagnosticRenderer, WithFilename) {
   auto diag = ParseDiagnostic::Error("Bad input",
                                      SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)});
 
-  std::string result =
-      DiagnosticRenderer::format(source, diag, {.filename = "test.svg"});
+  std::string result = DiagnosticRenderer::format(source, diag, {.filename = "test.svg"});
   EXPECT_EQ(result,
             "error: Bad input\n"
             "  --> test.svg:1:1\n"
@@ -63,9 +62,8 @@ TEST(DiagnosticRenderer, WithFilename) {
 
 TEST(DiagnosticRenderer, EndOfString) {
   const std::string_view source = "abc";
-  auto diag = ParseDiagnostic::Error("Unexpected end",
-                                     SourceRange{FileOffset::EndOfString(),
-                                                 FileOffset::EndOfString()});
+  auto diag = ParseDiagnostic::Error(
+      "Unexpected end", SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
 
   // EndOfString has no offset, so only the message is shown.
   std::string result = DiagnosticRenderer::format(source, diag);
@@ -107,10 +105,10 @@ TEST(DiagnosticRenderer, PointRange) {
 TEST(DiagnosticRenderer, FormatAll) {
   const std::string_view source = "abc";
   ParseWarningSink sink;
-  sink.add(ParseDiagnostic::Warning("warn1",
-                                    SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)}));
-  sink.add(ParseDiagnostic::Warning("warn2",
-                                    SourceRange{FileOffset::Offset(2), FileOffset::Offset(3)}));
+  sink.add(
+      ParseDiagnostic::Warning("warn1", SourceRange{FileOffset::Offset(0), FileOffset::Offset(1)}));
+  sink.add(
+      ParseDiagnostic::Warning("warn2", SourceRange{FileOffset::Offset(2), FileOffset::Offset(3)}));
 
   std::string result = DiagnosticRenderer::formatAll(source, sink);
   EXPECT_EQ(result,

@@ -54,48 +54,46 @@ TEST(XMLTokenizer, Empty) {
 
 TEST(XMLTokenizer, SelfClosingElement) {
   EXPECT_THAT(TokenizeWithText("<br/>"),
-              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "br"),
-                           Tok(T::TagSelfClose, "/>")));
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "br"), Tok(T::TagSelfClose, "/>")));
 }
 
 TEST(XMLTokenizer, ElementWithChildren) {
   EXPECT_THAT(TokenizeWithText("<a>text</a>"),
               ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::TagClose, ">"),
-                           Tok(T::TextContent, "text"), Tok(T::TagOpen, "</"),
-                           Tok(T::TagName, "a"), Tok(T::TagClose, ">")));
+                          Tok(T::TextContent, "text"), Tok(T::TagOpen, "</"), Tok(T::TagName, "a"),
+                          Tok(T::TagClose, ">")));
 }
 
 TEST(XMLTokenizer, Attributes) {
-  EXPECT_THAT(
-      TokenizeWithText(R"(<rect fill="red"/>)"),
-      ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "rect"), Tok(T::Whitespace, " "),
-                   Tok(T::AttributeName, "fill"), Tok(T::Whitespace, "="),
-                   Tok(T::AttributeValue, R"("red")"), Tok(T::TagSelfClose, "/>")));
+  EXPECT_THAT(TokenizeWithText(R"(<rect fill="red"/>)"),
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "rect"), Tok(T::Whitespace, " "),
+                          Tok(T::AttributeName, "fill"), Tok(T::Whitespace, "="),
+                          Tok(T::AttributeValue, R"("red")"), Tok(T::TagSelfClose, "/>")));
 }
 
 TEST(XMLTokenizer, MultipleAttributes) {
   EXPECT_THAT(TokenizeWithText(R"(<rect x="1" y="2"/>)"),
               ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "rect"), Tok(T::Whitespace, " "),
-                           Tok(T::AttributeName, "x"), Tok(T::Whitespace, "="),
-                           Tok(T::AttributeValue, R"("1")"), Tok(T::Whitespace, " "),
-                           Tok(T::AttributeName, "y"), Tok(T::Whitespace, "="),
-                           Tok(T::AttributeValue, R"("2")"), Tok(T::TagSelfClose, "/>")));
+                          Tok(T::AttributeName, "x"), Tok(T::Whitespace, "="),
+                          Tok(T::AttributeValue, R"("1")"), Tok(T::Whitespace, " "),
+                          Tok(T::AttributeName, "y"), Tok(T::Whitespace, "="),
+                          Tok(T::AttributeValue, R"("2")"), Tok(T::TagSelfClose, "/>")));
 }
 
 TEST(XMLTokenizer, SingleQuotedAttribute) {
   EXPECT_THAT(TokenizeWithText("<a b='c'/>"),
               ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::Whitespace, " "),
-                           Tok(T::AttributeName, "b"), Tok(T::Whitespace, "="),
-                           Tok(T::AttributeValue, "'c'"), Tok(T::TagSelfClose, "/>")));
+                          Tok(T::AttributeName, "b"), Tok(T::Whitespace, "="),
+                          Tok(T::AttributeValue, "'c'"), Tok(T::TagSelfClose, "/>")));
 }
 
 TEST(XMLTokenizer, WhitespaceAroundEquals) {
   EXPECT_THAT(
       TokenizeWithText(R"(<a x = "1" />)"),
       ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::Whitespace, " "),
-                   Tok(T::AttributeName, "x"), Tok(T::Whitespace, " "), Tok(T::Whitespace, "="),
-                   Tok(T::Whitespace, " "), Tok(T::AttributeValue, R"("1")"),
-                   Tok(T::Whitespace, " "), Tok(T::TagSelfClose, "/>")));
+                  Tok(T::AttributeName, "x"), Tok(T::Whitespace, " "), Tok(T::Whitespace, "="),
+                  Tok(T::Whitespace, " "), Tok(T::AttributeValue, R"("1")"),
+                  Tok(T::Whitespace, " "), Tok(T::TagSelfClose, "/>")));
 }
 
 // =============================================================================
@@ -103,8 +101,7 @@ TEST(XMLTokenizer, WhitespaceAroundEquals) {
 // =============================================================================
 
 TEST(XMLTokenizer, Comment) {
-  EXPECT_THAT(TokenizeWithText("<!-- hello -->"),
-              ElementsAre(Tok(T::Comment, "<!-- hello -->")));
+  EXPECT_THAT(TokenizeWithText("<!-- hello -->"), ElementsAre(Tok(T::Comment, "<!-- hello -->")));
 }
 
 TEST(XMLTokenizer, CData) {
@@ -137,20 +134,19 @@ TEST(XMLTokenizer, ProcessingInstruction) {
 
 TEST(XMLTokenizer, MixedContent) {
   const auto tokens = TokenizeWithText("<svg><!-- c --><rect/></svg>");
-  EXPECT_THAT(tokens, ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "svg"),
-                                   Tok(T::TagClose, ">"), Tok(T::Comment, "<!-- c -->"),
-                                   Tok(T::TagOpen, "<"), Tok(T::TagName, "rect"),
-                                   Tok(T::TagSelfClose, "/>"), Tok(T::TagOpen, "</"),
-                                   Tok(T::TagName, "svg"), Tok(T::TagClose, ">")));
+  EXPECT_THAT(tokens,
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "svg"), Tok(T::TagClose, ">"),
+                          Tok(T::Comment, "<!-- c -->"), Tok(T::TagOpen, "<"),
+                          Tok(T::TagName, "rect"), Tok(T::TagSelfClose, "/>"),
+                          Tok(T::TagOpen, "</"), Tok(T::TagName, "svg"), Tok(T::TagClose, ">")));
 }
 
 TEST(XMLTokenizer, TextBetweenElements) {
   EXPECT_THAT(TokenizeWithText("<a>hello<b/>world</a>"),
               ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::TagClose, ">"),
-                           Tok(T::TextContent, "hello"), Tok(T::TagOpen, "<"),
-                           Tok(T::TagName, "b"), Tok(T::TagSelfClose, "/>"),
-                           Tok(T::TextContent, "world"), Tok(T::TagOpen, "</"),
-                           Tok(T::TagName, "a"), Tok(T::TagClose, ">")));
+                          Tok(T::TextContent, "hello"), Tok(T::TagOpen, "<"), Tok(T::TagName, "b"),
+                          Tok(T::TagSelfClose, "/>"), Tok(T::TextContent, "world"),
+                          Tok(T::TagOpen, "</"), Tok(T::TagName, "a"), Tok(T::TagClose, ">")));
 }
 
 // =============================================================================
@@ -221,17 +217,16 @@ TEST(XMLTokenizer, RecoveryAfterMalformedInput) {
 }
 
 TEST(XMLTokenizer, NamespacedElement) {
-  EXPECT_THAT(TokenizeWithText("<ns:elem/>"),
-              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "ns:elem"),
-                           Tok(T::TagSelfClose, "/>")));
+  EXPECT_THAT(
+      TokenizeWithText("<ns:elem/>"),
+      ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "ns:elem"), Tok(T::TagSelfClose, "/>")));
 }
 
 TEST(XMLTokenizer, NamespacedAttribute) {
-  EXPECT_THAT(
-      TokenizeWithText(R"(<a xmlns:xlink="http://foo"/>)"),
-      ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::Whitespace, " "),
-                   Tok(T::AttributeName, "xmlns:xlink"), Tok(T::Whitespace, "="),
-                   Tok(T::AttributeValue, R"("http://foo")"), Tok(T::TagSelfClose, "/>")));
+  EXPECT_THAT(TokenizeWithText(R"(<a xmlns:xlink="http://foo"/>)"),
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::Whitespace, " "),
+                          Tok(T::AttributeName, "xmlns:xlink"), Tok(T::Whitespace, "="),
+                          Tok(T::AttributeValue, R"("http://foo")"), Tok(T::TagSelfClose, "/>")));
 }
 
 // =============================================================================
@@ -241,7 +236,7 @@ TEST(XMLTokenizer, NamespacedAttribute) {
 TEST(XMLTokenizer, EmptyElement) {
   EXPECT_THAT(TokenizeWithText("<a></a>"),
               ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "a"), Tok(T::TagClose, ">"),
-                           Tok(T::TagOpen, "</"), Tok(T::TagName, "a"), Tok(T::TagClose, ">")));
+                          Tok(T::TagOpen, "</"), Tok(T::TagName, "a"), Tok(T::TagClose, ">")));
 }
 
 TEST(XMLTokenizer, JustText) {

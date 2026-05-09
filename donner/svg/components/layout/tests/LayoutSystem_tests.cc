@@ -16,7 +16,8 @@ namespace {
 
 constexpr std::string_view kTinyPngDataUrl =
     "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+"
+    "Rq28akAAAAASUVORK5CYII=";
 
 }  // namespace
 
@@ -135,7 +136,8 @@ TEST_F(LayoutSystemTest, GetSetEntityFromParentTransform) {
   auto rectEntityHandle = document.querySelector("#rect1")->entityHandle();
 
   // Test getting the transform for the group
-  const Transform2d groupTransform = layoutSystem.getRawEntityFromParentTransform(groupEntityHandle);
+  const Transform2d groupTransform =
+      layoutSystem.getRawEntityFromParentTransform(groupEntityHandle);
   EXPECT_THAT(groupTransform, TransformEq(Transform2d::Translate({10.0, 20.0})));
 
   // Test setting a new transform for the rectangle
@@ -226,8 +228,8 @@ TEST_F(LayoutSystemTest, TransformOriginSupport) {
   auto rectB = document.querySelector("#b")->entityHandle();
 
   const Transform2d expectedOrigin50Percent = Transform2d::Translate({50.0, 50.0}) *
-                                             Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                                             Transform2d::Translate({-50.0, -50.0});
+                                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                                              Transform2d::Translate({-50.0, -50.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectA),
               TransformEq(expectedOrigin50Percent));
@@ -249,8 +251,8 @@ TEST_F(LayoutSystemTest, TransformOriginBottomRight) {
   auto rectC = document.querySelector("#c")->entityHandle();
 
   const Transform2d expected = Transform2d::Translate({100.0, 100.0}) *
-                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                              Transform2d::Translate({-100.0, -100.0});
+                               Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                               Transform2d::Translate({-100.0, -100.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectC), TransformEq(expected));
 }
@@ -269,8 +271,8 @@ TEST_F(LayoutSystemTest, TransformOriginQuarterThreeQuarter) {
   auto rectD = document.querySelector("#d")->entityHandle();
 
   const Transform2d expected = Transform2d::Translate({25.0, 75.0}) *
-                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                              Transform2d::Translate({-25.0, -75.0});
+                               Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                               Transform2d::Translate({-25.0, -75.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectD), TransformEq(expected));
 }
@@ -289,8 +291,8 @@ TEST_F(LayoutSystemTest, TransformOriginPixels) {
   auto rectE = document.querySelector("#e")->entityHandle();
 
   const Transform2d expected = Transform2d::Translate({10.0, 20.0}) *
-                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                              Transform2d::Translate({-10.0, -20.0});
+                               Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                               Transform2d::Translate({-10.0, -20.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectE), TransformEq(expected));
 }
@@ -330,8 +332,8 @@ TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeZeroBehavior) {
   )");
 
   auto& registry = document.registry();
-  auto size =
-      layoutSystem.calculateCanvasScaledDocumentSize(registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
+  auto size = layoutSystem.calculateCanvasScaledDocumentSize(
+      registry, LayoutSystem::InvalidSizeBehavior::ZeroSize);
   // Should produce a valid size.
   EXPECT_GT(size.x, 0);
   EXPECT_GT(size.y, 0);
@@ -720,21 +722,20 @@ TEST_F(LayoutSystemTest, DefiniteDimensionWithoutAspectRatioUsesDefaultCanvasDim
 }
 
 TEST_F(LayoutSystemTest, ImageIntrinsicSizingBranches) {
-  const std::string svg =
-      std::string(R"(
+  const std::string svg = std::string(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <image id="auto" href=")") +
-      std::string(kTinyPngDataUrl) +
-      R"(" x="1" y="2"/>
+                          std::string(kTinyPngDataUrl) +
+                          R"(" x="1" y="2"/>
       <image id="widthOnly" href=")" +
-      std::string(kTinyPngDataUrl) +
-      R"(" x="3" y="4" width="10"/>
+                          std::string(kTinyPngDataUrl) +
+                          R"(" x="3" y="4" width="10"/>
       <image id="heightOnly" href=")" +
-      std::string(kTinyPngDataUrl) +
-      R"(" x="5" y="6" height="12"/>
+                          std::string(kTinyPngDataUrl) +
+                          R"(" x="5" y="6" height="12"/>
       <image id="explicit" href=")" +
-      std::string(kTinyPngDataUrl) +
-      R"(" x="7" y="8" width="9" height="11"/>
+                          std::string(kTinyPngDataUrl) +
+                          R"(" x="7" y="8" width="9" height="11"/>
     </svg>
   )";
   auto document = ParseSVG(svg);
@@ -826,8 +827,8 @@ TEST_F(LayoutSystemTest, TransformOriginCenterKeyword) {
   // "center center" maps to 50% 50%, resolved against the viewBox (120x80).
   // Origin offset = (60, 40).
   const Transform2d expected = Transform2d::Translate({60.0, 40.0}) *
-                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                              Transform2d::Translate({-60.0, -40.0});
+                               Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                               Transform2d::Translate({-60.0, -40.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
 }
@@ -848,8 +849,8 @@ TEST_F(LayoutSystemTest, TransformOriginRightBottom) {
 
   // "right" = 100% of viewBox width (200), "bottom" = 100% of viewBox height (140).
   const Transform2d expected = Transform2d::Translate({200.0, 140.0}) *
-                              Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                              Transform2d::Translate({-200.0, -140.0});
+                               Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                               Transform2d::Translate({-200.0, -140.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
 }

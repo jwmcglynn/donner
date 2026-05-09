@@ -325,7 +325,7 @@ TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
       <text id="t"><textPath href="#p" startOffset="10">Offset text</textPath></text>
     </svg>
   )svg",
-                                               parseSink, options);
+                                                 parseSink, options);
   ASSERT_THAT(maybeResult, NoParseError());
   auto document = std::move(maybeResult).result();
 
@@ -360,7 +360,7 @@ TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
       <text id="t"><textPath href="#p">Spline override</textPath></text>
     </svg>
   )svg",
-                                               parseSink, options);
+                                                 parseSink, options);
   ASSERT_THAT(maybeResult, NoParseError());
   auto document = std::move(maybeResult).result();
 
@@ -769,7 +769,7 @@ TEST_F(TextSystemTest, TextPathTransformAppliesQuadAndCurveCommands) {
       </text>
     </svg>
   )svg",
-                                               parseSink, options);
+                                                 parseSink, options);
   ASSERT_THAT(maybeResult, NoParseError());
   auto document = std::move(maybeResult).result();
 
@@ -825,7 +825,7 @@ TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
       <text id="t"><textPath href="#closed">Z</textPath></text>
     </svg>
   )svg",
-                                               parseSink, options);
+                                                 parseSink, options);
   ASSERT_THAT(maybeResult, NoParseError());
   auto document = std::move(maybeResult).result();
 
@@ -843,9 +843,8 @@ TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
-  const auto pathSpan =
-      std::find_if(computed->spans.begin(), computed->spans.end(),
-                   [](const auto& span) { return span.pathSpline.has_value(); });
+  const auto pathSpan = std::find_if(computed->spans.begin(), computed->spans.end(),
+                                     [](const auto& span) { return span.pathSpline.has_value(); });
   ASSERT_NE(pathSpan, computed->spans.end());
   ASSERT_TRUE(pathSpan->pathSpline.has_value());
   EXPECT_EQ(pathSpan->pathSpline->points()[0], Vector2d(2, 3));

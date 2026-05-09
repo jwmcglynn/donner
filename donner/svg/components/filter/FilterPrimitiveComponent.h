@@ -63,8 +63,7 @@ struct FEFloodComponent {
                                   }};
 
   /// The flood fill opacity, defaults to 1. Range is [0, 1].
-  Property<double> floodOpacity{"flood-opacity",
-                                []() -> std::optional<double> { return 1.0; }};
+  Property<double> floodOpacity{"flood-opacity", []() -> std::optional<double> { return 1.0; }};
 };
 
 /**
@@ -91,10 +90,10 @@ struct FECompositeComponent {
   };
 
   Operator op = Operator::Over;  ///< Compositing operator.
-  double k1 = 0.0;              ///< Arithmetic coefficient k1.
-  double k2 = 0.0;              ///< Arithmetic coefficient k2.
-  double k3 = 0.0;              ///< Arithmetic coefficient k3.
-  double k4 = 0.0;              ///< Arithmetic coefficient k4.
+  double k1 = 0.0;               ///< Arithmetic coefficient k1.
+  double k2 = 0.0;               ///< Arithmetic coefficient k2.
+  double k3 = 0.0;               ///< Arithmetic coefficient k3.
+  double k4 = 0.0;               ///< Arithmetic coefficient k4.
 };
 
 /**
@@ -109,8 +108,8 @@ struct FEColorMatrixComponent {
     LuminanceToAlpha,  ///< No values.
   };
 
-  Type type = Type::Matrix;      ///< Matrix type.
-  std::vector<double> values;    ///< Matrix values (interpretation depends on type).
+  Type type = Type::Matrix;    ///< Matrix type.
+  std::vector<double> values;  ///< Matrix values (interpretation depends on type).
 };
 
 /**
@@ -144,10 +143,10 @@ struct FEBlendComponent {
  * Parameters for \ref SVGFEDropShadowElement.
  */
 struct FEDropShadowComponent {
-  double dx = 2.0;               ///< Horizontal offset.
-  double dy = 2.0;               ///< Vertical offset.
-  double stdDeviationX = 2.0;    ///< Blur standard deviation in X.
-  double stdDeviationY = 2.0;    ///< Blur standard deviation in Y.
+  double dx = 2.0;             ///< Horizontal offset.
+  double dy = 2.0;             ///< Vertical offset.
+  double stdDeviationX = 2.0;  ///< Blur standard deviation in X.
+  double stdDeviationY = 2.0;  ///< Blur standard deviation in Y.
 
   /// The flood fill color, defaults to black.
   Property<css::Color> floodColor{"flood-color", []() -> std::optional<css::Color> {
@@ -155,8 +154,7 @@ struct FEDropShadowComponent {
                                   }};
 
   /// The flood fill opacity, defaults to 1.
-  Property<double> floodOpacity{"flood-opacity",
-                                []() -> std::optional<double> { return 1.0; }};
+  Property<double> floodOpacity{"flood-opacity", []() -> std::optional<double> { return 1.0; }};
 };
 
 /**
@@ -180,21 +178,21 @@ struct FEFuncComponent {
 
   /// Transfer function type.
   enum class FuncType : std::uint8_t {
-    Identity,   ///< No change.
-    Table,      ///< Piecewise linear lookup.
-    Discrete,   ///< Step function lookup.
-    Linear,     ///< slope * C + intercept.
-    Gamma,      ///< amplitude * pow(C, exponent) + offset.
+    Identity,  ///< No change.
+    Table,     ///< Piecewise linear lookup.
+    Discrete,  ///< Step function lookup.
+    Linear,    ///< slope * C + intercept.
+    Gamma,     ///< amplitude * pow(C, exponent) + offset.
   };
 
-  Channel channel;                       ///< Which channel this applies to.
-  FuncType type = FuncType::Identity;    ///< Transfer function type.
-  std::vector<double> tableValues;       ///< Values for table/discrete types.
-  double slope = 1.0;                    ///< Slope for linear type.
-  double intercept = 0.0;               ///< Intercept for linear type.
-  double amplitude = 1.0;               ///< Amplitude for gamma type.
-  double exponent = 1.0;                ///< Exponent for gamma type.
-  double offset = 0.0;                  ///< Offset for gamma type.
+  Channel channel;                     ///< Which channel this applies to.
+  FuncType type = FuncType::Identity;  ///< Transfer function type.
+  std::vector<double> tableValues;     ///< Values for table/discrete types.
+  double slope = 1.0;                  ///< Slope for linear type.
+  double intercept = 0.0;              ///< Intercept for linear type.
+  double amplitude = 1.0;              ///< Amplitude for gamma type.
+  double exponent = 1.0;               ///< Exponent for gamma type.
+  double offset = 0.0;                 ///< Offset for gamma type.
 
   /// Construct a \ref FEFuncComponent for the given channel.
   explicit FEFuncComponent(Channel ch) : channel(ch) {}
@@ -211,15 +209,15 @@ struct FEConvolveMatrixComponent {
     None,       ///< Treat as transparent black.
   };
 
-  int orderX = 3;                            ///< Kernel width.
-  int orderY = 3;                            ///< Kernel height.
-  std::vector<double> kernelMatrix;          ///< Kernel values (orderX * orderY).
-  std::optional<double> divisor;               ///< Divisor (nullopt = sum of kernel values).
-  double bias = 0.0;                         ///< Bias added to result.
-  std::optional<int> targetX;                ///< Target X (nullopt = floor(orderX/2)).
-  std::optional<int> targetY;                ///< Target Y (nullopt = floor(orderY/2)).
-  EdgeMode edgeMode = EdgeMode::Duplicate;   ///< Edge handling mode.
-  bool preserveAlpha = false;                ///< If true, only filter RGB channels.
+  int orderX = 3;                           ///< Kernel width.
+  int orderY = 3;                           ///< Kernel height.
+  std::vector<double> kernelMatrix;         ///< Kernel values (orderX * orderY).
+  std::optional<double> divisor;            ///< Divisor (nullopt = sum of kernel values).
+  double bias = 0.0;                        ///< Bias added to result.
+  std::optional<int> targetX;               ///< Target X (nullopt = floor(orderX/2)).
+  std::optional<int> targetY;               ///< Target Y (nullopt = floor(orderY/2)).
+  EdgeMode edgeMode = EdgeMode::Duplicate;  ///< Edge handling mode.
+  bool preserveAlpha = false;               ///< If true, only filter RGB channels.
 };
 
 /**
@@ -278,12 +276,12 @@ struct FETurbulenceComponent {
     Turbulence,    ///< Turbulence (absolute value noise).
   };
 
-  Type type = Type::Turbulence;     ///< Noise type.
-  double baseFrequencyX = 0.0;     ///< Base frequency X.
-  double baseFrequencyY = 0.0;     ///< Base frequency Y.
-  int numOctaves = 1;              ///< Number of octaves.
-  double seed = 0.0;               ///< Random seed.
-  bool stitchTiles = false;        ///< Whether to stitch tiles.
+  Type type = Type::Turbulence;  ///< Noise type.
+  double baseFrequencyX = 0.0;   ///< Base frequency X.
+  double baseFrequencyY = 0.0;   ///< Base frequency Y.
+  int numOctaves = 1;            ///< Number of octaves.
+  double seed = 0.0;             ///< Random seed.
+  bool stitchTiles = false;      ///< Whether to stitch tiles.
 };
 
 /**
@@ -316,8 +314,8 @@ struct LightSourceComponent {
   Type type;  ///< Which kind of light source is represented.
 
   // feDistantLight attributes.
-  double azimuth = 0.0;     ///< Angle in the XY plane (degrees).
-  double elevation = 0.0;   ///< Angle above the XY plane (degrees).
+  double azimuth = 0.0;    ///< Angle in the XY plane (degrees).
+  double elevation = 0.0;  ///< Angle above the XY plane (degrees).
 
   // fePointLight / feSpotLight attributes.
   double x = 0.0;  ///< X position.
@@ -325,10 +323,10 @@ struct LightSourceComponent {
   double z = 0.0;  ///< Z position.
 
   // feSpotLight attributes.
-  double pointsAtX = 0.0;   ///< X target.
-  double pointsAtY = 0.0;   ///< Y target.
-  double pointsAtZ = 0.0;   ///< Z target.
-  double spotExponent = 1.0; ///< Spotlight exponent (falloff).
+  double pointsAtX = 0.0;                   ///< X target.
+  double pointsAtY = 0.0;                   ///< Y target.
+  double pointsAtZ = 0.0;                   ///< Z target.
+  double spotExponent = 1.0;                ///< Spotlight exponent (falloff).
   std::optional<double> limitingConeAngle;  ///< Cone angle limit (degrees).
 
   /// Construct a \ref LightSourceComponent for the given light type.
@@ -339,27 +337,27 @@ struct LightSourceComponent {
  * Parameters for \ref SVGFEDiffuseLightingElement.
  */
 struct FEDiffuseLightingComponent {
-  double surfaceScale = 1.0;      ///< Height of surface when alpha=1.
-  double diffuseConstant = 1.0;   ///< Diffuse reflection constant (kd).
+  double surfaceScale = 1.0;     ///< Height of surface when alpha=1.
+  double diffuseConstant = 1.0;  ///< Diffuse reflection constant (kd).
 
   /// `lighting-color` property, specifying the color of the light source (default: white).
   Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
-    return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
-  }};
+                                       return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
+                                     }};
 };
 
 /**
  * Parameters for \ref SVGFESpecularLightingElement.
  */
 struct FESpecularLightingComponent {
-  double surfaceScale = 1.0;       ///< Height of surface when alpha=1.
-  double specularConstant = 1.0;   ///< Specular reflection constant (ks).
-  double specularExponent = 1.0;   ///< Specular exponent (1..128).
+  double surfaceScale = 1.0;      ///< Height of surface when alpha=1.
+  double specularConstant = 1.0;  ///< Specular reflection constant (ks).
+  double specularExponent = 1.0;  ///< Specular exponent (1..128).
 
   /// `lighting-color` property, specifying the color of the light source (default: white).
   Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
-    return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
-  }};
+                                       return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
+                                     }};
 };
 
 /// @cond INTERNAL

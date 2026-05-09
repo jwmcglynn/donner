@@ -156,8 +156,10 @@ private:
       pos_ += 9;
       int bracket = 0;
       while (pos_ < size_) {
-        if (source_[pos_] == '[') ++bracket;
-        else if (source_[pos_] == ']') --bracket;
+        if (source_[pos_] == '[')
+          ++bracket;
+        else if (source_[pos_] == ']')
+          --bracket;
         else if (source_[pos_] == '>' && bracket <= 0) {
           ++pos_;
           emit(fn, T::Doctype, tagStart, pos_);

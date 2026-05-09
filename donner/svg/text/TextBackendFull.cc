@@ -78,8 +78,7 @@ double pixelScaleForPpem(FT_Face ftFace, float fontSizePx, bool useXAxis) {
     return 1.0 / 64.0;
   }
 
-  const unsigned int ppem =
-      useXAxis ? ftFace->size->metrics.x_ppem : ftFace->size->metrics.y_ppem;
+  const unsigned int ppem = useXAxis ? ftFace->size->metrics.x_ppem : ftFace->size->metrics.y_ppem;
   if (ppem == 0) {
     return 1.0 / 64.0;
   }

@@ -145,15 +145,13 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   styleComponent.updateStyle(style);
 
   // Merge the new style string with the existing style attribute.
-  auto& attributes =
-      handle.get_or_emplace<donner::components::AttributesComponent>();
+  auto& attributes = handle.get_or_emplace<donner::components::AttributesComponent>();
   const std::string_view existingStyle =
       attributes.getAttribute(xml::XMLQualifiedNameRef("style")).value_or("");
 
   const std::vector<css::Declaration> existingDeclarations =
       css::CSS::ParseStyleAttribute(existingStyle);
-  const std::vector<css::Declaration> updateDeclarations =
-      css::CSS::ParseStyleAttribute(style);
+  const std::vector<css::Declaration> updateDeclarations = css::CSS::ParseStyleAttribute(style);
   const std::string mergedStyle =
       css::mergeStyleDeclarations(existingDeclarations, updateDeclarations);
 

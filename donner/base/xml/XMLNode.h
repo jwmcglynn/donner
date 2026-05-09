@@ -279,7 +279,7 @@ public:
    * not exist.
    */
   std::optional<SourceRange> getAttributeLocation(std::string_view xmlInput,
-                                                      const XMLQualifiedNameRef& name) const;
+                                                  const XMLQualifiedNameRef& name) const;
 
   /// Get the list of attributes for this element.
   SmallVector<XMLQualifiedNameRef, 10> attributes() const;

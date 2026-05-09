@@ -403,8 +403,8 @@ public:
 
   /**
    * Get the computed CSS style of this element, after the CSS cascade has been applied. The
-   * returned \ref donner::svg::PropertyRegistry contains resolved values for all CSS properties (fill, stroke,
-   * font-size, etc.).
+   * returned \ref donner::svg::PropertyRegistry contains resolved values for all CSS properties
+   * (fill, stroke, font-size, etc.).
    */
   const PropertyRegistry& getComputedStyle() const;
 

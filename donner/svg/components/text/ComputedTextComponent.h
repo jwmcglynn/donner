@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "donner/base/Length.h"
+#include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -13,7 +14,6 @@
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
-#include "donner/base/Path.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"

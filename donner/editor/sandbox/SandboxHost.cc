@@ -19,8 +19,8 @@
 
 #include "donner/editor/sandbox/ReplayingRenderer.h"
 #include "donner/editor/sandbox/SandboxProtocol.h"
-#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 
 extern "C" char** environ;  // POSIX, not declared in <unistd.h> on glibc.
 
@@ -33,7 +33,7 @@ namespace {
 /// once per process; the static guard makes repeated construction cheap.
 void IgnoreSigpipeOnce() {
   static const bool kInstalled = [] {
-    struct sigaction sa{};
+    struct sigaction sa {};
     sa.sa_handler = SIG_IGN;
     sigemptyset(&sa.sa_mask);
     (void)::sigaction(SIGPIPE, &sa, nullptr);
@@ -47,16 +47,11 @@ SandboxStatus ClassifyExit(int rawStatus, int& outExit) {
     const int code = WEXITSTATUS(rawStatus);
     outExit = code;
     switch (code) {
-      case kExitOk:
-        return SandboxStatus::kOk;
-      case kExitUsageError:
-        return SandboxStatus::kUsageError;
-      case kExitParseError:
-        return SandboxStatus::kParseError;
-      case kExitRenderError:
-        return SandboxStatus::kRenderError;
-      default:
-        return SandboxStatus::kUnknownExit;
+      case kExitOk: return SandboxStatus::kOk;
+      case kExitUsageError: return SandboxStatus::kUsageError;
+      case kExitParseError: return SandboxStatus::kParseError;
+      case kExitRenderError: return SandboxStatus::kRenderError;
+      default: return SandboxStatus::kUnknownExit;
     }
   }
   if (WIFSIGNALED(rawStatus)) {
@@ -122,9 +117,8 @@ Pipe MakePipe() {
 SandboxHost::SandboxHost(std::string childBinaryPath)
     : childBinaryPath_(std::move(childBinaryPath)) {}
 
-SandboxHost::RawExitInfo SandboxHost::spawnAndCollect(
-    std::string_view svgBytes, int width, int height,
-    std::vector<uint8_t>& outStdout) {
+SandboxHost::RawExitInfo SandboxHost::spawnAndCollect(std::string_view svgBytes, int width,
+                                                      int height, std::vector<uint8_t>& outStdout) {
   IgnoreSigpipeOnce();
 
   RawExitInfo info;
@@ -176,9 +170,8 @@ SandboxHost::RawExitInfo SandboxHost::spawnAndCollect(
   };
 
   pid_t childPid = -1;
-  const int spawnErr = ::posix_spawn(&childPid, childBinaryPath_.c_str(),
-                                     &actions, /*attrp=*/nullptr, argv.data(),
-                                     childEnv.data());
+  const int spawnErr = ::posix_spawn(&childPid, childBinaryPath_.c_str(), &actions,
+                                     /*attrp=*/nullptr, argv.data(), childEnv.data());
   posix_spawn_file_actions_destroy(&actions);
 
   stdinPipe.closeRead();
@@ -195,13 +188,13 @@ SandboxHost::RawExitInfo SandboxHost::spawnAndCollect(
   }
 
   std::atomic<bool> writeOk{true};
-  std::thread writer([&writeOk, inFd = stdinPipe.writeFd,
-                      payload = std::string(svgBytes)]() mutable {
-    if (!WriteAll(inFd, payload)) {
-      writeOk.store(false, std::memory_order_relaxed);
-    }
-    ::close(inFd);
-  });
+  std::thread writer(
+      [&writeOk, inFd = stdinPipe.writeFd, payload = std::string(svgBytes)]() mutable {
+        if (!WriteAll(inFd, payload)) {
+          writeOk.store(false, std::memory_order_relaxed);
+        }
+        ::close(inFd);
+      });
   stdinPipe.writeFd = -1;
 
   std::string errBuf;
@@ -268,15 +261,14 @@ SandboxHost::RawExitInfo SandboxHost::spawnAndCollect(
 
   if (readFailed) {
     info.status = SandboxStatus::kReadFailed;
-  } else if (!writeOk.load(std::memory_order_relaxed) &&
-             info.status == SandboxStatus::kOk) {
+  } else if (!writeOk.load(std::memory_order_relaxed) && info.status == SandboxStatus::kOk) {
     info.status = SandboxStatus::kWriteFailed;
   }
   return info;
 }
 
-RenderResult SandboxHost::renderToBackend(std::string_view svgBytes, int width,
-                                          int height, svg::RendererInterface& target) {
+RenderResult SandboxHost::renderToBackend(std::string_view svgBytes, int width, int height,
+                                          svg::RendererInterface& target) {
   RenderResult result;
 
   RawExitInfo info = spawnAndCollect(svgBytes, width, height, result.wire);
@@ -294,9 +286,7 @@ RenderResult SandboxHost::renderToBackend(std::string_view svgBytes, int width,
   result.unsupportedCount = report.unsupportedCount;
 
   switch (replayStatus) {
-    case ReplayStatus::kOk:
-      result.status = SandboxStatus::kOk;
-      break;
+    case ReplayStatus::kOk: result.status = SandboxStatus::kOk; break;
     case ReplayStatus::kEncounteredUnsupported:
       // Still a successful render, just lossy. Keep kOk; callers inspect
       // `unsupportedCount` to decide whether to show a warning.
@@ -305,9 +295,7 @@ RenderResult SandboxHost::renderToBackend(std::string_view svgBytes, int width,
     case ReplayStatus::kHeaderMismatch:
     case ReplayStatus::kMalformed:
     case ReplayStatus::kEndOfStream:
-    case ReplayStatus::kUnknownOpcode:
-      result.status = SandboxStatus::kWireMalformed;
-      break;
+    case ReplayStatus::kUnknownOpcode: result.status = SandboxStatus::kWireMalformed; break;
   }
   return result;
 }
@@ -327,8 +315,7 @@ RenderResult SandboxHost::render(std::string_view svgBytes, int width, int heigh
   }
 
   result.png = svg::RendererImageIO::writeRgbaPixelsToPngMemory(
-      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4);
+      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y, bitmap.rowBytes / 4);
   if (result.png.empty()) {
     result.status = SandboxStatus::kRenderError;
     result.diagnostics += "\nhost-side PNG encode failed";

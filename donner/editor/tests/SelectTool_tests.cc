@@ -715,10 +715,8 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   // Expected drag delta: (55, 55) - (15, 15) = (40, 40).
   const Transform2d finalTransform = transformOf("#r1");
   const Vector2d translation = finalTransform.translation();
-  EXPECT_NEAR(translation.x, 40.0, 0.01)
-      << "drag delta corrupted by mid-drag canvas resize";
-  EXPECT_NEAR(translation.y, 40.0, 0.01)
-      << "drag delta corrupted by mid-drag canvas resize";
+  EXPECT_NEAR(translation.x, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
+  EXPECT_NEAR(translation.y, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
 }
 
 }  // namespace

@@ -82,14 +82,12 @@ TEST(SVGSVGElementTests, DefaultsWithMatchers) {
 // --------------------------------------------------------------------------
 
 TEST(SVGSVGElementTests, ParseWidthAndHeight) {
-  auto document =
-      parseSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" />)");
+  auto document = parseSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50" />)");
 
-  EXPECT_THAT(document,
-              SvgHas(AllOf(XEq(0.0, Lengthd::Unit::None),  //
-                           YEq(0.0, Lengthd::Unit::None),  //
-                           WidthEq(100.0, Lengthd::Unit::None),
-                           HeightEq(50.0, Lengthd::Unit::None))));
+  EXPECT_THAT(document, SvgHas(AllOf(XEq(0.0, Lengthd::Unit::None),  //
+                                     YEq(0.0, Lengthd::Unit::None),  //
+                                     WidthEq(100.0, Lengthd::Unit::None),
+                                     HeightEq(50.0, Lengthd::Unit::None))));
 }
 
 TEST(SVGSVGElementTests, ParseXAndY) {
@@ -107,8 +105,7 @@ TEST(SVGSVGElementTests, ParseAllAttributes) {
 
   EXPECT_THAT(document,
               SvgHas(AllOf(XEq(5.0, Lengthd::Unit::None),  //
-                           YEq(10.0, Lengthd::Unit::None),
-                           WidthEq(200.0, Lengthd::Unit::None),
+                           YEq(10.0, Lengthd::Unit::None), WidthEq(200.0, Lengthd::Unit::None),
                            HeightEq(100.0, Lengthd::Unit::None))));
 }
 
@@ -451,9 +448,8 @@ TEST(SVGSVGElementTests, SetPreserveAspectRatio) {
   auto document = instantiateSubtree(R"(<rect width="1" height="1"/>)");
   auto svg = document.svgElement();
 
-  svg.setPreserveAspectRatio(
-      PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMin,
-                           PreserveAspectRatio::MeetOrSlice::Slice});
+  svg.setPreserveAspectRatio(PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMin,
+                                                 PreserveAspectRatio::MeetOrSlice::Slice});
 
   EXPECT_THAT(svg.preserveAspectRatio(),
               Eq(PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMin,

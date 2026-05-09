@@ -189,9 +189,9 @@ css::RGBA compositeOverChecker(const css::RGBA& fg, int subPixelX, int subPixelY
   if (fg.a == 255) {
     return fg;
   }
-  const css::RGBA bg =
-      ((subPixelX / kCheckerSize + subPixelY / kCheckerSize) % 2 == 0) ? kCheckerLight
-                                                                       : kCheckerDark;
+  const css::RGBA bg = ((subPixelX / kCheckerSize + subPixelY / kCheckerSize) % 2 == 0)
+                           ? kCheckerLight
+                           : kCheckerDark;
   if (fg.a == 0) {
     return bg;
   }

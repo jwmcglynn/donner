@@ -84,10 +84,9 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
     donner::components::ForAllChildrenRecursive(
         EntityHandle(registry, child), [](EntityHandle desc) {
-          markDirty(desc,
-                    components::DirtyFlagsComponent::Style |
-                        components::DirtyFlagsComponent::Paint |
-                        components::DirtyFlagsComponent::RenderInstance);
+          markDirty(desc, components::DirtyFlagsComponent::Style |
+                              components::DirtyFlagsComponent::Paint |
+                              components::DirtyFlagsComponent::RenderInstance);
         });
   }
 }
@@ -100,9 +99,8 @@ void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
     donner::components::ForAllChildrenRecursive(
         EntityHandle(registry, child), [](EntityHandle desc) {
-          markDirty(desc,
-                    components::DirtyFlagsComponent::WorldTransform |
-                        components::DirtyFlagsComponent::RenderInstance);
+          markDirty(desc, components::DirtyFlagsComponent::WorldTransform |
+                              components::DirtyFlagsComponent::RenderInstance);
         });
   }
 }
@@ -262,8 +260,8 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     // Mark dirty flags based on the attribute type.
     if (actualName == "transform") {
       markDirty(handle_, components::DirtyFlagsComponent::Transform |
-                              components::DirtyFlagsComponent::WorldTransform |
-                              components::DirtyFlagsComponent::RenderInstance);
+                             components::DirtyFlagsComponent::WorldTransform |
+                             components::DirtyFlagsComponent::RenderInstance);
       propagateWorldTransformDirtyToDescendants(handle_);
     } else {
       // For CSS properties (fill, stroke, opacity, etc.) and element-specific attributes
@@ -271,7 +269,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
       markNeedsFullStyleRecompute(handle_);
       invalidateComputedStyle(handle_);
       markDirty(handle_, components::DirtyFlagsComponent::StyleCascade |
-                              components::DirtyFlagsComponent::Shape);
+                             components::DirtyFlagsComponent::Shape);
       if (PropertyRegistry::isPresentationAttributeInherited(actualName)) {
         invalidateComputedStyleForDescendants(handle_);
         propagateStyleDirtyToDescendants(handle_);

@@ -87,9 +87,8 @@ void PipelinedRenderer::workerMain() {
     PendingFrame pending;
     {
       std::unique_lock<std::mutex> lock(inboxMutex_);
-      inboxCv_.wait(lock, [&] {
-        return pending_.has_value() || shutdown_.load(std::memory_order_acquire);
-      });
+      inboxCv_.wait(
+          lock, [&] { return pending_.has_value() || shutdown_.load(std::memory_order_acquire); });
       if (shutdown_.load(std::memory_order_acquire) && !pending_.has_value()) {
         return;
       }
@@ -121,8 +120,7 @@ void PipelinedRenderer::workerMain() {
     PipelinedFrame out;
     out.frameId = pending.frameId;
     out.unsupportedCount = report.unsupportedCount;
-    out.ok = (status == ReplayStatus::kOk) ||
-             (status == ReplayStatus::kEncounteredUnsupported);
+    out.ok = (status == ReplayStatus::kOk) || (status == ReplayStatus::kEncounteredUnsupported);
     if (out.ok) {
       out.bitmap = backend->takeSnapshot();
     }

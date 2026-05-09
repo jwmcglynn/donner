@@ -77,9 +77,7 @@ TEST_F(DualPathVerifierTest, DifferentOutputsDetected) {
   // First snapshot (compositor): solid red. Second snapshot (reference): solid blue.
   const RendererBitmap solidRed = makeSolidBitmap(16, 16, 255, 0, 0);
   const RendererBitmap solidBlue = makeSolidBitmap(16, 16, 0, 0, 255);
-  EXPECT_CALL(renderer_, takeSnapshot())
-      .WillOnce(Return(solidRed))
-      .WillOnce(Return(solidBlue));
+  EXPECT_CALL(renderer_, takeSnapshot()).WillOnce(Return(solidRed)).WillOnce(Return(solidBlue));
 
   CompositorController compositor(document, renderer_);
   DualPathVerifier verifier(compositor, renderer_);
@@ -103,9 +101,7 @@ TEST_F(DualPathVerifierTest, ToleranceCheck) {
   // Bitmaps differ by 1 LSB in the red channel.
   const RendererBitmap bitmapA = makeSolidBitmap(4, 4, 200, 100, 50);
   const RendererBitmap bitmapB = makeSolidBitmap(4, 4, 201, 100, 50);
-  EXPECT_CALL(renderer_, takeSnapshot())
-      .WillOnce(Return(bitmapA))
-      .WillOnce(Return(bitmapB));
+  EXPECT_CALL(renderer_, takeSnapshot()).WillOnce(Return(bitmapA)).WillOnce(Return(bitmapB));
 
   CompositorController compositor(document, renderer_);
   DualPathVerifier verifier(compositor, renderer_);
@@ -128,9 +124,7 @@ TEST_F(DualPathVerifierTest, DimensionMismatchDetected) {
 
   const RendererBitmap small = makeSolidBitmap(4, 4, 255, 0, 0);
   const RendererBitmap large = makeSolidBitmap(8, 8, 255, 0, 0);
-  EXPECT_CALL(renderer_, takeSnapshot())
-      .WillOnce(Return(small))
-      .WillOnce(Return(large));
+  EXPECT_CALL(renderer_, takeSnapshot()).WillOnce(Return(small)).WillOnce(Return(large));
 
   CompositorController compositor(document, renderer_);
   DualPathVerifier verifier(compositor, renderer_);

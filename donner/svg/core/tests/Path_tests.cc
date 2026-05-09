@@ -69,12 +69,7 @@ TEST(Path, MoveToMultiple) {
 }
 
 TEST(Path, MoveToMultipleSegments) {
-  Path spline = PathBuilder()
-                    .moveTo(kVec1)
-                    .lineTo(kVec2)
-                    .moveTo(kVec3)
-                    .lineTo(kVec4)
-                    .build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).moveTo(kVec3).lineTo(kVec4).build();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
@@ -211,10 +206,7 @@ TEST(Path, ArcToLargeArc) {
 /// @test that calling arcTo with identical start and end points does nothing.
 TEST(Path, ArcToDegenerate) {
   Vector2d pt(1, 1);
-  Path spline = PathBuilder()
-                    .moveTo(pt)
-                    .arcTo(Vector2d(10, 10), 0.0, false, false, pt)
-                    .build();
+  Path spline = PathBuilder().moveTo(pt).arcTo(Vector2d(10, 10), 0.0, false, false, pt).build();
   EXPECT_THAT(spline.points(), ElementsAre(pt));
   EXPECT_THAT(spline.commands(), ElementsAre(Command(CommandType::MoveTo, 0)));
 }
@@ -228,8 +220,8 @@ TEST(Path, ArcToZeroRadius) {
 
   // Expect a simple line: one MoveTo and one LineTo command.
   EXPECT_THAT(spline.points(), ElementsAre(Vector2d(0, 0), Vector2d(10, 0)));
-  EXPECT_THAT(spline.commands(), ElementsAre(Command(Path::Verb::MoveTo, 0),
-                                             Command(Path::Verb::LineTo, 1)));
+  EXPECT_THAT(spline.commands(),
+              ElementsAre(Command(Path::Verb::MoveTo, 0), Command(Path::Verb::LineTo, 1)));
 }
 
 TEST(Path, ClosePath) {
@@ -242,13 +234,8 @@ TEST(Path, ClosePath) {
 }
 
 TEST(Path, ClosePathNeedsMoveToReopen) {
-  Path spline = PathBuilder()
-                    .moveTo(kVec1)
-                    .lineTo(kVec2)
-                    .closePath()
-                    .moveTo(kVec1)
-                    .lineTo(kVec3)
-                    .build();
+  Path spline =
+      PathBuilder().moveTo(kVec1).lineTo(kVec2).closePath().moveTo(kVec1).lineTo(kVec3).build();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec1, kVec3));
   EXPECT_THAT(spline.commands(),
@@ -273,13 +260,8 @@ TEST(Path, ClosePathAfterMoveTo) {
 }
 
 TEST(Path, ClosePathMoveToReplace) {
-  Path spline = PathBuilder()
-                    .moveTo(kVec1)
-                    .lineTo(kVec2)
-                    .closePath()
-                    .moveTo(kVec3)
-                    .lineTo(kVec4)
-                    .build();
+  Path spline =
+      PathBuilder().moveTo(kVec1).lineTo(kVec2).closePath().moveTo(kVec3).lineTo(kVec4).build();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
@@ -290,8 +272,7 @@ TEST(Path, ClosePathMoveToReplace) {
 
 TEST(Path, ConsecutiveClosePathIsNoOp) {
   // Second closePath is a no-op since no subpath is open.
-  Path spline =
-      PathBuilder().moveTo(kVec1).lineTo(kVec2).closePath().closePath().build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).closePath().closePath().build();
 
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2));
   EXPECT_THAT(spline.commands(),
@@ -313,8 +294,8 @@ TEST(Path, ConsecutiveClosePathThenNewSubpath) {
   EXPECT_THAT(spline.points(), ElementsAre(kVec1, kVec2, kVec3, kVec4));
   EXPECT_THAT(spline.commands(),
               ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                          Command{CommandType::ClosePath, 0},
-                          Command{CommandType::MoveTo, 2}, Command{CommandType::LineTo, 3}));
+                          Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
+                          Command{CommandType::LineTo, 3}));
 }
 
 // Regression test: many consecutive closePath calls after a single subpath.
@@ -345,8 +326,7 @@ TEST(Path, ManyConsecutiveClosePathsDoNotCorrupt) {
 TEST(Path, Ellipse) {
   const Vector2d center(0.0, 1.0);
   const Vector2d radius(2.0, 1.0);
-  Path spline =
-      PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
+  Path spline = PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
 
   EXPECT_THAT(spline.points(),
               ElementsAre(Vector2d(2.0, 1.0), _, _, Vector2d(0.0, 2.0), _, _, Vector2d(-2.0, 1.0),
@@ -387,8 +367,7 @@ TEST(Path, PathLengthSingleLine) {
 }
 
 TEST(Path, PathLengthMultipleSegments) {
-  Path spline =
-      PathBuilder().moveTo(kVec1).lineTo(kVec2).lineTo(kVec3).lineTo(kVec4).build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).lineTo(kVec3).lineTo(kVec4).build();
 
   const double expectedLength =
       (kVec2 - kVec1).length() + (kVec3 - kVec2).length() + (kVec4 - kVec3).length();
@@ -524,8 +503,7 @@ TEST(Path, BoundsEmpty) {
 }
 
 TEST(Path, Bounds) {
-  Path spline =
-      PathBuilder().moveTo(Vector2d::Zero()).lineTo(kVec1).lineTo(kVec2).build();
+  Path spline = PathBuilder().moveTo(Vector2d::Zero()).lineTo(kVec1).lineTo(kVec2).build();
 
   EXPECT_EQ(spline.bounds(), Box2d(Vector2d(0.0, 0.0), Vector2d(123.0, 1011.12)));
 }
@@ -542,8 +520,7 @@ TEST(Path, BoundsCurve) {
 TEST(Path, BoundsEllipse) {
   const Vector2d center(1.0, 2.0);
   const Vector2d radius(2.0, 1.0);
-  Path spline =
-      PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
+  Path spline = PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
 
   EXPECT_THAT(spline.bounds(), Box2d(Vector2d(-1.0, 1.0), Vector2d(3.0, 3.0)));
 }
@@ -676,11 +653,8 @@ TEST(Path, StrokeMiterBounds) {
   const Vector2 kBottomLeft = Vector2(-kXHalfExtent, 0.0);
   const Vector2 kBottomRight = Vector2(kXHalfExtent, 0.0);
 
-  Path spline = PathBuilder()
-                    .moveTo(kBottomLeft)
-                    .lineTo(Vector2(0.0, 100.0))
-                    .lineTo(kBottomRight)
-                    .build();
+  Path spline =
+      PathBuilder().moveTo(kBottomLeft).lineTo(Vector2(0.0, 100.0)).lineTo(kBottomRight).build();
 
   ASSERT_THAT(spline.commands(), SizeIs(3));
 
@@ -1124,8 +1098,7 @@ TEST(Path, AppendJoinWithMultipleMoveTo) {
 #endif
 
 TEST(Path, VerticesSimple) {
-  Path spline =
-      PathBuilder().moveTo(kVec1).lineTo(kVec2).lineTo(kVec3).lineTo(kVec4).build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).lineTo(kVec3).lineTo(kVec4).build();
 
   EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec4));
 }
@@ -1138,30 +1111,19 @@ TEST(Path, VerticesOstreamOutput) {
 }
 
 TEST(Path, VerticesWithJump) {
-  Path spline = PathBuilder()
-                    .moveTo(kVec1)
-                    .lineTo(kVec2)
-                    .moveTo(kVec3)
-                    .lineTo(kVec4)
-                    .build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).moveTo(kVec3).lineTo(kVec4).build();
 
   EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec4));
 }
 
 TEST(Path, VerticesClosePath) {
-  Path spline =
-      PathBuilder().moveTo(kVec1).lineTo(kVec2).lineTo(kVec3).closePath().build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).lineTo(kVec3).closePath().build();
 
   EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec3, kVec1));
 }
 
 TEST(Path, VerticesClosePathWithoutLine) {
-  Path spline = PathBuilder()
-                    .moveTo(kVec1)
-                    .lineTo(kVec2)
-                    .moveTo(kVec1)
-                    .closePath()
-                    .build();
+  Path spline = PathBuilder().moveTo(kVec1).lineTo(kVec2).moveTo(kVec1).closePath().build();
 
   EXPECT_THAT(spline.vertices(), VertexPointsAre(kVec1, kVec2, kVec1));
 }

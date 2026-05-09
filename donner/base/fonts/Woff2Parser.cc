@@ -13,8 +13,7 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
   }
 
   // Compute the decompressed output size from the WOFF2 header.
-  const size_t outSize =
-      woff2::ComputeWOFF2FinalSize(woff2Data.data(), woff2Data.size());
+  const size_t outSize = woff2::ComputeWOFF2FinalSize(woff2Data.data(), woff2Data.size());
   if (outSize == 0) {
     ParseDiagnostic err;
     err.reason = "WOFF2: failed to compute decompressed size (invalid header)";

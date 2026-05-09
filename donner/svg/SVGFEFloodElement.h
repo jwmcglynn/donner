@@ -168,8 +168,7 @@ class SVGFEFloodElement : public SVGFilterPrimitiveStandardAttributes {
 
 protected:
   /// Create an SVGFEFloodElement wrapper from an entity.
-  explicit SVGFEFloodElement(EntityHandle handle)
-      : SVGFilterPrimitiveStandardAttributes(handle) {}
+  explicit SVGFEFloodElement(EntityHandle handle) : SVGFilterPrimitiveStandardAttributes(handle) {}
 
   /**
    * Internal constructor to create the element on an existing \ref Entity.

@@ -68,8 +68,7 @@ TEST_F(AnimationIsolationTest, AnimationGateDisablesPromotion) {
   options.enableAnimationHints = false;
   resolver_.resolve(registry_, /*maxLayers=*/8, options);
 
-  EXPECT_EQ(layerIdOf(animated), 0u)
-      << "Animation hint should be ignored when the gate is off";
+  EXPECT_EQ(layerIdOf(animated), 0u) << "Animation hint should be ignored when the gate is off";
 }
 
 // An entity with both a Mandatory hint AND an Animation hint still gets a

@@ -111,8 +111,7 @@ TEST(Transform, IsTranslation) {
   EXPECT_FALSE(Transform2d::SkewY(0.1).isTranslation());
 
   // A rotation composed with a translation is still not a pure translation.
-  EXPECT_FALSE((Transform2d::Translate(5, 5) *
-                Transform2d::Rotate(MathConstants<double>::kHalfPi))
+  EXPECT_FALSE((Transform2d::Translate(5, 5) * Transform2d::Rotate(MathConstants<double>::kHalfPi))
                    .isTranslation());
 
   // A tiny jitter within the comparison tolerance should still be recognized
@@ -184,7 +183,7 @@ TEST(Transform, Inverse) {
 
   {
     Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
-                   Transform2d::Scale({2, 2}) * Transform2d::Translate({-50, 100});
+                    Transform2d::Scale({2, 2}) * Transform2d::Translate({-50, 100});
 
     // The inverse should apply the inverse transformations in reverse order
     EXPECT_THAT(t.inverse(),
@@ -199,8 +198,9 @@ TEST(Transform, MultiplicationOrder) {
   const double sin45 = std::sin(angle);                       // sin(45 degrees)
   const double scaleFactor = 2.0;
 
-  const Transform2d t = Transform2d::Rotate(angle) * Transform2d::Scale({scaleFactor, scaleFactor}) *
-                       Transform2d::Translate({-50, 100});
+  const Transform2d t = Transform2d::Rotate(angle) *
+                        Transform2d::Scale({scaleFactor, scaleFactor}) *
+                        Transform2d::Translate({-50, 100});
 
   EXPECT_THAT(t, TransformIs(cos45 * scaleFactor,   // a
                              sin45 * scaleFactor,   // b
@@ -262,8 +262,8 @@ TEST(Transform, TransformVectorOrPosition) {
   }
 
   {
-    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi) * Transform2d::Scale({2, 2}) *
-                   Transform2d::Translate({-50, 100});
+    Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi) *
+                    Transform2d::Scale({2, 2}) * Transform2d::Translate({-50, 100});
 
     EXPECT_THAT(t.transformVector({0, 0}), Vector2Near(0, 0));
     EXPECT_THAT(t.transformVector({50, 50}), Vector2Near(-100, 100));
@@ -347,8 +347,7 @@ TEST(Transform, ToSVGTransformStringGeneralMatrix) {
   // Skew isn't decomposable into translate/scale/rotate alone, so it falls through
   // to the general matrix form.
   const Transform2d skew = Transform2d::SkewX(MathConstants<double>::kPi / 4.0);
-  EXPECT_THAT(std::string_view(toSVGTransformString(skew)),
-              testing::StartsWith("matrix("));
+  EXPECT_THAT(std::string_view(toSVGTransformString(skew)), testing::StartsWith("matrix("));
 
   // A full custom matrix.
   Transform2d t(Transform2d::uninitialized);

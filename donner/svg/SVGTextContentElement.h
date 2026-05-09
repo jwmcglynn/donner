@@ -5,11 +5,11 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Length.h"
+#include "donner/base/Path.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/LengthAdjust.h"
-#include "donner/base/Path.h"
 
 namespace donner::svg {
 

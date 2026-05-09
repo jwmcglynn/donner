@@ -47,8 +47,7 @@ public:
    * @tparam Factory A callable returning ParseDiagnostic.
    */
   template <typename Factory>
-    requires std::invocable<Factory> &&
-             std::same_as<std::invoke_result_t<Factory>, ParseDiagnostic>
+    requires std::invocable<Factory> && std::same_as<std::invoke_result_t<Factory>, ParseDiagnostic>
   void add(Factory&& factory) {
     if (enabled_) {
       warnings_.push_back(std::forward<Factory>(factory)());

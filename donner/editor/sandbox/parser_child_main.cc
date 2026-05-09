@@ -44,7 +44,7 @@ std::string ReadAllStdin() {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-  using namespace donner;                  // NOLINT(google-build-using-namespace)
+  using namespace donner;                   // NOLINT(google-build-using-namespace)
   using namespace donner::editor::sandbox;  // NOLINT(google-build-using-namespace)
   using namespace donner::svg;              // NOLINT(google-build-using-namespace)
   using namespace donner::svg::parser;      // NOLINT(google-build-using-namespace)

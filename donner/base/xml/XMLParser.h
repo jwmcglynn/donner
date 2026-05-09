@@ -38,7 +38,8 @@ public:
 
     /**
      * Parse comments in the XML document, e.g. `<!-- ... -->`. If this flag is set to true,
-     * comments will be parsed as \ref donner::xml::XMLNode::Type::Comment nodes added to the document tree.
+     * comments will be parsed as \ref donner::xml::XMLNode::Type::Comment nodes added to the
+     * document tree.
      */
     bool parseComments = false;
 
@@ -57,8 +58,8 @@ public:
 
     /**
      * Parse processing instructions in the XML document, e.g. `<?php ...>`. If this flag is set to
-     * true, processing instructions will be parsed as \ref donner::xml::XMLNode::Type::ProcessingInstruction
-     * nodes added to the document tree.
+     * true, processing instructions will be parsed as \ref
+     * donner::xml::XMLNode::Type::ProcessingInstruction nodes added to the document tree.
      */
     bool parseProcessingInstructions = false;
 
@@ -140,9 +141,9 @@ public:
    * @return std::optional<AttributeLocation> containing the start and end offsets of the attribute
    * in the input string, or std::nullopt if the attribute was not found.
    */
-  static std::optional<SourceRange> GetAttributeLocation(
-      std::string_view str, FileOffset elementStartOffset,
-      const XMLQualifiedNameRef& attributeName);
+  static std::optional<SourceRange> GetAttributeLocation(std::string_view str,
+                                                         FileOffset elementStartOffset,
+                                                         const XMLQualifiedNameRef& attributeName);
 };
 
 }  // namespace donner::xml

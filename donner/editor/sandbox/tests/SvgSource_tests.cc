@@ -23,8 +23,7 @@ protected:
   void SetUp() override {
     const std::string tmpRoot = ::testing::TempDir();
     // testing::TempDir() may be shared across tests — make a per-test subdir.
-    tmpDir_ = std::filesystem::path(tmpRoot) /
-              ("svg_source_test_" + std::to_string(::rand()));
+    tmpDir_ = std::filesystem::path(tmpRoot) / ("svg_source_test_" + std::to_string(::rand()));
     std::filesystem::create_directories(tmpDir_);
   }
 

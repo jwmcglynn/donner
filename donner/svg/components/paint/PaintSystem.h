@@ -98,8 +98,7 @@ private:
    * @param handle Entity handle to start the inheritance chain from
    * @param warningSink Containing any warnings found
    */
-  std::vector<Entity> getInheritanceChain(EntityHandle handle,
-                                          ParseWarningSink& warningSink);
+  std::vector<Entity> getInheritanceChain(EntityHandle handle, ParseWarningSink& warningSink);
 
   /**
    * Create a \ref ComputedStopComponent for a given entity handle and its attached \ref

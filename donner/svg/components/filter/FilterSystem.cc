@@ -169,8 +169,7 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(const Registry& registry,
                                                                           entt::entity cur) {
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
-    if (style->properties.has_value() &&
-        style->properties->colorInterpolationFilters.hasValue()) {
+    if (style->properties.has_value() && style->properties->colorInterpolationFilters.hasValue()) {
       return style->properties->colorInterpolationFilters.getRequired();
     }
   }
@@ -189,8 +188,7 @@ bool hasFilterPrimitiveChildren(const Registry& registry, EntityHandle handle) {
   return false;
 }
 
-std::vector<EntityHandle> getInheritanceChain(EntityHandle handle,
-                                              ParseWarningSink& warningSink) {
+std::vector<EntityHandle> getInheritanceChain(EntityHandle handle, ParseWarningSink& warningSink) {
   Registry& registry = *handle.registry();
 
   std::vector<EntityHandle> inheritanceChain;

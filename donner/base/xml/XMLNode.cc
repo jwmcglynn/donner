@@ -186,8 +186,8 @@ std::optional<SourceRange> XMLNode::getNodeLocation() const {
   return std::nullopt;
 }
 
-std::optional<SourceRange> XMLNode::getAttributeLocation(
-    std::string_view xmlInput, const XMLQualifiedNameRef& name) const {
+std::optional<SourceRange> XMLNode::getAttributeLocation(std::string_view xmlInput,
+                                                         const XMLQualifiedNameRef& name) const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
     if (offset->startOffset) {
       if (auto maybeLocation =

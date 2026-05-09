@@ -39,21 +39,18 @@ TEST(TokenToCssText, Percentage) {
 }
 
 TEST(TokenToCssText, Dimension) {
-  EXPECT_EQ(
-      Token(Token::Dimension(10, "px", Lengthd::Unit::Px, "10", NumberType::Integer), 0)
-          .toCssText(),
-      "10px");
-  EXPECT_EQ(
-      Token(Token::Dimension(2.5, "em", Lengthd::Unit::Em, "2.5", NumberType::Number), 0)
-          .toCssText(),
-      "2.5em");
+  EXPECT_EQ(Token(Token::Dimension(10, "px", Lengthd::Unit::Px, "10", NumberType::Integer), 0)
+                .toCssText(),
+            "10px");
+  EXPECT_EQ(Token(Token::Dimension(2.5, "em", Lengthd::Unit::Em, "2.5", NumberType::Number), 0)
+                .toCssText(),
+            "2.5em");
   EXPECT_EQ(
       Token(Token::Dimension(45, "deg", std::nullopt, "45", NumberType::Integer), 0).toCssText(),
       "45deg");
-  EXPECT_EQ(
-      Token(Token::Dimension(0, "rem", Lengthd::Unit::Rem, "0", NumberType::Integer), 0)
-          .toCssText(),
-      "0rem");
+  EXPECT_EQ(Token(Token::Dimension(0, "rem", Lengthd::Unit::Rem, "0", NumberType::Integer), 0)
+                .toCssText(),
+            "0rem");
 }
 
 TEST(TokenToCssText, Hash) {
@@ -296,11 +293,7 @@ TEST(DeclarationToCssText, PercentageValue) {
 
 TEST(DeclarationRoundTrip, SimpleProperties) {
   const std::vector<std::string_view> inputs = {
-      "fill: red",
-      "stroke: blue",
-      "opacity: 0.5",
-      "visibility: hidden",
-      "display: none",
+      "fill: red", "stroke: blue", "opacity: 0.5", "visibility: hidden", "display: none",
   };
 
   for (const auto& input : inputs) {
@@ -318,11 +311,8 @@ TEST(DeclarationRoundTrip, SimpleProperties) {
 
 TEST(DeclarationRoundTrip, ComplexValues) {
   const std::vector<std::string_view> inputs = {
-      "fill: #ff0000",
-      "fill: rgb(255, 0, 0)",
-      "fill: url(#gradient)",
-      "stroke-width: 2px",
-      "font-family: Arial, sans-serif",
+      "fill: #ff0000",     "fill: rgb(255, 0, 0)",           "fill: url(#gradient)",
+      "stroke-width: 2px", "font-family: Arial, sans-serif",
   };
 
   for (const auto& input : inputs) {

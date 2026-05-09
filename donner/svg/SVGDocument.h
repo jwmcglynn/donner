@@ -21,7 +21,8 @@ class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement
  *
  * To create a document, parse SVG content with \ref donner::svg::parser::SVGParser::ParseSVG, or
  * construct an empty document and build the tree programmatically. Access the root `<svg>` element
- * with svgElement(), find elements with querySelector(), and render with \ref donner::svg::Renderer.
+ * with svgElement(), find elements with querySelector(), and render with \ref
+ * donner::svg::Renderer.
  *
  * SVGDocument and \ref SVGElement expose a familiar DOM API for traversal and manipulation (e.g.,
  * `firstChild()`, `appendChild()`, `querySelector()`). Elements are lightweight value types that
@@ -187,7 +188,8 @@ struct SVGDocument::Settings {
   /// Resource loader to use for loading external resources.
   std::unique_ptr<ResourceLoaderInterface> resourceLoader;
 
-  /// Processing mode for this document. Defaults to \ref donner::svg::ProcessingMode::DynamicInteractive.
+  /// Processing mode for this document. Defaults to \ref
+  /// donner::svg::ProcessingMode::DynamicInteractive.
   ProcessingMode processingMode = ProcessingMode::DynamicInteractive;
 
   /// Callback to parse SVG content into sub-documents.

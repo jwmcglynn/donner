@@ -26,7 +26,8 @@ public:
    * Parse the given WOFF data.
    *
    * @param bytes The WOFF file data as a byte span.
-   * @return A ParseResult containing the parsed WoffFont on success, or a ParseDiagnostic on failure.
+   * @return A ParseResult containing the parsed WoffFont on success, or a ParseDiagnostic on
+   * failure.
    */
   static ParseResult<WoffFont> Parse(std::span<const uint8_t> bytes);
 };

@@ -24,8 +24,8 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
-#include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/RenderingContext.h"
+#include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using ::testing::_;

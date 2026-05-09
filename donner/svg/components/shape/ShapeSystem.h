@@ -122,7 +122,7 @@ private:
    * system
    */
   std::optional<Box2d> getTransformedShapeBounds(EntityHandle handle,
-                                                const Transform2d& worldFromTarget);
+                                                 const Transform2d& worldFromTarget);
 
   ComputedPathComponent* createComputedShapeWithStyle(EntityHandle handle,
                                                       const CircleComponent& circle,
@@ -165,6 +165,6 @@ private:
  * Parse presentation attributes for a \ref xml_path element (the "d" attribute).
  */
 ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params);
+                                                 const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

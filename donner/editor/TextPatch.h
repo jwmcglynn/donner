@@ -28,17 +28,17 @@ namespace donner::editor {
  * earlier patches don't shift the byte offsets of later ones.
  */
 struct TextPatch {
-  std::size_t offset = 0;       ///< Byte offset in the source text.
-  std::size_t length = 0;       ///< Number of bytes to replace (0 = pure insert).
-  std::string replacement;      ///< New text to splice in (empty = pure delete).
+  std::size_t offset = 0;   ///< Byte offset in the source text.
+  std::size_t length = 0;   ///< Number of bytes to replace (0 = pure insert).
+  std::string replacement;  ///< New text to splice in (empty = pure delete).
 };
 
 /**
  * Result of an \ref applyPatches call.
  */
 struct ApplyPatchesResult {
-  std::size_t applied = 0;           ///< Number of patches successfully applied.
-  std::size_t rejectedBounds = 0;    ///< Patches whose offset+length exceeded the buffer.
+  std::size_t applied = 0;         ///< Number of patches successfully applied.
+  std::size_t rejectedBounds = 0;  ///< Patches whose offset+length exceeded the buffer.
 };
 
 /**

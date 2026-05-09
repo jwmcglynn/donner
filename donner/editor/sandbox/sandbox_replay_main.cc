@@ -19,8 +19,8 @@
 #include "donner/editor/sandbox/FrameInspector.h"
 #include "donner/editor/sandbox/ReplayingRenderer.h"
 #include "donner/editor/sandbox/RnrFile.h"
-#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 
 namespace {
 
@@ -29,8 +29,7 @@ int Usage() {
   return 64;
 }
 
-bool WritePngFile(const std::filesystem::path& path,
-                  const std::vector<uint8_t>& bytes) {
+bool WritePngFile(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
   std::ofstream out(path, std::ios::binary);
   if (!out) return false;
   out.write(reinterpret_cast<const char*>(bytes.data()),
@@ -41,13 +40,13 @@ bool WritePngFile(const std::filesystem::path& path,
 const char* RnrStatusString(donner::editor::sandbox::RnrIoStatus status) {
   using donner::editor::sandbox::RnrIoStatus;
   switch (status) {
-    case RnrIoStatus::kOk:               return "ok";
-    case RnrIoStatus::kWriteFailed:      return "write failed";
-    case RnrIoStatus::kReadFailed:       return "read failed";
-    case RnrIoStatus::kTruncated:        return "truncated header";
-    case RnrIoStatus::kMagicMismatch:    return "magic mismatch";
-    case RnrIoStatus::kVersionMismatch:  return "version mismatch";
-    case RnrIoStatus::kUriTooLong:       return "uri too long";
+    case RnrIoStatus::kOk: return "ok";
+    case RnrIoStatus::kWriteFailed: return "write failed";
+    case RnrIoStatus::kReadFailed: return "read failed";
+    case RnrIoStatus::kTruncated: return "truncated header";
+    case RnrIoStatus::kMagicMismatch: return "magic mismatch";
+    case RnrIoStatus::kVersionMismatch: return "version mismatch";
+    case RnrIoStatus::kUriTooLong: return "uri too long";
   }
   return "unknown";
 }
@@ -75,11 +74,10 @@ int main(int argc, char* argv[]) {
                static_cast<uint32_t>(header.backend), header.uri.c_str());
 
   donner::svg::Renderer backend;
-  const auto status = FrameInspector::ReplayPrefix(
-      wire, std::numeric_limits<std::size_t>::max(), backend);
+  const auto status =
+      FrameInspector::ReplayPrefix(wire, std::numeric_limits<std::size_t>::max(), backend);
   if (status != ReplayStatus::kOk && status != ReplayStatus::kEncounteredUnsupported) {
-    std::fprintf(stderr, "sandbox_replay: replay failed (status=%d)\n",
-                 static_cast<int>(status));
+    std::fprintf(stderr, "sandbox_replay: replay failed (status=%d)\n", static_cast<int>(status));
     return 70;
   }
   if (status == ReplayStatus::kEncounteredUnsupported) {
@@ -92,8 +90,7 @@ int main(int argc, char* argv[]) {
     return 70;
   }
   const auto png = donner::svg::RendererImageIO::writeRgbaPixelsToPngMemory(
-      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4);
+      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y, bitmap.rowBytes / 4);
   if (png.empty() || !WritePngFile(outputPath, png)) {
     std::fprintf(stderr, "sandbox_replay: failed to write PNG to %s\n",
                  outputPath.string().c_str());

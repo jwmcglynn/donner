@@ -6,8 +6,8 @@
  * rendered.
  */
 
-#include <ostream>
 #include <cstdint>
+#include <ostream>
 
 #include "donner/base/Utils.h"
 

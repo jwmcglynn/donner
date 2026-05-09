@@ -325,9 +325,9 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
   // If infinite => "Out of range"
   if (!std::isfinite(finalVal)) {
     if (options.forbidOutOfRange) {
-      return ParseDiagnostic::Error("Failed to parse number: Out of range",
-                                    SourceRange{FileOffset::Offset(0),
-                                                FileOffset::Offset(totalConsumed)});
+      return ParseDiagnostic::Error(
+          "Failed to parse number: Out of range",
+          SourceRange{FileOffset::Offset(0), FileOffset::Offset(totalConsumed)});
     } else {
       Result r;
       r.number = (finalVal < 0.0) ? -std::numeric_limits<double>::infinity()

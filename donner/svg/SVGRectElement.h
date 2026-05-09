@@ -2,8 +2,8 @@
 /// @file
 
 #include "donner/base/Length.h"
-#include "donner/svg/SVGGeometryElement.h"
 #include "donner/base/Path.h"
+#include "donner/svg/SVGGeometryElement.h"
 
 namespace donner::svg {
 

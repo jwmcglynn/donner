@@ -66,19 +66,10 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
 def _clang_format_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     """Emit a py_test that runs `clang-format --dry-run -Werror` on srcs + hdrs.
 
-    Mirrors `_banned_patterns_lint_test` so format escapes can be caught
-    by `bazel test //...` instead of waiting on the `Lint` GitHub workflow.
-
-    Currently tagged `manual` because the repo carries ~2.2k pre-existing
-    format escapes (250 files); `bazel test //...` would turn red on every
-    one. Run on demand with:
-
-        bazel test //... --test_tag_filters=clang_format \
-                          --build_tag_filters=clang_format
-
-    Once the historical debt is fixed in a single mechanical
-    `clang-format -i` pass, drop `manual` from `propagated_tags` so the
-    check moves onto the default PR gate.
+    Mirrors `_banned_patterns_lint_test` so format escapes are caught by
+    `bazel test //...` instead of waiting on the `Lint` GitHub workflow.
+    The test is tagged `lint` and `clang_format` so it can be filtered
+    if desired.
 
     Args:
       name: Parent target name. The lint test is named `{name}_clang_format`.
@@ -102,10 +93,9 @@ def _clang_format_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     if not lintable:
         return
 
-    # `manual` keeps the test out of `bazel test //...` until the
-    # historical-debt sweep lands. Remove `"manual"` from this list to
-    # promote clang-format to the default gate.
-    propagated_tags = ["lint", "clang_format", "manual"]
+    propagated_tags = ["lint", "clang_format"]
+    if "manual" in tags:
+        propagated_tags.append("manual")
 
     py_test(
         name = name + "_clang_format",

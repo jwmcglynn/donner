@@ -80,9 +80,10 @@ public:
    * Safe to call on a `RendererDriver` whose renderer holds persistent
    * state — the traversal never invokes renderer methods.
    */
-  [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(
-      Registry& registry, Entity firstEntity, Entity lastEntity,
-      const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
+  [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(Registry& registry,
+                                                              Entity firstEntity, Entity lastEntity,
+                                                              const RenderViewport& viewport,
+                                                              const Transform2d& surfaceFromCanvas);
 
   /**
    * Capture a snapshot from the underlying backend after rendering.

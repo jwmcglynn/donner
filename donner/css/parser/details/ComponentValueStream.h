@@ -128,9 +128,7 @@ public:
   /**
    * True if the element at offset `n` is a `Token::Delim` with the given character value.
    */
-  [[nodiscard]] bool peekDelimIs(char value, size_t n = 0) const {
-    return peekDelim(n) == value;
-  }
+  [[nodiscard]] bool peekDelimIs(char value, size_t n = 0) const { return peekDelim(n) == value; }
 
   /**
    * Consume leading `Token::Whitespace` components until a non-whitespace component

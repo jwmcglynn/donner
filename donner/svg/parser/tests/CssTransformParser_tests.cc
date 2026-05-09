@@ -594,7 +594,7 @@ TEST(TransformParserCss, SkewYParseErrors) {
 TEST(TransformParserCss, MultiplicationOrder) {
   {
     const Transform2d t = Transform2d::Translate({-50, 100}) * Transform2d::Scale({2, 2}) *
-                         Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
+                          Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
 
     EXPECT_THAT(parseAsCss("rotate(45deg) scale(2) translate(-50px, 100px)"),
                 ParseResultIs(TransformEq(t)));
@@ -602,7 +602,7 @@ TEST(TransformParserCss, MultiplicationOrder) {
 
   {
     const Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
-                         Transform2d::Scale({1.5, 1.5}) * Transform2d::Translate({80, 80});
+                          Transform2d::Scale({1.5, 1.5}) * Transform2d::Translate({80, 80});
 
     EXPECT_THAT(parseAsCss("translate(80px, 80px) scale(1.5, 1.5) \n rotate(45deg) "),
                 ParseResultIs(TransformEq(t)));

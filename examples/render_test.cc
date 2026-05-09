@@ -23,7 +23,6 @@
 #include "donner/css/Color.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
-
 #include "tiny_skia/Color.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Paint.h"
@@ -93,12 +92,13 @@ int main() {
   // Phase 3: Full Donner SVG render pipeline.
   std::printf("=== Phase 3: Full SVG render ===\n");
   {
-    const char* svgSource = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>"
-                            "<rect width='100' height='100' fill='red'/>"
-                            "<circle cx='50' cy='50' r='30' fill='blue'/>"
-                            "<line x1='0' y1='0' x2='100' y2='100' stroke='green' "
-                            "stroke-width='5'/>"
-                            "</svg>";
+    const char* svgSource =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>"
+        "<rect width='100' height='100' fill='red'/>"
+        "<circle cx='50' cy='50' r='30' fill='blue'/>"
+        "<line x1='0' y1='0' x2='100' y2='100' stroke='green' "
+        "stroke-width='5'/>"
+        "</svg>";
 
     ParseWarningSink warningSink;
     auto maybeDoc = SVGParser::ParseSVG(svgSource, warningSink);

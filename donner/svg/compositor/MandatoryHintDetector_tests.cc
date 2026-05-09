@@ -268,7 +268,7 @@ TEST(MandatoryHintDetectorTest, MoveConstructPreservesHint) {
   // by running reconcile against a registry with no qualifying entities: no
   // drops should occur.
   Registry emptyRegistry;
-  source.reconcile(emptyRegistry);  // NOLINT(bugprone-use-after-move)
+  source.reconcile(emptyRegistry);            // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(source.stats().hintsDropped, 0u)  // NOLINT(bugprone-use-after-move)
       << "moved-from detector's hints_ map must be empty — no hints to drop";
   EXPECT_EQ(source.stats().hintsActive, 0u);  // NOLINT(bugprone-use-after-move)
@@ -308,7 +308,8 @@ TEST(MandatoryHintDetectorTest, MultipleSignalsOnSameEntityProduceOneHint) {
   detector.reconcile(registry);
 
   EXPECT_EQ(detector.stats().candidatesEvaluated, 1u);
-  EXPECT_EQ(detector.stats().hintsPublished, 1u) << "one entity, one hint regardless of signal count";
+  EXPECT_EQ(detector.stats().hintsPublished, 1u)
+      << "one entity, one hint regardless of signal count";
   EXPECT_EQ(detector.stats().hintsActive, 1u);
 
   const auto& component = registry.get<CompositorHintComponent>(entity);

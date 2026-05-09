@@ -4,17 +4,17 @@
 #include <map>
 
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
+#include "donner/base/FillRule.h"
 #include "donner/base/ParseResult.h"
 #include "donner/base/SmallVector.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
+#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
-#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/CursorType.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
-#include "donner/base/FillRule.h"
 #include "donner/svg/core/FontStretch.h"
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
@@ -247,8 +247,7 @@ public:
   /// `color-interpolation-filters` property, which determines the color space for filter
   /// operations. Defaults to \ref ColorInterpolationFilters::LinearRGB. Inherited.
   Property<ColorInterpolationFilters, PropertyCascade::Inherit> colorInterpolationFilters{
-      "color-interpolation-filters",
-      []() -> std::optional<ColorInterpolationFilters> {
+      "color-interpolation-filters", []() -> std::optional<ColorInterpolationFilters> {
         return ColorInterpolationFilters::LinearRGB;
       }};
 
@@ -382,8 +381,7 @@ public:
   /// `image-rendering` property. Controls the sampling filter for raster image
   /// upscaling (`auto` = bilinear, `pixelated` = nearest-neighbor). Inherited.
   Property<ImageRendering, PropertyCascade::Inherit> imageRendering{
-      "image-rendering",
-      []() -> std::optional<ImageRendering> { return ImageRendering::Auto; }};
+      "image-rendering", []() -> std::optional<ImageRendering> { return ImageRendering::Auto; }};
 
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
@@ -515,7 +513,7 @@ public:
    * @return Error if the declaration had errors parsing or the property is not supported.
    */
   std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration,
-                                          css::Specificity specificity);
+                                               css::Specificity specificity);
 
   /**
    * Parse a SVG style attribute, and set the parsed values on this PropertyRegistry. Does not

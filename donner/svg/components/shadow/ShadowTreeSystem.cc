@@ -154,8 +154,7 @@ Entity ShadowTreeSystem::createShadowEntity(Registry& registry, ShadowBranchType
 Entity ShadowTreeSystem::createShadowAndChildren(
     Registry& registry, ShadowBranchType branchType,
     ComputedShadowTreeComponent::BranchStorage& storage, RecursionGuard& guard, Entity shadowParent,
-    Entity lightTarget, const std::set<Entity>& shadowHostParents,
-    ParseWarningSink& warningSink) {
+    Entity lightTarget, const std::set<Entity>& shadowHostParents, ParseWarningSink& warningSink) {
   auto validateNoRecursion = [&guard, &shadowHostParents, &warningSink](
                                  const RcString& href, Entity targetEntity) -> bool {
     if (shadowHostParents.count(targetEntity)) {

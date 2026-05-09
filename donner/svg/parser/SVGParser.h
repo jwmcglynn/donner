@@ -90,9 +90,9 @@ public:
    * @param settings Document settings, including the resource loader and processing mode.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
-  static ParseResult<SVGDocument> ParseSVG(
-      std::string_view source, ParseWarningSink& warningSink, Options options = {},
-      SVGDocument::Settings settings = {}) noexcept;
+  static ParseResult<SVGDocument> ParseSVG(std::string_view source, ParseWarningSink& warningSink,
+                                           Options options = {},
+                                           SVGDocument::Settings settings = {}) noexcept;
 
   /**
    * Parses an SVG XML document from an XML document tree.
@@ -103,10 +103,10 @@ public:
    * @param settings Document settings, including the resource loader and processing mode.
    * @return Parsed SVGDocument, or an error if a fatal error is encountered.
    */
-  static ParseResult<SVGDocument> ParseXMLDocument(
-      xml::XMLDocument&& xmlDocument, ParseWarningSink& warningSink,
-      Options options = {}, SVGDocument::Settings settings = {}) noexcept;
-
+  static ParseResult<SVGDocument> ParseXMLDocument(xml::XMLDocument&& xmlDocument,
+                                                   ParseWarningSink& warningSink,
+                                                   Options options = {},
+                                                   SVGDocument::Settings settings = {}) noexcept;
 };
 
 }  // namespace donner::svg::parser

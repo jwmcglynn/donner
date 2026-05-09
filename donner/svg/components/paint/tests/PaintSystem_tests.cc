@@ -56,8 +56,8 @@ protected:
       if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry)) {
         auto& shadow = registry.get_or_emplace<ComputedShadowTreeComponent>(entity);
         ShadowTreeSystem().populateInstance(EntityHandle(registry, entity), shadow,
-                                           ShadowBranchType::Main, targetEntity.value(),
-                                           shadowTreeComponent.mainHref().value(), warningSink);
+                                            ShadowBranchType::Main, targetEntity.value(),
+                                            shadowTreeComponent.mainHref().value(), warningSink);
       }
     }
 
@@ -120,9 +120,8 @@ TEST_F(PaintSystemTest, CreateComputedStopReturnsExistingComponent) {
   auto& style = registry.emplace<ComputedStyleComponent>(entity);
   style.properties.emplace();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  auto& existing = registry.emplace<ComputedStopComponent>(entity, stop.properties, style,
-                                                           style.properties->unparsedProperties,
-                                                           disabledSink);
+  auto& existing = registry.emplace<ComputedStopComponent>(
+      entity, stop.properties, style, style.properties->unparsedProperties, disabledSink);
 
   ParseWarningSink warningSink;
   const ComputedStopComponent& result =
@@ -591,8 +590,7 @@ TEST_F(PaintSystemTest, GradientTransformIsApplied) {
   auto element = document.querySelector("#g");
   ASSERT_TRUE(element.has_value());
 
-  auto* localTransform =
-      element->entityHandle().try_get<ComputedLocalTransformComponent>();
+  auto* localTransform = element->entityHandle().try_get<ComputedLocalTransformComponent>();
   ASSERT_THAT(localTransform, NotNull());
   // The gradientTransform is mapped to the entity's local transform, and should not be identity.
   EXPECT_FALSE(localTransform->parentFromEntity.isIdentity());
@@ -615,8 +613,7 @@ TEST_F(PaintSystemTest, GradientTransformDefaultIsIdentity) {
 
   // When no gradientTransform is specified, there should be no computed local transform, or it
   // should be identity.
-  auto* localTransform =
-      element->entityHandle().try_get<ComputedLocalTransformComponent>();
+  auto* localTransform = element->entityHandle().try_get<ComputedLocalTransformComponent>();
   if (localTransform) {
     EXPECT_TRUE(localTransform->parentFromEntity.isIdentity());
   }

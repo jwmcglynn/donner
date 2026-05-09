@@ -256,8 +256,8 @@ TEST_F(FilterSystemTest, FeComponentTransferSkipsNonFuncChildrenAndCapturesAllCh
   ASSERT_THAT(computed, NotNull());
   ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
 
-  const auto* transfer = std::get_if<filter_primitive::ComponentTransfer>(
-      &computed->filterGraph.nodes[0].primitive);
+  const auto* transfer =
+      std::get_if<filter_primitive::ComponentTransfer>(&computed->filterGraph.nodes[0].primitive);
   ASSERT_NE(transfer, nullptr);
   EXPECT_THAT(transfer->funcB.tableValues, testing::ElementsAre(0.0, 1.0));
   EXPECT_DOUBLE_EQ(transfer->funcA.slope, 0.5);

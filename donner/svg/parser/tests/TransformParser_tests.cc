@@ -309,7 +309,7 @@ TEST(TransformParser, SkewY_ParseErrors) {
 TEST(TransformParser, MultiplicationOrder) {
   {
     const Transform2d t = Transform2d::Translate({-50, 100}) * Transform2d::Scale({2, 2}) *
-                         Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
+                          Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5);
 
     EXPECT_THAT(TransformParser::Parse("rotate(45) scale(2) translate(-50, 100)"),
                 ParseResultIs(TransformEq(t)));
@@ -317,7 +317,7 @@ TEST(TransformParser, MultiplicationOrder) {
 
   {
     const Transform2d t = Transform2d::Rotate(MathConstants<double>::kHalfPi * 0.5) *
-                         Transform2d::Scale({1.5, 1.5}) * Transform2d::Translate({80, 80});
+                          Transform2d::Scale({1.5, 1.5}) * Transform2d::Translate({80, 80});
 
     EXPECT_THAT(TransformParser::Parse("translate(80, 80), scale(1.5, 1.5) \t,\n rotate(45) "),
                 ParseResultIs(TransformEq(t)));

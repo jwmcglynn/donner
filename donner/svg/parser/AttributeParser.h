@@ -20,9 +20,9 @@ public:
    * @param value The value of the attribute.
    */
   static std::optional<ParseDiagnostic> ParseAndSetAttribute(SVGParserContext& context,
-                                                        SVGElement& element,
-                                                        const xml::XMLQualifiedNameRef& name,
-                                                        std::string_view value) noexcept;
+                                                             SVGElement& element,
+                                                             const xml::XMLQualifiedNameRef& name,
+                                                             std::string_view value) noexcept;
 };
 
 }  // namespace donner::svg::parser

@@ -78,7 +78,7 @@ TEST(SVGImageElementTests, DefaultsWithMatchers) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGImageElement>("<image />"),
               ImageHas(AllOf(XEq(0.0, Lengthd::Unit::None),  //
                              YEq(0.0, Lengthd::Unit::None),  //
-                             WidthIsAuto(),                   //
+                             WidthIsAuto(),                  //
                              HeightIsAuto())));
 }
 
@@ -87,25 +87,22 @@ TEST(SVGImageElementTests, DefaultsWithMatchers) {
 // ---------------------------------------------------------------------------
 
 TEST(SVGImageElementTests, ParseBasicAttributes) {
-  EXPECT_THAT(
-      instantiateSubtreeElementAs<SVGImageElement>(
-          R"(<image href="test.png" x="10" y="20" width="100" height="50" />)"),
-      ImageHas(AllOf(XEq(10.0, Lengthd::Unit::None),       //
-                     YEq(20.0, Lengthd::Unit::None),       //
-                     WidthEq(100.0, Lengthd::Unit::None),  //
-                     HeightEq(50.0, Lengthd::Unit::None))));
+  EXPECT_THAT(instantiateSubtreeElementAs<SVGImageElement>(
+                  R"(<image href="test.png" x="10" y="20" width="100" height="50" />)"),
+              ImageHas(AllOf(XEq(10.0, Lengthd::Unit::None),       //
+                             YEq(20.0, Lengthd::Unit::None),       //
+                             WidthEq(100.0, Lengthd::Unit::None),  //
+                             HeightEq(50.0, Lengthd::Unit::None))));
 }
 
 TEST(SVGImageElementTests, ParseHref) {
-  auto img = instantiateSubtreeElementAs<SVGImageElement>(
-      R"(<image href="test.png" />)");
+  auto img = instantiateSubtreeElementAs<SVGImageElement>(R"(<image href="test.png" />)");
 
   EXPECT_THAT(img->href(), Eq("test.png"));
 }
 
 TEST(SVGImageElementTests, ParseXlinkHref) {
-  auto img = instantiateSubtreeElementAs<SVGImageElement>(
-      R"(<image xlink:href="legacy.png" />)");
+  auto img = instantiateSubtreeElementAs<SVGImageElement>(R"(<image xlink:href="legacy.png" />)");
 
   EXPECT_THAT(img->href(), Eq("legacy.png"));
 }
@@ -118,8 +115,8 @@ TEST(SVGImageElementTests, ParseDataUri) {
 }
 
 TEST(SVGImageElementTests, ParseWidthHeightOmitted) {
-  auto img = instantiateSubtreeElementAs<SVGImageElement>(
-      R"(<image href="test.png" x="5" y="10" />)");
+  auto img =
+      instantiateSubtreeElementAs<SVGImageElement>(R"(<image href="test.png" x="5" y="10" />)");
 
   EXPECT_THAT(img->x(), LengthIs(5.0, Lengthd::Unit::None));
   EXPECT_THAT(img->y(), LengthIs(10.0, Lengthd::Unit::None));
@@ -132,21 +129,18 @@ TEST(SVGImageElementTests, ParseWidthHeightOmitted) {
 // ---------------------------------------------------------------------------
 
 TEST(SVGImageElementTests, UnitsOnDimensions) {
-  EXPECT_THAT(
-      instantiateSubtreeElementAs<SVGImageElement>(
-          R"(<image x="50px" y="3em" width="30pt" height="2cm" />)"),
-      ImageHas(AllOf(XEq(50.0, Lengthd::Unit::Px),      //
-                     YEq(3.0, Lengthd::Unit::Em),        //
-                     WidthEq(30.0, Lengthd::Unit::Pt),   //
-                     HeightEq(2.0, Lengthd::Unit::Cm))));
+  EXPECT_THAT(instantiateSubtreeElementAs<SVGImageElement>(
+                  R"(<image x="50px" y="3em" width="30pt" height="2cm" />)"),
+              ImageHas(AllOf(XEq(50.0, Lengthd::Unit::Px),      //
+                             YEq(3.0, Lengthd::Unit::Em),       //
+                             WidthEq(30.0, Lengthd::Unit::Pt),  //
+                             HeightEq(2.0, Lengthd::Unit::Cm))));
 }
 
 TEST(SVGImageElementTests, PercentageUnits) {
-  EXPECT_THAT(
-      instantiateSubtreeElementAs<SVGImageElement>(
-          R"(<image width="50%" height="75%" />)"),
-      ImageHas(AllOf(WidthEq(50.0, Lengthd::Unit::Percent),   //
-                     HeightEq(75.0, Lengthd::Unit::Percent))));
+  EXPECT_THAT(instantiateSubtreeElementAs<SVGImageElement>(R"(<image width="50%" height="75%" />)"),
+              ImageHas(AllOf(WidthEq(50.0, Lengthd::Unit::Percent),  //
+                             HeightEq(75.0, Lengthd::Unit::Percent))));
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +223,8 @@ TEST(SVGImageElementTests, PreserveAspectRatioDefault) {
 }
 
 TEST(SVGImageElementTests, PreserveAspectRatioParsedNone) {
-  auto img = instantiateSubtreeElementAs<SVGImageElement>(
-      R"(<image preserveAspectRatio="none" />)");
+  auto img =
+      instantiateSubtreeElementAs<SVGImageElement>(R"(<image preserveAspectRatio="none" />)");
 
   EXPECT_THAT(img->preserveAspectRatio(),
               Eq(PreserveAspectRatio{PreserveAspectRatio::Align::None,
@@ -258,9 +252,8 @@ TEST(SVGImageElementTests, PreserveAspectRatioParsedMeet) {
 TEST(SVGImageElementTests, PreserveAspectRatioSet) {
   auto img = instantiateSubtreeElementAs<SVGImageElement>("<image />");
 
-  img->setPreserveAspectRatio(
-      PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMax,
-                           PreserveAspectRatio::MeetOrSlice::Slice});
+  img->setPreserveAspectRatio(PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMax,
+                                                  PreserveAspectRatio::MeetOrSlice::Slice});
 
   EXPECT_THAT(img->preserveAspectRatio(),
               Eq(PreserveAspectRatio{PreserveAspectRatio::Align::XMinYMax,

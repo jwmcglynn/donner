@@ -56,7 +56,8 @@ public:
       return resultToken.get<TokenType>();
     } else {
       return ParseDiagnostic::Error(
-          RcString("Unexpected token when parsing function '" + functionName_ + "'"), resultToken.offset());
+          RcString("Unexpected token when parsing function '" + functionName_ + "'"),
+          resultToken.offset());
     }
   }
 
@@ -92,7 +93,8 @@ public:
     }
 
     return ParseDiagnostic::Error(
-        RcString("Missing delimiter for alpha when parsing function '" + functionName_ + "'"), lastOffset_);
+        RcString("Missing delimiter for alpha when parsing function '" + functionName_ + "'"),
+        lastOffset_);
   }
 
   std::optional<ParseDiagnostic> requireEOF() {
@@ -194,7 +196,7 @@ public:
         return parseDeviceCmyk(name, f.values);
       } else {
         return ParseDiagnostic::Error(RcString("Unsupported color function '" + name + "'"),
-                                     f.sourceOffset);
+                                      f.sourceOffset);
       }
 
     } else {

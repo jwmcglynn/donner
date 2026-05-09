@@ -44,7 +44,7 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText);
 
 /// Text chunk boundary for per-chunk text-anchor adjustment.
 struct ChunkBoundary {
-  size_t runIndex = 0;  ///< Index of the run that starts this chunk.
+  size_t runIndex = 0;    ///< Index of the run that starts this chunk.
   size_t glyphIndex = 0;  ///< Glyph index within the run where the chunk begins.
   TextAnchor textAnchor = TextAnchor::Start;  ///< Effective text-anchor for the chunk.
 };
@@ -58,11 +58,9 @@ struct RunPenExtent {
 };
 
 /// Apply per-span and global textLength adjustments to positioned runs.
-void applyTextLength(std::vector<TextRun>& runs,
-                     const components::ComputedTextComponent& text,
-                     const std::vector<RunPenExtent>& runExtents,
-                     const TextLayoutParams& params, bool vertical, double currentPenX,
-                     double currentPenY);
+void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
+                     const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
+                     bool vertical, double currentPenX, double currentPenY);
 
 /// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,

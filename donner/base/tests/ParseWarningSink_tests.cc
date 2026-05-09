@@ -35,9 +35,7 @@ TEST(ParseWarningSink, AddDiagnosticDirect) {
 
 TEST(ParseWarningSink, AddDiagnosticViaFactory) {
   ParseWarningSink sink;
-  sink.add([&] {
-    return ParseDiagnostic::Warning("lazy warning", FileOffset::Offset(10));
-  });
+  sink.add([&] { return ParseDiagnostic::Warning("lazy warning", FileOffset::Offset(10)); });
 
   ASSERT_THAT(sink.warnings(), SizeIs(1));
   EXPECT_EQ(sink.warnings()[0].reason, "lazy warning");

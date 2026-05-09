@@ -76,9 +76,9 @@ TEST(SVGLineElementTests, Simple) {
 TEST(SVGLineElementTests, Units) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGLineElement>(  //
                   R"(<line x1="10px" y1="20%" x2="5em" y2="0" />)"),
-              LineHas(AllOf(X1Eq(10.0, Lengthd::Unit::Px),        //
-                            Y1Eq(20.0, Lengthd::Unit::Percent),   //
-                            X2Eq(5.0, Lengthd::Unit::Em),         //
+              LineHas(AllOf(X1Eq(10.0, Lengthd::Unit::Px),       //
+                            Y1Eq(20.0, Lengthd::Unit::Percent),  //
+                            X2Eq(5.0, Lengthd::Unit::Em),        //
                             Y2Eq(0.0, Lengthd::Unit::None))));
 }
 
@@ -144,24 +144,22 @@ TEST(SVGLineElementTests, SetFromDefaults) {
  * Verify that computedSpline() produces a 2-point line segment (MoveTo + LineTo).
  */
 TEST(SVGLineElementTests, ComputedSpline) {
-  EXPECT_THAT(
-      instantiateSubtreeElementAs<SVGLineElement>(  //
-          R"(<line x1="10" y1="20" x2="100" y2="50" />)"),
-      ComputedSplineIs(PointsAndCommandsAre(
-          ElementsAre(Vector2d(10, 20), Vector2d(100, 50)),  //
-          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+  EXPECT_THAT(instantiateSubtreeElementAs<SVGLineElement>(  //
+                  R"(<line x1="10" y1="20" x2="100" y2="50" />)"),
+              ComputedSplineIs(PointsAndCommandsAre(
+                  ElementsAre(Vector2d(10, 20), Vector2d(100, 50)),  //
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
 }
 
 /**
  * Verify that a degenerate line (start == end) still produces a valid spline.
  */
 TEST(SVGLineElementTests, ComputedSplineDegenerate) {
-  EXPECT_THAT(
-      instantiateSubtreeElementAs<SVGLineElement>(  //
-          R"(<line x1="50" y1="50" x2="50" y2="50" />)"),
-      ComputedSplineIs(PointsAndCommandsAre(
-          ElementsAre(Vector2d(50, 50), Vector2d(50, 50)),  //
-          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+  EXPECT_THAT(instantiateSubtreeElementAs<SVGLineElement>(  //
+                  R"(<line x1="50" y1="50" x2="50" y2="50" />)"),
+              ComputedSplineIs(PointsAndCommandsAre(
+                  ElementsAre(Vector2d(50, 50), Vector2d(50, 50)),  //
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
 }
 
 /**

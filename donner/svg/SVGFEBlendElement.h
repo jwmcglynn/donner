@@ -177,8 +177,7 @@ class SVGFEBlendElement : public SVGFilterPrimitiveStandardAttributes {
 
 protected:
   /// Create an SVGFEBlendElement wrapper from an entity.
-  explicit SVGFEBlendElement(EntityHandle handle)
-      : SVGFilterPrimitiveStandardAttributes(handle) {}
+  explicit SVGFEBlendElement(EntityHandle handle) : SVGFilterPrimitiveStandardAttributes(handle) {}
 
   /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEBlendElement CreateOn(EntityHandle handle);

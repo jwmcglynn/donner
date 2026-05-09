@@ -170,15 +170,14 @@ void SerializingRenderer::drawEllipse(const Box2d& bounds, const svg::StrokePara
 }
 
 void SerializingRenderer::drawImage(const svg::ImageResource& image,
-                                     const svg::ImageParams& params) {
+                                    const svg::ImageParams& params) {
   auto token = writer_.beginMessage(Opcode::kDrawImage);
   EncodeImageResource(writer_, image);
   EncodeImageParams(writer_, params);
   writer_.finishMessage(token);
 }
 
-void SerializingRenderer::drawText(Registry&,
-                                   const svg::components::ComputedTextComponent& text,
+void SerializingRenderer::drawText(Registry&, const svg::components::ComputedTextComponent& text,
                                    const svg::TextParams& params) {
   auto token = writer_.beginMessage(Opcode::kDrawText);
   EncodeComputedTextComponent(writer_, text);

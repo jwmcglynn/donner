@@ -21,27 +21,13 @@ void WriteQuotedJsonString(std::ostream& os, std::string_view s) {
   os << '"';
   for (char c : s) {
     switch (c) {
-      case '"':
-        os << "\\\"";
-        break;
-      case '\\':
-        os << "\\\\";
-        break;
-      case '\b':
-        os << "\\b";
-        break;
-      case '\f':
-        os << "\\f";
-        break;
-      case '\n':
-        os << "\\n";
-        break;
-      case '\r':
-        os << "\\r";
-        break;
-      case '\t':
-        os << "\\t";
-        break;
+      case '"': os << "\\\""; break;
+      case '\\': os << "\\\\"; break;
+      case '\b': os << "\\b"; break;
+      case '\f': os << "\\f"; break;
+      case '\n': os << "\\n"; break;
+      case '\r': os << "\\r"; break;
+      case '\t': os << "\\t"; break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char buf[8];
@@ -58,22 +44,14 @@ void WriteQuotedJsonString(std::ostream& os, std::string_view s) {
 
 const char* EventKindTag(ReproEvent::Kind kind) {
   switch (kind) {
-    case ReproEvent::Kind::MouseDown:
-      return "mdown";
-    case ReproEvent::Kind::MouseUp:
-      return "mup";
-    case ReproEvent::Kind::KeyDown:
-      return "kdown";
-    case ReproEvent::Kind::KeyUp:
-      return "kup";
-    case ReproEvent::Kind::Char:
-      return "chr";
-    case ReproEvent::Kind::Wheel:
-      return "wheel";
-    case ReproEvent::Kind::Resize:
-      return "resize";
-    case ReproEvent::Kind::Focus:
-      return "focus";
+    case ReproEvent::Kind::MouseDown: return "mdown";
+    case ReproEvent::Kind::MouseUp: return "mup";
+    case ReproEvent::Kind::KeyDown: return "kdown";
+    case ReproEvent::Kind::KeyUp: return "kup";
+    case ReproEvent::Kind::Char: return "chr";
+    case ReproEvent::Kind::Wheel: return "wheel";
+    case ReproEvent::Kind::Resize: return "resize";
+    case ReproEvent::Kind::Focus: return "focus";
   }
   return "unknown";
 }
@@ -94,25 +72,15 @@ void WriteEvent(std::ostream& os, const ReproEvent& ev) {
   os << "{\"k\":\"" << EventKindTag(ev.kind) << '"';
   switch (ev.kind) {
     case ReproEvent::Kind::MouseDown:
-    case ReproEvent::Kind::MouseUp:
-      os << ",\"b\":" << ev.mouseButton;
-      break;
+    case ReproEvent::Kind::MouseUp: os << ",\"b\":" << ev.mouseButton; break;
     case ReproEvent::Kind::KeyDown:
-    case ReproEvent::Kind::KeyUp:
-      os << ",\"key\":" << ev.key << ",\"m\":" << ev.modifiers;
-      break;
-    case ReproEvent::Kind::Char:
-      os << ",\"c\":" << ev.codepoint;
-      break;
+    case ReproEvent::Kind::KeyUp: os << ",\"key\":" << ev.key << ",\"m\":" << ev.modifiers; break;
+    case ReproEvent::Kind::Char: os << ",\"c\":" << ev.codepoint; break;
     case ReproEvent::Kind::Wheel:
       os << ",\"dx\":" << ev.wheelDeltaX << ",\"dy\":" << ev.wheelDeltaY;
       break;
-    case ReproEvent::Kind::Resize:
-      os << ",\"w\":" << ev.width << ",\"h\":" << ev.height;
-      break;
-    case ReproEvent::Kind::Focus:
-      os << ",\"on\":" << (ev.focusOn ? 1 : 0);
-      break;
+    case ReproEvent::Kind::Resize: os << ",\"w\":" << ev.width << ",\"h\":" << ev.height; break;
+    case ReproEvent::Kind::Focus: os << ",\"on\":" << (ev.focusOn ? 1 : 0); break;
   }
   os << '}';
 }
@@ -130,8 +98,8 @@ void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
 }
 
 void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {
-  os << "{\"f\":" << frame.index << ",\"t\":" << frame.timestampSeconds << ",\"dt\":" << frame.deltaMs
-     << ",\"mx\":" << frame.mouseX << ",\"my\":" << frame.mouseY
+  os << "{\"f\":" << frame.index << ",\"t\":" << frame.timestampSeconds
+     << ",\"dt\":" << frame.deltaMs << ",\"mx\":" << frame.mouseX << ",\"my\":" << frame.mouseY
      << ",\"btn\":" << frame.mouseButtonMask << ",\"mod\":" << frame.modifiers;
   if (!frame.events.empty()) {
     os << ",\"e\":[";
@@ -197,24 +165,12 @@ std::optional<std::string> ReadString(std::string_view& cursor) {
     if (c == '\\' && i + 1 < cursor.size()) {
       const char next = cursor[i + 1];
       switch (next) {
-        case '"':
-          out += '"';
-          break;
-        case '\\':
-          out += '\\';
-          break;
-        case 'n':
-          out += '\n';
-          break;
-        case 't':
-          out += '\t';
-          break;
-        case 'r':
-          out += '\r';
-          break;
-        default:
-          out += next;
-          break;
+        case '"': out += '"'; break;
+        case '\\': out += '\\'; break;
+        case 'n': out += '\n'; break;
+        case 't': out += '\t'; break;
+        case 'r': out += '\r'; break;
+        default: out += next; break;
       }
       i += 2;
       continue;
@@ -235,14 +191,18 @@ std::optional<ReproEvent> ParseEventObject(std::string_view& cursor) {
     if (cursor[i] == '"') {
       ++i;
       while (i < cursor.size() && cursor[i] != '"') {
-        if (cursor[i] == '\\' && i + 1 < cursor.size()) i += 2;
-        else ++i;
+        if (cursor[i] == '\\' && i + 1 < cursor.size())
+          i += 2;
+        else
+          ++i;
       }
       if (i < cursor.size()) ++i;
       continue;
     }
-    if (cursor[i] == '{') ++depth;
-    else if (cursor[i] == '}') --depth;
+    if (cursor[i] == '{')
+      ++depth;
+    else if (cursor[i] == '}')
+      --depth;
     ++i;
   }
   if (depth != 0) return std::nullopt;

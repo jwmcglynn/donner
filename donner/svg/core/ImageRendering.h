@@ -15,12 +15,12 @@ namespace donner::svg {
  * @see https://drafts.csswg.org/css-images/#the-image-rendering
  */
 enum class ImageRendering : uint8_t {
-  Auto,         ///< [DEFAULT] UA picks the algorithm; typically bilinear/trilinear.
-  OptimizeSpeed,///< Legacy SVG 1.1 alias; treated as `pixelated` here.
-  OptimizeQuality, ///< Legacy SVG 1.1 alias; treated as `auto`.
-  CrispEdges,   ///< Preserves sharp edges; treated as `pixelated` for nearest-neighbor.
-  Pixelated,    ///< Nearest-neighbor sampling for blocky upscaling.
-  Smooth,       ///< Bilinear/trilinear (same as `auto`).
+  Auto,             ///< [DEFAULT] UA picks the algorithm; typically bilinear/trilinear.
+  OptimizeSpeed,    ///< Legacy SVG 1.1 alias; treated as `pixelated` here.
+  OptimizeQuality,  ///< Legacy SVG 1.1 alias; treated as `auto`.
+  CrispEdges,       ///< Preserves sharp edges; treated as `pixelated` for nearest-neighbor.
+  Pixelated,        ///< Nearest-neighbor sampling for blocky upscaling.
+  Smooth,           ///< Bilinear/trilinear (same as `auto`).
 };
 
 /// ostream output operator for \ref ImageRendering.
