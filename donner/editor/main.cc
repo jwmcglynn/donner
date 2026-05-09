@@ -10,9 +10,10 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#else
+#include "donner/base/FailureSignalHandler.h"
 #endif
 
-#include "donner/base/FailureSignalHandler.h"
 #include "donner/editor/EditorIcon.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/EditorShell.h"
@@ -35,7 +36,9 @@ std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifndef __EMSCRIPTEN__
   donner::InstallFailureSignalHandler();
+#endif
 
   if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
     std::filesystem::current_path(bwd);
