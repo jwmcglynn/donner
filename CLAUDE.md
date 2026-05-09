@@ -18,6 +18,12 @@
 - **When touching the CMake mirror or `gen_cmakelists.py`, also run `python3 tools/cmake/gen_cmakelists.py --check --build`.** Plain `--check` is intentionally fast and static; `--build` is the opt-in local compile gate that catches real CMake drift before CI does.
 - The `tiny`, `text-full`, and `geode` variant lanes now run as `*_tiny` / `*_text_full` / `*_geode` wrappers under default `bazel test //...` (see `donner_cc_test(variants=…)` in `build_defs/rules.bzl`). The transitional `tools/presubmit.sh` wrapper has been retired — `bazel test //...` is the single command that gates a PR.
 
+## Formatting
+
+- **All committed C/C++ must pass `clang-format --dry-run -Werror`.** The `Lint` GitHub workflow gates this on every PR using the project's `.clang-format` (Google + 100-col, see `.clang-format`). Run `clang-format -i <files>` before committing — `git clang-format` covers staged changes — to avoid round-tripping through CI.
+- **Use clang-format 18 or 19.** CI installs `clang-format` 18.1.3; the project style is stable across both, so use whichever is on your `$PATH`.
+- **`bazel test //... --test_tag_filters=clang_format --build_tag_filters=clang_format` runs the per-target format gate locally.** Each `donner_cc_library`/`_test`/`_binary` emits a `{name}_clang_format` py_test (currently tagged `manual` until the historical-debt sweep lands). Promotion to the default PR gate is tracked as a follow-up — once the repo is fully formatted, drop the `manual` tag in `_clang_format_lint_test` (see `build_defs/rules.bzl`) so format escapes fail `bazel test //...`, not just CI.
+
 ## Debugging Discipline
 
 When debugging bugs — **especially performance or UI bugs** — write an automated test that reproduces the bug BEFORE attempting a fix. No fixes without repros.

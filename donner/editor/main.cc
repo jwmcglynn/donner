@@ -15,8 +15,8 @@
 #endif
 
 #include "donner/editor/EditorIcon.h"
-#include "donner/editor/Notice.h"
 #include "donner/editor/EditorShell.h"
+#include "donner/editor/Notice.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
 
@@ -92,13 +92,13 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  donner::editor::EditorShell shell(window, {.svgPath = svgPath.value_or(""),
-                                             .initialSource = initialSource,
-                                             .initialPath = initialPath,
-                                             .editorNoticeText =
-                                                 EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-                                             .experimentalMode = experimentalMode,
-                                             .reproOutputPath = reproOutputPath});
+  donner::editor::EditorShell shell(
+      window, {.svgPath = svgPath.value_or(""),
+               .initialSource = initialSource,
+               .initialPath = initialPath,
+               .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
+               .experimentalMode = experimentalMode,
+               .reproOutputPath = reproOutputPath});
   if (!shell.valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";

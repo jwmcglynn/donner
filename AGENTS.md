@@ -57,7 +57,7 @@ When creating a pull request:
    On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
    Also run, separately:
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
-   - `clang-format --dry-run` on modified files (`git clang-format` covers staged changes).
+   - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The `Lint` GitHub workflow gates on `clang-format --dry-run -Werror` and will fail the PR otherwise. Per-target `{name}_clang_format` py_tests exist (auto-emitted by `donner_cc_*`) and can be run on demand with `bazel test //... --test_tag_filters=clang_format --build_tag_filters=clang_format`; they're tagged `manual` for now while historical-debt format-up is pending.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
 4. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
 5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
