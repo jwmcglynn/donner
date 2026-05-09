@@ -20,9 +20,7 @@
 
 ## Formatting
 
-- **All committed C/C++ must pass `clang-format --dry-run -Werror`.** The `Lint` GitHub workflow gates this on every PR using the project's `.clang-format` (Google + 100-col, see `.clang-format`). Run `clang-format -i <files>` before committing — `git clang-format` covers staged changes — to avoid round-tripping through CI.
-- **Use clang-format 18 or 19.** CI installs `clang-format` 18.1.3; the project style is stable across both, so use whichever is on your `$PATH`.
-- **`bazel test //...` runs a per-target `{name}_clang_format` py_test** auto-emitted by every `donner_cc_library`/`_test`/`_binary`. Format escapes fail locally on the same PR gate that catches build/test regressions — no need to wait for the `Lint` GitHub workflow.
+- **Run `clang-format -i` on every modified C/C++ file before committing.** `git clang-format` covers staged changes. The project `.clang-format` (Google + 100-col, see `.clang-format`) is tuned so clang-format 18 and 19 produce identical output — use whichever is on your `$PATH`.
 
 ## Debugging Discipline
 

@@ -4,7 +4,6 @@ load("//build_defs:banned_deps.bzl", "banned_deps_test")
 exports_files(
     [
         "check_banned_patterns.py",
-        "check_clang_format.py",
     ],
     visibility = ["//visibility:public"],
 )
