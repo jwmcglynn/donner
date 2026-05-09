@@ -24,6 +24,14 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Picked up by every per-target clang-format lint test emitted by
+# donner_cc_library/_test/_binary so clang-format can find the project
+# style file inside the bazel test sandbox.
+exports_files(
+    [".clang-format"],
+    visibility = ["//visibility:public"],
+)
+
 exports_files(
     [
         "donner_icon.svg",

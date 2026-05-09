@@ -10,12 +10,13 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#else
+#include "donner/base/FailureSignalHandler.h"
 #endif
 
-#include "donner/base/FailureSignalHandler.h"
 #include "donner/editor/EditorIcon.h"
-#include "donner/editor/Notice.h"
 #include "donner/editor/EditorShell.h"
+#include "donner/editor/Notice.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
 
@@ -35,7 +36,9 @@ std::string EmbeddedBytesToString(std::span<const unsigned char> bytes) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifndef __EMSCRIPTEN__
   donner::InstallFailureSignalHandler();
+#endif
 
   if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
     std::filesystem::current_path(bwd);
@@ -89,13 +92,13 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  donner::editor::EditorShell shell(window, {.svgPath = svgPath.value_or(""),
-                                             .initialSource = initialSource,
-                                             .initialPath = initialPath,
-                                             .editorNoticeText =
-                                                 EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-                                             .experimentalMode = experimentalMode,
-                                             .reproOutputPath = reproOutputPath});
+  donner::editor::EditorShell shell(
+      window, {.svgPath = svgPath.value_or(""),
+               .initialSource = initialSource,
+               .initialPath = initialPath,
+               .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
+               .experimentalMode = experimentalMode,
+               .reproOutputPath = reproOutputPath});
   if (!shell.valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";

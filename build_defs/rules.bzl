@@ -5,12 +5,22 @@ Helper rules, such as for building fuzzers.
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@rules_python//python:defs.bzl", "py_test")
-load(":include_cleaner.bzl", "INCLUDE_CLEANER_VALUES", "include_cleaner_lint_test")
 
 # Script that enforces banned source patterns (no `long long`, no
 # `std::aligned_storage`, no user-defined literal operators). See
 # docs/coding_style.md "Language and Library Features".
 _BANNED_PATTERNS_SCRIPT = "//build_defs:check_banned_patterns.py"
+
+# Script that runs `clang-format --dry-run -Werror` on a list of files.
+# See `build_defs/check_clang_format.py`. Emitted as a per-target py_test
+# so `bazel test //...` catches format escapes locally instead of waiting
+# on the `Lint` GitHub workflow.
+_CLANG_FORMAT_SCRIPT = "//build_defs:check_clang_format.py"
+
+# File extensions clang-format actually formats. Mirror the set the
+# `Lint` workflow's clang-format step matches against — keep these in
+# lockstep with `.github/workflows/lint.yml`.
+_CLANG_FORMAT_EXTENSIONS = (".cc", ".cpp", ".cxx", ".c", ".h", ".hh", ".hpp", ".hxx")
 
 def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     """Emit a py_test that runs check_banned_patterns.py on srcs + hdrs.
@@ -53,48 +63,62 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
         size = "small",
     )
 
-def _maybe_emit_include_cleaner(name, srcs, hdrs, deps, copts, tags, include_cleaner):
-    """Emit a `{name}_include_cleaner` test if the parent opted in.
+def _clang_format_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
+    """Emit a py_test that runs `clang-format --dry-run -Werror` on srcs + hdrs.
 
-    `include_cleaner` is False by default; libraries opt in to "strict" as
-    they're cleaned of historical findings (issue #559). select()-valued
-    srcs/hdrs are skipped because we can't enumerate them at load time —
-    those files are still picked up by sibling targets that list them as
-    plain strings.
+    Mirrors `_banned_patterns_lint_test` so format escapes can be caught
+    by `bazel test //...` instead of waiting on the `Lint` GitHub workflow.
+
+    Currently tagged `manual` because the repo carries ~2.2k pre-existing
+    format escapes (250 files); `bazel test //...` would turn red on every
+    one. Run on demand with:
+
+        bazel test //... --test_tag_filters=clang_format \
+                          --build_tag_filters=clang_format
+
+    Once the historical debt is fixed in a single mechanical
+    `clang-format -i` pass, drop `manual` from `propagated_tags` so the
+    check moves onto the default PR gate.
+
+    Args:
+      name: Parent target name. The lint test is named `{name}_clang_format`.
+      srcs: Source files to lint.
+      hdrs: Header files to lint.
+      tags: Tags from the parent rule. `manual` is propagated so libraries
+        tagged manual don't pull their lint into `bazel test //...`.
     """
-    if not include_cleaner:
-        return
 
-    if include_cleaner not in INCLUDE_CLEANER_VALUES:
-        fail(
-            "include_cleaner must be False or one of {}; got {}".format(
-                INCLUDE_CLEANER_VALUES,
-                repr(include_cleaner),
-            ),
-        )
-
+    # select()-valued srcs/hdrs can't be enumerated at load time; skip linting
+    # them here. Those files are still linted whenever another target references
+    # them as a plain list.
     if type(srcs) != "list" or type(hdrs) != "list":
         return
 
-    lintable_srcs = [f for f in srcs if type(f) == "string" and not f.startswith(":") and not f.startswith("//")]
-    lintable_hdrs = [f for f in hdrs if type(f) == "string" and not f.startswith(":") and not f.startswith("//")]
-    if not (lintable_srcs or lintable_hdrs):
+    lintable = [
+        f
+        for f in (srcs + hdrs)
+        if type(f) == "string" and not f.startswith(":") and not f.startswith("//") and f.endswith(_CLANG_FORMAT_EXTENSIONS)
+    ]
+    if not lintable:
         return
 
-    # `deps` may be a select() (uncommon at this layer); fall back to an
-    # empty list rather than failing — the lint will still see the
-    # library's own srcs/hdrs but lose deps' include paths. Better to
-    # opt-in only when deps are concrete.
-    if type(deps) != "list":
-        return
+    # `manual` keeps the test out of `bazel test //...` until the
+    # historical-debt sweep lands. Remove `"manual"` from this list to
+    # promote clang-format to the default gate.
+    propagated_tags = ["lint", "clang_format", "manual"]
 
-    include_cleaner_lint_test(
-        name = name + "_include_cleaner",
-        srcs = lintable_srcs,
-        hdrs = lintable_hdrs,
-        deps = deps,
-        copts = copts,
-        tags = tags,
+    py_test(
+        name = name + "_clang_format",
+        srcs = [_CLANG_FORMAT_SCRIPT],
+        main = "check_clang_format.py",
+        args = ["$(rootpath {})".format(f) for f in lintable],
+        # `.clang-format` is included so clang-format's directory walk
+        # finds the project style file inside the bazel test sandbox
+        # (cwd is `_main/`, files live at `_main/donner/...`, config at
+        # `_main/.clang-format`).
+        data = lintable + ["//:.clang-format"],
+        tags = propagated_tags,
+        size = "small",
     )
 
 def llvm21_macos_workaround_linkopts():
@@ -365,7 +389,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
         testonly = 1,
     )
 
-def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], include_cleaner = False, **kwargs):
+def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
     """
     Create a cc_binary with donner-specific defaults including LLVM 21 workaround.
 
@@ -375,9 +399,6 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], inclu
       linkopts: List of linker options.
       deps: List of dependencies.
       tags: Tags.
-      include_cleaner: Opt-in to per-target `misc-include-cleaner` lint. False
-        (default) skips. "strict" emits `{name}_include_cleaner` test that
-        fails on any IWYU finding. See `build_defs/include_cleaner.bzl`.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
     cc_binary(
@@ -396,14 +417,11 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], inclu
         tags = tags,
     )
 
-    _maybe_emit_include_cleaner(
+    _clang_format_lint_test(
         name = name,
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
-        deps = deps,
-        copts = kwargs.get("copts", []),
         tags = tags,
-        include_cleaner = include_cleaner,
     )
 
 # Standard variant specs for donner_cc_test(variants = ...).
@@ -443,7 +461,7 @@ _VARIANT_FORWARDED_ATTRS = (
     "target_compatible_with",
 )
 
-def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variants = None, include_cleaner = False, **kwargs):
+def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variants = None, **kwargs):
     """
     Create a cc_test with donner-specific defaults including LLVM 21 workaround.
 
@@ -459,7 +477,6 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
         wrapper per entry via `donner_multi_transitioned_test`. This is the
         opt-in mechanism that lets `bazel test //...` cover variant lanes
         without per-test `--config=` flags. See doc 0031 M2.3.
-      include_cleaner: See `donner_cc_binary`.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     cc_test(
@@ -478,14 +495,11 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
         tags = tags,
     )
 
-    _maybe_emit_include_cleaner(
+    _clang_format_lint_test(
         name = name,
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
-        deps = deps,
-        copts = kwargs.get("copts", []),
         tags = tags,
-        include_cleaner = include_cleaner,
     )
 
     if variants:
@@ -562,7 +576,7 @@ def donner_perf_cc_test(name, correctness_srcs, wallclock_srcs, srcs = [], linko
         **kwargs
     )
 
-def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, include_cleaner = False, **kwargs):
+def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibility = None, **kwargs):
     """
     Create a cc_library with donner-specific defaults.
 
@@ -573,7 +587,6 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
       copts: List of copts.
       tags: List of tags.
       visibility: Visibility.
-      include_cleaner: See `donner_cc_binary`.
       **kwargs: Additional arguments, matching the implementation of cc_library.
     """
 
@@ -611,14 +624,11 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         tags = tags,
     )
 
-    _maybe_emit_include_cleaner(
+    _clang_format_lint_test(
         name = name,
         srcs = srcs,
         hdrs = hdrs,
-        deps = kwargs.get("deps", []),
-        copts = copts,
         tags = tags,
-        include_cleaner = include_cleaner,
     )
 
 def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
