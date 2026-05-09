@@ -217,7 +217,7 @@ void InstallFailureSignalHandler() {
   prewarmSymbolization();
 
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
-    struct sigaction action {};
+    struct sigaction action = {};
     action.sa_handler = failureSignalHandler;
     sigemptyset(&action.sa_mask);
     action.sa_flags = SA_RESETHAND;

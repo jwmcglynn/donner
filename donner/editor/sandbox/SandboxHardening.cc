@@ -228,7 +228,7 @@ bool InstallSeccompFilter() {
   // detect false positives during initial deployment.
   filter[idx++] = BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EACCES & SECCOMP_RET_DATA));
 
-  struct sock_fprog prog {};
+  struct sock_fprog prog = {};
   prog.len = static_cast<unsigned short>(idx);
   prog.filter = filter.data();
 
