@@ -1,3 +1,4 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "donner/editor/EditorShell.h"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include "GLFW/glfw3.h"
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/DragCoalesce.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
@@ -187,6 +189,7 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   app_.setCurrentFilePath(std::string(path));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.reset();
+  lastPostedScreenPoint_.reset();
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
   textures_.clearOverlay();
@@ -198,6 +201,7 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
 void EditorShell::applyExperimentalModeChange(bool enabled) {
   options_.experimentalMode = enabled;
   selectTool_.setCompositedDragPreviewEnabled(enabled);
+  lastPostedScreenPoint_.reset();
   renderCoordinator_.experimentalDragPresentation() = ExperimentalDragPresentation{};
   textures_.resetComposited();
 }
@@ -370,6 +374,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   if (interactionController_.pendingClick().has_value() &&
       !renderCoordinator_.asyncRenderer().isBusy()) {
+    // `SelectTool::onMouseDown` abandons any stale drag/marquee state
+    // before starting the new gesture, so drop the previous coalesced
+    // screen point alongside that reset.
+    lastPostedScreenPoint_.reset();
     selectTool_.onMouseDown(app_, interactionController_.pendingClick()->documentPoint,
                             interactionController_.pendingClick()->modifiers);
     renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -382,11 +390,17 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      selectTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      const ImVec2 currentScreen = ImGui::GetMousePos();
+      if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
+                                     renderCoordinator_.asyncRenderer().isBusy())) {
+        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true);
+        lastPostedScreenPoint_ = currentScreen;
+      }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      lastPostedScreenPoint_.reset();
       if (options_.experimentalMode && previewBeforeRelease.has_value()) {
         // The DOM was already updated every drag frame via
         // `SelectTool::onMouseMove` → `applyMutation`, so drag release

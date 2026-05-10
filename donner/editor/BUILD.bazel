@@ -223,6 +223,12 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "drag_coalesce",
+    hdrs = ["DragCoalesce.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "keyboard_shortcut_policy",
     hdrs = ["KeyboardShortcutPolicy.h"],
     deps = [],
@@ -330,6 +336,7 @@ donner_cc_library(
     srcs = ["EditorShell.cc"],
     hdrs = ["EditorShell.h"],
     deps = [
+        ":drag_coalesce",
         ":dialog_presenter",
         ":document_sync_controller",
         ":editor_app",
