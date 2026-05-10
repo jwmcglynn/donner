@@ -671,8 +671,27 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           components::LayoutSystem().getCanvasFromDocumentTransform(registry);
       const Transform2d newWorldFromEntity =
           abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
-      const Transform2d delta =
-          newWorldFromEntity * matchedLayer->bitmapEntityFromWorldTransform()->inverse();
+      // The delta is the canvas-from-canvas transform that maps
+      // bitmap-canvas-pixels (rasterized at the OLD `worldFromEntity`) to
+      // their CURRENT canvas position (under the NEW `worldFromEntity`).
+      //
+      // For a bitmap pixel at canvas position c_old, its corresponding
+      // entity-local point is `oldEntityFromWorld(c_old)`; its current
+      // canvas position is `newWorldFromEntity(<that local p>)`. Reading
+      // donner's left-to-right composition (`A * B` applied to v means
+      // "first A, then B"), the canvas-to-canvas mapping is therefore
+      // `oldEntityFromWorld * newWorldFromEntity`.
+      //
+      // The reverse order (`newWFE * oldEFW`) is an entity-local mapping,
+      // which collapses to the right answer ONLY when the old transform's
+      // linear part is identity. For a previously-resized element it
+      // misreports the canvas delta as `oldScale.inverse() * delta_doc`,
+      // so the cached bitmap moves at `delta_doc / scale` pixels per
+      // drag step while the overlay (driven by worldBounds) moves at
+      // `delta_doc`. See `LayerComposeOffsetReflectsDocumentDeltaForResized
+      // Element` for the regression pin.
+      const Transform2d delta = matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
+                                newWorldFromEntity;
 
       const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
       // Subtree layers require a pure-translation delta: only then can we
@@ -970,6 +989,15 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // rasterize at the post-drag position, producing misalignment
   // crescents at the sub-layers' rendered edges (the
   // `#Clouds_with_gradients` splash artifact).
+  // `worldFromEntityTransform` is stamped by `RenderingContext` as
+  // `absoluteTransform × canvasFromDocument` (for worldIsCanvas
+  // entities). With the canvas-from-canvas delta formula below
+  // (`oldEFW * newWFE`), the result is already in canvas-pixel space
+  // and feeds straight into the `setTransform` + `drawImage` compose
+  // pipeline. `ScaledCanvasTranslationOnlyDragProducesCorrectPixels`
+  // pins the 2× canvas (retina/zoomed) drag delta and
+  // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` pins
+  // the previously-resized-element drag delta.
   for (auto& layer : layers_) {
     if (!layer.hasValidBitmap() || !layer.bitmapEntityFromWorldTransform().has_value()) {
       continue;
@@ -980,7 +1008,29 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
     const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
     const Transform2d& bitmapStamp = *layer.bitmapEntityFromWorldTransform();
-    const Transform2d delta = instance.worldFromEntityTransform * bitmapStamp.inverse();
+    // Canvas-to-canvas delta for the cached bitmap. Applied to a canvas
+    // pixel `c_old` (where the bitmap content currently appears under
+    // the OLD `worldFromEntity`), the composition first walks back to
+    // entity-local via `oldEFW = oldWFE.inverse()`, then forward through
+    // the NEW `worldFromEntity`. With donner's left-to-right convention
+    // (`A * B`(v) = B(A(v))`), that's `oldEFW * newWFE`.
+    //
+    // The previous formula was `newWFE * oldEFW` followed by a
+    // `docFromCanvas * ... * canvasFromDoc` conjugation. Algebraically
+    // that produced the correct canvas-space delta ONLY when the old
+    // transform's linear part was identity — `newWFE * oldEFW` then
+    // collapses to `T_new * T_old.inverse()` (doc-space) and the
+    // conjugation lifts it to canvas-space. For a previously-resized
+    // element the cancellation fails: the old scale's inverse leaks
+    // into the result, the conjugation re-applies canvasFromDoc on top
+    // of an already canvas-space value, and the cached bitmap moves at
+    // `delta_doc / oldScale` canvas pixels per drag step — visibly
+    // behind the cursor while the overlay tracks correctly. See
+    // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement`.
+    //
+    // The new composition produces canvas-from-canvas directly, so the
+    // conjugation has nothing to do and is gone.
+    const Transform2d delta = bitmapStamp.inverse() * instance.worldFromEntityTransform;
     if (delta.isTranslation()) {
       layer.setCanvasFromBitmap(delta);
     }
