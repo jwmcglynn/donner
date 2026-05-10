@@ -13,9 +13,39 @@ constexpr std::string_view kTwoRectsSvg =
          <rect id="r2" x="100" y="100" width="40" height="40" fill="blue"/>
        </svg>)";
 
+constexpr std::string_view kCompositeSiblingSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <defs>
+           <filter id="halo">
+             <feGaussianBlur stdDeviation="1"/>
+           </filter>
+         </defs>
+         <g id="anchor" filter="url(#halo)">
+           <rect id="anchor_leaf" x="10" y="10" width="20" height="20" fill="black"/>
+         </g>
+         <g id="peer_contained">
+           <rect id="peer_contained_leaf" x="20" y="10" width="12" height="20" fill="cyan"/>
+         </g>
+         <g id="peer_excluded">
+           <rect id="peer_excluded_leaf" x="20" y="40" width="20" height="20" fill="white"/>
+         </g>
+       </svg>)svg";
+
+constexpr std::string_view kPlainGroupSiblingSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <g id="plain_group">
+           <rect id="plain_leaf" x="10" y="10" width="20" height="20" fill="black"/>
+         </g>
+         <g id="plain_peer">
+           <rect id="plain_peer_leaf" x="20" y="10" width="12" height="20" fill="cyan"/>
+         </g>
+       </svg>)";
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
+
+  void loadSvg(std::string_view svg) { ASSERT_TRUE(app.loadFromString(svg)); }
 
   svg::SVGElement elementById(std::string_view id) {
     auto element = app.document().document().querySelector(id);
@@ -82,6 +112,64 @@ TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
   tool.onMouseDown(app, Vector2d(110.0, 110.0), MouseModifiers{});
 
   EXPECT_TRUE(selectionIs("#r2"));
+}
+
+TEST_F(SelectToolTest, ElevatedFilterGroupDragIncludesMostlyContainedSibling) {
+  loadSvg(kCompositeSiblingSvg);
+
+  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "anchor");
+  EXPECT_EQ(app.selectedElements()[1].id(), "peer_contained");
+
+  tool.onMouseMove(app, Vector2d(42.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(42.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_DOUBLE_EQ(transformOf("#anchor").data[4], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#anchor").data[5], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[4], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[5], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
+}
+
+TEST_F(SelectToolTest, ElevatedFilterGroupExcludesHalfContainedSibling) {
+  loadSvg(kCompositeSiblingSvg);
+
+  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "anchor");
+  EXPECT_EQ(app.selectedElements()[1].id(), "peer_contained");
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
+
+  tool.onMouseMove(app, Vector2d(27.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(27.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
+}
+
+TEST_F(SelectToolTest, NonCompositingGroupDoesNotExpandToSibling) {
+  loadSvg(kPlainGroupSiblingSvg);
+
+  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf");
+
+  tool.onMouseMove(app, Vector2d(32.0, 40.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(32.0, 40.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_DOUBLE_EQ(transformOf("#plain_leaf").data[4], 20.0);
+  EXPECT_DOUBLE_EQ(transformOf("#plain_leaf").data[5], 20.0);
+  EXPECT_DOUBLE_EQ(transformOf("#plain_peer").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#plain_peer").data[5], 0.0);
 }
 
 TEST_F(SelectToolTest, DragTranslatesSelectedElement) {

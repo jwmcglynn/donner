@@ -1,12 +1,14 @@
 #include "donner/editor/SelectTool.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -14,6 +16,73 @@
 namespace donner::editor {
 
 namespace {
+
+bool HasCompositingBoundaryAttribute(const svg::SVGElement& element) {
+  return element.hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
+         element.hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
+         element.hasAttribute(xml::XMLQualifiedNameRef("clip-path"));
+}
+
+std::optional<Box2d> SubtreeWorldBounds(const svg::SVGElement& root) {
+  std::optional<Box2d> merged;
+  for (const svg::SVGGeometryElement& geometry : CollectRenderableGeometry(root)) {
+    const auto worldBounds = geometry.worldBounds();
+    if (!worldBounds.has_value()) {
+      continue;
+    }
+    if (merged.has_value()) {
+      merged->addBox(*worldBounds);
+    } else {
+      merged = *worldBounds;
+    }
+  }
+  return merged;
+}
+
+double ContainmentFraction(const Box2d& inner, const Box2d& outer) {
+  const double innerArea = std::max(0.0, inner.width()) * std::max(0.0, inner.height());
+  if (innerArea <= 0.0) {
+    return 0.0;
+  }
+
+  const double ixMin = std::max(inner.topLeft.x, outer.topLeft.x);
+  const double iyMin = std::max(inner.topLeft.y, outer.topLeft.y);
+  const double ixMax = std::min(inner.bottomRight.x, outer.bottomRight.x);
+  const double iyMax = std::min(inner.bottomRight.y, outer.bottomRight.y);
+  const double intersectionWidth = std::max(0.0, ixMax - ixMin);
+  const double intersectionHeight = std::max(0.0, iyMax - iyMin);
+  return (intersectionWidth * intersectionHeight) / innerArea;
+}
+
+std::vector<svg::SVGElement> CollectCompositePeerSiblings(const svg::SVGElement& compositingGroup) {
+  std::vector<svg::SVGElement> peers;
+  auto parent = compositingGroup.parentElement();
+  if (!parent.has_value()) {
+    return peers;
+  }
+
+  const auto anchorBounds = SubtreeWorldBounds(compositingGroup);
+  if (!anchorBounds.has_value() || anchorBounds->isEmpty()) {
+    return peers;
+  }
+
+  constexpr double kContainmentThreshold = 0.70;
+  for (auto sibling = parent->firstChild(); sibling.has_value(); sibling = sibling->nextSibling()) {
+    if (*sibling == compositingGroup) {
+      continue;
+    }
+
+    const auto siblingBounds = SubtreeWorldBounds(*sibling);
+    if (!siblingBounds.has_value() || siblingBounds->isEmpty()) {
+      continue;
+    }
+
+    if (ContainmentFraction(*siblingBounds, *anchorBounds) >= kContainmentThreshold) {
+      peers.push_back(*sibling);
+    }
+  }
+  return peers;
+}
 
 /// Walk @p leaf's ancestor chain and return the outermost ancestor whose
 /// presentation attributes break the compositor's promotion invariants —
@@ -47,9 +116,7 @@ svg::SVGElement ElevateToCompositingGroupAncestor(svg::SVGElement leaf) {
   svg::SVGElement best = leaf;
   svg::SVGElement cursor = leaf;
   while (auto parent = cursor.parentElement()) {
-    if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
-        parent->hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
-        parent->hasAttribute(xml::XMLQualifiedNameRef("clip-path"))) {
+    if (HasCompositingBoundaryAttribute(*parent)) {
       best = *parent;
     }
     cursor = *parent;
@@ -107,6 +174,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // layer. Without elevation the drag falls back to full-document
   // rendering at ~250 ms / frame on the splash.
   svg::SVGElement element = ElevateToCompositingGroupAncestor(*hit);
+  const bool didElevate = !(element == *hit);
 
   // If the element is already in the current multi-selection, preserve
   // the selection and drag ALL selected elements in lockstep — classic
@@ -118,6 +186,11 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       std::any_of(currentSelection.begin(), currentSelection.end(),
                   [&element](const svg::SVGElement& selected) { return selected == element; });
   const bool isMultiDrag = elementAlreadySelected && currentSelection.size() > 1;
+
+  std::vector<svg::SVGElement> compositePeers;
+  if (didElevate && !isMultiDrag && HasCompositingBoundaryAttribute(element)) {
+    compositePeers = CollectCompositePeerSiblings(element);
+  }
 
   const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
   const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
@@ -136,6 +209,26 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
           .currentTransform = extraStart,
           .writebackTarget = captureAttributeWritebackTarget(selected),
           .sourceTransformAttributeValue = selected.getAttribute("transform"),
+      });
+    }
+  } else if (!compositePeers.empty()) {
+    std::vector<svg::SVGElement> fullSelection;
+    fullSelection.reserve(1 + compositePeers.size());
+    fullSelection.push_back(element);
+    for (const svg::SVGElement& peer : compositePeers) {
+      fullSelection.push_back(peer);
+    }
+    editor.setSelection(std::move(fullSelection));
+
+    extras.reserve(compositePeers.size());
+    for (const svg::SVGElement& peer : compositePeers) {
+      const Transform2d peerStartTransform = peer.cast<svg::SVGGraphicsElement>().transform();
+      extras.push_back(PerElementDrag{
+          .element = peer,
+          .startTransform = peerStartTransform,
+          .currentTransform = peerStartTransform,
+          .writebackTarget = captureAttributeWritebackTarget(peer),
+          .sourceTransformAttributeValue = peer.getAttribute("transform"),
       });
     }
   } else {
