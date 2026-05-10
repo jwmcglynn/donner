@@ -28,6 +28,12 @@ struct DragStats {
   double maxWorkerMs = 0.0;
 };
 
+struct DragCounterStats {
+  uint64_t fastPathFrames = 0;
+  uint64_t slowPathFramesWithDirty = 0;
+  uint64_t noDirtyFrames = 0;
+};
+
 /// Aggregated result of replaying `filter_drag_repro.rnr` through the
 /// real editor stack. `skipped == true` means required data files were
 /// missing in runfiles and the caller should `GTEST_SKIP()` — the other
@@ -40,6 +46,8 @@ struct FilterDragReproResult {
   // mouse-up frames are excluded).
   DragStats firstDrag;
   DragStats secondDrag;
+  DragCounterStats firstDragCounters;
+  DragCounterStats secondDragCounters;
 
   // Selection invariants — did each mouse-up produce a selection, and
   // did the second mouse-up end up on a different entity than the first?
@@ -48,6 +56,8 @@ struct FilterDragReproResult {
   bool firstSelectionExists = false;
   bool secondSelectionExists = false;
   bool selectionChangedAcrossDrags = false;
+  int firstSelectionSize = 0;
+  int secondSelectionSize = 0;
 
   // Diagnostic identifiers mirrored from the live editor, surfaced so
   // failing-test output tells the reader which element the user hit
@@ -57,8 +67,9 @@ struct FilterDragReproResult {
   std::string secondSelectionId;
   std::string secondSelectionFilterAncestorId;
 
-  // CPU-speed-invariant compositor counters — the primary regression
-  // signal that the translation-only fast path is active.
+  // CPU-speed-invariant compositor counters — cumulative across the
+  // whole replay plus per-drag deltas in `firstDragCounters` /
+  // `secondDragCounters`.
   uint64_t fastPathFrames = 0;
   uint64_t slowPathFramesWithDirty = 0;
   uint64_t noDirtyFrames = 0;
