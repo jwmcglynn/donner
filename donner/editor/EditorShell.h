@@ -84,6 +84,7 @@ private:
   bool viewportInitialized_ = false;
   std::optional<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
+  std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   bool treeSelectionOriginatedInTree_ = false;
 
