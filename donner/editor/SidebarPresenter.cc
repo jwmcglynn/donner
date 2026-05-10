@@ -1,9 +1,12 @@
 #include "donner/editor/SidebarPresenter.h"
 
 #include <algorithm>
+#include <limits>
+#include <sstream>
 #include <string>
 #include <string_view>
 
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -45,6 +48,68 @@ std::string BuildTreeNodeLabel(const donner::svg::SVGElement& element) {
   return label;
 }
 
+std::string FormatAttributeName(const donner::xml::XMLQualifiedNameRef& name) {
+  if (name.namespacePrefix.empty()) {
+    return std::string(name.name);
+  }
+
+  std::string formatted;
+  formatted.reserve(name.namespacePrefix.size() + 1 + name.name.size());
+  formatted.append(name.namespacePrefix);
+  formatted.push_back(':');
+  formatted.append(name.name);
+  return formatted;
+}
+
+size_t AttributeSortKey(const donner::xml::XMLNode& node, std::string_view source,
+                        const donner::xml::XMLQualifiedNameRef& name) {
+  if (source.empty()) {
+    return std::numeric_limits<size_t>::max();
+  }
+
+  if (const auto location = node.getAttributeLocation(source, name); location.has_value()) {
+    return location->start.resolveOffset(source).offset.value_or(
+        std::numeric_limits<size_t>::max());
+  }
+
+  return std::numeric_limits<size_t>::max();
+}
+
+template <typename T, donner::svg::PropertyCascade kCascade>
+void AppendComputedStyleEntry(std::vector<std::pair<std::string, std::string>>& entries,
+                              const donner::svg::Property<T, kCascade>& property) {
+  std::ostringstream os;
+  if (const auto value = property.get(); value.has_value()) {
+    os << *value;
+  } else {
+    os << "nullopt";
+  }
+  os << (property.state == donner::svg::PropertyState::NotSet ? " (default)" : " (set)");
+  entries.emplace_back(std::string(property.name), os.str());
+}
+
+void RenderInspectorSection(const char* heading, const char* tableId,
+                            std::span<const std::pair<std::string, std::string>> entries) {
+  ImGui::Separator();
+  ImGui::TextUnformatted(heading);
+  if (entries.empty()) {
+    ImGui::TextDisabled("(none)");
+    return;
+  }
+
+  constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_PadOuterX;
+  if (ImGui::BeginTable(tableId, 2, kFlags)) {
+    for (const auto& [name, value] : entries) {
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(name.c_str());
+      ImGui::TableSetColumnIndex(1);
+      ImGui::TextUnformatted(value.c_str());
+    }
+    ImGui::EndTable();
+  }
+}
+
 }  // namespace
 
 void SidebarPresenter::captureTreeNode(const donner::svg::SVGElement& element,
@@ -74,9 +139,9 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
   // Inspector snapshot.
   InspectorSnapshot inspector;
-  if (app.hasSelection()) {
+  if (selectionList.size() == 1) {
     inspector.hasSelection = true;
-    const donner::svg::SVGElement& selected = *app.selectedElement();
+    const donner::svg::SVGElement& selected = selectionList.front();
     const std::string_view tagSv = selected.tagName().name;
     const donner::RcString idStr = selected.id();
     const std::string_view idSv = idStr;
@@ -98,6 +163,36 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
     if (selected.isa<donner::svg::SVGGraphicsElement>()) {
       inspector.transform = selected.cast<donner::svg::SVGGraphicsElement>().transform();
     }
+
+    if (auto xmlNode = donner::xml::XMLNode::TryCast(selected.entityHandle());
+        xmlNode.has_value()) {
+      auto attributes = xmlNode->attributes();
+      std::stable_sort(attributes.begin(), attributes.end(), [&](const auto& lhs, const auto& rhs) {
+        return AttributeSortKey(*xmlNode, app.cleanSourceText(), lhs) <
+               AttributeSortKey(*xmlNode, app.cleanSourceText(), rhs);
+      });
+      inspector.xmlAttributes.reserve(attributes.size());
+      for (const auto& attributeName : attributes) {
+        std::string value;
+        if (const auto attributeValue = xmlNode->getAttribute(attributeName);
+            attributeValue.has_value()) {
+          value.assign(std::string_view(*attributeValue));
+        }
+        inspector.xmlAttributes.emplace_back(FormatAttributeName(attributeName), std::move(value));
+      }
+    }
+
+    const auto& computedStyle = selected.getComputedStyle();
+    inspector.computedStyle.reserve(9);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.display);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.visibility);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.opacity);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.fill);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.fillOpacity);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.stroke);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.strokeWidth);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.strokeOpacity);
+    AppendComputedStyleEntry(inspector.computedStyle, computedStyle.color);
   }
   inspectorSnapshot_ = std::move(inspector);
 }
@@ -160,7 +255,7 @@ void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state) 
 
 void SidebarPresenter::renderInspector(const ViewportState& viewport) const {
   if (!inspectorSnapshot_.hasSelection) {
-    ImGui::TextDisabled("Nothing selected. Click an element to inspect.");
+    ImGui::TextDisabled("Select a single element to inspect attributes.");
   } else {
     ImGui::TextUnformatted(inspectorSnapshot_.titleText.c_str());
     if (inspectorSnapshot_.bounds.has_value()) {
@@ -173,6 +268,10 @@ void SidebarPresenter::renderInspector(const ViewportState& viewport) const {
       ImGui::Text("Transform: [%.3f %.3f %.3f %.3f  %.2f %.2f]", xform.data[0], xform.data[1],
                   xform.data[2], xform.data[3], xform.data[4], xform.data[5]);
     }
+    RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
+                           inspectorSnapshot_.xmlAttributes);
+    RenderInspectorSection("Computed style", "##inspector_computed_style",
+                           inspectorSnapshot_.computedStyle);
   }
   ImGui::Separator();
   ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);

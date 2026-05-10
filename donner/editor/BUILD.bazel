@@ -283,6 +283,7 @@ donner_cc_library(
         ":imgui_headers",
         ":viewport_state",
         "//donner/base",
+        "//donner/base/xml",
         "//donner/svg",
         "@imgui",
     ],

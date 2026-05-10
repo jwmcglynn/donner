@@ -4,6 +4,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -45,6 +46,20 @@ public:
   /// Render the inspector pane from the current snapshot.
   void renderInspector(const ViewportState& viewport) const;
 
+  [[nodiscard]] bool inspectorHasSelectionForTesting() const {
+    return inspectorSnapshot_.hasSelection;
+  }
+
+  [[nodiscard]] std::span<const std::pair<std::string, std::string>>
+  inspectorXmlAttributesForTesting() const {
+    return inspectorSnapshot_.xmlAttributes;
+  }
+
+  [[nodiscard]] std::span<const std::pair<std::string, std::string>>
+  inspectorComputedStyleForTesting() const {
+    return inspectorSnapshot_.computedStyle;
+  }
+
 private:
   struct TreeNodeSnapshot {
     /// Captured element reference. Valid for as long as the underlying
@@ -62,6 +77,8 @@ private:
     std::string titleText;
     std::optional<Box2d> bounds;
     std::optional<Transform2d> transform;
+    std::vector<std::pair<std::string, std::string>> xmlAttributes;
+    std::vector<std::pair<std::string, std::string>> computedStyle;
   };
 
   void captureTreeNode(const svg::SVGElement& element, std::span<const svg::SVGElement> selection,

@@ -213,6 +213,17 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "sidebar_presenter_tests",
+    srcs = ["SidebarPresenter_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:sidebar_presenter",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_sync_tests",
     srcs = ["EditorSync_tests.cc"],
     deps = [
