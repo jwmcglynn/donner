@@ -15,7 +15,8 @@ namespace donner::svg::compositor {
  * Dual-path assertion harness for composited rendering.
  *
  * Runs both the compositor path and a full re-render reference path, then pixel-diffs the results.
- * Use this to verify that composited output matches the ground truth during development and testing.
+ * Use this to verify that composited output matches the ground truth during development and
+ * testing.
  *
  * The harness wraps a `CompositorController` and a `RendererInterface`, intercepting `renderFrame`
  * to additionally perform a reference render and diff.

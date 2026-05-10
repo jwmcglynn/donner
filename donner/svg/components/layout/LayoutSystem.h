@@ -184,10 +184,10 @@ public:
    * @param warningSink Output vector of parse errors, if any.
    * @return Computed bounds.
    */
-  Box2d computeSizeProperties(EntityHandle entity, const SizedElementProperties& sizeProperties,
-                             const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
-                             const Box2d& viewBox, FontMetrics fontMetrics,
-                             ParseWarningSink& warningSink);
+  Box2d computeSizeProperties(
+      EntityHandle entity, const SizedElementProperties& sizeProperties,
+      const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Box2d& viewBox,
+      FontMetrics fontMetrics, ParseWarningSink& warningSink);
 
   /**
    * Creates a ComputedShadowSizedElementComponent for shadow trees where a parent element's size
@@ -269,7 +269,7 @@ private:
    * @param fontMetrics Font metrics, used to calculate the size of text elements.
    */
   Box2d calculateSizedElementBounds(EntityHandle entity, const SizedElementProperties& properties,
-                                   const Box2d& inheritedViewBox, FontMetrics fontMetrics);
+                                    const Box2d& inheritedViewBox, FontMetrics fontMetrics);
 
   /**
    * Get the document size scaled to fit the canvas, as a floating-point number without rounding.

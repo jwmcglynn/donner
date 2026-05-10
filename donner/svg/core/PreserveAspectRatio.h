@@ -103,7 +103,7 @@ public:
    * content (destination).
    */
   Transform2d elementContentFromViewBoxTransform(const Box2d& size,
-                                                std::optional<Box2d> viewBox) const;
+                                                 std::optional<Box2d> viewBox) const;
 
   /// Equality operator.
   bool operator==(const PreserveAspectRatio& other) const {

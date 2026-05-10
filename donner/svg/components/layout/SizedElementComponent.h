@@ -56,7 +56,7 @@ struct SizedElementComponent {
 struct ComputedSizedElementComponent {
   Box2d bounds;            ///< The computed rect of this sized element.
   Box2d inheritedViewBox;  ///< The viewBox of the parent element, used for preserveAspectRatio
-                          ///< transformations.
+                           ///< transformations.
 };
 
 /**

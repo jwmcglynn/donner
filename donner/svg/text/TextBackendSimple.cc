@@ -186,9 +186,7 @@ Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scal
         hasContour = true;
         break;
 
-      case STBTT_vline:
-        builder.lineTo(Vector2d(x, y));
-        break;
+      case STBTT_vline: builder.lineTo(Vector2d(x, y)); break;
 
       case STBTT_vcurve: {
         const double cx = static_cast<double>(vertices[i].cx) * scale;

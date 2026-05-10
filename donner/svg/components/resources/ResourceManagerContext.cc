@@ -31,9 +31,7 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   // would need one. `data:` URLs are decoded inline in `UrlLoader::fromUri`
   // without touching the resource loader, so their presence alone doesn't
   // justify the warning.
-  const auto needsExternalLoader = [](std::string_view uri) {
-    return !uri.starts_with("data:");
-  };
+  const auto needsExternalLoader = [](std::string_view uri) { return !uri.starts_with("data:"); };
 
   const bool hasExternalImage = [&] {
     for (auto entity : imageView) {
@@ -130,8 +128,7 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
           loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
         }
       } else if (source.kind == css::FontFaceSource::Kind::Data) {
-        const auto& dataPtr =
-            std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+        const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
         auto maybeFontData = fontLoader.fromData(*dataPtr);
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
@@ -191,9 +188,8 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   if (std::holds_alternative<ResourceLoaderError>(fetchResult)) {
     ParseDiagnostic err;
     const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
-    err.reason =
-        std::string("Failed to load external SVG '") + std::string(url) + "': " +
-        (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
+    err.reason = std::string("Failed to load external SVG '") + std::string(url) + "': " +
+                 (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
     warningSink.add(std::move(err));
     return std::nullopt;
   }

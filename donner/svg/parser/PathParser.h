@@ -50,8 +50,8 @@ namespace donner::svg::parser {
  *   <defs>
  *     <style>
  *       #path_data_moveto .sample { fill: none; stroke: #1f5a8a; stroke-width: 2.5; }
- *       #path_data_moveto .close  { fill: none; stroke: #c33;    stroke-width: 2; stroke-dasharray: 5,3; }
- *       #path_data_moveto .dot    { fill: #c33; }
+ *       #path_data_moveto .close  { fill: none; stroke: #c33;    stroke-width: 2; stroke-dasharray:
+ * 5,3; } #path_data_moveto .dot    { fill: #c33; }
  *     </style>
  *   </defs>
  *   <path class="sample" d="M 40 130 L 140 40 L 230 130" />
@@ -114,11 +114,10 @@ namespace donner::svg::parser {
  *   <defs>
  *     <style>
  *       #path_data_cubic .sample  { fill: none; stroke: #1f5a8a; stroke-width: 2.5; }
- *       #path_data_cubic .handle  { fill: none; stroke: #c33;    stroke-width: 1.5; stroke-dasharray: 4,3; }
- *       #path_data_cubic .handle2 { fill: none; stroke: #2a9;    stroke-width: 1.5; stroke-dasharray: 4,3; }
- *       #path_data_cubic .anchor  { fill: #c33; }
- *       #path_data_cubic .ctrl1   { fill: #c33; }
- *       #path_data_cubic .ctrl2   { fill: #2a9; }
+ *       #path_data_cubic .handle  { fill: none; stroke: #c33;    stroke-width: 1.5;
+ * stroke-dasharray: 4,3; } #path_data_cubic .handle2 { fill: none; stroke: #2a9; stroke-width: 1.5;
+ * stroke-dasharray: 4,3; } #path_data_cubic .anchor  { fill: #c33; } #path_data_cubic .ctrl1   {
+ * fill: #c33; } #path_data_cubic .ctrl2   { fill: #2a9; }
  *     </style>
  *   </defs>
  *   <path class="sample" d="M 40 140 C 80 30 180 30 220 140 S 300 30 300 30" />
@@ -158,9 +157,9 @@ namespace donner::svg::parser {
  *   <defs>
  *     <style>
  *       #path_data_quadratic .sample { fill: none; stroke: #1f5a8a; stroke-width: 2.5; }
- *       #path_data_quadratic .handle { fill: none; stroke: #c33;    stroke-width: 1.5; stroke-dasharray: 4,3; }
- *       #path_data_quadratic .anchor { fill: #c33; }
- *       #path_data_quadratic .ctrl   { fill: #c33; }
+ *       #path_data_quadratic .handle { fill: none; stroke: #c33;    stroke-width: 1.5;
+ * stroke-dasharray: 4,3; } #path_data_quadratic .anchor { fill: #c33; } #path_data_quadratic .ctrl
+ * { fill: #c33; }
  *     </style>
  *   </defs>
  *   <path class="sample" d="M 40 140 Q 120 20 200 140 T 360 140" />

@@ -85,8 +85,7 @@ public:
   ///
   /// @returns `ReplayStatus::kOk` on success, `kMalformed` if the stream
   ///   is corrupt, `kHeaderMismatch` on a missing/wrong header.
-  static ReplayStatus ReplayPrefix(std::span<const uint8_t> wire,
-                                   std::size_t commandCount,
+  static ReplayStatus ReplayPrefix(std::span<const uint8_t> wire, std::size_t commandCount,
                                    svg::RendererInterface& target);
 
   /// Builds a single-line textual summary of the wire stream: one row per

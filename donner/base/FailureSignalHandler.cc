@@ -51,7 +51,9 @@ char& demangleBufferStorage() {
 }
 
 /// Returns the fixed demangling buffer as a writable char pointer.
-char* demangleBuffer() { return &demangleBufferStorage(); }
+char* demangleBuffer() {
+  return &demangleBufferStorage();
+}
 
 /// Write a string to stderr (async-signal-safe).
 void writeToStderr(std::string_view str) {
@@ -59,7 +61,9 @@ void writeToStderr(std::string_view str) {
 }
 
 /// Write a single character to stderr (async-signal-safe).
-void writeChar(char ch) { (void)write(STDERR_FILENO, &ch, 1); }
+void writeChar(char ch) {
+  (void)write(STDERR_FILENO, &ch, 1);
+}
 
 /// Write an unsigned integer in decimal to stderr.
 void writeUnsigned(uint64_t value) {
@@ -121,7 +125,7 @@ const char* tryDemangleIntoFixedBuffer(const char* mangled) {
 
 /// Print a single backtrace frame, attempting to demangle the symbol into the fixed buffer.
 void printBacktraceFrame(void* frame) {
-  Dl_info info {};
+  Dl_info info{};
   if (!dladdr(frame, &info)) {
     writeToStderr("  ");
     writeHex(reinterpret_cast<uintptr_t>(frame));
@@ -148,8 +152,8 @@ void printBacktraceFrame(void* frame) {
 
     if (info.dli_saddr != nullptr) {
       writeToStderr(" + ");
-      const uintptr_t offset = reinterpret_cast<uintptr_t>(frame) -
-                               reinterpret_cast<uintptr_t>(info.dli_saddr);
+      const uintptr_t offset =
+          reinterpret_cast<uintptr_t>(frame) - reinterpret_cast<uintptr_t>(info.dli_saddr);
       writeUnsigned(offset);
     }
   }
@@ -162,7 +166,7 @@ void prewarmSymbolization() {
   void* frames[1] = {};
   (void)backtrace(frames, 1);
 
-  Dl_info info {};
+  Dl_info info{};
   (void)dladdr(reinterpret_cast<void*>(&InstallFailureSignalHandler), &info);
 
   const char* kDummyMangled = "_Z1fv";
@@ -213,7 +217,7 @@ void InstallFailureSignalHandler() {
   prewarmSymbolization();
 
   for (size_t i = 0; i < kNumFailureSignals; ++i) {
-    struct sigaction action{};
+    struct sigaction action = {};
     action.sa_handler = failureSignalHandler;
     sigemptyset(&action.sa_mask);
     action.sa_flags = SA_RESETHAND;

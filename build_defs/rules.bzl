@@ -11,17 +11,6 @@ load("@rules_python//python:defs.bzl", "py_test")
 # docs/coding_style.md "Language and Library Features".
 _BANNED_PATTERNS_SCRIPT = "//build_defs:check_banned_patterns.py"
 
-# Script that runs `clang-format --dry-run -Werror` on a list of files.
-# See `build_defs/check_clang_format.py`. Emitted as a per-target py_test
-# so `bazel test //...` catches format escapes locally instead of waiting
-# on the `Lint` GitHub workflow.
-_CLANG_FORMAT_SCRIPT = "//build_defs:check_clang_format.py"
-
-# File extensions clang-format actually formats. Mirror the set the
-# `Lint` workflow's clang-format step matches against — keep these in
-# lockstep with `.github/workflows/lint.yml`.
-_CLANG_FORMAT_EXTENSIONS = (".cc", ".cpp", ".cxx", ".c", ".h", ".hh", ".hpp", ".hxx")
-
 def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     """Emit a py_test that runs check_banned_patterns.py on srcs + hdrs.
 
@@ -59,64 +48,6 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
         main = "check_banned_patterns.py",
         args = ["$(rootpath {})".format(f) for f in lintable],
         data = lintable,
-        tags = propagated_tags,
-        size = "small",
-    )
-
-def _clang_format_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
-    """Emit a py_test that runs `clang-format --dry-run -Werror` on srcs + hdrs.
-
-    Mirrors `_banned_patterns_lint_test` so format escapes can be caught
-    by `bazel test //...` instead of waiting on the `Lint` GitHub workflow.
-
-    Currently tagged `manual` because the repo carries ~2.2k pre-existing
-    format escapes (250 files); `bazel test //...` would turn red on every
-    one. Run on demand with:
-
-        bazel test //... --test_tag_filters=clang_format \
-                          --build_tag_filters=clang_format
-
-    Once the historical debt is fixed in a single mechanical
-    `clang-format -i` pass, drop `manual` from `propagated_tags` so the
-    check moves onto the default PR gate.
-
-    Args:
-      name: Parent target name. The lint test is named `{name}_clang_format`.
-      srcs: Source files to lint.
-      hdrs: Header files to lint.
-      tags: Tags from the parent rule. `manual` is propagated so libraries
-        tagged manual don't pull their lint into `bazel test //...`.
-    """
-
-    # select()-valued srcs/hdrs can't be enumerated at load time; skip linting
-    # them here. Those files are still linted whenever another target references
-    # them as a plain list.
-    if type(srcs) != "list" or type(hdrs) != "list":
-        return
-
-    lintable = [
-        f
-        for f in (srcs + hdrs)
-        if type(f) == "string" and not f.startswith(":") and not f.startswith("//") and f.endswith(_CLANG_FORMAT_EXTENSIONS)
-    ]
-    if not lintable:
-        return
-
-    # `manual` keeps the test out of `bazel test //...` until the
-    # historical-debt sweep lands. Remove `"manual"` from this list to
-    # promote clang-format to the default gate.
-    propagated_tags = ["lint", "clang_format", "manual"]
-
-    py_test(
-        name = name + "_clang_format",
-        srcs = [_CLANG_FORMAT_SCRIPT],
-        main = "check_clang_format.py",
-        args = ["$(rootpath {})".format(f) for f in lintable],
-        # `.clang-format` is included so clang-format's directory walk
-        # finds the project style file inside the bazel test sandbox
-        # (cwd is `_main/`, files live at `_main/donner/...`, config at
-        # `_main/.clang-format`).
-        data = lintable + ["//:.clang-format"],
         tags = propagated_tags,
         size = "small",
     )
@@ -417,13 +348,6 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
         tags = tags,
     )
 
-    _clang_format_lint_test(
-        name = name,
-        srcs = srcs,
-        hdrs = kwargs.get("hdrs", []),
-        tags = tags,
-    )
-
 # Standard variant specs for donner_cc_test(variants = ...).
 #
 # Each entry expands into a `{name}_{variant}` wrapper around the base
@@ -489,13 +413,6 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
     )
 
     _banned_patterns_lint_test(
-        name = name,
-        srcs = srcs,
-        hdrs = kwargs.get("hdrs", []),
-        tags = tags,
-    )
-
-    _clang_format_lint_test(
         name = name,
         srcs = srcs,
         hdrs = kwargs.get("hdrs", []),
@@ -618,13 +535,6 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
     )
 
     _banned_patterns_lint_test(
-        name = name,
-        srcs = srcs,
-        hdrs = hdrs,
-        tags = tags,
-    )
-
-    _clang_format_lint_test(
         name = name,
         srcs = srcs,
         hdrs = hdrs,

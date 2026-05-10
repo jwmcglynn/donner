@@ -203,8 +203,8 @@ void PaintSystem::initializeComputedPattern(EntityHandle handle,
   // If patternUnits are objectBoundingBox, we want to evaluate percentages to [0, 1]. Otherwise
   // evaluate to userUnits.
   const Box2d tileViewBox = (computedPattern.patternUnits == PatternUnits::ObjectBoundingBox)
-                               ? Box2d(Vector2d(), Vector2d(1.0, 1.0))
-                               : LayoutSystem().getViewBox(handle);
+                                ? Box2d(Vector2d(), Vector2d(1.0, 1.0))
+                                : LayoutSystem().getViewBox(handle);
 
   computedPattern.tileRect = LayoutSystem().computeSizeProperties(
       handle, computedPattern.sizeProperties, style.properties->unparsedProperties, tileViewBox,
@@ -265,8 +265,7 @@ const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
 
 // Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
 // the registry
-void PaintSystem::createGradientShadowTrees(Registry& registry,
-                                            ParseWarningSink& warningSink) {
+void PaintSystem::createGradientShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
     const auto& [gradient] = view.get(entity);
 
@@ -301,8 +300,7 @@ void PaintSystem::createGradientShadowTrees(Registry& registry,
   }
 }
 
-void PaintSystem::createPatternShadowTrees(Registry& registry,
-                                           ParseWarningSink& warningSink) {
+void PaintSystem::createPatternShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   for (auto view = registry.view<PatternComponent>(); auto entity : view) {
     const auto& [pattern] = view.get(entity);
 

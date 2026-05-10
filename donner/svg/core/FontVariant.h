@@ -21,8 +21,8 @@ namespace donner::svg {
  * @see https://www.w3.org/TR/CSS21/fonts.html#propdef-font-variant
  */
 enum class FontVariant : uint8_t {
-  Normal,    ///< [DEFAULT] Normal variant.
-  SmallCaps, ///< Small-caps variant; lowercase letters rendered as smaller uppercase glyphs.
+  Normal,     ///< [DEFAULT] Normal variant.
+  SmallCaps,  ///< Small-caps variant; lowercase letters rendered as smaller uppercase glyphs.
 };
 
 /**

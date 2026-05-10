@@ -31,8 +31,8 @@
 
 #include "donner/editor/sandbox/SandboxHost.h"
 #include "donner/editor/sandbox/SvgSource.h"
-#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 
 namespace {
 
@@ -59,8 +59,7 @@ std::string ResolveChildPath(const char* argv0) {
   return "donner_parser_child";
 }
 
-bool WritePngFile(const std::filesystem::path& path,
-                  const std::vector<uint8_t>& bytes) {
+bool WritePngFile(const std::filesystem::path& path, const std::vector<uint8_t>& bytes) {
   std::ofstream out(path, std::ios::binary);
   if (!out) return false;
   out.write(reinterpret_cast<const char*>(bytes.data()),
@@ -119,8 +118,7 @@ int main(int argc, char* argv[]) {
   }
 
   const auto png = donner::svg::RendererImageIO::writeRgbaPixelsToPngMemory(
-      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4);
+      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y, bitmap.rowBytes / 4);
   if (png.empty() || !WritePngFile(outputPath, png)) {
     std::fprintf(stderr, "sandbox_render: failed to write PNG to %s\n",
                  outputPath.string().c_str());

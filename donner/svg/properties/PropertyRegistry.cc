@@ -1253,8 +1253,8 @@ constexpr std::array<std::pair<std::string_view, bool>, 71> kValidPresentationAt
 DONNER_CONSTEXPR_MAP auto kValidPresentationAttributes =
     makeCompileTimeMap(kValidPresentationAttributeEntries);
 
-using PropertyParseFn = std::optional<ParseDiagnostic> (*)(PropertyRegistry& registry,
-                                                      const parser::PropertyParseFnParams& params);
+using PropertyParseFn = std::optional<ParseDiagnostic> (*)(
+    PropertyRegistry& registry, const parser::PropertyParseFnParams& params);
 
 DONNER_CONSTEXPR_MAP auto kProperties =
     makeCompileTimeMap(
@@ -1929,7 +1929,7 @@ size_t PropertyRegistry::numPropertiesSet() const {
 }
 
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
-                                                          css::Specificity specificity) {
+                                                               css::Specificity specificity) {
   const std::string_view name(declaration.name);
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {

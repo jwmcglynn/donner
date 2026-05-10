@@ -6,8 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "donner/base/encoding/Base64.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/encoding/Base64.h"
 #include "donner/svg/SVGDocument.h"
 #define private public
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -41,7 +41,8 @@ SubDocumentCache::ParseCallback MakeFailingCallback() {
 
 constexpr std::string_view kTinyPngDataUrl =
     "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+"
+    "Rq28akAAAAASUVORK5CYII=";
 
 constexpr std::string_view kValidWoffBase64 =
     "d09GRk9UVE8AAAVAAAkAAAAAB0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDRkYgAAADXAAAAdEAAAIu"
@@ -271,10 +272,10 @@ protected:
 };
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGNoResourceLoader) {
-  setSvgParseCallback([](const std::vector<uint8_t>&,
-                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
-    return MakeDocumentWithCanvas(701).handle();
-  });
+  setSvgParseCallback(
+      [](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return MakeDocumentWithCanvas(701).handle();
+      });
 
   ParseWarningSink warnings;
   auto result = resourceManager_->loadExternalSVG("test.svg", warnings);
@@ -299,10 +300,10 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSecureModeBlocked) {
   auto loader = std::make_unique<TestResourceLoader>();
   loader->addFile("test.svg", {'<', 's', 'v', 'g', '>'});
   setResourceLoader(std::move(loader));
-  setSvgParseCallback([](const std::vector<uint8_t>&,
-                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
-    return MakeDocumentWithCanvas(702).handle();
-  });
+  setSvgParseCallback(
+      [](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return MakeDocumentWithCanvas(702).handle();
+      });
   setProcessingMode(ProcessingMode::SecureStatic);
 
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
@@ -313,10 +314,10 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSecureModeBlocked) {
 TEST_F(ResourceManagerContextTest, LoadExternalSVGFileNotFound) {
   auto loader = std::make_unique<TestResourceLoader>();
   setResourceLoader(std::move(loader));
-  setSvgParseCallback([](const std::vector<uint8_t>&,
-                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
-    return MakeDocumentWithCanvas(703).handle();
-  });
+  setSvgParseCallback(
+      [](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return MakeDocumentWithCanvas(703).handle();
+      });
 
   ParseWarningSink warnings;
   auto result = resourceManager_->loadExternalSVG("missing.svg", warnings);
@@ -330,10 +331,10 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSuccess) {
   const std::vector<uint8_t> svgContent{'<', 's', 'v', 'g', '>'};
   loader->addFile("test.svg", svgContent);
   setResourceLoader(std::move(loader));
-  setSvgParseCallback([](const std::vector<uint8_t>& data,
-                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
-    return MakeDocumentWithCanvas(static_cast<int>(data.size()) + 700).handle();
-  });
+  setSvgParseCallback(
+      [](const std::vector<uint8_t>& data, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return MakeDocumentWithCanvas(static_cast<int>(data.size()) + 700).handle();
+      });
 
   ParseWarningSink warnings;
   auto result = resourceManager_->loadExternalSVG("test.svg", warnings);
@@ -425,10 +426,10 @@ TEST_F(ResourceManagerContextTest, LoadResourcesLoadsSvgSubDocument) {
   auto loader = std::make_unique<TestResourceLoader>();
   loader->addFile("image.svg", {'<', 's', 'v', 'g', '/', '>'});
   setResourceLoader(std::move(loader));
-  setSvgParseCallback([](const std::vector<uint8_t>&,
-                         ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
-    return MakeDocumentWithCanvas(901).handle();
-  });
+  setSvgParseCallback(
+      [](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return MakeDocumentWithCanvas(901).handle();
+      });
 
   const Entity imageEntity = addImage("image.svg");
 
@@ -487,8 +488,8 @@ TEST_F(ResourceManagerContextTest, AddFontFacesLoadsUrlAndDataFonts) {
   urlFace.familyName = "UrlFont";
   css::FontFaceSource urlSource;
   urlSource.kind = css::FontFaceSource::Kind::Url;
-  urlSource.payload = RcString(std::string("data:application/x-font-woff;base64,") +
-                               std::string(kValidWoffBase64));
+  urlSource.payload =
+      RcString(std::string("data:application/x-font-woff;base64,") + std::string(kValidWoffBase64));
   urlFace.sources.push_back(urlSource);
 
   css::FontFace dataFace;
@@ -575,8 +576,8 @@ TEST_F(ResourceManagerContextTest, GetLoadedImageComponentLoadsDataUriWithoutRes
 }
 
 TEST_F(ResourceManagerContextTest, GetLoadedImageComponentReturnsNullForSvgDataUri) {
-  const Entity imageEntity =
-      addImage("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=");
+  const Entity imageEntity = addImage(
+      "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=");
 
   EXPECT_EQ(resourceManager_->getLoadedImageComponent(imageEntity), nullptr);
 }

@@ -64,11 +64,9 @@ private:
     std::optional<Transform2d> transform;
   };
 
-  void captureTreeNode(const svg::SVGElement& element,
-                        std::span<const svg::SVGElement> selection,
-                        TreeNodeSnapshot& out);
-  void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node,
-                      TreeViewState& state) const;
+  void captureTreeNode(const svg::SVGElement& element, std::span<const svg::SVGElement> selection,
+                       TreeNodeSnapshot& out);
+  void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state) const;
 
   std::optional<TreeNodeSnapshot> treeSnapshot_;
   InspectorSnapshot inspectorSnapshot_;

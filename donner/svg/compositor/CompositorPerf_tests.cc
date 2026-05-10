@@ -1,5 +1,3 @@
-#include "donner/svg/compositor/CompositorController.h"
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -9,6 +7,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComplexityBucketer.h"
+#include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/DragSession.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -43,8 +42,8 @@ std::string generateGridSvg(int count, int cols = 100) {
     // Give the first element an id for selection.
     if (i == 0) {
       svgBuilder << R"(<rect id="target" x=")" << x << R"(" y=")" << y << R"(" width=")"
-                 << cellW * 0.9 << R"(" height=")" << cellH * 0.9
-                 << R"(" fill="hsl()" << (i * 37) % 360 << R"(, 70%, 50%)" << R"(" />)";
+                 << cellW * 0.9 << R"(" height=")" << cellH * 0.9 << R"(" fill="hsl()"
+                 << (i * 37) % 360 << R"(, 70%, 50%)" << R"(" />)";
     } else {
       svgBuilder << R"(<rect x=")" << x << R"(" y=")" << y << R"(" width=")" << cellW * 0.9
                  << R"(" height=")" << cellH * 0.9 << R"(" fill="hsl()" << (i * 37) % 360
@@ -210,7 +209,8 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
   // walk is still O(entities) even when nothing needs rasterizing. 350 ms
   // = 2.5-3x observed, which still catches a real regression (e.g. full
   // re-rasterize every frame would be seconds) but tolerates runner load.
-  EXPECT_LT(avgMs, 350.0) << "Compositor overhead per frame exceeds 350ms (mock renderer, 10k nodes)";
+  EXPECT_LT(avgMs, 350.0)
+      << "Compositor overhead per frame exceeds 350ms (mock renderer, 10k nodes)";
 }
 
 // Measure click-to-first-drag-update latency — the cold path from "user selects
@@ -361,9 +361,9 @@ TEST_F(CompositorPerfTest, ComplexityBucketerReconcile_10kNodes) {
   const auto totalUs = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
   const double avgMs = static_cast<double>(totalUs) / kIterations / 1000.0;
 
-  std::cerr << "[PERF] ComplexityBucketerReconcile_10kNodes: " << avgMs
-            << " ms/pass (avg over " << kIterations << " warm reconciles, "
-            << bucketer.stats().candidatesConsidered << " candidates)\n";
+  std::cerr << "[PERF] ComplexityBucketerReconcile_10kNodes: " << avgMs << " ms/pass (avg over "
+            << kIterations << " warm reconciles, " << bucketer.stats().candidatesConsidered
+            << " candidates)\n";
 
   EXPECT_LT(avgMs, 100.0) << "Bucketer reconcile absurdly slow on 10k-node scene";
 }

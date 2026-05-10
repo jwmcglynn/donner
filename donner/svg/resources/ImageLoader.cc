@@ -10,8 +10,8 @@ namespace {
 bool LooksLikeSvgContent(const std::vector<uint8_t>& data) {
   // Skip leading whitespace.
   size_t i = 0;
-  while (i < data.size() && (data[i] == ' ' || data[i] == '\t' || data[i] == '\r' ||
-                              data[i] == '\n')) {
+  while (i < data.size() &&
+         (data[i] == ' ' || data[i] == '\t' || data[i] == '\r' || data[i] == '\n')) {
     ++i;
   }
   if (i >= data.size()) {

@@ -116,8 +116,7 @@ void ComplexityBucketer::reconcile(Registry& registry) {
   stale.reserve(bucketHints_.size());
   for (const auto& [entity, hint] : bucketHints_) {
     const bool invalid = !registry.valid(entity);
-    const bool evicted =
-        std::find(winners.begin(), winners.end(), entity) == winners.end();
+    const bool evicted = std::find(winners.begin(), winners.end(), entity) == winners.end();
     if (invalid || evicted) {
       stale.push_back(entity);
     }
@@ -130,8 +129,8 @@ void ComplexityBucketer::reconcile(Registry& registry) {
   // Publish hints for newly-winning entities.
   for (Entity entity : winners) {
     if (bucketHints_.count(entity) == 0) {
-      bucketHints_.emplace(entity, ScopedCompositorHint(registry, entity,
-                                                         HintSource::ComplexityBucket, 0x4000));
+      bucketHints_.emplace(
+          entity, ScopedCompositorHint(registry, entity, HintSource::ComplexityBucket, 0x4000));
       ++stats_.bucketsPublished;
     }
   }

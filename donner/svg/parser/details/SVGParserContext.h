@@ -80,9 +80,7 @@ public:
    *
    * @param warning Warning to add.
    */
-  void addWarning(ParseDiagnostic&& warning) {
-    warningSink_.add(std::move(warning));
-  }
+  void addWarning(ParseDiagnostic&& warning) { warningSink_.add(std::move(warning)); }
 
   /**
    * Add a warning from a subparser to the list of warnings, remapping the error back to the

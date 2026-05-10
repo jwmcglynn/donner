@@ -56,8 +56,8 @@ TEST(SVGUseElementTests, Defaults) {
                   "<use />"),
               UseHas(AllOf(XEq(0.0, Lengthd::Unit::None),  //
                            YEq(0.0, Lengthd::Unit::None),  //
-                           WidthIsAuto(),                   //
-                           HeightIsAuto(),                  //
+                           WidthIsAuto(),                  //
+                           HeightIsAuto(),                 //
                            HrefEq(RcString()))));
 }
 
@@ -188,7 +188,7 @@ TEST(SVGUseElementTests, SetWidthHeight) {
 TEST(SVGUseElementTests, WidthHeightUnits) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGUseElement>(  //
                   R"(<use width="100px" height="50em" />)"),
-              UseHas(AllOf(WidthEq(100.0, Lengthd::Unit::Px),    //
+              UseHas(AllOf(WidthEq(100.0, Lengthd::Unit::Px),  //
                            HeightEq(50.0, Lengthd::Unit::Em))));
 
   EXPECT_THAT(instantiateSubtreeElementAs<SVGUseElement>(  //
@@ -201,7 +201,7 @@ TEST(SVGUseElementTests, WidthHeightUnits) {
 TEST(SVGUseElementTests, XYUnits) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGUseElement>(  //
                   R"(<use x="10px" y="20em" />)"),
-              UseHas(AllOf(XEq(10.0, Lengthd::Unit::Px),   //
+              UseHas(AllOf(XEq(10.0, Lengthd::Unit::Px),  //
                            YEq(20.0, Lengthd::Unit::Em))));
 }
 
@@ -220,10 +220,10 @@ TEST(SVGUseElementTests, Cast) {
 TEST(SVGUseElementTests, AllAttributes) {
   EXPECT_THAT(instantiateSubtreeElementAs<SVGUseElement>(  //
                   R"(<use href="#target" x="5" y="10" width="200" height="100" />)"),
-              UseHas(AllOf(HrefEq(RcString("#target")),              //
-                           XEq(5.0, Lengthd::Unit::None),            //
-                           YEq(10.0, Lengthd::Unit::None),           //
-                           WidthEq(200.0, Lengthd::Unit::None),      //
+              UseHas(AllOf(HrefEq(RcString("#target")),          //
+                           XEq(5.0, Lengthd::Unit::None),        //
+                           YEq(10.0, Lengthd::Unit::None),       //
+                           WidthEq(200.0, Lengthd::Unit::None),  //
                            HeightEq(100.0, Lengthd::Unit::None))));
 }
 

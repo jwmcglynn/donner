@@ -86,7 +86,7 @@ struct Declaration {
    * going through `DeclarationListParser`.
    */
   SourceRange sourceRange;
-  bool important = false;              ///< Whether the declaration ends with `!important`.
+  bool important = false;  ///< Whether the declaration ends with `!important`.
 };
 
 /**

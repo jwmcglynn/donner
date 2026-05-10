@@ -26,8 +26,7 @@ bool ReadPod(std::span<const uint8_t>& cursor, T& out) {
 
 }  // namespace
 
-std::vector<uint8_t> EncodeRnrBuffer(const RnrHeader& header,
-                                     std::span<const uint8_t> wireBytes) {
+std::vector<uint8_t> EncodeRnrBuffer(const RnrHeader& header, std::span<const uint8_t> wireBytes) {
   std::vector<uint8_t> buf;
   buf.reserve(28 + header.uri.size() + wireBytes.size());
 

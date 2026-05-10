@@ -61,6 +61,6 @@ struct CircleComponent {
  * Parse presentation attributes for a \ref xml_circle element, such as cx, cy, r.
  */
 ParseResult<bool> ParseCirclePresentationAttribute(EntityHandle handle, std::string_view name,
-                                                    const parser::PropertyParseFnParams& params);
+                                                   const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

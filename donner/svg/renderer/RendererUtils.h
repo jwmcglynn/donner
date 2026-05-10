@@ -20,7 +20,6 @@ public:
    */
   static void prepareDocumentForRendering(SVGDocument& document, bool verbose,
                                           ParseWarningSink& warningSink);
-
 };
 
 }  // namespace donner::svg

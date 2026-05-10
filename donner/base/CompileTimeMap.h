@@ -122,12 +122,12 @@ class CompileTimeMap {
 public:
   /// @name STL-compatible typedefs
   /// @{
-  using key_type = Key;  ///< Type of the keys in the map.
-  using mapped_type = Value;  ///< Type of the mapped values.
+  using key_type = Key;                      ///< Type of the keys in the map.
+  using mapped_type = Value;                 ///< Type of the mapped values.
   using value_type = std::pair<Key, Value>;  ///< Key/value pair type.
-  using hasher = Hasher;  ///< Hasher type used to hash keys.
-  using key_equal = KeyEqual;  ///< Key equality comparator type.
-  using size_type = std::size_t;  ///< Size type.
+  using hasher = Hasher;                     ///< Hasher type used to hash keys.
+  using key_equal = KeyEqual;                ///< Key equality comparator type.
+  using size_type = std::size_t;             ///< Size type.
   /// @}
 
   /// Number of entries stored in the map.
@@ -308,7 +308,8 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
 
     std::array<std::size_t, N> bucketCounts{};
     for (std::size_t i = 0; i < N; ++i) {
-      const std::size_t bucket = static_cast<std::size_t>(dispatchHash(keys[i]) % tables.bucketCount);
+      const std::size_t bucket =
+          static_cast<std::size_t>(dispatchHash(keys[i]) % tables.bucketCount);
       ++bucketCounts[bucket];
       diagnostics.maxBucketSize =
           std::max(diagnostics.maxBucketSize, static_cast<std::uint32_t>(bucketCounts[bucket]));
@@ -324,7 +325,8 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
     std::array<std::size_t, N> bucketFill{};
     std::array<std::size_t, N> bucketItems{};
     for (std::size_t i = 0; i < N; ++i) {
-      const std::size_t bucket = static_cast<std::size_t>(dispatchHash(keys[i]) % tables.bucketCount);
+      const std::size_t bucket =
+          static_cast<std::size_t>(dispatchHash(keys[i]) % tables.bucketCount);
       const std::size_t position = bucketOffsets[bucket] + bucketFill[bucket];
       bucketItems[position] = i;
       ++bucketFill[bucket];
@@ -369,7 +371,8 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
         bool collision = false;
         for (std::size_t i = 0; i < count; ++i) {
           const std::size_t keyIndex = bucketItems[offset + i];
-          const std::size_t slot = static_cast<std::size_t>(mixHash(dispatchHash(keys[keyIndex]), seed) % N);
+          const std::size_t slot =
+              static_cast<std::size_t>(mixHash(dispatchHash(keys[keyIndex]), seed) % N);
           for (std::size_t j = 0; j < i; ++j) {
             if (candidateSlots[offset + j] == slot) {
               collision = true;
@@ -446,11 +449,11 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
 // fires on native builds.
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define DONNER_CONSTEXPR_MAP const
-#define makeCompileTimeMap(...)                                                  \
-  []() {                                                                        \
-    const auto _compiletime_map_result =                                        \
-        ::donner::detail::makeCompileTimeMapWithDiagnostics(__VA_ARGS__);       \
-    return _compiletime_map_result.map;                                         \
+#define makeCompileTimeMap(...)                                           \
+  []() {                                                                  \
+    const auto _compiletime_map_result =                                  \
+        ::donner::detail::makeCompileTimeMapWithDiagnostics(__VA_ARGS__); \
+    return _compiletime_map_result.map;                                   \
   }()
 // NOLINTEND(cppcoreguidelines-macro-usage)
 #else

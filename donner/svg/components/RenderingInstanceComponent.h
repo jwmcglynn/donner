@@ -1,9 +1,8 @@
 #pragma once
 /// @file
 
-#include <optional>
-
 #include <entt/entity/helper.hpp>  // entt::to_entity (2-arg overload)
+#include <optional>
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"

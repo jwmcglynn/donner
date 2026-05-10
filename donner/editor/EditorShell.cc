@@ -143,8 +143,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   // forever. Safe to capture `this` because `AsyncRenderer`'s lifetime
   // is strictly nested inside `RenderCoordinator`'s, which is a member
   // of `*this`.
-  renderCoordinator_.asyncRenderer().setWakeCallback(
-      [this]() { window_.wakeEventLoop(); });
+  renderCoordinator_.asyncRenderer().setWakeCallback([this]() { window_.wakeEventLoop(); });
 
   if (options_.reproOutputPath.has_value()) {
     repro::ReproRecorderOptions recorderOptions;
@@ -156,8 +155,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     recorderOptions.displayScale = window_.displayScale();
     recorderOptions.experimentalMode = options_.experimentalMode;
     reproRecorder_ = std::make_unique<repro::ReproRecorder>(std::move(recorderOptions));
-    std::fprintf(stderr, "[repro] recording UI inputs to %s\n",
-                 options_.reproOutputPath->c_str());
+    std::fprintf(stderr, "[repro] recording UI inputs to %s\n", options_.reproOutputPath->c_str());
   }
 
   valid_ = true;

@@ -81,8 +81,7 @@ void fuzzGetAttributeLocation(std::string_view source, const uint8_t* data, size
   const FileOffset fileOffset = FileOffset::Offset(offset);
 
   // Second byte → attribute-name length. Third+ bytes → name payload.
-  const std::size_t nameLen =
-      std::min<std::size_t>(data[1] % 16, size > 2 ? size - 2 : 0);
+  const std::size_t nameLen = std::min<std::size_t>(data[1] % 16, size > 2 ? size - 2 : 0);
   const std::string_view nameBytes(reinterpret_cast<const char*>(data + 2), nameLen);
   // Constrain to an ASCII-ish subset so we occasionally match a real
   // attribute name without biasing away from random garbage.
@@ -104,8 +103,7 @@ void fuzzGetAttributeLocation(std::string_view source, const uint8_t* data, size
 
   // Also probe the pathological out-of-range case so the fuzzer reliably
   // hits the bounds check in GetAttributeLocation.
-  (void)XMLParser::GetAttributeLocation(source,
-                                        FileOffset::Offset(source.size() + 1), attrName);
+  (void)XMLParser::GetAttributeLocation(source, FileOffset::Offset(source.size() + 1), attrName);
 }
 
 }  // namespace

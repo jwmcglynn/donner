@@ -254,8 +254,7 @@ constexpr Color RgbHex(uint32_t value) {
  * @param value Integer representation of the color value (0xRRGGBBAA).
  */
 constexpr Color RgbaHex(uint32_t value) {
-  return Color(
-      RGBA((value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
+  return Color(RGBA((value >> 24) & 0xFF, (value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF));
 }
 
 }  // namespace donner::css

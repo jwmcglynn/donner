@@ -1,10 +1,10 @@
 #include "donner/base/fonts/Woff2Parser.h"
 
-#include <fstream>
-#include <vector>
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <fstream>
+#include <vector>
 
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>

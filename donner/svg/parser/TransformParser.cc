@@ -95,9 +95,9 @@ public:
         skipWhitespace();
         if (remaining_.starts_with(')')) {
           // Only one parameter provided, rotation around origin.
-          transform =
-              Transform2d::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
-              transform;
+          transform = Transform2d::Rotate(maybeRotationDegrees.result() *
+                                          MathConstants<double>::kDegToRad) *
+                      transform;
         } else {
           skipCommaWhitespace();
 
@@ -107,10 +107,10 @@ public:
           }
 
           const Vector2d offset(numbers[0], numbers[1]);
-          transform =
-              Transform2d::Translate(-offset) *
-              Transform2d::Rotate(maybeRotationDegrees.result() * MathConstants<double>::kDegToRad) *
-              Transform2d::Translate(offset) * transform;
+          transform = Transform2d::Translate(-offset) *
+                      Transform2d::Rotate(maybeRotationDegrees.result() *
+                                          MathConstants<double>::kDegToRad) *
+                      Transform2d::Translate(offset) * transform;
         }
 
       } else if (func == "skewX") {

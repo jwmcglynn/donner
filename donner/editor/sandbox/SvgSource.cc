@@ -54,14 +54,11 @@ SvgFetchResult SvgSource::fetch(std::string_view uri) const {
   }
 
   if (HasExplicitScheme(uri)) {
-    if (uri.size() >= kFileScheme.size() &&
-        uri.substr(0, kFileScheme.size()) == kFileScheme) {
+    if (uri.size() >= kFileScheme.size() && uri.substr(0, kFileScheme.size()) == kFileScheme) {
       return fetchFromPath(std::filesystem::path(StripFileScheme(uri)));
     }
-    if ((uri.size() >= kHttpsScheme.size() &&
-         uri.substr(0, kHttpsScheme.size()) == kHttpsScheme) ||
-        (uri.size() >= kHttpScheme.size() &&
-         uri.substr(0, kHttpScheme.size()) == kHttpScheme)) {
+    if ((uri.size() >= kHttpsScheme.size() && uri.substr(0, kHttpsScheme.size()) == kHttpsScheme) ||
+        (uri.size() >= kHttpScheme.size() && uri.substr(0, kHttpScheme.size()) == kHttpScheme)) {
       return fetchFromUrl(uri);
     }
     result.status = SvgFetchStatus::kSchemeNotSupported;
@@ -94,8 +91,9 @@ SvgFetchResult SvgSource::fetchFromPath(const std::filesystem::path& path) const
   const bool exists = std::filesystem::exists(result.resolvedPath, existsEc);
   if (existsEc || !exists) {
     result.status = SvgFetchStatus::kNotFound;
-    result.diagnostics = Diagnose(result.resolvedPath, "stat",
-                                  existsEc ? existsEc : std::make_error_code(std::errc::no_such_file_or_directory));
+    result.diagnostics =
+        Diagnose(result.resolvedPath, "stat",
+                 existsEc ? existsEc : std::make_error_code(std::errc::no_such_file_or_directory));
     return result;
   }
 
@@ -121,9 +119,9 @@ SvgFetchResult SvgSource::fetchFromPath(const std::filesystem::path& path) const
   }
   if (byteCount > options_.maxFileBytes) {
     result.status = SvgFetchStatus::kTooLarge;
-    result.diagnostics = "file exceeds maxFileBytes (" + std::to_string(byteCount) +
-                         " > " + std::to_string(options_.maxFileBytes) + "): " +
-                         result.resolvedPath.string();
+    result.diagnostics = "file exceeds maxFileBytes (" + std::to_string(byteCount) + " > " +
+                         std::to_string(options_.maxFileBytes) +
+                         "): " + result.resolvedPath.string();
     return result;
   }
 
@@ -135,15 +133,14 @@ SvgFetchResult SvgSource::fetchFromPath(const std::filesystem::path& path) const
     } else {
       result.status = SvgFetchStatus::kReadFailed;
     }
-    result.diagnostics = "failed to open: " + result.resolvedPath.string() +
-                         " (" + std::strerror(errno) + ")";
+    result.diagnostics =
+        "failed to open: " + result.resolvedPath.string() + " (" + std::strerror(errno) + ")";
     return result;
   }
 
   result.bytes.resize(static_cast<std::size_t>(byteCount));
   if (byteCount > 0) {
-    in.read(reinterpret_cast<char*>(result.bytes.data()),
-            static_cast<std::streamsize>(byteCount));
+    in.read(reinterpret_cast<char*>(result.bytes.data()), static_cast<std::streamsize>(byteCount));
     if (!in || static_cast<std::size_t>(in.gcount()) != byteCount) {
       result.status = SvgFetchStatus::kReadFailed;
       result.bytes.clear();
@@ -164,11 +161,9 @@ SvgFetchResult SvgSource::fetchFromUrl(std::string_view url) const {
   // character set to prevent shell injection: alphanumeric, ':', '/', '.', '-',
   // '_', '~', '?', '&', '=', '%', '#', '+', '@', ',', ';', '!', '(', ')'.
   for (const char c : url) {
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-          (c >= '0' && c <= '9') ||
-          c == ':' || c == '/' || c == '.' || c == '-' || c == '_' ||
-          c == '~' || c == '?' || c == '&' || c == '=' || c == '%' ||
-          c == '#' || c == '+' || c == '@' || c == ',' || c == ';' ||
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ':' ||
+          c == '/' || c == '.' || c == '-' || c == '_' || c == '~' || c == '?' || c == '&' ||
+          c == '=' || c == '%' || c == '#' || c == '+' || c == '@' || c == ',' || c == ';' ||
           c == '!' || c == '(' || c == ')' || c == '[' || c == ']')) {
       result.status = SvgFetchStatus::kInvalidUri;
       result.diagnostics = "URL contains disallowed character for shell safety: '";
@@ -213,8 +208,8 @@ SvgFetchResult SvgSource::fetchFromUrl(std::string_view url) const {
       ::pclose(pipe);
       result.status = SvgFetchStatus::kTooLarge;
       result.bytes.clear();
-      result.diagnostics = "HTTP response exceeded maxHttpBytes (" +
-                           std::to_string(options_.maxHttpBytes) + ")";
+      result.diagnostics =
+          "HTTP response exceeded maxHttpBytes (" + std::to_string(options_.maxHttpBytes) + ")";
       return result;
     }
     result.bytes.insert(result.bytes.end(), buf.data(), buf.data() + n);

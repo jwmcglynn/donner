@@ -287,10 +287,10 @@ TEST_F(ShapeSystemTest, PathFillIntersects) {
 
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
-  EXPECT_TRUE(shapeSystem.pathFillIntersects(element->entityHandle(), Vector2d(50, 50),
-                                              FillRule::NonZero));
-  EXPECT_FALSE(shapeSystem.pathFillIntersects(element->entityHandle(), Vector2d(5, 5),
-                                               FillRule::NonZero));
+  EXPECT_TRUE(
+      shapeSystem.pathFillIntersects(element->entityHandle(), Vector2d(50, 50), FillRule::NonZero));
+  EXPECT_FALSE(
+      shapeSystem.pathFillIntersects(element->entityHandle(), Vector2d(5, 5), FillRule::NonZero));
 }
 
 TEST_F(ShapeSystemTest, PathStrokeIntersects) {

@@ -57,9 +57,9 @@ struct EncodedPath {
 
   /// Vertex for the band bounding quad (input to the Slug vertex shader).
   struct Vertex {
-    float posX, posY;       ///< Position in path space.
-    float normalX, normalY; ///< Outward normal (for dynamic half-pixel dilation).
-    uint32_t bandIndex;     ///< Which band this vertex belongs to.
+    float posX, posY;        ///< Position in path space.
+    float normalX, normalY;  ///< Outward normal (for dynamic half-pixel dilation).
+    uint32_t bandIndex;      ///< Which band this vertex belongs to.
   };
 
   std::vector<Curve> curves;     ///< All quadratic curves, sorted by band.

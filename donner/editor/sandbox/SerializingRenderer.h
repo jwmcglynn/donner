@@ -88,9 +88,7 @@ public:
 
   /// Move the accumulated wire bytes out of the writer. Invalidates the
   /// renderer; call exactly once, after `draw()` returns.
-  [[nodiscard]] std::vector<uint8_t> takeBuffer() && {
-    return std::move(writer_).take();
-  }
+  [[nodiscard]] std::vector<uint8_t> takeBuffer() && { return std::move(writer_).take(); }
 
   /// View of the accumulated wire bytes without transferring ownership.
   [[nodiscard]] std::span<const uint8_t> data() const { return writer_.data(); }

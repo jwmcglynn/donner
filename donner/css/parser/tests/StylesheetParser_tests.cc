@@ -27,7 +27,8 @@ TEST(StylesheetParser, WithRules) {
     test, .class {
       name: value;
     }
-  )", disabled)
+  )",
+                                      disabled)
                   .rules(),
               ElementsAre(SelectorRuleIs(
                   SelectorsAre(ComplexSelectorIs(EntryIs(TypeSelectorIs("test"))),
@@ -43,7 +44,8 @@ TEST(StylesheetParser, FontFace) {
       src: url(test.woff);
     }
     svg { fill: red; }
-  )", disabled);
+  )",
+                                             disabled);
 
   ASSERT_EQ(sheet.fontFaces().size(), 1u);
   EXPECT_EQ(sheet.fontFaces()[0].familyName, "test");
@@ -58,14 +60,15 @@ TEST(StylesheetParser, FontFaceDataUrl) {
       font-family: datafont;
       src: url(data:font/woff;base64,dGVzdA==);
     }
-  )", disabled);
+  )",
+                                             disabled);
 
   ASSERT_EQ(sheet.fontFaces().size(), 1u);
   EXPECT_EQ(sheet.fontFaces()[0].familyName, "datafont");
   ASSERT_EQ(sheet.fontFaces()[0].sources.size(), 1u);
   EXPECT_EQ(sheet.fontFaces()[0].sources[0].kind, FontFaceSource::Kind::Data);
-  const auto& dataPtr =
-      std::get<std::shared_ptr<const std::vector<uint8_t>>>(sheet.fontFaces()[0].sources[0].payload);
+  const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(
+      sheet.fontFaces()[0].sources[0].payload);
   EXPECT_THAT(*dataPtr, testing::ElementsAre('t', 'e', 's', 't'));
 }
 

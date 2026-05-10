@@ -87,7 +87,8 @@ TEST(CompileTimeMapTest, FallsBackWhenConstexprHashUnsupported) {
   constexpr std::array<std::pair<NonConstexprKey, int>, 2> kRuntimeEntries{
       {{{1}, 100}, {{2}, 200}}};
   constexpr auto runtimeResult =
-      detail::makeCompileTimeMapWithDiagnostics<NonConstexprKey, int, 2, NonConstexprHasher>(kRuntimeEntries);
+      detail::makeCompileTimeMapWithDiagnostics<NonConstexprKey, int, 2, NonConstexprHasher>(
+          kRuntimeEntries);
 
   static_assert(runtimeResult.status == CompileTimeMapStatus::kConstexprHashUnsupported);
   EXPECT_EQ(runtimeResult.status, CompileTimeMapStatus::kConstexprHashUnsupported);

@@ -31,11 +31,7 @@ TEST(PathBuilder, EmptyBuilder) {
 }
 
 TEST(PathBuilder, MoveToLineTo) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({100, 0})
-                  .lineTo({100, 100})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).build();
 
   EXPECT_EQ(path.verbCount(), 3u);
   EXPECT_EQ(path.points().size(), 3u);
@@ -45,10 +41,7 @@ TEST(PathBuilder, MoveToLineTo) {
 }
 
 TEST(PathBuilder, QuadTo) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .quadTo({50, 100}, {100, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
 
   EXPECT_EQ(path.verbCount(), 2u);
   EXPECT_EQ(path.commands()[1].verb, Path::Verb::QuadTo);
@@ -57,10 +50,7 @@ TEST(PathBuilder, QuadTo) {
 }
 
 TEST(PathBuilder, CurveTo) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 100}, {100, 100}, {100, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
 
   EXPECT_EQ(path.verbCount(), 2u);
   EXPECT_EQ(path.commands()[1].verb, Path::Verb::CurveTo);
@@ -68,12 +58,7 @@ TEST(PathBuilder, CurveTo) {
 }
 
 TEST(PathBuilder, ClosePath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({100, 0})
-                  .lineTo({100, 100})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).closePath().build();
 
   EXPECT_EQ(path.verbCount(), 4u);
   EXPECT_EQ(path.commands()[3].verb, Path::Verb::ClosePath);
@@ -132,9 +117,7 @@ TEST(PathBuilder, AddCircle) {
 }
 
 TEST(PathBuilder, AddEllipse) {
-  Path path = PathBuilder()
-                  .addEllipse(Box2d(Vector2d(0, 0), Vector2d(100, 50)))
-                  .build();
+  Path path = PathBuilder().addEllipse(Box2d(Vector2d(0, 0), Vector2d(100, 50))).build();
 
   EXPECT_EQ(path.verbCount(), 6u);  // moveTo + 4 curveTo + closePath
 }
@@ -159,11 +142,7 @@ TEST(Path, BoundsEmpty) {
 }
 
 TEST(Path, BoundsLinePath) {
-  Path path = PathBuilder()
-                  .moveTo({10, 20})
-                  .lineTo({50, 80})
-                  .lineTo({30, 40})
-                  .build();
+  Path path = PathBuilder().moveTo({10, 20}).lineTo({50, 80}).lineTo({30, 40}).build();
 
   Box2d box = path.bounds();
   EXPECT_NEAR(box.topLeft.x, 10.0, 1e-9);
@@ -174,24 +153,18 @@ TEST(Path, BoundsLinePath) {
 
 TEST(Path, BoundsCurvePath) {
   // Cubic arch: control points above the line.
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 100}, {100, 100}, {100, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
 
   Box2d box = path.bounds();
   // The curve peaks at ~75% of the control point height.
   EXPECT_NEAR(box.topLeft.x, 0.0, 1e-9);
   EXPECT_NEAR(box.bottomRight.x, 100.0, 1e-9);
-  EXPECT_GT(box.bottomRight.y, 50.0);  // Curve goes above y=0.
+  EXPECT_GT(box.bottomRight.y, 50.0);   // Curve goes above y=0.
   EXPECT_LT(box.bottomRight.y, 100.0);  // But not as high as control points.
 }
 
 TEST(Path, BoundsQuadPath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .quadTo({50, 100}, {100, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
 
   Box2d box = path.bounds();
   EXPECT_NEAR(box.topLeft.x, 0.0, 1e-9);
@@ -240,10 +213,7 @@ TEST(Path, ForEachVisitsAllCommands) {
 // =============================================================================
 
 TEST(Path, CubicToQuadraticStraightLine) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({1, 1}, {2, 2}, {3, 3})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({1, 1}, {2, 2}, {3, 3}).build();
 
   Path result = path.cubicToQuadratic(0.01);
 
@@ -264,12 +234,8 @@ TEST(Path, CubicToQuadraticStraightLine) {
 }
 
 TEST(Path, CubicToQuadraticPreservesNonCubics) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 0})
-                  .quadTo({15, 10}, {20, 0})
-                  .closePath()
-                  .build();
+  Path path =
+      PathBuilder().moveTo({0, 0}).lineTo({10, 0}).quadTo({15, 10}, {20, 0}).closePath().build();
 
   Path result = path.cubicToQuadratic();
 
@@ -278,10 +244,7 @@ TEST(Path, CubicToQuadraticPreservesNonCubics) {
 }
 
 TEST(Path, CubicToQuadraticSCurve) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 10}, {10, -10}, {10, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 10}, {10, -10}, {10, 0}).build();
 
   Path result = path.cubicToQuadratic(0.1);
 
@@ -301,10 +264,7 @@ TEST(Path, CubicToQuadraticSCurve) {
 
 TEST(Path, ToMonotonicAlreadyMonotonic) {
   // A line is always monotonic.
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 10})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 10}).build();
 
   Path result = path.toMonotonic();
   EXPECT_EQ(result.verbCount(), path.verbCount());
@@ -312,10 +272,7 @@ TEST(Path, ToMonotonicAlreadyMonotonic) {
 
 TEST(Path, ToMonotonicSplitsQuadratic) {
   // An arch: Y goes up then down. Should be split at the Y-extremum.
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .quadTo({50, 100}, {100, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
 
   Path result = path.toMonotonic();
 
@@ -331,10 +288,7 @@ TEST(Path, ToMonotonicSplitsQuadratic) {
 
 TEST(Path, ToMonotonicSplitsCubic) {
   // S-curve with two Y-extrema.
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 10}, {10, -10}, {10, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 10}, {10, -10}, {10, 0}).build();
 
   Path result = path.toMonotonic();
 
@@ -353,12 +307,7 @@ TEST(Path, ToMonotonicSplitsCubic) {
 // =============================================================================
 
 TEST(Path, FlattenLinesUnchanged) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 0})
-                  .lineTo({10, 10})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).closePath().build();
 
   Path result = path.flatten();
 
@@ -393,10 +342,7 @@ TEST(Path, FlattenProducesOnlyLines) {
 }
 
 TEST(Path, FlattenToleranceAffectsSegmentCount) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 100}, {100, 100}, {100, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
 
   Path fine = path.flatten(0.01);
   Path coarse = path.flatten(10.0);
@@ -421,10 +367,7 @@ TEST(Path, PointsPerVerb) {
 // =============================================================================
 
 TEST(Path, CopyPreservesContent) {
-  Path original = PathBuilder()
-                      .moveTo({1, 2})
-                      .lineTo({3, 4})
-                      .build();
+  Path original = PathBuilder().moveTo({1, 2}).lineTo({3, 4}).build();
 
   Path copy = original;  // NOLINT(performance-unnecessary-copy-initialization)
 
@@ -435,10 +378,7 @@ TEST(Path, CopyPreservesContent) {
 }
 
 TEST(Path, MoveTransfersOwnership) {
-  Path original = PathBuilder()
-                      .moveTo({1, 2})
-                      .lineTo({3, 4})
-                      .build();
+  Path original = PathBuilder().moveTo({1, 2}).lineTo({3, 4}).build();
 
   Path moved = std::move(original);
 
@@ -634,12 +574,7 @@ TEST(Path, PointAtCurveTo) {
 }
 
 TEST(Path, PointAtClosePath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 0})
-                  .lineTo({10, 10})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).closePath().build();
   // ClosePath segment goes from (10, 10) back to (0, 0).
   ExpectNear(path.pointAt(3, 0.0), Vector2d(10, 10));
   ExpectNear(path.pointAt(3, 0.5), Vector2d(5, 5));
@@ -681,11 +616,7 @@ TEST(Path, TangentAtCurveTo) {
 }
 
 TEST(Path, TangentAtClosePath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 0})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).closePath().build();
   Vector2d tangent = path.tangentAt(2, 0.0);
   ExpectNear(tangent, Vector2d(-10, 0));
 }
@@ -723,21 +654,14 @@ TEST(Path, IsInsideOnBoundary) {
 }
 
 TEST(Path, IsInsideQuadraticPath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .quadTo({50, 100}, {100, 0})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).closePath().build();
   EXPECT_TRUE(path.isInside({50, 20}));
   EXPECT_FALSE(path.isInside({200, 200}));
 }
 
 TEST(Path, IsInsideCubicPath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 100}, {100, 100}, {100, 0})
-                  .closePath()
-                  .build();
+  Path path =
+      PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).closePath().build();
   EXPECT_TRUE(path.isInside({50, 30}));
   EXPECT_FALSE(path.isInside({200, 200}));
 }
@@ -786,12 +710,7 @@ TEST(Path, IsOnPathCubic) {
 }
 
 TEST(Path, IsOnPathClosePath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({10, 0})
-                  .lineTo({10, 10})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).closePath().build();
   // Closing edge goes diagonally from (10,10) to (0,0).
   EXPECT_TRUE(path.isOnPath({5, 5}, 1.0));
 }
@@ -939,14 +858,11 @@ TEST(Path, StrokeToFillRoundCap) {
   // the line's travel direction (the round cap's outermost extent).
   const Box2d bounds = filled.bounds();
   EXPECT_LT(bounds.topLeft.x, -0.95) << "Round cap should extend ~halfWidth left of x=0";
-  EXPECT_GT(bounds.bottomRight.x, 9.95)
-      << "Round cap should extend ~halfWidth right of x=10";
+  EXPECT_GT(bounds.bottomRight.x, 9.95) << "Round cap should extend ~halfWidth right of x=10";
   EXPECT_NEAR(bounds.topLeft.y, -1.0, 1e-9);
   EXPECT_NEAR(bounds.bottomRight.y, 1.0, 1e-9);
-  EXPECT_NEAR(bounds.topLeft.x, -1.0, 0.1)
-      << "Left cap polyline should reach ~(-1, 0)";
-  EXPECT_NEAR(bounds.bottomRight.x, 11.0, 0.1)
-      << "Right cap polyline should reach ~(11, 0)";
+  EXPECT_NEAR(bounds.topLeft.x, -1.0, 0.1) << "Left cap polyline should reach ~(-1, 0)";
+  EXPECT_NEAR(bounds.bottomRight.x, 11.0, 0.1) << "Right cap polyline should reach ~(11, 0)";
 
   // ---- Winding tests inside the expected round-capped region ----
   // Interior of the straight part.
@@ -974,14 +890,10 @@ TEST(Path, StrokeToFillRoundCap) {
   // cover (|x|+epsilon past the endpoint, near ±halfWidth in y). With stroke
   // width 2 at endpoint (0,0): (-0.9, 0.9) has distance sqrt(1.62) ≈ 1.273 > 1,
   // so it should be OUTSIDE the round cap (but inside a square cap).
-  EXPECT_EQ(rayCastWinding(filled, {-0.9, 0.9}), 0)
-      << "upper-left corner outside round cap";
-  EXPECT_EQ(rayCastWinding(filled, {-0.9, -0.9}), 0)
-      << "lower-left corner outside round cap";
-  EXPECT_EQ(rayCastWinding(filled, {10.9, 0.9}), 0)
-      << "upper-right corner outside round cap";
-  EXPECT_EQ(rayCastWinding(filled, {10.9, -0.9}), 0)
-      << "lower-right corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {-0.9, 0.9}), 0) << "upper-left corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {-0.9, -0.9}), 0) << "lower-left corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {10.9, 0.9}), 0) << "upper-right corner outside round cap";
+  EXPECT_EQ(rayCastWinding(filled, {10.9, -0.9}), 0) << "lower-right corner outside round cap";
 }
 
 TEST(Path, StrokeToFillSquareCap) {
@@ -998,8 +910,7 @@ TEST(Path, StrokeToFillSquareCap) {
   // For a horizontal line (0,0)→(10,0) with width 2, the bounds should
   // reach x=-1 and x=11.
   const Box2d bounds = filled.bounds();
-  EXPECT_LE(bounds.topLeft.x, -1.0 + 1e-9)
-      << "Square cap should extend halfWidth left of x=0";
+  EXPECT_LE(bounds.topLeft.x, -1.0 + 1e-9) << "Square cap should extend halfWidth left of x=0";
   EXPECT_GE(bounds.bottomRight.x, 11.0 - 1e-9)
       << "Square cap should extend halfWidth right of x=10";
   EXPECT_NEAR(bounds.topLeft.y, -1.0, 1e-9);
@@ -1127,8 +1038,7 @@ TEST(Path, StrokeToFillRoundJoin) {
   // A round join subdivides into an arc at the outside of the corner. The
   // point count should exceed the bevel-joined equivalent by the round-join
   // arc subdivision.
-  Path bevel =
-      path.strokeToFill({.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Bevel});
+  Path bevel = path.strokeToFill({.width = 2.0, .cap = LineCap::Butt, .join = LineJoin::Bevel});
   EXPECT_GT(filled.points().size(), bevel.points().size())
       << "Round join should add arc points beyond the bevel baseline";
 
@@ -1324,9 +1234,7 @@ TEST(Path, StrokeToFillClosedEllipseInteriorIsEmpty) {
   // points. Before the fix the interior would show odd winding counts at
   // positions where the zig-zag self-intersections happened to align with a
   // scan line.
-  Path ellipse = PathBuilder()
-                     .addEllipse(Box2d(Vector2d(0, 0), Vector2d(100, 60)))
-                     .build();
+  Path ellipse = PathBuilder().addEllipse(Box2d(Vector2d(0, 0), Vector2d(100, 60))).build();
   StrokeStyle style;
   style.width = 4.0;  // halfWidth = 2
   Path filled = ellipse.strokeToFill(style);
@@ -1368,10 +1276,7 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
   // scale 0.5), the stroke ring is a thin ribbon along the curve. Points
   // INSIDE the lens — the empty area above the chord, between the curve's
   // two halves — must NOT be inside the stroke polygon.
-  Path path = PathBuilder()
-                  .moveTo({115, 165})
-                  .quadTo({215, 40}, {315, 165})
-                  .build();
+  Path path = PathBuilder().moveTo({115, 165}).quadTo({215, 40}, {315, 165}).build();
   StrokeStyle style;
   style.width = 2.5;
   Path filled = path.strokeToFill(style);
@@ -1388,10 +1293,7 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
 
 TEST(Path, StrokeToFillCurves) {
   // Curves are flattened then offset.
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .curveTo({0, 10}, {10, 10}, {10, 0})
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 10}, {10, 10}, {10, 0}).build();
   StrokeStyle style;
   style.width = 1.0;
   Path filled = path.strokeToFill(style);
@@ -1607,8 +1509,7 @@ TEST(Path, VerticesSingleLine) {
 }
 
 TEST(Path, VerticesPolyline) {
-  Path path =
-      PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).lineTo({0, 10}).build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).lineTo({0, 10}).build();
   std::vector<Path::Vertex> verts = path.vertices();
   EXPECT_GE(verts.size(), 4u);
 }
@@ -1634,12 +1535,7 @@ TEST(Path, VerticesClosedPathDegenerateFirstSegment) {
   // moveTo(5,5) + zero-length lineTo(5,5) + lineTo(15,5) + closePath.
   // The outgoing tangent at the start should follow the (5,5)→(15,5) segment,
   // i.e. point in the +X direction, not collapse to zero.
-  Path path = PathBuilder()
-                  .moveTo({5, 5})
-                  .lineTo({5, 5})
-                  .lineTo({15, 5})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({5, 5}).lineTo({5, 5}).lineTo({15, 5}).closePath().build();
   std::vector<Path::Vertex> verts = path.vertices();
   ASSERT_FALSE(verts.empty());
   EXPECT_EQ(verts.front().point, Vector2d(5, 5));
@@ -1771,12 +1667,8 @@ TEST(Path, OstreamVertex) {
 // the left-side contour trace stays monotonic along each segment's offset
 // line rather than backtracking into the previous segment.
 TEST(Path, StrokeToFillInsideTurnForwardContourDoesNotBacktrack) {
-  Path path = PathBuilder()
-                  .moveTo({150, 50})
-                  .lineTo({150, 130})
-                  .lineTo({50, 90})
-                  .lineTo({150, 50})
-                  .build();
+  Path path =
+      PathBuilder().moveTo({150, 50}).lineTo({150, 130}).lineTo({50, 90}).lineTo({150, 50}).build();
   StrokeStyle style;
   style.width = 20.0;
   style.cap = LineCap::Round;
@@ -1830,22 +1722,13 @@ TEST(PathToSVGPathData, MoveToLineTo) {
 }
 
 TEST(PathToSVGPathData, MultipleLineTo) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({100, 0})
-                  .lineTo({100, 100})
-                  .lineTo({0, 100})
-                  .build();
+  Path path =
+      PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).lineTo({0, 100}).build();
   EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 100 0 L 100 100 L 0 100");
 }
 
 TEST(PathToSVGPathData, ClosePath) {
-  Path path = PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({100, 0})
-                  .lineTo({100, 100})
-                  .closePath()
-                  .build();
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).closePath().build();
   EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 100 0 L 100 100 Z");
 }
 
@@ -1889,8 +1772,7 @@ TEST(PathToSVGPathData, AllVerbTypes) {
                   .curveTo({20, 20}, {30, 20}, {30, 0})
                   .closePath()
                   .build();
-  EXPECT_EQ(path.toSVGPathData(),
-            "M 0 0 L 10 0 Q 15 10 20 0 C 20 20 30 20 30 0 Z");
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 10 0 Q 15 10 20 0 C 20 20 30 20 30 0 Z");
 }
 
 TEST(PathToSVGPathData, IntegerValuesNoDecimalPoint) {

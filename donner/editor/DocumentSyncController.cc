@@ -122,7 +122,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     if (changed) {
       textEditor.setText(source, /*preserveScroll=*/true);
       QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText_,
-                                   &lastWritebackSourceText_);
+                                  &lastWritebackSourceText_);
     }
   }
 
@@ -138,9 +138,8 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     std::optional<TextPatch> patch;
     if (writeback.restoreSourceTransformAttributeValue) {
       if (writeback.sourceTransformAttributeValue.has_value()) {
-        patch = buildAttributeWriteback(
-            source, writeback.target, "transform",
-            std::string_view(*writeback.sourceTransformAttributeValue));
+        patch = buildAttributeWriteback(source, writeback.target, "transform",
+                                        std::string_view(*writeback.sourceTransformAttributeValue));
       } else {
         patch = buildAttributeRemoveWriteback(source, writeback.target, "transform");
       }
@@ -165,7 +164,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   applyPatches(source, patches);
   textEditor.setText(source, /*preserveScroll=*/true);
   QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText_,
-                               &lastWritebackSourceText_);
+                              &lastWritebackSourceText_);
 }
 
 TextEditor::ErrorMarkers DocumentSyncController::ParseErrorToMarkers(const ParseDiagnostic& diag) {

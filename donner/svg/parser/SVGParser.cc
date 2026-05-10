@@ -30,14 +30,14 @@ concept HasPathLength =
 
 template <typename T>
 std::optional<ParseDiagnostic> ParseNodeContents(SVGParserContext& context, T element,
-                                            const XMLNode& node) {
+                                                 const XMLNode& node) {
   return std::nullopt;
 }
 
 template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserContext& context,
-                                                             SVGStyleElement element,
-                                                             const XMLNode& node) {
+                                                                  SVGStyleElement element,
+                                                                  const XMLNode& node) {
   if (element.isCssType()) {
     // Concatenate all text/CDATA children into a single string before parsing.
     // Multiple Data/CData nodes can occur when whitespace text nodes are preserved
@@ -80,8 +80,8 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
  */
 template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTextElement>(SVGParserContext& context,
-                                                            SVGTextElement element,
-                                                            const XMLNode& node) {
+                                                                 SVGTextElement element,
+                                                                 const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
       if (auto maybeValue = child->value()) {
@@ -104,8 +104,8 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTextElement>(SVGParserContex
  */
 template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTSpanElement>(SVGParserContext& context,
-                                                             SVGTSpanElement element,
-                                                             const XMLNode& node) {
+                                                                  SVGTSpanElement element,
+                                                                  const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
       if (auto maybeValue = child->value()) {
@@ -128,8 +128,8 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTSpanElement>(SVGParserConte
  */
 template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
-                                                                SVGTextPathElement element,
-                                                                const XMLNode& node) {
+                                                                     SVGTextPathElement element,
+                                                                     const XMLNode& node) {
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
       if (auto maybeValue = child->value()) {
@@ -268,7 +268,7 @@ public:
   }
 
   std::optional<ParseDiagnostic> walkChildren(std::optional<SVGElement> element,
-                                         const XMLNode& rootNode) {
+                                              const XMLNode& rootNode) {
     bool foundRootSvg = false;
 
     for (auto child = rootNode.firstChild(); child;) {
@@ -291,9 +291,8 @@ public:
         if (maybeUri != "http://www.w3.org/2000/svg") {
           ParseDiagnostic err;
           std::ostringstream ss;
-          ss << "Ignored element <" << name << "> with an unsupported namespace. "
-             << "Expected '" << context_.namespacePrefix() << "', found '" << name.namespacePrefix
-             << "'";
+          ss << "Ignored element <" << name << "> with an unsupported namespace. " << "Expected '"
+             << context_.namespacePrefix() << "', found '" << name.namespacePrefix << "'";
           err.reason = ss.str();
           if (auto sourceOffset = child->sourceStartOffset()) {
             err.range.start = sourceOffset.value();
@@ -374,16 +373,14 @@ public:
   }
 };
 
-ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source,
-                                             ParseWarningSink& warningSink,
+ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarningSink& warningSink,
                                              SVGParser::Options options,
                                              SVGDocument::Settings settings) noexcept {
   // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
   // (sub-documents cannot load their own sub-documents).
   if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
-    settings.svgParseCallback =
-        [](const std::vector<uint8_t>& svgContent,
-           ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    settings.svgParseCallback = [](const std::vector<uint8_t>& svgContent,
+                                   ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
       SVGDocument::Settings subSettings;
       subSettings.processingMode = ProcessingMode::SecureStatic;
       // No resource loader — secure mode sub-documents cannot load external resources.

@@ -81,7 +81,8 @@ TEST(RcString, FromFormat) {
   }
 
   {
-    RcString str = RcString::fromFormat("{}", "a long string that exceeds the short string capacity!!");
+    RcString str =
+        RcString::fromFormat("{}", "a long string that exceeds the short string capacity!!");
     EXPECT_EQ(str, "a long string that exceeds the short string capacity!!");
   }
 

@@ -26,9 +26,8 @@ TEST(ParseDiagnostic, ResolveOffset) {
 }
 
 TEST(ParseDiagnostic, Output) {
-  auto err =
-      ParseDiagnostic::Error("Test reason",
-                             FileOffset::OffsetWithLineInfo(3, FileOffset::LineInfo(1, 2)));
+  auto err = ParseDiagnostic::Error("Test reason",
+                                    FileOffset::OffsetWithLineInfo(3, FileOffset::LineInfo(1, 2)));
 
   EXPECT_EQ((std::ostringstream() << err).str(), "error at 1:2: Test reason");
 }

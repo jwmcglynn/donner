@@ -212,8 +212,8 @@ struct NoParameterEntityPredicate {
 
 /// Append a codepoint as a new string to the pieces vector.
 std::optional<ParseDiagnostic> AppendUnicodeCharToNewString(char32_t codepoint,
-                                                           ChunkedString& chunkedString,
-                                                           size_t offset) {
+                                                            ChunkedString& chunkedString,
+                                                            size_t offset) {
   // Validate the codepoint per XML specs.
   if (!Utf8::IsValidCodepoint(codepoint) || codepoint == 0xFFFE || codepoint == 0xFFFF) {
     return ParseDiagnostic::Error("Invalid numeric character entity", FileOffset::Offset(offset));
@@ -424,7 +424,8 @@ private:
                                   location.value_or(currentOffsetWithLineNumber(remaining_)));
   }
 
-  [[nodiscard]] std::optional<ParseDiagnostic> recordEntitySubstitution(const FileOffset& entityOffset) {
+  [[nodiscard]] std::optional<ParseDiagnostic> recordEntitySubstitution(
+      const FileOffset& entityOffset) {
     if (entitySubstitutionCount_ >= maxEntitySubstitutions_) {
       return createParseError("Entity substitution limit exceeded", entityOffset);
     }
@@ -1281,9 +1282,8 @@ private:
     // Extract element name
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
-      return ParseDiagnostic::Error(
-          RcString("Invalid element name: " + maybeName.error().reason),
-          maybeName.error().range.start);
+      return ParseDiagnostic::Error(RcString("Invalid element name: " + maybeName.error().reason),
+                                    maybeName.error().range.start);
     }
 
     // Create element node
@@ -1502,9 +1502,8 @@ private:
 
     auto maybeName = consumeQualifiedName();
     if (maybeName.hasError()) {
-      return ParseDiagnostic::Error(
-          RcString("Invalid attribute name: " + maybeName.error().reason),
-          maybeName.error().range.start);
+      return ParseDiagnostic::Error(RcString("Invalid attribute name: " + maybeName.error().reason),
+                                    maybeName.error().range.start);
     }
 
     const XMLQualifiedNameRef& name = maybeName.result();
@@ -1566,8 +1565,7 @@ private:
 
       if (maybeAttribute.result().has_value()) {
         if (attributeCount >= maxAttributesPerElement_) {
-          return createParseError("Maximum attributes-per-element count exceeded",
-                                  beforeAttribute);
+          return createParseError("Maximum attributes-per-element count exceeded", beforeAttribute);
         }
         ++attributeCount;
         const ParsedAttribute& attribute = maybeAttribute.result().value();
@@ -1615,7 +1613,7 @@ std::optional<SourceRange> XMLParser::GetAttributeLocation(
   XMLParserImpl parser(elementToEnd, reparseOptions);
   if (auto attributeLocationInElement = parser.getElementAttributeLocation(attributeName)) {
     SourceRange result{attributeLocationInElement->start.addParentOffset(elementStartOffset),
-                           attributeLocationInElement->end.addParentOffset(elementStartOffset)};
+                       attributeLocationInElement->end.addParentOffset(elementStartOffset)};
     return result;
   }
 

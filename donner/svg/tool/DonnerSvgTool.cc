@@ -53,7 +53,6 @@ struct CliOptions {
   bool interactive = false;
 };
 
-
 /** Raw terminal mode guard for interactive mouse input. */
 class ScopedTerminalRawMode {
 public:
@@ -252,8 +251,7 @@ std::optional<std::string> ReadFile(std::string_view filename) {
 /** Parse SVG data into an SVGDocument. */
 std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::string& fileData,
                                          std::ostream& out, std::ostream& err) {
-  ParseWarningSink warningSink =
-      options.quiet ? ParseWarningSink::Disabled() : ParseWarningSink();
+  ParseWarningSink warningSink = options.quiet ? ParseWarningSink::Disabled() : ParseWarningSink();
   parser::SVGParser::Options parserOptions;
   parserOptions.enableExperimental = options.experimental;
 
@@ -261,8 +259,8 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
   settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
       std::filesystem::current_path(), options.inputFile);
 
-  auto result = parser::SVGParser::ParseSVG(fileData, warningSink, parserOptions,
-                                            std::move(settings));
+  auto result =
+      parser::SVGParser::ParseSVG(fileData, warningSink, parserOptions, std::move(settings));
   if (result.hasError()) {
     err << "Parse error: " << result.error() << "\n";
     return std::nullopt;
@@ -271,7 +269,7 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
   if (!options.quiet && warningSink.hasWarnings()) {
     out << "Parse warnings:\n";
     out << DiagnosticRenderer::formatAll(fileData, warningSink,
-                                        {.filename = options.inputFile, .colorize = true});
+                                         {.filename = options.inputFile, .colorize = true});
   }
 
   return std::move(result.result());
@@ -287,7 +285,6 @@ void ApplyCanvasSize(const CliOptions& options, SVGDocument* document) {
   }
 }
 
-
 /** Build a TerminalImageView from a RendererBitmap. */
 TerminalImageView MakeView(const RendererBitmap& bitmap) {
   TerminalImageView view;
@@ -297,7 +294,6 @@ TerminalImageView MakeView(const RendererBitmap& bitmap) {
   view.strideInPixels = bitmap.rowBytes / 4;
   return view;
 }
-
 
 /** Render an image preview in the terminal. Returns the sampled image dimensions. */
 SampledImageInfo RenderPreview(const RendererBitmap& bitmap, bool interactive, std::ostream& out,
@@ -329,10 +325,10 @@ SampledImageInfo RenderPreview(const RendererBitmap& bitmap, bool interactive, s
   // For quarter-pixel mode (cellWidth=2): xScale ~ imageWidth / (columns * 2)
   // But this is approximate due to ceil. Use the exact relationship instead:
   // The sampler sets startX = int(column * cellWidth * xScale) for each column.
-  // We can recover xScale = imageWidth / scaledWidth where scaledWidth = int(imageWidth * effectiveScale).
-  // Since we don't have effectiveScale, derive from: the last sub-pixel must map to < imageWidth.
-  // The simplest exact recovery: xScale = imageWidth / (columns * 2.0) would overshoot.
-  // Instead, find the xScale such that the last sub-pixel maps to the last image pixel.
+  // We can recover xScale = imageWidth / scaledWidth where scaledWidth = int(imageWidth *
+  // effectiveScale). Since we don't have effectiveScale, derive from: the last sub-pixel must map
+  // to < imageWidth. The simplest exact recovery: xScale = imageWidth / (columns * 2.0) would
+  // overshoot. Instead, find the xScale such that the last sub-pixel maps to the last image pixel.
   const double totalSubPixelsX = static_cast<double>(sampled.columns) * 2.0;
   const double totalSubPixelsY = static_cast<double>(sampled.rows) * 2.0;
   const double xScale = static_cast<double>(bitmap.dimensions.x) / totalSubPixelsX;
@@ -340,7 +336,6 @@ SampledImageInfo RenderPreview(const RendererBitmap& bitmap, bool interactive, s
 
   return {sampled.columns, sampled.rows, xScale, yScale};
 }
-
 
 /**
  * Create a highlight bitmap by adding a semi-transparent white copy of the element's path on top
@@ -444,9 +439,8 @@ void RedrawImage(const TerminalImageView& view, int imageRows, std::ostream& out
 }
 
 /** Run mouse-driven terminal selection UI. */
-void RunInteractiveSelection(SVGDocument document, Renderer& renderer,
-                             const RendererBitmap& bitmap, std::ostream& out,
-                             std::ostream& err) {
+void RunInteractiveSelection(SVGDocument document, Renderer& renderer, const RendererBitmap& bitmap,
+                             std::ostream& out, std::ostream& err) {
   const SampledImageInfo imageInfo = RenderPreview(bitmap, /*interactive=*/true, out, err);
 
   // The status line sits directly after the image. renderSampled's last row ends with \n,
@@ -473,8 +467,8 @@ void RunInteractiveSelection(SVGDocument document, Renderer& renderer,
   // image dimensions, not the full terminal size.
   const double scaleX = static_cast<double>(bitmap.dimensions.x) /
                         static_cast<double>(std::max(1, imageInfo.columns));
-  const double scaleY = static_cast<double>(bitmap.dimensions.y) /
-                        static_cast<double>(std::max(1, imageInfo.rows));
+  const double scaleY =
+      static_cast<double>(bitmap.dimensions.y) / static_cast<double>(std::max(1, imageInfo.rows));
 
   std::string buffer;
   while (true) {

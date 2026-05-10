@@ -129,9 +129,8 @@ TEST(ParseResultTestUtils, PrintTo) {
 TEST(ParseResultTestUtils, ErrorMatchers) {
   ParseResult<int> withResult = 42;
   ParseResult<int> withError = []() -> ParseResult<int> {
-    return ParseDiagnostic::Error(
-        "Test error please ignore",
-        FileOffset::OffsetWithLineInfo(31, FileOffset::LineInfo(1, 30)));
+    return ParseDiagnostic::Error("Test error please ignore",
+                                  FileOffset::OffsetWithLineInfo(31, FileOffset::LineInfo(1, 30)));
   }();
 
   std::optional<ParseDiagnostic> optionalError = withError.error();

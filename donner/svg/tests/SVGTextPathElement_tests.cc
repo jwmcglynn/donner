@@ -29,8 +29,8 @@ SVGDocument makeTextPathDocument(std::string_view textPathAttrs = R"(href="#myPa
     <svg>
       <defs><path id="myPath" d="M 10 80 Q 95 10 180 80" /></defs>
       <text font-family="fallback-font" font-size="16px">
-        <textPath )") +
-                          std::string(textPathAttrs) + ">" + std::string(textContent) +
+        <textPath )") + std::string(textPathAttrs) +
+                          ">" + std::string(textContent) +
                           R"(</textPath>
       </text>
     </svg>
@@ -175,20 +175,17 @@ TEST(SVGTextPathElementTests, ParseMethodSideSpacingAndPositioningLists) {
       </text>
     </svg>
   )",
-                            kExperimentalOptions);
+                                kExperimentalOptions);
   auto textPath = queryTextPath(doc);
 
   EXPECT_THAT(textPath.startOffset(), Optional(LengthIs(25.0, Lengthd::Unit::Percent)));
-  EXPECT_THAT(textPath.xList(),
-              testing::ElementsAre(Lengthd(1, Lengthd::Unit::None),
-                                   Lengthd(2, Lengthd::Unit::Percent)));
+  EXPECT_THAT(textPath.xList(), testing::ElementsAre(Lengthd(1, Lengthd::Unit::None),
+                                                     Lengthd(2, Lengthd::Unit::Percent)));
   EXPECT_THAT(textPath.yList(), testing::ElementsAre(Lengthd(3, Lengthd::Unit::None)));
-  EXPECT_THAT(textPath.dxList(),
-              testing::ElementsAre(Lengthd(4, Lengthd::Unit::None),
-                                   Lengthd(5, Lengthd::Unit::None)));
-  EXPECT_THAT(textPath.dyList(),
-              testing::ElementsAre(Lengthd(6, Lengthd::Unit::None),
-                                   Lengthd(7, Lengthd::Unit::None)));
+  EXPECT_THAT(textPath.dxList(), testing::ElementsAre(Lengthd(4, Lengthd::Unit::None),
+                                                      Lengthd(5, Lengthd::Unit::None)));
+  EXPECT_THAT(textPath.dyList(), testing::ElementsAre(Lengthd(6, Lengthd::Unit::None),
+                                                      Lengthd(7, Lengthd::Unit::None)));
   EXPECT_THAT(textPath.rotateList(), testing::ElementsAre(0.0, 90.0));
 
   const auto& component = textPath.entityHandle().get<components::TextPathComponent>();

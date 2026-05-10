@@ -29,8 +29,8 @@
 #include "donner/editor/sandbox/SerializingRenderer.h"
 #include "donner/editor/sandbox/Wire.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor::sandbox {
 namespace {

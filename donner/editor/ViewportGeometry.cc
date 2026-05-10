@@ -20,8 +20,7 @@ bool DrawingViewportLayout::containsScreenPoint(const Vector2d& screenPoint) con
          screenPoint.y <= imageOrigin.y + imageSize.y;
 }
 
-std::optional<Vector2d> DrawingViewportLayout::screenToDocument(
-    const Vector2d& screenPoint) const {
+std::optional<Vector2d> DrawingViewportLayout::screenToDocument(const Vector2d& screenPoint) const {
   if (!hasImage()) {
     return std::nullopt;
   }
@@ -57,9 +56,9 @@ DrawingViewportLayout ComputeDrawingViewportLayout(const Vector2d& contentOrigin
   DrawingViewportLayout result;
   result.imageSize = imageSize;
   result.documentViewBox = documentViewBox;
-  result.imageOrigin = Vector2d(
-      contentOrigin.x + (availableRegionSize.x - imageSize.x) * 0.5 + panOffset.x,
-      contentOrigin.y + (availableRegionSize.y - imageSize.y) * 0.5 + panOffset.y);
+  result.imageOrigin =
+      Vector2d(contentOrigin.x + (availableRegionSize.x - imageSize.x) * 0.5 + panOffset.x,
+               contentOrigin.y + (availableRegionSize.y - imageSize.y) * 0.5 + panOffset.y);
   return result;
 }
 

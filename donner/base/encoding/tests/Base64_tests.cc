@@ -41,10 +41,8 @@ TEST(Base64Encode, SingleByte) {
 
 TEST(Base64Encode, TwoBytes) {
   EXPECT_EQ(EncodeBase64Data(std::span<const uint8_t>{std::vector<uint8_t>{'M', 'a'}}), "TWE=");
-  EXPECT_EQ(EncodeBase64Data(std::span<const uint8_t>{std::vector<uint8_t>{0x00, 0x00}}),
-            "AAA=");
-  EXPECT_EQ(EncodeBase64Data(std::span<const uint8_t>{std::vector<uint8_t>{0xFF, 0xFF}}),
-            "//8=");
+  EXPECT_EQ(EncodeBase64Data(std::span<const uint8_t>{std::vector<uint8_t>{0x00, 0x00}}), "AAA=");
+  EXPECT_EQ(EncodeBase64Data(std::span<const uint8_t>{std::vector<uint8_t>{0xFF, 0xFF}}), "//8=");
 }
 
 TEST(Base64Encode, ThreeBytes) {

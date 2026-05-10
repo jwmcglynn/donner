@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 
-#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/base/Path.h"
+#include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::svg {
 

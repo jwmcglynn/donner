@@ -430,8 +430,7 @@ private:
       // Null-terminate so that data() returns a null-terminated pointer, matching
       // std::string::data() semantics and enabling safe use in strlen/string_view(const char*).
       const bool needsNullTerminator = data.back() != '\0';
-      auto storage =
-          std::make_shared<std::vector<char>>(size + (needsNullTerminator ? 1 : 0));
+      auto storage = std::make_shared<std::vector<char>>(size + (needsNullTerminator ? 1 : 0));
       std::copy(data.begin(), data.end(), storage->begin());
       if (needsNullTerminator) {
         (*storage)[size] = '\0';

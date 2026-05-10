@@ -865,8 +865,7 @@ TEST_F(XMLParserTests, MaxAttributesPerElementLimitExceeded) {
   XMLParser::Options options;
   options.maxAttributesPerElement = 2;
 
-  auto result =
-      XMLParser::Parse(R"(<node a="1" b="2" c="3" d="4"/>)", options);
+  auto result = XMLParser::Parse(R"(<node a="1" b="2" c="3" d="4"/>)", options);
 
   EXPECT_THAT(result, ParseErrorIs("Maximum attributes-per-element count exceeded"));
 }
@@ -894,8 +893,7 @@ TEST_F(XMLParserTests, MaxNestingDepthLimitExceeded) {
   // The root element sits at depth 0; each child pushes depth by one.
   // With maxNestingDepth=3, <a><b><c><d></d></c></b></a> is rejected
   // at the point where we try to enter <d> (depth 3 → 4 would exceed).
-  auto result =
-      XMLParser::Parse("<a><b><c><d><e/></d></c></b></a>", options);
+  auto result = XMLParser::Parse("<a><b><c><d><e/></d></c></b></a>", options);
 
   EXPECT_THAT(result, ParseErrorIs("Maximum element nesting depth exceeded"));
 }

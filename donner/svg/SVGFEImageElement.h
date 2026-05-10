@@ -216,8 +216,7 @@ class SVGFEImageElement : public SVGFilterPrimitiveStandardAttributes {
 
 protected:
   /// Create an SVGFEImageElement wrapper from an entity.
-  explicit SVGFEImageElement(EntityHandle handle)
-      : SVGFilterPrimitiveStandardAttributes(handle) {}
+  explicit SVGFEImageElement(EntityHandle handle) : SVGFilterPrimitiveStandardAttributes(handle) {}
 
   /**
    * Internal constructor to create the element on an existing \ref Entity.

@@ -979,9 +979,7 @@ private:
     return stream_.peekDelimIs(value, advance);
   }
 
-  std::optional<char> peekNextDelim(size_t advance = 0) const {
-    return stream_.peekDelim(advance);
-  }
+  std::optional<char> peekNextDelim(size_t advance = 0) const { return stream_.peekDelim(advance); }
 
   void skipWhitespace() { stream_.skipWhitespace(); }
 

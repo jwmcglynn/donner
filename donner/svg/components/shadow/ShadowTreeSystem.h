@@ -80,8 +80,7 @@ public:
    */
   std::optional<size_t> populateInstance(EntityHandle entity, ComputedShadowTreeComponent& shadow,
                                          ShadowBranchType branchType, Entity lightTarget,
-                                         const RcString& href,
-                                         ParseWarningSink& warningSink);
+                                         const RcString& href, ParseWarningSink& warningSink);
 
 private:
   Entity createShadowEntity(Registry& registry, ShadowBranchType branchType,

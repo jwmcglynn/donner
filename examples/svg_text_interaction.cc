@@ -18,8 +18,8 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGSVGElement.h"
-#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTSpanElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/renderer/Renderer.h"
 
 using donner::Lengthd;
@@ -43,8 +43,7 @@ int main(int argc, char* argv[]) {
   //! [text_svg_source]
 
   donner::ParseWarningSink warnings;
-  auto maybeDocument =
-      donner::svg::parser::SVGParser::ParseSVG(kSvgSource, warnings);
+  auto maybeDocument = donner::svg::parser::SVGParser::ParseSVG(kSvgSource, warnings);
   if (maybeDocument.hasError()) {
     std::cerr << "Parse error: " << maybeDocument.error() << "\n";
     return 1;

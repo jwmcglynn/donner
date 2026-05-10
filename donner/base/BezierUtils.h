@@ -78,11 +78,8 @@ std::pair<std::array<Vector2d, 3>, std::array<Vector2d, 3>> SplitQuadratic(const
  * @param t Split parameter in [0, 1].
  * @return A pair of {left, right} point arrays, each describing a cubic Bezier.
  */
-std::pair<std::array<Vector2d, 4>, std::array<Vector2d, 4>> SplitCubic(const Vector2d& p0,
-                                                                       const Vector2d& p1,
-                                                                       const Vector2d& p2,
-                                                                       const Vector2d& p3,
-                                                                       double t);
+std::pair<std::array<Vector2d, 4>, std::array<Vector2d, 4>> SplitCubic(
+    const Vector2d& p0, const Vector2d& p1, const Vector2d& p2, const Vector2d& p3, double t);
 
 /**
  * Approximate a cubic Bezier curve as a sequence of quadratic Bezier curves within a given

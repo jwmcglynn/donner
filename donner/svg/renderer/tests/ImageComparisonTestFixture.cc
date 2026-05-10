@@ -18,11 +18,11 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
-#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
@@ -688,8 +688,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     return;
   }
 
-  auto maybeGoldenImage =
-      RendererImageTestUtils::readRgbaImageFromPngFile(effectiveGoldenFilename);
+  auto maybeGoldenImage = RendererImageTestUtils::readRgbaImageFromPngFile(effectiveGoldenFilename);
   ASSERT_TRUE(maybeGoldenImage.has_value());
 
   Image goldenImage = std::move(maybeGoldenImage.value());
@@ -716,8 +715,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
                                               width, height, strideInPixels);
 
-    const std::filesystem::path diffFilePath =
-        std::filesystem::temp_directory_path() / ("diff_" + escapeFilename(effectiveGoldenFilename));
+    const std::filesystem::path diffFilePath = std::filesystem::temp_directory_path() /
+                                               ("diff_" + escapeFilename(effectiveGoldenFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 

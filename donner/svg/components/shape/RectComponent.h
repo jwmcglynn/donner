@@ -98,6 +98,6 @@ struct RectComponent {
  * Parse presentation attributes for a \ref xml_rect element, such as x, y, width, height, rx, ry.
  */
 ParseResult<bool> ParseRectPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params);
+                                                 const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

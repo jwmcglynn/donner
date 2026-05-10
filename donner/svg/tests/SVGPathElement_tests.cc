@@ -39,7 +39,8 @@ TEST(SVGPathElementTests, Defaults) {
                   "<path />"),
               ComputedSplineIsEmpty());
   EXPECT_EQ(instantiateSubtreeElementAs<SVGPathElement>("<path />")->d(), "");
-  EXPECT_DOUBLE_EQ(instantiateSubtreeElementAs<SVGPathElement>("<path />")->computedPathLength(), 0.0);
+  EXPECT_DOUBLE_EQ(instantiateSubtreeElementAs<SVGPathElement>("<path />")->computedPathLength(),
+                   0.0);
 }
 
 TEST(SVGPathElementTests, Simple) {

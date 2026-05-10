@@ -144,8 +144,8 @@ TEST(SVGStopElementTests, StopColorHexFormat) {
 }
 
 TEST(SVGStopElementTests, StopColorRgbFunction) {
-  auto stop = instantiateSubtreeElementAs<SVGStopElement>(
-      R"-(<stop stop-color="rgb(128, 64, 32)" />)-");
+  auto stop =
+      instantiateSubtreeElementAs<SVGStopElement>(R"-(<stop stop-color="rgb(128, 64, 32)" />)-");
   EXPECT_EQ(stop->stopColor(), css::Color(css::RGBA(128, 64, 32, 0xFF)));
 }
 
