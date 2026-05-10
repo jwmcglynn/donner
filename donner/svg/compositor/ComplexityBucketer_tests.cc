@@ -73,8 +73,7 @@ TEST_F(ComplexityBucketerTest, RootOnlyProducesNoBuckets) {
   ComplexityBucketer bucketer;
   bucketer.reconcile(registry_);
 
-  EXPECT_EQ(bucketer.stats().entitiesEvaluated, 1u)
-      << "root is visited but not a candidate";
+  EXPECT_EQ(bucketer.stats().entitiesEvaluated, 1u) << "root is visited but not a candidate";
   EXPECT_EQ(bucketer.stats().candidatesConsidered, 0u);
   EXPECT_EQ(bucketer.stats().bucketsPublished, 0u);
 }
@@ -155,7 +154,7 @@ TEST_F(ComplexityBucketerTest, MaskAddsCostBelowFilter) {
 
   auto& maskedInstance = registry_.get<RenderingInstanceComponent>(masked);
   maskedInstance.mask = components::ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
-                                                   MaskContentUnits::Default};
+                                                 MaskContentUnits::Default};
 
   auto& filteredInstance = registry_.get<RenderingInstanceComponent>(filtered);
   filteredInstance.resolvedFilter = components::ResolvedFilterEffect{std::vector<FilterEffect>{}};
@@ -249,8 +248,7 @@ TEST_F(ComplexityBucketerTest, ReservedSlotsReduceBudget) {
   static_cast<void>(c1);
   static_cast<void>(c4);
 
-  ComplexityBucketer bucketer(
-      ComplexityBucketerConfig{.targetBucketCount = 5, .reservedSlots = 3});
+  ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 5, .reservedSlots = 3});
   bucketer.reconcile(registry_);
 
   EXPECT_EQ(bucketer.stats().bucketsPublished, 2u);
@@ -296,7 +294,7 @@ TEST_F(ComplexityBucketerTest, SubtreeWithInternalMaskStaysIntactInOneBucket) {
 
   auto& childInstance = registry_.get<RenderingInstanceComponent>(child);
   childInstance.mask = components::ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
-                                                  MaskContentUnits::Default};
+                                                MaskContentUnits::Default};
 
   ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 2});
   bucketer.reconcile(registry_);
@@ -338,7 +336,7 @@ TEST_F(ComplexityBucketerTest, MultipleTopLevelChildrenEachBucketedAtomically) {
 
   auto& maskedInstance = registry_.get<RenderingInstanceComponent>(masked);
   maskedInstance.mask = components::ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt,
-                                                   MaskContentUnits::Default};
+                                                 MaskContentUnits::Default};
 
   auto& isolatedInstance = registry_.get<RenderingInstanceComponent>(isolated);
   isolatedInstance.isolatedLayer = true;
@@ -360,8 +358,7 @@ TEST_F(ComplexityBucketerTest, BudgetZeroProducesNothing) {
   setSubtreeEnd(root, c2);
   static_cast<void>(c1);
 
-  ComplexityBucketer bucketer(
-      ComplexityBucketerConfig{.targetBucketCount = 1, .reservedSlots = 1});
+  ComplexityBucketer bucketer(ComplexityBucketerConfig{.targetBucketCount = 1, .reservedSlots = 1});
   bucketer.reconcile(registry_);
 
   EXPECT_EQ(bucketer.stats().candidatesConsidered, 2u) << "candidates still evaluated";

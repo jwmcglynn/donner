@@ -148,12 +148,10 @@ TEST(BezierUtils, SplitQuadraticAtT05) {
   ExpectNear(right[2], p2);
 
   // Verify that evaluating the left half at t=0.5 gives the same as the original at t=0.25.
-  ExpectNear(EvalQuadratic(left[0], left[1], left[2], 0.5),
-             EvalQuadratic(p0, p1, p2, 0.25));
+  ExpectNear(EvalQuadratic(left[0], left[1], left[2], 0.5), EvalQuadratic(p0, p1, p2, 0.25));
 
   // Verify that evaluating the right half at t=0.5 gives the same as the original at t=0.75.
-  ExpectNear(EvalQuadratic(right[0], right[1], right[2], 0.5),
-             EvalQuadratic(p0, p1, p2, 0.75));
+  ExpectNear(EvalQuadratic(right[0], right[1], right[2], 0.5), EvalQuadratic(p0, p1, p2, 0.75));
 }
 
 TEST(BezierUtils, SplitQuadraticPreservesEvaluation) {
@@ -167,8 +165,8 @@ TEST(BezierUtils, SplitQuadraticPreservesEvaluation) {
 
   // Points on the left half correspond to the original curve at t in [0, splitT].
   for (double u = 0.0; u <= 1.0; u += 0.1) {
-    ExpectNear(EvalQuadratic(left[0], left[1], left[2], u),
-               EvalQuadratic(p0, p1, p2, splitT * u), 1e-9);
+    ExpectNear(EvalQuadratic(left[0], left[1], left[2], u), EvalQuadratic(p0, p1, p2, splitT * u),
+               1e-9);
   }
 
   // Points on the right half correspond to the original curve at t in [splitT, 1].

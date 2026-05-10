@@ -22,11 +22,11 @@ namespace donner::editor::sandbox {
 
 /// Outcome of replaying a single frame onto the wrapped backend.
 enum class ReplayStatus {
-  kOk,                ///< Frame ended cleanly with `kEndFrame`.
-  kEndOfStream,       ///< Reader ran out of bytes without seeing `kEndFrame`.
-  kMalformed,         ///< A payload failed to decode (length, tag, range).
-  kUnknownOpcode,     ///< Reader saw an opcode it doesn't know.
-  kHeaderMismatch,    ///< Magic or version mismatch on the stream header.
+  kOk,                      ///< Frame ended cleanly with `kEndFrame`.
+  kEndOfStream,             ///< Reader ran out of bytes without seeing `kEndFrame`.
+  kMalformed,               ///< A payload failed to decode (length, tag, range).
+  kUnknownOpcode,           ///< Reader saw an opcode it doesn't know.
+  kHeaderMismatch,          ///< Magic or version mismatch on the stream header.
   kEncounteredUnsupported,  ///< Replay succeeded but hit a `kUnsupported` message.
 };
 
@@ -60,10 +60,10 @@ public:
 
 private:
   enum class DispatchOutcome {
-    kHandled,       ///< Message was fully consumed and dispatched.
-    kUnsupported,   ///< `kUnsupported` message — replay skips but remains valid.
-    kDecodeError,   ///< Payload failed to decode; reader is marked failed.
-    kUnknownOpcode, ///< Opcode not recognized; payload must be skipped.
+    kHandled,        ///< Message was fully consumed and dispatched.
+    kUnsupported,    ///< `kUnsupported` message — replay skips but remains valid.
+    kDecodeError,    ///< Payload failed to decode; reader is marked failed.
+    kUnknownOpcode,  ///< Opcode not recognized; payload must be skipped.
   };
 
   DispatchOutcome handleMessage(WireReader& r, Opcode opcode);

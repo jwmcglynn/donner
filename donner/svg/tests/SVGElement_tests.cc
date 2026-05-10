@@ -6,9 +6,9 @@
 #include <deque>
 
 #include "donner/base/ParseWarningSink.h"
-#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
@@ -283,14 +283,13 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   // — which live in the same PropertyRegistry but are tagged with a
   // distinct Specificity (FromABC(0,0,0) vs StyleAttribute()).
   auto element = create();
-  auto& styleComponent =
-      element.entityHandle().get_or_emplace<components::StyleComponent>();
+  auto& styleComponent = element.entityHandle().get_or_emplace<components::StyleComponent>();
 
   // Simulate the parse path: fill="red" lands via the presentation-
   // attribute code path, then style="stroke: green; opacity: 0.5"
   // lands via setStyle.
-  auto fillResult = styleComponent.properties.parsePresentationAttribute(
-      "fill", "red", element.entityHandle());
+  auto fillResult =
+      styleComponent.properties.parsePresentationAttribute("fill", "red", element.entityHandle());
   ASSERT_TRUE(fillResult.hasResult() && fillResult.result());
   styleComponent.setStyle("stroke: green; opacity: 0.5");
 
@@ -347,13 +346,11 @@ TEST_F(SVGElementTests, StyleDirtyPropagatesToDescendants) {
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->setStyle("fill: red");
 
-  const auto* parentDirty =
-      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
 
-  const auto* childDirty =
-      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* childDirty = child->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(childDirty, nullptr);
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Paint));
@@ -382,15 +379,13 @@ TEST_F(SVGElementTests, TransformDirtyPropagatesWorldTransformToDescendants) {
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->setAttribute("transform", "translate(10 20)");
 
-  const auto* parentDirty =
-      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::Transform));
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::WorldTransform));
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::RenderInstance));
 
-  const auto* childDirty =
-      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* childDirty = child->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(childDirty, nullptr);
   EXPECT_FALSE(childDirty->test(components::DirtyFlagsComponent::Transform));
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::WorldTransform));
@@ -419,13 +414,11 @@ TEST_F(SVGElementTests, InheritedPresentationAttributePropagatesToDescendants) {
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->setAttribute("fill", "red");
 
-  const auto* parentDirty =
-      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
 
-  const auto* childDirty =
-      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* childDirty = child->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(childDirty, nullptr);
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Paint));
@@ -454,8 +447,7 @@ TEST_F(SVGElementTests, NonInheritedPresentationAttributeDoesNotPropagateToDesce
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->setAttribute("opacity", "0.5");
 
-  const auto* parentDirty =
-      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
 
@@ -483,13 +475,11 @@ TEST_F(SVGElementTests, RemovingInheritedPresentationAttributePropagatesToDescen
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->removeAttribute("fill");
 
-  const auto* parentDirty =
-      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::StyleCascade));
 
-  const auto* childDirty =
-      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* childDirty = child->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(childDirty, nullptr);
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Style));
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::Paint));
@@ -518,15 +508,13 @@ TEST_F(SVGElementTests, RemovingTransformPropagatesWorldTransformToDescendants) 
   doc.registry().clear<components::DirtyFlagsComponent>();
   parent->removeAttribute("transform");
 
-  const auto* parentDirty =
-      parent->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* parentDirty = parent->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(parentDirty, nullptr);
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::Transform));
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::WorldTransform));
   EXPECT_TRUE(parentDirty->test(components::DirtyFlagsComponent::RenderInstance));
 
-  const auto* childDirty =
-      child->entityHandle().try_get<components::DirtyFlagsComponent>();
+  const auto* childDirty = child->entityHandle().try_get<components::DirtyFlagsComponent>();
   ASSERT_NE(childDirty, nullptr);
   EXPECT_FALSE(childDirty->test(components::DirtyFlagsComponent::Transform));
   EXPECT_TRUE(childDirty->test(components::DirtyFlagsComponent::WorldTransform));
@@ -560,10 +548,12 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
   ASSERT_TRUE(child.has_value());
 
   components::StyleSystem styleSystem;
-  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
+  {
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(doc.registry(), disabledSink);
+  }
 
-  const auto* initialComputed =
-      child->entityHandle().try_get<components::ComputedStyleComponent>();
+  const auto* initialComputed = child->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(initialComputed, nullptr);
   ASSERT_TRUE(initialComputed->properties.has_value());
   EXPECT_EQ(initialComputed->properties->fill.getRequired(),
@@ -573,10 +563,12 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
 
   EXPECT_EQ(child->entityHandle().try_get<components::ComputedStyleComponent>(), nullptr);
 
-  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
+  {
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(doc.registry(), disabledSink);
+  }
 
-  const auto* updatedComputed =
-      child->entityHandle().try_get<components::ComputedStyleComponent>();
+  const auto* updatedComputed = child->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(updatedComputed, nullptr);
   ASSERT_TRUE(updatedComputed->properties.has_value());
   EXPECT_EQ(updatedComputed->properties->fill.getRequired(),
@@ -597,7 +589,10 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   ASSERT_TRUE(sibling.has_value());
 
   components::StyleSystem styleSystem;
-  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
+  {
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(doc.registry(), disabledSink);
+  }
 
   if (!doc.registry().ctx().contains<components::RenderTreeState>()) {
     doc.registry().ctx().emplace<components::RenderTreeState>();
@@ -607,14 +602,12 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
 
-  auto* siblingComputed =
-      sibling->entityHandle().try_get<components::ComputedStyleComponent>();
+  auto* siblingComputed = sibling->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(siblingComputed, nullptr);
   ASSERT_TRUE(siblingComputed->properties.has_value());
 
-  siblingComputed->properties->fill.set(
-      PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))),
-      css::Specificity::Override());
+  siblingComputed->properties->fill.set(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))),
+                                        css::Specificity::Override());
 
   target->entityHandle().get_or_emplace<components::StyleComponent>().properties.opacity.set(
       0.5, css::Specificity::Override());
@@ -622,10 +615,12 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   target->entityHandle().get_or_emplace<components::DirtyFlagsComponent>().mark(
       components::DirtyFlagsComponent::Style);
 
-  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
+  {
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(doc.registry(), disabledSink);
+  }
 
-  const auto* targetComputed =
-      target->entityHandle().try_get<components::ComputedStyleComponent>();
+  const auto* targetComputed = target->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(targetComputed, nullptr);
   ASSERT_TRUE(targetComputed->properties.has_value());
   EXPECT_DOUBLE_EQ(targetComputed->properties->opacity.getRequired(), 0.5);
@@ -654,7 +649,10 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
   ASSERT_TRUE(second.has_value());
 
   components::StyleSystem styleSystem;
-  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
+  {
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(doc.registry(), disabledSink);
+  }
 
   if (!doc.registry().ctx().contains<components::RenderTreeState>()) {
     doc.registry().ctx().emplace<components::RenderTreeState>();
@@ -674,7 +672,10 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
   first->setClassName("");
   EXPECT_TRUE(renderState.needsFullStyleRecompute);
 
-  { ParseWarningSink disabledSink = ParseWarningSink::Disabled(); styleSystem.computeAllStyles(doc.registry(), disabledSink); }
+  {
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    styleSystem.computeAllStyles(doc.registry(), disabledSink);
+  }
 
   const auto* updatedComputed =
       second->entityHandle().try_get<components::ComputedStyleComponent>();

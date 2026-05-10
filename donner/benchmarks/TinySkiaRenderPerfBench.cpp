@@ -66,8 +66,8 @@ Paint createPaint() {
 void recordThroughput(benchmark::State& state, std::int64_t dim) {
   const auto pixelsPerIteration = static_cast<double>(dim * dim);
   state.SetItemsProcessed(state.iterations() * dim * dim);
-  state.counters["pixelsPerSecond"] = benchmark::Counter(
-      pixelsPerIteration, benchmark::Counter::kIsIterationInvariantRate);
+  state.counters["pixelsPerSecond"] =
+      benchmark::Counter(pixelsPerIteration, benchmark::Counter::kIsIterationInvariantRate);
 }
 
 void BM_FillPath_TinySkia(benchmark::State& state) {
@@ -106,10 +106,8 @@ void BM_FillRect_TinySkia(benchmark::State& state) {
     return;
   }
 
-  auto rect = Rect::fromLTRB(0.12f * static_cast<float>(dim),
-                             0.18f * static_cast<float>(dim),
-                             0.88f * static_cast<float>(dim),
-                             0.84f * static_cast<float>(dim));
+  auto rect = Rect::fromLTRB(0.12f * static_cast<float>(dim), 0.18f * static_cast<float>(dim),
+                             0.88f * static_cast<float>(dim), 0.84f * static_cast<float>(dim));
   if (!rect.has_value()) {
     state.SkipWithError("Failed to create rect");
     return;
@@ -176,11 +174,11 @@ void BM_FillPath_LinearGradient_TinySkia(benchmark::State& state) {
   }
 
   const auto d = static_cast<float>(dim);
-  auto gradient = LinearGradient::create(
-      Point::fromXY(0.1f * d, 0.1f * d), Point::fromXY(0.9f * d, 0.9f * d),
-      {GradientStop::create(0.0f, Color::fromRgba8(50, 127, 150, 200)),
-       GradientStop::create(1.0f, Color::fromRgba8(220, 140, 75, 180))},
-      SpreadMode::Pad, Transform::identity());
+  auto gradient =
+      LinearGradient::create(Point::fromXY(0.1f * d, 0.1f * d), Point::fromXY(0.9f * d, 0.9f * d),
+                             {GradientStop::create(0.0f, Color::fromRgba8(50, 127, 150, 200)),
+                              GradientStop::create(1.0f, Color::fromRgba8(220, 140, 75, 180))},
+                             SpreadMode::Pad, Transform::identity());
   if (!gradient.has_value()) {
     state.SkipWithError("Failed to create linear gradient");
     return;
@@ -360,9 +358,9 @@ void BM_FillPath_Transformed_TinySkia(benchmark::State& state) {
   constexpr float kSin30 = 0.5f;
   const float cx = static_cast<float>(dim) * 0.5f;
   const float cy = cx;
-  const Transform xform = Transform::fromRow(kCos30, kSin30, -kSin30, kCos30,
-                                             cx * (1.0f - kCos30) + cy * kSin30,
-                                             cy * (1.0f - kCos30) - cx * kSin30);
+  const Transform xform =
+      Transform::fromRow(kCos30, kSin30, -kSin30, kCos30, cx * (1.0f - kCos30) + cy * kSin30,
+                         cy * (1.0f - kCos30) - cx * kSin30);
 
   for (auto _ : state) {
     pixmap->fill(clearColor);

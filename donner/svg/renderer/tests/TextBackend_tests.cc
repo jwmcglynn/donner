@@ -1,10 +1,11 @@
+#include "donner/svg/text/TextBackend.h"
+
 #include <gtest/gtest.h>
 
 #include <fstream>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
-#include "donner/svg/text/TextBackend.h"
 #include "donner/svg/text/TextBackendFull.h"
 #include "donner/svg/text/TextBackendSimple.h"
 
@@ -143,8 +144,7 @@ TEST_P(TextBackendTest, GlyphOutlineProducesNonEmptyPath) {
   const FontHandle font = fallbackFont();
   ASSERT_TRUE(static_cast<bool>(font));
 
-  const auto shaped =
-      backend().shapeRun(font, 16.0f, "A", 0, 1, false, FontVariant::Normal, false);
+  const auto shaped = backend().shapeRun(font, 16.0f, "A", 0, 1, false, FontVariant::Normal, false);
   ASSERT_EQ(shaped.glyphs.size(), 1u);
   ASSERT_GT(shaped.glyphs[0].glyphIndex, 0);
 
@@ -244,8 +244,7 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
   ASSERT_TRUE(static_cast<bool>(font));
 
   const char* text = "\xE6\x97\xA5\xE6\x9C\xAC";  // 日本
-  const auto shaped =
-      backend().shapeRun(font, 64.0f, text, 0, 6, true, FontVariant::Normal, false);
+  const auto shaped = backend().shapeRun(font, 64.0f, text, 0, 6, true, FontVariant::Normal, false);
   ASSERT_EQ(shaped.glyphs.size(), 2u);
 
   for (const auto& glyph : shaped.glyphs) {
@@ -355,7 +354,7 @@ TEST(TextBackendFullCapabilities, DetectsCursiveScripts) {
   TextBackendFull backend(fontManager, registry);
 
   EXPECT_TRUE(backend.isCursive(0x0627));   // Arabic alef
-  EXPECT_FALSE(backend.isCursive('A'));      // Latin
+  EXPECT_FALSE(backend.isCursive('A'));     // Latin
   EXPECT_FALSE(backend.isCursive(0x4E00));  // CJK
 }
 
@@ -369,10 +368,10 @@ TEST(TextBackendFullCapabilities, TinyFontAdvancesStayInScale) {
   ASSERT_TRUE(static_cast<bool>(font));
 
   constexpr std::string_view kText = "Some long text";
-  const auto simpleShaped = simpleBackend.shapeRun(
-      font, 0.24f, kText, 0, kText.size(), false, FontVariant::Normal, false);
-  const auto fullShaped = fullBackend.shapeRun(
-      font, 0.24f, kText, 0, kText.size(), false, FontVariant::Normal, false);
+  const auto simpleShaped = simpleBackend.shapeRun(font, 0.24f, kText, 0, kText.size(), false,
+                                                   FontVariant::Normal, false);
+  const auto fullShaped =
+      fullBackend.shapeRun(font, 0.24f, kText, 0, kText.size(), false, FontVariant::Normal, false);
 
   ASSERT_EQ(simpleShaped.glyphs.size(), fullShaped.glyphs.size());
 

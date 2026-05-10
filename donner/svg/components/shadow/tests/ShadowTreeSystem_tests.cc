@@ -8,9 +8,9 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/ParseWarningSink.h"
-#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -99,7 +99,8 @@ TEST_F(ShadowTreeSystemTest, SelfRecursionDetected) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <use id="self" href="#self"/>
     </svg>
-  )", parseSink);
+  )",
+                                                 parseSink);
 
   // The parse should succeed (self-recursion is a warning, not a hard error).
   ASSERT_TRUE(maybeResult.hasResult());
@@ -114,7 +115,8 @@ TEST_F(ShadowTreeSystemTest, IndirectRecursionDetected) {
       <g id="a"><use href="#b"/></g>
       <g id="b"><use href="#a"/></g>
     </svg>
-  )", parseSink);
+  )",
+                                                 parseSink);
 
   ASSERT_TRUE(maybeResult.hasResult());
 }
@@ -149,7 +151,8 @@ TEST_F(ShadowTreeSystemTest, UseWithMissingHref) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <use href="#nonexistent"/>
     </svg>
-  )", parseSink);
+  )",
+                                                 parseSink);
 
   // Should not crash; missing ref is a warning.
   ASSERT_TRUE(maybeResult.hasResult());
@@ -332,7 +335,8 @@ TEST_F(ShadowTreeSystemTest, TeardownRemovesMainAndOffscreenEntities) {
   registry.get<donner::components::TreeComponent>(mainRoot).appendChild(registry, mainChild);
 
   const Entity offscreenRoot = registry.create();
-  registry.emplace<donner::components::TreeComponent>(offscreenRoot, xml::XMLQualifiedNameRef("rect"));
+  registry.emplace<donner::components::TreeComponent>(offscreenRoot,
+                                                      xml::XMLQualifiedNameRef("rect"));
 
   ComputedShadowTreeComponent shadow;
   shadow.mainBranch = ComputedShadowTreeComponent::BranchStorage{
@@ -368,8 +372,8 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowTreeInvokesHandlerAndCo
       document.querySelector("#target")->entityHandle().entity());
 
   bool handlerCalled = false;
-  ShadowTreeSystem system([&handlerCalled](Registry&, Entity, EntityHandle, Entity, ShadowBranchType,
-                                           ParseWarningSink&) {
+  ShadowTreeSystem system([&handlerCalled](Registry&, Entity, EntityHandle, Entity,
+                                           ShadowBranchType, ParseWarningSink&) {
     handlerCalled = true;
     return true;
   });
@@ -388,8 +392,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowTreeInvokesHandlerAndCo
   bool foundDoNotInherit = false;
   for (Entity entity : shadow.mainBranch->shadowEntities) {
     foundRootMarker = foundRootMarker || registry.all_of<ShadowTreeRootComponent>(entity);
-    foundDoNotInherit =
-        foundDoNotInherit || registry.all_of<DoNotInheritFillOrStrokeTag>(entity);
+    foundDoNotInherit = foundDoNotInherit || registry.all_of<DoNotInheritFillOrStrokeTag>(entity);
   }
   EXPECT_TRUE(foundRootMarker);
   EXPECT_TRUE(foundDoNotInherit);

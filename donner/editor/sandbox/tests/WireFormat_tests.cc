@@ -37,8 +37,8 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/properties/PaintServer.h"
-#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 
 namespace donner::editor::sandbox {
@@ -364,8 +364,7 @@ public:
   }
   void popIsolatedLayer() override { calls.push_back({"popIsolatedLayer"}); }
 
-  void pushFilterLayer(const svg::components::FilterGraph&, const std::optional<Box2d>&) override {
-  }
+  void pushFilterLayer(const svg::components::FilterGraph&, const std::optional<Box2d>&) override {}
   void popFilterLayer() override {}
 
   void pushMask(const std::optional<Box2d>&) override {}
@@ -485,8 +484,7 @@ TEST(IntegrationTest, AllMethodsNowSupportedNoUnsupported) {
   ReplayingRenderer replay(target);
   ReplayReport report;
   const auto status = replay.pumpFrame(ser.data(), report);
-  EXPECT_EQ(status, ReplayStatus::kOk)
-      << "replay should complete cleanly with zero unsupported";
+  EXPECT_EQ(status, ReplayStatus::kOk) << "replay should complete cleanly with zero unsupported";
   EXPECT_EQ(report.unsupportedCount, 0u);
 }
 
@@ -497,12 +495,12 @@ TEST(IntegrationTest, AllMethodsNowSupportedNoUnsupported) {
 TEST(AdversarialTest, RandomBytesDoNotCrashReplay) {
   // 256 bytes of "random-ish" input across a few characteristic patterns.
   const std::vector<std::vector<uint8_t>> corpora = {
-      {},                                                      // empty
-      {0x00},                                                  // too short for header
-      {0xDE, 0xAD, 0xBE, 0xEF},                                // wrong magic
-      {0x44, 0x52, 0x4E, 0x52},                                // correct magic alone
-      std::vector<uint8_t>(32, 0xFF),                          // all ones
-      std::vector<uint8_t>(256, 0x00),                         // all zeros
+      {},                               // empty
+      {0x00},                           // too short for header
+      {0xDE, 0xAD, 0xBE, 0xEF},         // wrong magic
+      {0x44, 0x52, 0x4E, 0x52},         // correct magic alone
+      std::vector<uint8_t>(32, 0xFF),   // all ones
+      std::vector<uint8_t>(256, 0x00),  // all zeros
   };
 
   capture::CapturingRenderer target;
@@ -611,8 +609,7 @@ TEST(PixelRoundTripTest, LinearGradientMatchesDirectRender) {
 
   ASSERT_EQ(direct.dimensions, viaWire.dimensions);
   ASSERT_EQ(direct.pixels.size(), viaWire.pixels.size());
-  EXPECT_FALSE(hasUnsupported)
-      << "linear gradients should no longer trigger kUnsupported";
+  EXPECT_FALSE(hasUnsupported) << "linear gradients should no longer trigger kUnsupported";
   EXPECT_EQ(direct.pixels, viaWire.pixels)
       << "linear gradient rendering must be byte-identical across the wire";
 }
@@ -657,8 +654,7 @@ TEST(PixelRoundTripTest, MaskedContentMatchesDirectRender) {
   const auto direct = RenderDirect(kSvg, 80, 80);
   bool hasUnsupported = false;
   const auto viaWire = RenderViaWire(kSvg, 80, 80, hasUnsupported);
-  EXPECT_FALSE(hasUnsupported)
-      << "mask opcodes should no longer emit kUnsupported";
+  EXPECT_FALSE(hasUnsupported) << "mask opcodes should no longer emit kUnsupported";
   ASSERT_EQ(direct.dimensions, viaWire.dimensions);
   EXPECT_EQ(direct.pixels, viaWire.pixels);
 }
@@ -686,8 +682,7 @@ TEST(PixelRoundTripTest, PatternTileMatchesDirectRender) {
   const auto direct = RenderDirect(kSvg, 80, 80);
   bool hasUnsupported = false;
   const auto viaWire = RenderViaWire(kSvg, 80, 80, hasUnsupported);
-  EXPECT_FALSE(hasUnsupported)
-      << "pattern opcodes should not emit kUnsupported";
+  EXPECT_FALSE(hasUnsupported) << "pattern opcodes should not emit kUnsupported";
   ASSERT_EQ(direct.dimensions, viaWire.dimensions);
 
   // Count differing pixels and diagnose.
@@ -697,8 +692,7 @@ TEST(PixelRoundTripTest, PatternTileMatchesDirectRender) {
   for (std::size_t i = 0; i + 3 < direct.pixels.size(); i += 4) {
     if (direct.pixels[i + 3] != 0) ++nonBlankDirect;
     if (viaWire.pixels[i + 3] != 0) ++nonBlankWire;
-    if (direct.pixels[i] != viaWire.pixels[i] ||
-        direct.pixels[i + 1] != viaWire.pixels[i + 1] ||
+    if (direct.pixels[i] != viaWire.pixels[i] || direct.pixels[i + 1] != viaWire.pixels[i + 1] ||
         direct.pixels[i + 2] != viaWire.pixels[i + 2] ||
         direct.pixels[i + 3] != viaWire.pixels[i + 3]) {
       ++diffPixels;
@@ -715,15 +709,14 @@ TEST(PixelRoundTripTest, PatternTileMatchesDirectRender) {
   wireDoc2.setCanvasSize(80, 80);
   SerializingRenderer ser2;
   ser2.draw(wireDoc2);
-  const bool wiresDeterministic = (ser1.data().size() == ser2.data().size()) &&
+  const bool wiresDeterministic =
+      (ser1.data().size() == ser2.data().size()) &&
       std::equal(ser1.data().begin(), ser1.data().end(), ser2.data().begin());
-  EXPECT_TRUE(wiresDeterministic)
-      << "two serialize passes produced different wire bytes (sizes: "
-      << ser1.data().size() << " vs " << ser2.data().size() << ")";
+  EXPECT_TRUE(wiresDeterministic) << "two serialize passes produced different wire bytes (sizes: "
+                                  << ser1.data().size() << " vs " << ser2.data().size() << ")";
   EXPECT_EQ(direct.pixels, viaWire.pixels)
       << "pattern: " << diffPixels << " / " << totalPixels << " pixels differ. "
-      << "direct non-blank=" << nonBlankDirect
-      << " wire non-blank=" << nonBlankWire;
+      << "direct non-blank=" << nonBlankDirect << " wire non-blank=" << nonBlankWire;
 }
 
 TEST(PixelRoundTripTest, TransformedShapesMatchDirectRender) {
@@ -765,8 +758,7 @@ TEST(PixelRoundTripTest, GaussianBlurFilterMatchesDirectRender) {
   const auto direct = RenderDirect(kSvg, 80, 80);
   bool hasUnsupported = false;
   const auto viaWire = RenderViaWire(kSvg, 80, 80, hasUnsupported);
-  EXPECT_FALSE(hasUnsupported)
-      << "filter opcodes should not emit kUnsupported";
+  EXPECT_FALSE(hasUnsupported) << "filter opcodes should not emit kUnsupported";
   ASSERT_EQ(direct.dimensions, viaWire.dimensions);
   EXPECT_EQ(direct.pixels, viaWire.pixels)
       << "feGaussianBlur rendering must be byte-identical across the wire";
@@ -789,8 +781,7 @@ TEST(PixelRoundTripTest, ColorMatrixFilterMatchesDirectRender) {
   const auto direct = RenderDirect(kSvg, 64, 64);
   bool hasUnsupported = false;
   const auto viaWire = RenderViaWire(kSvg, 64, 64, hasUnsupported);
-  EXPECT_FALSE(hasUnsupported)
-      << "feColorMatrix should not emit kUnsupported";
+  EXPECT_FALSE(hasUnsupported) << "feColorMatrix should not emit kUnsupported";
   ASSERT_EQ(direct.dimensions, viaWire.dimensions);
   EXPECT_EQ(direct.pixels, viaWire.pixels)
       << "feColorMatrix rendering must be byte-identical across the wire";
@@ -871,8 +862,7 @@ TEST(CodecTest, FontFaceRoundTrip) {
   {
     const auto& s = decoded.sources[0];
     EXPECT_EQ(s.kind, css::FontFaceSource::Kind::Data);
-    const auto* dataPtr =
-        std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&s.payload);
+    const auto* dataPtr = std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&s.payload);
     ASSERT_NE(dataPtr, nullptr);
     ASSERT_NE(*dataPtr, nullptr);
     EXPECT_EQ((*dataPtr)->size(), 8u);
@@ -941,8 +931,7 @@ TEST(CodecTest, TextParamsWithFontFacesRoundTrip) {
   ASSERT_EQ(decodedFaces[0].sources.size(), 1u);
   const auto& ds = decodedFaces[0].sources[0];
   EXPECT_EQ(ds.kind, css::FontFaceSource::Kind::Data);
-  const auto* dp =
-      std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&ds.payload);
+  const auto* dp = std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&ds.payload);
   ASSERT_NE(dp, nullptr);
   ASSERT_NE(*dp, nullptr);
   EXPECT_EQ((*dp)->size(), 7u);

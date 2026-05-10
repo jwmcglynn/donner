@@ -1,5 +1,3 @@
-#include "donner/svg/compositor/ScopedCompositorHint.h"
-
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -8,6 +6,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
+#include "donner/svg/compositor/ScopedCompositorHint.h"
 
 namespace donner::svg::compositor {
 

@@ -21,9 +21,8 @@ std::map<RcString, parser::UnparsedProperty> ParseUnparsedProperties(std::string
   std::map<RcString, parser::UnparsedProperty> properties;
 
   for (const auto& declaration : css::CSS::ParseStyleAttribute(style)) {
-    properties.emplace(
-        declaration.name,
-        parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+    properties.emplace(declaration.name,
+                       parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
   }
 
   return properties;
@@ -72,10 +71,10 @@ TEST(RectComponent, ParseRectPresentationAttributeReturnsErrorForInvalidAttribut
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);
 
-  EXPECT_THAT(ParseRectPresentationAttribute(
-                  rect.entityHandle(), "rx",
-                  parser::PropertyParseFnParams::CreateForAttribute("bogus")),
-              ParseErrorIs("Invalid length or percentage"));
+  EXPECT_THAT(
+      ParseRectPresentationAttribute(rect.entityHandle(), "rx",
+                                     parser::PropertyParseFnParams::CreateForAttribute("bogus")),
+      ParseErrorIs("Invalid length or percentage"));
 
   const RectProperties& properties = rect.entityHandle().get<RectComponent>().properties;
   EXPECT_FALSE(properties.rx.hasValue());
@@ -85,10 +84,10 @@ TEST(RectComponent, ParseRectPresentationAttributeReturnsFalseForUnknownAttribut
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);
 
-  EXPECT_THAT(ParseRectPresentationAttribute(
-                  rect.entityHandle(), "cx",
-                  parser::PropertyParseFnParams::CreateForAttribute("10")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseRectPresentationAttribute(rect.entityHandle(), "cx",
+                                     parser::PropertyParseFnParams::CreateForAttribute("10")),
+      ParseResultIs(false));
   EXPECT_FALSE(rect.entityHandle().all_of<RectComponent>());
 }
 

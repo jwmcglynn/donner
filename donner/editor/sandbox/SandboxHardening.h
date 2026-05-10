@@ -85,12 +85,12 @@ struct HardeningOptions {
 /// Classifies the outcome of `ApplyHardening`. On any non-kOk status the
 /// child should exit with a usage error — hardening is all-or-nothing.
 enum class HardeningStatus {
-  kOk,                    ///< Every requested measure took effect.
-  kMissingSandboxEnv,     ///< DONNER_SANDBOX was not set to 1.
-  kChdirFailed,           ///< chdir("/") returned non-zero.
-  kCloseFdsFailed,        ///< FD sweep failed in a way we can't recover from.
-  kResourceLimitFailed,   ///< One of the setrlimit calls failed.
-  kSeccompFailed,         ///< seccomp-bpf filter installation failed.
+  kOk,                   ///< Every requested measure took effect.
+  kMissingSandboxEnv,    ///< DONNER_SANDBOX was not set to 1.
+  kChdirFailed,          ///< chdir("/") returned non-zero.
+  kCloseFdsFailed,       ///< FD sweep failed in a way we can't recover from.
+  kResourceLimitFailed,  ///< One of the setrlimit calls failed.
+  kSeccompFailed,        ///< seccomp-bpf filter installation failed.
 };
 
 struct HardeningResult {

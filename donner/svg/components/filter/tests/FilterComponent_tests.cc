@@ -1,5 +1,3 @@
-#include "donner/svg/components/filter/FilterEffect.h"
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -7,6 +5,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 
 namespace donner::svg::components {
@@ -17,8 +16,8 @@ using css::RGBA;
 using testing::Optional;
 
 TEST(FilterEffectTest, EqualityAndOstreamOutput) {
-  const FilterEffect blur(FilterEffect::Blur{Lengthd(1, Lengthd::Unit::Px),
-                                             Lengthd(2, Lengthd::Unit::Px)});
+  const FilterEffect blur(
+      FilterEffect::Blur{Lengthd(1, Lengthd::Unit::Px), Lengthd(2, Lengthd::Unit::Px)});
   const FilterEffect reference(FilterEffect::ElementReference(Reference("#f")));
   const FilterEffect hueRotate(FilterEffect::HueRotate{45.0});
   const FilterEffect brightness(FilterEffect::Brightness{0.5});
@@ -28,9 +27,9 @@ TEST(FilterEffectTest, EqualityAndOstreamOutput) {
   const FilterEffect opacity(FilterEffect::FilterOpacity{0.4});
   const FilterEffect saturate(FilterEffect::Saturate{3.0});
   const FilterEffect sepia(FilterEffect::Sepia{1.0});
-  const FilterEffect shadow(FilterEffect::DropShadow{
-      Lengthd(1, Lengthd::Unit::Px), Lengthd(2, Lengthd::Unit::Px),
-      Lengthd(3, Lengthd::Unit::Px), Color(RGBA(0xFF, 0, 0, 0xFF))});
+  const FilterEffect shadow(
+      FilterEffect::DropShadow{Lengthd(1, Lengthd::Unit::Px), Lengthd(2, Lengthd::Unit::Px),
+                               Lengthd(3, Lengthd::Unit::Px), Color(RGBA(0xFF, 0, 0, 0xFF))});
 
   EXPECT_EQ(blur, FilterEffect(FilterEffect::Blur{Lengthd(1, Lengthd::Unit::Px),
                                                   Lengthd(2, Lengthd::Unit::Px)}));
@@ -56,18 +55,18 @@ TEST(FilterPrimitiveComponentTest, ParseFeFloodPresentationAttribute) {
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);
 
-  EXPECT_THAT(ParseFeFloodPresentationAttribute(
-                  rect.entityHandle(), "flood-color",
-                  parser::PropertyParseFnParams::CreateForAttribute("red")),
-              ParseResultIs(true));
-  EXPECT_THAT(ParseFeFloodPresentationAttribute(
-                  rect.entityHandle(), "flood-opacity",
-                  parser::PropertyParseFnParams::CreateForAttribute("50%")),
-              ParseResultIs(true));
-  EXPECT_THAT(ParseFeFloodPresentationAttribute(
-                  rect.entityHandle(), "unknown",
-                  parser::PropertyParseFnParams::CreateForAttribute("red")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseFeFloodPresentationAttribute(rect.entityHandle(), "flood-color",
+                                        parser::PropertyParseFnParams::CreateForAttribute("red")),
+      ParseResultIs(true));
+  EXPECT_THAT(
+      ParseFeFloodPresentationAttribute(rect.entityHandle(), "flood-opacity",
+                                        parser::PropertyParseFnParams::CreateForAttribute("50%")),
+      ParseResultIs(true));
+  EXPECT_THAT(
+      ParseFeFloodPresentationAttribute(rect.entityHandle(), "unknown",
+                                        parser::PropertyParseFnParams::CreateForAttribute("red")),
+      ParseResultIs(false));
 
   const auto& component = rect.entityHandle().get<FEFloodComponent>();
   EXPECT_THAT(component.floodColor.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
@@ -78,14 +77,14 @@ TEST(FilterPrimitiveComponentTest, ParseFeFloodPresentationAttributeErrors) {
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);
 
-  EXPECT_THAT(ParseFeFloodPresentationAttribute(
-                  rect.entityHandle(), "flood-color",
-                  parser::PropertyParseFnParams::CreateForAttribute("bogus")),
-              ParseErrorIs("Invalid color 'bogus'"));
-  EXPECT_THAT(ParseFeFloodPresentationAttribute(
-                  rect.entityHandle(), "flood-opacity",
-                  parser::PropertyParseFnParams::CreateForAttribute("bogus")),
-              ParseErrorIs("Invalid alpha value"));
+  EXPECT_THAT(
+      ParseFeFloodPresentationAttribute(rect.entityHandle(), "flood-color",
+                                        parser::PropertyParseFnParams::CreateForAttribute("bogus")),
+      ParseErrorIs("Invalid color 'bogus'"));
+  EXPECT_THAT(
+      ParseFeFloodPresentationAttribute(rect.entityHandle(), "flood-opacity",
+                                        parser::PropertyParseFnParams::CreateForAttribute("bogus")),
+      ParseErrorIs("Invalid alpha value"));
 }
 
 TEST(FilterPrimitiveComponentTest, ParseFeDropShadowPresentationAttribute) {
@@ -118,10 +117,10 @@ TEST(FilterPrimitiveComponentTest, ParseFeDropShadowPresentationAttributeErrors)
                   rect.entityHandle(), "flood-opacity",
                   parser::PropertyParseFnParams::CreateForAttribute("bogus")),
               ParseErrorIs("Invalid alpha value"));
-  EXPECT_THAT(ParseFeDropShadowPresentationAttribute(
-                  rect.entityHandle(), "unknown",
-                  parser::PropertyParseFnParams::CreateForAttribute("red")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseFeDropShadowPresentationAttribute(
+          rect.entityHandle(), "unknown", parser::PropertyParseFnParams::CreateForAttribute("red")),
+      ParseResultIs(false));
 }
 
 TEST(FilterPrimitiveComponentTest, ParseLightingPresentationAttribute) {
@@ -151,18 +150,18 @@ TEST(FilterPrimitiveComponentTest, ParseLightingPresentationAttributeErrors) {
                   rect.entityHandle(), "lighting-color",
                   parser::PropertyParseFnParams::CreateForAttribute("bogus")),
               ParseErrorIs("Invalid color 'bogus'"));
-  EXPECT_THAT(ParseFeDiffuseLightingPresentationAttribute(
-                  rect.entityHandle(), "unknown",
-                  parser::PropertyParseFnParams::CreateForAttribute("red")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseFeDiffuseLightingPresentationAttribute(
+          rect.entityHandle(), "unknown", parser::PropertyParseFnParams::CreateForAttribute("red")),
+      ParseResultIs(false));
   EXPECT_THAT(ParseFeSpecularLightingPresentationAttribute(
                   rect.entityHandle(), "lighting-color",
                   parser::PropertyParseFnParams::CreateForAttribute("bogus")),
               ParseErrorIs("Invalid color 'bogus'"));
-  EXPECT_THAT(ParseFeSpecularLightingPresentationAttribute(
-                  rect.entityHandle(), "unknown",
-                  parser::PropertyParseFnParams::CreateForAttribute("red")),
-              ParseResultIs(false));
+  EXPECT_THAT(
+      ParseFeSpecularLightingPresentationAttribute(
+          rect.entityHandle(), "unknown", parser::PropertyParseFnParams::CreateForAttribute("red")),
+      ParseResultIs(false));
 }
 
 }  // namespace

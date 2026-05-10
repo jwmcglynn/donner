@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 
-#include "donner/base/RcString.h"
 #include "donner/base/Path.h"
+#include "donner/base/RcString.h"
 #include "donner/svg/properties/Property.h"
 
 namespace donner::svg::components {

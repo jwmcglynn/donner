@@ -92,8 +92,8 @@ TEST(PreserveAspectRatio, Defaults) {
 
   // With the position x/y other than 0,0 it translates to the new origin too.
   {
-    auto transform =
-        preserveAspectRatio.elementContentFromViewBoxTransform(Box2d({50, 50}, {250, 450}), viewBox);
+    auto transform = preserveAspectRatio.elementContentFromViewBoxTransform(
+        Box2d({50, 50}, {250, 450}), viewBox);
     EXPECT_THAT(transform,
                 TransformEq(Transform2d::Scale({2, 2}) * Transform2d::Translate({50, 150})));
 
@@ -130,8 +130,8 @@ TEST(PreserveAspectRatio, None) {
 
   // With the position x/y other than 0,0 it translates to the new origin.
   {
-    auto transform =
-        preserveAspectRatio.elementContentFromViewBoxTransform(Box2d({50, 50}, {250, 450}), viewBox);
+    auto transform = preserveAspectRatio.elementContentFromViewBoxTransform(
+        Box2d({50, 50}, {250, 450}), viewBox);
     EXPECT_THAT(transform,
                 TransformEq(Transform2d::Scale({2, 4}) * Transform2d::Translate({50, 50})));
 
@@ -180,8 +180,8 @@ TEST(PreserveAspectRatio, Slice) {
 
   // With the position x/y other than 0,0 it translates to the new origin too.
   {
-    auto transform =
-        preserveAspectRatio.elementContentFromViewBoxTransform(Box2d({50, 50}, {250, 450}), viewBox);
+    auto transform = preserveAspectRatio.elementContentFromViewBoxTransform(
+        Box2d({50, 50}, {250, 450}), viewBox);
     EXPECT_THAT(transform,
                 TransformEq(Transform2d::Scale({4, 4}) * Transform2d::Translate({-50, 50})));
 

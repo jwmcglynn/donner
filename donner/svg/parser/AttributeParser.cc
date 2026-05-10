@@ -398,8 +398,8 @@ void ParseUnconditionalCommonAttribute(SVGParserContext& context, SVGElement& el
 
 template <typename T>
 std::optional<ParseDiagnostic> ParseCommonAttribute(SVGParserContext& context, T& element,
-                                               const XMLQualifiedNameRef& name,
-                                               std::string_view value) {
+                                                    const XMLQualifiedNameRef& name,
+                                                    std::string_view value) {
   if constexpr (HasPathLength<T>) {
     if (name == XMLQualifiedNameRef("pathLength")) {
       // Parse the attribute as a number, and if it resolves set the length.
@@ -420,9 +420,9 @@ std::optional<ParseDiagnostic> ParseCommonAttribute(SVGParserContext& context, T
 }
 
 std::optional<ParseDiagnostic> ParseGradientCommonAttribute(SVGParserContext& context,
-                                                       SVGGradientElement& element,
-                                                       const XMLQualifiedNameRef& name,
-                                                       std::string_view value) {
+                                                            SVGGradientElement& element,
+                                                            const XMLQualifiedNameRef& name,
+                                                            std::string_view value) {
   if (name == XMLQualifiedNameRef("gradientUnits")) {
     if (value == "userSpaceOnUse") {
       element.setGradientUnits(GradientUnits::UserSpaceOnUse);
@@ -456,15 +456,16 @@ std::optional<ParseDiagnostic> ParseGradientCommonAttribute(SVGParserContext& co
 
 template <typename T>
 std::optional<ParseDiagnostic> ParseAttribute(SVGParserContext& context, T element,
-                                         const XMLQualifiedNameRef& name, std::string_view value) {
+                                              const XMLQualifiedNameRef& name,
+                                              std::string_view value) {
   return ParseCommonAttribute(context, element, name, value);
 }
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGClipPathElement>(SVGParserContext& context,
-                                                             SVGClipPathElement element,
-                                                             const XMLQualifiedNameRef& name,
-                                                             std::string_view value) {
+                                                                  SVGClipPathElement element,
+                                                                  const XMLQualifiedNameRef& name,
+                                                                  std::string_view value) {
   if (name == XMLQualifiedNameRef("clipPathUnits")) {
     if (value == "userSpaceOnUse") {
       element.setClipPathUnits(ClipPathUnits::UserSpaceOnUse);
@@ -484,9 +485,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGClipPathElement>(SVGParserConte
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGMaskElement>(SVGParserContext& context,
-                                                         SVGMaskElement element,
-                                                         const XMLQualifiedNameRef& name,
-                                                         std::string_view value) {
+                                                              SVGMaskElement element,
+                                                              const XMLQualifiedNameRef& name,
+                                                              std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -519,9 +520,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGMaskElement>(SVGParserContext& 
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFilterElement>(SVGParserContext& context,
-                                                           SVGFilterElement element,
-                                                           const XMLQualifiedNameRef& name,
-                                                           std::string_view value) {
+                                                                SVGFilterElement element,
+                                                                const XMLQualifiedNameRef& name,
+                                                                std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -563,10 +564,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFilterElement>(SVGParserContext
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEGaussianBlurElement>(SVGParserContext& context,
-                                                                   SVGFEGaussianBlurElement element,
-                                                                   const XMLQualifiedNameRef& name,
-                                                                   std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEGaussianBlurElement>(
+    SVGParserContext& context, SVGFEGaussianBlurElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -608,9 +608,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEGaussianBlurElement>(SVGParse
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEBlendElement>(SVGParserContext& context,
-                                                            SVGFEBlendElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEBlendElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -752,9 +752,9 @@ void ParseFuncAttributes(components::FEFuncComponent& comp, const XMLQualifiedNa
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncRElement>(SVGParserContext& context,
-                                                            SVGFEFuncRElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEFuncRElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
   ParseFuncAttributes(comp, name, value);
   return std::nullopt;
@@ -762,9 +762,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncRElement>(SVGParserContex
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncGElement>(SVGParserContext& context,
-                                                            SVGFEFuncGElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEFuncGElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
   ParseFuncAttributes(comp, name, value);
   return std::nullopt;
@@ -772,9 +772,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncGElement>(SVGParserContex
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncBElement>(SVGParserContext& context,
-                                                            SVGFEFuncBElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEFuncBElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
   ParseFuncAttributes(comp, name, value);
   return std::nullopt;
@@ -782,19 +782,18 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncBElement>(SVGParserContex
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncAElement>(SVGParserContext& context,
-                                                            SVGFEFuncAElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEFuncAElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
   ParseFuncAttributes(comp, name, value);
   return std::nullopt;
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEColorMatrixElement>(SVGParserContext& context,
-                                                                  SVGFEColorMatrixElement element,
-                                                                  const XMLQualifiedNameRef& name,
-                                                                  std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEColorMatrixElement>(
+    SVGParserContext& context, SVGFEColorMatrixElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -841,10 +840,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEColorMatrixElement>(SVGParser
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFECompositeElement>(SVGParserContext& context,
-                                                                SVGFECompositeElement element,
-                                                                const XMLQualifiedNameRef& name,
-                                                                std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFECompositeElement>(
+    SVGParserContext& context, SVGFECompositeElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -890,10 +888,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFECompositeElement>(SVGParserCo
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEDropShadowElement>(SVGParserContext& context,
-                                                                 SVGFEDropShadowElement element,
-                                                                 const XMLQualifiedNameRef& name,
-                                                                 std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEDropShadowElement>(
+    SVGParserContext& context, SVGFEDropShadowElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -935,9 +932,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEDropShadowElement>(SVGParserC
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEFloodElement>(SVGParserContext& context,
-                                                            SVGFEFloodElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEFloodElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -951,10 +948,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFloodElement>(SVGParserContex
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEMorphologyElement>(SVGParserContext& context,
-                                                                 SVGFEMorphologyElement element,
-                                                                 const XMLQualifiedNameRef& name,
-                                                                 std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEMorphologyElement>(
+    SVGParserContext& context, SVGFEMorphologyElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -1048,9 +1044,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEDisplacementMapElement>(
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEImageElement>(SVGParserContext& context,
-                                                            SVGFEImageElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEImageElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -1129,10 +1125,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFESpecularLightingElement>(
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEDistantLightElement>(SVGParserContext& context,
-                                                                   SVGFEDistantLightElement element,
-                                                                   const XMLQualifiedNameRef& name,
-                                                                   std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEDistantLightElement>(
+    SVGParserContext& context, SVGFEDistantLightElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (name == XMLQualifiedNameRef("azimuth")) {
     auto& comp = element.entityHandle().get<components::LightSourceComponent>();
     if (auto n = ParseNumberNoSuffix(value)) {
@@ -1151,10 +1146,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEDistantLightElement>(SVGParse
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEPointLightElement>(SVGParserContext& context,
-                                                                 SVGFEPointLightElement element,
-                                                                 const XMLQualifiedNameRef& name,
-                                                                 std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEPointLightElement>(
+    SVGParserContext& context, SVGFEPointLightElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   auto& comp = element.entityHandle().get<components::LightSourceComponent>();
   if (name == XMLQualifiedNameRef("x")) {
     if (auto n = ParseNumberNoSuffix(value)) {
@@ -1176,10 +1170,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEPointLightElement>(SVGParserC
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFESpotLightElement>(SVGParserContext& context,
-                                                                SVGFESpotLightElement element,
-                                                                const XMLQualifiedNameRef& name,
-                                                                std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFESpotLightElement>(
+    SVGParserContext& context, SVGFESpotLightElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   auto& comp = element.entityHandle().get<components::LightSourceComponent>();
   if (name == XMLQualifiedNameRef("x")) {
     if (auto n = ParseNumberNoSuffix(value)) {
@@ -1312,10 +1305,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFETurbulenceElement>(SVGParserContext& context,
-                                                                 SVGFETurbulenceElement element,
-                                                                 const XMLQualifiedNameRef& name,
-                                                                 std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFETurbulenceElement>(
+    SVGParserContext& context, SVGFETurbulenceElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -1367,9 +1359,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFETurbulenceElement>(SVGParserC
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFETileElement>(SVGParserContext& context,
-                                                           SVGFETileElement element,
-                                                           const XMLQualifiedNameRef& name,
-                                                           std::string_view value) {
+                                                                SVGFETileElement element,
+                                                                const XMLQualifiedNameRef& name,
+                                                                std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -1383,9 +1375,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFETileElement>(SVGParserContext
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEOffsetElement>(SVGParserContext& context,
-                                                             SVGFEOffsetElement element,
-                                                             const XMLQualifiedNameRef& name,
-                                                             std::string_view value) {
+                                                                  SVGFEOffsetElement element,
+                                                                  const XMLQualifiedNameRef& name,
+                                                                  std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -1407,9 +1399,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEOffsetElement>(SVGParserConte
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeElement>(SVGParserContext& context,
-                                                            SVGFEMergeElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGFEMergeElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     return std::nullopt;
   } else if (ParseFilterPrimitiveAttributes(element, name, value)) {
@@ -1422,10 +1414,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeElement>(SVGParserContex
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeNodeElement>(SVGParserContext& context,
-                                                                SVGFEMergeNodeElement element,
-                                                                const XMLQualifiedNameRef& name,
-                                                                std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeNodeElement>(
+    SVGParserContext& context, SVGFEMergeNodeElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (name == XMLQualifiedNameRef("in")) {
     element.entityHandle().get<components::FEMergeNodeComponent>().in = ParseFilterInput(value);
   } else {
@@ -1437,9 +1428,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEMergeNodeElement>(SVGParserCo
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGImageElement>(SVGParserContext& context,
-                                                          SVGImageElement element,
-                                                          const XMLQualifiedNameRef& name,
-                                                          std::string_view value) {
+                                                               SVGImageElement element,
+                                                               const XMLQualifiedNameRef& name,
+                                                               std::string_view value) {
   if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(value);
   } else if (name == XMLQualifiedNameRef("preserveAspectRatio")) {
@@ -1459,9 +1450,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGImageElement>(SVGParserContext&
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGLineElement>(SVGParserContext& context,
-                                                         SVGLineElement element,
-                                                         const XMLQualifiedNameRef& name,
-                                                         std::string_view value) {
+                                                              SVGLineElement element,
+                                                              const XMLQualifiedNameRef& name,
+                                                              std::string_view value) {
   if (name == XMLQualifiedNameRef("x1")) {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setX1(length.value());
@@ -1486,10 +1477,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGLineElement>(SVGParserContext& 
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGLinearGradientElement>(SVGParserContext& context,
-                                                                   SVGLinearGradientElement element,
-                                                                   const XMLQualifiedNameRef& name,
-                                                                   std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGLinearGradientElement>(
+    SVGParserContext& context, SVGLinearGradientElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (name == XMLQualifiedNameRef("x1")) {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setX1(length.value());
@@ -1515,9 +1505,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGLinearGradientElement>(SVGParse
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGPatternElement>(SVGParserContext& context,
-                                                            SVGPatternElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGPatternElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -1555,9 +1545,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGPatternElement>(SVGParserContex
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGPolygonElement>(SVGParserContext& context,
-                                                            SVGPolygonElement element,
-                                                            const XMLQualifiedNameRef& name,
-                                                            std::string_view value) {
+                                                                 SVGPolygonElement element,
+                                                                 const XMLQualifiedNameRef& name,
+                                                                 std::string_view value) {
   if (name == XMLQualifiedNameRef("points")) {
     auto pointsResult = PointsListParser::Parse(value);
 
@@ -1578,9 +1568,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGPolygonElement>(SVGParserContex
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGPolylineElement>(SVGParserContext& context,
-                                                             SVGPolylineElement element,
-                                                             const XMLQualifiedNameRef& name,
-                                                             std::string_view value) {
+                                                                  SVGPolylineElement element,
+                                                                  const XMLQualifiedNameRef& name,
+                                                                  std::string_view value) {
   if (name == XMLQualifiedNameRef("points")) {
     auto pointsResult = PointsListParser::Parse(value);
 
@@ -1600,10 +1590,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGPolylineElement>(SVGParserConte
 }
 
 template <>
-std::optional<ParseDiagnostic> ParseAttribute<SVGRadialGradientElement>(SVGParserContext& context,
-                                                                   SVGRadialGradientElement element,
-                                                                   const XMLQualifiedNameRef& name,
-                                                                   std::string_view value) {
+std::optional<ParseDiagnostic> ParseAttribute<SVGRadialGradientElement>(
+    SVGParserContext& context, SVGRadialGradientElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
   if (name == XMLQualifiedNameRef("cx")) {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setCx(length.value());
@@ -1637,9 +1626,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGRadialGradientElement>(SVGParse
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGSVGElement>(SVGParserContext& context,
-                                                        SVGSVGElement element,
-                                                        const XMLQualifiedNameRef& name,
-                                                        std::string_view value) {
+                                                             SVGSVGElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
   if (ParseViewBoxPreserveAspectRatio(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -1654,9 +1643,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGSVGElement>(SVGParserContext& c
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGStopElement>(SVGParserContext& context,
-                                                         SVGStopElement element,
-                                                         const XMLQualifiedNameRef& name,
-                                                         std::string_view value) {
+                                                              SVGStopElement element,
+                                                              const XMLQualifiedNameRef& name,
+                                                              std::string_view value) {
   if (name == XMLQualifiedNameRef("offset")) {
     if (auto maybeOffset = ParseStopOffset(context, value)) {
       element.setOffset(maybeOffset.value());
@@ -1670,9 +1659,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGStopElement>(SVGParserContext& 
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGStyleElement>(SVGParserContext& context,
-                                                          SVGStyleElement element,
-                                                          const XMLQualifiedNameRef& name,
-                                                          std::string_view value) {
+                                                               SVGStyleElement element,
+                                                               const XMLQualifiedNameRef& name,
+                                                               std::string_view value) {
   if (name == XMLQualifiedNameRef("type")) {
     if (value.empty() ||
         StringUtils::Equals<StringComparison::IgnoreCase>(value, std::string_view("text/css"))) {
@@ -1693,9 +1682,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGStyleElement>(SVGParserContext&
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGUseElement>(SVGParserContext& context,
-                                                        SVGUseElement element,
-                                                        const XMLQualifiedNameRef& name,
-                                                        std::string_view value) {
+                                                             SVGUseElement element,
+                                                             const XMLQualifiedNameRef& name,
+                                                             std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -1710,9 +1699,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGUseElement>(SVGParserContext& c
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGMarkerElement>(SVGParserContext& context,
-                                                           SVGMarkerElement element,
-                                                           const XMLQualifiedNameRef& name,
-                                                           std::string_view value) {
+                                                                SVGMarkerElement element,
+                                                                const XMLQualifiedNameRef& name,
+                                                                std::string_view value) {
   if (ParseViewBoxPreserveAspectRatio(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -1780,9 +1769,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGMarkerElement>(SVGParserContext
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGSymbolElement>(SVGParserContext& context,
-                                                           SVGSymbolElement element,
-                                                           const XMLQualifiedNameRef& name,
-                                                           std::string_view value) {
+                                                                SVGSymbolElement element,
+                                                                const XMLQualifiedNameRef& name,
+                                                                std::string_view value) {
   if (ParseXYWidthHeight(context, element, name, value)) {
     // Warning already added if there was an error.
     return std::nullopt;
@@ -1823,9 +1812,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGSymbolElement>(SVGParserContext
  */
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGTextElement>(SVGParserContext& context,
-                                                         SVGTextElement element,
-                                                         const XMLQualifiedNameRef& name,
-                                                         std::string_view value) {
+                                                              SVGTextElement element,
+                                                              const XMLQualifiedNameRef& name,
+                                                              std::string_view value) {
   if (name == XMLQualifiedNameRef("textLength")) {
     if (auto length = ParseLengthAttribute(context, value)) {
       element.setTextLength(length);
@@ -1908,9 +1897,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTextElement>(SVGParserContext& 
  */
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGTSpanElement>(SVGParserContext& context,
-                                                          SVGTSpanElement element,
-                                                          const XMLQualifiedNameRef& name,
-                                                          std::string_view value) {
+                                                               SVGTSpanElement element,
+                                                               const XMLQualifiedNameRef& name,
+                                                               std::string_view value) {
   if (name == XMLQualifiedNameRef("x")) {
     SmallVector<Lengthd, 1> list;
     if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
@@ -1983,9 +1972,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTSpanElement>(SVGParserContext&
  */
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGTextPathElement>(SVGParserContext& context,
-                                                             SVGTextPathElement element,
-                                                             const XMLQualifiedNameRef& name,
-                                                             std::string_view value) {
+                                                                  SVGTextPathElement element,
+                                                                  const XMLQualifiedNameRef& name,
+                                                                  std::string_view value) {
   if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
     element.setHref(RcStringOrRef(value));
   } else if (name == XMLQualifiedNameRef("startOffset")) {
@@ -2071,10 +2060,11 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTextPathElement>(SVGParserConte
 }
 
 template <size_t I = 0, typename... Types>
-std::optional<ParseDiagnostic> ParseAttributesForElement(SVGParserContext& context, SVGElement& element,
-                                                    const XMLQualifiedNameRef& name,
-                                                    std::string_view value,
-                                                    entt::type_list<Types...>) {
+std::optional<ParseDiagnostic> ParseAttributesForElement(SVGParserContext& context,
+                                                         SVGElement& element,
+                                                         const XMLQualifiedNameRef& name,
+                                                         std::string_view value,
+                                                         entt::type_list<Types...>) {
   if constexpr (I != sizeof...(Types)) {
     using ElementType = typename std::tuple_element<I, std::tuple<Types...>>::type;
 
@@ -2092,10 +2082,9 @@ std::optional<ParseDiagnostic> ParseAttributesForElement(SVGParserContext& conte
 
 }  // namespace
 
-std::optional<ParseDiagnostic> AttributeParser::ParseAndSetAttribute(SVGParserContext& context,
-                                                                SVGElement& element,
-                                                                const XMLQualifiedNameRef& name,
-                                                                std::string_view value) noexcept {
+std::optional<ParseDiagnostic> AttributeParser::ParseAndSetAttribute(
+    SVGParserContext& context, SVGElement& element, const XMLQualifiedNameRef& name,
+    std::string_view value) noexcept {
   return ParseAttributesForElement(context, element, name, value, AllSVGElements());
 }
 

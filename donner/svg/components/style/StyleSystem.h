@@ -22,8 +22,7 @@ public:
    * @param warningSink Containing any warnings found
    * @returns Computed style component for the entity
    */
-  const ComputedStyleComponent& computeStyle(EntityHandle handle,
-                                             ParseWarningSink& warningSink);
+  const ComputedStyleComponent& computeStyle(EntityHandle handle, ParseWarningSink& warningSink);
 
   /**
    * Computes the style for all entities in the registry.

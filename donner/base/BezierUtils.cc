@@ -62,8 +62,7 @@ void approximateCubicWithQuadraticsImpl(const Vector2d& p0, const Vector2d& p1, 
 
   // Split at t=0.5 and recurse.
   auto [left, right] = SplitCubic(p0, p1, p2, p3, 0.5);
-  approximateCubicWithQuadraticsImpl(left[0], left[1], left[2], left[3], tolerance, out,
-                                     depth + 1);
+  approximateCubicWithQuadraticsImpl(left[0], left[1], left[2], left[3], tolerance, out, depth + 1);
   approximateCubicWithQuadraticsImpl(right[0], right[1], right[2], right[3], tolerance, out,
                                      depth + 1);
 }
@@ -168,11 +167,8 @@ std::pair<std::array<Vector2d, 3>, std::array<Vector2d, 3>> SplitQuadratic(const
   return {std::array<Vector2d, 3>{p0, q0, m}, std::array<Vector2d, 3>{m, q1, p2}};
 }
 
-std::pair<std::array<Vector2d, 4>, std::array<Vector2d, 4>> SplitCubic(const Vector2d& p0,
-                                                                       const Vector2d& p1,
-                                                                       const Vector2d& p2,
-                                                                       const Vector2d& p3,
-                                                                       double t) {
+std::pair<std::array<Vector2d, 4>, std::array<Vector2d, 4>> SplitCubic(
+    const Vector2d& p0, const Vector2d& p1, const Vector2d& p2, const Vector2d& p3, double t) {
   // Level 1: interpolate between adjacent control points.
   const Vector2d q0 = Lerp2d(p0, p1, t);
   const Vector2d q1 = Lerp2d(p1, p2, t);

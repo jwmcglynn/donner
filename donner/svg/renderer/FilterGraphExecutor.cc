@@ -47,8 +47,8 @@ std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
       // edge-clamped bilinear sampling from extending the image beyond its placement
       // rectangle (important for feImage with preserveAspectRatio where the image doesn't
       // fill the full subregion).
-      if (sourceX < -0.5 || sourceX >= sourceWidth - 0.5 ||
-          sourceY < -0.5 || sourceY >= sourceHeight - 0.5) {
+      if (sourceX < -0.5 || sourceX >= sourceWidth - 0.5 || sourceY < -0.5 ||
+          sourceY >= sourceHeight - 0.5) {
         continue;
       }
       const int x0 = static_cast<int>(std::floor(sourceX));
@@ -310,16 +310,16 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
   // Detect rotation/skew: if the transform has off-diagonal elements, subregion clipping inside
   // the filter graph needs per-pixel point-in-rect testing to avoid AABB overflow.
-  const bool hasRotation = !NearZero(deviceFromFilter.data[1], 1e-6) ||
-                           !NearZero(deviceFromFilter.data[2], 1e-6);
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
   if (hasRotation && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
     const Transform2d inv = deviceFromFilter.inverse();
     graph.filterFromDevice = tiny_skia::filter::AffineTransform{
         inv.data[0], inv.data[1], inv.data[2], inv.data[3], inv.data[4], inv.data[5]};
     if (filterRegion.has_value()) {
-      graph.userSpaceFilterRegion = tiny_skia::filter::PixelRect{
-          filterRegion->topLeft.x, filterRegion->topLeft.y,
-          filterRegion->width(), filterRegion->height()};
+      graph.userSpaceFilterRegion =
+          tiny_skia::filter::PixelRect{filterRegion->topLeft.x, filterRegion->topLeft.y,
+                                       filterRegion->width(), filterRegion->height()};
     }
   }
 
@@ -363,8 +363,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
       // Store user-space subregion for rotation-aware clipping.
       if (graph.filterFromDevice.has_value()) {
-        graphNode.userSpaceSubregion =
-            tiny_skia::filter::PixelRect{ux, uy, uw, uh};
+        graphNode.userSpaceSubregion = tiny_skia::filter::PixelRect{ux, uy, uw, uh};
       }
     }
 
@@ -572,23 +571,25 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                 //   fragment pixel → (÷ viewBoxScale) → document user space
                 //   → (+ filterRegion.topLeft) → host user space
                 //   → (× deviceFromFilter) → device pixels
-                const Transform2d viewBoxScaleInv = Transform2d::Scale(
-                    NearZero(filterGraph.userToPixelScale.x, 1e-12) ? 1.0
-                        : 1.0 / filterGraph.userToPixelScale.x,
-                    NearZero(filterGraph.userToPixelScale.y, 1e-12) ? 1.0
-                        : 1.0 / filterGraph.userToPixelScale.y);
+                const Transform2d viewBoxScaleInv =
+                    Transform2d::Scale(NearZero(filterGraph.userToPixelScale.x, 1e-12)
+                                           ? 1.0
+                                           : 1.0 / filterGraph.userToPixelScale.x,
+                                       NearZero(filterGraph.userToPixelScale.y, 1e-12)
+                                           ? 1.0
+                                           : 1.0 / filterGraph.userToPixelScale.y);
                 const Transform2d regionOffset = Transform2d::Translate(
                     primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
                 const Transform2d deviceFromFragment =
                     viewBoxScaleInv * regionOffset * deviceFromFilter;
 
                 image.pixels = RasterizeTransformedImagePremultiplied(
-                    premultiplied, primitive.imageWidth, primitive.imageHeight,
-                    deviceFromFragment, std::nullopt, std::nullopt, w, h);
+                    premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
+                    std::nullopt, std::nullopt, w, h);
                 image.width = w;
                 image.height = h;
-                image.targetRect = tiny_skia::filter::PixelRect{
-                    0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
+                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
+                                                                static_cast<double>(h)};
               } else if (primitive.isFragmentReference) {
                 image.pixels = premultiplied;
                 image.width = primitive.imageWidth;
@@ -599,18 +600,18 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                     primitive.fragmentRegionTopLeft.x * filterGraph.userToPixelScale.x;
                 const double deviceOffsetY =
                     primitive.fragmentRegionTopLeft.y * filterGraph.userToPixelScale.y;
-                image.targetRect = tiny_skia::filter::PixelRect{deviceOffsetX, deviceOffsetY,
-                    static_cast<double>(primitive.imageWidth),
+                image.targetRect = tiny_skia::filter::PixelRect{
+                    deviceOffsetX, deviceOffsetY, static_cast<double>(primitive.imageWidth),
                     static_cast<double>(primitive.imageHeight)};
               } else if (graph.filterFromDevice.has_value()) {
                 const Box2d imageBox =
                     Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
                 const Box2d userSubregion = graphNode.userSpaceSubregion.has_value()
-                                               ? Box2d::FromXYWH(graphNode.userSpaceSubregion->x,
-                                                                graphNode.userSpaceSubregion->y,
-                                                                graphNode.userSpaceSubregion->w,
-                                                                graphNode.userSpaceSubregion->h)
-                                               : filterRegion.value_or(primitiveUnitsBounds);
+                                                ? Box2d::FromXYWH(graphNode.userSpaceSubregion->x,
+                                                                  graphNode.userSpaceSubregion->y,
+                                                                  graphNode.userSpaceSubregion->w,
+                                                                  graphNode.userSpaceSubregion->h)
+                                                : filterRegion.value_or(primitiveUnitsBounds);
                 const Transform2d filterFromImage =
                     primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion,
                                                                                      imageBox);
@@ -621,8 +622,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                     userSubregion, deviceFromFilter.inverse(), w, h);
                 image.width = w;
                 image.height = h;
-                image.targetRect = tiny_skia::filter::PixelRect{
-                    0.0, 0.0, static_cast<double>(w), static_cast<double>(h)};
+                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
+                                                                static_cast<double>(h)};
               } else {
                 image.pixels = premultiplied;
                 image.width = primitive.imageWidth;
@@ -656,8 +657,7 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                 image.targetRect = tiny_skia::filter::PixelRect{
                     std::min(topLeft.x, bottomRight.x) + regionX,
                     std::min(topLeft.y, bottomRight.y) + regionY,
-                    std::abs(bottomRight.x - topLeft.x),
-                    std::abs(bottomRight.y - topLeft.y)};
+                    std::abs(bottomRight.x - topLeft.x), std::abs(bottomRight.y - topLeft.y)};
               }
             }
             graphNode.primitive = std::move(image);

@@ -26,16 +26,16 @@ namespace donner::editor::sandbox {
 
 /// Outcome of a single render invocation on `SandboxHost`.
 enum class SandboxStatus {
-  kOk,            ///< Child exited 0 and the replay consumed the stream cleanly.
-  kSpawnFailed,   ///< `posix_spawn` or pipe setup failed before the child ran.
-  kWriteFailed,   ///< Host could not deliver the full SVG payload to the child.
-  kReadFailed,    ///< Host could not read stdout/stderr from the child.
-  kParseError,    ///< Child returned `kExitParseError` — malformed SVG.
-  kUsageError,    ///< Child returned `kExitUsageError` — bad argv/dimensions.
-  kRenderError,   ///< Child returned `kExitRenderError` — encoder bailed out.
-  kCrashed,       ///< Child died via signal (SIGSEGV, SIGABRT, ...).
-  kUnknownExit,   ///< Child exited with an unrecognized non-zero code.
-  kWireMalformed, ///< Child exited 0 but its wire stream failed to decode.
+  kOk,             ///< Child exited 0 and the replay consumed the stream cleanly.
+  kSpawnFailed,    ///< `posix_spawn` or pipe setup failed before the child ran.
+  kWriteFailed,    ///< Host could not deliver the full SVG payload to the child.
+  kReadFailed,     ///< Host could not read stdout/stderr from the child.
+  kParseError,     ///< Child returned `kExitParseError` — malformed SVG.
+  kUsageError,     ///< Child returned `kExitUsageError` — bad argv/dimensions.
+  kRenderError,    ///< Child returned `kExitRenderError` — encoder bailed out.
+  kCrashed,        ///< Child died via signal (SIGSEGV, SIGABRT, ...).
+  kUnknownExit,    ///< Child exited with an unrecognized non-zero code.
+  kWireMalformed,  ///< Child exited 0 but its wire stream failed to decode.
 };
 
 /// Result payload for a render call. Fields are populated according to

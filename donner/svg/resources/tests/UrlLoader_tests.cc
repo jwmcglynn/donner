@@ -131,8 +131,8 @@ TEST(UrlLoader, DetectsSvgMimeType) {
   UrlLoader urlLoader(loader);
   auto result = urlLoader.fromUri("icon.svg");
 
-  EXPECT_THAT(result,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+  EXPECT_THAT(result, VariantWith<UrlLoader::Result>(
+                          Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
 }
 
 /// @test that MIME type is detected from .svgz file extension.
@@ -142,8 +142,8 @@ TEST(UrlLoader, DetectsSvgzMimeType) {
   UrlLoader urlLoader(loader);
   auto result = urlLoader.fromUri("icon.svgz");
 
-  EXPECT_THAT(result,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+  EXPECT_THAT(result, VariantWith<UrlLoader::Result>(
+                          Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
 }
 
 /// @test that MIME type is detected from .png file extension.
@@ -164,8 +164,8 @@ TEST(UrlLoader, DetectsJpegMimeType) {
   UrlLoader urlLoader(loader);
   auto result = urlLoader.fromUri("photo.jpg");
 
-  EXPECT_THAT(result,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/jpeg"))));
+  EXPECT_THAT(result, VariantWith<UrlLoader::Result>(
+                          Field(&UrlLoader::Result::mimeType, Eq("image/jpeg"))));
 }
 
 /// @test that MIME type detection is case-insensitive.
@@ -175,8 +175,8 @@ TEST(UrlLoader, MimeTypeDetectionCaseInsensitive) {
   UrlLoader urlLoader(loader);
   auto result = urlLoader.fromUri("icon.SVG");
 
-  EXPECT_THAT(result,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+  EXPECT_THAT(result, VariantWith<UrlLoader::Result>(
+                          Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
 }
 
 /// @test that MIME type detection ignores query strings and fragments in external URLs.
@@ -187,12 +187,12 @@ TEST(UrlLoader, MimeTypeDetectionIgnoresQueryAndFragment) {
   UrlLoader urlLoader(loader);
 
   auto result1 = urlLoader.fromUri("icon.svg?v=2");
-  EXPECT_THAT(result1,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+  EXPECT_THAT(result1, VariantWith<UrlLoader::Result>(
+                           Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
 
   auto result2 = urlLoader.fromUri("icon.svg#element");
-  EXPECT_THAT(result2,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
+  EXPECT_THAT(result2, VariantWith<UrlLoader::Result>(
+                           Field(&UrlLoader::Result::mimeType, Eq("image/svg+xml"))));
 }
 
 /// @test that unknown file extensions produce an empty MIME type.
@@ -201,8 +201,7 @@ TEST(UrlLoader, UnknownExtensionEmptyMimeType) {
   UrlLoader urlLoader(loader);
   auto result = urlLoader.fromUri("test.txt");
 
-  EXPECT_THAT(result,
-              VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq(""))));
+  EXPECT_THAT(result, VariantWith<UrlLoader::Result>(Field(&UrlLoader::Result::mimeType, Eq(""))));
 }
 
 }  // namespace donner::svg

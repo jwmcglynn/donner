@@ -50,7 +50,7 @@ RendererBitmap MakeBlackBitmap(int width, int height) {
 // Sample the bitmap using TerminalImageViewer and return which sub-pixels are blue.
 // Returns a 2D grid of booleans indexed as [subY][subX].
 std::vector<std::vector<bool>> SampleSubPixelColors(const RendererBitmap& bmp,
-                                                     const SampledImageInfo& info) {
+                                                    const SampledImageInfo& info) {
   TerminalImageViewerConfig config;
   config.pixelMode = TerminalPixelMode::kQuarterPixel;
   config.autoScale = false;
@@ -58,8 +58,7 @@ std::vector<std::vector<bool>> SampleSubPixelColors(const RendererBitmap& bmp,
   // scale = (columns * 2) / imageWidth (derived from sampler's formula).
   config.scale = static_cast<double>(info.columns * 2) / static_cast<double>(bmp.dimensions.x);
   config.verticalScaleFactor =
-      static_cast<double>(info.rows * 2) /
-      (static_cast<double>(bmp.dimensions.y) * config.scale);
+      static_cast<double>(info.rows * 2) / (static_cast<double>(bmp.dimensions.y) * config.scale);
 
   TerminalImageView view;
   view.data = std::span<const uint8_t>(bmp.pixels.data(), bmp.pixels.size());

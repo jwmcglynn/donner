@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGFEBlendElement.h"
 #include "donner/svg/SVGFEColorMatrixElement.h"
 #include "donner/svg/SVGFEComponentTransferElement.h"
@@ -26,7 +27,6 @@
 #include "donner/svg/SVGFESpotLightElement.h"
 #include "donner/svg/SVGFETileElement.h"
 #include "donner/svg/SVGFETurbulenceElement.h"
-#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -48,10 +48,8 @@ TEST(SVGFilterPrimitiveWrapperTests, TrivialWrappersInstantiate) {
       R"(<feComponentTransfer />)");
   ExpectExperimentalElementInstantiates<SVGFECompositeElement>(R"(<feComposite />)");
   ExpectExperimentalElementInstantiates<SVGFEConvolveMatrixElement>(R"(<feConvolveMatrix />)");
-  ExpectExperimentalElementInstantiates<SVGFEDiffuseLightingElement>(
-      R"(<feDiffuseLighting />)");
-  ExpectExperimentalElementInstantiates<SVGFEDisplacementMapElement>(
-      R"(<feDisplacementMap />)");
+  ExpectExperimentalElementInstantiates<SVGFEDiffuseLightingElement>(R"(<feDiffuseLighting />)");
+  ExpectExperimentalElementInstantiates<SVGFEDisplacementMapElement>(R"(<feDisplacementMap />)");
   ExpectExperimentalElementInstantiates<SVGFEDistantLightElement>(R"(<feDistantLight />)");
   ExpectExperimentalElementInstantiates<SVGFEDropShadowElement>(R"(<feDropShadow />)");
   ExpectExperimentalElementInstantiates<SVGFEFloodElement>(R"(<feFlood />)");
@@ -65,8 +63,7 @@ TEST(SVGFilterPrimitiveWrapperTests, TrivialWrappersInstantiate) {
   ExpectExperimentalElementInstantiates<SVGFEMergeNodeElement>(R"(<feMergeNode />)");
   ExpectExperimentalElementInstantiates<SVGFEMorphologyElement>(R"(<feMorphology />)");
   ExpectExperimentalElementInstantiates<SVGFEPointLightElement>(R"(<fePointLight />)");
-  ExpectExperimentalElementInstantiates<SVGFESpecularLightingElement>(
-      R"(<feSpecularLighting />)");
+  ExpectExperimentalElementInstantiates<SVGFESpecularLightingElement>(R"(<feSpecularLighting />)");
   ExpectExperimentalElementInstantiates<SVGFESpotLightElement>(R"(<feSpotLight />)");
   ExpectExperimentalElementInstantiates<SVGFETileElement>(R"(<feTile />)");
   ExpectExperimentalElementInstantiates<SVGFETurbulenceElement>(R"(<feTurbulence />)");

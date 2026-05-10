@@ -66,8 +66,8 @@ inline std::ostream& operator<<(std::ostream& os, XMLTokenType type) {
  * A single token emitted by the XML tokenizer.
  */
 struct XMLToken {
-  XMLTokenType type;   ///< Token type.
-  SourceRange range;   ///< Source byte range `[start, end)`.
+  XMLTokenType type;  ///< Token type.
+  SourceRange range;  ///< Source byte range `[start, end)`.
 
   /// Convenience: extract the token's text from the original source.
   std::string_view text(std::string_view source) const {

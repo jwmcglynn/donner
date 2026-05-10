@@ -202,9 +202,7 @@ public:
   explicit WireReader(std::span<const uint8_t> bytes) : bytes_(bytes) {}
 
   [[nodiscard]] bool failed() const { return failed_; }
-  [[nodiscard]] std::size_t remaining() const {
-    return failed_ ? 0 : (bytes_.size() - pos_);
-  }
+  [[nodiscard]] std::size_t remaining() const { return failed_ ? 0 : (bytes_.size() - pos_); }
   [[nodiscard]] std::size_t position() const { return pos_; }
 
   /// Manually mark the reader failed (e.g., when a higher-level invariant is

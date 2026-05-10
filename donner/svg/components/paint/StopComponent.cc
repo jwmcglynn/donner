@@ -9,7 +9,7 @@ namespace donner::svg::components {
 namespace {
 
 std::optional<ParseDiagnostic> ParseStopColor(StopProperties& properties,
-                                         const parser::PropertyParseFnParams& params) {
+                                              const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
       [](const parser::PropertyParseFnParams& params) {
@@ -19,7 +19,7 @@ std::optional<ParseDiagnostic> ParseStopColor(StopProperties& properties,
 }
 
 std::optional<ParseDiagnostic> ParseStopOpacity(StopProperties& properties,
-                                           const parser::PropertyParseFnParams& params) {
+                                                const parser::PropertyParseFnParams& params) {
   return Parse(
       params,
       [](const parser::PropertyParseFnParams& params) {
@@ -82,7 +82,7 @@ ComputedStopComponent::ComputedStopComponent(
 }
 
 ParseResult<bool> ParseStopPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params) {
+                                                 const parser::PropertyParseFnParams& params) {
   StopProperties& properties = handle.get_or_emplace<StopComponent>().properties;
   return ParseStopPresentationAttributeImpl(name, params, properties);
 }

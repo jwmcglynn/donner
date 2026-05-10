@@ -25,7 +25,7 @@ namespace {
 using ::testing::Test;
 
 class SandboxHostTest : public Test {
- protected:
+protected:
   SandboxHost MakeHost() {
     const std::string childPath =
         Runfiles::instance().Rlocation("donner/editor/sandbox/donner_parser_child");
@@ -38,8 +38,7 @@ constexpr std::string_view kTrivialSvg =
     R"(<rect width="50" height="50" fill="red"/>)"
     R"(</svg>)";
 
-constexpr std::array<uint8_t, 8> kPngMagic = {0x89, 0x50, 0x4E, 0x47,
-                                              0x0D, 0x0A, 0x1A, 0x0A};
+constexpr std::array<uint8_t, 8> kPngMagic = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
 
 bool StartsWithPngMagic(const std::vector<uint8_t>& bytes) {
   if (bytes.size() < kPngMagic.size()) return false;
@@ -62,8 +61,7 @@ TEST_F(SandboxHostTest, ClassifiesParseErrorWithoutCrashingHost) {
 
   EXPECT_EQ(result.status, SandboxStatus::kParseError);
   EXPECT_TRUE(result.png.empty());
-  EXPECT_FALSE(result.diagnostics.empty())
-      << "expected a stderr diagnostic from the child";
+  EXPECT_FALSE(result.diagnostics.empty()) << "expected a stderr diagnostic from the child";
 }
 
 TEST_F(SandboxHostTest, EmptyInputIsParseError) {
@@ -78,8 +76,7 @@ TEST_F(SandboxHostTest, LargeSvgDoesNotDeadlockPipes) {
   // Build an SVG larger than the default 64 KiB pipe buffer so that the host's
   // background-writer thread actually has to overlap with the child's reads.
   // If the SandboxHost pipe plumbing is wrong this test wedges forever.
-  std::string svg =
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">)";
   svg.reserve(200 * 1024);
   for (int i = 0; i < 2000; ++i) {
     svg += R"(<rect x="1" y="1" width="2" height="2" fill="#010101"/>)";
@@ -120,8 +117,7 @@ TEST_F(SandboxHostTest, AdversarialBytesNeverCrashTheHost) {
   RenderResult result = host.render(payload, 100, 100);
   // We don't care whether this is kOk or kParseError — we care that we got a
   // RenderResult at all. Failing this test means the host crashed.
-  EXPECT_TRUE(result.status == SandboxStatus::kOk ||
-              result.status == SandboxStatus::kParseError ||
+  EXPECT_TRUE(result.status == SandboxStatus::kOk || result.status == SandboxStatus::kParseError ||
               result.status == SandboxStatus::kRenderError ||
               result.status == SandboxStatus::kCrashed)
       << "unexpected status " << static_cast<int>(result.status);

@@ -80,28 +80,24 @@ enum class RnrIoStatus {
 /// the file. `wireBytes` is copied verbatim after the header — callers
 /// should pass the exact bytes returned by the sandbox or serializing
 /// renderer, including the `kStreamHeader` and `kEndFrame` messages.
-[[nodiscard]] RnrIoStatus SaveRnrFile(const std::filesystem::path& path,
-                                      const RnrHeader& header,
+[[nodiscard]] RnrIoStatus SaveRnrFile(const std::filesystem::path& path, const RnrHeader& header,
                                       std::span<const uint8_t> wireBytes);
 
 /// Reads a `.rnr` file into memory. On success, `outHeader` is populated
 /// and `outWireBytes` contains the raw wire stream suitable for
 /// `ReplayingRenderer::pumpFrame`.
-[[nodiscard]] RnrIoStatus LoadRnrFile(const std::filesystem::path& path,
-                                      RnrHeader& outHeader,
+[[nodiscard]] RnrIoStatus LoadRnrFile(const std::filesystem::path& path, RnrHeader& outHeader,
                                       std::vector<uint8_t>& outWireBytes);
 
 /// Parses a recording from an in-memory buffer instead of disk. Same
 /// semantics as `LoadRnrFile`, but without any I/O — useful for unit tests
 /// and for round-tripping a recording through a memfd without hitting the
 /// filesystem.
-[[nodiscard]] RnrIoStatus ParseRnrBuffer(std::span<const uint8_t> buffer,
-                                         RnrHeader& outHeader,
+[[nodiscard]] RnrIoStatus ParseRnrBuffer(std::span<const uint8_t> buffer, RnrHeader& outHeader,
                                          std::vector<uint8_t>& outWireBytes);
 
 /// Serializes `header` + `wireBytes` into a contiguous byte vector without
 /// touching the filesystem. Always succeeds (just allocates and memcpys).
-std::vector<uint8_t> EncodeRnrBuffer(const RnrHeader& header,
-                                     std::span<const uint8_t> wireBytes);
+std::vector<uint8_t> EncodeRnrBuffer(const RnrHeader& header, std::span<const uint8_t> wireBytes);
 
 }  // namespace donner::editor::sandbox

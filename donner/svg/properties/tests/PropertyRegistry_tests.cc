@@ -830,10 +830,8 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
 
   {
     const std::pair<const char*, StrokeLinejoin> cases[] = {
-        {"miter", StrokeLinejoin::Miter},
-        {"miter-clip", StrokeLinejoin::MiterClip},
-        {"round", StrokeLinejoin::Round},
-        {"bevel", StrokeLinejoin::Bevel},
+        {"miter", StrokeLinejoin::Miter}, {"miter-clip", StrokeLinejoin::MiterClip},
+        {"round", StrokeLinejoin::Round}, {"bevel", StrokeLinejoin::Bevel},
         {"arcs", StrokeLinejoin::Arcs},
     };
 
@@ -976,22 +974,17 @@ TEST(PropertyRegistry, DisplayAnchorVisibilityOverflowAndPointerEventsErrors) {
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("pointer-events: invalid").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("pointer-events: invalid").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Invalid pointer-events"));
   }
 
   {
     const auto invalidCases = {
-        "isolation: invalid",
-        "dominant-baseline: invalid",
-        "mix-blend-mode: invalid",
-        "writing-mode: invalid",
-        "fill-rule: invalid",
-        "color-interpolation-filters: invalid",
-        "clip-rule: invalid",
-        "stroke-linecap: invalid",
+        "isolation: invalid",       "dominant-baseline: invalid",
+        "mix-blend-mode: invalid",  "writing-mode: invalid",
+        "fill-rule: invalid",       "color-interpolation-filters: invalid",
+        "clip-rule: invalid",       "stroke-linecap: invalid",
         "stroke-linejoin: invalid",
     };
 
@@ -1027,29 +1020,29 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#paint)");
     ASSERT_TRUE(registry.fill.hasValue());
-    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference("#paint"))));
+    EXPECT_THAT(registry.fill.get(),
+                Optional(PaintServer(PaintServer::ElementReference("#paint"))));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#paint) none");
     ASSERT_TRUE(registry.fill.hasValue());
-    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference("#paint"))));
+    EXPECT_THAT(registry.fill.get(),
+                Optional(PaintServer(PaintServer::ElementReference("#paint"))));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#paint) red");
     ASSERT_TRUE(registry.fill.hasValue());
-    EXPECT_THAT(registry.fill.get(),
-                Optional(PaintServer(PaintServer::ElementReference(
-                    "#paint", Color(RGBA(0xFF, 0x00, 0x00, 0xFF))))));
+    EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference(
+                                         "#paint", Color(RGBA(0xFF, 0x00, 0x00, 0xFF))))));
   }
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("fill: context-fill red").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("fill: context-fill red").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Unexpected tokens after paint server value"));
   }
@@ -1174,15 +1167,14 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: brightness( )");
-    EXPECT_DOUBLE_EQ(registry.filter.getRequiredRef().front().get<FilterEffect::Brightness>().amount,
-                     1.0);
+    EXPECT_DOUBLE_EQ(
+        registry.filter.getRequiredRef().front().get<FilterEffect::Brightness>().amount, 1.0);
   }
 
   {
-    const char* invalidFilters[] = {"brightness(invalid)", "contrast(invalid)",
-                                    "grayscale(invalid)",  "invert(invalid)",
-                                    "opacity(invalid)",    "saturate(invalid)",
-                                    "sepia(invalid)"};
+    const char* invalidFilters[] = {
+        "brightness(invalid)", "contrast(invalid)", "grayscale(invalid)", "invert(invalid)",
+        "opacity(invalid)",    "saturate(invalid)", "sepia(invalid)"};
 
     for (const char* filter : invalidFilters) {
       PropertyRegistry registry;
@@ -1232,9 +1224,12 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
 
   {
     PropertyRegistry registry;
-    EXPECT_THAT(registry.parsePresentationAttribute("filter", ""), ParseErrorIs("Invalid filter value"));
-    EXPECT_THAT(registry.parsePresentationAttribute("filter", " "), ParseErrorIs("Invalid filter value"));
-    EXPECT_THAT(registry.parsePresentationAttribute("filter", ","), ParseErrorIs("Invalid filter value"));
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", ""),
+                ParseErrorIs("Invalid filter value"));
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", " "),
+                ParseErrorIs("Invalid filter value"));
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", ","),
+                ParseErrorIs("Invalid filter value"));
     EXPECT_THAT(registry.parsePresentationAttribute("filter", "/"),
                 ParseErrorIs("Invalid filter value"));
   }
@@ -1359,21 +1354,20 @@ TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("filter: blur(1%)").at(0);
-    EXPECT_THAT(registry.parseProperty(declaration, Specificity()), ParseErrorIs("Invalid blur value"));
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Invalid blur value"));
   }
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("filter: brightness(-1)").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("filter: brightness(-1)").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Negative value not allowed for brightness()"));
   }
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("filter: drop-shadow(1px)").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("filter: drop-shadow(1px)").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Expected offset-y for drop-shadow"));
   }
@@ -1384,9 +1378,9 @@ TEST(PropertyRegistry, TransformPresentationAttribute) {
   SVGRectElement rect = SVGRectElement::Create(document);
   PropertyRegistry registry;
 
-  EXPECT_THAT(registry.parsePresentationAttribute("transform", "translate(10 20)",
-                                                  rect.entityHandle()),
-              ParseResultIs(true));
+  EXPECT_THAT(
+      registry.parsePresentationAttribute("transform", "translate(10 20)", rect.entityHandle()),
+      ParseResultIs(true));
   ASSERT_TRUE(rect.entityHandle().all_of<components::TransformComponent>());
   EXPECT_TRUE(rect.entityHandle().get<components::TransformComponent>().transform.hasValue());
 }
@@ -1464,16 +1458,14 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("filter: contrast(-1)").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("filter: contrast(-1)").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Negative value not allowed for contrast()"));
   }
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("filter: saturate(-1)").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("filter: saturate(-1)").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Negative value not allowed for saturate()"));
   }
@@ -1490,8 +1482,7 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
 TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("text-decoration: red").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("text-decoration: red").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Invalid text-decoration value"));
   }
@@ -1506,8 +1497,7 @@ TEST(PropertyRegistry, TextDecorationAndDasharrayErrorPaths) {
 
   {
     PropertyRegistry registry;
-    css::Declaration declaration =
-        css::CSS::ParseStyleAttribute("stroke-dasharray: 1px/2px").at(0);
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("stroke-dasharray: 1px/2px").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Unexpected tokens after dasharray value"));
   }

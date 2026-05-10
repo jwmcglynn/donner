@@ -18,7 +18,6 @@
 /// shortcuts) they should live here too.
 
 #include <string_view>
-
 #include <webgpu/webgpu.hpp>
 
 namespace donner::geode {

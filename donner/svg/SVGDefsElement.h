@@ -46,8 +46,8 @@ namespace donner::svg {
  * <svg id="xml_defs" width="320" height="160" style="background-color: white">
  *   <style>
  *     #xml_defs text { font-family: monospace; font-size: 12px; fill: black }
- *     #xml_defs text.label { font-family: sans-serif; font-size: 12px; font-weight: bold; fill: black }
- *     #xml_defs rect.box { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 4,3 }
+ *     #xml_defs text.label { font-family: sans-serif; font-size: 12px; font-weight: bold; fill:
+ * black } #xml_defs rect.box { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 4,3 }
  *     #xml_defs line.ref { stroke: #c33; stroke-width: 1.5; stroke-dasharray: 4,3 }
  *   </style>
  *   <defs>

@@ -109,18 +109,16 @@ protected:
 /// 2x2 canvas, one cubic Bézier filled with a solid color. Minimal-footprint
 /// regression target for cubic-to-quadratic decomposition.
 TEST_F(RendererGeodeGoldenTests, MinimalClosedCubic2x2) {
-  compareWithGeodeGolden(
-      "donner/svg/renderer/testdata/minimal_closed_cubic_2x2.svg",
-      "donner/svg/renderer/testdata/golden/minimal_closed_cubic_2x2.png",
-      ImageComparisonParams().setCanvasSize(10, 10));
+  compareWithGeodeGolden("donner/svg/renderer/testdata/minimal_closed_cubic_2x2.svg",
+                         "donner/svg/renderer/testdata/golden/minimal_closed_cubic_2x2.png",
+                         ImageComparisonParams().setCanvasSize(10, 10));
 }
 
 /// 5x3 canvas, similar to the 2x2 case.
 TEST_F(RendererGeodeGoldenTests, MinimalClosedCubic5x3) {
-  compareWithGeodeGolden(
-      "donner/svg/renderer/testdata/minimal_closed_cubic_5x3.svg",
-      "donner/svg/renderer/testdata/golden/minimal_closed_cubic_5x3.png",
-      ImageComparisonParams().setCanvasSize(10, 6));
+  compareWithGeodeGolden("donner/svg/renderer/testdata/minimal_closed_cubic_5x3.svg",
+                         "donner/svg/renderer/testdata/golden/minimal_closed_cubic_5x3.png",
+                         ImageComparisonParams().setCanvasSize(10, 6));
 }
 
 /// Large solid-colored lightning bolt path. Pure `<path fill="#faa21b">`, no
@@ -284,9 +282,8 @@ TEST_F(RendererGeodeGoldenTests, LinearGradientBasic) {
 
 /// `userSpaceOnUse` gradient with a `gradientTransform="rotate(...)"`.
 TEST_F(RendererGeodeGoldenTests, LinearGradientUserSpace) {
-  compareWithGeodeGolden(
-      "donner/svg/renderer/testdata/linear_gradient_userspace.svg",
-      "donner/svg/renderer/testdata/golden/geode/linear_gradient_userspace.png");
+  compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_userspace.svg",
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_userspace.png");
 }
 
 /// Pad / reflect / repeat spread modes rendered side by side.
@@ -319,9 +316,8 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientBasic) {
 /// `userSpaceOnUse` radial gradient with an anisotropic `gradientTransform`,
 /// verifying the `gradientFromPath` inverse is applied correctly per pixel.
 TEST_F(RendererGeodeGoldenTests, RadialGradientUserSpace) {
-  compareWithGeodeGolden(
-      "donner/svg/renderer/testdata/radial_gradient_userspace.svg",
-      "donner/svg/renderer/testdata/golden/geode/radial_gradient_userspace.png");
+  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_userspace.svg",
+                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_userspace.png");
 }
 
 /// Off-center focal point inside the outer circle. Brightest pixel should
@@ -337,10 +333,10 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientFocal) {
 /// pixel differently on the reflect/repeat strips, so allow a small diff
 /// budget instead of strict identity.
 TEST_F(RendererGeodeGoldenTests, RadialGradientSpread) {
-  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_spread.svg",
-                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_spread.png",
-                         ImageComparisonParams::WithThreshold(0.02f, 40)
-                             .includeAntiAliasingDifferences());
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/radial_gradient_spread.svg",
+      "donner/svg/renderer/testdata/golden/geode/radial_gradient_spread.png",
+      ImageComparisonParams::WithThreshold(0.02f, 40).includeAntiAliasingDifferences());
 }
 
 /// Stroke outline filled with a radial gradient — same dispatch as the
@@ -360,9 +356,8 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientStroke) {
 /// 2x2 data-URL PNG with `image-rendering: pixelated` scaled to 32×32.
 /// Nearest-neighbor sampling should produce four 16×16 solid quadrants.
 TEST_F(RendererGeodeGoldenTests, ImageDataUrlPixelated) {
-  compareWithGeodeGolden(
-      "donner/svg/renderer/testdata/image_data_url_pixelated.svg",
-      "donner/svg/renderer/testdata/golden/geode/image_data_url_pixelated.png");
+  compareWithGeodeGolden("donner/svg/renderer/testdata/image_data_url_pixelated.svg",
+                         "donner/svg/renderer/testdata/golden/geode/image_data_url_pixelated.png");
 }
 
 /// Same 2x2 PNG over an opaque white background at 50% opacity using the

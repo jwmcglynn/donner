@@ -7,8 +7,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Declaration.h"
@@ -35,7 +35,7 @@ TEST(PropertyParsingTest, ParseAlphaValueNumber) {
   decl.values.push_back(makeToken(css::Token::Number(0.5, "0.5", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
-                                               PropertyParseBehavior::AllowUserUnits);
+                                              PropertyParseBehavior::AllowUserUnits);
   auto result = ParseAlphaValue(params.components());
   ASSERT_TRUE(result.hasResult());
   EXPECT_THAT(result.result(), DoubleNear(0.5, 0.001));
@@ -46,7 +46,7 @@ TEST(PropertyParsingTest, ParseAlphaValuePercentage) {
   decl.values.push_back(makeToken(css::Token::Percentage(50.0, "50", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
-                                               PropertyParseBehavior::AllowUserUnits);
+                                              PropertyParseBehavior::AllowUserUnits);
   auto result = ParseAlphaValue(params.components());
   ASSERT_TRUE(result.hasResult());
   EXPECT_THAT(result.result(), DoubleNear(0.5, 0.001));
@@ -57,7 +57,7 @@ TEST(PropertyParsingTest, ParseAlphaValueClampedHigh) {
   decl.values.push_back(makeToken(css::Token::Number(2.0, "2.0", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
-                                               PropertyParseBehavior::AllowUserUnits);
+                                              PropertyParseBehavior::AllowUserUnits);
   auto result = ParseAlphaValue(params.components());
   ASSERT_TRUE(result.hasResult());
   EXPECT_THAT(result.result(), DoubleNear(1.0, 0.001));
@@ -68,7 +68,7 @@ TEST(PropertyParsingTest, ParseAlphaValueClampedLow) {
   decl.values.push_back(makeToken(css::Token::Number(-1.0, "-1.0", css::NumberType::Number)));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
-                                               PropertyParseBehavior::AllowUserUnits);
+                                              PropertyParseBehavior::AllowUserUnits);
   auto result = ParseAlphaValue(params.components());
   ASSERT_TRUE(result.hasResult());
   EXPECT_THAT(result.result(), DoubleNear(0.0, 0.001));
@@ -79,7 +79,7 @@ TEST(PropertyParsingTest, ParseAlphaValueInvalid) {
   decl.values.push_back(makeToken(css::Token::Ident(RcString("auto"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
-                                               PropertyParseBehavior::AllowUserUnits);
+                                              PropertyParseBehavior::AllowUserUnits);
   auto result = ParseAlphaValue(params.components());
   EXPECT_TRUE(result.hasError());
 }
@@ -176,7 +176,8 @@ TEST(PropertyParsingIntegrationTest, PresentationAttributesParsedCorrectly) {
       <rect id="r" width="50" height="50" fill="red" stroke="blue"
             opacity="0.5" stroke-width="2"/>
     </svg>
-  )", warningSink);
+  )",
+                                         warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult.result());
   auto element = document.querySelector("#r");
@@ -189,7 +190,8 @@ TEST(PropertyParsingIntegrationTest, StyleAttributeOverridesPresentation) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" width="50" height="50" fill="red" style="fill: blue"/>
     </svg>
-  )", warningSink);
+  )",
+                                         warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
   auto document = std::move(maybeResult.result());
   auto element = document.querySelector("#r");
@@ -203,7 +205,7 @@ TEST(PropertyParsingTest, ParseLengthPercentageOrAutoWithAuto) {
   decl.values.push_back(makeToken(css::Token::Ident(RcString("auto"))));
 
   auto params = PropertyParseFnParams::Create(decl, css::Specificity{},
-                                               PropertyParseBehavior::AllowUserUnits);
+                                              PropertyParseBehavior::AllowUserUnits);
   auto result = ParseLengthPercentageOrAuto(params.components(), true);
   ASSERT_TRUE(result.hasResult());
   EXPECT_FALSE(result.result().has_value());

@@ -25,8 +25,7 @@ inline uint16_t ReadUnitsPerEm(std::span<const uint8_t> data) {
       break;
     }
 
-    if (data[off] == 'h' && data[off + 1] == 'e' && data[off + 2] == 'a' &&
-        data[off + 3] == 'd') {
+    if (data[off] == 'h' && data[off + 1] == 'e' && data[off + 2] == 'a' && data[off + 3] == 'd') {
       const uint32_t tableOff = ReadBe32(data.data() + off + 8);
       if (tableOff + 20 <= data.size()) {
         return static_cast<uint16_t>((data[tableOff + 18] << 8) | data[tableOff + 19]);

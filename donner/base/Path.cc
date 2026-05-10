@@ -41,14 +41,14 @@ Box2d Path::bounds() const {
   for (const auto& cmd : commands_) {
     switch (cmd.verb) {
       case Verb::MoveTo:
-      case Verb::LineTo:
-        box.addPoint(points_[cmd.pointIndex]);
-        break;
+      case Verb::LineTo: box.addPoint(points_[cmd.pointIndex]); break;
 
       case Verb::QuadTo: {
         // Find the start point (previous command's end point or the moveTo).
-        const Vector2d& start = (cmd.pointIndex >= 2) ? points_[cmd.pointIndex - 1]
-                                                       : (cmd.pointIndex >= 1 ? points_[cmd.pointIndex - 1] : points_[0]);
+        const Vector2d& start =
+            (cmd.pointIndex >= 2)
+                ? points_[cmd.pointIndex - 1]
+                : (cmd.pointIndex >= 1 ? points_[cmd.pointIndex - 1] : points_[0]);
         const Vector2d& control = points_[cmd.pointIndex];
         const Vector2d& end = points_[cmd.pointIndex + 1];
         const Box2d qBounds = QuadraticBounds(start, control, end);
@@ -68,8 +68,7 @@ Box2d Path::bounds() const {
         break;
       }
 
-      case Verb::ClosePath:
-        break;
+      case Verb::ClosePath: break;
     }
   }
 
@@ -133,9 +132,7 @@ double measureCubicPartial(const std::array<Vector2d, 4>& pts, double tEnd, doub
   }
 
   // De Casteljau split at tEnd to get the left sub-curve [0, tEnd].
-  const auto lerp = [](const Vector2d& a, const Vector2d& b, double t) {
-    return a + (b - a) * t;
-  };
+  const auto lerp = [](const Vector2d& a, const Vector2d& b, double t) { return a + (b - a) * t; };
   const Vector2d p01 = lerp(pts[0], pts[1], tEnd);
   const Vector2d p12 = lerp(pts[1], pts[2], tEnd);
   const Vector2d p23 = lerp(pts[2], pts[3], tEnd);
@@ -188,8 +185,8 @@ Vector2d evalCubic(const std::array<Vector2d, 4>& pts, double t) {
 /// Evaluate the tangent (first derivative) of a cubic Bezier at parameter \p t.
 Vector2d evalCubicTangent(const std::array<Vector2d, 4>& pts, double t) {
   const double s = 1.0 - t;
-  return 3.0 * (s * s * (pts[1] - pts[0]) + 2.0 * s * t * (pts[2] - pts[1]) +
-                t * t * (pts[3] - pts[2]));
+  return 3.0 *
+         (s * s * (pts[1] - pts[0]) + 2.0 * s * t * (pts[2] - pts[1]) + t * t * (pts[3] - pts[2]));
 }
 
 /// Get the end point of command at index \p i.
@@ -257,8 +254,8 @@ double Path::pathLength() const {
       }
       case Verb::CurveTo: {
         const std::array<Vector2d, 4> cubicPts = {currentPoint, points_[cmd.pointIndex],
-                                                   points_[cmd.pointIndex + 1],
-                                                   points_[cmd.pointIndex + 2]};
+                                                  points_[cmd.pointIndex + 1],
+                                                  points_[cmd.pointIndex + 2]};
         totalLength += subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
         currentPoint = points_[cmd.pointIndex + 2];
         break;
@@ -342,8 +339,8 @@ Path::PointOnPath Path::pointAtArcLength(double distance) const {
 
       case Verb::CurveTo: {
         const std::array<Vector2d, 4> cubicPts = {currentPoint, points_[cmd.pointIndex],
-                                                   points_[cmd.pointIndex + 1],
-                                                   points_[cmd.pointIndex + 2]};
+                                                  points_[cmd.pointIndex + 1],
+                                                  points_[cmd.pointIndex + 2]};
         const double segLen = subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
 
         if (accumulated + segLen >= distance) {
@@ -401,18 +398,18 @@ Vector2d Path::pointAt(size_t index, double t) const {
     case Verb::QuadTo: {
       const Vector2d start = startPointOfCommand(commands_, points_, index);
       const double rev_t = 1.0 - t;
-      return rev_t * rev_t * start                          // (1 - t)^2 * P0
-             + 2.0 * rev_t * t * points_[cmd.pointIndex]    // 2(1 - t)t * P1
-             + t * t * points_[cmd.pointIndex + 1];          // t^2 * P2
+      return rev_t * rev_t * start                        // (1 - t)^2 * P0
+             + 2.0 * rev_t * t * points_[cmd.pointIndex]  // 2(1 - t)t * P1
+             + t * t * points_[cmd.pointIndex + 1];       // t^2 * P2
     }
 
     case Verb::CurveTo: {
       const Vector2d start = startPointOfCommand(commands_, points_, index);
       const double rev_t = 1.0 - t;
-      return rev_t * rev_t * rev_t * start                              // (1 - t)^3 * P0
-             + 3.0 * t * rev_t * rev_t * points_[cmd.pointIndex]        // 3t(1 - t)^2 * P1
-             + 3.0 * t * t * rev_t * points_[cmd.pointIndex + 1]        // 3t^2(1 - t) * P2
-             + t * t * t * points_[cmd.pointIndex + 2];                  // t^3 * P3
+      return rev_t * rev_t * rev_t * start                        // (1 - t)^3 * P0
+             + 3.0 * t * rev_t * rev_t * points_[cmd.pointIndex]  // 3t(1 - t)^2 * P1
+             + 3.0 * t * t * rev_t * points_[cmd.pointIndex + 1]  // 3t^2(1 - t) * P2
+             + t * t * t * points_[cmd.pointIndex + 2];           // t^3 * P3
     }
   }
 
@@ -464,10 +461,10 @@ Vector2d Path::tangentAt(size_t index, double t) const {
       const Vector2d p_2_1 = points_[cmd.pointIndex + 1] - points_[cmd.pointIndex];
       const Vector2d p_3_2 = points_[cmd.pointIndex + 2] - points_[cmd.pointIndex + 1];
 
-      const Vector2d derivative = 3.0 * (rev_t * rev_t * p_1_0        // (1 - t)^2 * (P1 - P0)
-                                          + 2.0 * t * rev_t * p_2_1   // 2t(1-t) * (P2 - P1)
-                                          + t * t * p_3_2              // t^2 * (P3 - P2)
-                                         );
+      const Vector2d derivative = 3.0 * (rev_t * rev_t * p_1_0      // (1 - t)^2 * (P1 - P0)
+                                         + 2.0 * t * rev_t * p_2_1  // 2t(1-t) * (P2 - P1)
+                                         + t * t * p_3_2            // t^2 * (P3 - P2)
+                                        );
 
       if (NearZero(derivative.lengthSquared())) {
         // First derivative is zero — degenerate curve with coincident control points.
@@ -671,8 +668,7 @@ int WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1, const
 
 /// Recursive check whether a point is within \p tolerance of a cubic Bezier.
 bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vector2d& p1,
-                          const Vector2d& p2, const Vector2d& p3, double tolerance,
-                          int depth = 0) {
+                          const Vector2d& p2, const Vector2d& p3, double tolerance, int depth = 0) {
   if (depth > kHitTestMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
     return DistanceFromPointToLine(point, p0, p3) <= tolerance;
   }
@@ -867,8 +863,7 @@ Vector2d tangentAtStart(const std::vector<Path::Command>& commands,
       }
       return Vector2d::Zero();
 
-    case Path::Verb::LineTo:
-      return points[cmd.pointIndex] - start;
+    case Path::Verb::LineTo: return points[cmd.pointIndex] - start;
 
     case Path::Verb::QuadTo: {
       // Derivative of quadratic at t=0: 2*(P1 - P0).
@@ -914,8 +909,7 @@ Vector2d tangentAtEnd(const std::vector<Path::Command>& commands,
       }
       return Vector2d::Zero();
 
-    case Path::Verb::LineTo:
-      return points[cmd.pointIndex] - start;
+    case Path::Verb::LineTo: return points[cmd.pointIndex] - start;
 
     case Path::Verb::QuadTo: {
       // Derivative of quadratic at t=1: 2*(P2 - P1).
@@ -969,7 +963,8 @@ std::vector<Path::Vertex> Path::vertices() const {
         assert(i > 0);
 
         // Place a vertex at the end of the previous segment. For open subpaths, the orientation is
-        // the direction of the line. Skip if the previous command was also a MoveTo (empty subpath).
+        // the direction of the line. Skip if the previous command was also a MoveTo (empty
+        // subpath).
         const Vector2d point = endPointOfCommand(commands_, points_, i - 1);
         const Vector2d orientation = tangentAtEnd(commands_, points_, i - 1).normalize();
         result.push_back(Vertex{point, orientation});
@@ -1082,7 +1077,6 @@ Vector2d findStartPoint(const std::vector<Path::Command>& commands,
   return points[prevCmd.pointIndex + prevPoints - 1];
 }
 
-
 }  // namespace
 
 Path Path::cubicToQuadratic(double tolerance) const {
@@ -1091,13 +1085,9 @@ Path Path::cubicToQuadratic(double tolerance) const {
   for (size_t i = 0; i < commands_.size(); ++i) {
     const auto& cmd = commands_[i];
     switch (cmd.verb) {
-      case Verb::MoveTo:
-        builder.moveTo(points_[cmd.pointIndex]);
-        break;
+      case Verb::MoveTo: builder.moveTo(points_[cmd.pointIndex]); break;
 
-      case Verb::LineTo:
-        builder.lineTo(points_[cmd.pointIndex]);
-        break;
+      case Verb::LineTo: builder.lineTo(points_[cmd.pointIndex]); break;
 
       case Verb::QuadTo:
         builder.quadTo(points_[cmd.pointIndex], points_[cmd.pointIndex + 1]);
@@ -1119,9 +1109,7 @@ Path Path::cubicToQuadratic(double tolerance) const {
         break;
       }
 
-      case Verb::ClosePath:
-        builder.closePath();
-        break;
+      case Verb::ClosePath: builder.closePath(); break;
     }
   }
 
@@ -1134,9 +1122,7 @@ Path Path::toMonotonic() const {
   for (size_t i = 0; i < commands_.size(); ++i) {
     const auto& cmd = commands_[i];
     switch (cmd.verb) {
-      case Verb::MoveTo:
-        builder.moveTo(points_[cmd.pointIndex]);
-        break;
+      case Verb::MoveTo: builder.moveTo(points_[cmd.pointIndex]); break;
 
       case Verb::LineTo:
         // Lines are always monotonic.
@@ -1198,9 +1184,7 @@ Path Path::toMonotonic() const {
         break;
       }
 
-      case Verb::ClosePath:
-        builder.closePath();
-        break;
+      case Verb::ClosePath: builder.closePath(); break;
     }
   }
 
@@ -1315,8 +1299,8 @@ void flattenQuadratic(PathBuilder& builder, const Vector2d& p0, const Vector2d& 
   flattenQuadratic(builder, right[0], right[1], right[2], tolerance, depth + 1);
 }
 
-void flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1,
-                  const Vector2d& p2, const Vector2d& p3, double tolerance, int depth) {
+void flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                  const Vector2d& p3, double tolerance, int depth) {
   const Vector2d d1 = p1 - (p0 * (2.0 / 3.0) + p3 * (1.0 / 3.0));
   const Vector2d d2 = p2 - (p0 * (1.0 / 3.0) + p3 * (2.0 / 3.0));
   const double dist = std::max(d1.length(), d2.length());
@@ -1339,13 +1323,9 @@ Path Path::flatten(double tolerance) const {
   for (size_t i = 0; i < commands_.size(); ++i) {
     const auto& cmd = commands_[i];
     switch (cmd.verb) {
-      case Verb::MoveTo:
-        builder.moveTo(points_[cmd.pointIndex]);
-        break;
+      case Verb::MoveTo: builder.moveTo(points_[cmd.pointIndex]); break;
 
-      case Verb::LineTo:
-        builder.lineTo(points_[cmd.pointIndex]);
-        break;
+      case Verb::LineTo: builder.lineTo(points_[cmd.pointIndex]); break;
 
       case Verb::QuadTo: {
         const Vector2d start = findStartPoint(commands_, points_, i);
@@ -1364,9 +1344,7 @@ Path Path::flatten(double tolerance) const {
         break;
       }
 
-      case Verb::ClosePath:
-        builder.closePath();
-        break;
+      case Verb::ClosePath: builder.closePath(); break;
     }
   }
 
@@ -1665,9 +1643,9 @@ struct FlatSubpath {
   /// vertex with the exact tangent normals derived from the original curve
   /// control points.
   struct TangentOverride {
-    size_t vertexIndex;         ///< Index into \c points.
-    Vector2d incomingNormal;    ///< Exact normal for the segment ending at this vertex.
-    Vector2d outgoingNormal;    ///< Exact normal for the segment starting at this vertex.
+    size_t vertexIndex;       ///< Index into \c points.
+    Vector2d incomingNormal;  ///< Exact normal for the segment ending at this vertex.
+    Vector2d outgoingNormal;  ///< Exact normal for the segment starting at this vertex.
   };
   std::vector<TangentOverride> tangentOverrides;
 };
@@ -1689,14 +1667,11 @@ std::vector<FlatSubpath> extractSubpaths(const Path& path) {
         current.points.push_back(moveToPoint);
         break;
 
-      case Path::Verb::LineTo:
-        current.points.push_back(path.points()[cmd.pointIndex]);
-        break;
+      case Path::Verb::LineTo: current.points.push_back(path.points()[cmd.pointIndex]); break;
 
       case Path::Verb::ClosePath:
         // Close: add closing line back to moveTo if needed.
-        if (!current.points.empty() &&
-            current.points.back().distanceSquared(moveToPoint) > 1e-20) {
+        if (!current.points.empty() && current.points.back().distanceSquared(moveToPoint) > 1e-20) {
           current.points.push_back(moveToPoint);
         }
         current.closed = true;
@@ -1724,8 +1699,8 @@ std::vector<FlatSubpath> extractSubpaths(const Path& path) {
 /// For curves, this is derived from the last control-point → endpoint vector,
 /// with fallback to earlier control points if degenerate.  Returns a non-zero
 /// vector, or (0,0) if all fallbacks are degenerate.
-Vector2d commandExitTangent(Path::Verb verb, const Vector2d& start,
-                            std::span<const Vector2d> pts, size_t pointIndex) {
+Vector2d commandExitTangent(Path::Verb verb, const Vector2d& start, std::span<const Vector2d> pts,
+                            size_t pointIndex) {
   constexpr double kDegenerateSquared = 1e-20;
   switch (verb) {
     case Path::Verb::CurveTo: {
@@ -1740,10 +1715,8 @@ Vector2d commandExitTangent(Path::Verb verb, const Vector2d& start,
       if (t.lengthSquared() > kDegenerateSquared) return t;
       return pts[pointIndex + 1] - start;  // end - start
     }
-    case Path::Verb::LineTo:
-      return pts[pointIndex] - start;
-    default:
-      return Vector2d(0, 0);
+    case Path::Verb::LineTo: return pts[pointIndex] - start;
+    default: return Vector2d(0, 0);
   }
 }
 
@@ -1751,8 +1724,8 @@ Vector2d commandExitTangent(Path::Verb verb, const Vector2d& start,
 ///
 /// For curves, this is derived from the startpoint → first-control-point vector,
 /// with fallback to later control points if degenerate.
-Vector2d commandEntryTangent(Path::Verb verb, const Vector2d& start,
-                             std::span<const Vector2d> pts, size_t pointIndex) {
+Vector2d commandEntryTangent(Path::Verb verb, const Vector2d& start, std::span<const Vector2d> pts,
+                             size_t pointIndex) {
   constexpr double kDegenerateSquared = 1e-20;
   switch (verb) {
     case Path::Verb::CurveTo: {
@@ -1767,10 +1740,8 @@ Vector2d commandEntryTangent(Path::Verb verb, const Vector2d& start,
       if (t.lengthSquared() > kDegenerateSquared) return t;
       return pts[pointIndex + 1] - start;  // end - start
     }
-    case Path::Verb::LineTo:
-      return pts[pointIndex] - start;
-    default:
-      return Vector2d(0, 0);
+    case Path::Verb::LineTo: return pts[pointIndex] - start;
+    default: return Vector2d(0, 0);
   }
 }
 
@@ -1784,8 +1755,7 @@ Vector2d commandEntryTangent(Path::Verb verb, const Vector2d& start,
 /// adjacent command is a curve, and stores the exact tangent normals in the
 /// corresponding `FlatSubpath::tangentOverrides` so that `strokeSubpath` can
 /// use them instead of the approximate segment normals.
-void computeCurveBoundaryOverrides(const Path& originalPath,
-                                   std::vector<FlatSubpath>& subpaths) {
+void computeCurveBoundaryOverrides(const Path& originalPath, std::vector<FlatSubpath>& subpaths) {
   const auto cmds = originalPath.commands();
   const auto pts = originalPath.points();
 
@@ -1830,11 +1800,8 @@ void computeCurveBoundaryOverrides(const Path& originalPath,
         endpoint = pts[cmd.pointIndex + 1];
         isCurve = true;
         break;
-      case Path::Verb::LineTo:
-        endpoint = pts[cmd.pointIndex];
-        break;
-      default:
-        break;
+      case Path::Verb::LineTo: endpoint = pts[cmd.pointIndex]; break;
+      default: break;
     }
 
     // Peek at the next command; only junctions between two drawing commands
@@ -1852,9 +1819,8 @@ void computeCurveBoundaryOverrides(const Path& originalPath,
 
         if (exitTan.lengthSquared() > kDegenerateSquared &&
             entryTan.lengthSquared() > kDegenerateSquared) {
-          boundaries.push_back(
-              {endpoint, Vector2d(-exitTan.y, exitTan.x).normalize(),
-               Vector2d(-entryTan.y, entryTan.x).normalize()});
+          boundaries.push_back({endpoint, Vector2d(-exitTan.y, exitTan.x).normalize(),
+                                Vector2d(-entryTan.y, entryTan.x).normalize()});
         }
       }
     }
@@ -1950,9 +1916,8 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     const int numSteps = std::max(16, static_cast<int>(std::ceil(halfWidth * 4.0)));
     builder.moveTo(Vector2d(p.x + halfWidth, p.y));
     for (int s = 1; s < numSteps; ++s) {
-      const double angle =
-          (static_cast<double>(s) / static_cast<double>(numSteps)) * 2.0 *
-          MathConstants<double>::kPi;
+      const double angle = (static_cast<double>(s) / static_cast<double>(numSteps)) * 2.0 *
+                           MathConstants<double>::kPi;
       builder.lineTo(
           Vector2d(p.x + std::cos(angle) * halfWidth, p.y + std::sin(angle) * halfWidth));
     }
@@ -2284,11 +2249,11 @@ FlatSubpath extractPolylineRange(const FlatSubpath& subpath, double startDist, d
 /// Dash a single subpath and emit its stroked dashes to the builder. Returns
 /// true if any dashes were emitted, false if the pattern was invalid or the
 /// subpath was too degenerate to dash.
-bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
-                         double totalPathArc, PathBuilder& builder) {
+bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, double totalPathArc,
+                         PathBuilder& builder) {
   const double totalArc = subpathLength(subpath);
-  auto maybePattern = resolveDashPattern(style.dashArray, style.dashOffset, totalArc,
-                                         totalPathArc, style.pathLength);
+  auto maybePattern = resolveDashPattern(style.dashArray, style.dashOffset, totalArc, totalPathArc,
+                                         style.pathLength);
   if (!maybePattern.has_value()) {
     return false;
   }
@@ -2667,12 +2632,8 @@ PathBuilder& PathBuilder::addCircle(const Vector2d& center, double radius) {
 PathBuilder& PathBuilder::addPath(const Path& path) {
   for (const auto& cmd : path.commands_) {
     switch (cmd.verb) {
-      case Path::Verb::MoveTo:
-        moveTo(path.points_[cmd.pointIndex]);
-        break;
-      case Path::Verb::LineTo:
-        lineTo(path.points_[cmd.pointIndex]);
-        break;
+      case Path::Verb::MoveTo: moveTo(path.points_[cmd.pointIndex]); break;
+      case Path::Verb::LineTo: lineTo(path.points_[cmd.pointIndex]); break;
       case Path::Verb::QuadTo:
         quadTo(path.points_[cmd.pointIndex], path.points_[cmd.pointIndex + 1]);
         break;
@@ -2680,9 +2641,7 @@ PathBuilder& PathBuilder::addPath(const Path& path) {
         curveTo(path.points_[cmd.pointIndex], path.points_[cmd.pointIndex + 1],
                 path.points_[cmd.pointIndex + 2]);
         break;
-      case Path::Verb::ClosePath:
-        closePath();
-        break;
+      case Path::Verb::ClosePath: closePath(); break;
     }
   }
   return *this;

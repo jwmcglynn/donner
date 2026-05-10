@@ -1,9 +1,9 @@
-#include "donner/editor/ViewportState.h"
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
+
+#include "donner/editor/ViewportState.h"
 
 namespace donner::editor {
 namespace {
@@ -18,9 +18,8 @@ namespace {
   const double dy = std::abs(actual.y - expected.y);
   if (dx > tolerance || dy > tolerance) {
     return ::testing::AssertionFailure()
-           << "actual=(" << actual.x << ", " << actual.y << ") expected=(" << expected.x
-           << ", " << expected.y << ") |dx|=" << dx << " |dy|=" << dy
-           << " tolerance=" << tolerance;
+           << "actual=(" << actual.x << ", " << actual.y << ") expected=(" << expected.x << ", "
+           << expected.y << ") |dx|=" << dx << " |dy|=" << dy << " tolerance=" << tolerance;
   }
   return ::testing::AssertionSuccess();
 }
@@ -84,8 +83,8 @@ TEST(ViewportStateTest, ResetTo100PercentMakesOneDocUnitOneScreenPixel) {
 TEST(ViewportStateTest, ScreenToDocumentRoundTripsAt100Percent) {
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
                                    Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0));
-  for (auto p : {Vector2d(0.0, 0.0), Vector2d(50.0, 70.0), Vector2d(199.0, 199.0),
-                 Vector2d(100.5, 50.25)}) {
+  for (auto p :
+       {Vector2d(0.0, 0.0), Vector2d(50.0, 70.0), Vector2d(199.0, 199.0), Vector2d(100.5, 50.25)}) {
     EXPECT_NEAR_VEC(v.screenToDocument(v.documentToScreen(p)), p, 1e-9);
   }
 }
@@ -95,15 +94,13 @@ TEST(ViewportStateTest, ScreenToDocumentRoundTripsUnderZoomAndPan) {
   // assert that round-tripping any document point through screen and
   // back lands within `1e-6` of the original.
   for (double zoom : {0.25, 0.5, 1.0, 2.0, 4.0, 16.0}) {
-    for (Vector2d focal :
-         {Vector2d(120.0, 80.0), Vector2d(0.0, 0.0), Vector2d(800.0, 600.0)}) {
+    for (Vector2d focal : {Vector2d(120.0, 80.0), Vector2d(0.0, 0.0), Vector2d(800.0, 600.0)}) {
       ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(1280.0, 720.0),
                                        Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0));
       v.zoomAround(zoom, focal);
       v.panBy(Vector2d(37.5, -12.0));
-      for (auto docPoint :
-           {Vector2d(0.0, 0.0), Vector2d(446.0, 256.0), Vector2d(892.0, 512.0),
-            Vector2d(123.4, 56.7)}) {
+      for (auto docPoint : {Vector2d(0.0, 0.0), Vector2d(446.0, 256.0), Vector2d(892.0, 512.0),
+                            Vector2d(123.4, 56.7)}) {
         EXPECT_NEAR_VEC(v.screenToDocument(v.documentToScreen(docPoint)), docPoint, 1e-6)
             << "  zoom=" << zoom << " focal=(" << focal.x << "," << focal.y << ") doc=("
             << docPoint.x << "," << docPoint.y << ")";
@@ -148,8 +145,8 @@ TEST(ViewportStateTest, ZoomAroundCursorPreservesFocalAcrossSweep) {
   ViewportState base = MakeFreshState(Vector2d::Zero(), Vector2d(1000.0, 800.0),
                                       Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0));
   for (double zoom : {0.3, 1.0, 1.5, 4.0, 12.0, 30.0}) {
-    for (Vector2d focal : {Vector2d(100.0, 200.0), Vector2d(500.0, 400.0),
-                           Vector2d(900.0, 700.0), Vector2d(0.0, 0.0)}) {
+    for (Vector2d focal : {Vector2d(100.0, 200.0), Vector2d(500.0, 400.0), Vector2d(900.0, 700.0),
+                           Vector2d(0.0, 0.0)}) {
       ViewportState v = base;
       const Vector2d docBefore = v.screenToDocument(focal);
       v.zoomAround(zoom, focal);
@@ -199,8 +196,7 @@ TEST(ViewportStateTest, PanByMovesEveryPointByDelta) {
   // A few representative document points — pan must shift their
   // on-screen positions by exactly `delta`, regardless of where they
   // are in the document.
-  for (auto docPoint :
-       {Vector2d(0.0, 0.0), Vector2d(446.0, 256.0), Vector2d(892.0, 512.0)}) {
+  for (auto docPoint : {Vector2d(0.0, 0.0), Vector2d(446.0, 256.0), Vector2d(892.0, 512.0)}) {
     const Vector2d screenBefore = v.documentToScreen(docPoint);
     ViewportState w = v;
     w.panBy(delta);
@@ -334,10 +330,9 @@ TEST(ViewportStateTest, ScreenToDocumentIsDprInvariant) {
   ViewportState v3 = v1;
   v3.devicePixelRatio = 3.0;
 
-  for (auto screenPoint : {Vector2d(100.0, 100.0), Vector2d(400.0, 300.0),
-                           Vector2d(750.5, 599.25)}) {
-    EXPECT_NEAR_VEC(v1.screenToDocument(screenPoint), v3.screenToDocument(screenPoint),
-                    1e-9);
+  for (auto screenPoint :
+       {Vector2d(100.0, 100.0), Vector2d(400.0, 300.0), Vector2d(750.5, 599.25)}) {
+    EXPECT_NEAR_VEC(v1.screenToDocument(screenPoint), v3.screenToDocument(screenPoint), 1e-9);
   }
 }
 

@@ -11,6 +11,8 @@
 ///  4. The worker thread shuts down cleanly when the renderer is destroyed,
 ///     even if a frame is still in-flight.
 
+#include "donner/editor/sandbox/PipelinedRenderer.h"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -19,10 +21,9 @@
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
-#include "donner/editor/sandbox/PipelinedRenderer.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor::sandbox {
 namespace {
@@ -105,9 +106,7 @@ TEST(PipelinedRendererTest, NewestWinsWhenQueuingSeveralFrames) {
 TEST(PipelinedRendererTest, ShutdownIsClean) {
   // Smoke test: constructing and destructing a pipeline without any frames
   // must not deadlock. Also: destructing mid-submission must not crash.
-  {
-    PipelinedRenderer idle;
-  }
+  { PipelinedRenderer idle; }
   {
     PipelinedRenderer inFlight;
     auto doc = ParseOrDie(kSimpleSvg);

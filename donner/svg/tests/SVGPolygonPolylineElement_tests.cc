@@ -1,9 +1,8 @@
-#include "donner/svg/SVGPolygonElement.h"
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGPolygonElement.h"
 #include "donner/svg/SVGPolylineElement.h"
 #include "donner/svg/core/tests/PathTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -47,21 +46,21 @@ TEST(SVGPolygonPolylineElementTests, PolylineDefaultsAndSetPoints) {
 }
 
 TEST(SVGPolygonPolylineElementTests, PolygonComputedSplineClosesPath) {
-  EXPECT_THAT(instantiateSubtreeElementAs<SVGPolygonElement>(
-                  R"(<polygon points="10,10 20,20 30,10"/>)"),
-              ComputedSplineIs(PointsAndCommandsAre(
-                  ElementsAre(Vector2d(10, 10), Vector2d(20, 20), Vector2d(30, 10)),
-                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                              Command{CommandType::LineTo, 2}, Command{CommandType::ClosePath, 0}))));
+  EXPECT_THAT(
+      instantiateSubtreeElementAs<SVGPolygonElement>(R"(<polygon points="10,10 20,20 30,10"/>)"),
+      ComputedSplineIs(PointsAndCommandsAre(
+          ElementsAre(Vector2d(10, 10), Vector2d(20, 20), Vector2d(30, 10)),
+          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                      Command{CommandType::LineTo, 2}, Command{CommandType::ClosePath, 0}))));
 }
 
 TEST(SVGPolygonPolylineElementTests, PolylineComputedSplineStaysOpen) {
-  EXPECT_THAT(instantiateSubtreeElementAs<SVGPolylineElement>(
-                  R"(<polyline points="10,10 20,20 30,10"/>)"),
-              ComputedSplineIs(PointsAndCommandsAre(
-                  ElementsAre(Vector2d(10, 10), Vector2d(20, 20), Vector2d(30, 10)),
-                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
-                              Command{CommandType::LineTo, 2}))));
+  EXPECT_THAT(
+      instantiateSubtreeElementAs<SVGPolylineElement>(R"(<polyline points="10,10 20,20 30,10"/>)"),
+      ComputedSplineIs(PointsAndCommandsAre(
+          ElementsAre(Vector2d(10, 10), Vector2d(20, 20), Vector2d(30, 10)),
+          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
+                      Command{CommandType::LineTo, 2}))));
 }
 
 }  // namespace

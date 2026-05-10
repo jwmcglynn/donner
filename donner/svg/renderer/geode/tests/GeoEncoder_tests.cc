@@ -30,7 +30,7 @@ constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4 = 256.
 /// Sharing the device avoids the Mesa llvmpipe / Intel ANV driver hang caused
 /// by accumulating many WebGPU device creations in a single process.
 class GeoEncoderTest : public ::testing::Test {
- protected:
+protected:
   /// Returns a process-wide shared GeodeDevice (created once, destroyed at exit).
   static std::shared_ptr<GeodeDevice> sharedDevice() {
     static auto device = [] {
@@ -53,8 +53,7 @@ class GeoEncoderTest : public ::testing::Test {
                                                 device_->useAlphaCoverageAA(), sampleCount);
     gradientPipeline_ = std::make_unique<GeodeGradientPipeline>(
         device_->device(), kFormat, device_->useAlphaCoverageAA(), sampleCount);
-    imagePipeline_ =
-        std::make_unique<GeodeImagePipeline>(device_->device(), kFormat, sampleCount);
+    imagePipeline_ = std::make_unique<GeodeImagePipeline>(device_->device(), kFormat, sampleCount);
 
     wgpu::TextureDescriptor td = {};
     td.label = wgpuLabel("TestTarget");
@@ -124,8 +123,8 @@ class GeoEncoderTest : public ::testing::Test {
       bool ok = false;
     } mapState;
     wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-    mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/,
-                        void* userdata1, void* /*userdata2*/) {
+    mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                        void* /*userdata2*/) {
       auto* s = static_cast<MapState*>(userdata1);
       s->ok = (status == WGPUMapAsyncStatus_Success);
       s->done = true;
@@ -138,8 +137,8 @@ class GeoEncoderTest : public ::testing::Test {
     }
     EXPECT_TRUE(mapState.ok) << "buffer map failed";
 
-    const uint8_t* mapped = static_cast<const uint8_t*>(
-        readback_.getConstMappedRange(0, kBytesPerRow * kSize));
+    const uint8_t* mapped =
+        static_cast<const uint8_t*>(readback_.getConstMappedRange(0, kBytesPerRow * kSize));
 
     // Strip the row padding (256 bytes per row → 256 bytes per row, but the
     // visible part is kSize * 4 = 256 bytes for kSize=64, so no stripping
@@ -172,7 +171,8 @@ class GeoEncoderTest : public ::testing::Test {
 
 /// Just clear and read back — simplest end-to-end test.
 TEST_F(GeoEncoderTest, ClearOnly) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 128, 255, 255));  // Half-saturated blue.
   encoder.finish();
 
@@ -188,7 +188,8 @@ TEST_F(GeoEncoderTest, ClearOnly) {
 TEST_F(GeoEncoderTest, FillRect) {
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));  // Black.
   encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -219,7 +220,8 @@ TEST_F(GeoEncoderTest, FillTriangle) {
                   .closePath()
                   .build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(0, 255, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -264,7 +266,8 @@ TEST_F(GeoEncoderTest, FillLinearGradientUserSpace) {
   params.spreadMode = 0;                    // pad
   params.stops = std::span<const LinearGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathLinearGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -308,7 +311,8 @@ TEST_F(GeoEncoderTest, FillLinearGradientRepeat) {
   params.spreadMode = 2;  // repeat
   params.stops = std::span<const LinearGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathLinearGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -350,7 +354,8 @@ TEST_F(GeoEncoderTest, FillRadialGradientConcentric) {
   params.spreadMode = 0;  // pad
   params.stops = std::span<const RadialGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathRadialGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -397,7 +402,8 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
   params.spreadMode = 0;
   params.stops = std::span<const RadialGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathRadialGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -417,7 +423,8 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
 TEST_F(GeoEncoderTest, FillCircle) {
   Path path = PathBuilder().addCircle(Vector2d(32, 32), 20).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(0, 0, 255, 255), FillRule::NonZero);
   encoder.finish();
@@ -449,7 +456,8 @@ svg::ImageResource makeMagentaImage2x2() {
 /// Verify that the destination pixels are magenta and the outside is
 /// untouched.
 TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   svg::ImageResource image = makeMagentaImage2x2();
@@ -476,7 +484,8 @@ TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
 /// opacity — the result should read back as ~(128, 0, 0, 255) over black
 /// with premultiplied source-over.
 TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   svg::ImageResource image;
@@ -501,7 +510,8 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
 /// this test shipped, future refactors that forget to re-bind the Slug
 /// fill pipeline between pipeline switches will regress here.
 TEST_F(GeoEncoderTest, FillThenImageThenFill) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   // 1) Fill a red rect covering the top half.
@@ -573,7 +583,8 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
   // one tile, the wrap logic is exercised.
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, msaaTarget_,
+                     target_);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   GeoEncoder::PatternPaint paint;
   paint.tile = tile;

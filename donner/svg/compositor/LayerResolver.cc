@@ -1,8 +1,8 @@
 #include "donner/svg/compositor/LayerResolver.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <vector>
 
@@ -21,8 +21,7 @@ struct Candidate {
 
 }  // namespace
 
-void LayerResolver::resolve(Registry& registry, uint32_t maxLayers,
-                            const ResolveOptions& options) {
+void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const ResolveOptions& options) {
   stats_ = {};
 
   // Clean up stale ComputedLayerAssignmentComponents on entities that no longer have any hints.
@@ -63,13 +62,11 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers,
         hasMandatory = true;
         continue;  // Mandatory short-circuits below.
       }
-      const bool enabled = (entry.source == HintSource::Explicit) ||
-                           (entry.source == HintSource::Interaction &&
-                            options.enableInteractionHints) ||
-                           (entry.source == HintSource::Animation &&
-                            options.enableAnimationHints) ||
-                           (entry.source == HintSource::ComplexityBucket &&
-                            options.enableComplexityBucketHints);
+      const bool enabled =
+          (entry.source == HintSource::Explicit) ||
+          (entry.source == HintSource::Interaction && options.enableInteractionHints) ||
+          (entry.source == HintSource::Animation && options.enableAnimationHints) ||
+          (entry.source == HintSource::ComplexityBucket && options.enableComplexityBucketHints);
       if (!enabled) {
         continue;
       }
@@ -102,8 +99,7 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers,
   // log and count toward `budgetExhaustions` so tests can detect the condition.
   std::sort(mandatoryCandidates.begin(), mandatoryCandidates.end(),
             [](const Candidate& a, const Candidate& b) {
-              return static_cast<std::uint32_t>(a.entity) <
-                     static_cast<std::uint32_t>(b.entity);
+              return static_cast<std::uint32_t>(a.entity) < static_cast<std::uint32_t>(b.entity);
             });
 
   // Sort contested candidates by weight descending, ties broken by entity id ascending.
@@ -113,8 +109,7 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers,
               if (a.totalWeight != b.totalWeight) {
                 return a.totalWeight > b.totalWeight;
               }
-              return static_cast<std::uint32_t>(a.entity) <
-                     static_cast<std::uint32_t>(b.entity);
+              return static_cast<std::uint32_t>(a.entity) < static_cast<std::uint32_t>(b.entity);
             });
 
   // Assignment pass.

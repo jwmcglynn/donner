@@ -10,13 +10,13 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/base/Vector2.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/DualPathVerifier.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -488,7 +488,7 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
   const Pixel farAway = getPixel(flat, 5, 5);
 
   EXPECT_LT(halo.g, 240) << "halo pixel should be tinted red by the blur (not white). got: "
-                        << halo;
+                         << halo;
   EXPECT_LT(halo.b, 240) << "halo pixel should be tinted red by the blur. got: " << halo;
   EXPECT_GT(halo.r, halo.g) << "red channel dominant in halo. got: " << halo;
   EXPECT_THAT(farAway, IsWhite()) << "far from drag, background stays white";
@@ -754,8 +754,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
 
   // Simulate 10 more drag frames with only translation changes.
   for (int i = 2; i <= 11; ++i) {
-    target->cast<SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(i * 1.0, 0.0)));
+    target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(i * 1.0, 0.0)));
     compositor.renderFrame(viewport_);
   }
 
@@ -849,7 +848,8 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
 
   // Capture the pre-mutation filter-layer bitmap pointer. An intervening
   // rasterizeLayer call would reallocate the vector and change `.data()`.
-  const uint8_t* glowDataBefore = compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+  const uint8_t* glowDataBefore =
+      compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
   ASSERT_NE(glowDataBefore, nullptr);
 
   // Simulate the mutation the editor applies on drag release: bake the drag
@@ -859,7 +859,8 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
   // Settling render.
   compositor.renderFrame(viewport_);
 
-  const uint8_t* glowDataAfter = compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+  const uint8_t* glowDataAfter =
+      compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
   EXPECT_EQ(glowDataBefore, glowDataAfter)
       << "glow filter layer must be reused across the drag-release mutation — re-rasterizing it "
          "is what the user felt as a ~2s hang on every new drag";
@@ -1078,8 +1079,10 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   std::uint64_t segment1GenBefore = 0;
   for (const auto& tile : tilesBefore) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0) segment0GenBefore = tile.generation;
-      else segment1GenBefore = tile.generation;
+      if (tile.paintOrderIndex == 0)
+        segment0GenBefore = tile.generation;
+      else
+        segment1GenBefore = tile.generation;
     }
   }
 
@@ -1093,8 +1096,10 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   std::uint64_t segment1GenAfter = 0;
   for (const auto& tile : tilesAfter) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0) segment0GenAfter = tile.generation;
-      else segment1GenAfter = tile.generation;
+      if (tile.paintOrderIndex == 0)
+        segment0GenAfter = tile.generation;
+      else
+        segment1GenAfter = tile.generation;
     }
   }
   EXPECT_EQ(segment0GenBefore, segment0GenAfter)
@@ -1437,16 +1442,14 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
   // — but only after confirming the diff is AA-noise, not a
   // cropping/shifting regression.
   EXPECT_TRUE(result.isExact())
-      << "real-splash tight-bounds pixel identity failed. Mismatch count="
-      << result.mismatchCount << " max channel diff=" << int(result.maxChannelDiff)
+      << "real-splash tight-bounds pixel identity failed. Mismatch count=" << result.mismatchCount
+      << " max channel diff=" << int(result.maxChannelDiff)
       << ". If non-zero, tight-bound bounds are cropping content the reference renders "
          "outside the computed bounds. Candidates: strokes on paths, filter regions "
          "extending beyond geometry, or clip-path-expanded bounds. Widen the padding "
          "in `rasterizeDirtyStaticSegments` or fall back to full-canvas for paths "
          "with strokes.";
 }
-
-
 
 // Minimal reproduction of the radial-gradient-in-dragged-group artifact:
 // a circle filled by a userSpaceOnUse radial gradient inside a plain
@@ -1528,9 +1531,9 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
   }
 
   EXPECT_LE(mismatchesOver5, 10)
-      << "radial-gradient circle in dragged group diverges from reference. "
-      << mismatchesOver5 << " pixels with diff>5, maxDiff=" << maxDiff << " at (" << worstX << ","
-      << worstY << "). Expected near-zero (only premul round-trip drift ≤ 3 channels).";
+      << "radial-gradient circle in dragged group diverges from reference. " << mismatchesOver5
+      << " pixels with diff>5, maxDiff=" << maxDiff << " at (" << worstX << "," << worstY
+      << "). Expected near-zero (only premul round-trip drift ≤ 3 channels).";
 }
 
 // Next hypothesis: rotated `<ellipse>` (via an element-level
@@ -1592,7 +1595,11 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseNoClip) {
                                          static_cast<int>(off.pixels[o + c])));
       }
       if (worst > 5) ++diff;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
     }
   }
   std::cerr << "[rot-ellipse] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
@@ -1653,7 +1660,11 @@ TEST_F(CompositorGoldenTest, TightBoundsGradientWithClipPathSublayer) {
                                          static_cast<int>(off.pixels[o + c])));
       }
       if (worst > 5) ++diff;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
     }
   }
   std::cerr << "[clip+grad] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
@@ -1731,7 +1742,11 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
                                          static_cast<int>(tightOff.pixels[off + c])));
       }
       if (worst > 5) ++diff;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
     }
   }
   std::cerr << "[rot-grad] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
@@ -1805,14 +1820,17 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
                                          static_cast<int>(off.pixels[o + c])));
       }
       if (worst > 5) ++diff;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
     }
   }
-  std::cerr << "[rot-ellipse+grad] tight-on vs tight-off: diff>5=" << diff
-            << " maxDiff=" << maxDiff << " at (" << worstX << "," << worstY << ")\n";
-  EXPECT_LE(diff, 10)
-      << "rotated ellipse with rotating userSpaceOnUse gradient drifted under "
-         "tight-bounded segment (likely drawEntityRange CTM composition order)";
+  std::cerr << "[rot-ellipse+grad] tight-on vs tight-off: diff>5=" << diff << " maxDiff=" << maxDiff
+            << " at (" << worstX << "," << worstY << ")\n";
+  EXPECT_LE(diff, 10) << "rotated ellipse with rotating userSpaceOnUse gradient drifted under "
+                         "tight-bounded segment (likely drawEntityRange CTM composition order)";
 }
 
 // Reproduction of the user's recorded scenario in
@@ -1846,8 +1864,7 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
     if (!orb.has_value()) {
       orb = doc.querySelector(".cls-64");
     }
-    EXPECT_TRUE(orb.has_value())
-        << "splash missing cls-64 cloud orb — has the file changed?";
+    EXPECT_TRUE(orb.has_value()) << "splash missing cls-64 cloud orb — has the file changed?";
 
     CompositorConfig config;
     config.tightBoundedSegments = tightBounds;
@@ -1883,8 +1900,8 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
     if (worst > 0) ++onVsOffDiff;
     if (worst > onVsOffMax) onVsOffMax = worst;
   }
-  std::cerr << "[repro] tight-on vs tight-off diff=" << onVsOffDiff
-            << " maxDiff=" << onVsOffMax << "\n";
+  std::cerr << "[repro] tight-on vs tight-off diff=" << onVsOffDiff << " maxDiff=" << onVsOffMax
+            << "\n";
   // Also check tight-off vs reference directly.
   int offVsRefDiff = 0;
   int offVsRefMax = 0;
@@ -1916,16 +1933,20 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
                                          static_cast<int>(reference.pixels[off + c])));
       }
       if (worst > 5) ++diffOver5;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
       if (x >= 467 && x < 527 && y >= 92 && y < 152) {
         if (worst > 5) ++cls8DiffOver5;
         if (worst > cls8MaxDiff) cls8MaxDiff = worst;
       }
     }
   }
-  std::cerr << "[repro] click-orb scenario: total diff>5=" << diffOver5
-            << " maxDiff=" << maxDiff << " at (" << worstX << "," << worstY
-            << ") | cls-8 region diff>5=" << cls8DiffOver5 << " maxDiff=" << cls8MaxDiff << "\n";
+  std::cerr << "[repro] click-orb scenario: total diff>5=" << diffOver5 << " maxDiff=" << maxDiff
+            << " at (" << worstX << "," << worstY << ") | cls-8 region diff>5=" << cls8DiffOver5
+            << " maxDiff=" << cls8MaxDiff << "\n";
   RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_compositor.png",
                                             composited.pixels, composited.dimensions.x,
                                             composited.dimensions.y);
@@ -1965,10 +1986,9 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
   }
   RendererImageIO::writeRgbaPixelsToPngFile("/tmp/splash_click_orb_heat.png", heat,
                                             composited.dimensions.x, composited.dimensions.y);
-  EXPECT_LE(diffOver5, 100)
-      << "click-then-click-orb scenario diverges from reference: " << diffOver5
-      << " px > 5ch, maxDiff=" << maxDiff << " at (" << worstX << "," << worstY
-      << "). Expected near-zero (only premul noise).";
+  EXPECT_LE(diffOver5, 100) << "click-then-click-orb scenario diverges from reference: "
+                            << diffOver5 << " px > 5ch, maxDiff=" << maxDiff << " at (" << worstX
+                            << "," << worstY << "). Expected near-zero (only premul noise).";
 }
 
 // Splash regression: dragging `#Clouds_with_gradients` must match the
@@ -2031,13 +2051,18 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
                                          static_cast<int>(reference.pixels[off + c])));
       }
       if (worst > 5) ++diffOver5;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
     }
   }
-  EXPECT_LE(diffOver5, 100)
-      << "#Clouds_with_gradients drag divergence: " << diffOver5 << " px with diff>5, maxDiff="
-      << maxDiff << " at (" << worstX << "," << worstY << "). Expected near-zero "
-                                                          "(only premul round-trip drift ≤ 3).";
+  EXPECT_LE(diffOver5, 100) << "#Clouds_with_gradients drag divergence: " << diffOver5
+                            << " px with diff>5, maxDiff=" << maxDiff << " at (" << worstX << ","
+                            << worstY
+                            << "). Expected near-zero "
+                               "(only premul round-trip drift ≤ 3).";
 }
 
 // Evolving minimal repro of the Clouds_with_gradients drag artifact.
@@ -2111,7 +2136,11 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
                                          static_cast<int>(reference.pixels[off + c])));
       }
       if (worst > 5) ++mismatchesOver5;
-      if (worst > maxDiff) { maxDiff = worst; worstX = x; worstY = y; }
+      if (worst > maxDiff) {
+        maxDiff = worst;
+        worstX = x;
+        worstY = y;
+      }
     }
   }
   std::cerr << "[DIAG ClipPathSibling] mismatchesOver5=" << mismatchesOver5
@@ -2133,9 +2162,9 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
       v.advance();
     }
   }
-  EXPECT_LE(mismatchesOver5, 10)
-      << "compositor diverges from reference: " << mismatchesOver5 << " px with diff>5, maxDiff="
-      << maxDiff << " at (" << worstX << "," << worstY << ")";
+  EXPECT_LE(mismatchesOver5, 10) << "compositor diverges from reference: " << mismatchesOver5
+                                 << " px with diff>5, maxDiff=" << maxDiff << " at (" << worstX
+                                 << "," << worstY << ")";
 }
 
 // Minimal reproduction of the two-phase Selection→ActiveDrag bug:
@@ -2170,12 +2199,11 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   // phase-1 snapshot.
 
   // Two-phase: Selection prewarm → demote → ActiveDrag re-promote.
-  ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(),
-                                       InteractionHint::Selection));
+  ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
-  ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(),
-                                       InteractionHint::ActiveDrag));
+  ASSERT_TRUE(
+      compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag));
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
 
@@ -2247,8 +2275,8 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
   int mismatchCount = 0;
   int maxDiff = 0;
   for (size_t i = 0; i < afterFlip.pixels.size(); ++i) {
-    const int diff = std::abs(static_cast<int>(afterFlip.pixels[i]) -
-                              static_cast<int>(reference.pixels[i]));
+    const int diff =
+        std::abs(static_cast<int>(afterFlip.pixels[i]) - static_cast<int>(reference.pixels[i]));
     if (diff > 0) {
       ++mismatchCount;
       maxDiff = std::max(maxDiff, diff);
@@ -2256,7 +2284,8 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
   }
   EXPECT_EQ(mismatchCount, 0)
       << "runtime toggle off did not converge to same pixels as construct-time off. "
-         "mismatchCount=" << mismatchCount << " maxDiff=" << maxDiff
+         "mismatchCount="
+      << mismatchCount << " maxDiff=" << maxDiff
       << ". If non-zero, `setTightBoundedSegmentsEnabled(false)` is not fully "
          "invalidating prior tight-bound caches — likely a missing "
          "`markAllSegmentsDirty` call in the setter.";
@@ -2319,15 +2348,14 @@ TEST_F(CompositorGoldenTest, FlatColorInsideFilteredGroup_RepeatedFrames) {
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(letter->entityHandle().entity()));
   for (int i = 0; i < 5; ++i) {
-    letter->cast<SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(i * 5.0, 0.0)));
+    letter->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(i * 5.0, 0.0)));
     compositor.renderFrame(viewport_);
   }
   const RendererBitmap flat = renderer_.takeSnapshot();
   const Pixel halo = getPixel(flat, 70, 50);
   const bool isPureWhite = halo.r >= 253 && halo.g >= 253 && halo.b >= 253;
-  EXPECT_FALSE(isPureWhite)
-      << "flat color + filter across repeated frames: halo must remain. got: " << halo;
+  EXPECT_FALSE(isPureWhite) << "flat color + filter across repeated frames: halo must remain. got: "
+                            << halo;
 }
 
 TEST_F(CompositorGoldenTest, DraggingLetterPreservesGradientFilteredGlowAcrossFrames) {
@@ -2461,10 +2489,10 @@ TEST_F(CompositorGoldenTest, DraggingLetterPreservesBackgroundGlow) {
 
   // If the glow disappears during drag, these pixels would be pure white.
   // With the glow preserved, they should be tinted red.
-  EXPECT_LT(glowHaloLeft.g, 240)
-      << "glow halo left: tinted red by blur, not pure white. got: " << glowHaloLeft;
-  EXPECT_LT(glowHaloRight.g, 240)
-      << "glow halo right: tinted red by blur, not pure white. got: " << glowHaloRight;
+  EXPECT_LT(glowHaloLeft.g, 240) << "glow halo left: tinted red by blur, not pure white. got: "
+                                 << glowHaloLeft;
+  EXPECT_LT(glowHaloRight.g, 240) << "glow halo right: tinted red by blur, not pure white. got: "
+                                  << glowHaloRight;
 }
 
 TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildren) {
@@ -2495,8 +2523,8 @@ TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildre
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
 
-  EXPECT_LE(result.maxChannelDiff, 10) << "filtered group with children must render its children: "
-                                       << result;
+  EXPECT_LE(result.maxChannelDiff, 10)
+      << "filtered group with children must render its children: " << result;
   EXPECT_LE(result.mismatchCount, result.totalPixels / 20u) << result;  // 5% AA tolerance
 }
 
@@ -2960,8 +2988,7 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   // Phase 2 — first drag frame. Promotes + rasterizes everything.
   ASSERT_TRUE(compositor.promoteEntity(letterEntity))
       << "letter failed to promote — a compositing-breaking ancestor may be in the way";
-  firstLetter->cast<SVGGraphicsElement>().setTransform(
-      Transform2d::Translate(Vector2d(4.0, 0.0)));
+  firstLetter->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   const auto t1 = Clock::now();
   compositor.renderFrame(fullViewport);
   const double firstDragFrameMs = elapsedMs(t1);
@@ -3203,8 +3230,7 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
       << "identity remap must succeed — every required entity is present";
 
   // Cached bitmaps should be preserved (same `.pixels.data()` pointer).
-  EXPECT_EQ(compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data(),
-            glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data(), glowBitmapBefore)
       << "glow filter-layer bitmap was reallocated during identity remap — cache lost";
   EXPECT_EQ(compositor.layerBitmapOf(target->entityHandle().entity()).pixels.data(),
             targetBitmapBefore)
@@ -3214,8 +3240,7 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  EXPECT_EQ(compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data(),
-            glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data(), glowBitmapBefore)
       << "glow bitmap was reallocated on the post-remap drag frame — fast path broke";
 }
 
@@ -3266,8 +3291,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapMismatchReturnsEmpty) {
   )svg");
 
   const auto remap = BuildStructuralEntityRemap(docA, docB);
-  EXPECT_TRUE(remap.empty())
-      << "remap must be empty when child counts differ";
+  EXPECT_TRUE(remap.empty()) << "remap must be empty when child counts differ";
 }
 
 // Mismatched `id` → empty remap.
@@ -3308,8 +3332,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIgnoresAttributeValueChan
   auto dragA = docA.querySelector("#drag");
   auto dragB = docB.querySelector("#drag");
   ASSERT_TRUE(dragA.has_value() && dragB.has_value());
-  EXPECT_EQ(remap.at(dragA->entityHandle().entity()),
-            dragB->entityHandle().entity());
+  EXPECT_EQ(remap.at(dragA->entityHandle().entity()), dragB->entityHandle().entity());
 }
 
 // Incremental GL-upload discipline: on the first click-to-drag after
@@ -3390,8 +3413,7 @@ TEST_F(CompositorGoldenTest, ClickToDragAdvancesAtMostThreeTileGenerations) {
     }
   }
 
-  std::cerr << "[TILES] Click-to-drag advanced " << changedCount
-            << " tile generation(s).\n";
+  std::cerr << "[TILES] Click-to-drag advanced " << changedCount << " tile generation(s).\n";
   for (const auto& name : changedNames) {
     std::cerr << "        " << name << "\n";
   }

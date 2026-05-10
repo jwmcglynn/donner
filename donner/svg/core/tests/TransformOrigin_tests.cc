@@ -18,7 +18,8 @@ TEST(TransformOriginTest, OstreamOutput) {
   }
 
   {
-    TransformOrigin origin{Lengthd(50, Lengthd::Unit::Percent), Lengthd(50, Lengthd::Unit::Percent)};
+    TransformOrigin origin{Lengthd(50, Lengthd::Unit::Percent),
+                           Lengthd(50, Lengthd::Unit::Percent)};
     EXPECT_THAT(origin, ToStringIs("50% 50%"));
   }
 

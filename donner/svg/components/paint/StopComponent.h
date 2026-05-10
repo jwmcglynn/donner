@@ -1,9 +1,8 @@
 #pragma once
 /// @file
 
-#include <optional>
-
 #include <map>
+#include <optional>
 
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/ParseWarningSink.h"
@@ -67,6 +66,6 @@ struct StopComponent {
  * Parse presentation attributes for a \ref xml_stop element, such as stop-color and stop-opacity.
  */
 ParseResult<bool> ParseStopPresentationAttribute(EntityHandle handle, std::string_view name,
-                                                  const parser::PropertyParseFnParams& params);
+                                                 const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

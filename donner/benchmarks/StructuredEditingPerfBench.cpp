@@ -58,13 +58,11 @@ constexpr std::string_view kTrivialSvg =
 
 /// A medium SVG with ~50 elements — typical of a simple diagram.
 std::string MakeMediumSvg() {
-  std::string svg =
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">)";
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">)";
   svg += "\n";
   for (int i = 0; i < 50; ++i) {
-    svg += "  <rect id=\"r" + std::to_string(i) + "\" x=\"" + std::to_string(i * 15) +
-           "\" y=\"" + std::to_string(i * 10) +
-           "\" width=\"40\" height=\"30\" fill=\"#" +
+    svg += "  <rect id=\"r" + std::to_string(i) + "\" x=\"" + std::to_string(i * 15) + "\" y=\"" +
+           std::to_string(i * 10) + "\" width=\"40\" height=\"30\" fill=\"#" +
            std::to_string(100000 + i * 1111) + "\"/>\n";
   }
   svg += "</svg>";
@@ -73,12 +71,10 @@ std::string MakeMediumSvg() {
 
 /// A large SVG with ~500 elements — stress test for the full-reparse baseline.
 std::string MakeLargeSvg() {
-  std::string svg =
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000">)";
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000">)";
   svg += "\n";
   for (int i = 0; i < 500; ++i) {
-    svg += "  <rect x=\"" + std::to_string(i % 50 * 40) + "\" y=\"" +
-           std::to_string(i / 50 * 40) +
+    svg += "  <rect x=\"" + std::to_string(i % 50 * 40) + "\" y=\"" + std::to_string(i / 50 * 40) +
            "\" width=\"35\" height=\"35\" fill=\"blue\"/>\n";
   }
   svg += "</svg>";
@@ -158,12 +154,10 @@ BENCHMARK(BM_XMLParse_Large);
 // ---------------------------------------------------------------------------
 
 static void BM_GetAttributeLocation_Trivial(benchmark::State& state) {
-  const auto offset = donner::FileOffset::Offset(
-      kTrivialSvg.find("<rect"));
+  const auto offset = donner::FileOffset::Offset(kTrivialSvg.find("<rect"));
   const donner::xml::XMLQualifiedNameRef attrName("fill");
   for (auto _ : state) {
-    auto result =
-        XMLParser::GetAttributeLocation(kTrivialSvg, offset, attrName);
+    auto result = XMLParser::GetAttributeLocation(kTrivialSvg, offset, attrName);
     benchmark::DoNotOptimize(result);
   }
   state.SetItemsProcessed(state.iterations());
@@ -211,12 +205,8 @@ static void BM_TransformToString_Matrix(benchmark::State& state) {
 BENCHMARK(BM_TransformToString_Matrix);
 
 static void BM_PathToSVGPathData_Short(benchmark::State& state) {
-  Path path = donner::PathBuilder()
-                  .moveTo({0, 0})
-                  .lineTo({100, 0})
-                  .lineTo({100, 100})
-                  .closePath()
-                  .build();
+  Path path =
+      donner::PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({100, 100}).closePath().build();
   for (auto _ : state) {
     RcString result = path.toSVGPathData();
     benchmark::DoNotOptimize(result);

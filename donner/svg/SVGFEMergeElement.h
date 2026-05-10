@@ -164,8 +164,7 @@ class SVGFEMergeElement : public SVGFilterPrimitiveStandardAttributes {
 
 protected:
   /// Create an SVGFEMergeElement wrapper from an entity.
-  explicit SVGFEMergeElement(EntityHandle handle)
-      : SVGFilterPrimitiveStandardAttributes(handle) {}
+  explicit SVGFEMergeElement(EntityHandle handle) : SVGFilterPrimitiveStandardAttributes(handle) {}
 
   /// Internal constructor to create the element on an existing \ref donner::Entity.
   static SVGFEMergeElement CreateOn(EntityHandle handle);

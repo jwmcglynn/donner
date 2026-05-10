@@ -464,9 +464,7 @@ private:
     return std::nullopt;
   }
 
-  void quadCurveTo(const Vector2d& point1, const Vector2d& end) {
-    builder_.quadTo(point1, end);
-  }
+  void quadCurveTo(const Vector2d& point1, const Vector2d& end) { builder_.quadTo(point1, end); }
 
   Vector2d reflectedControlPoint() const {
     // Per 9.5.2: https://www.w3.org/TR/SVG/paths.html#ReflectedControlPoints

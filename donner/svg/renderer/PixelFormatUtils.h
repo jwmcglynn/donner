@@ -27,8 +27,7 @@ namespace donner::svg {
 ///
 /// @param rgbaPixels Straight-alpha RGBA bytes (size must be a multiple of 4).
 /// @return Newly-allocated premul RGBA buffer of the same size.
-[[nodiscard]] std::vector<std::uint8_t> PremultiplyRgba(
-    std::span<const std::uint8_t> rgbaPixels);
+[[nodiscard]] std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels);
 
 /// Convert tightly-packed premultiplied RGBA8 to straight-alpha RGBA8,
 /// in place. Fully-opaque pixels (alpha == 255) are unchanged;
@@ -42,7 +41,6 @@ void UnpremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba);
 /// needs to preserve the input.
 ///
 /// @param rgbaPixels Premultiplied RGBA bytes (size must be a multiple of 4).
-[[nodiscard]] std::vector<std::uint8_t> UnpremultiplyRgba(
-    std::span<const std::uint8_t> rgbaPixels);
+[[nodiscard]] std::vector<std::uint8_t> UnpremultiplyRgba(std::span<const std::uint8_t> rgbaPixels);
 
 }  // namespace donner::svg

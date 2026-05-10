@@ -272,16 +272,12 @@ public:
   /**
    * Gets the data stored in the vector.
    */
-  T* data() noexcept {
-    return isLong_ ? data_.longData : shortDataPtr(0);
-  }
+  T* data() noexcept { return isLong_ ? data_.longData : shortDataPtr(0); }
 
   /**
    * Gets the data stored in the vector (const version).
    */
-  const T* data() const noexcept {
-    return isLong_ ? data_.longData : shortDataPtr(0);
-  }
+  const T* data() const noexcept { return isLong_ ? data_.longData : shortDataPtr(0); }
 
   /**
    * Returns the number of elements in the vector.
@@ -449,8 +445,8 @@ private:
     /// Inline buffer backing storage used while the vector fits within \p DefaultSize.
     struct ShortData {
       alignas(T) std::byte data[sizeof(T) * DefaultSize];  ///< Raw inline storage bytes.
-    } shortData;  //!< Data storage for small vectors.
-    T* longData;    //!< Data storage for large vectors.
+    } shortData;                                           //!< Data storage for small vectors.
+    T* longData;                                           //!< Data storage for large vectors.
 
     Data() : longData(nullptr) {}
     ~Data() {}

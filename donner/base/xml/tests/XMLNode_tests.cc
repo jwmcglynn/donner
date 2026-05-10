@@ -437,8 +437,7 @@ TEST_F(XMLNodeTests, SerializeToString_ProcessingInstruction) {
   XMLDocument doc;
   XMLNode pi = XMLNode::CreateProcessingInstructionNode(doc, "xml-stylesheet",
                                                         "type=\"text/css\" href=\"style.css\"");
-  EXPECT_EQ(pi.serializeToString(),
-            "<?xml-stylesheet type=\"text/css\" href=\"style.css\"?>");
+  EXPECT_EQ(pi.serializeToString(), "<?xml-stylesheet type=\"text/css\" href=\"style.css\"?>");
 }
 
 TEST_F(XMLNodeTests, SerializeToString_ProcessingInstructionNoValue) {
@@ -502,8 +501,7 @@ std::optional<XMLNode> FirstElementChild(const XMLNode& parent) {
 
 /// Find the next sibling that is an Element node.
 std::optional<XMLNode> NextElementSibling(const XMLNode& node) {
-  for (std::optional<XMLNode> sib = node.nextSibling(); sib.has_value();
-       sib = sib->nextSibling()) {
+  for (std::optional<XMLNode> sib = node.nextSibling(); sib.has_value(); sib = sib->nextSibling()) {
     if (sib->type() == XMLNode::Type::Element) {
       return sib;
     }

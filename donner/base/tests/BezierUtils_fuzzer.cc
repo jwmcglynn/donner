@@ -129,10 +129,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   // Exercise remaining functions for crash detection — no numerical assertions.
   // Correctness is validated by the 37 unit tests in BezierUtils_tests.cc.
-  { auto e = QuadraticYExtrema(p0, p1, p2); (void)e; }
-  { auto e = CubicYExtrema(p0, p1, p2, p3); (void)e; }
-  { auto b = QuadraticBounds(p0, p1, p2); (void)b; }
-  { auto b = CubicBounds(p0, p1, p2, p3); (void)b; }
+  {
+    auto e = QuadraticYExtrema(p0, p1, p2);
+    (void)e;
+  }
+  {
+    auto e = CubicYExtrema(p0, p1, p2, p3);
+    (void)e;
+  }
+  {
+    auto b = QuadraticBounds(p0, p1, p2);
+    (void)b;
+  }
+  {
+    auto b = CubicBounds(p0, p1, p2, p3);
+    (void)b;
+  }
 
   return 0;
 }

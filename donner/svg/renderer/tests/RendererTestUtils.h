@@ -76,15 +76,13 @@ struct AsciiImage {
         return image.matchesImpl(defaultGolden, true);
       }
 
-      std::cerr << "No golden pattern set for active backend: "
-                << ActiveRendererBackendName() << "\n";
+      std::cerr << "No golden pattern set for active backend: " << ActiveRendererBackendName()
+                << "\n";
       return false;
     }
   };
 
   BackendMatcher matchBackend() const { return BackendMatcher{*this, {}, {}}; }
-
-
 
 private:
   bool matchesImpl(std::string_view golden, bool emitDiagnostics) const {
@@ -187,13 +185,13 @@ public:
         const uint32_t a = snapshot.pixels[pixelIndex + 3];
         // Composite against white then convert to grayscale.  Transparent areas become white
         // (intensity 255) so that the sparse '.' character represents the background.
-        const uint8_t intensity = static_cast<uint8_t>(
-            ((r * a + 255u * (255u - a)) / 255u + (g * a + 255u * (255u - a)) / 255u +
-             (b * a + 255u * (255u - a)) / 255u) /
-            3u);
+        const uint8_t intensity = static_cast<uint8_t>(((r * a + 255u * (255u - a)) / 255u +
+                                                        (g * a + 255u * (255u - a)) / 255u +
+                                                        (b * a + 255u * (255u - a)) / 255u) /
+                                                       3u);
         // Use the same bucketing as the old Skia drawIntoAscii: pixel / (256 / tableSize).
-        std::size_t tableIndex = static_cast<std::size_t>(intensity) /
-                                 (256u / kGrayscaleTable.size());
+        std::size_t tableIndex =
+            static_cast<std::size_t>(intensity) / (256u / kGrayscaleTable.size());
         if (tableIndex >= kGrayscaleTable.size()) {
           tableIndex = kGrayscaleTable.size() - 1u;
         }

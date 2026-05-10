@@ -107,9 +107,9 @@ struct TerminalCell {
  * @brief Sampled representation of an image prepared for terminal rendering.
  */
 struct TerminalImage {
-  TerminalPixelMode mode;  ///< Cell glyph mode used to render the sampled image.
-  int columns;  ///< Number of terminal columns in the sampled image.
-  int rows;  ///< Number of terminal rows in the sampled image.
+  TerminalPixelMode mode;           ///< Cell glyph mode used to render the sampled image.
+  int columns;                      ///< Number of terminal columns in the sampled image.
+  int rows;                         ///< Number of terminal rows in the sampled image.
   std::vector<TerminalCell> cells;  ///< Row-major grid of sampled terminal cells.
 
   /// Return the cell at the given (\p column, \p row) position.

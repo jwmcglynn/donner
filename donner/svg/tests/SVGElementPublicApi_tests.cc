@@ -11,8 +11,8 @@
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/SVGStopElement.h"
-#include "donner/svg/SVGTextPositioningElement.h"
 #include "donner/svg/SVGTSpanElement.h"
+#include "donner/svg/SVGTextPositioningElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -130,8 +130,8 @@ TEST(SVGUseElementTest, DefaultAttributes) {
 }
 
 TEST(SVGUseElementTest, ParsedAttributes) {
-  auto frag = instantiateSubtreeElementAs<SVGUseElement>(
-      R"(<use x="10" y="20" href="#template"/>)");
+  auto frag =
+      instantiateSubtreeElementAs<SVGUseElement>(R"(<use x="10" y="20" href="#template"/>)");
 
   EXPECT_EQ(frag->x(), Lengthd(10));
   EXPECT_EQ(frag->y(), Lengthd(20));
@@ -149,8 +149,7 @@ TEST(SVGUseElementTest, SetAttributesProgrammatically) {
 }
 
 TEST(SVGUseElementTest, OptionalWidthHeight) {
-  auto frag = instantiateSubtreeElementAs<SVGUseElement>(
-      R"(<use width="50" height="60"/>)");
+  auto frag = instantiateSubtreeElementAs<SVGUseElement>(R"(<use width="50" height="60"/>)");
 
   ASSERT_TRUE(frag->width().has_value());
   EXPECT_EQ(frag->width().value(), Lengthd(50));
@@ -166,8 +165,8 @@ TEST(SVGStopElementTest, DefaultOffset) {
 }
 
 TEST(SVGStopElementTest, ParsedOffset) {
-  auto frag = instantiateSubtreeElementAs<SVGStopElement>(
-      R"(<stop offset="0.7" stop-color="red"/>)");
+  auto frag =
+      instantiateSubtreeElementAs<SVGStopElement>(R"(<stop offset="0.7" stop-color="red"/>)");
   EXPECT_THAT(frag->offset(), FloatNear(0.7f, 0.001f));
 }
 
@@ -214,8 +213,8 @@ TEST(SVGTextPositioningElementTest, SetAndGetRotate) {
 }
 
 TEST(SVGTextPositioningElementTest, ClearPositions) {
-  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(
-      R"(<tspan x="10" y="20" />)", kExperimentalOptions);
+  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(R"(<tspan x="10" y="20" />)",
+                                                            kExperimentalOptions);
 
   EXPECT_THAT(tspan->x(), Ne(std::nullopt));
   tspan->setX(std::nullopt);
@@ -223,16 +222,16 @@ TEST(SVGTextPositioningElementTest, ClearPositions) {
 }
 
 TEST(SVGTextPositioningElementTest, PositionLists) {
-  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(
-      R"(<tspan x="1 2 3" y="4 5 6" />)", kExperimentalOptions);
+  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(R"(<tspan x="1 2 3" y="4 5 6" />)",
+                                                            kExperimentalOptions);
 
   EXPECT_EQ(tspan->xList().size(), 3u);
   EXPECT_EQ(tspan->yList().size(), 3u);
 }
 
 TEST(SVGTextPositioningElementTest, RotateList) {
-  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(
-      R"(<tspan rotate="10 20 30" />)", kExperimentalOptions);
+  auto tspan = instantiateSubtreeElementAs<SVGTSpanElement>(R"(<tspan rotate="10 20 30" />)",
+                                                            kExperimentalOptions);
 
   EXPECT_EQ(tspan->rotateList().size(), 3u);
 }

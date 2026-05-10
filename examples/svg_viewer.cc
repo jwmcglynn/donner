@@ -44,7 +44,6 @@
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
-
 #include "glad/glad.h"
 
 extern "C" {
@@ -199,12 +198,10 @@ struct ViewerState {
 /// Build a `TextEditor::ErrorMarkers` map from a parser diagnostic.
 /// `TextEditor` keys markers by 1-based line number; diagnostics with no
 /// resolved line info land on line 1 so the user always sees something.
-donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(
-    const donner::ParseDiagnostic& diag) {
+donner::editor::TextEditor::ErrorMarkers ParseErrorToMarkers(const donner::ParseDiagnostic& diag) {
   donner::editor::TextEditor::ErrorMarkers markers;
-  const int line = diag.range.start.lineInfo.has_value()
-                       ? static_cast<int>(diag.range.start.lineInfo->line)
-                       : 1;
+  const int line =
+      diag.range.start.lineInfo.has_value() ? static_cast<int>(diag.range.start.lineInfo->line) : 1;
   markers.emplace(line, std::string(std::string_view(diag.reason)));
   return markers;
 }
@@ -388,10 +385,9 @@ int main(int argc, char** argv) {
 
     // Render pane: image + click-to-select.
     ImGui::SetNextWindowPos(ImVec2(kSourcePaneWidth, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(
-        ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth,
-               static_cast<float>(windowHeight)),
-        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(windowWidth) - kSourcePaneWidth,
+                                    static_cast<float>(windowHeight)),
+                             ImGuiCond_Always);
     ImGui::Begin("Render", nullptr, kPaneFlags);
 
     // Size the document's canvas to the render pane so the SVG scales
@@ -420,7 +416,8 @@ int main(int argc, char** argv) {
         const donner::Transform2d documentFromCanvas =
             state.document.canvasFromDocumentTransform().inverse();
         const donner::Vector2d canvasPoint(mouse.x - imageOrigin.x, mouse.y - imageOrigin.y);
-        const auto sourceRange = state.handleClick(documentFromCanvas.transformPosition(canvasPoint));
+        const auto sourceRange =
+            state.handleClick(documentFromCanvas.transformPosition(canvasPoint));
         if (sourceRange.has_value()) {
           textEditor.selectAndFocus(FileOffsetToEditorCoordinates(sourceRange->start),
                                     FileOffsetToEditorCoordinates(sourceRange->end));

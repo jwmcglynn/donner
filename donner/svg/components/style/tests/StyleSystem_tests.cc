@@ -11,13 +11,13 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
-#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::NotNull;
@@ -281,25 +281,30 @@ TEST_F(StyleSystemTest, ComputeAllStylesDirtyOnlyRecomputesStyleDirtyEntities) {
 
   auto dirty = document.querySelector("#dirty")->entityHandle();
   auto clean = document.querySelector("#clean")->entityHandle();
-  SetRenderTreeState(document.registry(), RenderTreeState{
-      .needsFullRebuild = false, .needsFullStyleRecompute = false, .hasBeenBuilt = true});
+  SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                          .needsFullStyleRecompute = false,
+                                                          .hasBeenBuilt = true});
 
   dirty.get_or_emplace<StyleComponent>().properties.parseStyle("fill: blue");
   clean.get_or_emplace<StyleComponent>().properties.parseStyle("fill: green");
   styleSystem.invalidateComputed(dirty);
 
-  document.registry().emplace_or_replace<DirtyFlagsComponent>(dirty.entity()).mark(
-      DirtyFlagsComponent::Style);
-  document.registry().emplace_or_replace<DirtyFlagsComponent>(clean.entity()).mark(
-      DirtyFlagsComponent::Layout);
+  document.registry()
+      .emplace_or_replace<DirtyFlagsComponent>(dirty.entity())
+      .mark(DirtyFlagsComponent::Style);
+  document.registry()
+      .emplace_or_replace<DirtyFlagsComponent>(clean.entity())
+      .mark(DirtyFlagsComponent::Layout);
 
   ParseWarningSink warningSink;
   styleSystem.computeAllStyles(document.registry(), warningSink);
 
-  EXPECT_EQ(document.registry().get<ComputedStyleComponent>(dirty.entity())
+  EXPECT_EQ(document.registry()
+                .get<ComputedStyleComponent>(dirty.entity())
                 .properties->fill.getRequired(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
-  EXPECT_EQ(document.registry().get<ComputedStyleComponent>(clean.entity())
+  EXPECT_EQ(document.registry()
+                .get<ComputedStyleComponent>(clean.entity())
                 .properties->fill.getRequired(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)))));
 }
@@ -318,13 +323,15 @@ TEST_F(StyleSystemTest, ComputeAllStylesFullRecomputeClearsAndRebuildsStyles) {
   auto styleEntity = document.querySelector("style")->entityHandle().entity();
   auto& stylesheet = document.registry().get<StylesheetComponent>(styleEntity);
   stylesheet.parseStylesheet("rect { fill: blue; }");
-  SetRenderTreeState(document.registry(), RenderTreeState{
-      .needsFullRebuild = false, .needsFullStyleRecompute = true, .hasBeenBuilt = true});
+  SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                          .needsFullStyleRecompute = true,
+                                                          .hasBeenBuilt = true});
 
   ParseWarningSink warningSink;
   styleSystem.computeAllStyles(document.registry(), warningSink);
 
-  EXPECT_EQ(document.registry().get<ComputedStyleComponent>(element->entityHandle().entity())
+  EXPECT_EQ(document.registry()
+                .get<ComputedStyleComponent>(element->entityHandle().entity())
                 .properties->fill.getRequired(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
@@ -343,10 +350,12 @@ TEST_F(StyleSystemTest, ComputeAllStylesRegistersFontFacesDuringIncrementalPass)
   )");
 
   auto element = document.querySelector("#r")->entityHandle();
-  SetRenderTreeState(document.registry(), RenderTreeState{
-      .needsFullRebuild = false, .needsFullStyleRecompute = false, .hasBeenBuilt = true});
-  document.registry().emplace_or_replace<DirtyFlagsComponent>(element.entity()).mark(
-      DirtyFlagsComponent::Style);
+  SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                          .needsFullStyleRecompute = false,
+                                                          .hasBeenBuilt = true});
+  document.registry()
+      .emplace_or_replace<DirtyFlagsComponent>(element.entity())
+      .mark(DirtyFlagsComponent::Style);
 
   ParseWarningSink warningSink;
   styleSystem.computeAllStyles(document.registry(), warningSink);
@@ -401,8 +410,9 @@ TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {
   ASSERT_TRUE(target.has_value());
 
   ParseWarningSink warningSink;
-  ShadowTreeSystem().populateInstance(useElement->entityHandle(), shadowTree, ShadowBranchType::Main,
-                                      target->handle.entity(), RcString("#src"), warningSink);
+  ShadowTreeSystem().populateInstance(useElement->entityHandle(), shadowTree,
+                                      ShadowBranchType::Main, target->handle.entity(),
+                                      RcString("#src"), warningSink);
   styleSystem.computeAllStyles(document.registry(), warningSink);
 
   ASSERT_TRUE(shadowTree.mainBranch.has_value());

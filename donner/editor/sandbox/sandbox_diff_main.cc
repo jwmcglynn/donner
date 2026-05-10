@@ -22,13 +22,13 @@ namespace {
 const char* RnrStatusString(donner::editor::sandbox::RnrIoStatus status) {
   using donner::editor::sandbox::RnrIoStatus;
   switch (status) {
-    case RnrIoStatus::kOk:              return "ok";
-    case RnrIoStatus::kWriteFailed:     return "write failed";
-    case RnrIoStatus::kReadFailed:      return "read failed";
-    case RnrIoStatus::kTruncated:       return "truncated header";
-    case RnrIoStatus::kMagicMismatch:   return "magic mismatch";
+    case RnrIoStatus::kOk: return "ok";
+    case RnrIoStatus::kWriteFailed: return "write failed";
+    case RnrIoStatus::kReadFailed: return "read failed";
+    case RnrIoStatus::kTruncated: return "truncated header";
+    case RnrIoStatus::kMagicMismatch: return "magic mismatch";
     case RnrIoStatus::kVersionMismatch: return "version mismatch";
-    case RnrIoStatus::kUriTooLong:      return "uri too long";
+    case RnrIoStatus::kUriTooLong: return "uri too long";
   }
   return "unknown";
 }

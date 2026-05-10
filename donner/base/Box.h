@@ -169,7 +169,9 @@ struct Box2 {
   }
 
   /// Return the box moved by subtracting the given vector.
-  Box2<T> operator-(const Vector2<T>& vec) const { return Box2<T>(topLeft - vec, bottomRight - vec); }
+  Box2<T> operator-(const Vector2<T>& vec) const {
+    return Box2<T>(topLeft - vec, bottomRight - vec);
+  }
 
   /// Move the box by subtracting the given vector.
   Box2<T>& operator-=(const Vector2<T>& vec) {
@@ -179,7 +181,9 @@ struct Box2 {
   }
 
   /// Return the box moved by adding the given vector.
-  Box2<T> operator+(const Vector2<T>& vec) const { return Box2<T>(topLeft + vec, bottomRight + vec); }
+  Box2<T> operator+(const Vector2<T>& vec) const {
+    return Box2<T>(topLeft + vec, bottomRight + vec);
+  }
 
   /// Move the box by adding the given vector.
   Box2<T>& operator+=(const Vector2<T>& vec) {

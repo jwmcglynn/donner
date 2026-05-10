@@ -48,8 +48,7 @@ int main(int argc, char* argv[]) {
   //! [filter_svg_source]
 
   donner::ParseWarningSink warnings;
-  auto maybeDocument =
-      donner::svg::parser::SVGParser::ParseSVG(kSvgSource, warnings);
+  auto maybeDocument = donner::svg::parser::SVGParser::ParseSVG(kSvgSource, warnings);
   if (maybeDocument.hasError()) {
     std::cerr << "Parse error: " << maybeDocument.error() << "\n";
     return 1;
@@ -78,8 +77,7 @@ int main(int argc, char* argv[]) {
   //! [filter_swap]
   // Swap the filter reference on the second rect. CSS presentation attributes (including
   // `filter`) can be set via setStyle(), which accepts any normal CSS declaration.
-  std::optional<SVGElement> maybeSecondRect =
-      document.querySelector("rect:nth-of-type(2)");
+  std::optional<SVGElement> maybeSecondRect = document.querySelector("rect:nth-of-type(2)");
   UTILS_RELEASE_ASSERT_MSG(maybeSecondRect, "Expected a second <rect>");
   maybeSecondRect->setStyle("filter: url(#Heavy)");
   //! [filter_swap]

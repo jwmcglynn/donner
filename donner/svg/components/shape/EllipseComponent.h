@@ -89,6 +89,6 @@ struct EllipseComponent {
  * Parse presentation attributes for a \ref xml_ellipse element, such as cx, cy, rx, ry.
  */
 ParseResult<bool> ParseEllipsePresentationAttribute(EntityHandle handle, std::string_view name,
-                                                     const parser::PropertyParseFnParams& params);
+                                                    const parser::PropertyParseFnParams& params);
 
 }  // namespace donner::svg::components

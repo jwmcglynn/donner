@@ -36,8 +36,7 @@ XMLQualifiedName CreateRandomElementName(FuzzedDataProvider& provider) {
   // Either pick from a known element name or generate a random one
   const bool useKnownElementName = provider.ConsumeBool();
   if (useKnownElementName) {
-    const std::string_view elementName =
-        provider.PickValueInArray(donner::svg::kSVGElementNames);
+    const std::string_view elementName = provider.PickValueInArray(donner::svg::kSVGElementNames);
     return XMLQualifiedName(donner::RcString(elementName));
   }
 

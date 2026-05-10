@@ -1550,7 +1550,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     if (!run.glyphs.empty()) {
       Box2d runEmBounds =
           Box2d::FromXYWH(run.glyphs.front().xPosition, run.glyphs.front().yPosition - emTop, 0.0,
-                         emTop + emBottom);
+                          emTop + emBottom);
       for (const auto& glyph : run.glyphs) {
         runEmBounds.addPoint(Vector2d(glyph.xPosition, glyph.yPosition - emTop));
         runEmBounds.addPoint(
@@ -1578,12 +1578,11 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
-      Path glyphPath =
-          glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
+      Path glyphPath = glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);
       if (!glyphPath.empty()) {
         if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPath(
-              glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+          glyphPath = transformPath(glyphPath,
+                                    Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
         }
 
         Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
@@ -1602,7 +1601,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
         const double targetX = glyph.xPosition + bitmap->bearingX;
         const double targetY = glyph.yPosition - bitmap->bearingY;
         const Box2d extent = Box2d::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
-                                           bitmap->height * bitmap->scale);
+                                             bitmap->height * bitmap->scale);
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
       }

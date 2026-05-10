@@ -54,8 +54,7 @@ TEST(XMLEscape, WhitespaceIsEscapedToNumericEntities) {
   EXPECT_THAT(EscapeAttributeValue("\t"), Optional(RcString("&#9;")));
   EXPECT_THAT(EscapeAttributeValue("\n"), Optional(RcString("&#10;")));
   EXPECT_THAT(EscapeAttributeValue("\r"), Optional(RcString("&#13;")));
-  EXPECT_THAT(EscapeAttributeValue("line1\nline2"),
-              Optional(RcString("line1&#10;line2")));
+  EXPECT_THAT(EscapeAttributeValue("line1\nline2"), Optional(RcString("line1&#10;line2")));
 }
 
 // -----------------------------------------------------------------------------
@@ -115,8 +114,7 @@ TEST(XMLEscape, ValidUtf8PassesThrough) {
   // 3-byte: 你 (U+4F60)
   EXPECT_THAT(EscapeAttributeValue("\xE4\xBD\xA0"), Optional(RcString("\xE4\xBD\xA0")));
   // 4-byte: 😀 (U+1F600)
-  EXPECT_THAT(EscapeAttributeValue("\xF0\x9F\x98\x80"),
-              Optional(RcString("\xF0\x9F\x98\x80")));
+  EXPECT_THAT(EscapeAttributeValue("\xF0\x9F\x98\x80"), Optional(RcString("\xF0\x9F\x98\x80")));
   // Mixed ASCII + multibyte.
   EXPECT_THAT(EscapeAttributeValue("Hello 你好!"), Optional(RcString("Hello 你好!")));
 }
@@ -137,9 +135,9 @@ TEST(XMLEscape, RoundTripThroughParser) {
       "tab\there",
       "line1\nline2",
       "cr\rhere",
-      "caf\xC3\xA9",        // é
+      "caf\xC3\xA9",               // é
       "\xE4\xBD\xA0\xE5\xA5\xBD",  // 你好
-      "\xF0\x9F\x98\x80",    // 😀
+      "\xF0\x9F\x98\x80",          // 😀
       "",
   };
 

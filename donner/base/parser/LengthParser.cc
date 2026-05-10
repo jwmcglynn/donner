@@ -86,8 +86,7 @@ public:
       if (unitRequired(number)) {
         if (remaining_.empty()) {
           return ParseDiagnostic::Error(
-              "Unit expected",
-              SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
+              "Unit expected", SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
         } else {
           return ParseDiagnostic::Error("Unit expected", currentRange(0, 1));
         }
@@ -118,9 +117,7 @@ public:
     if (unitRequired(number)) {
       // Range covers up to the end of what could be a unit (up to 4 chars for longest units).
       const size_t unitLen = std::min(remaining_.size(), size_t{4});
-      return ParseDiagnostic::Error(
-          "Invalid unit",
-          currentRange(0, static_cast<int>(unitLen)));
+      return ParseDiagnostic::Error("Invalid unit", currentRange(0, static_cast<int>(unitLen)));
     } else {
       result.length.value = number;
       result.consumedChars = consumedChars();

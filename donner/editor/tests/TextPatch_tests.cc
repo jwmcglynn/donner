@@ -44,8 +44,8 @@ TEST(TextPatch, MultiplePatchesAppliedInDescendingOrder) {
   // both apply correctly because applyPatches sorts by descending offset.
   std::string source = "fill: red; stroke: green";
   std::vector<TextPatch> patches = {
-      {6, 3, "blue"},      // replace "red" with "blue"
-      {19, 5, "orange"},   // replace "green" with "orange"
+      {6, 3, "blue"},     // replace "red" with "blue"
+      {19, 5, "orange"},  // replace "green" with "orange"
   };
   auto result = applyPatches(source, patches);
   EXPECT_EQ(result.applied, 2u);
@@ -56,7 +56,7 @@ TEST(TextPatch, PatchesInForwardOrderStillWork) {
   // Same patches as above but in forward order — the sort handles it.
   std::string source = "fill: red; stroke: green";
   std::vector<TextPatch> patches = {
-      {19, 5, "orange"},   // higher offset first in input
+      {19, 5, "orange"},  // higher offset first in input
       {6, 3, "blue"},
   };
   auto result = applyPatches(source, patches);
@@ -116,9 +116,9 @@ TEST(TextPatch, EmptySourceInsert) {
 TEST(TextPatch, MixOfValidAndInvalidPatches) {
   std::string source = "abcdefgh";
   std::vector<TextPatch> patches = {
-      {0, 1, "A"},       // valid: replace 'a' with 'A'
-      {100, 1, "X"},     // invalid: offset way past end
-      {7, 1, "H"},       // valid: replace 'h' with 'H'
+      {0, 1, "A"},    // valid: replace 'a' with 'A'
+      {100, 1, "X"},  // invalid: offset way past end
+      {7, 1, "H"},    // valid: replace 'h' with 'H'
   };
   auto result = applyPatches(source, patches);
   EXPECT_EQ(result.applied, 2u);

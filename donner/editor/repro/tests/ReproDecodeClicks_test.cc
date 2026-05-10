@@ -61,8 +61,7 @@ struct PaneLayout {
 };
 PaneLayout computeRenderPaneLayout(Vector2d windowSize) {
   const double paneHeight = std::max(0.0, windowSize.y - kMenuBarHeightApprox);
-  const double paneWidth =
-      std::max(0.0, windowSize.x - kSourcePaneWidth - kInspectorPaneWidth);
+  const double paneWidth = std::max(0.0, windowSize.x - kSourcePaneWidth - kInspectorPaneWidth);
   return {
       Vector2d(kSourcePaneWidth, kMenuBarHeightApprox),
       Vector2d(paneWidth, paneHeight),
@@ -86,12 +85,11 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
   auto file = ReadReproFile(kReproPath);
   if (!file.has_value()) {
     GTEST_SKIP() << "could not load " << kReproPath
-                 << " (record one first with: donner-editor --save-repro "
-                 << kReproPath << " donner_splash.svg)";
+                 << " (record one first with: donner-editor --save-repro " << kReproPath
+                 << " donner_splash.svg)";
   }
 
-  std::fprintf(stderr, "\n[decode] repro: %s (frames=%zu)\n", kReproPath,
-               file->frames.size());
+  std::fprintf(stderr, "\n[decode] repro: %s (frames=%zu)\n", kReproPath, file->frames.size());
   std::fprintf(stderr, "[decode] svg: %s  window: %dx%d  scale: %.2f  exp: %d\n",
                file->metadata.svgPath.c_str(), file->metadata.windowWidth,
                file->metadata.windowHeight, file->metadata.displayScale,
@@ -144,10 +142,9 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
       const Vector2d docPoint = viewport.screenToDocument(screen);
 
       // Is the click inside the pane at all?
-      const bool insidePane = screen.x >= layout.origin.x &&
-                              screen.x <= layout.origin.x + layout.size.x &&
-                              screen.y >= layout.origin.y &&
-                              screen.y <= layout.origin.y + layout.size.y;
+      const bool insidePane =
+          screen.x >= layout.origin.x && screen.x <= layout.origin.x + layout.size.x &&
+          screen.y >= layout.origin.y && screen.y <= layout.origin.y + layout.size.y;
 
       auto hit = app.hitTest(docPoint);
       std::string hitName = "(none)";
@@ -187,10 +184,10 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
                    "         window=(%.1f, %.1f)  insidePane=%s\n"
                    "         document=(%.2f, %.2f)\n"
                    "         hit=%s%s%s%s\n",
-                   ++clickIdx, static_cast<size_t>(frame.index),
-                   frame.timestampSeconds, ev.mouseButton, screen.x, screen.y,
-                   insidePane ? "yes" : "NO", docPoint.x, docPoint.y, hitName.c_str(),
-                   hitId.c_str(), hitClass.c_str(), hitAncestors.c_str());
+                   ++clickIdx, static_cast<size_t>(frame.index), frame.timestampSeconds,
+                   ev.mouseButton, screen.x, screen.y, insidePane ? "yes" : "NO", docPoint.x,
+                   docPoint.y, hitName.c_str(), hitId.c_str(), hitClass.c_str(),
+                   hitAncestors.c_str());
     }
   }
   std::fprintf(stderr, "[decode] %d click(s) decoded\n", clickIdx);

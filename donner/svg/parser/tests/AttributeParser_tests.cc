@@ -556,7 +556,8 @@ TEST(AttributeParserTest, InvalidLengthIgnored) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="abc" y="0" width="50" height="50"/>
     </svg>
-  )", warningSink);
+  )",
+                                         warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
 
   auto document = std::move(maybeResult).result();
@@ -571,7 +572,8 @@ TEST(AttributeParserTest, ExtraDataAfterLength) {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
       <rect id="r" x="10xyz" y="0" width="50" height="50"/>
     </svg>
-  )", warningSink);
+  )",
+                                         warningSink);
   ASSERT_TRUE(maybeResult.hasResult());
 
   auto document = std::move(maybeResult).result();
@@ -745,7 +747,8 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveComponents) {
   EXPECT_EQ(QueryComponent<components::FilterComponent>(document, "#f").colorInterpolationFilters,
             ColorInterpolationFilters::LinearRGB);
 
-  const auto& blurPrimitive = QueryComponent<components::FilterPrimitiveComponent>(document, "#blur");
+  const auto& blurPrimitive =
+      QueryComponent<components::FilterPrimitiveComponent>(document, "#blur");
   ASSERT_TRUE(blurPrimitive.in.has_value());
   EXPECT_EQ(std::get<components::FilterStandardInput>(blurPrimitive.in->value),
             components::FilterStandardInput::StrokePaint);
@@ -777,18 +780,10 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveComponents) {
   for (const Entity entity : funcView) {
     const auto& func = funcView.get<components::FEFuncComponent>(entity);
     switch (func.channel) {
-      case components::FEFuncComponent::Channel::R:
-        funcR = &func;
-        break;
-      case components::FEFuncComponent::Channel::G:
-        funcG = &func;
-        break;
-      case components::FEFuncComponent::Channel::B:
-        funcB = &func;
-        break;
-      case components::FEFuncComponent::Channel::A:
-        funcA = &func;
-        break;
+      case components::FEFuncComponent::Channel::R: funcR = &func; break;
+      case components::FEFuncComponent::Channel::G: funcG = &func; break;
+      case components::FEFuncComponent::Channel::B: funcB = &func; break;
+      case components::FEFuncComponent::Channel::A: funcA = &func; break;
     }
   }
 
@@ -851,7 +846,8 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveComponents) {
   EXPECT_EQ(image.preserveAspectRatio, PreserveAspectRatio::None());
   EXPECT_EQ(QueryComponent<components::ImageComponent>(document, "#img").href, "test.png");
 
-  const auto& diffuse = QueryComponent<components::FEDiffuseLightingComponent>(document, "#diffuse");
+  const auto& diffuse =
+      QueryComponent<components::FEDiffuseLightingComponent>(document, "#diffuse");
   EXPECT_DOUBLE_EQ(diffuse.surfaceScale, 14.0);
   EXPECT_DOUBLE_EQ(diffuse.diffuseConstant, 0.0);
 
@@ -859,8 +855,7 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveComponents) {
   EXPECT_DOUBLE_EQ(distant.azimuth, 16.0);
   EXPECT_DOUBLE_EQ(distant.elevation, 17.0);
 
-  const auto& specular =
-      QueryComponent<components::FESpecularLightingComponent>(document, "#spec");
+  const auto& specular = QueryComponent<components::FESpecularLightingComponent>(document, "#spec");
   EXPECT_DOUBLE_EQ(specular.surfaceScale, 18.0);
   EXPECT_DOUBLE_EQ(specular.specularConstant, 0.0);
   EXPECT_DOUBLE_EQ(specular.specularExponent, 20.0);
@@ -903,7 +898,8 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveComponents) {
   EXPECT_EQ(turbulence.type, components::FETurbulenceComponent::Type::FractalNoise);
   EXPECT_TRUE(turbulence.stitchTiles);
 
-  const auto& tilePrimitive = QueryComponent<components::FilterPrimitiveComponent>(document, "#tile");
+  const auto& tilePrimitive =
+      QueryComponent<components::FilterPrimitiveComponent>(document, "#tile");
   ASSERT_TRUE(tilePrimitive.in.has_value());
   EXPECT_EQ(std::get<components::FilterStandardInput>(tilePrimitive.in->value),
             components::FilterStandardInput::FillPaint);
@@ -1016,7 +1012,7 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveVariantMatricesAndWarnings)
       </defs>
     </svg>
   )",
-                                         warningSink, options);
+                                           warningSink, options);
   ASSERT_TRUE(maybeDocument.hasResult());
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
@@ -1072,18 +1068,18 @@ TEST(AttributeParserTest, ExperimentalWarningAndFallbackBranches) {
       <rect id="r" x="oops" width="10 foo" height="5"/>
     </svg>
   )",
-                                         warningSink, options);
+                                           warningSink, options);
   ASSERT_TRUE(maybeDocument.hasResult());
   auto document = std::move(maybeDocument).result();
 
   EXPECT_EQ(QueryComponent<components::FilterComponent>(document, "#f").colorInterpolationFilters,
             ColorInterpolationFilters::SRGB);
-  EXPECT_EQ(QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-ba")
-                .xChannelSelector,
-            components::FEDisplacementMapComponent::Channel::B);
-  EXPECT_EQ(QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-ba")
-                .yChannelSelector,
-            components::FEDisplacementMapComponent::Channel::A);
+  EXPECT_EQ(
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-ba").xChannelSelector,
+      components::FEDisplacementMapComponent::Channel::B);
+  EXPECT_EQ(
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-ba").yChannelSelector,
+      components::FEDisplacementMapComponent::Channel::A);
   EXPECT_EQ(QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-wrap").edgeMode,
             components::FEConvolveMatrixComponent::EdgeMode::Wrap);
   EXPECT_EQ(QueryComponent<components::FETurbulenceComponent>(document, "#turb-default").type,
@@ -1105,13 +1101,13 @@ TEST(AttributeParserTest, ExperimentalWarningAndFallbackBranches) {
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
                                                testing::HasSubstr("Failed to parse number"))));
+  EXPECT_THAT(
+      warningSink.warnings(),
+      testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                       testing::HasSubstr("Unexpected data at end of attribute"))));
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(
-                  &ParseDiagnostic::reason,
-                  testing::HasSubstr("Unexpected data at end of attribute"))));
-  EXPECT_THAT(warningSink.warnings(),
-              testing::Contains(testing::Field(&ParseDiagnostic::reason,
-                                               testing::HasSubstr("Invalid <style> element type"))));
+                  &ParseDiagnostic::reason, testing::HasSubstr("Invalid <style> element type"))));
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
                                                testing::HasSubstr("Invalid refX value"))));

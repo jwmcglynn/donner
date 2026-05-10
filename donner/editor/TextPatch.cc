@@ -16,9 +16,8 @@ ApplyPatchesResult applyPatches(std::string& source, std::span<const TextPatch> 
   // invalidate the byte offsets of subsequent ones.
   std::vector<std::size_t> indices(patches.size());
   std::iota(indices.begin(), indices.end(), 0);
-  std::sort(indices.begin(), indices.end(), [&](std::size_t a, std::size_t b) {
-    return patches[a].offset > patches[b].offset;
-  });
+  std::sort(indices.begin(), indices.end(),
+            [&](std::size_t a, std::size_t b) { return patches[a].offset > patches[b].offset; });
 
   for (const std::size_t idx : indices) {
     const TextPatch& patch = patches[idx];

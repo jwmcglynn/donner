@@ -224,12 +224,11 @@ TEST(LengthParser, RangeNumberParseErrorPropagated) {
 // accepts, which is the whole point of the serializer.
 TEST(LengthParser, ToRcStringRoundTrip) {
   constexpr Lengthd::Unit kUnits[] = {
-      Lengthd::Unit::None, Lengthd::Unit::Percent, Lengthd::Unit::Cm,
-      Lengthd::Unit::Mm,   Lengthd::Unit::Q,       Lengthd::Unit::In,
-      Lengthd::Unit::Pc,   Lengthd::Unit::Pt,      Lengthd::Unit::Px,
-      Lengthd::Unit::Em,   Lengthd::Unit::Ex,      Lengthd::Unit::Ch,
-      Lengthd::Unit::Rem,  Lengthd::Unit::Vw,      Lengthd::Unit::Vh,
-      Lengthd::Unit::Vmin, Lengthd::Unit::Vmax,
+      Lengthd::Unit::None, Lengthd::Unit::Percent, Lengthd::Unit::Cm, Lengthd::Unit::Mm,
+      Lengthd::Unit::Q,    Lengthd::Unit::In,      Lengthd::Unit::Pc, Lengthd::Unit::Pt,
+      Lengthd::Unit::Px,   Lengthd::Unit::Em,      Lengthd::Unit::Ex, Lengthd::Unit::Ch,
+      Lengthd::Unit::Rem,  Lengthd::Unit::Vw,      Lengthd::Unit::Vh, Lengthd::Unit::Vmin,
+      Lengthd::Unit::Vmax,
   };
   constexpr double kValues[] = {0.0, 1.0, 10.0, -5.0, 1.5, 0.25, 3.14, -0.5, 100.0};
 

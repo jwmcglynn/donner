@@ -30,8 +30,7 @@ void GlfwErrorCallback(int error, const char* description) {
   // error callback with a `[Warning]` prefix — e.g. ImGui's backend calls
   // `glfwSetWindowAttrib(GLFW_MOUSE_PASSTHROUGH)` every frame, which the
   // shim can't honor. Drop those so the console only shows real errors.
-  if (description != nullptr &&
-      std::string_view(description).substr(0, 9) == "[Warning]") {
+  if (description != nullptr && std::string_view(description).substr(0, 9) == "[Warning]") {
     return;
   }
 #endif

@@ -1,9 +1,9 @@
 #include "donner/svg/SVGFilterElement.h"
 
-#include <variant>
-
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <variant>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"

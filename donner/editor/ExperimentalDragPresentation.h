@@ -76,7 +76,6 @@ struct ExperimentalDragPresentation {
     chromeRefreshTargetVersion = 0;
   }
 
-
   /// End settling once a fresh full render has landed.  Also clears cached texture state so the
   /// display falls back to the just-uploaded flat texture instead of showing stale composited
   /// layers.
@@ -100,8 +99,7 @@ struct ExperimentalDragPresentation {
     // Prefer an active preview whose entity matches our cached textures —
     // that's the happy path where the render worker's cached triple is
     // still valid for what we're being asked to display.
-    if (activePreview.has_value() && hasCachedTextures &&
-        activePreview->entity == cachedEntity) {
+    if (activePreview.has_value() && hasCachedTextures && activePreview->entity == cachedEntity) {
       return activePreview;
     }
     if (settlingPreview.has_value() && hasCachedTextures &&

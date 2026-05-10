@@ -80,7 +80,7 @@ ComputedEllipseComponent::ComputedEllipseComponent(
 }
 
 ParseResult<bool> ParseEllipsePresentationAttribute(EntityHandle handle, std::string_view name,
-                                                     const parser::PropertyParseFnParams& params) {
+                                                    const parser::PropertyParseFnParams& params) {
   const EllipsePresentationAttributeParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     EllipseProperties& properties = handle.get_or_emplace<EllipseComponent>().properties;

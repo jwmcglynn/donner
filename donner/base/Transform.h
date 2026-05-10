@@ -373,7 +373,7 @@ inline RcString toSVGTransformString(const Transform2d& transform) {
       return RcString::fromFormat("translate({})", detail::FormatNumberForSVG(e));
     }
     return RcString::fromFormat("translate({}, {})", detail::FormatNumberForSVG(e),
-                                 detail::FormatNumberForSVG(f));
+                                detail::FormatNumberForSVG(f));
   }
 
   // Pure rotation around origin: matrix must be [cos, sin, -sin, cos, 0, 0] with
@@ -398,14 +398,14 @@ inline RcString toSVGTransformString(const Transform2d& transform) {
       return RcString::fromFormat("scale({})", detail::FormatNumberForSVG(a));
     }
     return RcString::fromFormat("scale({}, {})", detail::FormatNumberForSVG(a),
-                                 detail::FormatNumberForSVG(d));
+                                detail::FormatNumberForSVG(d));
   }
 
   // General fallback.
-  return RcString::fromFormat(
-      "matrix({}, {}, {}, {}, {}, {})", detail::FormatNumberForSVG(a),
-      detail::FormatNumberForSVG(b), detail::FormatNumberForSVG(c), detail::FormatNumberForSVG(d),
-      detail::FormatNumberForSVG(e), detail::FormatNumberForSVG(f));
+  return RcString::fromFormat("matrix({}, {}, {}, {}, {}, {})", detail::FormatNumberForSVG(a),
+                              detail::FormatNumberForSVG(b), detail::FormatNumberForSVG(c),
+                              detail::FormatNumberForSVG(d), detail::FormatNumberForSVG(e),
+                              detail::FormatNumberForSVG(f));
 }
 
 }  // namespace donner

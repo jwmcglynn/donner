@@ -122,9 +122,8 @@ TEST(PathParser, ClosePath) {
 
     Path spline = result.result();
     // After closePath, ensureMoveTo() adds a new point at the moveTo position (0,0).
-    EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0), Vector2d::Zero(),
-                            Vector2d(-1.0, -1.0)));
+    EXPECT_THAT(spline.points(), ElementsAre(Vector2d::Zero(), Vector2d(1.0, 1.0), Vector2d::Zero(),
+                                             Vector2d(-1.0, -1.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::ClosePath, 0}, Command{CommandType::MoveTo, 2},
@@ -533,9 +532,8 @@ TEST(PathParser, QuadCurveTo) {
     // Q400,50 600,300 -> QuadTo with control=(400,50), end=(600,300)
     // T1000,300 -> reflected control=(800,550), end=(1000,300)
     EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2d(200.0, 300.0), Vector2d(400.0, 50.0),
-                            Vector2d(600.0, 300.0), Vector2d(800.0, 550.0),
-                            Vector2d(1000.0, 300.0)));
+                ElementsAre(Vector2d(200.0, 300.0), Vector2d(400.0, 50.0), Vector2d(600.0, 300.0),
+                            Vector2d(800.0, 550.0), Vector2d(1000.0, 300.0)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::QuadTo, 1},
                             Command{CommandType::QuadTo, 3}));
@@ -574,18 +572,16 @@ TEST(PathParser, EllipticalArc) {
 
     Path spline = result.result();
     // Proper SVG arc decomposition: 270-degree arc produces 3 cubic Bezier segments.
-    EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2Near(300, 200), Vector2Near(150, 200),
-                            Vector2Near(150, 282.84), Vector2Near(217.16, 350),
-                            Vector2Near(300, 350), Vector2Near(382.84, 350),
-                            Vector2Near(450, 282.84), Vector2Near(450, 200),
-                            Vector2Near(450, 117.16), Vector2Near(382.84, 50),
-                            Vector2Near(300, 50)));
+    EXPECT_THAT(
+        spline.points(),
+        ElementsAre(Vector2Near(300, 200), Vector2Near(150, 200), Vector2Near(150, 282.84),
+                    Vector2Near(217.16, 350), Vector2Near(300, 350), Vector2Near(382.84, 350),
+                    Vector2Near(450, 282.84), Vector2Near(450, 200), Vector2Near(450, 117.16),
+                    Vector2Near(382.84, 50), Vector2Near(300, 50)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::CurveTo, 2}, Command{CommandType::CurveTo, 5},
-                            Command{CommandType::CurveTo, 8},
-                            Command{CommandType::ClosePath, 0}));
+                            Command{CommandType::CurveTo, 8}, Command{CommandType::ClosePath, 0}));
   }
 
   {
@@ -646,11 +642,11 @@ TEST(PathParser, EllipticalArtOutOfRangeRadii) {
     ASSERT_THAT(result, NoParseError());
 
     Path spline = result.result();
-    EXPECT_THAT(spline.points(),
-                ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25),
-                            Vector2Near(233.58, -16.42), Vector2Near(166.42, -16.42),
-                            Vector2Near(125, 25), Vector2Near(83.58, 66.42),
-                            Vector2Near(83.58, 133.58), Vector2Near(125, 175)));
+    EXPECT_THAT(
+        spline.points(),
+        ElementsAre(Vector2Near(275, 175), Vector2Near(275, 25), Vector2Near(233.58, -16.42),
+                    Vector2Near(166.42, -16.42), Vector2Near(125, 25), Vector2Near(83.58, 66.42),
+                    Vector2Near(83.58, 133.58), Vector2Near(125, 175)));
     EXPECT_THAT(spline.commands(),
                 ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1},
                             Command{CommandType::CurveTo, 2}, Command{CommandType::CurveTo, 5},
@@ -693,14 +689,14 @@ TEST(PathParser, NoWhitespace) {
                                                  ElementsAre(Command{CommandType::MoveTo, 0}))));
 
   // Proper SVG arc decomposition produces two cubic Bezier segments.
-  EXPECT_THAT(PathParser::Parse("M10-20A5.5.3-4 110-.1"),
-              ParseResultIs(PointsAndCommandsAre(
-                  ElementsAre(Vector2d(10.0, -20.0), Vector2Near(106.745, -26.59),
-                              Vector2Near(182.933, -27.48), Vector2Near(180.172, -21.99),
-                              Vector2Near(177.41, -16.49), Vector2Near(96.74, -6.69),
-                              Vector2Near(0, -0.1)),
-                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
-                              Command{CommandType::CurveTo, 4}))));
+  EXPECT_THAT(
+      PathParser::Parse("M10-20A5.5.3-4 110-.1"),
+      ParseResultIs(PointsAndCommandsAre(
+          ElementsAre(Vector2d(10.0, -20.0), Vector2Near(106.745, -26.59),
+                      Vector2Near(182.933, -27.48), Vector2Near(180.172, -21.99),
+                      Vector2Near(177.41, -16.49), Vector2Near(96.74, -6.69), Vector2Near(0, -0.1)),
+          ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::CurveTo, 1},
+                      Command{CommandType::CurveTo, 4}))));
 
   EXPECT_THAT(
       PathParser::Parse("M10 20V30H40V50H60Z"),
@@ -763,8 +759,7 @@ void ExpectRoundTrip(std::string_view d) {
   RcString serialized = path.toSVGPathData();
 
   ParseResult<Path> second = PathParser::Parse(serialized);
-  ASSERT_THAT(second, NoParseError())
-      << "Re-parse failed for serialized: " << serialized;
+  ASSERT_THAT(second, NoParseError()) << "Re-parse failed for serialized: " << serialized;
 
   const Path& roundTripped = second.result();
   ASSERT_EQ(roundTripped.verbCount(), path.verbCount())

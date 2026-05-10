@@ -63,15 +63,14 @@ public:
 
   /// Factory: publish an `Explicit` hint with caller-chosen weight (defaults to the
   /// mid-range weight `0x4000`, matching the design-doc default).
-  static ScopedCompositorHint Explicit(Registry& registry, Entity entity,
-                                       uint16_t weight = 0x4000);
+  static ScopedCompositorHint Explicit(Registry& registry, Entity entity, uint16_t weight = 0x4000);
 
   /// Factory: publish an `Interaction` hint. `kind` records the interaction
   /// semantics for future introspection; the resolver only reads the weight.
   /// Default weight `0x8000` matches the Medium slot in the design-doc weight
   /// hierarchy.
-  static ScopedCompositorHint Interaction(Registry& registry, Entity entity,
-                                          InteractionHint kind, uint16_t weight = 0x8000);
+  static ScopedCompositorHint Interaction(Registry& registry, Entity entity, InteractionHint kind,
+                                          uint16_t weight = 0x8000);
 
   /// Factory: publish an `Animation` hint. Default weight `0xC000` matches the
   /// High slot in the design-doc weight hierarchy — higher than Interaction so
@@ -80,7 +79,8 @@ public:
   static ScopedCompositorHint Animation(Registry& registry, Entity entity,
                                         uint16_t weight = 0xC000);
 
-  /// Returns the entity this handle targets. Returns `entt::null` if the handle has been moved from.
+  /// Returns the entity this handle targets. Returns `entt::null` if the handle has been moved
+  /// from.
   [[nodiscard]] Entity entity() const { return entity_; }
 
   /// Returns the hint source. Undefined if the handle has been moved from.

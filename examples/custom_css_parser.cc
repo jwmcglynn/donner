@@ -40,7 +40,8 @@ int main(int argc, char* argv[]) {
     g > :nth-child(2n of path) {
       fill: green;
     }
-  )", disabled);
+  )",
+                                               disabled);
 
   std::cout << "Parsed stylesheet:\n" << stylesheet << "\n";
   //! [parse_stylesheet]
