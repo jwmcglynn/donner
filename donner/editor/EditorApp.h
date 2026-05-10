@@ -100,6 +100,9 @@ public:
     isDirty_ = false;
   }
 
+  /// The last source text known to be in sync with the DOM.
+  [[nodiscard]] std::string_view cleanSourceText() const { return cleanSourceText_; }
+
   /// Recompute the dirty flag from the current source text. This allows the
   /// editor to clear the dirty indicator when the user undoes or edits back
   /// to the last clean baseline.
