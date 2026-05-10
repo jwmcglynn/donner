@@ -149,6 +149,23 @@ public:
   void setBitmap(RendererBitmap bitmap, const Transform2d& worldFromEntityTransform) {
     bitmap_ = std::move(bitmap);
     bitmapEntityFromWorldTransform_ = worldFromEntityTransform;
+    // Reset the compose offset: the new bitmap captures the entity at
+    // `worldFromEntityTransform` (its CURRENT world position), so no
+    // additional offset is needed to display it at that position.
+    //
+    // Any `canvasFromBitmap_` value that was computed against the
+    // PREVIOUS (stale) bitmap stamp — e.g. the update loop in
+    // `renderFrame` that sets `delta = current_RIC - old_stamp`
+    // before `rasterizeDirtyLayersLoop` fires — is wrong for the new
+    // bitmap: displaying at `new_stamp + old_delta` double-offsets the
+    // element by (current - old). Resetting here brings the post-
+    // rasterize compose math back to "draw bitmap at stamped pos."
+    //
+    // Callers that want a specific compose offset on top of the
+    // freshly-rasterized bitmap (e.g. a drag hand-off that wants to
+    // preserve the in-flight screen position across the rasterize)
+    // must call `setCanvasFromBitmap` explicitly AFTER this.
+    canvasFromBitmap_ = Transform2d();
     dirty_ = false;
     ++generation_;
   }
