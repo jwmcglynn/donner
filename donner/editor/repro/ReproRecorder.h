@@ -18,11 +18,25 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 
 #include "donner/editor/repro/ReproFile.h"
 
 namespace donner::editor::repro {
+
+/// Additional per-frame state that is only available from the live
+/// editor, not from ImGui alone.
+struct FrameContext {
+  /// Viewport snapshot used for this frame's screen→document mapping.
+  std::optional<ReproViewport> viewport;
+  /// Mouse position in SVG-document coordinates.
+  std::optional<std::pair<double, double>> mouseDoc;
+  /// Optional mouse-down hit-test callback for diagnostics.
+  std::function<std::optional<ReproHit>(double docX, double docY)> hitTester;
+};
 
 /// Options passed at construction. All fields populated from editor
 /// startup state; the recorder copies what it needs.
@@ -50,13 +64,15 @@ public:
   /// code consumes input events. Reads the current ImGuiIO state,
   /// diffs against the previous frame's snapshot, appends a frame
   /// record + any discrete events to the in-memory recording buffer.
+  /// Passing a default-constructed `FrameContext` preserves the v1
+  /// capture behavior and omits the v2-only fields.
   ///
   /// Cheap (a few dozen ImGui field reads + a small vector append),
   /// but the buffer grows linearly with recording duration. A
   /// 10-minute session at 60 fps produces ~36k frames; back-of-envelope
   /// ~5 MB serialized. Not streamed to disk; held entirely in memory
   /// until `flush()`.
-  void snapshotFrame();
+  void snapshotFrame(const FrameContext& context = {});
 
   /// Serialize the in-memory recording to the configured output path.
   /// Called from the editor's shutdown path (or invoked manually from

@@ -55,13 +55,32 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   ASSERT_EQ(loaded->frames.size(), 1u);
   EXPECT_DOUBLE_EQ(loaded->frames[0].mouseX, 123.25);
   EXPECT_DOUBLE_EQ(loaded->frames[0].mouseY, 456.75);
+  EXPECT_FALSE(loaded->frames[0].mouseDocX.has_value());
+  EXPECT_FALSE(loaded->frames[0].mouseDocY.has_value());
+  EXPECT_FALSE(loaded->frames[0].viewport.has_value());
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
 }
 
-TEST(ReproFileTest, RoundTripWithAllEventKinds) {
+TEST(ReproFileTest, RoundTripWithAllEventKindsAndV2Fields) {
   ReproFile file = MakeFileWithOneFrame();
+
+  ReproViewport viewport;
+  viewport.paneOriginX = 560.0;
+  viewport.paneOriginY = 22.0;
+  viewport.paneSizeW = 1040.0;
+  viewport.paneSizeH = 878.0;
+  viewport.devicePixelRatio = 2.0;
+  viewport.zoom = 1.5;
+  viewport.panDocX = 446.0;
+  viewport.panDocY = 256.0;
+  viewport.panScreenX = 1080.0;
+  viewport.panScreenY = 461.0;
+  viewport.viewBoxX = 0.0;
+  viewport.viewBoxY = 0.0;
+  viewport.viewBoxW = 892.0;
+  viewport.viewBoxH = 512.0;
 
   ReproFrame f1;
   f1.index = 1;
@@ -69,12 +88,20 @@ TEST(ReproFileTest, RoundTripWithAllEventKinds) {
   f1.deltaMs = 16.5;
   f1.mouseX = 200.0;
   f1.mouseY = 100.0;
+  f1.mouseDocX = 34.0;
+  f1.mouseDocY = 12.0;
   f1.mouseButtonMask = 0b01;
   f1.modifiers = 0b0010;  // Shift
+  f1.viewport = viewport;
 
   ReproEvent mdown;
   mdown.kind = ReproEvent::Kind::MouseDown;
   mdown.mouseButton = 0;
+  ReproHit hit;
+  hit.tag = "g";
+  hit.id = "big_lightning_glow";
+  hit.docOrderIndex = 42;
+  mdown.hit = hit;
   f1.events.push_back(mdown);
 
   ReproEvent mup;
@@ -123,10 +150,23 @@ TEST(ReproFileTest, RoundTripWithAllEventKinds) {
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
   ASSERT_EQ(loaded->frames.size(), 2u);
+  ASSERT_TRUE(loaded->frames[1].mouseDocX.has_value());
+  EXPECT_DOUBLE_EQ(*loaded->frames[1].mouseDocX, 34.0);
+  ASSERT_TRUE(loaded->frames[1].mouseDocY.has_value());
+  EXPECT_DOUBLE_EQ(*loaded->frames[1].mouseDocY, 12.0);
+  ASSERT_TRUE(loaded->frames[1].viewport.has_value());
+  EXPECT_DOUBLE_EQ(loaded->frames[1].viewport->paneOriginX, 560.0);
+  EXPECT_DOUBLE_EQ(loaded->frames[1].viewport->zoom, 1.5);
+  EXPECT_DOUBLE_EQ(loaded->frames[1].viewport->viewBoxW, 892.0);
   const auto& loadedEvents = loaded->frames[1].events;
   ASSERT_EQ(loadedEvents.size(), 8u);
   EXPECT_EQ(loadedEvents[0].kind, ReproEvent::Kind::MouseDown);
   EXPECT_EQ(loadedEvents[0].mouseButton, 0);
+  ASSERT_TRUE(loadedEvents[0].hit.has_value());
+  EXPECT_EQ(loadedEvents[0].hit->tag, "g");
+  EXPECT_EQ(loadedEvents[0].hit->id, "big_lightning_glow");
+  EXPECT_EQ(loadedEvents[0].hit->docOrderIndex, 42);
+  EXPECT_FALSE(loadedEvents[0].hit->empty);
   EXPECT_EQ(loadedEvents[1].kind, ReproEvent::Kind::MouseUp);
   EXPECT_EQ(loadedEvents[1].mouseButton, 1);
   EXPECT_EQ(loadedEvents[2].kind, ReproEvent::Kind::KeyDown);
@@ -144,6 +184,34 @@ TEST(ReproFileTest, RoundTripWithAllEventKinds) {
   EXPECT_EQ(loadedEvents[6].height, 1080);
   EXPECT_EQ(loadedEvents[7].kind, ReproEvent::Kind::Focus);
   EXPECT_FALSE(loadedEvents[7].focusOn);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, ReadsV1FileWithV2FieldsDefaultConstructed) {
+  const auto path = TempFile("v1_legacy");
+  {
+    std::ofstream os(path);
+    os << R"({"v":1,"svg":"foo.svg","wnd":[1600,900],"scale":2.0,"exp":0})" << '\n';
+    os << R"({"f":0,"t":0.0,"dt":16.6,"mx":100,"my":50,"btn":1,"mod":2,)"
+       << R"("e":[{"k":"mdown","b":0},{"k":"wheel","dy":1.0}]})" << '\n';
+  }
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_EQ(loaded->frames.size(), 1u);
+  const auto& frame = loaded->frames[0];
+  EXPECT_DOUBLE_EQ(frame.mouseX, 100.0);
+  EXPECT_DOUBLE_EQ(frame.mouseY, 50.0);
+  EXPECT_EQ(frame.mouseButtonMask, 1);
+  EXPECT_EQ(frame.modifiers, 2);
+  EXPECT_FALSE(frame.mouseDocX.has_value());
+  EXPECT_FALSE(frame.mouseDocY.has_value());
+  EXPECT_FALSE(frame.viewport.has_value());
+  ASSERT_EQ(frame.events.size(), 2u);
+  EXPECT_FALSE(frame.events[0].hit.has_value());
+  EXPECT_FALSE(frame.events[1].hit.has_value());
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
