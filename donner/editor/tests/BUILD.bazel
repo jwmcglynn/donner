@@ -1,4 +1,18 @@
-load("//build_defs:rules.bzl", "donner_cc_test", "donner_perf_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_perf_cc_test")
+
+donner_cc_library(
+    name = "bitmap_golden_compare",
+    testonly = 1,
+    srcs = ["BitmapGoldenCompare.cc"],
+    hdrs = ["BitmapGoldenCompare.h"],
+    deps = [
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "@com_google_gtest//:gtest",
+        "@pixelmatch-cpp17",
+    ],
+)
 
 donner_cc_test(
     name = "drag_coalesce_tests",
@@ -343,6 +357,43 @@ donner_cc_test(
         "//donner/svg/compositor",
         "//donner/svg/parser",
         "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+filegroup(
+    name = "rnr_replay_testdata",
+    srcs = [
+        "filter_elm_disappear-2.rnr",
+        "filter_elm_disappear-3.rnr",
+        "filter_elm_disappear-4.rnr",
+        "filter_elm_disappear-5.rnr",
+        "filter_elm_disappear-6.rnr",
+        "filter_elm_disappear-7.rnr",
+        "testdata/filter_disappear_rnr3_after_mup2.png",
+        "testdata/filter_disappear_single_drag_lgd_post.png",
+    ],
+)
+
+donner_cc_test(
+    name = "rnr_replay_tests",
+    srcs = ["RnrReplay_tests.cc"],
+    data = [
+        ":rnr_replay_testdata",
+        "//:donner_splash.svg",
+    ],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:async_renderer",
+        "//donner/editor:editor_app",
+        "//donner/editor:imgui_headers",
+        "//donner/editor:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/editor/repro:repro_file",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )
