@@ -71,6 +71,9 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 - Docs: follow `docs/AGENTS.md`, use templates under `docs/design_docs/`. Run `tools/doxygen.sh` to regenerate.
 - **All code changes should include tests.** Use gMock/gTest. Add fuzzers for parser paths when practical.
 - Fix root causes, not symptoms; include necessary error handling without asking. Mainline must stay green — investigate failures rather than dismissing them as pre-existing.
+- **No dead code, refactor in-place.** Modify existing types/functions/modules step by step — do NOT build a parallel new implementation alongside the old one with the intent to "switch over later." Orphaned `.cc`/`.h` whose only consumers are their own tests are dead code and must be deleted in the same commit that severs their last live caller. See `CLAUDE.md` §"No Dead Code, Refactor In-Place" for the policy that drives this.
+- **Pixel-diff tests use `donner/editor/tests:bitmap_golden_compare` (`CompareBitmapToBitmap` / `CompareBitmapToGolden`) + pixelmatch.** No private `composeOver` helpers; no percentage-divergence thresholds — either identity or inspectable `actual_*`/`expected_*`/`diff_*.png` under `$TEST_UNDECLARED_OUTPUTS_DIR`. See `CLAUDE.md` §"Pixel-Diff Tests".
+- **Regression tests must fail at HEAD before the fix lands.** Commit the failing test on its own commit first so CI records a red→green transition. See `CLAUDE.md` §"Debugging Discipline" and §"Bug-Fix Commit Discipline".
 
 ## Building
 
@@ -89,7 +92,14 @@ cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) &&
 
 ## Transform Naming Convention
 
-Use **destFromSource** naming: `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`. Always `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
+Use **destFromSource** naming for every `Transform2d` — locals, fields, parameters, struct members, return values, everything. The destFromSource name *is* the documentation; a value whose direction lives only in a comment will eventually be composed wrong.
+
+- ✅ `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`, `bitmapEntityFromEntity`, `worldFromPreviousWorld`.
+- ❌ `delta`, `xform`, `transform`, `mat`, `t`, `temp` — and `deviceToLocal` / `worldToEntity` (wrong direction word).
+
+Composition reads right-to-left under donner's post-multiply convention: `A_from_B * B_from_C` produces `A_from_C` (rightmost applied first). If your composition doesn't spell out a valid `dest_from_source` chain when you read the names, the math is wrong.
+
+Inverses get the swapped name: `bitmapEntityFromWorld.inverse()` is `worldFromBitmapEntity`. Don't keep the original name on a local that holds the inverse.
 
 ## Feature Flags & Build Configurations
 
