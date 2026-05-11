@@ -152,7 +152,7 @@ ReproRecorder::ReproRecorder(ReproRecorderOptions options) : options_(std::move(
   prevWindowHeight_ = options_.windowHeight;
 }
 
-void ReproRecorder::snapshotFrame() {
+void ReproRecorder::snapshotFrame(const FrameContext& context) {
   ImGuiIO& io = ImGui::GetIO();
   if (!started_) {
     startTime_ = std::chrono::steady_clock::now();
@@ -174,6 +174,13 @@ void ReproRecorder::snapshotFrame() {
   frame.mouseY = io.MousePos.y;
   frame.mouseButtonMask = CurrentMouseButtonMask();
   frame.modifiers = PackCurrentModifiers();
+  if (context.viewport.has_value()) {
+    frame.viewport = *context.viewport;
+  }
+  if (context.mouseDoc.has_value()) {
+    frame.mouseDocX = context.mouseDoc->first;
+    frame.mouseDocY = context.mouseDoc->second;
+  }
 
   // Mouse button edges.
   const int prevMask = prevButtonMask_;
@@ -186,6 +193,12 @@ void ReproRecorder::snapshotFrame() {
       ReproEvent ev;
       ev.kind = ReproEvent::Kind::MouseDown;
       ev.mouseButton = b;
+      if (b == 0 && context.hitTester && context.mouseDoc.has_value()) {
+        auto hit = context.hitTester(context.mouseDoc->first, context.mouseDoc->second);
+        if (hit.has_value()) {
+          ev.hit = std::move(*hit);
+        }
+      }
       frame.events.push_back(ev);
     } else if (wasDown && !isDown) {
       ReproEvent ev;
