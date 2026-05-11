@@ -16,10 +16,14 @@
 /// Format is one JSON object per line (NDJSON):
 ///
 /// ```
-/// {"v":1,"svg":"path.svg","wnd":[1600,900],"scale":2.0,"exp":false}
-/// {"f":0,"t":0.0,"dt":16.6,"mx":100.5,"my":50.2,"btn":0,"mod":0}
-/// {"f":1,"t":16.6,"dt":16.7,"mx":120.0,"my":50.0,"btn":0,"mod":0,
-///  "e":[{"k":"mdown","b":0},{"k":"wheel","dy":1.0}]}
+/// {"v":2,"svg":"path.svg","wnd":[1600,900],"scale":2.0,"exp":false}
+/// {"f":0,"t":0.0,"dt":16.6,"mx":100.5,"my":50.2,"btn":0,"mod":0,
+///  "mdx":12.4,"mdy":33.1,
+///  "vp":{"ox":560,"oy":22,"pw":1040,"ph":878,"dpr":2,
+///        "z":1.0,"pdx":446,"pdy":256,"psx":1080,"psy":461,
+///        "vbx":0,"vby":0,"vbw":892,"vbh":512}}
+/// {"f":1,"t":16.6,"dt":16.7,"mx":120.0,"my":50.0,"btn":1,"mod":0,
+///  "e":[{"k":"mdown","b":0,"hit":{"id":"lightning","tag":"g"}}]}
 /// ...
 /// ```
 ///
@@ -29,7 +33,7 @@
 ///
 /// | code   | meaning                  | fields                        |
 /// |--------|--------------------------|-------------------------------|
-/// | mdown  | mouse button down        | b (button index 0-4)          |
+/// | mdown  | mouse button down        | b (button index 0-4), hit{}   |
 /// | mup    | mouse button up          | b                             |
 /// | kdown  | keyboard key down        | k (ImGui key enum), m (mods)  |
 /// | kup    | keyboard key up          | k, m                          |
@@ -42,6 +46,11 @@
 /// position + current button mask) so a dropped event in the discrete
 /// list can't leave the player in an inconsistent state — the next
 /// frame's state trumps.
+///
+/// Since v2 the frame record can also carry:
+///   - `mdx` / `mdy`: mouse position in SVG-document coordinates
+///   - `vp`: a snapshot of the editor viewport at record time
+///   - `mdown.hit`: the element under the cursor at mouse-down time
 
 #include <cstdint>
 #include <filesystem>
@@ -51,12 +60,52 @@
 
 namespace donner::editor::repro {
 
-/// File format version. Bump when format changes; loader rejects unknown versions.
-constexpr int kReproFileVersion = 1;
+/// File format version written by the current serializer.
+///
+/// The reader accepts both:
+/// - v1: legacy files with window-space mouse data only
+/// - v2: adds doc-space mouse coords, viewport snapshots, and
+///   mouse-down hit-test checkpoints
+constexpr int kReproFileVersion = 2;
 
 /// Maximum number of mouse buttons recorded. Matches ImGui's
 /// `ImGuiMouseButton_COUNT`.
 constexpr int kMaxMouseButtons = 5;
+
+/// Snapshot of the editor viewport used to map window coordinates into
+/// SVG-document coordinates.
+struct ReproViewport {
+  double paneOriginX = 0.0;
+  double paneOriginY = 0.0;
+  double paneSizeW = 0.0;
+  double paneSizeH = 0.0;
+  double devicePixelRatio = 1.0;
+  double zoom = 1.0;
+  double panDocX = 0.0;
+  double panDocY = 0.0;
+  double panScreenX = 0.0;
+  double panScreenY = 0.0;
+  double viewBoxX = 0.0;
+  double viewBoxY = 0.0;
+  double viewBoxW = 0.0;
+  double viewBoxH = 0.0;
+
+  friend bool operator==(const ReproViewport&, const ReproViewport&) = default;
+};
+
+/// Hit-test checkpoint captured at mouse-down time.
+struct ReproHit {
+  /// `id` attribute of the hit element, or empty if none.
+  std::string id;
+  /// Tag name of the hit element, or empty if none.
+  std::string tag;
+  /// Document-order index of the hit element, or `-1` if unspecified.
+  int docOrderIndex = -1;
+  /// True when the click landed on empty space.
+  bool empty = false;
+
+  friend bool operator==(const ReproHit&, const ReproHit&) = default;
+};
 
 /// One discrete event that fired within a frame. Frame-state
 /// (mouse position, button mask) lives on the owning frame record;
@@ -93,6 +142,8 @@ struct ReproEvent {
   int height = 0;
   // Focus on/off for Focus events.
   bool focusOn = true;
+  /// Hit-test checkpoint for `MouseDown` events.
+  std::optional<ReproHit> hit;
 };
 
 /// One frame's snapshot: continuous input state + any discrete events
@@ -108,10 +159,15 @@ struct ReproFrame {
   /// Current mouse position in logical window coordinates.
   double mouseX = 0.0;
   double mouseY = 0.0;
+  /// Current mouse position in SVG-document coordinates.
+  std::optional<double> mouseDocX;
+  std::optional<double> mouseDocY;
   /// Bitmask of currently-held mouse buttons. Bit N set means button N down.
   int mouseButtonMask = 0;
   /// Current modifier bitmask (see `ReproEvent::modifiers`).
   int modifiers = 0;
+  /// Viewport snapshot captured for this frame.
+  std::optional<ReproViewport> viewport;
   /// Discrete events that fired during this frame, in arrival order.
   std::vector<ReproEvent> events;
 };
@@ -147,7 +203,8 @@ struct ReproFile {
 
 /// Parse an NDJSON repro file. Returns `std::nullopt` on any error
 /// (file missing, version mismatch, malformed line); writes details
-/// to `stderr`.
+/// to `stderr`. When reading a v1 file, the v2-only fields stay
+/// default-constructed.
 [[nodiscard]] std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path);
 
 }  // namespace donner::editor::repro
