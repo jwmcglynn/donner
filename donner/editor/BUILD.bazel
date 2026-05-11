@@ -423,7 +423,6 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":imgui_headers",
-        ":selection_aabb",
         ":tool",
         ":undo_timeline",
         "//donner/base",
