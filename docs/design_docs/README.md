@@ -75,6 +75,7 @@ conventions automated agents should follow when editing design docs.
 | 0029 | [ci_runtime](0029-ci_runtime.md)                                                       | Superseded by [0031](0031-ci_hardening_2026q2.md)                          | CI runtime reduction plan (post-Skia baseline, per-config cache slots, runner sizing). Scope folded into 0031. |
 | 0030 | [geode_performance](0030-geode_performance.md)                                         | In Progress                                                                | Geode GPU-backend performance milestones (counters, arenas, shared command encoder, target reuse). |
 | 0031 | [ci_hardening_2026q2](0031-ci_hardening_2026q2.md)                                     | Design                                                                     | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029). |
+| 0032 | [sandbox_branch_split](0032-sandbox_branch_split.md)                                   | Design                                                                     | Plan for extracting general-purpose improvements off the `sandbox` branch into `main`-targeted PRs (tiered by porting cost). |
 
 ## Cross-reference: developer docs
 

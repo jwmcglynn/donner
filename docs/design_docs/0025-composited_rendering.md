@@ -2137,3 +2137,273 @@ the root cause is found — no rebuild required.
    `takeSnapshot()` → `drawImage()` paths** — this is a pre-existing
    correctness bug independent of the compositor. Fix alongside the
    tier-1 `AlphaType` adapter work.
+
+## Postmortem — #582: Fast-path subtree propagation accumulated deltas across drag frames
+
+### Summary
+
+A subtle correctness bug in `CompositorController`'s translation-only
+fast path drifted the rendered position of subtree-promoted layers
+(the canonical case: `<g filter>` groups) away from the DOM-truth
+position over consecutive drag frames. A 50-frame drag of splash's
+`#Big_lightning_glow` produced a backend bitmap that diverged from
+a direct re-render by ~16,000 pixels — a visually obvious
+"mispositioned filter" at the end of the drag.
+
+The bug was user-visible, consistently reproducible by hand, and
+survived **four rounds of speculative "fixes"** (commits
+`8e7ec375`, `5fb1acc8`, plus two reverted attempts) spanning
+multiple weeks before the actual root cause was isolated. Each
+of those speculative fixes was merged in good faith and claimed
+to close the issue in its commit message. None of them did.
+
+The final fix is three lines at `CompositorController.cc:738-740`
+(`53780152`): compute a per-frame delta separately from the
+stamp-relative delta, and pass the per-frame delta to the subtree
+propagation.
+
+### Root cause
+
+The fast path for subtree-promoted layers called
+`propagateFastPathTranslationToSubtree(registry, res.entity, res.delta)`
+at `CompositorController.cc:735` (pre-fix), where `res.delta` is
+`newWorldFromEntity * bitmapEntityFromWorldTransform^-1` — the
+cumulative delta **since the bitmap was stamped**. That's the right
+value for `setCanvasFromBitmap`: the layer's compose offset is
+relative to its stamp, so the full cumulative translation lands
+the bitmap at the current DOM position.
+
+But it is the **wrong** value for subtree propagation.
+`propagateFastPathTranslationToSubtree` left-composes its argument
+onto each descendant's *current*
+`RenderingInstanceComponent::worldFromEntityTransform`:
+
+```cpp
+instance->worldFromEntityTransform =
+    delta * instance->worldFromEntityTransform;
+```
+
+The descendant's `worldFromEntityTransform` had already been
+translated on previous drag frames. Left-composing the
+cumulative-since-stamp delta on top re-applied every prior frame's
+drag on top of itself. After N frames of drag with per-frame
+deltas `d_1, d_2, …, d_N`:
+
+- Expected descendant transform: `C * (I + d_N)` (scale + one
+  copy of the cumulative translation).
+- Actual descendant transform: `C * (I + d_N + d_{N-1} + … + d_1)`
+  — up to N-fold over-translation in the worst case.
+
+The layer ROOT was fine because `res.layer->setCanvasFromBitmap(res.delta)`
+overwrote its compose offset every frame (no accumulation on
+that path). Only descendants — which the fast path mutates to
+keep their RICs in sync so the slow-path / rasterize paths still
+work — accumulated the drift.
+
+### Why "dual-path debug assertion" didn't catch this
+
+The design doc's **§"Verification Strategy"** guarantees
+pixel-identical correctness via a runtime debug assertion
+(`CompositorConfig::verifyPixelIdentity`) that captures the
+composited output, runs a full-document reference render, and
+diffs pixel-by-pixel. The doc's §Reversibility promises: "the
+compositor can never silently produce wrong pixels — any
+regression is caught immediately."
+
+That guarantee did not hold for this bug. Three reasons:
+
+1. **The assertion is off by default.** `verifyPixelIdentity`
+   defaults to `false` (see `CompositorConfig`) and costs 2×
+   frame time when on. No CI target turns it on for interactive
+   drag sequences; the compositor's dedicated tests turn it on
+   for synthetic scenes, but none of those exercise the
+   "subtree-promoted layer + many consecutive drag frames on a
+   real splash-scale document" case.
+
+2. **The assertion runs inside `renderFrame`.** It compares
+   compositor output against a `RendererDriver::draw(document)`
+   reference on the same frame. But the bug manifests only after
+   the subtree propagation has been applied N times — and the
+   reference path reads the **same already-drifted
+   `worldFromEntityTransform` values** that the compositor
+   just wrote. Both paths converge on the same wrong answer.
+   The assertion would only catch this bug if the reference
+   path recomputed `worldFromEntityTransform` from scratch via
+   `LayoutSystem`, bypassing the RICs. It doesn't.
+
+3. **No test exercised the exact trigger.** The bug requires:
+   (a) a subtree-promoted layer (triggers
+   `propagateFastPathTranslationToSubtree`), (b) multiple
+   consecutive drag frames on the same entity (triggers the
+   accumulation), and (c) a comparison against an authoritative
+   post-drag DOM state (triggers the visible divergence). The
+   existing golden tests had (a) and (b) but compared against
+   **committed PNG goldens generated from the compositor's own
+   output** — so any drift that was consistent across runs would
+   lock into the golden on first generation.
+
+### Why the bug survived four speculative fixes
+
+Each attempted fix was plausible because it matched *a* detail
+of the user's symptom (filter disappearing / shifting /
+appearing clipped). None of them were verified against the
+actual bug because **no automated test existed that could fail
+on the bug**. Fixes were merged, I asserted the bug was closed,
+the user pushed back within a day or two, and the cycle
+repeated.
+
+The specific anti-patterns that made each iteration feel like
+progress but weren't:
+
+- **Boutique CPU-composition helpers in tests.** The initial
+  regression tests re-implemented alpha-over composition with a
+  private `CompositeOver` helper in the test file itself, then
+  diffed the result against a re-raster ground truth with a
+  **percentage-divergence threshold** (e.g. "< 5% of the filter's
+  bounding region"). A bug that visually moved the whole filter
+  by a few pixels stayed within 5% because the filter's opaque
+  area is only a fraction of its bounding box — the test
+  reported "PASS" at 1.8% diff on a scenario that was actually
+  showing the exact bug.
+
+- **Investigation chasing the wrong architecture.** For several
+  sessions, investigation focused on `GlTextureCache` /
+  `RenderPanePresenter` / `ExperimentalDragPresentation` —
+  classes whose file paths still existed in the tree but which
+  had been orphaned from the live binary by the thin-client
+  migration (`60052563`). Hypotheses about
+  `GlTextureCache::promotedTranslationDoc_` entity desync,
+  `PromotedTextureScreenOffset` rounding, and drag-target-swap
+  state machine transitions all looked plausible given the
+  symptom — and were **investigated against code that no live
+  binary ever executes**. The bug was in a completely different
+  file from any of the hypotheses.
+
+- **Fixes motivated by a single crash-adjacent detail.**
+  Commit `8e7ec375` ("reset `canvasFromBitmap_` inside
+  `setBitmap`") and `5fb1acc8` ("size compositor viewport to
+  `doc.canvasSize()`") each fixed a real issue — a real
+  double-offset on re-rasterize, a real canvas-size mismatch —
+  but neither was the dominant contributor to #582. They were
+  found by reasoning about the compositor's data flow, not by
+  running a failing test. The subsequent claim that each "fixed
+  #582" was based on "I don't see an obvious reason it would
+  still be broken," not on a reproducer that went green.
+
+### What finally worked
+
+Four things, in order:
+
+1. **Deleted the dead code.** `0783e821` removed ~10k LOC of the
+   old `EditorShell` / `RenderPanePresenter` / `GlTextureCache`
+   path that was orphaned in the 60052563 rebase but still had
+   test suites passing. This eliminated the entire class of
+   "investigate the wrong architecture" failures and forced
+   subsequent investigation onto the live thin-client path.
+
+2. **Wrote a test that actually reproduced the bug.** `a7788beb`
+   added `FilterDisappearRepro7BackendBitmapMatchesDirectRender`:
+   replay `filter_elm_disappear-7.rnr` through the live
+   `EditorBackendCore::handlePointerEvent`, capture
+   `FramePayload.finalBitmapPixels` at each mup, diff against a
+   fresh `svg::Renderer::draw(doc)` of the backend's current
+   DOM via pixelmatch, dump inspectable `actual_` / `expected_` /
+   `diff_` PNGs on failure. No boutique composition math, no
+   percentage thresholds. The first time the test ran it
+   failed with 15,000-19,000 pixels of divergence at every
+   post-interaction checkpoint — exactly matching the user's
+   report.
+
+3. **Bisected with a test-only kill-switch.** `923f63db` added
+   `EditorBackendCore::setCpuComposeEnabledForTesting(bool)` and
+   paired it with a second test that forces the main-renderer
+   compose path. Both variants diverged by the same pixel count —
+   ruling out the CPU compose path (which had been my previous
+   top suspect) in one test run.
+
+4. **Frame-by-frame bisection pinpointed the first bad frame.**
+   `b8c3c251` added `SplashFilterDragPerFrameDivergence`, which
+   counted divergent pixels after every single event in a
+   synthesized drag. The log showed divergence flat at the
+   chrome baseline (~2,940 px) through mv#1-6, then jumping
+   to 10,475 px at mv#7 — the exact frame where SelectTool's
+   drag-activation threshold first mutated filter-g's transform
+   and the fast-path first fired. From there it grew
+   monotonically as the accumulation compounded. That single
+   log line localized the bug to ±5 lines of code in the
+   fast-path loop.
+
+### Lessons
+
+1. **A runtime debug assertion is not a substitute for a test
+   that fails on the bug.** `verifyPixelIdentity`'s design guarantee
+   assumed the reference path would be authoritative — but it
+   shares RIC storage with the compositor. The dual-path assertion
+   should either recompute RIC state from `LayoutSystem` before
+   each reference render, OR be supplemented by a test that reads
+   the DOM from outside the compositor's run (i.e. an external
+   process, which is what the new `FilterDisappearRepro7Backend*`
+   tests effectively are).
+
+2. **Test-private alpha-over is a trap.** Any future compositor
+   regression test that needs to diff bitmaps must go through
+   `BitmapGoldenCompare::CompareBitmapToBitmap` (or the existing
+   golden-PNG path), not a private `CompositeOver` helper. The
+   `BitmapGoldenCompare` path produces operator-inspectable
+   `actual_` / `expected_` / `diff_` PNGs on mismatch; a private
+   helper with a percentage threshold produces an uninspectable
+   number.
+
+3. **"Plausible fix" is not a merge criterion.** When a user
+   reports a bug still reproduces after a fix, the default
+   response must be "the test that allegedly verifies my fix is
+   wrong or missing" — not "I don't see why it would still be
+   broken." The test that landed with `a7788beb` should have
+   been written **before** `8e7ec375` or `5fb1acc8`; both would
+   have been exposed as non-fixes the moment the test ran.
+
+4. **Dead code is actively harmful during debugging.** The
+   orphaned frontend classes (EditorShell, GlTextureCache,
+   RenderPanePresenter, ExperimentalDragPresentation) survived
+   in the tree because their tests still passed. They soaked
+   up weeks of investigation because they matched the symptom
+   lexically ("drag-target swap stale textures", "promoted-layer
+   compose offset") without being in the live execution path.
+   The rebase commit (60052563) listed these for deletion and
+   called them "kept deleted" — but the deletion itself didn't
+   land. That alone should have been a process gate: a rebase
+   commit claiming to delete code must include the deletion, or
+   the architecture migration isn't actually complete.
+
+5. **Fast-path delta semantics need to be named explicitly.** The
+   `res.delta` variable meant "cumulative-since-stamp", but the
+   name gave no hint, and the code used it in two places that
+   wanted different things. A follow-up refactor should rename
+   `res.delta` to `res.stampDelta` and the computed
+   `perFrameDelta` to `res.perFrameDelta`, and document at the
+   `FastPathResolution` struct definition which consumers need
+   which delta. The cost of the bug was dominated by the two
+   names that didn't exist — if the code had said `stampDelta`
+   at line 671 and `perFrameDelta` somewhere, a reviewer would
+   have noticed both being used interchangeably downstream.
+
+### Action items
+
+- [x] Land the fix (`53780152`).
+- [x] Land the bug-reproducing test (`a7788beb`) as a permanent
+      regression guard.
+- [x] Delete the orphaned frontend code (`0783e821`).
+- [x] Replace boutique `CompositeOver` in tests with
+      `BitmapGoldenCompare::CompareBitmapToBitmap` + pixelmatch
+      (done in the test cluster around `a7788beb`).
+- [ ] Extend `verifyPixelIdentity` to recompute RIC state from
+      `LayoutSystem` before the reference render, so the dual-
+      path assertion doesn't share drifted state with the
+      compositor path. Tracked as follow-up.
+- [ ] Rename `FastPathResolution::delta` → `stampDelta` and make
+      the per-frame delta a separate named field. Tracked as
+      follow-up.
+- [ ] Enable `verifyPixelIdentity` by default in a dedicated CI
+      target (e.g. `compositor_pixel_identity_tests`) running
+      against a representative subset of the existing `.rnr`
+      fixtures. Tracked as follow-up.

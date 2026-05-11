@@ -404,6 +404,16 @@ public:
   /// bucket layers keep their generation and their GL texture binding.
   [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload() const;
 
+  /// Read-only accessor for the layer bound to @p entity. Test-only —
+  /// lets regression tests inspect `canvasFromBitmap` /
+  /// `bitmapEntityFromWorldTransform` after a drag frame to verify the
+  /// translation-only fast path engaged (bitmap stamp unchanged,
+  /// composition transform carries the delta). Production callers
+  /// should go through `isPromoted` / `promoteEntity` instead.
+  [[nodiscard]] const CompositorLayer* findLayerForTest(Entity entity) const {
+    return findLayer(entity);
+  }
+
 private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
@@ -504,12 +514,14 @@ private:
   /// Fast-path helper: a promoted subtree layer's root just shifted by a pure
   /// world-space translation. Descendants' local transforms are unchanged, so
   /// their world transforms shift by the same delta. Pre-multiply every
-  /// descendant RIC's `worldFromEntityTransform` by @p delta so subsequent
+  /// descendant RIC's `worldFromEntityTransform` by @p worldFromPreviousWorld
+  /// — the per-frame world-from-world delta that maps a point at its previous
+  /// frame's world position to its current world position — so subsequent
   /// reads (e.g. a forced re-rasterize later in the session, or the next
   /// frame's fast-path delta computation against a descendant-rooted layer)
   /// see up-to-date world positions.
   static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
-                                                    const Transform2d& delta);
+                                                    const Transform2d& worldFromPreviousWorld);
 
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;

@@ -145,6 +145,238 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
   EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "Original position now vacated";
 }
 
+// Editor-reported regression: when the compositor has a promoted layer
+// and the DOM transform changes by a pure translation, the fast path
+// should update `canvasFromBitmap` (cheap, ~50 µs) and NOT re-
+// rasterize the layer bitmap (~10-100 ms on real content). The spike
+// shows up as visible jank on the fps graph during drag. This guards
+// the fast path by checking that after a translation-only drag frame
+// the layer's `canvasFromBitmap` carries the delta AND the
+// bitmap's rasterize-time stamp is unchanged (which means the cached
+// bitmap was reused). Fires on regressions to:
+//   - `isTranslation()` returning false (e.g. `canvasFromDoc`
+//      conjugation introducing float drift that trips `NearEquals`);
+//   - `bitmapEntityFromWorldTransform` getting updated every frame
+//     (which would incorrectly make every delta `Identity`);
+//   - the dirty-flag consumer marking the drag target for re-raster
+//     even when the delta is pure translation.
+// Editor-reported regression: dragging a `<g filter>` group should
+// reuse the filter's cached bitmap via the compositor's translation-
+// only fast path, not re-rasterize the entire scene. Before the fix,
+// the fast-path eligibility check required `firstEntity == lastEntity
+// == e`, which is only true for single-entity layers. Subtree layers
+// (filter groups, clip-path groups, `<g>` with children) failed the
+// gate, forcing every drag frame through `prepareDocumentForRendering`
+// at ~25 ms/frame on real splash content.
+TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="4"/></filter>
+      </defs>
+      <rect width="200" height="200" fill="white"/>
+      <g id="target" filter="url(#blur)">
+        <rect x="60" y="60" width="40" height="20" fill="red"/>
+        <rect x="60" y="100" width="40" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  // Promote with ActiveDrag so the drag target sets up the single-
+  // promoted-layer split path. The filter group itself is also auto-
+  // promoted by `MandatoryHintDetector`; the explicit promote here
+  // matches what `SelectTool::onMouseDown` does when the user clicks
+  // a filter group after the editor's `elevateToCompositingRoot`
+  // hoist.
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* layer = compositor.findLayerForTest(entity);
+  ASSERT_NE(layer, nullptr) << "filter group must be a layer root";
+  ASSERT_TRUE(layer->hasValidBitmap());
+  const std::optional<Transform2d> stampAfterWarm = layer->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterWarm.has_value());
+
+  // Drag. The filter group contains children, so `layer.firstEntity()
+  // != layer.lastEntity()` — the single-entity fast-path gate would
+  // have rejected this, forcing a full `prepareDocumentForRendering`
+  // re-run every frame.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* layerAfterDrag = compositor.findLayerForTest(entity);
+  ASSERT_NE(layerAfterDrag, nullptr);
+  ASSERT_TRUE(layerAfterDrag->hasValidBitmap());
+
+  // Fast-path signal #1: the layer's rasterize-time stamp hasn't
+  // moved. If it changed, `setBitmap` ran — slow path.
+  const std::optional<Transform2d> stampAfterDrag =
+      layerAfterDrag->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterDrag.has_value());
+  EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+      << "filter-group layer was re-rasterized during drag instead of reusing "
+         "the cached bitmap — the `firstEntity == lastEntity == e` gate "
+         "rejected the subtree layer from the fast path";
+  EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
+
+  // Fast-path signal #2: `canvasFromBitmap` carries the 10-px
+  // delta in canvas-pixel space.
+  const Transform2d canvasFromBitmap = layerAfterDrag->canvasFromBitmap();
+  ASSERT_TRUE(canvasFromBitmap.isTranslation());
+  EXPECT_NEAR(canvasFromBitmap.translation().x, 10.0, 1e-6);
+  EXPECT_NEAR(canvasFromBitmap.translation().y, 0.0, 1e-6);
+}
+
+TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScales) {
+  for (double canvasScale : {1.0, 2.0, 1.5}) {
+    SCOPED_TRACE("canvasScale=" + std::to_string(canvasScale));
+    const int canvasDim = static_cast<int>(200.0 * canvasScale);
+    const std::string svgSource =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + std::to_string(canvasDim) +
+        "\" height=\"" + std::to_string(canvasDim) +
+        "\" viewBox=\"0 0 200 200\">"
+        "<rect width=\"200\" height=\"200\" fill=\"white\"/>"
+        "<rect id=\"target\" x=\"20\" y=\"20\" width=\"40\" height=\"40\" fill=\"red\"/>"
+        "</svg>";
+    SVGDocument document = parseDocument(svgSource);
+
+    auto target = document.querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+    const Entity entity = target->entityHandle().entity();
+
+    CompositorController compositor(document, renderer_);
+    ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+    RenderViewport viewport;
+    viewport.size = Vector2d(canvasDim, canvasDim);
+    viewport.devicePixelRatio = 1.0;
+
+    // Warm the bitmap cache. At this point `bitmapEntityFromWorldTransform`
+    // is stamped against the current (identity-translation) DOM state.
+    compositor.renderFrame(viewport);
+
+    const CompositorLayer* layer = compositor.findLayerForTest(entity);
+    ASSERT_NE(layer, nullptr);
+    ASSERT_TRUE(layer->hasValidBitmap())
+        << "post-warm layer bitmap should be valid";
+    const std::optional<Transform2d> stampAfterWarm = layer->bitmapEntityFromWorldTransform();
+    ASSERT_TRUE(stampAfterWarm.has_value());
+
+    // Drag. SelectTool pre-multiplies the delta in parent (doc) space.
+    target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(25.0, 0.0)));
+    compositor.renderFrame(viewport);
+
+    const CompositorLayer* layerAfterDrag = compositor.findLayerForTest(entity);
+    ASSERT_NE(layerAfterDrag, nullptr);
+    ASSERT_TRUE(layerAfterDrag->hasValidBitmap());
+
+    // The fast-path signal: the layer's `bitmapEntityFromWorldTransform`
+    // MUST be identical to the warmed stamp (no re-rasterize). If it
+    // was bumped to the new DOM transform, `setBitmap` ran, which
+    // means the slow path kicked in.
+    const std::optional<Transform2d> stampAfterDrag =
+        layerAfterDrag->bitmapEntityFromWorldTransform();
+    ASSERT_TRUE(stampAfterDrag.has_value());
+    EXPECT_NEAR(stampAfterDrag->data[0], stampAfterWarm->data[0], 1e-9)
+        << "bitmap stamp regressed: layer was re-rasterized instead of using "
+           "the translation-only fast path";
+    EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+        << "bitmap stamp regressed: layer was re-rasterized instead of using "
+           "the translation-only fast path";
+    EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9)
+        << "bitmap stamp regressed: layer was re-rasterized instead of using "
+           "the translation-only fast path";
+
+    // And the canvasFromBitmap MUST carry the delta — 25 doc units
+    // at `canvasScale` → `25 * canvasScale` canvas pixels.
+    const Transform2d canvasFromBitmap = layerAfterDrag->canvasFromBitmap();
+    ASSERT_TRUE(canvasFromBitmap.isTranslation())
+        << "canvasFromBitmap should be a pure translation after a "
+           "translation-only drag; non-translation means the conjugation "
+           "produced an affine with scale/shear drift and would have marked "
+           "the layer dirty for re-rasterize";
+    const Vector2d delta = canvasFromBitmap.translation();
+    EXPECT_NEAR(delta.x, 25.0 * canvasScale, 1e-6)
+        << "delta should be in canvas-pixel space";
+    EXPECT_NEAR(delta.y, 0.0, 1e-6);
+  }
+}
+
+// Editor-reported bug repro: when the canvas is bigger than the viewBox —
+// e.g. HiDPI rendering at 2x, or zoomed-in interactive mode — a drag that
+// translates an element by N document units should produce a visible move
+// of N * canvasScale pixels. On Geode's split-bitmap path this was moving
+// the bitmap by N pixels (document units applied raw) while the rest of
+// the frame (and the selection chrome) correctly moved N * canvasScale.
+// Guarded here with a plain `CompositorController.renderFrame` so a
+// regression fires an assert even without an editor-level harness.
+TEST_F(CompositorGoldenTest, ScaledCanvasTranslationOnlyDragProducesCorrectPixels) {
+  // viewBox 100×100 rendered into a 200×200 canvas → 2× scale.
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 100 100">
+      <rect width="100" height="100" fill="white"/>
+      <rect id="target" x="5" y="5" width="20" height="20" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  RenderViewport scaledViewport;
+  scaledViewport.size = Vector2d(200, 200);
+  scaledViewport.devicePixelRatio = 1.0;
+
+  // Frame 1: initial render, stamps the layer bitmap at identity
+  // transform. This is the "pre-drag" frame the editor sends on
+  // select-before-drag to warm the cache.
+  compositor.renderFrame(scaledViewport);
+
+  // Now the user drags: DOM moves by 25 doc units → canvas 50 pixels
+  // (at 2× scale). Mirror SelectTool::onMouseMove's `Translate(deltaDoc)
+  // * startTransform` shape.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(25.0, 0.0)));
+
+  // Frame 2: drag frame. Compositor picks up the delta against the
+  // stamped bitmap and applies a translation-only canvasFromBitmap
+  // instead of re-rasterizing. This is the path the user exercises
+  // during drag — if the delta is computed in doc space but applied
+  // in canvas-pixel space, the bitmap moves HALF the intended
+  // distance, producing a visible gap between the chrome AABB (which
+  // re-reads DOM canvas-space) and the rendered shape.
+  compositor.renderFrame(scaledViewport);
+
+  const RendererBitmap flat = renderer_.takeSnapshot();
+  // Original target center: doc (15, 15) → canvas (30, 30).
+  // After Translate(25, 0) in doc space: doc (40, 15) → canvas (80, 30).
+  EXPECT_THAT(getPixel(flat, 80, 30), IsRed())
+      << "after a fast-path drag the bitmap should be stamped at canvas "
+         "pixel (80, 30); any other offset means the compositor applied "
+         "the doc-space delta in pixel space and missed the canvasFromDoc "
+         "scale — this is the user-reported `shape moves half the distance "
+         "of the overlay` regression";
+  EXPECT_THAT(getPixel(flat, 30, 30), IsWhite())
+      << "original position now vacated — a stale bitmap here means the "
+         "compositor left the old stamp around AND overlaid a shifted copy";
+  // Probe the "moved half the distance" regression specifically: canvas
+  // pixel (55, 30) is where the bitmap lands if delta is applied raw.
+  EXPECT_THAT(getPixel(flat, 55, 30), IsWhite())
+      << "no bitmap residue at half-delta position — if this fails, the "
+         "split-bitmap path is treating doc-space translation as pixel-space";
+}
+
 // Targeted probe: when a top-level `<rect>` is bucketed in isolation, does
 // `rasterizeLayer` (via `RendererDriver::drawEntityRange`) produce the
 // correct pixels? Calls the same code path the bucketer triggers at
