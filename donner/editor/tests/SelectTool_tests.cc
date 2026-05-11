@@ -114,14 +114,20 @@ TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
   EXPECT_TRUE(selectionIs("#r2"));
 }
 
-TEST_F(SelectToolTest, ElevatedFilterGroupDragIncludesMostlyContainedSibling) {
+// Pins the elevation contract: clicking inside a `<g filter>` selects
+// the filter group itself, NOT the clicked leaf path. Sibling layers are
+// NOT swept into the selection — auto-expansion to composite peers was
+// explicitly vetoed (issue #582 follow-up): if a document author wants
+// siblings to move together they wrap them in a `<g>`; the editor
+// respects the DOM and doesn't guess.
+TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
   loadSvg(kCompositeSiblingSvg);
 
   tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
 
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "anchor");
-  EXPECT_EQ(app.selectedElements()[1].id(), "peer_contained");
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "anchor")
+      << "elevation lands on the filter-g, single-element selection";
 
   tool.onMouseMove(app, Vector2d(42.0, 50.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(42.0, 50.0));
@@ -129,38 +135,21 @@ TEST_F(SelectToolTest, ElevatedFilterGroupDragIncludesMostlyContainedSibling) {
 
   EXPECT_DOUBLE_EQ(transformOf("#anchor").data[4], 30.0);
   EXPECT_DOUBLE_EQ(transformOf("#anchor").data[5], 30.0);
-  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[4], 30.0);
-  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[5], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[4], 0.0)
+      << "contained sibling stays put — no auto-expansion";
+  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[5], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
 }
 
-TEST_F(SelectToolTest, ElevatedFilterGroupExcludesHalfContainedSibling) {
-  loadSvg(kCompositeSiblingSvg);
-
-  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
-
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "anchor");
-  EXPECT_EQ(app.selectedElements()[1].id(), "peer_contained");
-  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
-  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
-
-  tool.onMouseMove(app, Vector2d(27.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(27.0, 35.0));
-  ASSERT_TRUE(app.flushFrame());
-
-  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
-  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
-}
-
-TEST_F(SelectToolTest, NonCompositingGroupDoesNotExpandToSibling) {
+TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
   loadSvg(kPlainGroupSiblingSvg);
 
   tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf");
+  EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf")
+      << "plain `<g>` is not a compositing object — select the leaf path";
 
   tool.onMouseMove(app, Vector2d(32.0, 40.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(32.0, 40.0));
