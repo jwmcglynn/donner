@@ -231,6 +231,15 @@ build:ci --local_test_jobs=HOST_CPUS
 build:ci --jobs=HOST_CPUS
 build:ci --verbose_failures
 build:ci --repository_cache=~/.cache/bazel-repo
+# Bazel-diff's `affected targets` list can include targets whose
+# `target_compatible_with` rules exclude the current host (the canonical
+# case: `//donner/editor/wasm:*` flagged on linux/macos hosts). Without
+# this flag bazel fails fast with "Target X is incompatible and cannot
+# be built, but was explicitly requested." With it, those targets are
+# silently skipped — which is the right behavior for a target-determinator-
+# generated list, since the host platform is the constraint, not the PR.
+# Avoids needing the `ci:full-test` PR label as a workaround.
+build:ci --skip_incompatible_explicit_targets
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
