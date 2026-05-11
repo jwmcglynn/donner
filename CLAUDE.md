@@ -18,6 +18,10 @@
 - **When touching the CMake mirror or `gen_cmakelists.py`, also run `python3 tools/cmake/gen_cmakelists.py --check --build`.** Plain `--check` is intentionally fast and static; `--build` is the opt-in local compile gate that catches real CMake drift before CI does.
 - The `tiny`, `text-full`, and `geode` variant lanes now run as `*_tiny` / `*_text_full` / `*_geode` wrappers under default `bazel test //...` (see `donner_cc_test(variants=…)` in `build_defs/rules.bzl`). The transitional `tools/presubmit.sh` wrapper has been retired — `bazel test //...` is the single command that gates a PR.
 
+## Transform Naming
+
+- **Every `Transform2d` local, field, parameter, and struct member must be named in `destFromSource` form** — e.g., `bitmapEntityFromEntity`, `worldFromPreviousWorld`, `canvasFromDocument`. Names like `delta`, `xform`, `t`, `transform`, `mat` are banned: the destFromSource name *is* the documentation, and a value whose direction is encoded only in a comment will be composed wrong the first time it's reused. See `AGENTS.md` §"Transform Naming Convention" for the full rule and rationale.
+
 ## Formatting
 
 - **Run `clang-format -i` on every modified C/C++ file before committing.** `git clang-format` covers staged changes. The project `.clang-format` (Google + 100-col, see `.clang-format`) is tuned so clang-format 18 and 19 produce identical output — use whichever is on your `$PATH`.

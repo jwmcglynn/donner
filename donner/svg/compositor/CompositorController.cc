@@ -623,7 +623,11 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       Entity entity = entt::null;
       CompositorLayer* layer = nullptr;
       Transform2d newWorldFromEntity;
-      Transform2d delta;
+      /// `bitmapEntity_from_entity` — the canvas-from-canvas mapping from
+      /// the bitmap's stamped entity frame to the entity's CURRENT frame.
+      /// Used as the layer's `canvasFromBitmap` compose offset on the
+      /// bitmap-reuse fast path. **Stamp-relative**, NOT per-frame.
+      Transform2d bitmapEntityFromEntity;
       bool isSubtree = false;
     };
     std::vector<FastPathResolution> resolutions;
@@ -671,27 +675,27 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           components::LayoutSystem().getCanvasFromDocumentTransform(registry);
       const Transform2d newWorldFromEntity =
           abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
-      // The delta is the canvas-from-canvas transform that maps
-      // bitmap-canvas-pixels (rasterized at the OLD `worldFromEntity`) to
-      // their CURRENT canvas position (under the NEW `worldFromEntity`).
+      // `bitmapEntityFromEntity`: takes a point in the entity's CURRENT
+      // frame and returns it in the bitmap's stamp-time entity frame.
+      // The compositor uses this as `canvasFromBitmap` on the layer's
+      // bitmap-reuse fast path: rendering the cached bitmap (which was
+      // rasterized in stamp-frame coords) through this transform places
+      // its pixels at the entity's current world position.
       //
-      // For a bitmap pixel at canvas position c_old, its corresponding
-      // entity-local point is `oldEntityFromWorld(c_old)`; its current
-      // canvas position is `newWorldFromEntity(<that local p>)`. Reading
-      // donner's left-to-right composition (`A * B` applied to v means
-      // "first A, then B"), the canvas-to-canvas mapping is therefore
-      // `oldEntityFromWorld * newWorldFromEntity`.
-      //
-      // The reverse order (`newWFE * oldEFW`) is an entity-local mapping,
-      // which collapses to the right answer ONLY when the old transform's
-      // linear part is identity. For a previously-resized element it
-      // misreports the canvas delta as `oldScale.inverse() * delta_doc`,
-      // so the cached bitmap moves at `delta_doc / scale` pixels per
-      // drag step while the overlay (driven by worldBounds) moves at
-      // `delta_doc`. See `LayerComposeOffsetReflectsDocumentDeltaForResized
-      // Element` for the regression pin.
-      const Transform2d delta = matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
-                                newWorldFromEntity;
+      // Under donner's post-multiply convention (`A * B` applied to v
+      // means "first B, then A"), `bitmapEntityFromWorld_at_stamp *
+      // newWorldFromEntity_now` walks v from current entity → world →
+      // stamp entity. The reverse order (`newWFE * oldEFW`) reads as a
+      // direct entity-local mapping and collapses to the right answer
+      // ONLY when the stamped transform's linear part is identity. For a
+      // previously-resized element the reverse misreports the canvas
+      // delta as `oldScale.inverse() * delta_doc`, so the cached bitmap
+      // moves at `delta_doc / scale` pixels per drag step while the
+      // overlay (driven by worldBounds) moves at `delta_doc`. See
+      // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` for
+      // the regression pin.
+      const Transform2d bitmapEntityFromEntity =
+          matchedLayer->bitmapEntityFromWorldTransform()->inverse() * newWorldFromEntity;
 
       const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
       // Subtree layers require a pure-translation delta: only then can we
@@ -700,7 +704,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       // (scale, rotate, transform-list change) stay on the slow path.
       // Single-entity layers can tolerate non-translation deltas via a
       // targeted re-rasterize later in `renderFrame`.
-      if (isSubtree && !delta.isTranslation()) {
+      if (isSubtree && !bitmapEntityFromEntity.isTranslation()) {
         eligible = false;
         break;
       }
@@ -732,7 +736,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           .entity = e,
           .layer = matchedLayer,
           .newWorldFromEntity = newWorldFromEntity,
-          .delta = delta,
+          .bitmapEntityFromEntity = bitmapEntityFromEntity,
           .isSubtree = isSubtree,
       });
     }
@@ -742,29 +746,31 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       unhandledDirtyEntities.reserve(resolutions.size());
       for (const auto& res : resolutions) {
         auto& instance = registry.get<components::RenderingInstanceComponent>(res.entity);
-        // Compute the per-frame delta BEFORE we overwrite the RIC:
-        // `instance.worldFromEntityTransform` at this moment is the
-        // PREVIOUS frame's value (set either by a prior fast-path
-        // iteration, by `prepareDocumentForRendering`, or by the
-        // initial tree instantiation). `res.delta` below, in contrast,
-        // is the cumulative delta since the bitmap was STAMPED —
-        // the right value for `setCanvasFromBitmap` (which operates
-        // against the stamped bitmap) but the WRONG value for
+        // `worldFromPreviousWorld`: takes a point in the previous frame's
+        // world-space and returns its position in the current frame's
+        // world-space. Computed BEFORE we overwrite the RIC, because
+        // `instance.worldFromEntityTransform` at this moment still holds
+        // the PREVIOUS frame's value (set by a prior fast-path iteration,
+        // by `prepareDocumentForRendering`, or by initial tree
+        // instantiation). `res.bitmapEntityFromEntity` below is
+        // *stamp-relative* (cumulative since the bitmap was rasterized) —
+        // the right value for `setCanvasFromBitmap`, which operates
+        // against the stamped bitmap, but the WRONG value for
         // `propagateFastPathTranslationToSubtree`, which left-composes
         // it onto each descendant's already-translated
-        // `worldFromEntityTransform`. Using the stamp-delta there
-        // re-applies every prior frame's translation on top of
-        // itself, producing canvas pixels that drift further from
-        // the DOM's true position with every drag frame — the #582
-        // "filter element mispositioned after many drag frames"
-        // symptom. Per-frame delta is what the descendants actually
-        // need: layered over their current (already-post-previous-frame)
-        // transforms, it advances them exactly one drag step.
-        const Transform2d perFrameDelta =
+        // `worldFromEntityTransform`. Passing the stamp-relative delta
+        // there re-applies every prior frame's translation on top of
+        // itself, drifting descendants forward by `n * frame_delta`
+        // after `n` drag frames — the #582 "filter element
+        // mispositioned" symptom. The per-frame
+        // `worldFromPreviousWorld`, layered over the descendants'
+        // post-previous-frame transforms, advances them exactly one
+        // drag step.
+        const Transform2d worldFromPreviousWorld =
             res.newWorldFromEntity * instance.worldFromEntityTransform.inverse();
         instance.worldFromEntityTransform = res.newWorldFromEntity;
 
-        if (res.delta.isTranslation()) {
+        if (res.bitmapEntityFromEntity.isTranslation()) {
           // Bitmap-reuse fast path: the delta between the current DOM
           // transform and the bitmap's rasterize-time transform is a
           // pure translation, so reuse the bitmap by updating
@@ -772,9 +778,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           // mouse-move flips the entity's transform attribute, but the
           // compositor just writes a ~single-matrix compose offset
           // rather than going back to the renderer.
-          res.layer->setCanvasFromBitmap(res.delta);
+          res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
           if (res.isSubtree) {
-            propagateFastPathTranslationToSubtree(registry, res.entity, perFrameDelta);
+            propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
           }
         } else {
           // Single-entity layer with non-translation delta (scale,
@@ -2239,8 +2245,8 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   return {entity, lastPainting != entt::null ? lastPainting : entity};
 }
 
-void CompositorController::propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
-                                                                 const Transform2d& delta) {
+void CompositorController::propagateFastPathTranslationToSubtree(
+    Registry& registry, Entity root, const Transform2d& worldFromPreviousWorld) {
   using TreeComponent = donner::components::TreeComponent;
   std::vector<Entity> stack;
   if (const auto* tree = registry.try_get<TreeComponent>(root)) {
@@ -2259,7 +2265,8 @@ void CompositorController::propagateFastPathTranslationToSubtree(Registry& regis
       // translation — every descendant's world transform pre-multiplies
       // by that same delta (root-from-descendant is unchanged, world-
       // from-root shifts by delta, so world-from-descendant shifts too).
-      instance->worldFromEntityTransform = delta * instance->worldFromEntityTransform;
+      instance->worldFromEntityTransform =
+          worldFromPreviousWorld * instance->worldFromEntityTransform;
       // Invalidate the cached absolute-transform so any later
       // `LayoutSystem::getAbsoluteTransformComponent` query recomputes
       // from the authoritative DOM instead of returning the pre-drag

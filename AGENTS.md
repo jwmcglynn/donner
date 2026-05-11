@@ -92,7 +92,14 @@ cmake -S . -B build -DDONNER_BUILD_TESTS=ON && cmake --build build -j$(nproc) &&
 
 ## Transform Naming Convention
 
-Use **destFromSource** naming: `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`. Always `destFromSource` form (e.g., `localFromDevice`, not `deviceToLocal`).
+Use **destFromSource** naming for every `Transform2d` — locals, fields, parameters, struct members, return values, everything. The destFromSource name *is* the documentation; a value whose direction lives only in a comment will eventually be composed wrong.
+
+- ✅ `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`, `bitmapEntityFromEntity`, `worldFromPreviousWorld`.
+- ❌ `delta`, `xform`, `transform`, `mat`, `t`, `temp` — and `deviceToLocal` / `worldToEntity` (wrong direction word).
+
+Composition reads right-to-left under donner's post-multiply convention: `A_from_B * B_from_C` produces `A_from_C` (rightmost applied first). If your composition doesn't spell out a valid `dest_from_source` chain when you read the names, the math is wrong.
+
+Inverses get the swapped name: `bitmapEntityFromWorld.inverse()` is `worldFromBitmapEntity`. Don't keep the original name on a local that holds the inverse.
 
 ## Feature Flags & Build Configurations
 
