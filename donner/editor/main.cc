@@ -44,7 +44,14 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(bwd);
   }
 
-  bool experimentalMode = false;
+  // Experimental mode used to gate the compositor's split bg/promoted/fg
+  // display path. After the tier3 work that made the path correct at
+  // arbitrary zoom (see promotedTranslationDoc unit conversion in
+  // AsyncRenderer), the path is the default — drag at any zoom skips the
+  // main GPU compose, dropping per-frame cost from ~150ms to ~10ms at
+  // moderate zoom on the splash. `--experimental` and `--no-experimental`
+  // remain available as escape hatches.
+  bool experimentalMode = true;
   std::optional<std::string> svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
@@ -54,11 +61,15 @@ int main(int argc, char** argv) {
   initialPath = std::string("donner_icon.svg");
 #else
   constexpr std::string_view kUsage =
-      "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";
+      "Usage: donner-editor [--no-experimental] [--save-repro <path>] <filename>\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
       experimentalMode = true;
+      continue;
+    }
+    if (arg == "--no-experimental") {
+      experimentalMode = false;
       continue;
     }
     if (arg == "--save-repro") {

@@ -100,6 +100,7 @@ void AsyncRenderer::workerLoop() {
         compositorDocument_ = *request.document;  // cheap: refcount bump on the Registry handle.
         compositorRenderer_ = request.renderer;
         compositorEntity_ = entt::null;
+        compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
         compositorDocumentGeneration_ = request.documentGeneration;
       }
 
@@ -148,6 +149,7 @@ void AsyncRenderer::workerLoop() {
         if (!remapped) {
           compositor_->resetAllLayers(/*documentReplaced=*/true);
           compositorEntity_ = entt::null;
+          compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
           compositorResetCount_.fetch_add(1, std::memory_order_release);
         }
         compositorDocumentGeneration_ = request.documentGeneration;
@@ -163,13 +165,29 @@ void AsyncRenderer::workerLoop() {
           request.dragPreview.has_value() ? request.dragPreview->interactionKind
                                           : svg::compositor::InteractionHint::Selection;
 
-      if (compositorEntity_ != desiredEntity) {
-        if (compositorEntity_ != entt::null) {
+      // Re-promote when EITHER the entity changes OR the kind changes (the
+      // editor flips Selection → ActiveDrag at drag start without changing
+      // the entity). The compositor's `promoteEntity` refreshes the kind
+      // in place for an already-promoted entity instead of demoting and
+      // re-promoting, so the layer's cached bitmap survives the
+      // transition. Skipping the kind-change re-promote left the
+      // compositor treating an active drag as a Selection prewarm and
+      // tripped the descendant-segment dirty cascade every drag frame
+      // post-zoom — sustained > 1 s/frame on the splash.
+      const bool entityChanged = compositorEntity_ != desiredEntity;
+      const bool kindChanged =
+          desiredEntity != entt::null && desiredKind != compositorInteractionKind_;
+      if (entityChanged || kindChanged) {
+        if (entityChanged && compositorEntity_ != entt::null) {
           compositor_->demoteEntity(compositorEntity_);
         }
-        compositorEntity_ = entt::null;
+        if (entityChanged) {
+          compositorEntity_ = entt::null;
+          compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
+        }
         if (desiredEntity != entt::null && compositor_->promoteEntity(desiredEntity, desiredKind)) {
           compositorEntity_ = desiredEntity;
+          compositorInteractionKind_ = desiredKind;
         }
       }
 
@@ -213,13 +231,36 @@ void AsyncRenderer::workerLoop() {
       // bitmap to line up with bg/fg on the GPU side.
       if (request.dragPreview.has_value() && compositorEntity_ != entt::null &&
           compositor_->hasSplitStaticLayers()) {
+        // `layerComposeOffset` returns `canvasFromBitmap` whose translation
+        // is in CANVAS pixels (= doc × zoom × DPR for `worldIsCanvas`
+        // entities). The display path consumes
+        // `RenderResult::CompositedPreview::promotedTranslationDoc` in
+        // *document* units and re-applies the viewport zoom downstream
+        // (`textures.promotedTranslationDoc() * pixelsPerDocUnit()` in
+        // `RenderPanePresenter`). Convert here so the field actually
+        // matches its name. Without the conversion, dragging at zoom 5×
+        // on a Retina display visibly moves the promoted bitmap ~10×
+        // further than the overlay (which reads the DOM directly).
         const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
+        const Vector2i canvasSize = request.document->canvasSize();
+        const Box2d viewBox = request.document->svgElement().viewBox().value_or(Box2d::FromXYWH(
+            0, 0, static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)));
+        const double viewBoxWidth = viewBox.size().x;
+        const double viewBoxHeight = viewBox.size().y;
+        const double scaleX =
+            viewBoxWidth > 0.0 ? static_cast<double>(canvasSize.x) / viewBoxWidth : 1.0;
+        const double scaleY =
+            viewBoxHeight > 0.0 ? static_cast<double>(canvasSize.y) / viewBoxHeight : 1.0;
+        const Vector2d composeTranslationCanvas = composeOffset.translation();
+        const Vector2d composeTranslationDoc(
+            scaleX != 0.0 ? composeTranslationCanvas.x / scaleX : 0.0,
+            scaleY != 0.0 ? composeTranslationCanvas.y / scaleY : 0.0);
         compositedPreview = RenderResult::CompositedPreview{
             .backgroundBitmap = compositor_->backgroundBitmap(),
             .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
             .foregroundBitmap = compositor_->foregroundBitmap(),
             .entity = compositorEntity_,
-            .promotedTranslationDoc = composeOffset.translation(),
+            .promotedTranslationDoc = composeTranslationDoc,
         };
       }
 

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -90,6 +91,21 @@ private:
 
   std::uint64_t lastRenderedVersion_ = 0;
   Vector2i lastRenderedCanvasSize_ = Vector2i::Zero();
+  /// Most recent canvas size we passed into `SVGDocument::setCanvasSize`.
+  /// Used to skip the call when the viewport's desired size hasn't
+  /// changed — the alternative (comparing against
+  /// `document().canvasSize()`) reads back through
+  /// `LayoutSystem::calculateCanvasScaledDocumentSize` which can
+  /// normalize and produce a mismatch even at stable zoom, causing a
+  /// full `invalidateRenderTree` every frame.
+  Vector2i lastSetCanvasSize_ = Vector2i::Zero();
+  /// Most recent desired canvas size requested by `maybeRequestRender`.
+  /// Used to debounce continuous pinch-zoom: while
+  /// `pendingCanvasSize_` differs from `lastSetCanvasSize_` we wait
+  /// `kCanvasSizeCommitDelay` of stability before committing through
+  /// `SVGDocument::setCanvasSize`. See the call site for the rationale.
+  Vector2i pendingCanvasSize_ = Vector2i::Zero();
+  std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
 
   // Declared last so it is destroyed first — see the comment on
   // `renderer_` above. Its destructor joins the worker thread, which
