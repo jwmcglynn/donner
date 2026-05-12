@@ -97,6 +97,20 @@ public:
                                                 : std::nullopt;
   }
 
+  /**
+   * Update the recorded interaction kind without touching the published hint entry.
+   * Used by `CompositorController::promoteEntity` to transition a `Selection`
+   * prewarm hint into an `ActiveDrag` on first drag-move without demoting the
+   * layer and dropping its cached bitmap.
+   *
+   * @param kind New interaction kind.
+   */
+  void setInteractionKind(InteractionHint kind) {
+    if (source_ == HintSource::Interaction) {
+      interactionKind_ = kind;
+    }
+  }
+
   /// Returns true if this handle is still live (has not been moved from).
   [[nodiscard]] bool active() const { return registry_ != nullptr; }
 

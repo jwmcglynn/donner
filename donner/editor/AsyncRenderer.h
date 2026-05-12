@@ -268,6 +268,13 @@ private:
   std::optional<svg::SVGDocument> compositorDocument_;
   svg::Renderer* compositorRenderer_ = nullptr;
   Entity compositorEntity_ = entt::null;
+  /// Kind under which `compositorEntity_` is currently promoted. Tracked
+  /// alongside the entity so a Selection→ActiveDrag transition refreshes
+  /// the hint in place instead of demote-then-re-promote (which would
+  /// drop the layer's cached bitmap and tank fast-path engagement on the
+  /// first drag move after a click).
+  svg::compositor::InteractionHint compositorInteractionKind_ =
+      svg::compositor::InteractionHint::Selection;
   /// Document generation at the time the compositor was last configured.
   /// Detects document replacement (ReplaceDocumentCommand / source reparse)
   /// that invalidates all entity handles. Crucially tracks the generation

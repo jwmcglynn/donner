@@ -174,13 +174,21 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
     return false;
   }
 
-  // Already promoted via the controller's `promoteEntity` path. `activeHints_`
-  // is the controller-owned hint ledger (Interaction under
-  // `autoPromoteInteractions`, Explicit otherwise). A future Mandatory or
-  // Animation hint from another source would also produce a
-  // `ComputedLayerAssignmentComponent` but doesn't count as "promoted by the
-  // controller" here.
-  if (activeHints_.contains(entity)) {
+  // Already promoted via the controller's `promoteEntity` path. Refresh the
+  // Interaction kind in place so a Selection prewarm can become an ActiveDrag
+  // without demoting the layer or dropping its cached bg/promoted/fg bitmaps.
+  // Critical for drag-after-zoom: without this, the kind upgrade returned
+  // early here, the compositor kept treating the entity as a Selection hint,
+  // and the descendant-segment cascade marked unrelated segments dirty every
+  // drag frame — turning a moderately-zoomed drag into 3-second slow frames.
+  auto activeHintIt = activeHints_.find(entity);
+  if (activeHintIt != activeHints_.end()) {
+    if (config_.autoPromoteInteractions) {
+      const std::optional<InteractionHint> activeKind = activeHintIt->second.interactionKind();
+      if (!activeKind.has_value() || *activeKind != interactionKind) {
+        activeHintIt->second.setInteractionKind(interactionKind);
+      }
+    }
     return true;
   }
 
@@ -1971,19 +1979,19 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
     //
     // EXCEPTION: if the entity is a promoted layer ROOT (non-zero
     // `ComputedLayerAssignmentComponent::layerId` and the layer is
-    // rooted at this entity), its content lives in the layer's cached
-    // bitmap — NOT in any segment. The layer's bitmap is either reused
-    // via a compose-transform (fast path) or re-rasterized via
-    // `rasterizeLayer` (slow path); the segment carries zero pixels
-    // that belong to this entity. Marking `findSegmentForEntity(entity)`
-    // dirty just forces an unnecessary canvas-sized re-rasterize of an
-    // adjacent segment on every drag frame — on the splash that's the
-    // tail segment (100+ paths), costing ~40 ms/frame. Skip it.
+    // rooted at this entity), its whole subtree lives in the layer's
+    // cached bitmap — NOT in any static segment. The layer's bitmap is
+    // either reused via a compose-transform (fast path) or re-rasterized
+    // via `rasterizeLayer` (slow path). Marking the root or descendants'
+    // segments dirty just forces unnecessary static-segment rasterize +
+    // bg/fg recomposition on every drag frame.
     const auto* selfAssignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
     const bool entityIsPromotedLayerRoot =
         selfAssignment != nullptr && selfAssignment->layerId != 0;
-    if (!entityIsPromotedLayerRoot &&
-        registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    if (entityIsPromotedLayerRoot) {
+      continue;
+    }
+    if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
       const size_t selfSegIdx = findSegmentForEntity(entity);
       if (selfSegIdx < staticSegmentDirty_.size()) {
         staticSegmentDirty_[selfSegIdx] = true;

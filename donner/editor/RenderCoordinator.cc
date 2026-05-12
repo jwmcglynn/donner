@@ -1,10 +1,27 @@
 #include "donner/editor/RenderCoordinator.h"
 
+#include <chrono>
+
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 
 namespace donner::editor {
+
+namespace {
+
+/// During continuous pinch-zoom, the viewport's `desiredCanvasSize` changes
+/// every wheel event (~60 Hz). Each commit through
+/// `SVGDocument::setCanvasSize` calls `invalidateRenderTree`, which forces
+/// the compositor to re-rasterize every promoted layer at the new canvas
+/// size — at high zoom on the splash that's 7–8 layers × seconds each, so
+/// the editor freezes for the whole gesture. Debouncing the commit lets
+/// the previously-rendered bitmap (at the prior canvas size) keep displaying
+/// stretched until the user stops zooming; the high-quality re-rasterize
+/// then happens once.
+constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
+
+}  // namespace
 
 void RenderCoordinator::resetForLoadedDocument() {
   experimentalDragPresentation_ = ExperimentalDragPresentation{};
@@ -151,9 +168,35 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 
   const Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
-  const Vector2i currentSize = app.document().document().canvasSize();
-  if (currentSize.x != desiredCanvasSize.x || currentSize.y != desiredCanvasSize.y) {
-    app.document().document().setCanvasSize(desiredCanvasSize.x, desiredCanvasSize.y);
+  // Cache the last committed canvas size to avoid the
+  // `document().canvasSize()` round-trip producing a spurious
+  // "changed!" verdict at stable zoom (the readback goes through
+  // `calculateCanvasScaledDocumentSize` which normalizes the value).
+  //
+  // Additionally **debounce** the commit during continuous pinch-zoom:
+  // when `desiredCanvasSize` is changing every frame, every
+  // `setCanvasSize` call triggers `invalidateRenderTree` →
+  // `needsFullRebuild=true` → every promoted layer re-rasterizes at the
+  // new canvas. At high zoom on the splash that's 7–8 layers × seconds
+  // each, so the editor freezes the entire gesture. Hold the new size
+  // in `pendingCanvasSize_` until it's been stable for
+  // `kCanvasSizeCommitDelay`, then commit. The pre-pinch bitmap keeps
+  // displaying (stretched by the screen-side viewport transform) until
+  // the gesture settles and the high-quality re-rasterize lands once.
+  const auto now = std::chrono::steady_clock::now();
+  if (desiredCanvasSize != pendingCanvasSize_) {
+    pendingCanvasSize_ = desiredCanvasSize;
+    pendingCanvasSizeSince_ = now;
+  }
+  const bool pendingSettled = pendingCanvasSize_ != lastSetCanvasSize_ &&
+                              (now - pendingCanvasSizeSince_) >= kCanvasSizeCommitDelay;
+  // Always commit on the *first* setCanvasSize for a document — we need
+  // a real bitmap for the initial render. The debounce only kicks in for
+  // subsequent changes (lastSetCanvasSize_ != zero).
+  const bool firstCommit = lastSetCanvasSize_ == Vector2i::Zero();
+  if ((firstCommit && pendingCanvasSize_ != Vector2i::Zero()) || pendingSettled) {
+    app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
+    lastSetCanvasSize_ = pendingCanvasSize_;
   }
 
   const Vector2i currentCanvasSize = app.document().document().canvasSize();
