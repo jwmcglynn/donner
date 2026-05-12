@@ -240,8 +240,10 @@ void morphology(const Pixmap& src, Pixmap& dst, MorphologyOp op, int radiusX, in
   auto dstData = dst.data();
 
   const std::size_t totalBytes = static_cast<std::size_t>(w) * h * 4;
-  // Guard against OOM.
-  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  // Guard against OOM. 1 GiB cap consistent with `GaussianBlur` and
+  // `Pixmap::fromSize`; see those for the rationale and the regression
+  // that surfaced from the prior 64 MiB value.
+  constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
   if (totalBytes > kMaxAllocationBytes) {
     return;
   }

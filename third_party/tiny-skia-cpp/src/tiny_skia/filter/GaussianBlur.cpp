@@ -351,8 +351,10 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
     return;
   }
 
-  // Guard against OOM: each buffer is width*height*4 bytes.
-  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  // Guard against OOM: each buffer is width*height*4 bytes. 1 GiB cap to
+  // match the float variant below and `Pixmap::fromSize`. See the float
+  // overload's comment for the rationale.
+  constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
   const std::size_t bufferSize = static_cast<std::size_t>(width) * height * 4;
   if (bufferSize > kMaxAllocationBytes) {
     return;
@@ -411,8 +413,16 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
     return;
   }
 
-  // Guard against OOM: each buffer is width*height*4 floats.
-  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  // Guard against OOM: each buffer is width*height*4 floats. The cap
+  // matches `Pixmap::fromSize`'s 1 GiB defensive ceiling — large enough
+  // to handle a viewport-sized SourceGraphic (e.g. the editor's worst
+  // case at the `kMaxCanvasDim=8192` clamp boundary requires ~616 MiB
+  // of float buffer per blur scratch), small enough to reject inputs
+  // claiming pathological sizes. The prior 64 MiB cap silently no-op'd
+  // the blur whenever the SourceGraphic exceeded ~2048×2048 floats —
+  // which is the path the editor hits at high zoom, surfacing as
+  // "filters disappear when I zoom in." See `ZoomFilterRepro_tests.cc`.
+  constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
   const std::size_t bufferSize = static_cast<std::size_t>(width) * height * 4 * sizeof(float);
   if (bufferSize > kMaxAllocationBytes) {
     return;
