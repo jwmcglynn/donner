@@ -33,9 +33,15 @@ class FloatPixmap {
       return std::nullopt;
     }
     const std::size_t count = static_cast<std::size_t>(width) * height * 4;
-    // Defensive cap: reject large allocations to prevent OOM crashes on memory-constrained
-    // systems. With -fno-exceptions, OOM calls std::terminate instead of throwing.
-    constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+    // Defensive cap: reject malicious / accidental large allocations rather
+    // than crashing the process. With -fno-exceptions, OOM calls std::terminate
+    // instead of throwing. 1 GiB cap matches `Pixmap::fromSize` and the filter
+    // primitives' caps so a `FloatPixmap` can hold the float conversion of
+    // any `Pixmap` the allocator already accepted. The prior 64 MiB capped
+    // float pixmaps at ~2048×2048, which contributed to filters silently
+    // failing at high editor zoom — see `GaussianBlur.cpp` and
+    // `ZoomFilterRepro_tests.cc`.
+    constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
     if (count * sizeof(float) > kMaxAllocationBytes) {
       return std::nullopt;
     }

@@ -172,10 +172,19 @@ std::optional<Pixmap> Pixmap::fromSize(std::uint32_t width, std::uint32_t height
     return std::nullopt;
   }
 
-  // Defensive cap: reject large allocations to prevent OOM crashes on memory-constrained
-  // systems. With -fno-exceptions, std::vector's allocator calls std::terminate instead of
-  // throwing std::bad_alloc, so we must reject before allocating.
-  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  // Defensive cap: reject malicious / accidental large allocations rather than
+  // crashing the process. With -fno-exceptions, std::vector's allocator calls
+  // std::terminate instead of throwing std::bad_alloc, so we must reject before
+  // allocating. The cap is set at 1 GiB — large enough for desktop renderer
+  // usage (donner's editor allows up to 8192×8192 RGBA = 256 MiB main canvas
+  // plus offscreen pixmaps for filter / mask / shadow-tree rasterization) and
+  // small enough to reject obviously-bad inputs (a viewBox claiming
+  // 100000×100000 would need ~40 GiB and is rejected outright).
+  //
+  // The previous 64 MiB value capped at 4096×4096 RGBA, which is below the
+  // editor's max canvas and silently broke filter rendering at moderate-to-
+  // high zoom — see `ZoomFilterRepro_tests.cc` for the regression.
+  constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
   if (len.value() > kMaxAllocationBytes) {
     return std::nullopt;
   }
