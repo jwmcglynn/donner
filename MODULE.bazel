@@ -107,7 +107,7 @@ new_local_repository(
 bazel_dep(name = "zlib", version = "1.3.2")
 
 # brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
-bazel_dep(name = "brotli", version = "1.2.0")
+bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
 
 ##
 ## Test dependencies
