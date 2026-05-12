@@ -14,7 +14,12 @@ std::optional<Mask> Mask::fromSize(std::uint32_t width, std::uint32_t height) {
   }
 
   const auto dataLen = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-  constexpr std::size_t kMaxAllocationBytes = 64 * 1024 * 1024;
+  // Same defensive cap (1 GiB) as `Pixmap::fromSize`. Masks are 1 byte/pixel
+  // so this allows up to ~32768×32768 — comfortably above any reasonable
+  // editor / renderer use case while still rejecting maliciously-large input.
+  // See `Pixmap.cpp` for the rationale and the regression that drove raising
+  // the cap from the prior 64 MiB.
+  constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
   if (dataLen > kMaxAllocationBytes) {
     return std::nullopt;
   }
