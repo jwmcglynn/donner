@@ -42,7 +42,7 @@ def _non_bcr_deps_impl(_mctx):
     new_git_repository(
         name = "woff2",
         build_file = "//third_party:BUILD.woff2",
-        commit = "1f184d05566b3e25827a1f8e68eb82b9ccf54f3b",
+        commit = "1c69169e9e1811dccd6c54c532fedda300233968",
         remote = "https://github.com/google/woff2.git",
     )
 
