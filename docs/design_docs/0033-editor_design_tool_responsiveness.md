@@ -1,8 +1,9 @@
 # Design: Editor Design-Tool-Grade Responsiveness
 
-**Status:** Design
+**Status:** Implementing (M1, M2, M5, M7 landed; M3/M4/M6/M8/M9/M10 open)
 **Author:** Claude Opus 4.7 (1M context)
 **Created:** 2026-05-12
+**Last updated:** 2026-05-13
 
 ## Summary
 
@@ -80,17 +81,78 @@ re-running the long-form instrumentation cycle that this round needed.
   Geode (GPU-tessellated path rasterization via the Slug algorithm)
   without a second rewrite.
 
+## Status (2026-05-13)
+
+| Milestone | State | Commit |
+|-----------|-------|--------|
+| M1 — Diagnostic layer panel | ✅ Landed (expanded scope: paint-order tile table, state header, viewport diagnostics) | `e38d9a94` + iterations folded into `ab802105` |
+| M2 — Intrinsic-size rasterization | ✅ Landed (M2A+M2B squashed; zoom-fix follow-up) | `e5a08619`, `4f0f5bf6` |
+| M3 — Cache band invariant under canvas resize | ⏳ Open | — |
+| M4 — Async re-rasterization with cancellation | ⏳ Open | — |
+| M5 — Preemptive swap-in | ✅ Landed | `793f96eb` |
+| M6 — Pinch-zoom GPU stretch | ⚠️ Partial (canvas-commit throttle only) | `0d1cdc56` |
+| M7 — Selection chrome priority lane | ✅ Snapshot infra landed; editor callsites not flipped yet | `965f0a02` |
+| M8 — Click→drag handoff doesn't wait for raster | ❌ Attempted + reverted (race condition); needs re-design via M7 snapshot path | `47901a55` → reverted |
+| M9 — Layer-set hysteresis | ⏳ Open (related: `MandatoryFilterLayerSurvivesCanvasResize` fix in `e38d9a94`) | — |
+| M10 — Operator perf validation | ⏳ Open | — |
+
+### Post-implementation stabilization (debugging arc, folded into `ab802105`)
+
+The M1/M2 landing surfaced a cluster of pre-existing bugs that the
+old `[CompositorSlowFrame]` log had been masking. All fixed in the
+omnibus stability commit:
+
+- **Prewarm dispatch loop:** entities the compositor refused to
+  promote (filter ancestors, memory cap) were re-queued every frame.
+  Closed via `notePrewarmAttempted` tracking.
+- **Drag dispatch loop:** the parallel `needsExperimentalLayerCapture`
+  path had the same shape. Closed via a `sameAsLastFailedDispatch`
+  guard.
+- **`cachedCanvasSize` mismatch:** `noteCachedTextures` was called
+  with the promoted bitmap's pixel dimensions instead of
+  `SVGDocument::canvasSize()`. After M2's intrinsic-size promotion
+  these aren't equivalent — the cache freshness check rejected
+  every frame and triggered a re-dispatch loop. Fixed by passing the
+  live document canvas size.
+- **Memory budget:** `kMaxCompositorMemoryBytes` was 256 MiB.
+  Retina-scale splash hit the cap at ~252 MiB and refused promotion
+  with `PromoteRefusalReason::MemoryLimit` — visible from the panel.
+  Bumped to 1 GiB.
+- **Canvas-commit stall after `ReplaceDocument`:** the throttle
+  compared the pending desired canvas against a stale
+  `lastSetCanvasSize_` cache that was never invalidated when
+  `ReplaceDocument` installed a fresh registry (with `canvasSize=
+  nullopt`). Fix: compare against the live
+  `app.document().document().canvasSize()` readback with a 1-pixel
+  aspect-rounding tolerance.
+
 ## Next Steps
 
-- Operator review of this doc to confirm scope (drag-only, panel design,
-  cache strategy, deferral semantics).
-- After sign-off, kick off Milestone 1 (diagnostic panel) since it
-  unblocks every subsequent perf measurement — we need the panel before
-  the perf milestones to know what's actually happening.
+- **M3 (cache band) is the next perf-impacting milestone.** Layer
+  bitmaps now survive a canvas resize (M2), but the editor still
+  re-rasterizes whenever the viewport scale moves at all. The
+  scale-band tolerance is what turns "drag at a new zoom level
+  re-rasterizes everything" into "drag at a new zoom level
+  GL-stretches the cached bitmap until the worker delivers a
+  refined one."
+- **M8 re-design.** Route the chrome through `SelectionChrome
+  Snapshot` end-to-end so the click→drag handoff is registry-read-
+  free. The M7 snapshot APIs are already in place.
+- **M6 completion.** Once M3 lands, the pinch-zoom GPU-stretch
+  model becomes a thin shim on top of the cache band — the cached
+  bitmap is already authoritative; the pane's display transform
+  just absorbs the gesture.
+- **M9 (hysteresis).** The `MandatoryFilterLayerSurvivesCanvasResize`
+  fix landed in M1's diff is a near-relative; the full hysteresis
+  policy is still open.
+- **M10 (perf validation).** No per-milestone wall-clock budget
+  tests are wired up yet; budgets live only as comments in the
+  table below.
 
 ## Implementation Plan
 
-- [ ] **Milestone 1: Diagnostic layer panel.**
+- [x] **Milestone 1: Diagnostic layer panel.** *Landed in `e38d9a94`;
+  follow-on iterations folded into the omnibus `ab802105`.*
   Right-side ImGui panel with one row per active compositor layer; columns
   are (id, entity name/id, kind/source, bitmap canvas size, rasterize
   wall-clock from last frame, cache-hit count, fast-path-engaged
@@ -98,13 +160,54 @@ re-running the long-form instrumentation cycle that this round needed.
   surface, not a control. Updates each frame the renderer isn't busy
   (the SidebarPresenter's existing snapshot pattern).
 
-- [ ] **Milestone 2: Intrinsic-size layer rasterization.**
+  *As shipped, the panel goes beyond the original scope:*
+  - **Unified paint-order tile table** — one row per composite tile
+    (background, foreground, segments, layers) with thumbnails, so the
+    panel reflects exactly what the renderer blits to make the final
+    frame. Replaces the originally-planned per-layer-only view.
+  - **State header** surfaces `activeHints`, `layerCount`, `splitPath`,
+    canvas size, and the last `PromoteRefusalReason` (`InvalidEntity`,
+    `CompositingBreakingAncestor`, `LayerLimit`, `MemoryLimit`,
+    `DescendantPromoted`). The `MemoryLimit` repro on splash at Retina
+    was diagnosed entirely from this header — no source-level
+    instrumentation needed.
+  - **Viewport diagnostics** — `zoom`, `DPR`, and a three-way canvas
+    state (viewport-desired vs. document-committed vs. compositor-
+    rasterized). Red on commit stall vs. desired; orange on compositor-
+    not-yet-re-rasterized. Surfaced the `ReplaceDocument` canvas-
+    commit stall bug fixed in the omnibus.
+  - APIs: `CompositorController::snapshotState()`,
+    `snapshotCompositeTiles()`, `snapshotLayerInspectorRows()` — all
+    self-contained value types, safe to read off the worker thread.
+
+- [x] **Milestone 2: Intrinsic-size layer rasterization.** *M2A landed
+  in `e5a08619`, M2B in the same commit (squashed); follow-up zoom-fix
+  in `4f0f5bf6`.*
   Each promoted layer rasterizes into a bitmap sized to the *layer's
   worldBounds + filter padding*, not the full canvas. Compose places the
   bitmap at the layer's canvas offset. Removes the "all layer bitmaps are
   canvas-sized, every canvas-size change invalidates everything" failure
   mode. The bitmap stores its source-scale and its world-to-bitmap
   transform so the fast-path delta math survives a canvas resize.
+
+  *As-shipped notes:*
+  - `computeEntityRangeBounds` + a 2px AA halo defines the intrinsic
+    bitmap; `CompositorController::canvasOffset_` carries the layer's
+    canvas-space offset through to the editor blit.
+  - The M2B blit initially pinned promoted-layer bitmaps at their
+    on-disk pixel size (`bitmapPx / DPR`), so zoom-in stretched the
+    chrome but not the promoted bitmap — content drifted off its
+    path. Fixed in `4f0f5bf6` by adding a `promotedBitmapDimsDoc`
+    field that scales the blit destination by the live
+    `documentFromCanvas`.
+  - Related regression discovered post-M1: when `SVGDocument::
+    setCanvasSize` calls `invalidateRenderTree`, every
+    `RenderingInstanceComponent` is wiped. If `mandatoryDetector_.
+    reconcile` ran before `prepareDocumentForRendering` rebuilt the
+    RICs, the detector saw zero candidates and dropped the filter
+    layer. Reordering fix lives in the M1 commit's diff and is
+    pinned by `CompositorController_tests.cc::
+    MandatoryFilterLayerSurvivesCanvasResize`.
 
 - [ ] **Milestone 3: Cache key invariant under canvas resize.**
   A layer's bitmap remains valid across a canvas-size change as long as the
@@ -123,7 +226,7 @@ re-running the long-form instrumentation cycle that this round needed.
   drag-coalesce). Critical: never block UI thread on a re-rasterize, and
   never queue more than one in-flight request per layer.
 
-- [ ] **Milestone 5: Preemptive swap-in.**
+- [x] **Milestone 5: Preemptive swap-in.** *Landed in `793f96eb`.*
   When the AsyncRenderer's worker delivers a refined-resolution bitmap,
   the editor's main loop swaps it in on the *next ImGui frame*, not on the
   next mouse event. The current setup waits for `pollResult()` to be
@@ -131,27 +234,80 @@ re-running the long-form instrumentation cycle that this round needed.
   ms during idle. Add an explicit `wake()` from the worker that triggers
   ImGui to redraw via `glfwPostEmptyEvent`.
 
-- [ ] **Milestone 6: Pinch-zoom GPU stretch.**
+  *As shipped:* `AsyncRenderer::setWakeCallback` is wired to
+  `Window::wakeEventLoop` in `EditorShell::EditorShell` (which calls
+  `glfwPostEmptyEvent` under the hood); the worker fires it the moment
+  a refined-resolution result is ready. Pinned by
+  `AsyncRenderer_tests.cc` (the test asserts the callback is invoked
+  exactly once per ready result, regression-guarding the wake plumbing).
+
+- [ ] **Milestone 6: Pinch-zoom GPU stretch.** *Partial — canvas-commit
+  throttle landed in `0d1cdc56` (`kCanvasSizeCommitDelay = 120 ms` in
+  `RenderCoordinator`), but the full "no commit during gesture +
+  GPU-stretch the cached bitmap" model is not yet implemented.*
   During an active pinch gesture, no `setCanvasSize` commit. The pane's
   display-transform absorbs the pinch zoom via GL stretch on the cached
   bitmap. After gesture-end + 200 ms idle, commit the new canvas size and
   schedule the async re-rasterize. Same model browsers use for trackpad
   pinch.
 
-- [ ] **Milestone 7: Selection chrome priority lane.**
+  *Status:* the throttle is sufficient to prevent the worst-case
+  setCanvasSize-per-event storm, but the editor still re-rasterizes
+  mid-gesture once the throttle window elapses. The compositor-side
+  `ReplaceDocument` canvas-commit stall (fixed by comparing against
+  the live `SVGDocument::canvasSize()` readback in
+  `RenderCoordinator.cc`, with a 1-pixel aspect-rounding tolerance)
+  was a prerequisite — without that, the throttle would mask the
+  stall and re-rasterizes would silently use the wrong canvas size.
+
+- [x] **Milestone 7: Selection chrome priority lane.** *Snapshot
+  infrastructure landed in `965f0a02`. Editor callsites still gate on
+  `!isBusy()`; flipping them to the snapshot path is what M8 needs to
+  unblock.*
   The overlay renderer's chrome rasterize moves to a high-priority slot
   that runs before any layer rasterize on the AsyncRenderer worker (or
   on the UI thread if cheap enough — the chrome is a single offscreen
   bitmap with one path outline + AABB). User sees the selection appear in
   the frame after the click; high-res content can lag.
 
+  *As shipped:*
+  - `OverlayRenderer::captureChromeSnapshot(selection, marquee,
+    canvasFromDoc)` reads the registry once and packs everything the
+    draw phase needs into a self-contained `SelectionChromeSnapshot`
+    value (per-element `(spline, canvasFromElement)`, AABBs in doc
+    space, optional marquee, pre-computed stroke widths). Holds no
+    registry pointers.
+  - `OverlayRenderer::drawChromeFromSnapshot(renderer, snapshot)`
+    reads only the snapshot — race-free with respect to the worker.
+  - The existing `drawChromeWithTransform` API is preserved and now
+    routes through `captureChromeSnapshot` + `drawChromeFromSnapshot`
+    internally, so the snapshot path is the single source of truth.
+  - Pinned by `SnapshotProducesByteIdenticalPixelsAsLivePath` (API
+    equivalence) and `SnapshotSurvivesDocumentMutationBetweenCapture
+    AndDraw` (race-safety).
+
 - [ ] **Milestone 8: Click→drag handoff doesn't wait for raster.**
+  *Attempted (`47901a55`) and reverted (folded into `4f0f5bf6` after
+  squash). The naive busy-path bypass exposed a worker-vs-UI race —
+  `tryStartRedragOnSelected` read `ShapeSystem` components that the
+  worker was concurrently rebuilding via
+  `prepareDocumentForRendering`. The revert net-zeroed the busy-path
+  bypass but kept the M2B zoom fix that was found alongside.*
   `EditorShell` currently defers `onMouseDown` until
   `asyncRenderer.isBusy()` is false. Decouple: `SelectTool::onMouseDown`
   fires immediately on the UI thread (it only mutates `dragState_`, no
   registry access required), and the first drag frame uses the cached
   bitmap with the new selection's overlay drawn on top. The async
   re-rasterize lands behind it without blocking interaction.
+
+  *Re-design needed.* The right shape is likely to route the click
+  through M7's `SelectionChromeSnapshot` end-to-end: the UI thread
+  captures the selection snapshot synchronously the moment the click
+  resolves, dispatches `drawChromeFromSnapshot` on the next ImGui
+  frame, and leaves the async path to deliver the refined render
+  behind. The snapshot's race-safety guarantee (no live registry
+  reads in the draw phase) is the property that the failed M8 attempt
+  was missing.
 
 - [ ] **Milestone 9: Layer-set hysteresis.**
   Adding/removing a promoted layer (mandatory filter detector running
@@ -296,9 +452,13 @@ Prior art the doc draws from:
    commit + schedule re-rasterize. No mid-gesture re-rasterizes.
 
 7. **Diagnostic surface.** A right-side panel observable in any session
-   (no flag) exposes the live compositor state — exactly what
-   `[CompositorSlowFrame]` logs print, but as an always-on overlay
-   instead of after-the-fact stderr.
+   (no flag) exposes the live compositor state — paint-order composite
+   tiles with thumbnails, raster wall-clock, state header (active
+   hints, layer count, split path, last `PromoteRefusalReason`),
+   viewport diagnostics (zoom, DPR, three-way canvas state) — as an
+   always-on overlay. The earlier `[CompositorSlowFrame]` stderr
+   instrumentation has been removed; the panel surfaces the same data
+   live (per `ab802105`).
 
 ### Strategies prod tools use to feel responsive (recommended additions)
 
@@ -480,20 +640,25 @@ Captured during the design review with the operator (2026-05-12):
 
 ## Future Work
 
-- **M2C — Stop flattening bg/fg in `recomposeSplitBitmaps`.** Today the
+- **M2C — Stop flattening bg/fg in `recomposeSplitBitmaps`.**
+  *Diagnostic side delivered:* the M1 panel now iterates the unified
+  paint-order tile list (background, foreground, segments, layers)
+  via `snapshotCompositeTiles`, so the operator can see the
+  individual tiles even while the editor blit is still going through
+  the flattened bg/fg pair. *Display side still open.* Today the
   compositor pre-composes every segment + non-drag layer into two
   canvas-sized bg/fg bitmaps on every drag-target switch and uploads
   those two textures to the editor. The cached layer/segment bitmaps
   still exist (they're inputs to the recompose) but the editor never
-  sees them individually. User observation on
-  `74083723`: "we're re-rasterizing the fg/bg and losing the isolated
-  promoted layers when this happens — it looks like we're flattening
-  the fg/bg." The right architecture: editor's drag composite draws
-  N textures directly (segment 0, layer 0, …, drag layer at offset,
-  …, segment N), no flatten step. Eliminates a chunk of per-drag-
-  target-switch work, gets rid of the asymmetric editor-display
-  path, and unifies the on-screen blit with the diagnostic-panel
-  view (the panel already iterates the same in-order list). Touches
+  sees them individually. User observation while iterating M1: "we're
+  re-rasterizing the fg/bg and losing the isolated promoted layers
+  when this happens — it looks like we're flattening the fg/bg." The
+  right architecture: editor's drag composite draws N textures
+  directly (segment 0, layer 0, …, drag layer at offset, …, segment
+  N), no flatten step. Eliminates a chunk of per-drag-target-switch
+  work, gets rid of the asymmetric editor-display path, and unifies
+  the on-screen blit with the diagnostic-panel view (the panel
+  already iterates the same in-order list). Touches
   `CompositedPreview` (becomes a vector of tile entries),
   `GlTextureCache` (per-tile texture cache), `RenderPanePresenter`
   (iterates tiles), and the compositor (drops `recomposeSplitBitmaps`).
