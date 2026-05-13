@@ -11,6 +11,7 @@
 #include "donner/editor/EditorInputBridge.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/LayerInspectorPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
@@ -59,8 +60,10 @@ private:
   void renderSourcePane(float paneOriginY, float paneHeight, ImFont* codeFont);
   void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
                         ImGuiWindowFlags paneFlags);
-  void renderSidebars(float rightPaneX, float paneOriginY, float treePaneHeight,
-                      float inspectorPaneY, float inspectorPaneHeight, ImGuiWindowFlags paneFlags);
+  void renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
+                      float treePaneHeight, float inspectorPaneY, float inspectorPaneHeight,
+                      float layerPanelPaneY, float layerPanelHeight, ImGuiWindowFlags paneFlags);
+  void renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight);
   void highlightSelectionSourceIfNeeded();
 
   gui::EditorWindow& window_;
@@ -77,11 +80,17 @@ private:
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
+  LayerInspectorPanel layerInspectorPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
+  /// Width (in pixels) of the right-side column hosting the tree view,
+  /// inspector, and compositor layer panel. Mutated by the
+  /// drag-to-resize splitter rendered between the render pane and the
+  /// right column.
+  float rightPaneWidth_ = 420.0f;
   std::optional<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
   std::optional<ImVec2> lastPostedScreenPoint_;

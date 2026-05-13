@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -313,6 +314,90 @@ public:
     return fastPathCounters_;
   }
 
+  /// Max side length (in pixels) of the thumbnail bitmap synthesized into
+  /// each `LayerInspectorRow::thumbnailPixels`. The downsample preserves
+  /// aspect ratio, so the smaller side is `round(otherSide * shortSide /
+  /// longSide)`. 64 px keeps the memory cost trivial (16 KiB / layer max)
+  /// while staying legible at the editor's right-pane width.
+  static constexpr int kLayerThumbnailMaxSide = 64;
+
+  /// One row of diagnostic state per active compositor layer, intended
+  /// for the editor's read-only layer-inspector panel (design doc 0033
+  /// M1). Cheap to build, cheap to copy: a few ints and one short
+  /// string per layer.
+  struct LayerInspectorRow {
+    /// Layer's stable numeric id (`CompositorLayer::id`).
+    uint32_t layerId = 0;
+    /// Root entity of the promoted subtree.
+    Entity entity = entt::null;
+    /// Pixel size of the layer's cached bitmap. `Vector2i::Zero()` when
+    /// the layer has not yet been rasterized (`hasValidBitmap` false).
+    Vector2i bitmapSize = Vector2i::Zero();
+    /// Monotonic generation counter from `CompositorLayer::generation`.
+    uint64_t generation = 0;
+    /// Cumulative rasterize count from `CompositorLayer::rasterizeCount`.
+    uint32_t rasterizeCount = 0;
+    /// Wall-clock duration of the most recent rasterize, in ms.
+    double lastRasterizeMs = 0.0;
+    /// Whether this layer is currently flagged dirty (a rasterize is
+    /// pending on the next `renderFrame` call).
+    bool dirty = false;
+    /// Whether the layer has a valid cached bitmap.
+    bool hasValidBitmap = false;
+    /// Raw fallback flags (handy for tests; the panel renders
+    /// `fallbackReasonsText` for display).
+    FallbackReason fallbackReasons = FallbackReason::None;
+    /// Pre-formatted fallback flag list (e.g. `"Filter | IsolatedLayer"`).
+    std::string fallbackReasonsText;
+    /// Pixel dimensions of the downsampled thumbnail. `Vector2i::Zero()`
+    /// when the layer has no valid bitmap. Otherwise the longer side is
+    /// `kLayerThumbnailMaxSide` and the shorter side preserves aspect.
+    Vector2i thumbnailDims = Vector2i::Zero();
+    /// RGBA8 thumbnail pixels, tightly packed (`thumbnailDims.x * 4` row
+    /// stride), suitable for direct upload via `glTexImage2D`. Empty when
+    /// the layer has no valid bitmap.
+    std::vector<uint8_t> thumbnailPixels;
+  };
+
+  /// Build a per-layer snapshot of compositor state for the layer-
+  /// inspector panel. Safe to call from the renderer worker thread when
+  /// the compositor isn't mid-render (the editor calls it at the same
+  /// Done-transition point as `fastPathCountersForTesting`). Allocates a
+  /// `vector` and one short string per layer — fine for diagnostics, not
+  /// hot-path-grade.
+  [[nodiscard]] std::vector<LayerInspectorRow> snapshotLayerInspectorRows() const;
+
+  /// One row of diagnostic state per static segment (the non-promoted
+  /// content between promoted layers, plus the pre-first and post-last
+  /// slots). Sized N+1 where N is `layerCount()`.
+  struct SegmentInspectorRow {
+    /// Slot index (0..N inclusive). Segment 0 is the pre-first-layer
+    /// content; segment N is the post-last-layer content.
+    size_t slotIndex = 0;
+    /// Pixel dimensions of the cached segment bitmap. `Vector2i::Zero()`
+    /// when the slot has no bitmap yet.
+    Vector2i bitmapSize = Vector2i::Zero();
+    /// Canvas-space top-left offset where this segment's bitmap blits
+    /// back (non-zero only on the tight-bounded path, design doc 0027).
+    Vector2d canvasOffset = Vector2d::Zero();
+    /// Monotonic per-slot generation counter.
+    uint64_t generation = 0;
+    /// Wall-clock duration of the most recent rasterize, in ms. Zero
+    /// when this slot has never been rasterized in the current session.
+    double lastRasterizeMs = 0.0;
+    /// Whether this slot is currently flagged dirty (a rasterize is
+    /// pending on the next `renderFrame` call).
+    bool dirty = false;
+    /// Whether the slot has a non-empty cached bitmap.
+    bool hasValidBitmap = false;
+  };
+
+  /// Snapshot per-segment diagnostic state. Mirrors the per-layer
+  /// snapshot but covers the static-segment cache, which dominates the
+  /// per-frame rasterize cost on documents like the splash. Same
+  /// invocation rules as `snapshotLayerInspectorRows`.
+  [[nodiscard]] std::vector<SegmentInspectorRow> snapshotSegmentInspectorRows() const;
+
   /**
    * Clear all layers and cached state.
    *
@@ -551,6 +636,12 @@ private:
   /// GL texture uploads when a segment survived the layer-set change
   /// untouched.
   std::vector<uint64_t> staticSegmentGeneration_;
+  /// Per-segment wall-clock duration (ms) of the most recent rasterize,
+  /// parallel to `staticSegments_`. Diagnostic-only — surfaced via
+  /// `snapshotSegmentInspectorRows` to the layer-inspector panel (design
+  /// doc 0033 M1+). Zero for slots that have never rasterized in the
+  /// current session.
+  std::vector<double> staticSegmentLastRasterizeMs_;
   /// Monotonic counter used to seed `staticSegmentGeneration_[i]` when
   /// a segment slot is freshly created. Survives layer-set shuffles
   /// (i.e., when a segment splits in two, both new slots get fresh

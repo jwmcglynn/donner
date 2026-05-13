@@ -289,6 +289,8 @@ void AsyncRenderer::workerLoop() {
           result_.version = request.version;
           result_.workerMs = workerMs;
           lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
+          lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
+          lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
           state_ = State::Done;
           // Snapshot the callback under the lock so a concurrent
           // `setWakeCallback` swap can't tear the invocation. Fire it
