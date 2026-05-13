@@ -120,7 +120,8 @@ svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& con
 }  // namespace
 
 bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
-                                          MouseModifiers modifiers) {
+                                          MouseModifiers modifiers,
+                                          std::span<const Box2d> selectionBoundsDoc) {
   if (modifiers.shift) {
     return false;
   }
@@ -128,9 +129,12 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   if (currentSelection.size() != 1) {
     return false;
   }
-  const auto bounds =
-      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(currentSelection));
-  if (bounds.empty() || !bounds.front().contains(documentPoint) ||
+  // M8: bounds are caller-supplied so this path is race-safe during a
+  // busy render. EditorShell passes the pre-snapshotted bounds from
+  // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
+  // `onMouseDown` passes a freshly-computed live snapshot (its caller has
+  // already gated on `!isBusy()`).
+  if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint) ||
       !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
     return false;
   }
@@ -181,11 +185,15 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   //
   // The race-safe variant (`tryStartRedragOnSelected`) is exposed
   // publicly so EditorShell can run it before `!isBusy()` for the
-  // mid-render re-drag case — but on this code path we always have a
-  // resolved hitTest, so dispatch the same helper as a hit-miss
-  // fallback only.
-  if (!hit.has_value() && tryStartRedragOnSelected(editor, documentPoint, modifiers)) {
-    return;
+  // mid-render re-drag case — but on this code path the caller has
+  // already gated on `!isBusy()`, so a live `SnapshotSelectionWorldBounds`
+  // call is race-free.
+  if (!hit.has_value()) {
+    const auto liveBoundsDoc =
+        SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
+    if (tryStartRedragOnSelected(editor, documentPoint, modifiers, liveBoundsDoc)) {
+      return;
+    }
   }
 
   // Click on empty space → start a marquee. The marquee resolves to a

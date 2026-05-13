@@ -96,6 +96,13 @@ private:
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   bool treeSelectionOriginatedInTree_ = false;
+  /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
+  /// pending click without going through the `!isBusy()`-gated post-
+  /// onMouseDown follow-up (bounds cache refresh, overlay rasterize,
+  /// render request). The follow-up fires on the next idle frame so
+  /// the chrome catches up to the new drag-target without blocking
+  /// the click acknowledgement.
+  bool pendingClickFollowupAfterIdle_ = false;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;

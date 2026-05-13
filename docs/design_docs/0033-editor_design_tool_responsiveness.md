@@ -1,6 +1,6 @@
 # Design: Editor Design-Tool-Grade Responsiveness
 
-**Status:** Implementing (M1, M2, M5, M7 landed; M3/M4/M6/M8/M9/M10 open)
+**Status:** Implementing (M1, M2, M5, M7, M8 landed; M3/M4/M6/M9/M10 open)
 **Author:** Claude Opus 4.7 (1M context)
 **Created:** 2026-05-12
 **Last updated:** 2026-05-13
@@ -92,7 +92,7 @@ re-running the long-form instrumentation cycle that this round needed.
 | M5 — Preemptive swap-in | ✅ Landed | `793f96eb` |
 | M6 — Pinch-zoom GPU stretch | ⚠️ Partial (canvas-commit throttle only) | `0d1cdc56` |
 | M7 — Selection chrome priority lane | ✅ Snapshot infra landed; editor callsites not flipped yet | `965f0a02` |
-| M8 — Click→drag handoff doesn't wait for raster | ❌ Attempted + reverted (race condition); needs re-design via M7 snapshot path | `47901a55` → reverted |
+| M8 — Click→drag handoff doesn't wait for raster | ✅ Cache-backed re-drag fast path bypasses `!isBusy()`; full hitTest path still gated | (M8 re-attempt) |
 | M9 — Layer-set hysteresis | ⏳ Open (related: `MandatoryFilterLayerSurvivesCanvasResize` fix in `e38d9a94`) | — |
 | M10 — Operator perf validation | ⏳ Open | — |
 
@@ -135,9 +135,13 @@ omnibus stability commit:
   re-rasterizes everything" into "drag at a new zoom level
   GL-stretches the cached bitmap until the worker delivers a
   refined one."
-- **M8 re-design.** Route the chrome through `SelectionChrome
-  Snapshot` end-to-end so the click→drag handoff is registry-read-
-  free. The M7 snapshot APIs are already in place.
+- **M8 selection-change decoupling.** The M8 fast path covers
+  re-drag (click inside currently-selected element). Selection
+  change clicks still gate on `!isBusy()`. Routing the new selection
+  through M7's `SelectionChromeSnapshot` end-to-end would let the
+  selection switch also bypass `!isBusy()`. Sequenced after M3 so
+  the cache-band tolerance can serve the post-selection-change
+  preview without a forced re-rasterize.
 - **M6 completion.** Once M3 lands, the pinch-zoom GPU-stretch
   model becomes a thin shim on top of the cache band — the cached
   bitmap is already authoritative; the pane's display transform
@@ -286,28 +290,42 @@ omnibus stability commit:
     equivalence) and `SnapshotSurvivesDocumentMutationBetweenCapture
     AndDraw` (race-safety).
 
-- [ ] **Milestone 8: Click→drag handoff doesn't wait for raster.**
-  *Attempted (`47901a55`) and reverted (folded into `4f0f5bf6` after
-  squash). The naive busy-path bypass exposed a worker-vs-UI race —
-  `tryStartRedragOnSelected` read `ShapeSystem` components that the
-  worker was concurrently rebuilding via
-  `prepareDocumentForRendering`. The revert net-zeroed the busy-path
-  bypass but kept the M2B zoom fix that was found alongside.*
-  `EditorShell` currently defers `onMouseDown` until
-  `asyncRenderer.isBusy()` is false. Decouple: `SelectTool::onMouseDown`
-  fires immediately on the UI thread (it only mutates `dragState_`, no
-  registry access required), and the first drag frame uses the cached
-  bitmap with the new selection's overlay drawn on top. The async
-  re-rasterize lands behind it without blocking interaction.
+- [x] **Milestone 8: Click→drag handoff doesn't wait for raster.**
+  *Cache-backed re-drag fast path landed; the first M8 attempt
+  (`47901a55`) was reverted because it called the live
+  `SnapshotSelectionWorldBounds` mid-render and raced the worker's
+  `prepareDocumentForRendering`. The re-attempt routes the bounds
+  read through `SelectionBoundsCache::displayedBoundsDoc` —
+  populated on idle frames — so the call doesn't touch any
+  registry component the worker is mid-mutating.*
 
-  *Re-design needed.* The right shape is likely to route the click
-  through M7's `SelectionChromeSnapshot` end-to-end: the UI thread
-  captures the selection snapshot synchronously the moment the click
-  resolves, dispatches `drawChromeFromSnapshot` on the next ImGui
-  frame, and leaves the async path to deliver the refined render
-  behind. The snapshot's race-safety guarantee (no live registry
-  reads in the draw phase) is the property that the failed M8 attempt
-  was missing.
+  *As shipped:*
+  - `SelectTool::tryStartRedragOnSelected` accepts a caller-supplied
+    `std::span<const Box2d> selectionBoundsDoc`. EditorShell passes
+    the bounds-cache snapshot; `onMouseDown` (slow path, already
+    inside `!isBusy()`) passes a freshly-computed live snapshot.
+  - `EditorShell` calls `tryStartRedragOnSelected` BEFORE checking
+    `!isBusy()`. If the click falls inside the cached bbox of the
+    currently-selected single element, the drag starts immediately
+    — no waiting for the worker. The follow-up registry-reading
+    work (bounds cache refresh, overlay rasterize, request render)
+    is deferred to the next idle frame via
+    `pendingClickFollowupAfterIdle_`, so the chrome catches up
+    within 1–2 frames of the click without blocking the click
+    acknowledgement.
+  - Slow path (selection change, marquee, shift-click, multi-select,
+    stale cache) still gates on `!isBusy()` and goes through the
+    full `onMouseDown` flow. Selection change is rare relative to
+    re-drag during sustained editing, so the slow-path latency is
+    acceptable; further decoupling (route the new selection through
+    M7's chrome-snapshot end-to-end) is future work.
+  - Pinned by `SelectTool_tests.cc`:
+    - `TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBounds`
+    - `TryRedragOnSelectedReturnsFalseOnShiftClick`
+    - `TryRedragOnSelectedReturnsFalseWhenNothingSelected`
+    - `TryRedragOnSelectedReturnsFalseWhenClickIsOutsideSelectedBounds`
+    - `TryRedragOnSelectedReturnsFalseOnEmptyCachedBounds`
+    - `TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup`
 
 - [ ] **Milestone 9: Layer-set hysteresis.**
   Adding/removing a promoted layer (mandatory filter detector running

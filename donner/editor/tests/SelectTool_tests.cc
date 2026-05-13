@@ -1,6 +1,7 @@
 #include "donner/editor/SelectTool.h"
 
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "gtest/gtest.h"
 
@@ -811,8 +812,13 @@ TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBou
 
   // Click inside the same element's bounds (still selected). The
   // snapshot-safe re-drag path must start a drag without changing
-  // the selection.
-  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}));
+  // the selection. Pass freshly-snapshotted bounds the way the
+  // EditorShell does (in the real flow the bounds come from
+  // `SelectionBoundsCache::displayedBoundsDoc` — race-free even if
+  // the worker is currently rendering).
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}, bounds));
   EXPECT_TRUE(tool.isDragging());
   EXPECT_TRUE(selectionIs("#r1"));
 }
@@ -823,16 +829,19 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {
 
   MouseModifiers shift{};
   shift.shift = true;
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
   // Shift-click must NOT start a re-drag — it toggles selection
   // membership, which requires the full hitTest path.
-  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), shift));
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), shift, bounds));
   EXPECT_FALSE(tool.isDragging());
 }
 
 TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenNothingSelected) {
   // No prior selection.
   EXPECT_FALSE(app.selectedElement().has_value());
-  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(15.0, 15.0), MouseModifiers{}));
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(15.0, 15.0), MouseModifiers{},
+                                             std::span<const Box2d>{}));
   EXPECT_FALSE(tool.isDragging());
 }
 
@@ -842,8 +851,29 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenClickIsOutsideSelected
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
   ASSERT_TRUE(selectionIs("#r1"));
 
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
   // Click on r2's territory (well outside r1).
-  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(110.0, 110.0), MouseModifiers{}));
+  EXPECT_FALSE(
+      tool.tryStartRedragOnSelected(app, Vector2d(110.0, 110.0), MouseModifiers{}, bounds));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+// Design doc 0033 §M8: the cache-based fast path must work with
+// pre-snapshotted bounds — the EditorShell drops the `!isBusy()`
+// gate for it, so a live `SnapshotSelectionWorldBounds` call would
+// race the worker. Passing an empty bounds span (e.g. when the
+// bounds cache hasn't been refreshed since selection changed) must
+// fall through cleanly.
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnEmptyCachedBounds) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  // Empty bounds span — the EditorShell hits this when the cache's
+  // `lastSelection` doesn't match the current selection (cache stale).
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{},
+                                             std::span<const Box2d>{}));
   EXPECT_FALSE(tool.isDragging());
 }
 
@@ -864,9 +894,12 @@ TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) 
 
   // Click inside #anchor's snapshotted world bounds. The fast path
   // re-drags #anchor without consulting `editor.hitTest`. Without it,
-  // a future M8 caller-side `!isBusy()` drop wouldn't have a safe
-  // re-drag path during busy renders.
-  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(15.0, 20.0), MouseModifiers{}));
+  // the M8 caller-side `!isBusy()` drop wouldn't have a safe re-drag
+  // path during busy renders.
+  const auto anchorBounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  EXPECT_TRUE(
+      tool.tryStartRedragOnSelected(app, Vector2d(15.0, 20.0), MouseModifiers{}, anchorBounds));
   EXPECT_TRUE(tool.isDragging());
   EXPECT_TRUE(selectionIs("#anchor"));
 }
