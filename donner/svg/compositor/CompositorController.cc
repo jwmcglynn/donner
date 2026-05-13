@@ -1950,6 +1950,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
   std::vector<CompositorTile> tiles;
   tiles.reserve(layers_.size() + staticSegments_.size());
   uint32_t paintIdx = 0;
+  const auto segmentOffsetAt = [this](size_t idx) {
+    return idx < staticSegmentOffsets_.size() ? staticSegmentOffsets_[idx] : Vector2d::Zero();
+  };
   for (size_t i = 0; i < layers_.size(); ++i) {
     // Segment slot before layer[i]. Tile id = (left-neighbor entity,
     // right-neighbor entity).
@@ -1965,7 +1968,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
         .paintOrderIndex = paintIdx++,
         .bitmap = segBitmap,
         .layerEntity = entt::null,
+        .canvasOffsetPx = segmentOffsetAt(i),
         .canvasFromBitmap = Transform2d(),
+        .isDragTarget = false,
     });
     // Layer tile.
     const auto& layer = layers_[i];
@@ -1976,7 +1981,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
         .paintOrderIndex = paintIdx++,
         .bitmap = layerBitmap,
         .layerEntity = layer.entity(),
+        .canvasOffsetPx = layer.canvasOffset(),
         .canvasFromBitmap = layer.canvasFromBitmap(),
+        .isDragTarget = layer.entity() == splitStaticLayersEntity_,
     });
   }
   // Trailing segment after the last layer.
@@ -1996,7 +2003,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload() const
       .paintOrderIndex = paintIdx,
       .bitmap = tailBitmap,
       .layerEntity = entt::null,
+      .canvasOffsetPx = segmentOffsetAt(tailIdx),
       .canvasFromBitmap = Transform2d(),
+      .isDragTarget = false,
   });
   return tiles;
 }

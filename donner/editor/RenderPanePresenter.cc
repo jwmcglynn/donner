@@ -20,16 +20,6 @@ constexpr float kOverBudgetThresholdMs = kTargetFrameMs * 1.1f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
 
-Vector2d PromotedTextureScreenOffset(const GlTextureCache& textures,
-                                     const ViewportState& viewport) {
-  // Includes both the layer's intrinsic canvas position (non-zero after
-  // M2B's tight-bound rasterize) and the post-rasterize DOM drag delta.
-  // Both fields are reported in doc units; the screen-side conversion
-  // is the same `pixelsPerDocUnit` factor.
-  const Vector2d totalDoc = textures.promotedCanvasOffsetDoc() + textures.promotedTranslationDoc();
-  return totalDoc * viewport.pixelsPerDocUnit();
-}
-
 void RenderFrameGraph(const FrameHistory& history) {
   const ImVec2 origin = ImGui::GetCursorScreenPos();
   ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -159,16 +149,9 @@ void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2&
 }  // namespace
 
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
-  // The DOM is the source of truth for position. The overlay chrome and AABBs
-  // are recomputed against the current DOM transform, so no editor-side
-  // "screen offset" is layered on top. The only offset that survives is the
-  // one the compositor itself reports for the promoted bitmap — the delta
-  // between the bitmap's stamp-time DOM transform and the current DOM
-  // transform, used when a stale bitmap is reused via the fast path.
-  const auto promotedScreenOffset = PromotedTextureScreenOffset(state.textures, state.viewport);
-
-  if (state.textures.flatWidth() <= 0 && state.textures.flatHeight() <= 0 &&
-      !state.experimentalDragPresentation.hasCachedTextures) {
+  const bool hasFlat = state.textures.flatWidth() > 0 && state.textures.flatHeight() > 0;
+  const bool hasTiles = !state.textures.tiles().empty();
+  if (!hasFlat && !state.experimentalDragPresentation.hasCachedTextures && !hasTiles) {
     ImGui::TextUnformatted("(no rendered image)");
     return;
   }
@@ -181,48 +164,40 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
 
-  if (state.experimentalMode &&
+  // M2C: when the worker has published a composited tile list and the
+  // editor is in the experimental drag-presentation mode, blit the
+  // tiles directly in paint order. Each tile carries its own canvas
+  // offset (in doc units) and intrinsic dimensions, so the bitmap
+  // tracks pinch-zoom changes via the live `pixelsPerDocUnit` (same
+  // §M2B property the old single-promoted-bitmap path had, applied
+  // uniformly now to every tile).
+  const bool useTiles =
+      state.experimentalMode && hasTiles &&
       state.experimentalDragPresentation.shouldDisplayCompositedLayers(state.activeDragPreview) &&
-      state.textures.promotedWidth() > 0 && state.textures.promotedHeight() > 0 &&
-      state.displayedDragPreview.has_value()) {
-    if (state.textures.backgroundWidth() > 0 && state.textures.backgroundHeight() > 0) {
-      paneDrawList->AddImage(
-          static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.backgroundTexture())),
-          imageOrigin, imageBottomRight);
+      state.displayedDragPreview.has_value();
+  if (useTiles) {
+    const double pxPerDoc = state.viewport.pixelsPerDocUnit();
+    for (const auto& tile : state.textures.tiles()) {
+      if (tile.texture == 0) {
+        continue;
+      }
+      const Vector2d originDoc = tile.canvasOffsetDoc + tile.dragTranslationDoc;
+      Vector2d sizeScreen = tile.bitmapDimsDoc * pxPerDoc;
+      if (sizeScreen.x <= 0.0 || sizeScreen.y <= 0.0) {
+        // Defensive fallback for canvas-sized tiles that pre-date
+        // M2's intrinsic-size rasterize — stretch across the full
+        // pane, matching the old bg/fg behavior.
+        sizeScreen.x = static_cast<double>(imageBottomRight.x - imageOrigin.x);
+        sizeScreen.y = static_cast<double>(imageBottomRight.y - imageOrigin.y);
+      }
+      const ImVec2 tileOrigin(imageOrigin.x + static_cast<float>(originDoc.x * pxPerDoc),
+                              imageOrigin.y + static_cast<float>(originDoc.y * pxPerDoc));
+      const ImVec2 tileBottomRight(tileOrigin.x + static_cast<float>(sizeScreen.x),
+                                   tileOrigin.y + static_cast<float>(sizeScreen.y));
+      paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tile.texture)),
+                             tileOrigin, tileBottomRight);
     }
-
-    // Intrinsic-size blit (design doc 0033 §M2B). The bitmap covers
-    // `promotedBitmapDimsDoc` doc units; multiply by the *current*
-    // `pixelsPerDocUnit` to get the on-screen blit size. Crucial
-    // difference from `bitmapPx / DPR`: that formula freezes the
-    // bitmap's screen size against pinch-zoom, because the rasterize
-    // is debounced during the gesture (canvas pixels don't change),
-    // but the view's `pixelsPerDocUnit` does — the bitmap must
-    // stretch with the view. (Pinned by
-    // `RenderPanePresenterTest.PromotedBitmapScalesWithZoom`.)
-    Vector2d promotedSizeScreen =
-        state.textures.promotedBitmapDimsDoc() * state.viewport.pixelsPerDocUnit();
-    if (promotedSizeScreen.x <= 0.0 || promotedSizeScreen.y <= 0.0) {
-      // Defensive fallback for legacy CompositedPreview payloads that
-      // predate the field — stretch across the full pane (matches the
-      // pre-M2B behavior for canvas-sized bitmaps).
-      promotedSizeScreen.x = static_cast<double>(imageBottomRight.x - imageOrigin.x);
-      promotedSizeScreen.y = static_cast<double>(imageBottomRight.y - imageOrigin.y);
-    }
-    const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(promotedScreenOffset.x),
-                                imageOrigin.y + static_cast<float>(promotedScreenOffset.y));
-    const ImVec2 promotedBottomRight(promotedOrigin.x + static_cast<float>(promotedSizeScreen.x),
-                                     promotedOrigin.y + static_cast<float>(promotedSizeScreen.y));
-    paneDrawList->AddImage(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.promotedTexture())),
-        promotedOrigin, promotedBottomRight);
-
-    if (state.textures.foregroundWidth() > 0 && state.textures.foregroundHeight() > 0) {
-      paneDrawList->AddImage(
-          static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.foregroundTexture())),
-          imageOrigin, imageBottomRight);
-    }
-  } else {
+  } else if (hasFlat) {
     paneDrawList->AddImage(
         static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.flatTexture())),
         imageOrigin, imageBottomRight);

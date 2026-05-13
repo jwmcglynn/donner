@@ -62,11 +62,26 @@ struct CompositorTile {
   /// for a static segment tile.
   Entity layerEntity = entt::null;
 
+  /// Canvas-space top-left where the tile's bitmap blits back, in
+  /// canvas pixels at rasterize time (design doc 0033 §M2C). For
+  /// segments this is `staticSegmentOffsets_[i]` (non-zero on the
+  /// tight-bounded path, design doc 0027); for layers this is
+  /// `CompositorLayer::canvasOffset()` (non-zero for intrinsic-sized
+  /// rasters, design doc 0033 §M2A). The editor's blit math is
+  /// `Translate(canvasOffsetPx) * canvasFromBitmap`.
+  Vector2d canvasOffsetPx = Vector2d::Zero();
+
   /// `canvasFromBitmap` transform the tile should be drawn with:
   /// maps the bitmap's local pixel grid into canvas pixels. Identity
   /// for segments and for non-drag layers; pure translation for the
   /// drag layer when the fast path has updated its offset.
   Transform2d canvasFromBitmap;
+
+  /// True when this tile is the active drag-target layer. The editor
+  /// uses this both for diagnostic highlighting and as the cue to
+  /// route the live pre-commit DOM delta through `canvasFromBitmap`
+  /// on the GPU side.
+  bool isDragTarget = false;
 };
 
 /**
