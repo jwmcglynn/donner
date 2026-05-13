@@ -230,6 +230,25 @@ public:
     return lastFastPathCounters_;
   }
 
+  /// Snapshot of the compositor's per-layer diagnostic rows (design doc
+  /// 0033 M1). Captured under the worker mutex at every Done transition;
+  /// the UI thread copies the cached vector out under the lock. Empty
+  /// before the first render lands or when the compositor isn't
+  /// instantiated.
+  [[nodiscard]] std::vector<svg::compositor::CompositorController::LayerInspectorRow>
+  compositorLayerInspectorRows() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastLayerInspectorRows_;
+  }
+
+  /// Snapshot of the compositor's per-segment diagnostic rows. Same
+  /// capture point and locking as the per-layer rows.
+  [[nodiscard]] std::vector<svg::compositor::CompositorController::SegmentInspectorRow>
+  compositorSegmentInspectorRows() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastSegmentInspectorRows_;
+  }
+
 private:
   void workerLoop();
 
@@ -293,6 +312,15 @@ private:
   /// this via `compositorFastPathCountersForTesting`. Mutable because we
   /// lock in a const method.
   svg::compositor::CompositorController::FastPathCounters lastFastPathCounters_;
+
+  /// Most recent per-layer diagnostic snapshot, captured under `mutex_`
+  /// at every Done transition. UI-thread reads this via
+  /// `compositorLayerInspectorRows()`. Empty before the first render.
+  std::vector<svg::compositor::CompositorController::LayerInspectorRow> lastLayerInspectorRows_;
+
+  /// Most recent per-segment diagnostic snapshot. Captured / read on
+  /// the same code path as `lastLayerInspectorRows_`.
+  std::vector<svg::compositor::CompositorController::SegmentInspectorRow> lastSegmentInspectorRows_;
 
   /// Runtime kill-switch for tight-bounded segment rasterization. Pushed
   /// into `CompositorController` at the start of each worker iteration.

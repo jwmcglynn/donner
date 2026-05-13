@@ -290,6 +290,25 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "layer_inspector_panel",
+    srcs = ["LayerInspectorPanel.cc"],
+    hdrs = ["LayerInspectorPanel.h"],
+    deps = [
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/svg/compositor",
+        "@imgui",
+    ] + select({
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "//third_party/glad",
+        ],
+    }),
+)
+
+donner_cc_library(
     name = "dialog_presenter",
     srcs = ["DialogPresenter.cc"],
     hdrs = ["DialogPresenter.h"],
@@ -345,6 +364,7 @@ donner_cc_library(
         ":gl_texture_cache",
         ":keyboard_shortcut_policy",
         ":imgui_headers",
+        ":layer_inspector_panel",
         ":menu_bar_presenter",
         ":render_coordinator",
         ":render_pane_presenter",
@@ -423,6 +443,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":imgui_headers",
+        ":selection_aabb",
         ":tool",
         ":undo_timeline",
         "//donner/base",

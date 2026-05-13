@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
@@ -58,6 +59,11 @@ inline constexpr FallbackReason& operator|=(FallbackReason& a, FallbackReason b)
   a = a | b;
   return a;
 }
+
+/// Format `reasons` as a pipe-separated list of set flag names, e.g.
+/// `"Filter | IsolatedLayer"`. Returns `"None"` when no flags are set.
+/// Used by the editor's layer-inspector panel to render the "Kind" column.
+[[nodiscard]] std::string FallbackReasonToString(FallbackReason reasons);
 
 /**
  * Represents a single compositor layer with its cached bitmap and dirty state.
@@ -168,12 +174,30 @@ public:
     canvasFromBitmap_ = Transform2d();
     dirty_ = false;
     ++generation_;
+    ++rasterizeCount_;
   }
 
   /// Monotonic version counter — bumped on every `setBitmap`. The
   /// editor uses it to decide whether to re-upload this layer's
   /// bitmap to its cached GL texture.
   [[nodiscard]] uint64_t generation() const { return generation_; }
+
+  /// Cumulative number of times this layer's bitmap has been re-rasterized
+  /// since construction. Increments with `generation_`, but is exposed as
+  /// a separate counter so the editor's layer-inspector panel can show a
+  /// "rasterize count" column without ambiguity over what `generation`
+  /// means (the editor uses `generation` for GL texture upload gating).
+  [[nodiscard]] uint32_t rasterizeCount() const { return rasterizeCount_; }
+
+  /// Wall-clock milliseconds the most recent `rasterizeLayer` call took,
+  /// as measured by the compositor. Zero if the layer has never been
+  /// rasterized. See `CompositorController::snapshotLayerInspectorRows`.
+  [[nodiscard]] double lastRasterizeMs() const { return lastRasterizeMs_; }
+
+  /// Record the wall-clock duration of the most recent rasterization.
+  /// Called by `CompositorController::rasterizeLayer` immediately after
+  /// `setBitmap`.
+  void setLastRasterizeMs(double ms) { lastRasterizeMs_ = ms; }
 
   /// Set the `canvasFromBitmap` transform used during blitting.
   void setCanvasFromBitmap(const Transform2d& transform) { canvasFromBitmap_ = transform; }
@@ -221,6 +245,8 @@ private:
   FallbackReason fallbackReasons_ = FallbackReason::None;
   bool dirty_ = true;
   uint64_t generation_ = 0;
+  uint32_t rasterizeCount_ = 0;
+  double lastRasterizeMs_ = 0.0;
 };
 
 }  // namespace donner::svg::compositor

@@ -512,6 +512,223 @@ TEST_F(CompositorControllerTest, ResetAllLayersClearsComputedLayerAssignment) {
   EXPECT_FALSE(document.registry().all_of<ComputedLayerAssignmentComponent>(entity));
 }
 
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsIsEmptyBeforePromotion) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="10" height="10" fill="red" />
+  )svg");
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_TRUE(compositor.snapshotLayerInspectorRows().empty());
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsRowPerLayerWithBitmapDims) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="blue" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const Entity entityA = a->entityHandle().entity();
+  const Entity entityB = b->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entityA));
+  ASSERT_TRUE(compositor.promoteEntity(entityB));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rows.size(), 2u);
+
+  // Every row must point at one of the promoted entities; every row must
+  // have a populated bitmap (the mock renderer's dummy bitmap) and a
+  // non-zero rasterize count after the first renderFrame.
+  std::vector<Entity> entitiesInRows;
+  for (const auto& row : rows) {
+    EXPECT_TRUE(row.hasValidBitmap);
+    EXPECT_NE(row.bitmapSize, Vector2i::Zero());
+    EXPECT_GE(row.rasterizeCount, 1u);
+    EXPECT_GE(row.generation, 1u);
+    entitiesInRows.push_back(row.entity);
+  }
+  EXPECT_THAT(entitiesInRows, ::testing::UnorderedElementsAre(entityA, entityB));
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsTracksRasterizeCountAcrossFrames) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // First frame: layer must rasterize exactly once.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFirst.size(), 1u);
+  EXPECT_EQ(rowsAfterFirst.front().rasterizeCount, 1u);
+
+  // A pure-translation drag goes through the fast path — bitmap is reused,
+  // rasterize count does NOT advance.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterTranslate = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterTranslate.size(), 1u);
+  EXPECT_EQ(rowsAfterTranslate.front().rasterizeCount, 1u)
+      << "Pure-translation drag must reuse the cached bitmap rather than re-rasterize.";
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMaxSideClamp) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rows.size(), 1u);
+  const auto& row = rows.front();
+  ASSERT_TRUE(row.hasValidBitmap);
+
+  // Thumbnail must be non-empty, longer side clamped to `kLayerThumbnailMaxSide`,
+  // and the RGBA8 byte buffer must match the dimensions.
+  EXPECT_GT(row.thumbnailDims.x, 0);
+  EXPECT_GT(row.thumbnailDims.y, 0);
+  EXPECT_LE(std::max(row.thumbnailDims.x, row.thumbnailDims.y),
+            CompositorController::kLayerThumbnailMaxSide);
+  EXPECT_EQ(row.thumbnailPixels.size(), static_cast<size_t>(row.thumbnailDims.x) *
+                                            static_cast<size_t>(row.thumbnailDims.y) * 4u);
+}
+
+TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot) {
+  // With N promoted layers there should be N+1 segment slots (pre-first,
+  // between-each-pair, post-last). Each populated slot reports
+  // dimensions, generation, and a wall-clock for the most recent
+  // rasterize.
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="blue" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  ASSERT_TRUE(a.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotSegmentInspectorRows();
+  // One promoted layer → two segment slots (pre-layer + post-layer).
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].slotIndex, 0u);
+  EXPECT_EQ(rows[1].slotIndex, 1u);
+  for (const auto& row : rows) {
+    if (row.hasValidBitmap) {
+      EXPECT_NE(row.bitmapSize, Vector2i::Zero());
+      EXPECT_GT(row.generation, 0u);
+    }
+  }
+}
+
+TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
+  // Regression for the detector-ordering bug surfaced by design doc 0033
+  // M1's layer inspector: `RenderingContext::invalidateRenderTree()`
+  // (called by `SVGDocument::setCanvasSize`) clears every
+  // `RenderingInstanceComponent`. If `mandatoryDetector_.reconcile`
+  // runs against that empty RIC view BEFORE
+  // `prepareDocumentForRendering` rebuilds it, the detector scores
+  // zero candidates and `reconcileLayers` drops the filter layer.
+  // The next render frame must keep the filter group promoted.
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+
+  // First render: mandatory detector picks up the filter group.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_FALSE(compositor.snapshotLayerInspectorRows().empty())
+      << "Sanity check: mandatory filter detection should have promoted #target on first frame.";
+
+  // Simulate a canvas resize — same code path as the editor's pinch-zoom
+  // / window-resize path. `setCanvasSize` calls
+  // `invalidateRenderTree()` which wipes every RIC.
+  document.setCanvasSize(kTestSvgDefaultSize.x * 2, kTestSvgDefaultSize.y * 2);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize * 2});
+
+  // The filter group must still be promoted after the resize-driven
+  // render. Without the fix, the snapshot returns zero rows because
+  // the detector ran before prepare and saw an empty RIC view.
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  EXPECT_FALSE(rows.empty())
+      << "Canvas resize dropped the mandatory filter layer (detector ran against empty RICs).";
+  bool sawFilterAfterResize = false;
+  for (const auto& row : rows) {
+    if ((row.fallbackReasons & FallbackReason::Filter) != FallbackReason::None) {
+      sawFilterAfterResize = true;
+    }
+  }
+  EXPECT_TRUE(sawFilterAfterResize)
+      << "Filter-bearing layer should still be promoted after canvas resize.";
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsFormatsFallbackReasons) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // Filter-bearing entities are auto-promoted by MandatoryHintDetector;
+  // drive a frame to let it run.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_FALSE(rows.empty());
+
+  // At least one row should have the Filter fallback flag set, with the
+  // string representation matching the FallbackReasonToString output.
+  bool sawFilter = false;
+  for (const auto& row : rows) {
+    if ((row.fallbackReasons & FallbackReason::Filter) != FallbackReason::None) {
+      sawFilter = true;
+      EXPECT_NE(row.fallbackReasonsText.find("Filter"), std::string::npos)
+          << "fallbackReasonsText='" << row.fallbackReasonsText << "'";
+    }
+  }
+  EXPECT_TRUE(sawFilter);
+}
+
 TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />

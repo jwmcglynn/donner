@@ -319,6 +319,116 @@ FallbackReason CompositorController::fallbackReasonsOf(Entity entity) const {
   return layer ? layer->fallbackReasons() : FallbackReason::None;
 }
 
+namespace {
+
+/// Nearest-neighbor downsample of an RGBA8 bitmap into a thumbnail of at
+/// most `kLayerThumbnailMaxSide` on the longer side, preserving aspect.
+/// Output is tightly packed (no row padding) so the editor can hand it
+/// directly to `glTexImage2D`.
+void BuildThumbnail(const RendererBitmap& bitmap, Vector2i* outDims,
+                    std::vector<uint8_t>* outPixels) {
+  *outDims = Vector2i::Zero();
+  outPixels->clear();
+
+  if (bitmap.empty()) {
+    return;
+  }
+
+  const int srcW = bitmap.dimensions.x;
+  const int srcH = bitmap.dimensions.y;
+  const int longSide = std::max(srcW, srcH);
+  const int maxSide = CompositorController::kLayerThumbnailMaxSide;
+
+  int thumbW;
+  int thumbH;
+  if (longSide <= maxSide) {
+    thumbW = srcW;
+    thumbH = srcH;
+  } else {
+    const double scale = static_cast<double>(maxSide) / static_cast<double>(longSide);
+    thumbW = std::max(1, static_cast<int>(std::lround(srcW * scale)));
+    thumbH = std::max(1, static_cast<int>(std::lround(srcH * scale)));
+  }
+
+  outDims->x = thumbW;
+  outDims->y = thumbH;
+  outPixels->resize(static_cast<size_t>(thumbW) * static_cast<size_t>(thumbH) * 4u);
+
+  const size_t srcRowBytes =
+      bitmap.rowBytes != 0u ? bitmap.rowBytes : static_cast<size_t>(srcW) * 4u;
+
+  for (int y = 0; y < thumbH; ++y) {
+    const int srcY = std::min(srcH - 1, (y * srcH) / thumbH);
+    const uint8_t* srcRow = bitmap.pixels.data() + static_cast<size_t>(srcY) * srcRowBytes;
+    uint8_t* dstRow = outPixels->data() + static_cast<size_t>(y) * static_cast<size_t>(thumbW) * 4u;
+    for (int x = 0; x < thumbW; ++x) {
+      const int srcX = std::min(srcW - 1, (x * srcW) / thumbW);
+      const uint8_t* srcPx = srcRow + static_cast<size_t>(srcX) * 4u;
+      uint8_t* dstPx = dstRow + static_cast<size_t>(x) * 4u;
+      dstPx[0] = srcPx[0];
+      dstPx[1] = srcPx[1];
+      dstPx[2] = srcPx[2];
+      dstPx[3] = srcPx[3];
+    }
+  }
+}
+
+}  // namespace
+
+std::vector<CompositorController::SegmentInspectorRow>
+CompositorController::snapshotSegmentInspectorRows() const {
+  const size_t count = staticSegments_.size();
+  std::vector<SegmentInspectorRow> rows;
+  rows.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    SegmentInspectorRow row;
+    row.slotIndex = i;
+    const RendererBitmap& bitmap = staticSegments_[i];
+    row.hasValidBitmap = !bitmap.empty();
+    if (row.hasValidBitmap) {
+      row.bitmapSize = bitmap.dimensions;
+    }
+    if (i < staticSegmentOffsets_.size()) {
+      row.canvasOffset = staticSegmentOffsets_[i];
+    }
+    if (i < staticSegmentGeneration_.size()) {
+      row.generation = staticSegmentGeneration_[i];
+    }
+    if (i < staticSegmentLastRasterizeMs_.size()) {
+      row.lastRasterizeMs = staticSegmentLastRasterizeMs_[i];
+    }
+    if (i < staticSegmentDirty_.size()) {
+      row.dirty = staticSegmentDirty_[i];
+    }
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
+std::vector<CompositorController::LayerInspectorRow>
+CompositorController::snapshotLayerInspectorRows() const {
+  std::vector<LayerInspectorRow> rows;
+  rows.reserve(layers_.size());
+  for (const CompositorLayer& layer : layers_) {
+    LayerInspectorRow row;
+    row.layerId = layer.id();
+    row.entity = layer.entity();
+    if (layer.hasValidBitmap()) {
+      row.bitmapSize = layer.bitmap().dimensions;
+      BuildThumbnail(layer.bitmap(), &row.thumbnailDims, &row.thumbnailPixels);
+    }
+    row.generation = layer.generation();
+    row.rasterizeCount = layer.rasterizeCount();
+    row.lastRasterizeMs = layer.lastRasterizeMs();
+    row.dirty = layer.isDirty();
+    row.hasValidBitmap = layer.hasValidBitmap();
+    row.fallbackReasons = layer.fallbackReasons();
+    row.fallbackReasonsText = FallbackReasonToString(layer.fallbackReasons());
+    rows.push_back(std::move(row));
+  }
+  return rows;
+}
+
 bool CompositorController::hasSplitStaticLayers() const {
   // The split-static-layers optimization (background / promoted-drag / foreground) depends on
   // having exactly ONE moving layer — the drag target. Bucket layers (from
@@ -506,6 +616,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   staticSegmentBoundaries_.clear();
   staticSegmentDirty_.clear();
   staticSegmentGeneration_.clear();
+  staticSegmentLastRasterizeMs_.clear();
   staticSegmentOffsets_.clear();
   staticSegmentsCanvas_ = Vector2i::Zero();
   staticSegmentsLayerCount_ = 0;
@@ -819,8 +930,21 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // gets built by `prepareDocumentForRendering` below), so the mandatory /
   // bucket detectors can't score anything useful. Defer them to the first
   // post-prepare frame by also rescanning whenever `hintsScanned_` is false.
+  //
+  // The same condition applies when `needsFullRebuild` is true:
+  // `RenderingContext::invalidateRenderTree()` (called by
+  // `SVGDocument::setCanvasSize` etc.) wipes every RIC. Running the
+  // detector against the empty view here would mark every existing
+  // mandatory hint as stale (the qualifying set is empty, see
+  // `MandatoryHintDetector::reconcile`) and silently demote every
+  // filter / mask / isolated-layer subtree until the user mutates the
+  // document again. Skip the pre-prepare scan in that case and let the
+  // post-prepare branch below pick the hints back up against the
+  // freshly-rebuilt RIC view. Pinned by `MandatoryFilterLayerSurvives
+  // CanvasResize`.
+  const bool deferDetectorsToPostPrepare = needsFullRebuild;
   const bool needsHintRescan = !hintsScanned_ || documentDirty;
-  if ((!documentPrepared_ || documentDirty) && documentPrepared_) {
+  if ((!documentPrepared_ || documentDirty) && documentPrepared_ && !deferDetectorsToPostPrepare) {
     // Document is already prepared and became dirty — rescan now.
     {
       ZoneScopedN("Compositor::mandatoryDetector.reconcile");
@@ -897,6 +1021,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     }
     staticSegments_.clear();
     staticSegmentOffsets_.clear();
+    staticSegmentLastRasterizeMs_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
     staticSegmentsLayerCount_ = 0;
     backgroundBitmap_ = RendererBitmap();
@@ -998,8 +1123,10 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
 
-    // First prepare completed — run detectors now if they haven't yet.
-    if (!hintsScanned_) {
+    // First prepare completed — run detectors now if they haven't yet,
+    // OR re-run them when the pre-prepare branch deferred to here
+    // because RICs had just been wiped by `invalidateRenderTree()`.
+    if (!hintsScanned_ || deferDetectorsToPostPrepare) {
       ZoneScopedN("Compositor::detectorsAfterFirstPrepare");
       mandatoryDetector_.reconcile(registry);
       if (config_.complexityBucketing) {
@@ -1157,6 +1284,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
     staticSegmentOffsets_.clear();
+    staticSegmentLastRasterizeMs_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
     staticSegmentsLayerCount_ = 0;
     backgroundBitmap_ = RendererBitmap();
@@ -1326,6 +1454,7 @@ const CompositorLayer* CompositorController::findLayer(Entity entity) const {
 
 void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport) {
   ZoneScopedN("Compositor::rasterizeLayer");
+  const auto rasterizeStart = std::chrono::steady_clock::now();
   auto offscreen = renderer_->createOffscreenInstance();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
 
@@ -1349,6 +1478,10 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                           .worldFromEntityTransform;
   }
   layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
+  const auto rasterizeEnd = std::chrono::steady_clock::now();
+  const auto elapsedUs =
+      std::chrono::duration_cast<std::chrono::microseconds>(rasterizeEnd - rasterizeStart).count();
+  layer.setLastRasterizeMs(static_cast<double>(elapsedUs) / 1000.0);
   // Don't reset `canvasFromBitmap_` here — a caller may have set it
   // explicitly (tests, editor drag hand-off paths) and expect that
   // additional offset to apply on top of the freshly-rasterized bitmap.
@@ -1370,6 +1503,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   // the per-segment writes below are always in bounds.
   if (staticSegmentOffsets_.size() != layerCount + 1) {
     staticSegmentOffsets_.resize(layerCount + 1, Vector2d::Zero());
+  }
+  if (staticSegmentLastRasterizeMs_.size() != layerCount + 1) {
+    staticSegmentLastRasterizeMs_.resize(layerCount + 1, 0.0);
   }
 
   // Snapshot paint order once per frame. Each segment is a slice of this
@@ -1429,6 +1565,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       continue;
     }
     ZoneScopedN("Compositor::rasterizeSegment");
+    const auto segmentRasterizeStart = std::chrono::steady_clock::now();
 
     // Segment `i` spans paint order strictly between layer i-1 and
     // layer i (exclusive on both ends). Edge cases: segment 0 starts
@@ -1544,6 +1681,13 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     if (i < staticSegmentGeneration_.size()) {
       staticSegmentGeneration_[i] = nextSegmentGeneration_++;
     }
+    const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
+    const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                               segmentRasterizeEnd - segmentRasterizeStart)
+                               .count();
+    if (i < staticSegmentLastRasterizeMs_.size()) {
+      staticSegmentLastRasterizeMs_[i] = static_cast<double>(elapsedUs) / 1000.0;
+    }
   }
 }
 
@@ -1569,6 +1713,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   std::vector<bool> newDirty(newCount, true);
   std::vector<uint64_t> newGeneration(newCount, 0);
   std::vector<Vector2d> newOffsets(newCount, Vector2d::Zero());
+  std::vector<double> newLastRasterizeMs(newCount, 0.0);
 
   if (!canvasChanged && !staticSegments_.empty()) {
     // Build a lookup from old boundary identity → (old slot index).
@@ -1592,6 +1737,9 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
             // would blit at (0,0) and wreck the compose.
             newOffsets[i] = staticSegmentOffsets_[j];
           }
+          if (j < staticSegmentLastRasterizeMs_.size()) {
+            newLastRasterizeMs[i] = staticSegmentLastRasterizeMs_[j];
+          }
           break;
         }
       }
@@ -1613,6 +1761,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   staticSegmentBoundaries_ = std::move(newBoundaries);
   staticSegmentGeneration_ = std::move(newGeneration);
   staticSegmentOffsets_ = std::move(newOffsets);
+  staticSegmentLastRasterizeMs_ = std::move(newLastRasterizeMs);
   staticSegmentsCanvas_ = currentCanvasSize;
   staticSegmentsLayerCount_ = layers_.size();
 

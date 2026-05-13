@@ -27,9 +27,12 @@ namespace donner::editor {
 namespace {
 
 constexpr float kSourcePaneWidth = 560.0f;
-constexpr float kInspectorPaneWidth = 320.0f;
-constexpr float kTreeViewHeightFraction = 0.4f;
+constexpr float kTreeViewHeightFraction = 0.33f;
+constexpr float kLayerInspectorHeightFraction = 0.33f;
 constexpr float kKeyboardZoomStep = 1.5f;
+constexpr float kRightPaneSplitterThickness = 6.0f;
+constexpr float kMinRightPaneWidth = 220.0f;
+constexpr float kMaxRightPaneWidth = 900.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 
@@ -433,9 +436,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   ImGui::End();
 }
 
-void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float treePaneHeight,
-                                 float inspectorPaneY, float inspectorPaneHeight,
-                                 ImGuiWindowFlags paneFlags) {
+void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
+                                 float treePaneHeight, float inspectorPaneY,
+                                 float inspectorPaneHeight, float layerPanelPaneY,
+                                 float layerPanelHeight, ImGuiWindowFlags paneFlags) {
   const auto& selectionBeforeTree = app_.selectedElement();
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
@@ -454,7 +458,7 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, treePaneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, treePaneHeight), ImGuiCond_Always);
   ImGui::Begin("Tree View", nullptr, paneFlags);
   TreeViewState treeState{
       .scrollTarget = selectionBeforeTree,
@@ -470,10 +474,46 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
   lastTreeSelection_ = app_.selectedElement();
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, inspectorPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
   ImGui::Begin("Inspector", nullptr, paneFlags);
   sidebarPresenter_.renderInspector(interactionController_.viewport());
   ImGui::End();
+
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layerPanelPaneY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layerPanelHeight), ImGuiCond_Always);
+  ImGui::Begin("Layers", nullptr, paneFlags);
+  const auto layerRows = renderCoordinator_.asyncRenderer().compositorLayerInspectorRows();
+  const auto segmentRows = renderCoordinator_.asyncRenderer().compositorSegmentInspectorRows();
+  const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
+  layerInspectorPanel_.render(layerRows, segmentRows, fastPath);
+  ImGui::End();
+}
+
+void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight) {
+  const float splitterCenterX = windowWidth - rightPaneWidth_;
+  const float splitterLeft = splitterCenterX - kRightPaneSplitterThickness * 0.5f;
+
+  ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(kRightPaneSplitterThickness, paneHeight), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  constexpr ImGuiWindowFlags kSplitterFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("##right_pane_splitter", nullptr, kSplitterFlags);
+  ImGui::InvisibleButton("##right_pane_splitter_handle",
+                         ImVec2(kRightPaneSplitterThickness, paneHeight));
+  if (ImGui::IsItemActive()) {
+    const float deltaX = ImGui::GetIO().MouseDelta.x;
+    // Dragging the splitter LEFT (negative deltaX) widens the right pane.
+    rightPaneWidth_ = std::clamp(rightPaneWidth_ - deltaX, kMinRightPaneWidth, kMaxRightPaneWidth);
+  }
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+  ImGui::End();
+  ImGui::PopStyleVar(2);
 }
 
 void EditorShell::highlightSelectionSourceIfNeeded() {
@@ -514,14 +554,22 @@ void EditorShell::runFrame() {
   const float menuBarHeight = ImGui::GetFrameHeight();
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - menuBarHeight);
+  rightPaneWidth_ =
+      std::clamp(rightPaneWidth_, kMinRightPaneWidth,
+                 std::max(kMinRightPaneWidth,
+                          std::min(kMaxRightPaneWidth, static_cast<float>(windowSize.x) -
+                                                           kSourcePaneWidth - kMinRightPaneWidth)));
   const float renderPaneWidth =
-      std::max(0.0f, static_cast<float>(windowSize.x) - kSourcePaneWidth - kInspectorPaneWidth);
-  const float rightPaneX = static_cast<float>(windowSize.x) - kInspectorPaneWidth;
+      std::max(0.0f, static_cast<float>(windowSize.x) - kSourcePaneWidth - rightPaneWidth_);
+  const float rightPaneX = static_cast<float>(windowSize.x) - rightPaneWidth_;
   const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
-  const float rightPaneContentHeight = std::max(0.0f, paneHeight - rightPaneGap);
+  const float rightPaneContentHeight = std::max(0.0f, paneHeight - 2.0f * rightPaneGap);
   const float treePaneHeight = rightPaneContentHeight * kTreeViewHeightFraction;
+  const float layerPanelHeight = rightPaneContentHeight * kLayerInspectorHeightFraction;
   const float inspectorPaneY = paneOriginY + treePaneHeight + rightPaneGap;
-  const float inspectorPaneHeight = std::max(0.0f, paneHeight - treePaneHeight - rightPaneGap);
+  const float inspectorPaneHeight =
+      std::max(0.0f, rightPaneContentHeight - treePaneHeight - layerPanelHeight);
+  const float layerPanelPaneY = inspectorPaneY + inspectorPaneHeight + rightPaneGap;
   const Vector2d renderPaneOrigin(kSourcePaneWidth, paneOriginY);
   const Vector2d renderPaneSize(renderPaneWidth, paneHeight);
 
@@ -595,8 +643,9 @@ void EditorShell::runFrame() {
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
   renderSourcePane(paneOriginY, paneHeight, codeFont_);
   renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags);
-  renderSidebars(rightPaneX, paneOriginY, treePaneHeight, inspectorPaneY, inspectorPaneHeight,
-                 kPaneFlags);
+  renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, treePaneHeight, inspectorPaneY,
+                 inspectorPaneHeight, layerPanelPaneY, layerPanelHeight, kPaneFlags);
+  renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
 }
 
 }  // namespace donner::editor
