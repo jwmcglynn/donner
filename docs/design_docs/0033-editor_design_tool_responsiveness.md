@@ -1,6 +1,6 @@
 # Design: Editor Design-Tool-Grade Responsiveness
 
-**Status:** Implementing (M1, M2, M5, M7, M8 landed; M3/M4/M6/M9/M10 open)
+**Status:** Implementing (M1, M2, M5, M7, M8, M9 landed; M3/M4/M6/M10 open)
 **Author:** Claude Opus 4.7 (1M context)
 **Created:** 2026-05-12
 **Last updated:** 2026-05-13
@@ -93,7 +93,7 @@ re-running the long-form instrumentation cycle that this round needed.
 | M6 — Pinch-zoom GPU stretch | ⚠️ Partial (canvas-commit throttle only) | `0d1cdc56` |
 | M7 — Selection chrome priority lane | ✅ Snapshot infra landed; editor callsites not flipped yet | `965f0a02` |
 | M8 — Click→drag handoff doesn't wait for raster | ✅ Cache-backed re-drag fast path bypasses `!isBusy()`; full hitTest path still gated | (M8 re-attempt) |
-| M9 — Layer-set hysteresis | ⏳ Open (related: `MandatoryFilterLayerSurvivesCanvasResize` fix in `e38d9a94`) | — |
+| M9 — Layer-set hysteresis | ✅ `demoteEntity` queues for `kDemotionHysteresisFrames` (30, ~0.5s @ 60Hz); re-promote inside the window cancels the demote without segment churn | (this commit) |
 | M10 — Operator perf validation | ⏳ Open | — |
 
 ### Post-implementation stabilization (debugging arc, folded into `ab802105`)
@@ -146,9 +146,14 @@ omnibus stability commit:
   model becomes a thin shim on top of the cache band — the cached
   bitmap is already authoritative; the pane's display transform
   just absorbs the gesture.
-- **M9 (hysteresis).** The `MandatoryFilterLayerSurvivesCanvasResize`
-  fix landed in M1's diff is a near-relative; the full hysteresis
-  policy is still open.
+- **M9 follow-on memory cap.** With sustained "select different
+  element each time" churn the pending-demotion queue could in
+  principle grow unbounded. The `kMaxCompositorLayers` ceiling on
+  `activeHints_` already caps it indirectly (a pending-demote
+  layer counts toward the layer slot budget, so a 33rd hint would
+  be refused), but an explicit LRU eviction on the
+  `pendingDemotions_` map would be cleaner. Trivial to add when
+  needed.
 - **M10 (perf validation).** No per-milestone wall-clock budget
   tests are wired up yet; budgets live only as comments in the
   table below.
@@ -327,13 +332,51 @@ omnibus stability commit:
     - `TryRedragOnSelectedReturnsFalseOnEmptyCachedBounds`
     - `TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup`
 
-- [ ] **Milestone 9: Layer-set hysteresis.**
+- [x] **Milestone 9: Layer-set hysteresis.** *Landed.*
   Adding/removing a promoted layer (mandatory filter detector running
   on a freshly-mutated document, drag-target promotion, etc.) currently
   resets `resyncSegmentsToLayerSet`'s caches. Add hysteresis: promote
   immediately; demote only after the entity has been below the threshold
   for several frames. Prevents the "click-deselect-click" trash-and-
   rebuild loop.
+
+  *As shipped:*
+  - `CompositorController::demoteEntity` adds the entity to a
+    `pendingDemotions_` map keyed on entity → frame counter
+    (`kDemotionHysteresisFrames = 30`, ~0.5s at 60Hz). The hint
+    stays in `activeHints_`; the layer stays in `layers_`; segments
+    stay split. No `resolver_.resolve` / `reconcileLayers` /
+    `resyncSegmentsToLayerSet` work fires synchronously.
+  - `promoteEntity` for the same entity inside the window erases
+    the pending-demote entry and falls through to the existing
+    kind-refresh path. The cached bitmap and segment split are
+    reused — exactly zero compositor work beyond an
+    `unordered_map::erase` and an interaction-kind write.
+  - `renderFrame` calls `processPendingDemotions` once at the top
+    to age each counter by one. Entries that hit zero are erased
+    from `activeHints_`; the deferred `resolver_.resolve` +
+    `reconcileLayers` runs in a single batched pass for any number
+    of expirations in the same frame.
+  - `flushPendingDemotionsForTesting()` is exposed for unit tests
+    that pre-date M9 and expect the "promote → demote → assert
+    layer gone" pattern. Production code never calls it; it just
+    drops the per-entry counters to zero and runs
+    `processPendingDemotions` immediately.
+  - `resetAllLayers` clears `pendingDemotions_`;
+    `remapAfterStructuralReplace` remaps the map keys alongside
+    `activeHints_` so the queue survives `ReplaceDocument` /
+    structural-equivalent reparses.
+  - Pinned by `CompositorController_tests.cc::M9*`:
+    - `M9DemoteIsLazyWithinHysteresisWindow` — demote leaves the
+      layer in place for the duration of the window.
+    - `M9RepromoteSameEntityCancelsPendingDemote` — same-entity
+      re-promote reuses the cached bitmap (generation does not
+      bump).
+    - `M9DemoteFiresAfterHysteresisExpires` — after
+      `kDemotionHysteresisFrames + 1` renderFrame calls the
+      deferred resolver pass runs and the layer is gone.
+    - `M9FlushPendingDemotionsForTesting...` — the test-helper
+      bypass works.
 
 - [ ] **Milestone 10: Operator perf validation.**
   Each prior milestone has a per-milestone perf gate in

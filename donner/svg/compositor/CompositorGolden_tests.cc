@@ -1747,6 +1747,10 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
+  // §M9: flush so the demote-then-promote-different-kind sequence
+  // rebuilds the layer (the path under test) rather than reusing
+  // the hysteresis-preserved one.
+  compositor.flushPendingDemotionsForTesting();
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
@@ -2282,6 +2286,12 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
     compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     compositor.demoteEntity(target->entityHandle().entity());
+    // §M9: flush the hysteresis window so the demote actually fires
+    // before the kind-change re-promote — this test specifically
+    // probes the demote+promote layer-rebuild path (vs. the
+    // hysteresis-preserved layer reuse), so the hysteresis would
+    // otherwise mask the very transition under test.
+    compositor.flushPendingDemotionsForTesting();
     compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::ActiveDrag);
     target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
     compositor.renderFrame(vp);
@@ -2361,6 +2371,11 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
+  // §M9: flush the hysteresis window so the demote actually fires
+  // before the kind-change re-promote — this test probes the
+  // demote+promote layer-rebuild path, which the M9 hysteresis would
+  // otherwise short-circuit.
+  compositor.flushPendingDemotionsForTesting();
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
@@ -2464,6 +2479,10 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
+  // §M9: flush the hysteresis so the demote+re-promote cycle this
+  // test specifically probes still rebuilds the layer rather than
+  // taking the hysteresis fast path.
+  compositor.flushPendingDemotionsForTesting();
   ASSERT_TRUE(
       compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag));
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));

@@ -110,6 +110,115 @@ TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
   EXPECT_EQ(compositor.layerCount(), 1u);
 
   compositor.demoteEntity(entity);
+  // §M9: demote is queued; layer + hint linger until the hysteresis
+  // window expires. Flush immediately so we can assert the
+  // committed-demote state here.
+  compositor.flushPendingDemotionsForTesting();
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+// Design doc 0033 §M9 — layer-set hysteresis. `demoteEntity` queues the
+// demotion for `kDemotionHysteresisFrames` and only fires after the
+// counter expires. A `promoteEntity` for the same entity inside the
+// window cancels the queued demotion and reuses the cached layer
+// (no `resyncSegmentsToLayerSet` rebuild).
+TEST_F(CompositorControllerTest, M9DemoteIsLazyWithinHysteresisWindow) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  compositor.demoteEntity(entity);
+  // The hysteresis hasn't expired — the layer + hint linger so the
+  // editor's GL textures stay live and a re-promote can short-circuit.
+  EXPECT_EQ(compositor.layerCount(), 1u);
+  EXPECT_TRUE(compositor.isPromoted(entity));
+}
+
+TEST_F(CompositorControllerTest, M9RepromoteSameEntityCancelsPendingDemote) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_EQ(compositor.layerCount(), 1u);
+  const uint64_t generationAfterFirstRender =
+      compositor.snapshotLayerInspectorRows().front().generation;
+
+  // Demote → re-promote with a different kind, mirroring the editor's
+  // selection → drag transition. With the M9 fast path the layer is
+  // preserved and its cached bitmap reused (generation does NOT
+  // bump).
+  compositor.demoteEntity(entity);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  ASSERT_TRUE(compositor.isPromoted(entity));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const uint64_t generationAfterRepromote =
+      compositor.snapshotLayerInspectorRows().front().generation;
+  EXPECT_EQ(generationAfterRepromote, generationAfterFirstRender)
+      << "M9 fast path should reuse the cached bitmap — re-rasterizing on every "
+         "click-deselect-click is exactly the work the hysteresis prevents.";
+}
+
+TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  compositor.demoteEntity(entity);
+  EXPECT_EQ(compositor.layerCount(), 1u);
+
+  // Render `kDemotionHysteresisFrames` frames — each call ages the
+  // counter by one. The last call should expire the queue and run
+  // the deferred resolver/reconcile that actually drops the layer.
+  for (uint32_t i = 0; i < CompositorController::kDemotionHysteresisFrames + 1; ++i) {
+    compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  }
+
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+TEST_F(CompositorControllerTest, M9FlushPendingDemotionsForTestingFiresImmediately) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.demoteEntity(entity);
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entity));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
@@ -146,6 +255,9 @@ TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
   EXPECT_NE(registry.get<ComputedLayerAssignmentComponent>(entity).layerId, 0u);
 
   compositor.demoteEntity(entity);
+  // §M9: flush the hysteresis queue so the assignment teardown
+  // happens before we check.
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(registry.all_of<ComputedLayerAssignmentComponent>(entity));
 }
 
