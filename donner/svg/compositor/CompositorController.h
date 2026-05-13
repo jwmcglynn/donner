@@ -314,12 +314,6 @@ public:
   /// Returns true when the compositor has cached a split underlay/overlay pair for drag preview.
   [[nodiscard]] bool hasSplitStaticLayers() const;
 
-  /// Cached underlay bitmap for the single-promoted-layer drag-preview case.
-  [[nodiscard]] const RendererBitmap& backgroundBitmap() const { return backgroundBitmap_; }
-
-  /// Cached overlay bitmap for the single-promoted-layer drag-preview case.
-  [[nodiscard]] const RendererBitmap& foregroundBitmap() const { return foregroundBitmap_; }
-
   /// Cached bitmap for the promoted entity, or an empty bitmap if unavailable.
   [[nodiscard]] const RendererBitmap& layerBitmapOf(Entity entity) const;
 
@@ -438,28 +432,6 @@ public:
   /// per-frame rasterize cost on documents like the splash. Same
   /// invocation rules as `snapshotLayerInspectorRows`.
   [[nodiscard]] std::vector<SegmentInspectorRow> snapshotSegmentInspectorRows() const;
-
-  /// Compose-output bitmaps (the editor-facing split bitmaps that get
-  /// drawn into the canvas pane during drag). Diagnostic-only — the
-  /// editor reads the bg/promoted/fg trio directly via
-  /// `backgroundBitmap()` / `layerBitmapOf(...)` / `foregroundBitmap()`,
-  /// but the layer-inspector panel surfaces this snapshot so the
-  /// operator sees every bitmap that contributes to the final compose
-  /// at a glance, not just the per-promoted-entity caches.
-  struct SplitBitmapsSnapshot {
-    bool splitPathActive = false;
-    bool hasBackground = false;
-    Vector2i backgroundDims = Vector2i::Zero();
-    bool hasForeground = false;
-    Vector2i foregroundDims = Vector2i::Zero();
-    /// Entity whose drag layer the cached bg/fg split is keyed on, or
-    /// `entt::null` if the split path isn't active.
-    Entity dragEntity = entt::null;
-  };
-
-  /// Snapshot the editor-facing split bitmaps. Same invocation rules
-  /// as the per-layer / per-segment snapshots.
-  [[nodiscard]] SplitBitmapsSnapshot snapshotSplitBitmaps() const;
 
   /// One row of the unified "everything composited together" view that
   /// the layer-inspector panel renders in paint order — design doc 0033
@@ -739,13 +711,6 @@ private:
   /// `layers_.size() + 1` along the way.
   void markAllSegmentsDirty();
 
-  /// Composite the editor's backwards-compatible bg/fg bitmaps from the
-  /// cached static segments plus any non-drag promoted layer bitmaps,
-  /// using the drag layer's paint-order position as the split point.
-  /// Called from `renderFrame` in the single-drag-target split path after
-  /// segments / layers have been rasterized.
-  void recomposeSplitBitmaps(const CompositorLayer& dragLayer, const RenderViewport& viewport);
-
   /// Compose all layers onto the main render target.
   void composeLayers(const RenderViewport& viewport);
 
@@ -865,14 +830,13 @@ private:
   /// the promoted set changes segment boundaries, so segments invalidate.
   size_t staticSegmentsLayerCount_ = 0;
 
-  /// Editor-facing split bitmaps — composited from `staticSegments_` plus
-  /// any non-drag promoted layer bitmaps. Populated only in the single
-  /// drag-target split path for the editor's smooth drag-overlay pipeline.
-  RendererBitmap backgroundBitmap_;
-  RendererBitmap foregroundBitmap_;
-  /// Entity whose drag layer the cached bg/fg split is keyed on. When the
-  /// drag target changes, the split must be re-composited even if the
-  /// document otherwise appears clean.
+  /// Entity tracking the active editor-promoted drag target — used by
+  /// `snapshotTilesForUpload` to mark the corresponding `CompositorTile`
+  /// with `isDragTarget = true`. `entt::null` when no editor-promoted
+  /// drag target is active (selection-only state, no editor selection,
+  /// or multiple active hints). Post-§M2C there are no pre-flattened
+  /// bg/fg bitmaps gated on this — the field only drives the tile-list
+  /// drag-target flag.
   Entity splitStaticLayersEntity_ = entt::null;
   /// Canvas size bg/fg were composited at. Mirrors `staticSegmentsCanvas_`
   /// but tracks bg/fg independently so a no-op frame can skip recompositing.

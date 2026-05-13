@@ -291,14 +291,6 @@ public:
     return lastSegmentInspectorRows_;
   }
 
-  /// Snapshot of the editor-facing bg/fg split bitmaps. Same capture
-  /// point and locking as the per-layer and per-segment snapshots.
-  [[nodiscard]] svg::compositor::CompositorController::SplitBitmapsSnapshot
-  compositorSplitBitmapsSnapshot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return lastSplitBitmapsSnapshot_;
-  }
-
   /// Unified in-paint-order snapshot of every tile the compositor
   /// blits to produce the final composite (design doc 0033 §M1++).
   /// The editor's layer-inspector panel renders this list with
@@ -417,9 +409,6 @@ private:
   /// Most recent per-segment diagnostic snapshot. Captured / read on
   /// the same code path as `lastLayerInspectorRows_`.
   std::vector<svg::compositor::CompositorController::SegmentInspectorRow> lastSegmentInspectorRows_;
-
-  /// Most recent bg/fg split-bitmaps snapshot. Same capture site.
-  svg::compositor::CompositorController::SplitBitmapsSnapshot lastSplitBitmapsSnapshot_;
 
   /// Most recent unified composite-tile snapshot (in paint order).
   std::vector<svg::compositor::CompositorController::CompositeTileSnapshot> lastCompositeTiles_;

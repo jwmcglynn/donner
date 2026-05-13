@@ -297,11 +297,11 @@ void CompositorController::demoteEntity(Entity entity) {
 
   // The split bg / drag / fg cache is keyed on the drag entity itself —
   // once the drag target goes away, it's meaningless and must be
-  // dropped. Skipping this would leave a stale bg/fg pair carrying the
-  // previous entity's composition, which the editor would then upload
-  // and draw against the new selection.
-  backgroundBitmap_ = RendererBitmap();
-  foregroundBitmap_ = RendererBitmap();
+  // dropped. After §M2C the editor reads tiles directly from
+  // `snapshotTilesForUpload` (no bg/fg cache to invalidate); clearing
+  // `splitStaticLayersEntity_` here releases the previous drag
+  // target so the next `snapshotTilesForUpload` doesn't mark a stale
+  // layer `isDragTarget`.
   splitStaticLayersEntity_ = entt::null;
   splitStaticLayersViewport_ = Vector2i::Zero();
 
@@ -412,15 +412,6 @@ CompositorController::snapshotCompositeTiles() const {
     tiles.push_back(std::move(tile));
   };
 
-  // Pseudo-generation for bg/fg: bumps every time the split-bitmaps
-  // cache is rebuilt against a different drag entity or canvas size,
-  // which is the only state the editor needs to invalidate its GL
-  // texture for these slots against. Mixes the entity id and the
-  // canvas size for a cheap-but-unique signature.
-  const uint64_t bgFgGeneration = static_cast<uint64_t>(splitStaticLayersEntity_) ^
-                                  (static_cast<uint64_t>(splitStaticLayersViewport_.x) << 16) ^
-                                  (static_cast<uint64_t>(splitStaticLayersViewport_.y) << 32);
-
   // Always emit the full segments+layers paint-order breakdown — even
   // when the editor's split-bitmap optimization is active. User
   // feedback on commit `74083723`: "we just split the current segment
@@ -460,19 +451,11 @@ CompositorController::snapshotCompositeTiles() const {
     }
   }
 
-  // When the editor's split-bitmap optimization is active, append the
-  // composed `bg` / `fg` tiles as supplementary views. These aren't
-  // independent rasterized bitmaps — they're the pre-composed
-  // segments+non-drag-layers the editor uploads for the drag overlay,
-  // shown here so the operator sees the full pipeline.
-  if (hasSplitStaticLayers()) {
-    pushBitmapTile(CompositeTileSnapshot::Kind::Background, "bg", "background (composed)",
-                   backgroundBitmap_, bgFgGeneration, /*lastRasterizeMs=*/0.0,
-                   /*isDragTarget=*/false);
-    pushBitmapTile(CompositeTileSnapshot::Kind::Foreground, "fg", "foreground (composed)",
-                   foregroundBitmap_, bgFgGeneration, /*lastRasterizeMs=*/0.0,
-                   /*isDragTarget=*/false);
-  }
+  // Post-§M2C: bg/fg tiles no longer exist (the compositor doesn't
+  // pre-flatten — the editor blits segments and layers directly).
+  // The Kind::Background / Kind::Foreground enum values are retained
+  // for source compatibility but `snapshotCompositeTiles` no longer
+  // emits them.
   return tiles;
 }
 
@@ -485,21 +468,6 @@ CompositorController::StateSnapshot CompositorController::snapshotState() const 
   out.canvasSize = staticSegmentsCanvas_;
   out.lastPromoteRefusalReason = lastPromoteRefusalReason_;
   out.lastPromoteRefusalEntity = lastPromoteRefusalEntity_;
-  return out;
-}
-
-CompositorController::SplitBitmapsSnapshot CompositorController::snapshotSplitBitmaps() const {
-  SplitBitmapsSnapshot out;
-  out.splitPathActive = hasSplitStaticLayers();
-  out.hasBackground = !backgroundBitmap_.empty();
-  if (out.hasBackground) {
-    out.backgroundDims = backgroundBitmap_.dimensions;
-  }
-  out.hasForeground = !foregroundBitmap_.empty();
-  if (out.hasForeground) {
-    out.foregroundDims = foregroundBitmap_.dimensions;
-  }
-  out.dragEntity = splitStaticLayersEntity_;
   return out;
 }
 
@@ -559,12 +527,19 @@ CompositorController::snapshotLayerInspectorRows() const {
 }
 
 bool CompositorController::hasSplitStaticLayers() const {
-  // The split-static-layers optimization (background / promoted-drag / foreground) depends on
-  // having exactly ONE moving layer — the drag target. Bucket layers (from
-  // `ComplexityBucketer`) stay static during a drag, so they don't invalidate the split as long
-  // as there's exactly one active-hint (drag/explicit) entry. Check `activeHints_`, not
-  // `layers_.size()`, so bucketing and drag coexist cleanly.
-  return activeHints_.size() == 1 && (!backgroundBitmap_.empty() || !foregroundBitmap_.empty());
+  // Post-design-doc 0033 §M2C: the editor blits segments + layers
+  // directly, no bg/fg flatten step exists anymore. "Split static
+  // layers active" now means "there's exactly one editor-promoted
+  // entity (the drag target) with a rasterized layer the editor can
+  // upload". Bucket layers stay static during a drag and don't
+  // invalidate the split, so we check `activeHints_` (explicit
+  // promotions) rather than `layers_.size()`.
+  if (activeHints_.size() != 1) {
+    return false;
+  }
+  const Entity dragEntity = activeHints_.begin()->first;
+  const CompositorLayer* layer = findLayer(dragEntity);
+  return layer != nullptr && layer->hasValidBitmap();
 }
 
 const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
@@ -696,9 +671,8 @@ bool CompositorController::remapAfterStructuralReplace(
     if (it != remap.end()) {
       splitStaticLayersEntity_ = it->second;
     } else {
-      // Cache identity lost — next render will recompute bg/fg.
-      backgroundBitmap_ = RendererBitmap();
-      foregroundBitmap_ = RendererBitmap();
+      // Cache identity lost — drop the split-target id so the next
+      // `snapshotTilesForUpload` re-derives it from `activeHints_`.
       splitStaticLayersEntity_ = entt::null;
     }
   }
@@ -754,8 +728,6 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   staticSegmentOffsets_.clear();
   staticSegmentsCanvas_ = Vector2i::Zero();
   staticSegmentsLayerCount_ = 0;
-  backgroundBitmap_ = RendererBitmap();
-  foregroundBitmap_ = RendererBitmap();
   splitStaticLayersEntity_ = entt::null;
   splitStaticLayersViewport_ = Vector2i::Zero();
   rootDirty_ = true;
@@ -1136,8 +1108,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     staticSegmentLastRasterizeMs_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
     staticSegmentsLayerCount_ = 0;
-    backgroundBitmap_ = RendererBitmap();
-    foregroundBitmap_ = RendererBitmap();
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
     rootDirty_ = false;
@@ -1383,8 +1353,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     staticSegmentLastRasterizeMs_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
     staticSegmentsLayerCount_ = 0;
-    backgroundBitmap_ = RendererBitmap();
-    foregroundBitmap_ = RendererBitmap();
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
     rootDirty_ = false;
@@ -1395,10 +1363,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     anySegmentDirty = resyncSegmentsToLayerSet(currentCanvasSize);
   }
   if (anySegmentDirty) {
-    // At least one segment changed; the bg/fg cache composed from the
-    // old segment set is stale.
-    backgroundBitmap_ = RendererBitmap();
-    foregroundBitmap_ = RendererBitmap();
+    // Segment set changed; clear the drag-target tracking so the
+    // next snapshot re-derives it.
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
   }
@@ -1415,35 +1381,18 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // bg/fg bitmaps. For `N=1` (just the drag layer promoted) they're
   // exactly the two cached segments — no composite needed. For `N>1`
   // (mandatory filter / bucket layers live alongside the drag target)
-  // recomposite into offscreen bitmaps so non-drag promoted content
-  // paints in its correct paint-order slot within bg/fg.
-  const bool splitPathActive = activeHints_.size() == 1 && findLayer(activeHints_.begin()->first);
-  if (splitPathActive) {
-    const Entity dragEntity = activeHints_.begin()->first;
-    const CompositorLayer* dragLayer = findLayer(dragEntity);
-    const bool splitCacheValid = !backgroundBitmap_.empty() && !foregroundBitmap_.empty() &&
-                                 splitStaticLayersEntity_ == dragEntity &&
-                                 splitStaticLayersViewport_ == currentCanvasSize;
-    if (dragLayer != nullptr && !splitCacheValid) {
-      ZoneScopedN("Compositor::splitBitmapsBuild");
-      // Always route through `recomposeSplitBitmaps` — it produces
-      // canvas-sized bg/fg bitmaps that the editor uploads to GL
-      // textures and blits at the full canvas screen rect. An earlier
-      // "N=1 fast path" assigned `backgroundBitmap_ = staticSegments_[0]`
-      // directly, which was valid when segments were always canvas-
-      // sized but produces tight-sized bg/fg bitmaps now that segments
-      // are tight-bounded. Those tight bitmaps get drawn stretched to
-      // the full canvas screen rect, which wrecks the display. The
-      // cost of always routing through `composeRange` on N=1 is one
-      // offscreen alloc + one `drawImage` per segment (typically 2
-      // segments, ~0.5 ms combined at 892×512). Worth the correctness.
-      recomposeSplitBitmaps(*dragLayer, viewport);
-      splitStaticLayersEntity_ = dragEntity;
-      splitStaticLayersViewport_ = currentCanvasSize;
-    }
+  // Design doc 0033 §M2C: the compositor no longer pre-flattens
+  // segments + non-drag layers into bg/fg bitmaps. The editor reads
+  // segments and layers directly via `snapshotTilesForUpload`, so the
+  // only state we maintain here is *which* entity is the active drag
+  // target. The tile snapshot uses `splitStaticLayersEntity_` to set
+  // each tile's `isDragTarget` flag, which in turn drives the worker's
+  // `dragTranslationDoc` extraction (`canvasFromBitmap` translation in
+  // doc units).
+  if (activeHints_.size() == 1 && findLayer(activeHints_.begin()->first) != nullptr) {
+    splitStaticLayersEntity_ = activeHints_.begin()->first;
+    splitStaticLayersViewport_ = currentCanvasSize;
   } else {
-    backgroundBitmap_ = RendererBitmap();
-    foregroundBitmap_ = RendererBitmap();
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
   }
@@ -1496,7 +1445,7 @@ size_t CompositorController::layerCount() const {
 }
 
 size_t CompositorController::totalBitmapMemory() const {
-  size_t total = backgroundBitmap_.pixels.size() + foregroundBitmap_.pixels.size();
+  size_t total = 0;
   for (const auto& segment : staticSegments_) {
     total += segment.pixels.size();
   }
@@ -2036,111 +1985,6 @@ void CompositorController::markAllSegmentsDirty() {
   staticSegmentDirty_.assign(layers_.size() + 1, true);
 }
 
-void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLayer,
-                                                 const RenderViewport& viewport) {
-  ZoneScopedN("Compositor::recomposeSplitBitmaps");
-  if (staticSegments_.empty()) {
-    return;
-  }
-
-  // Find the drag layer's index in the paint-order-sorted `layers_` vector.
-  size_t dragIdx = layers_.size();
-  for (size_t i = 0; i < layers_.size(); ++i) {
-    if (layers_[i].entity() == dragLayer.entity()) {
-      dragIdx = i;
-      break;
-    }
-  }
-  if (dragIdx == layers_.size()) {
-    return;
-  }
-
-  auto composeRange = [&](size_t layerStart, size_t layerEndExclusive) {
-    ZoneScopedN("Compositor::composeRange");
-    std::unique_ptr<RendererInterface> offscreen;
-    {
-      ZoneScopedN("Compositor::composeRange::createOffscreen");
-      offscreen = renderer_->createOffscreenInstance();
-    }
-    UTILS_RELEASE_ASSERT(offscreen != nullptr);
-
-    {
-      ZoneScopedN("Compositor::composeRange::beginFrame");
-      offscreen->beginFrame(viewport);
-    }
-    {
-      ZoneScopedN("Compositor::composeRange::drawLoop");
-      // Range covers segments [layerStart .. layerEndExclusive] plus the
-      // non-drag promoted layers [layerStart .. layerEndExclusive - 1]
-      // interleaved in paint order.
-      for (size_t i = layerStart; i <= layerEndExclusive; ++i) {
-        const RendererBitmap& segment = staticSegments_[i];
-        if (!segment.empty()) {
-          ZoneScopedN("Compositor::composeRange::drawSegment");
-          ImageResource image = BuildImageResource(segment);
-          ImageParams params;
-          params.targetRect =
-              Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(segment.dimensions.x),
-                                               static_cast<double>(segment.dimensions.y)));
-          // Tight-bounded segments live at a non-origin offset on the
-          // canvas; full-canvas-fallback segments use `Zero()`. Same
-          // API shape either way.
-          const Vector2d segmentOffset =
-              i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i] : Vector2d::Zero();
-          offscreen->setTransform(Transform2d::Translate(segmentOffset));
-          offscreen->drawImage(image, params);
-        }
-        if (i < layerEndExclusive) {
-          const CompositorLayer& promoted = layers_[i];
-          if (promoted.hasValidBitmap()) {
-            ZoneScopedN("Compositor::composeRange::drawPromoted");
-            const RendererBitmap& bitmap = promoted.bitmap();
-            // Intrinsic-size layers carry their canvas position in
-            // `canvasOffset()`; canvas-sized layers report Zero. Compose
-            // is `Translate(canvasOffset) * canvasFromBitmap`. Snap the
-            // combined translation to integer pixels.
-            const Vector2d offset = promoted.canvasOffset();
-            Transform2d canvasFromBitmap = promoted.canvasFromBitmap();
-            if (canvasFromBitmap.isTranslation()) {
-              const Vector2d t = canvasFromBitmap.translation();
-              canvasFromBitmap =
-                  Transform2d::Translate(std::round(t.x + offset.x), std::round(t.y + offset.y));
-            } else {
-              canvasFromBitmap = Transform2d::Translate(offset) * canvasFromBitmap;
-            }
-            ImageResource image = BuildImageResource(bitmap);
-            ImageParams params;
-            params.targetRect =
-                Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
-                                                 static_cast<double>(bitmap.dimensions.y)));
-            offscreen->setTransform(canvasFromBitmap);
-            offscreen->drawImage(image, params);
-          }
-        }
-      }
-    }
-    {
-      ZoneScopedN("Compositor::composeRange::endFrame");
-      offscreen->endFrame();
-    }
-    RendererBitmap snapshot;
-    {
-      ZoneScopedN("Compositor::composeRange::takeSnapshot");
-      snapshot = offscreen->takeSnapshot();
-    }
-    return snapshot;
-  };
-
-  {
-    ZoneScopedN("Compositor::composeRange::background");
-    backgroundBitmap_ = composeRange(0, dragIdx);
-  }
-  {
-    ZoneScopedN("Compositor::composeRange::foreground");
-    foregroundBitmap_ = composeRange(dragIdx + 1, layers_.size());
-  }
-}
-
 void CompositorController::composeLayers(const RenderViewport& viewport) {
   ZoneScopedN("Compositor::composeLayersImpl");
 
@@ -2245,19 +2089,16 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     drawBitmap(layer.bitmap(), canvasFromBitmap);
   };
 
-  if (hasSplitStaticLayers()) {
-    const Entity dragEntity = activeHints_.begin()->first;
-    // Background/foreground composites are always canvas-sized — they
-    // bake in the tight-bound offsets of their constituent segments,
-    // so the editor can upload them as-is.
-    drawBitmap(backgroundBitmap_, Transform2d());
-    if (const CompositorLayer* dragLayer = findLayer(dragEntity)) {
-      drawLayer(*dragLayer);
-    }
-    drawBitmap(foregroundBitmap_, Transform2d());
-  } else if (!staticSegments_.empty()) {
-    // Segments carry their tight-bound offset in `staticSegmentOffsets_`;
-    // `Translate(offset)` places each bitmap at its canvas-space home.
+  // Design doc 0033 §M2C: always walk segments + layers in interleave
+  // paint order. The legacy `if (hasSplitStaticLayers()) drawBitmap(bg)
+  // / drawLayer(drag) / drawBitmap(fg)` fast path is gone — there are
+  // no pre-flattened bitmaps to short-circuit through. With N promoted
+  // layers we do 2N+1 `drawImage` calls; for the splash this is ~11
+  // calls vs. the old path's 3. This only runs when the main
+  // renderer compose isn't being skipped (selection-only state, post-
+  // drag settle, first-frame fallback) — active drag frames skip
+  // composeLayers entirely via the `skipMainCompose` gate above.
+  if (!staticSegments_.empty()) {
     for (size_t i = 0; i < layers_.size(); ++i) {
       const Vector2d segmentOffset =
           i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i] : Vector2d::Zero();

@@ -951,11 +951,13 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
 }
 
-// Translation-only drag must not re-rasterize bg/fg between frames. The
-// promise of the split-static-layers optimization is: bg and fg are
-// rasterized once per drag session and reused via GL texture blit. If they
-// got re-rendered every frame, the compositor would be doing full-document
-// work per pointer move.
+// Translation-only drag must not re-rasterize the static segment / non-
+// drag-layer tiles between frames. Post §M2C the editor blits segments
+// and non-drag layers directly — if their generations bumped per frame,
+// the editor would re-upload N textures every pointer move (the
+// equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
+// We probe `snapshotTilesForUpload` and assert generations are stable
+// for non-drag tiles across translation-only drag frames.
 TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
   SVGDocument document = parseDocument(R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -975,18 +977,18 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  // Snapshot the bitmaps after the first drag frame. The `.data()` address
-  // only changes when the vector is reassigned — so comparing it across
-  // renderFrame calls is a cheap, direct probe of whether the bitmap was
-  // re-rasterized.
-  const RendererBitmap& bgFrame1 = compositor.backgroundBitmap();
-  const RendererBitmap& fgFrame1 = compositor.foregroundBitmap();
-  ASSERT_FALSE(bgFrame1.empty());
-  ASSERT_FALSE(fgFrame1.empty());
-  const std::vector<uint8_t> bgPixelsFrame1 = bgFrame1.pixels;
-  const std::vector<uint8_t> fgPixelsFrame1 = fgFrame1.pixels;
-  const uint8_t* bgDataPtrFrame1 = bgFrame1.pixels.data();
-  const uint8_t* fgDataPtrFrame1 = fgFrame1.pixels.data();
+  // Capture per-tile generations after the first drag frame, keyed on the
+  // stable `tileId`. The drag-target layer's generation is allowed to bump
+  // (its `canvasFromBitmap` updates each fast-path frame); every other tile
+  // must stay stable.
+  auto tilesAfterFirstDrag = compositor.snapshotTilesForUpload();
+  std::unordered_map<uint64_t, uint64_t> nonDragGenerations;
+  for (const auto& tile : tilesAfterFirstDrag) {
+    if (!tile.isDragTarget) {
+      nonDragGenerations[tile.tileId] = tile.generation;
+    }
+  }
+  ASSERT_FALSE(nonDragGenerations.empty());
 
   // Simulate 10 more drag frames with only translation changes.
   for (int i = 2; i <= 11; ++i) {
@@ -994,14 +996,19 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
     compositor.renderFrame(viewport_);
   }
 
-  const RendererBitmap& bgFinal = compositor.backgroundBitmap();
-  const RendererBitmap& fgFinal = compositor.foregroundBitmap();
-  EXPECT_EQ(bgFinal.pixels.data(), bgDataPtrFrame1)
-      << "bg bitmap re-allocated between drag frames — cache invalidated incorrectly";
-  EXPECT_EQ(fgFinal.pixels.data(), fgDataPtrFrame1)
-      << "fg bitmap re-allocated between drag frames — cache invalidated incorrectly";
-  EXPECT_EQ(bgFinal.pixels, bgPixelsFrame1);
-  EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
+  const auto tilesAfterFinalDrag = compositor.snapshotTilesForUpload();
+  for (const auto& tile : tilesAfterFinalDrag) {
+    if (tile.isDragTarget) {
+      continue;
+    }
+    auto it = nonDragGenerations.find(tile.tileId);
+    ASSERT_NE(it, nonDragGenerations.end())
+        << "non-drag tile id " << tile.tileId
+        << " disappeared between drag frames — segment cache rebuilt mid-drag";
+    EXPECT_EQ(it->second, tile.generation)
+        << "non-drag tile id " << tile.tileId
+        << " re-rasterized between drag frames — cache invalidated incorrectly";
+  }
 }
 
 // A drag-release `SetTransformCommand` mutation must NOT trigger a full
@@ -1398,7 +1405,7 @@ TEST_F(CompositorGoldenTest, TooSmallCullingSkipsSubpixelPaths) {
 }
 
 // Zooming changes the viewport size the renderer rasterizes at, so the
-// cached bg/fg bitmaps from the previous zoom level must NOT be reused —
+// cached segment bitmaps from the previous zoom level must NOT be reused —
 // they're sized to the old canvas. Reusing them would stamp their pixels
 // into the top-left region of the new (larger) canvas, leaving the rest
 // transparent, which the editor's GL layer would then linearly-stretch
@@ -1424,8 +1431,16 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   smallViewport.size = Vector2d(200, 100);
   smallViewport.devicePixelRatio = 1.0;
   compositor.renderFrame(smallViewport);
-  ASSERT_FALSE(compositor.backgroundBitmap().empty());
-  EXPECT_EQ(compositor.backgroundBitmap().dimensions, Vector2i(200, 100));
+
+  // Capture the segment / non-drag-layer generations at the small canvas.
+  auto smallTiles = compositor.snapshotTilesForUpload();
+  std::unordered_map<uint64_t, uint64_t> generationsAtSmall;
+  for (const auto& tile : smallTiles) {
+    if (!tile.isDragTarget && tile.bitmap != nullptr) {
+      generationsAtSmall[tile.tileId] = tile.generation;
+    }
+  }
+  ASSERT_FALSE(generationsAtSmall.empty());
 
   // Simulate a zoom-in: the editor's RenderCoordinator calls setCanvasSize
   // before requestRender when the viewport's desiredCanvasSize changes, so
@@ -1436,9 +1451,20 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   largeViewport.devicePixelRatio = 1.0;
   compositor.renderFrame(largeViewport);
 
-  EXPECT_EQ(compositor.backgroundBitmap().dimensions, Vector2i(400, 200))
-      << "bg bitmap should re-rasterize to match new canvas after zoom";
-  EXPECT_EQ(compositor.foregroundBitmap().dimensions, Vector2i(400, 200));
+  // Every non-drag tile that had a bitmap at the small canvas size must
+  // have its generation bumped after the canvas resize — the old bitmap is
+  // sized for 200×100 and re-using it would leave the new 400×200 canvas
+  // mostly transparent.
+  auto largeTiles = compositor.snapshotTilesForUpload();
+  for (const auto& tile : largeTiles) {
+    auto it = generationsAtSmall.find(tile.tileId);
+    if (it == generationsAtSmall.end() || tile.isDragTarget || tile.bitmap == nullptr) {
+      continue;
+    }
+    EXPECT_NE(it->second, tile.generation)
+        << "non-drag tile id " << tile.tileId
+        << " kept its generation across canvas resize — would re-use a stale-sized bitmap";
+  }
 }
 
 // Regression: tight-bounded segment rasterize must produce pixel-identical
