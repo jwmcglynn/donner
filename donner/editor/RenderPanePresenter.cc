@@ -191,20 +191,28 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
           imageOrigin, imageBottomRight);
     }
 
-    // Intrinsic-size blit (design doc 0033 §M2B): the promoted texture
-    // is sized to the entity's bbox + filter halo in canvas pixels.
-    // Convert to screen pixels via `1 / devicePixelRatio` (the canvas is
-    // rendered at DPR resolution, so canvas-pixel-to-screen-pixel is
-    // `1 / DPR`). For canvas-sized layers (the M2A path), the result
-    // matches the legacy "stretch across imageRect" behavior exactly.
-    const double dpr =
-        state.viewport.devicePixelRatio > 0.0 ? state.viewport.devicePixelRatio : 1.0;
-    const float promotedWidthScreen = static_cast<float>(state.textures.promotedWidth() / dpr);
-    const float promotedHeightScreen = static_cast<float>(state.textures.promotedHeight() / dpr);
+    // Intrinsic-size blit (design doc 0033 §M2B). The bitmap covers
+    // `promotedBitmapDimsDoc` doc units; multiply by the *current*
+    // `pixelsPerDocUnit` to get the on-screen blit size. Crucial
+    // difference from `bitmapPx / DPR`: that formula freezes the
+    // bitmap's screen size against pinch-zoom, because the rasterize
+    // is debounced during the gesture (canvas pixels don't change),
+    // but the view's `pixelsPerDocUnit` does — the bitmap must
+    // stretch with the view. (Pinned by
+    // `RenderPanePresenterTest.PromotedBitmapScalesWithZoom`.)
+    Vector2d promotedSizeScreen =
+        state.textures.promotedBitmapDimsDoc() * state.viewport.pixelsPerDocUnit();
+    if (promotedSizeScreen.x <= 0.0 || promotedSizeScreen.y <= 0.0) {
+      // Defensive fallback for legacy CompositedPreview payloads that
+      // predate the field — stretch across the full pane (matches the
+      // pre-M2B behavior for canvas-sized bitmaps).
+      promotedSizeScreen.x = static_cast<double>(imageBottomRight.x - imageOrigin.x);
+      promotedSizeScreen.y = static_cast<double>(imageBottomRight.y - imageOrigin.y);
+    }
     const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(promotedScreenOffset.x),
                                 imageOrigin.y + static_cast<float>(promotedScreenOffset.y));
-    const ImVec2 promotedBottomRight(promotedOrigin.x + promotedWidthScreen,
-                                     promotedOrigin.y + promotedHeightScreen);
+    const ImVec2 promotedBottomRight(promotedOrigin.x + static_cast<float>(promotedSizeScreen.x),
+                                     promotedOrigin.y + static_cast<float>(promotedSizeScreen.y));
     paneDrawList->AddImage(
         static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.promotedTexture())),
         promotedOrigin, promotedBottomRight);

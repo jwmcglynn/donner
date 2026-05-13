@@ -261,13 +261,24 @@ void AsyncRenderer::workerLoop() {
         // rasterize path (design doc 0033 §M2).
         const Vector2d promotedCanvasOffsetDoc =
             canvasToDoc(compositor_->layerCanvasOffsetOf(compositorEntity_));
+        // Bitmap intrinsic dimensions in doc units. The bitmap is in
+        // canvas pixels at the rasterize-time canvasPixelsPerDocUnit;
+        // divide by that scale to recover doc-space dims. The editor
+        // multiplies by current `pixelsPerDocUnit` to obtain the
+        // on-screen blit size, so the bitmap continues to scale with
+        // pinch-zoom even when the canvas-size commit is debounced.
+        const svg::RendererBitmap& promotedBitmap = compositor_->layerBitmapOf(compositorEntity_);
+        const Vector2d promotedBitmapDimsDoc =
+            canvasToDoc(Vector2d(static_cast<double>(promotedBitmap.dimensions.x),
+                                 static_cast<double>(promotedBitmap.dimensions.y)));
         compositedPreview = RenderResult::CompositedPreview{
             .backgroundBitmap = compositor_->backgroundBitmap(),
-            .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
+            .promotedBitmap = promotedBitmap,
             .foregroundBitmap = compositor_->foregroundBitmap(),
             .entity = compositorEntity_,
             .promotedTranslationDoc = composeTranslationDoc,
             .promotedCanvasOffsetDoc = promotedCanvasOffsetDoc,
+            .promotedBitmapDimsDoc = promotedBitmapDimsDoc,
         };
       }
 
