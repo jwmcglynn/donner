@@ -380,6 +380,15 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     // `SelectTool::onMouseDown` abandons any stale drag/marquee state
     // before starting the new gesture, so drop the previous coalesced
     // screen point alongside that reset.
+    //
+    // M8 originally dropped the `!isBusy()` gate here and tried a
+    // snapshot-based re-drag path, but `SnapshotSelectionWorldBounds`
+    // reads `ShapeSystem` components from the registry — the worker
+    // mutates these inside `prepareDocumentForRendering`, so the
+    // mid-render call raced and SIGSEGV'd inside `getTransformed
+    // ShapeBounds`. The mid-render re-drag path needs a pre-snapshotted
+    // bounds cache (similar to `SelectionBoundsCache`) before it can
+    // be safely re-enabled; tracked as a follow-up.
     lastPostedScreenPoint_.reset();
     selectTool_.onMouseDown(app_, interactionController_.pendingClick()->documentPoint,
                             interactionController_.pendingClick()->modifiers);

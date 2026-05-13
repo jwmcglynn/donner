@@ -67,6 +67,15 @@ public:
   /// translation)` with intrinsic dims instead of stretching to canvas.
   [[nodiscard]] const Vector2d& promotedCanvasOffsetDoc() const { return promotedCanvasOffsetDoc_; }
 
+  /// The promoted bitmap's intrinsic dimensions in document units (i.e.
+  /// `canvasPixelDims / canvasPixelsPerDocUnit_at_rasterize`). The
+  /// editor multiplies by current `pixelsPerDocUnit` to get on-screen
+  /// blit size — keeps the bitmap scaling with pinch-zoom during the
+  /// canvas-resize debounce window. Zero when the promoted texture
+  /// isn't from an intrinsic-size layer (e.g. early in a session
+  /// before any rasterize has landed).
+  [[nodiscard]] const Vector2d& promotedBitmapDimsDoc() const { return promotedBitmapDimsDoc_; }
+
 private:
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
                            int* outHeight);
@@ -91,6 +100,7 @@ private:
 
   Vector2d promotedTranslationDoc_ = Vector2d::Zero();
   Vector2d promotedCanvasOffsetDoc_ = Vector2d::Zero();
+  Vector2d promotedBitmapDimsDoc_ = Vector2d::Zero();
 };
 
 }  // namespace donner::editor

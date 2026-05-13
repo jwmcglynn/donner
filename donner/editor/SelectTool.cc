@@ -8,6 +8,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -118,6 +119,48 @@ svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& con
 
 }  // namespace
 
+bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
+                                          MouseModifiers modifiers) {
+  if (modifiers.shift) {
+    return false;
+  }
+  const auto& currentSelection = editor.selectedElements();
+  if (currentSelection.size() != 1) {
+    return false;
+  }
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(currentSelection));
+  if (bounds.empty() || !bounds.front().contains(documentPoint) ||
+      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
+    return false;
+  }
+
+  // Reset any in-progress drag/marquee state before starting the new one
+  // — mirrors `onMouseDown`'s prologue. A previous mouse-down without
+  // a matching mouse-up means the user dragged off the window or a
+  // tool switch happened mid-drag.
+  dragState_.reset();
+  marqueeState_.reset();
+
+  // Reuse the currently-selected element as the drag target.
+  const svg::SVGElement element = currentSelection.front();
+  const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
+  const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
+  dragState_ = DragState{
+      .primary =
+          PerElementDrag{
+              .element = element,
+              .startTransform = primaryStartTransform,
+              .currentTransform = primaryStartTransform,
+              .writebackTarget = primaryWritebackTarget,
+              .sourceTransformAttributeValue = element.getAttribute("transform"),
+          },
+      .extras = {},
+      .startDocumentPoint = documentPoint,
+  };
+  return true;
+}
+
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                              MouseModifiers modifiers) {
   // Reset any in-progress drag/marquee — a previous mouse-down without
@@ -128,6 +171,22 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   marqueeState_.reset();
 
   auto hit = editor.hitTest(documentPoint);
+
+  // Snapshot-safe fallback for clicks inside the selected element's
+  // bbox that miss its geometric path: clicking on the transparent
+  // interior of a `<g filter>`, between strokes, etc. Only fires when
+  // hitTest returned null AND not shift — when hitTest DOES return a
+  // hit, the click might be on a different element (deselect /
+  // re-select); we never want to hijack that.
+  //
+  // The race-safe variant (`tryStartRedragOnSelected`) is exposed
+  // publicly so EditorShell can run it before `!isBusy()` for the
+  // mid-render re-drag case — but on this code path we always have a
+  // resolved hitTest, so dispatch the same helper as a hit-miss
+  // fallback only.
+  if (!hit.has_value() && tryStartRedragOnSelected(editor, documentPoint, modifiers)) {
+    return;
+  }
 
   // Click on empty space → start a marquee. The marquee resolves to a
   // selection set on `onMouseUp`. While dragging it shows up as

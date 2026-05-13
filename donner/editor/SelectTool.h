@@ -55,6 +55,24 @@ public:
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
+  /// Snapshot-safe re-drag start (design doc 0033 §M8). When the user
+  /// clicks inside the bounds of the single currently-selected element,
+  /// start a drag of that element WITHOUT calling `EditorApp::hitTest`
+  /// — so the call is safe to run even while the async-renderer worker
+  /// is mid-render (hitTest would race the worker's
+  /// `prepareDocumentForRendering`).
+  ///
+  /// Returns true if a drag was started; false if the caller must fall
+  /// back to the full `onMouseDown` path (multi-select, shift-click,
+  /// click outside the selection's snapshotted bounds, etc.).
+  ///
+  /// `onMouseDown` itself calls this first to avoid duplicating logic
+  /// — so plain clicks on the selection always take the no-hit-test
+  /// path regardless of busy state. The split exists so EditorShell
+  /// can run it BEFORE checking `isBusy()` for the click handler.
+  [[nodiscard]] bool tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
+                                              MouseModifiers modifiers);
+
   /// Enable the experimental compositor-backed drag preview path.
   void setCompositedDragPreviewEnabled(bool enabled) { compositedDragPreviewEnabled_ = enabled; }
 

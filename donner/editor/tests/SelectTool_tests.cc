@@ -796,5 +796,80 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   EXPECT_NEAR(translation.y, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
 }
 
+// Design doc 0033 §M8 — re-drag-of-selected fast path. `tryStartRedragOn
+// Selected` doesn't call `EditorApp::hitTest`; it works off
+// `SnapshotSelectionWorldBounds` of the currently-selected element.
+// EditorShell drops the `!isBusy()` gate for this path so the user
+// can re-grab a selected element even while a render is in flight.
+TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBounds) {
+  // Establish a single-element selection via the normal click path.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(selectionIs("#r1"));
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_FALSE(tool.isDragging());
+
+  // Click inside the same element's bounds (still selected). The
+  // snapshot-safe re-drag path must start a drag without changing
+  // the selection.
+  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}));
+  EXPECT_TRUE(tool.isDragging());
+  EXPECT_TRUE(selectionIs("#r1"));
+}
+
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+
+  MouseModifiers shift{};
+  shift.shift = true;
+  // Shift-click must NOT start a re-drag — it toggles selection
+  // membership, which requires the full hitTest path.
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), shift));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenNothingSelected) {
+  // No prior selection.
+  EXPECT_FALSE(app.selectedElement().has_value());
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(15.0, 15.0), MouseModifiers{}));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenClickIsOutsideSelectedBounds) {
+  // Select r1 at (10,10)..(30,30).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  // Click on r2's territory (well outside r1).
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(110.0, 110.0), MouseModifiers{}));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+// The re-drag fast path is reachable from a plain `onMouseDown` too —
+// `SnapshotSelectionWorldBounds` returns the geometric bbox of the
+// selection (no filter expansion), so any click inside that bbox is
+// served by the no-hitTest path. This lets the user re-grab a
+// selected `<g>` even when the click lands on a transparent
+// interior pixel that `EditorApp::hitTest` wouldn't see.
+TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) {
+  loadSvg(kCompositeSiblingSvg);
+  // Pick anchor via the normal hitTest path first to establish
+  // selection. anchor_leaf is at (10,10)..(30,30); a click squarely
+  // inside the rect selects #anchor.
+  tool.onMouseDown(app, Vector2d(15.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(selectionIs("#anchor"));
+  tool.onMouseUp(app, Vector2d(15.0, 20.0));
+
+  // Click inside #anchor's snapshotted world bounds. The fast path
+  // re-drags #anchor without consulting `editor.hitTest`. Without it,
+  // a future M8 caller-side `!isBusy()` drop wouldn't have a safe
+  // re-drag path during busy renders.
+  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(15.0, 20.0), MouseModifiers{}));
+  EXPECT_TRUE(tool.isDragging());
+  EXPECT_TRUE(selectionIs("#anchor"));
+}
+
 }  // namespace
 }  // namespace donner::editor

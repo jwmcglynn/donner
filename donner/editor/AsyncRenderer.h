@@ -134,9 +134,20 @@ struct RenderResult {
     /// rasterized at intrinsic size — the bitmap covers only the
     /// entity's bbox + filter halo, not the full canvas. The editor
     /// blits the texture at `(promotedCanvasOffsetDoc + promoted
-    /// TranslationDoc) * pixelsPerDocUnit` with size equal to the
-    /// bitmap's intrinsic dimensions (not stretched to canvas).
+    /// TranslationDoc) * pixelsPerDocUnit` with size equal to
+    /// `promotedBitmapDimsDoc * pixelsPerDocUnit` (not the raw bitmap
+    /// pixel count — that would freeze the bitmap's screen size
+    /// against zoom changes; see §M2B comment in
+    /// `RenderPanePresenter`).
     Vector2d promotedCanvasOffsetDoc = Vector2d::Zero();
+    /// The promoted bitmap's intrinsic dimensions in document units.
+    /// Equals `bitmap.dimensions / canvasPixelsPerDocUnit_at_rasterize`.
+    /// The editor multiplies this by `pixelsPerDocUnit_current` to
+    /// obtain the on-screen blit size, which then tracks pinch-zoom
+    /// changes during the canvas-resize debounce window (the bitmap
+    /// stretches with the view instead of freezing at the rasterize-
+    /// time screen size).
+    Vector2d promotedBitmapDimsDoc = Vector2d::Zero();
 
     [[nodiscard]] bool valid() const { return entity != entt::null && !promotedBitmap.empty(); }
   };
