@@ -22,6 +22,22 @@ struct ExperimentalDragPresentation {
   bool waitingForChromeRefresh = false;
   std::uint64_t chromeRefreshTargetVersion = 0;
 
+  /// Last `(entity, version, canvasSize)` combination a prewarm was
+  /// dispatched for, regardless of whether the render produced a
+  /// composited preview. Tracked separately from `cachedEntity` etc.
+  /// because a prewarm that fails to produce a composited preview —
+  /// e.g. when the selected entity has a compositing-breaking ancestor
+  /// and `CompositorController::promoteEntity` refuses — must not
+  /// re-dispatch every frame. Without this, the prewarm loop runs
+  /// forever: `shouldPrewarm` keeps returning true (because
+  /// `hasCachedTextures` stays false), the worker stays continuously
+  /// busy, the editor's click handler is permanently blocked by the
+  /// `!isBusy()` gate, and the user can't change selection or even
+  /// observe the editor responding to input. See `notePrewarmAttempted`.
+  Entity lastPrewarmEntity = entt::null;
+  std::uint64_t lastPrewarmVersion = 0;
+  Vector2i lastPrewarmCanvasSize = Vector2i::Zero();
+
   /// Returns true when selection should trigger an async prewarm capture.
   [[nodiscard]] bool shouldPrewarm(Entity selectedEntity, std::uint64_t currentVersion,
                                    const Vector2i& currentCanvasSize, bool dragActive) const {
@@ -30,8 +46,31 @@ struct ExperimentalDragPresentation {
       return false;
     }
 
+    // Once we've dispatched a prewarm for this exact `(entity, version,
+    // canvasSize)` combination — successfully or not — don't keep
+    // re-dispatching. A subsequent mutation, selection change, or
+    // canvas resize will bump one of the fields and unblock the next
+    // prewarm.
+    if (lastPrewarmEntity == selectedEntity && lastPrewarmVersion == currentVersion &&
+        lastPrewarmCanvasSize == currentCanvasSize) {
+      return false;
+    }
+
     return !hasCachedTextures || cachedEntity != selectedEntity ||
            cachedVersion != currentVersion || cachedCanvasSize != currentCanvasSize;
+  }
+
+  /// Record that a prewarm render landed for this `(entity, version,
+  /// canvasSize)`. Called by the editor's `pollRenderResult` on every
+  /// render result for a selected (non-drag) entity, regardless of
+  /// whether the result carried a composited preview. Combined with
+  /// the `shouldPrewarm` guard above, this prevents the dispatch loop
+  /// when the compositor refuses to promote the entity (e.g.
+  /// `HasCompositingBreakingAncestor`).
+  void notePrewarmAttempted(Entity entity, std::uint64_t version, const Vector2i& canvasSize) {
+    lastPrewarmEntity = entity;
+    lastPrewarmVersion = version;
+    lastPrewarmCanvasSize = canvasSize;
   }
 
   /// Mark cached composited textures as available for the given entity/version/canvas size.

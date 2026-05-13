@@ -268,6 +268,60 @@ public:
     return lastSegmentInspectorRows_;
   }
 
+  /// Snapshot of the editor-facing bg/fg split bitmaps. Same capture
+  /// point and locking as the per-layer and per-segment snapshots.
+  [[nodiscard]] svg::compositor::CompositorController::SplitBitmapsSnapshot
+  compositorSplitBitmapsSnapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastSplitBitmapsSnapshot_;
+  }
+
+  /// Unified in-paint-order snapshot of every tile the compositor
+  /// blits to produce the final composite (design doc 0033 §M1++).
+  /// The editor's layer-inspector panel renders this list with
+  /// thumbnails for every tile so the operator can see the
+  /// comprehensive composite at a glance.
+  [[nodiscard]] std::vector<svg::compositor::CompositorController::CompositeTileSnapshot>
+  compositorCompositeTiles() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastCompositeTiles_;
+  }
+
+  /// Compositor-wide diagnostic state: active-hints count, layer
+  /// count, split-path active flag, drag-target entity, canvas
+  /// size. The editor's layer-inspector panel renders this as a
+  /// state header so the operator can spot mismatches between the
+  /// editor's idea of the drag target and the compositor's.
+  [[nodiscard]] svg::compositor::CompositorController::StateSnapshot compositorState() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastStateSnapshot_;
+  }
+
+  /// The worker's current view of which entity is promoted. Read on
+  /// the UI thread; the worker updates it under the same mutex as the
+  /// other snapshot fields when transitioning to Done. `entt::null`
+  /// when the worker hasn't promoted anything (e.g. promotion was
+  /// refused). Compare against the editor's selection to spot races
+  /// between the editor's `selectedEntity` and what the compositor
+  /// actually holds.
+  [[nodiscard]] Entity workerCompositorEntity() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastWorkerCompositorEntity_;
+  }
+
+  /// Canvas size in the request the worker is currently processing
+  /// (read from `request.document->canvasSize()`). Surfaces the
+  /// document's actual canvas size at the worker's last-completed
+  /// render, separate from the compositor's `staticSegmentsCanvas_`
+  /// (which is the size of the last successful rasterize). When
+  /// `documentCanvasAtLastDispatch != compositorCanvas`, the doc was
+  /// re-sized but the compositor hasn't re-rasterized at the new
+  /// size yet.
+  [[nodiscard]] Vector2i lastDocumentCanvasSize() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastDocumentCanvasSize_;
+  }
+
 private:
   void workerLoop();
 
@@ -340,6 +394,28 @@ private:
   /// Most recent per-segment diagnostic snapshot. Captured / read on
   /// the same code path as `lastLayerInspectorRows_`.
   std::vector<svg::compositor::CompositorController::SegmentInspectorRow> lastSegmentInspectorRows_;
+
+  /// Most recent bg/fg split-bitmaps snapshot. Same capture site.
+  svg::compositor::CompositorController::SplitBitmapsSnapshot lastSplitBitmapsSnapshot_;
+
+  /// Most recent unified composite-tile snapshot (in paint order).
+  std::vector<svg::compositor::CompositorController::CompositeTileSnapshot> lastCompositeTiles_;
+
+  /// Most recent compositor state snapshot (active-hints count,
+  /// split-path active flag, etc.). Captured under `mutex_` at the
+  /// Done-transition site alongside the other snapshots.
+  svg::compositor::CompositorController::StateSnapshot lastStateSnapshot_;
+
+  /// Snapshot of the worker's `compositorEntity_` at the last Done
+  /// transition. Surfaces the worker's view of "which entity is
+  /// currently promoted" to the editor's diagnostic panel.
+  Entity lastWorkerCompositorEntity_ = entt::null;
+
+  /// Canvas size from `request.document->canvasSize()` at the last
+  /// completed render. Diagnostic — compared against the
+  /// compositor's `staticSegmentsCanvas_` to spot "document was
+  /// re-sized but compositor hasn't caught up yet".
+  Vector2i lastDocumentCanvasSize_ = Vector2i::Zero();
 
   /// Runtime kill-switch for tight-bounded segment rasterization. Pushed
   /// into `CompositorController` at the start of each worker iteration.

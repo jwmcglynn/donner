@@ -1227,10 +1227,11 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
 //     rasterizes the whole splash twice over.
 //
 // The test asserts the per-click-drag compositor renderFrame stays
-// under 500 ms. If it trips the threshold, the `[CompositorSlowFrame]`
-// stderr print from `CompositorController::renderFrame` dumps a state
-// breakdown (canvas size, layer count, per-layer rasterize reasons)
-// that's rich enough to construct a tighter repro.
+// under 500 ms. If it trips the threshold, run the editor against the
+// same SVG and inspect the LayerInspectorPanel — the paint-order tile
+// list, raster-time column, and state header (active hints, split
+// path, last promote-refusal reason) give the equivalent breakdown
+// live.
 TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
@@ -1375,11 +1376,12 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
     if (t.label == "click-D (first promote)" || t.label == "click-O (second promote)") {
       EXPECT_LT(t.wallMs, 2500.0)
           << t.label
-          << " — slow-frame diagnostic should have fired to stderr. "
-             "If this trips, the most common regression is re-introducing the "
-             "eager `rootDirty_ = true` / segment-cache wipe in `CompositorController"
-             "::demoteEntity`. Check the `[CompositorSlowFrame]` stderr log above: "
-             "a count of rasterizeLayerCalls >> 1 indicates that regression.";
+          << " — the most common regression is re-introducing the eager "
+             "`rootDirty_ = true` / segment-cache wipe in `CompositorController"
+             "::demoteEntity`. Reproduce in the editor and open the layer "
+             "inspector panel: a raster-time column where most segments and "
+             "layers all rasterize on the click (instead of just the dragged "
+             "entity's layer) indicates that regression.";
     }
   }
 

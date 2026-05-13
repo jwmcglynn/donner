@@ -1,6 +1,7 @@
 #include "donner/editor/RenderCoordinator.h"
 
 #include <chrono>
+#include <cstdlib>
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
@@ -123,16 +124,43 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
       result.compositedPreview.has_value() && result.compositedPreview->valid();
   if (hasComposited) {
     textures.uploadComposited(*result.compositedPreview);
+    // Pass the document's actual canvas size, NOT the promoted
+    // bitmap's intrinsic dimensions. Pre-M2 the promoted bitmap was
+    // canvas-sized so the two were equivalent, but after M2A/M2B the
+    // bitmap covers only the entity bbox + filter halo. Using the
+    // bitmap dims here permanently mismatches `cachedCanvasSize !=
+    // currentCanvasSize` in `shouldPrewarm` / `needsExperimentalLayer
+    // Capture`, which dispatches a render every UI frame. The
+    // resulting busy state blocks `onMouseMove` (gated on `!isBusy()`
+    // via `ShouldPostDragMove`) → drag of any successfully-promoted
+    // entity produces zero motion. Symptom the user observed:
+    // promoted letters can't drag, but letters whose promotion was
+    // rejected work via the slow path.
     experimentalDragPresentation_.noteCachedTextures(
-        result.compositedPreview->entity, result.version,
-        Vector2i(result.compositedPreview->promotedBitmap.dimensions.x,
-                 result.compositedPreview->promotedBitmap.dimensions.y));
+        result.compositedPreview->entity, result.version, app.document().document().canvasSize());
   }
 
   if (!result.bitmap.empty()) {
     textures.uploadFlat(result.bitmap);
     if (!hasComposited) {
       experimentalDragPresentation_.noteFullRenderLanded(result.version);
+    }
+  }
+
+  // Mark this `(entity, version, canvasSize)` as "prewarm attempted"
+  // even when the result didn't carry a composited preview. Closes
+  // the prewarm dispatch loop that would otherwise fire every frame
+  // when the selected entity is refused by
+  // `CompositorController::promoteEntity` (e.g.
+  // `HasCompositingBreakingAncestor`): without this, the worker stays
+  // continuously busy and the editor's click handler can never
+  // process a new selection. See `ExperimentalDragPresentation::
+  // shouldPrewarm` for the matching guard.
+  if (app.hasDocument() && app.selectedElement().has_value()) {
+    const auto& selected = *app.selectedElement();
+    if (selected.isa<svg::SVGGraphicsElement>()) {
+      experimentalDragPresentation_.notePrewarmAttempted(
+          selected.entityHandle().entity(), result.version, app.document().document().canvasSize());
     }
   }
 
@@ -168,35 +196,34 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 
   const Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
-  // Cache the last committed canvas size to avoid the
-  // `document().canvasSize()` round-trip producing a spurious
-  // "changed!" verdict at stable zoom (the readback goes through
-  // `calculateCanvasScaledDocumentSize` which normalizes the value).
-  //
-  // Additionally **debounce** the commit during continuous pinch-zoom:
-  // when `desiredCanvasSize` is changing every frame, every
-  // `setCanvasSize` call triggers `invalidateRenderTree` →
-  // `needsFullRebuild=true` → every promoted layer re-rasterizes at the
-  // new canvas. At high zoom on the splash that's 7–8 layers × seconds
-  // each, so the editor freezes the entire gesture. Hold the new size
-  // in `pendingCanvasSize_` until it's been stable for
-  // `kCanvasSizeCommitDelay`, then commit. The pre-pinch bitmap keeps
-  // displaying (stretched by the screen-side viewport transform) until
-  // the gesture settles and the high-quality re-rasterize lands once.
+  const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
+  // Compare desired against what the document *actually reports* now,
+  // not against a separate `lastSetCanvasSize_` tracker:
+  //   - Avoids the "document forgot the canvas size" bug where a
+  //     `ReplaceDocument` (drag-release writeback → source-pane
+  //     reparse → `setDocumentMaybeStructural` → fresh SVGDocument
+  //     with `canvasSize = nullopt`) leaves the registry reading
+  //     `canvasSize()` as viewBox-sized while our cached `lastSet`
+  //     still holds the old big value. Symptom: "after a drag the
+  //     view goes low-res and stays" (panel shows
+  //     `viewport: zoom=… → desired 3954×2269`,
+  //     `document canvas: 892×512 ← commit stalled vs desired`).
+  //   - 1-pixel tolerance absorbs the aspect-preserving min-scale
+  //     rounding `LayoutSystem::calculateCanvasScaledDocumentSize`
+  //     applies on read-back; without it, setting `(3954, 2269)`
+  //     reads back as `(3953, 2269)` and the next commit refires
+  //     with the same value forever at the 120 ms throttle rate.
+  pendingCanvasSize_ = desiredCanvasSize;
   const auto now = std::chrono::steady_clock::now();
-  if (desiredCanvasSize != pendingCanvasSize_) {
-    pendingCanvasSize_ = desiredCanvasSize;
-    pendingCanvasSizeSince_ = now;
-  }
-  const bool pendingSettled = pendingCanvasSize_ != lastSetCanvasSize_ &&
-                              (now - pendingCanvasSizeSince_) >= kCanvasSizeCommitDelay;
-  // Always commit on the *first* setCanvasSize for a document — we need
-  // a real bitmap for the initial render. The debounce only kicks in for
-  // subsequent changes (lastSetCanvasSize_ != zero).
-  const bool firstCommit = lastSetCanvasSize_ == Vector2i::Zero();
-  if ((firstCommit && pendingCanvasSize_ != Vector2i::Zero()) || pendingSettled) {
+  const bool throttleElapsed = (now - pendingCanvasSizeSince_) >= kCanvasSizeCommitDelay;
+  const bool firstCommit = actualDocumentCanvas == Vector2i::Zero();
+  const bool closeEnough = std::abs(pendingCanvasSize_.x - actualDocumentCanvas.x) <= 1 &&
+                           std::abs(pendingCanvasSize_.y - actualDocumentCanvas.y) <= 1;
+  const bool wouldChange = !closeEnough;
+  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && (firstCommit || throttleElapsed)) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
-    lastSetCanvasSize_ = pendingCanvasSize_;
+    lastSetCanvasSize_ = app.document().document().canvasSize();
+    pendingCanvasSizeSince_ = now;
   }
 
   const Vector2i currentCanvasSize = app.document().document().canvasSize();
@@ -229,8 +256,26 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc);
   }
 
+  // A prior dispatch for this exact `(entity, version, canvasSize)`
+  // combination that landed *without* a composited preview means the
+  // compositor can't produce one — typically because the entity has
+  // a compositing-breaking ancestor and `promoteEntity` is refusing.
+  // Re-dispatching for the same combo would just reproduce the same
+  // empty result, holding the worker busy and starving the editor's
+  // mouse-move handler (which is gated on `!isBusy()`) — symptom:
+  // dragging a letter inside a `<g filter>` produces no visible
+  // motion, even though the click selects the element correctly.
+  // Same guard as the prewarm path, applied to the drag path. See
+  // `ExperimentalDragPresentation::shouldPrewarm` for the prewarm
+  // mirror.
+  const bool sameAsLastFailedDispatch =
+      !experimentalDragPresentation_.hasCachedTextures && dragPreview.has_value() &&
+      experimentalDragPresentation_.lastPrewarmEntity == dragPreview->entity &&
+      experimentalDragPresentation_.lastPrewarmVersion == currentVersion &&
+      experimentalDragPresentation_.lastPrewarmCanvasSize == currentCanvasSize;
+
   const bool needsExperimentalLayerCapture =
-      experimentalMode && dragPreview.has_value() &&
+      experimentalMode && dragPreview.has_value() && !sameAsLastFailedDispatch &&
       (!experimentalDragPresentation_.hasCachedTextures ||
        experimentalDragPresentation_.cachedEntity != dragPreview->entity ||
        experimentalDragPresentation_.cachedVersion != currentVersion ||
