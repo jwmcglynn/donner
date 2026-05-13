@@ -41,8 +41,10 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
@@ -116,40 +118,61 @@ struct RenderRequest {
 
 /// Bitmap plus the document version it was rendered from.
 struct RenderResult {
-  struct CompositedPreview {
-    svg::RendererBitmap backgroundBitmap;
-    svg::RendererBitmap promotedBitmap;
-    svg::RendererBitmap foregroundBitmap;
-    Entity entity = entt::null;
-    /// Compositor-reported translation (in document-space units) to apply when
-    /// drawing `promotedBitmap` independently of bg/fg — i.e. the delta between
-    /// the bitmap's rasterize-time DOM transform and the entity's current DOM
-    /// transform. For the split-layer display path, the editor blits the
-    /// promoted bitmap at this offset so it aligns with bg/fg (which were
-    /// rendered against the current DOM state, with the promoted entity
-    /// hidden).
-    Vector2d promotedTranslationDoc = Vector2d::Zero();
-    /// Canvas-space top-left of the promoted bitmap, in document-space
-    /// units (design doc 0033 §M2). Non-zero when the layer was
-    /// rasterized at intrinsic size — the bitmap covers only the
-    /// entity's bbox + filter halo, not the full canvas. The editor
-    /// blits the texture at `(promotedCanvasOffsetDoc + promoted
-    /// TranslationDoc) * pixelsPerDocUnit` with size equal to
-    /// `promotedBitmapDimsDoc * pixelsPerDocUnit` (not the raw bitmap
-    /// pixel count — that would freeze the bitmap's screen size
-    /// against zoom changes; see §M2B comment in
-    /// `RenderPanePresenter`).
-    Vector2d promotedCanvasOffsetDoc = Vector2d::Zero();
-    /// The promoted bitmap's intrinsic dimensions in document units.
-    /// Equals `bitmap.dimensions / canvasPixelsPerDocUnit_at_rasterize`.
-    /// The editor multiplies this by `pixelsPerDocUnit_current` to
-    /// obtain the on-screen blit size, which then tracks pinch-zoom
-    /// changes during the canvas-resize debounce window (the bitmap
-    /// stretches with the view instead of freezing at the rasterize-
-    /// time screen size).
-    Vector2d promotedBitmapDimsDoc = Vector2d::Zero();
+  /// One composite tile from the worker's `CompositorController::
+  /// snapshotCompositorTiles()` snapshot (design doc 0033 §M2C). The
+  /// editor uploads one GL texture per tile (keyed on `id`) and
+  /// blits each tile at its canvas offset, replacing the legacy
+  /// `bg`/`promoted`/`fg` triple. Geometry fields are doc-unit
+  /// quantities so the editor can scale them by the *current*
+  /// `pixelsPerDocUnit` and the bitmap follows pinch-zoom changes
+  /// during canvas-resize debouncing (same rationale as the M2B
+  /// `promotedBitmapDimsDoc` field this replaces).
+  struct CompositedTile {
+    enum class Kind : std::uint8_t { Segment, Layer };
 
-    [[nodiscard]] bool valid() const { return entity != entt::null && !promotedBitmap.empty(); }
+    Kind kind = Kind::Segment;
+    /// Stable id from the compositor — `"seg:{i}"` or
+    /// `"layer:{entity}"`. The editor's per-tile texture cache uses
+    /// this to reuse GL textures across frames when the tile's
+    /// `generation` hasn't bumped.
+    std::string id;
+    /// Monotonic generation from the compositor. Editor re-uploads
+    /// the bitmap only when this advances.
+    std::uint64_t generation = 0;
+    /// Source bitmap; uploaded as the tile's GL texture content.
+    svg::RendererBitmap bitmap;
+    /// Canvas-space top-left of `bitmap`, in document units. Editor
+    /// multiplies by `pixelsPerDocUnit` to get the on-screen blit
+    /// origin.
+    Vector2d canvasOffsetDoc = Vector2d::Zero();
+    /// Bitmap's intrinsic dimensions, in document units. Editor
+    /// multiplies by current `pixelsPerDocUnit` to get the on-screen
+    /// blit size — keeps the bitmap stretching with pinch-zoom while
+    /// the canvas-size commit is debounced.
+    Vector2d bitmapDimsDoc = Vector2d::Zero();
+    /// For drag-target tiles, the per-frame DOM translation in doc
+    /// units (the delta between the bitmap's rasterize-time DOM
+    /// transform and the entity's current DOM transform). Editor
+    /// adds this to `canvasOffsetDoc` so the dragged tile slides in
+    /// real time without re-rasterizing.
+    Vector2d dragTranslationDoc = Vector2d::Zero();
+    /// True when this tile is the active drag target. Useful for
+    /// pre-test inspection; the editor's blit math treats drag and
+    /// non-drag tiles uniformly via `dragTranslationDoc`.
+    bool isDragTarget = false;
+  };
+
+  struct CompositedPreview {
+    /// Paint-order tile list. Blit in `tiles` order: each tile gets
+    /// one `AddImage` call at `(canvasOffsetDoc + dragTranslationDoc)
+    /// * pixelsPerDocUnit` with size `bitmapDimsDoc *
+    /// pixelsPerDocUnit`.
+    std::vector<CompositedTile> tiles;
+    /// Active drag-target entity (for selection chrome routing). May
+    /// be `entt::null` if no entity is currently being dragged.
+    Entity entity = entt::null;
+
+    [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
 
   svg::RendererBitmap bitmap;

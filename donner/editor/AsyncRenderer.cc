@@ -222,26 +222,14 @@ void AsyncRenderer::workerLoop() {
         workerMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
       }
 
-      // Expose the split bg/drag/fg trio to the editor only when it was
-      // actually produced (single-layer drag path). Pre-warmed state
-      // (no active drag) still goes through this path, which means the
-      // editor can upload the GL textures as soon as selection happens and
-      // the first real drag frame is zero-cost. The compositor-reported
-      // compose offset travels back so the editor can place the promoted
-      // bitmap to line up with bg/fg on the GPU side.
+      // Expose the compositor's paint-order tile list to the editor (design
+      // doc 0033 §M2C). The editor blits each tile directly at its canvas
+      // offset, replacing the legacy bg/promoted/fg flatten step. Pre-warmed
+      // state (no active drag) also goes through this path so the editor
+      // can upload GL textures as soon as selection happens and the first
+      // drag frame is zero-cost.
       if (request.dragPreview.has_value() && compositorEntity_ != entt::null &&
-          compositor_->hasSplitStaticLayers()) {
-        // `layerComposeOffset` returns `canvasFromBitmap` whose translation
-        // is in CANVAS pixels (= doc × zoom × DPR for `worldIsCanvas`
-        // entities). The display path consumes
-        // `RenderResult::CompositedPreview::promotedTranslationDoc` in
-        // *document* units and re-applies the viewport zoom downstream
-        // (`textures.promotedTranslationDoc() * pixelsPerDocUnit()` in
-        // `RenderPanePresenter`). Convert here so the field actually
-        // matches its name. Without the conversion, dragging at zoom 5×
-        // on a Retina display visibly moves the promoted bitmap ~10×
-        // further than the overlay (which reads the DOM directly).
-        const Transform2d composeOffset = compositor_->layerComposeOffset(compositorEntity_);
+          compositor_->layerCount() > 0u) {
         const Vector2i canvasSize = request.document->canvasSize();
         const Box2d viewBox = request.document->svgElement().viewBox().value_or(Box2d::FromXYWH(
             0, 0, static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)));
@@ -255,31 +243,42 @@ void AsyncRenderer::workerLoop() {
           return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
                           scaleY != 0.0 ? canvas.y / scaleY : 0.0);
         };
-        const Vector2d composeTranslationDoc = canvasToDoc(composeOffset.translation());
-        // Layer's intrinsic canvas position, also expressed in doc units —
-        // non-zero whenever the layer went through the M2 tight-bound
-        // rasterize path (design doc 0033 §M2).
-        const Vector2d promotedCanvasOffsetDoc =
-            canvasToDoc(compositor_->layerCanvasOffsetOf(compositorEntity_));
-        // Bitmap intrinsic dimensions in doc units. The bitmap is in
-        // canvas pixels at the rasterize-time canvasPixelsPerDocUnit;
-        // divide by that scale to recover doc-space dims. The editor
-        // multiplies by current `pixelsPerDocUnit` to obtain the
-        // on-screen blit size, so the bitmap continues to scale with
-        // pinch-zoom even when the canvas-size commit is debounced.
-        const svg::RendererBitmap& promotedBitmap = compositor_->layerBitmapOf(compositorEntity_);
-        const Vector2d promotedBitmapDimsDoc =
-            canvasToDoc(Vector2d(static_cast<double>(promotedBitmap.dimensions.x),
-                                 static_cast<double>(promotedBitmap.dimensions.y)));
-        compositedPreview = RenderResult::CompositedPreview{
-            .backgroundBitmap = compositor_->backgroundBitmap(),
-            .promotedBitmap = promotedBitmap,
-            .foregroundBitmap = compositor_->foregroundBitmap(),
-            .entity = compositorEntity_,
-            .promotedTranslationDoc = composeTranslationDoc,
-            .promotedCanvasOffsetDoc = promotedCanvasOffsetDoc,
-            .promotedBitmapDimsDoc = promotedBitmapDimsDoc,
-        };
+
+        const auto compositorTiles = compositor_->snapshotTilesForUpload();
+        std::vector<RenderResult::CompositedTile> previewTiles;
+        previewTiles.reserve(compositorTiles.size());
+        for (const auto& ct : compositorTiles) {
+          if (ct.bitmap == nullptr || ct.bitmap->empty()) {
+            continue;
+          }
+          using OutKind = RenderResult::CompositedTile::Kind;
+          RenderResult::CompositedTile tile;
+          tile.kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
+          // Reuse the compositor's stable `tileId` as the editor cache
+          // key. Segment ids are entity-pair encoded so they survive a
+          // segment split; layer ids carry the high bit + entity.
+          tile.id = std::to_string(ct.tileId);
+          tile.generation = ct.generation;
+          tile.canvasOffsetDoc = canvasToDoc(ct.canvasOffsetPx);
+          tile.bitmapDimsDoc = canvasToDoc(Vector2d(static_cast<double>(ct.bitmap->dimensions.x),
+                                                    static_cast<double>(ct.bitmap->dimensions.y)));
+          // For the drag layer, `canvasFromBitmap` captures the post-
+          // rasterize DOM drift (translation in canvas pixels). Convert
+          // to doc units so the editor blit math composes with the live
+          // `pixelsPerDocUnit`.
+          if (ct.isDragTarget && ct.canvasFromBitmap.isTranslation()) {
+            tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
+          }
+          tile.isDragTarget = ct.isDragTarget;
+          tile.bitmap = *ct.bitmap;
+          previewTiles.push_back(std::move(tile));
+        }
+        if (!previewTiles.empty()) {
+          compositedPreview = RenderResult::CompositedPreview{
+              .tiles = std::move(previewTiles),
+              .entity = compositorEntity_,
+          };
+        }
       }
 
       // Selection chrome is no longer baked into the bitmap — main.cc

@@ -194,7 +194,17 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   // keep its flat texture current.
   EXPECT_FALSE(result->bitmap.empty());
   EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity());
-  EXPECT_FALSE(result->compositedPreview->promotedBitmap.empty());
+  // M2C: promoted bitmap now lives inside the `tiles` paint-order
+  // list. Assert at least one Layer-kind tile carries non-empty
+  // pixels for the dragged entity.
+  bool sawLayerTile = false;
+  for (const auto& tile : result->compositedPreview->tiles) {
+    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && !tile.bitmap.empty()) {
+      sawLayerTile = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(sawLayerTile);
 }
 
 TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPreviewLayers) {
@@ -386,7 +396,17 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag1 = waitForResult();
   ASSERT_TRUE(drag1.has_value());
   ASSERT_TRUE(drag1->compositedPreview.has_value());
-  const std::vector<uint8_t> promotedPixelsDrag1 = drag1->compositedPreview->promotedBitmap.pixels;
+  // M2C: capture the dragged layer's tile bitmap (kind=Layer, isDragTarget=true)
+  // to compare against the post-release/re-drag frame below.
+  const auto findDragTileBitmap = [](const RenderResult::CompositedPreview& cp) {
+    for (const auto& tile : cp.tiles) {
+      if (tile.isDragTarget && tile.kind == RenderResult::CompositedTile::Kind::Layer) {
+        return tile.bitmap.pixels;
+      }
+    }
+    return std::vector<uint8_t>{};
+  };
+  const std::vector<uint8_t> promotedPixelsDrag1 = findDragTileBitmap(*drag1->compositedPreview);
   ASSERT_FALSE(promotedPixelsDrag1.empty());
 
   // Release: selection held but no drag.
@@ -420,8 +440,8 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag2 = waitForResult();
   ASSERT_TRUE(drag2.has_value());
   ASSERT_TRUE(drag2->compositedPreview.has_value());
-  EXPECT_EQ(drag2->compositedPreview->promotedBitmap.pixels, promotedPixelsDrag1)
-      << "promoted bitmap should be identical after release → drag-again";
+  EXPECT_EQ(findDragTileBitmap(*drag2->compositedPreview), promotedPixelsDrag1)
+      << "drag-target tile bitmap should be identical after release → drag-again";
 }
 
 // Regression: mimic the editor's splash scenario — a drag target living
@@ -495,7 +515,18 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   auto prewarm = waitForResult();
   ASSERT_TRUE(prewarm.has_value());
   ASSERT_TRUE(prewarm->compositedPreview.has_value());
-  ASSERT_FALSE(prewarm->compositedPreview->promotedBitmap.empty());
+  ASSERT_FALSE(prewarm->compositedPreview->tiles.empty());
+  // At least one tile must carry a non-empty bitmap (post-M2C the prewarm
+  // delivers the full paint-order tile list, not just a single promoted
+  // bitmap, so the assertion exists on the union, not a named slot).
+  bool sawTileBitmap = false;
+  for (const auto& tile : prewarm->compositedPreview->tiles) {
+    if (!tile.bitmap.empty()) {
+      sawTileBitmap = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(sawTileBitmap);
 
   // Drive a long drag sequence. Each frame: mutate the DOM transform (via
   // the public `setTransform`, identical to `SetTransformCommand` in
@@ -906,14 +937,15 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
     // steady-state sizes since canvas dims don't change).
     if (result.has_value()) {
       if (result->compositedPreview.has_value()) {
-        const auto& cp = *result->compositedPreview;
-        stats.compositedUploadBytesPerFrame =
-            static_cast<std::size_t>(cp.backgroundBitmap.dimensions.x) *
-                static_cast<std::size_t>(cp.backgroundBitmap.dimensions.y) * 4u +
-            static_cast<std::size_t>(cp.promotedBitmap.dimensions.x) *
-                static_cast<std::size_t>(cp.promotedBitmap.dimensions.y) * 4u +
-            static_cast<std::size_t>(cp.foregroundBitmap.dimensions.x) *
-                static_cast<std::size_t>(cp.foregroundBitmap.dimensions.y) * 4u;
+        // M2C: composited preview is now a paint-order tile list, not
+        // a flattened bg/promoted/fg triple. Total upload bytes is the
+        // sum over all tiles' RGBA8 buffers.
+        std::size_t totalBytes = 0;
+        for (const auto& tile : result->compositedPreview->tiles) {
+          totalBytes += static_cast<std::size_t>(tile.bitmap.dimensions.x) *
+                        static_cast<std::size_t>(tile.bitmap.dimensions.y) * 4u;
+        }
+        stats.compositedUploadBytesPerFrame = totalBytes;
       }
       stats.flatUploadBytesPerFrame = static_cast<std::size_t>(result->bitmap.dimensions.x) *
                                       static_cast<std::size_t>(result->bitmap.dimensions.y) * 4u;
