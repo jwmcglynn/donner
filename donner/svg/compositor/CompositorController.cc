@@ -179,6 +179,15 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
     return refuse(PromoteRefusalReason::CompositingBreakingAncestor);
   }
 
+  // Design doc 0033 §M9 — layer-set hysteresis. If `entity` is in the
+  // pending-demotion queue, lift the demotion. The layer + hint
+  // survived the `demoteEntity` call, so we can fall through to the
+  // kind-refresh path below and reuse the cached bitmap / segment
+  // split without any `resyncSegmentsToLayerSet` work. This is the
+  // "click-deselect-click" / "drag-release-redrag-same-element" fast
+  // path the milestone targets.
+  pendingDemotions_.erase(entity);
+
   // Already promoted via the controller's `promoteEntity` path. Refresh the
   // Interaction kind in place so a Selection prewarm can become an ActiveDrag
   // without demoting the layer or dropping its cached bg/promoted/fg bitmaps.
@@ -285,38 +294,85 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
 }
 
 void CompositorController::demoteEntity(Entity entity) {
-  Registry& registry = document_->registry();
-
-  const auto hintIt = activeHints_.find(entity);
-  if (hintIt != activeHints_.end()) {
-    activeHints_.erase(hintIt);
+  // Design doc 0033 §M9 — layer-set hysteresis. Don't run the
+  // resolver / reconcileLayers immediately; queue the demotion
+  // against a frame counter and let the layer + hint linger.
+  // `promoteEntity` for the same entity within the window cancels
+  // the queued demotion and reuses the cached bitmap (no
+  // `resyncSegmentsToLayerSet` churn). Once the counter expires,
+  // `processPendingDemotions` runs the deferred cleanup in a batch.
+  //
+  // Only entities currently in `activeHints_` qualify. Mandatory-
+  // detector hints / complexity-bucket hints live in separate maps
+  // and aren't part of the explicit promote/demote API, so calling
+  // `demoteEntity` for those is a silent no-op (matching the
+  // pre-§M9 behaviour, where the `activeHints_.find` miss was also
+  // a no-op).
+  if (!activeHints_.contains(entity)) {
+    return;
   }
+  pendingDemotions_[entity] = kDemotionHysteresisFrames;
 
-  resolver_.resolve(registry, kMaxCompositorLayers);
-  reconcileLayers(registry);
-
-  // The split bg / drag / fg cache is keyed on the drag entity itself —
-  // once the drag target goes away, it's meaningless and must be
-  // dropped. After §M2C the editor reads tiles directly from
-  // `snapshotTilesForUpload` (no bg/fg cache to invalidate); clearing
-  // `splitStaticLayersEntity_` here releases the previous drag
-  // target so the next `snapshotTilesForUpload` doesn't mark a stale
-  // layer `isDragTarget`.
+  // The split bg / drag / fg cache is keyed on the editor's current
+  // drag entity. Even though the layer lives on through the hysteresis
+  // window, the editor's view of "this entity is the drag target" is
+  // over — clear `splitStaticLayersEntity_` so the next
+  // `snapshotTilesForUpload` doesn't mark the about-to-be-demoted
+  // layer with `isDragTarget=true`.
   splitStaticLayersEntity_ = entt::null;
   splitStaticLayersViewport_ = Vector2i::Zero();
+}
 
-  // Do NOT clear `staticSegments_` / set `rootDirty_` — those would
-  // nuke every cached segment bitmap on every demote, which turns
-  // "release D then click O" into a multi-second freeze as the
-  // compositor re-rasterizes all 9 segments + every mandatory filter
-  // layer from scratch. The next `renderFrame` will call
-  // `resyncSegmentsToLayerSet`, which surgically preserves every
-  // segment whose boundary pair survived the layer removal and marks
-  // only the slot(s) whose boundaries actually changed (the two that
-  // used to border the demoted layer collapse into one). `reconcile
-  // Layers` above already preserved the promoted-layer bitmaps that
-  // didn't change. See the `MultiShapeClickDragHiDpiRepro` test for
-  // the gate.
+void CompositorController::flushPendingDemotionsForTesting() {
+  if (pendingDemotions_.empty() || document_ == nullptr) {
+    return;
+  }
+  // Drop the per-entry counters to zero so the next processing pass
+  // expires all of them. We can't just `clear()` + erase from
+  // `activeHints_` because the deferred resolver / reconcile work
+  // still needs to run — push it through the normal path.
+  for (auto& [entity, frames] : pendingDemotions_) {
+    frames = 0;
+  }
+  processPendingDemotions(document_->registry());
+}
+
+void CompositorController::processPendingDemotions(Registry& registry) {
+  if (pendingDemotions_.empty()) {
+    return;
+  }
+
+  std::vector<Entity> expired;
+  for (auto it = pendingDemotions_.begin(); it != pendingDemotions_.end();) {
+    if (it->second > 0) {
+      --it->second;
+      ++it;
+    } else {
+      expired.push_back(it->first);
+      it = pendingDemotions_.erase(it);
+    }
+  }
+  // Decrement-then-act: an entry minted this frame (count =
+  // `kDemotionHysteresisFrames`) needs `kDemotionHysteresisFrames`
+  // calls to this function before it fires. The `> 0` check above
+  // means a fresh entry is decremented to `kDemotionHysteresisFrames
+  // - 1` on the first call and only enters the `expired` bucket
+  // when it would otherwise tick below zero.
+  if (expired.empty()) {
+    return;
+  }
+
+  for (Entity entity : expired) {
+    activeHints_.erase(entity);
+  }
+  // Batch a single resolver + reconcile pass for all expirations
+  // — the loop above might have removed several hints at once, and
+  // running the resolver per-entity would N² the segment cache
+  // rebuild. `resyncSegmentsToLayerSet` (called from
+  // `renderFrame`'s normal flow later this tick) preserves every
+  // segment whose boundary pair survived the layer removals.
+  resolver_.resolve(registry, kMaxCompositorLayers);
+  reconcileLayers(registry);
 }
 
 bool CompositorController::isPromoted(Entity entity) const {
@@ -639,6 +695,20 @@ bool CompositorController::remapAfterStructuralReplace(
   }
   activeHints_ = std::move(newActiveHints);
 
+  // §M9: remap the hysteresis queue alongside `activeHints_`. Entries
+  // whose entity id doesn't survive the remap are dropped — the layer
+  // they were guarding is already gone from the new entity space, so
+  // there's nothing left to demote later.
+  std::unordered_map<Entity, uint32_t> newPendingDemotions;
+  newPendingDemotions.reserve(pendingDemotions_.size());
+  for (const auto& [oldEntity, framesRemaining] : pendingDemotions_) {
+    const auto it = remap.find(oldEntity);
+    if (it != remap.end()) {
+      newPendingDemotions.emplace(it->second, framesRemaining);
+    }
+  }
+  pendingDemotions_ = std::move(newPendingDemotions);
+
   // Step 2: rebuild the auto-promotion detectors against the new
   // registry. `prepareDocumentForRendering` above populated RICs, so
   // `reconcile` has the data it needs to re-detect filter / bucket
@@ -717,6 +787,9 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
     complexityBucketer_.clear();
   }
   activeHints_.clear();
+  // §M9 hysteresis queue is tied to the old entity space; both
+  // document-replaced and live-registry resets must drop it.
+  pendingDemotions_.clear();
   resolver_.resolve(registry, kMaxCompositorLayers);
   reconcileLayers(registry);
 
@@ -756,6 +829,14 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
   Registry& registry = document_->registry();
+
+  // Design doc 0033 §M9 — age the hysteresis queue and flush
+  // expirations before the dirty-flag snapshot. An entity that
+  // expires this frame becomes a real demote whose
+  // `resyncSegmentsToLayerSet` runs as part of the normal render
+  // flow below; an entity that survives the frame stays in
+  // `activeHints_` / `layers_` so its cached bitmap is reused.
+  processPendingDemotions(registry);
 
   // `mandatoryDetector_.reconcile()` is O(N) over all `RenderingInstanceComponent`
   // entities. For steady-state drag (translation-only, no style mutations) it

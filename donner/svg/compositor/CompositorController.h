@@ -734,6 +734,17 @@ private:
   /// all defer to it after running the resolver.
   void reconcileLayers(Registry& registry);
 
+  /// Design doc 0033 §M9 — age `pendingDemotions_` by one frame and
+  /// flush any entries that hit zero. Called once per `renderFrame`
+  /// before the dirty-flag snapshot so an expired demotion's
+  /// `resyncSegmentsToLayerSet` runs inside the normal render's
+  /// resolve+reconcile pass (one batched cost for any number of
+  /// expirations in the same frame). The pending entity stays in
+  /// `activeHints_` and `layers_` for the whole window — a
+  /// re-`promoteEntity` for the same entity erases it from
+  /// `pendingDemotions_` and reuses the cached bitmap.
+  void processPendingDemotions(Registry& registry);
+
   /// Returns true if the entity is currently within the layer's cached render range.
   bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
 
@@ -765,6 +776,36 @@ private:
   std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
   std::vector<CompositorLayer> layers_;
 
+  /// Design doc 0033 §M9 — layer-set hysteresis. Entity → frames
+  /// remaining before the demote actually fires. `demoteEntity` adds
+  /// an entry here instead of running the resolver / reconcileLayers
+  /// immediately; the layer + hint stay in `layers_` /
+  /// `activeHints_` so a `promoteEntity` for the same entity inside
+  /// the window cancels the demotion and reuses the cached
+  /// bitmap/segments (no `resyncSegmentsToLayerSet` churn). The
+  /// counter ages once per `renderFrame`; entries that hit zero are
+  /// removed from `activeHints_` and the deferred resolver pass
+  /// runs in a batch.
+  std::unordered_map<Entity, uint32_t> pendingDemotions_;
+
+public:
+  /// Frames the demotion waits before actually firing. ~0.5s at 60Hz
+  /// — long enough to absorb the typical "click-deselect-click"
+  /// rhythm (a few hundred ms), short enough that an actual
+  /// commit-to-demote stays inside one human reaction time. Public
+  /// so tests can drive `renderFrame` exactly the right number of
+  /// times to observe the expiry transition.
+  static constexpr uint32_t kDemotionHysteresisFrames = 30;
+
+  /// Test-only: bypass the §M9 hysteresis window and process every
+  /// pending demotion immediately. Provided so unit tests can keep
+  /// using the "promote → demote → assert layer gone" pattern
+  /// without having to render `kDemotionHysteresisFrames` frames in
+  /// the middle. Production code calls happen via the normal
+  /// `renderFrame` flow, which ages the queue one frame at a time.
+  void flushPendingDemotionsForTesting();
+
+private:
   /// Cached static segments — N+1 bitmaps, one per paint-order gap between
   /// promoted layers, plus the pre-first and post-last slots. Together
   /// with `layers_` (interleaved) this reproduces the full document in
