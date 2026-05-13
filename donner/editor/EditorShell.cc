@@ -375,29 +375,62 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
   }
 
-  if (interactionController_.pendingClick().has_value() &&
-      !renderCoordinator_.asyncRenderer().isBusy()) {
-    // `SelectTool::onMouseDown` abandons any stale drag/marquee state
-    // before starting the new gesture, so drop the previous coalesced
-    // screen point alongside that reset.
-    //
-    // M8 originally dropped the `!isBusy()` gate here and tried a
-    // snapshot-based re-drag path, but `SnapshotSelectionWorldBounds`
-    // reads `ShapeSystem` components from the registry — the worker
-    // mutates these inside `prepareDocumentForRendering`, so the
-    // mid-render call raced and SIGSEGV'd inside `getTransformed
-    // ShapeBounds`. The mid-render re-drag path needs a pre-snapshotted
-    // bounds cache (similar to `SelectionBoundsCache`) before it can
-    // be safely re-enabled; tracked as a follow-up.
-    lastPostedScreenPoint_.reset();
-    selectTool_.onMouseDown(app_, interactionController_.pendingClick()->documentPoint,
-                            interactionController_.pendingClick()->modifiers);
+  // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
+  //
+  // Fast path: if the user clicks inside the bounds of the currently-
+  // selected element, we can start the re-drag IMMEDIATELY without
+  // gating on `!isBusy()`. The check uses `SelectionBoundsCache::
+  // displayedBoundsDoc` — populated on idle frames — so the call
+  // doesn't touch the registry the worker is mid-mutating. The
+  // previous M8 attempt failed because it called the live
+  // `SnapshotSelectionWorldBounds` during the busy window; the
+  // cache-based check fixes the race.
+  //
+  // Slow path: anything else (selection change, marquee, shift-click,
+  // empty cache, multi-select) still waits for `!isBusy()` and goes
+  // through the full `onMouseDown` flow. The follow-up registry-
+  // reading work (`refreshSelectionBoundsCache`, overlay rasterize,
+  // render request) is deferred to the next idle frame for both
+  // paths, so the user sees the click acknowledged immediately even
+  // when the chrome catches up a frame later.
+  if (interactionController_.pendingClick().has_value()) {
+    const auto& pendingClick = *interactionController_.pendingClick();
+    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+    const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const bool tookFastRedrag =
+        cacheMatchesSelection && selectTool_.tryStartRedragOnSelected(
+                                     app_, pendingClick.documentPoint, pendingClick.modifiers,
+                                     boundsCache.displayedBoundsDoc);
+    if (tookFastRedrag) {
+      lastPostedScreenPoint_.reset();
+      interactionController_.clearPendingClick();
+      pendingClickFollowupAfterIdle_ = true;
+    } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
+      // Slow path: full `onMouseDown` (hitTest + selection change +
+      // possible drag start). Race-safe only when the worker is idle.
+      lastPostedScreenPoint_.reset();
+      selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+      renderCoordinator_.refreshSelectionBoundsCache(app_);
+      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                            options_.experimentalMode, textures_);
+      renderCoordinator_.rasterizeOverlayForCurrentSelection(
+          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+      interactionController_.clearPendingClick();
+    }
+  }
+
+  // After-idle follow-up for the M8 fast-path click. These calls all
+  // read or rasterize against the live registry, so they must wait
+  // for the worker to land. Once it does, refresh the bounds cache
+  // for the now-stable drag-target, post a render request, and re-
+  // rasterize the overlay chrome at the new selection.
+  if (pendingClickFollowupAfterIdle_ && !renderCoordinator_.asyncRenderer().isBusy()) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
                                           options_.experimentalMode, textures_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(app_, interactionController_.viewport(),
                                                            textures_, selectTool_.marqueeRect());
-    interactionController_.clearPendingClick();
+    pendingClickFollowupAfterIdle_ = false;
   }
 
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
