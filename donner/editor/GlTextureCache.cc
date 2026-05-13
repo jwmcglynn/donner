@@ -61,6 +61,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   UploadBitmap(promotedTexture_, preview.promotedBitmap, &promotedWidth_, &promotedHeight_);
   UploadBitmap(foregroundTexture_, preview.foregroundBitmap, &foregroundWidth_, &foregroundHeight_);
   promotedTranslationDoc_ = preview.promotedTranslationDoc;
+  promotedCanvasOffsetDoc_ = preview.promotedCanvasOffsetDoc;
 }
 
 void GlTextureCache::clearOverlay() {
@@ -76,6 +77,7 @@ void GlTextureCache::resetComposited() {
   foregroundWidth_ = 0;
   foregroundHeight_ = 0;
   promotedTranslationDoc_ = Vector2d::Zero();
+  promotedCanvasOffsetDoc_ = Vector2d::Zero();
 }
 
 void GlTextureCache::UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,

@@ -294,6 +294,14 @@ public:
   /// Cached bitmap for the promoted entity, or an empty bitmap if unavailable.
   [[nodiscard]] const RendererBitmap& layerBitmapOf(Entity entity) const;
 
+  /// Canvas-space top-left of the entity's cached layer bitmap. `Zero()`
+  /// when the entity is not promoted, when its layer hasn't rasterized
+  /// yet, or when the layer fell back to canvas-size rasterization
+  /// (design doc 0033 §M2). The editor's `CompositedPreview` consumer
+  /// blits the promoted texture at this offset (converted to doc
+  /// units) plus the per-frame DOM drag delta.
+  [[nodiscard]] Vector2d layerCanvasOffsetOf(Entity entity) const;
+
   /// Diagnostic counters for the translation-only fast path. Tests read
   /// these to assert that a drag is taking the fast path every frame,
   /// not falling through to `prepareDocumentForRendering`.
@@ -349,6 +357,10 @@ public:
     FallbackReason fallbackReasons = FallbackReason::None;
     /// Pre-formatted fallback flag list (e.g. `"Filter | IsolatedLayer"`).
     std::string fallbackReasonsText;
+    /// Canvas-space top-left position where this layer's bitmap blits
+    /// back. `Vector2d::Zero()` for canvas-sized layers; non-zero for
+    /// intrinsic-sized layers (design doc 0033 §M2).
+    Vector2d canvasOffset = Vector2d::Zero();
     /// Pixel dimensions of the downsampled thumbnail. `Vector2i::Zero()`
     /// when the layer has no valid bitmap. Otherwise the longer side is
     /// `kLayerThumbnailMaxSide` and the shorter side preserves aspect.

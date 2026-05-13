@@ -107,7 +107,29 @@ public:
   /// Identity when the DOM entity has not moved since rasterization; a
   /// pure translation during the bitmap-reuse fast path; other
   /// transforms force re-rasterization before compose.
+  ///
+  /// When the bitmap is *intrinsic-sized* (smaller than the canvas,
+  /// rasterized into a tight bound — see `canvasOffset()`), the full
+  /// compose transform is `Translate(canvasOffset) * canvasFromBitmap`.
+  /// `canvasFromBitmap_` itself still encodes only the post-rasterize
+  /// drift, so the fast-path math is unchanged.
   [[nodiscard]] const Transform2d& canvasFromBitmap() const { return canvasFromBitmap_; }
+
+  /// Canvas-space top-left position of the bitmap's pixel (0,0). Zero
+  /// for canvas-sized layers (the rasterize spans the whole canvas and
+  /// the bitmap's origin is the canvas origin). Non-zero for intrinsic-
+  /// sized layers, where the rasterize covers only the entity's
+  /// world-bounds + filter padding and the bitmap is placed back into
+  /// the canvas at `canvasOffset`.
+  ///
+  /// See design doc 0033 §M2 "Intrinsic-size layer rasterization".
+  [[nodiscard]] const Vector2d& canvasOffset() const { return canvasOffset_; }
+
+  /// Set the canvas-space top-left where this layer's bitmap blits back.
+  /// Called by `CompositorController::rasterizeLayer` immediately after
+  /// `setBitmap` when the layer was rasterized into a tight-bound
+  /// offscreen.
+  void setCanvasOffset(const Vector2d& offset) { canvasOffset_ = offset; }
 
   /// Returns the entity's absolute transform at the moment the cached
   /// bitmap was rasterized, if any. The compositor uses this to decide
@@ -247,6 +269,7 @@ private:
   uint64_t generation_ = 0;
   uint32_t rasterizeCount_ = 0;
   double lastRasterizeMs_ = 0.0;
+  Vector2d canvasOffset_ = Vector2d::Zero();
 };
 
 }  // namespace donner::svg::compositor

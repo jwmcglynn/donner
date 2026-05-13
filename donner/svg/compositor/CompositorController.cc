@@ -424,6 +424,7 @@ CompositorController::snapshotLayerInspectorRows() const {
     row.hasValidBitmap = layer.hasValidBitmap();
     row.fallbackReasons = layer.fallbackReasons();
     row.fallbackReasonsText = FallbackReasonToString(layer.fallbackReasons());
+    row.canvasOffset = layer.canvasOffset();
     rows.push_back(std::move(row));
   }
   return rows;
@@ -442,6 +443,11 @@ const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
   static const RendererBitmap kEmptyBitmap;
   const CompositorLayer* layer = findLayer(entity);
   return layer ? layer->bitmap() : kEmptyBitmap;
+}
+
+Vector2d CompositorController::layerCanvasOffsetOf(Entity entity) const {
+  const CompositorLayer* layer = findLayer(entity);
+  return layer ? layer->canvasOffset() : Vector2d::Zero();
 }
 
 std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(const SVGDocument& oldDoc,
@@ -1455,14 +1461,80 @@ const CompositorLayer* CompositorController::findLayer(Entity entity) const {
 void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport) {
   ZoneScopedN("Compositor::rasterizeLayer");
   const auto rasterizeStart = std::chrono::steady_clock::now();
-  auto offscreen = renderer_->createOffscreenInstance();
-  UTILS_RELEASE_ASSERT(offscreen != nullptr);
 
   Registry& registry = document_->registry();
 
+  // Intrinsic-size rasterization (design doc 0033 §M2): size the
+  // offscreen to the layer's tight canvas bounds instead of the full
+  // viewport. Editor-promoted layers go through this path too;
+  // `CompositedPreview` carries the layer's `canvasOffset()` so the
+  // editor blits the texture at its intrinsic dimensions + position
+  // (see RenderPanePresenter). M2A scoped this to mandatory-detected
+  // layers; M2B drops the gate.
+  //
+  // `computeEntityRangeBounds` already accounts for filter expansion,
+  // stroke widths, isolated-layer accumulation, and clip rects — see
+  // `RendererDriver.h §computeEntityRangeBounds`. `nullopt` means "fall
+  // back to canvas-size"; never "empty".
+  std::optional<Box2d> tightBoundsCanvas;
+  {
+    ZoneScopedN("Compositor::rasterizeLayer::computeBounds");
+    RendererDriver boundsDriver(*renderer_);
+    tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
+        registry, layer.firstEntity(), layer.lastEntity(), viewport, Transform2d());
+  }
+
+  // Snap to integer pixels and pad for AA. The padding matters: filter
+  // primitives (gaussian blur in particular) produce a soft falloff
+  // outside the entity's geometric bbox. `computeEntityRangeBounds`
+  // returns the filter region (per spec, a hard clip), but the AA at
+  // its edge still has sub-pixel contributions that need a 1-2 px halo
+  // on either side to stay pixel-identical with the canvas-size
+  // rasterize. 2 px is the smallest value that survived
+  // `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly
+  // packed scene with two large gaussian blurs); 1 px left a ~0.001
+  // alpha tail clipped at the bitmap edge, producing maxDiff=1 in
+  // ~174 boundary pixels. Threshold against canvas area: if the tight
+  // rect covers most of the canvas, the intrinsic-size win is
+  // negligible and the bitmap-management overhead isn't worth it.
+  constexpr double kTightBoundsCoverageThreshold = 0.75;
+  constexpr double kEdgePaddingPx = 2.0;
+  Box2d tightBoundsSnapped;
+  bool useTight = false;
+  const double canvasArea = viewport.size.x * viewport.size.y;
+  if (tightBoundsCanvas.has_value() && canvasArea > 0.0) {
+    const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
+    Box2d padded(tightBoundsCanvas->topLeft - padding, tightBoundsCanvas->bottomRight + padding);
+    const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
+                          std::floor(std::max(0.0, padded.topLeft.y)));
+    const Vector2d snapBR(std::ceil(std::min(viewport.size.x, padded.bottomRight.x)),
+                          std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
+    if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
+      tightBoundsSnapped = Box2d(snapTL, snapBR);
+      const double tightArea = tightBoundsSnapped.width() * tightBoundsSnapped.height();
+      if (tightArea < canvasArea * kTightBoundsCoverageThreshold) {
+        useTight = true;
+      }
+    }
+  }
+
+  auto offscreen = renderer_->createOffscreenInstance();
+  UTILS_RELEASE_ASSERT(offscreen != nullptr);
   RendererDriver driver(*offscreen);
-  driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), viewport,
-                         Transform2d());
+
+  Vector2d resultingCanvasOffset = Vector2d::Zero();
+  if (useTight) {
+    ZoneScopedN("Compositor::rasterizeLayer::drawEntityRangeTight");
+    RenderViewport tightViewport;
+    tightViewport.size = tightBoundsSnapped.size();
+    tightViewport.devicePixelRatio = viewport.devicePixelRatio;
+    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), tightViewport,
+                           Transform2d::Translate(-tightBoundsSnapped.topLeft));
+    resultingCanvasOffset = tightBoundsSnapped.topLeft;
+  } else {
+    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), viewport,
+                           Transform2d());
+  }
 
   // Stamp the bitmap with the entity's current absolute transform so the
   // fast path in `renderFrame` can later tell whether a DOM transform
@@ -1478,6 +1550,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                           .worldFromEntityTransform;
   }
   layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
+  layer.setCanvasOffset(resultingCanvasOffset);
   const auto rasterizeEnd = std::chrono::steady_clock::now();
   const auto elapsedUs =
       std::chrono::duration_cast<std::chrono::microseconds>(rasterizeEnd - rasterizeStart).count();
@@ -1951,10 +2024,18 @@ void CompositorController::recomposeSplitBitmaps(const CompositorLayer& dragLaye
           if (promoted.hasValidBitmap()) {
             ZoneScopedN("Compositor::composeRange::drawPromoted");
             const RendererBitmap& bitmap = promoted.bitmap();
+            // Intrinsic-size layers carry their canvas position in
+            // `canvasOffset()`; canvas-sized layers report Zero. Compose
+            // is `Translate(canvasOffset) * canvasFromBitmap`. Snap the
+            // combined translation to integer pixels.
+            const Vector2d offset = promoted.canvasOffset();
             Transform2d canvasFromBitmap = promoted.canvasFromBitmap();
             if (canvasFromBitmap.isTranslation()) {
-              Vector2d t = canvasFromBitmap.translation();
-              canvasFromBitmap = Transform2d::Translate(std::round(t.x), std::round(t.y));
+              const Vector2d t = canvasFromBitmap.translation();
+              canvasFromBitmap =
+                  Transform2d::Translate(std::round(t.x + offset.x), std::round(t.y + offset.y));
+            } else {
+              canvasFromBitmap = Transform2d::Translate(offset) * canvasFromBitmap;
             }
             ImageResource image = BuildImageResource(bitmap);
             ImageParams params;
@@ -2074,11 +2155,21 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     if (!layer.hasValidBitmap()) {
       return;
     }
-    // Apply canvasFromBitmap with integer-pixel snap for translations.
+    // Compose = Translate(canvasOffset) * canvasFromBitmap. For intrinsic-
+    // sized layers `canvasOffset` is non-zero (the bitmap was rasterized
+    // into a tight subrect of the canvas); for canvas-sized layers it's
+    // Zero and the composition reduces to the legacy behavior.
+    // `canvasFromBitmap` encodes only the post-rasterize DOM drift, so
+    // the fast path's math is unchanged. Snap the combined translation
+    // to integer pixels.
+    const Vector2d offset = layer.canvasOffset();
     Transform2d canvasFromBitmap = layer.canvasFromBitmap();
     if (canvasFromBitmap.isTranslation()) {
-      Vector2d t = canvasFromBitmap.translation();
-      canvasFromBitmap = Transform2d::Translate(std::round(t.x), std::round(t.y));
+      const Vector2d t = canvasFromBitmap.translation();
+      canvasFromBitmap =
+          Transform2d::Translate(std::round(t.x + offset.x), std::round(t.y + offset.y));
+    } else {
+      canvasFromBitmap = Transform2d::Translate(offset) * canvasFromBitmap;
     }
     drawBitmap(layer.bitmap(), canvasFromBitmap);
   };
