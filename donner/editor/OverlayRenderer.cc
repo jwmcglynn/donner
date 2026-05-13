@@ -74,37 +74,6 @@ double LinearScale(const Transform2d& canvasFromDoc) {
   return canvasFromDoc.transformVector(Vector2d(1.0, 0.0)).length();
 }
 
-/// Inner helper that draws *just* the path outline for a single
-/// geometry element. The AABB is drawn separately by the caller —
-/// per the design doc, multi-select chrome shows one combined AABB
-/// across the whole selection, not one box per element.
-void DrawElementPathOutline(svg::Renderer& renderer, const svg::SVGGeometryElement& geometry,
-                            const Transform2d& canvasFromDoc, const svg::PaintParams& paint) {
-  // The spline is in the element's local coordinate space. To draw
-  // it at the right on-screen position we chain local → world →
-  // canvas. Per Donner's row-vector `A * B = apply A first, then B`
-  // semantics, that's `elementFromWorld * canvasFromDoc` (the name
-  // `elementFromWorld` is a legacy misnomer — the actual behavior,
-  // verified by reading `RendererDriver::traverse`, is local→world,
-  // same transform the main renderer feeds into `setTransform` for
-  // each element's own draw calls). The composition's destFromSource
-  // name is `canvasFromElement`.
-  //
-  // An earlier version of this code had an extra `.inverse()` which
-  // silently flipped the sign of every element transform — dragging
-  // a selected element right moved the path outline left. The AABB
-  // path below didn't have the bug because it goes through
-  // `worldBounds()` which already returns world-space coordinates.
-  if (const auto spline = geometry.computedSpline(); spline.has_value()) {
-    const Transform2d canvasFromElement = geometry.elementFromWorld() * canvasFromDoc;
-    renderer.setTransform(canvasFromElement);
-    svg::PathShape shape;
-    shape.path = *spline;
-    shape.parentFromEntity = Transform2d();
-    renderer.drawPath(shape, paint.strokeParams);
-  }
-}
-
 }  // namespace
 
 void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
@@ -142,13 +111,36 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
   drawChromeWithTransform(renderer, selection, /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
 }
 
-void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
-                                              std::span<const svg::SVGElement> selection,
-                                              const std::optional<Box2d>& marqueeRectDoc,
-                                              const Transform2d& canvasFromDoc) {
-  ZoneScopedN("OverlayRenderer::drawChrome");
-  if (selection.empty() && !marqueeRectDoc.has_value()) {
-    return;
+SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
+    std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
+    const Transform2d& canvasFromDoc) {
+  SelectionChromeSnapshot snapshot;
+  snapshot.canvasFromDoc = canvasFromDoc;
+  snapshot.marqueeDoc = marqueeRectDoc;
+
+  const double scale = LinearScale(canvasFromDoc);
+  const auto pixelToWorld = [scale](double pixels) {
+    return scale > 1e-9 ? pixels / scale : pixels;
+  };
+  snapshot.selectionStrokeWidthWorld = pixelToWorld(kSelectionStrokePixels);
+  snapshot.marqueeStrokeWidthWorld = pixelToWorld(kMarqueeStrokePixels);
+
+  if (selection.empty()) {
+    return snapshot;
+  }
+
+  // Per-element path data + transforms. `computedSpline` and
+  // `elementFromWorld` both read registry state — done here, before
+  // returning, so the post-return snapshot is fully self-contained.
+  for (const auto& element : selection) {
+    for (const auto& geometry : CollectRenderableGeometry(element)) {
+      if (const auto spline = geometry.computedSpline(); spline.has_value()) {
+        SelectionChromeSnapshot::PathItem item;
+        item.spline = *spline;
+        item.canvasFromElement = geometry.elementFromWorld() * canvasFromDoc;
+        snapshot.paths.push_back(std::move(item));
+      }
+    }
   }
 
   // AABBs are computed inline from the selection's current DOM transforms
@@ -159,69 +151,81 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
   // the AABB (cached). Path outline + AABB are now sampled from the same
   // DOM snapshot. The cache is still useful for main-loop selection-
   // changed detection; it's just no longer gating the overlay's bounds.
-  const std::vector<Box2d> selectionBoundsDoc = SnapshotSelectionWorldBounds(selection);
+  snapshot.aabbsDoc = SnapshotSelectionWorldBounds(selection);
+  return snapshot;
+}
 
-  // Compensate for the canvasFromDoc scale so strokes stay a fixed
-  // canvas-pixel width regardless of zoom. Computed once and shared
-  // across every chrome element.
-  const double scale = LinearScale(canvasFromDoc);
-  const auto pixelToWorld = [scale](double pixels) {
-    return scale > 1e-9 ? pixels / scale : pixels;
-  };
-  const double selectionStrokeWidth = pixelToWorld(kSelectionStrokePixels);
-  const double marqueeStrokeWidth = pixelToWorld(kMarqueeStrokePixels);
-  const svg::PaintParams selectionStrokePaint = MakeSelectionStrokePaint(selectionStrokeWidth);
+void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
+                                             const SelectionChromeSnapshot& snapshot) {
+  ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
+  if (snapshot.paths.empty() && snapshot.aabbsDoc.empty() && !snapshot.marqueeDoc.has_value()) {
+    return;
+  }
+
+  const svg::PaintParams selectionStrokePaint =
+      MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
 
   // Per-element path outlines first — the user sees the exact shape of
-  // every selected element regardless of how many are picked. Group-like
-  // selections (e.g. `<g filter>`) are expanded into their renderable
-  // geometry descendants so the user still sees the leaf shapes that
-  // make up the group, not just its AABB. All outlines share the same
-  // cyan stroke, so we set the paint once and reuse it across the loop.
-  if (!selection.empty()) {
+  // every selected element regardless of how many are picked. All
+  // outlines share the same cyan stroke, so the paint is set once and
+  // reused across the loop.
+  if (!snapshot.paths.empty()) {
     renderer.setPaint(selectionStrokePaint);
-    for (const auto& element : selection) {
-      for (const auto& geometry : CollectRenderableGeometry(element)) {
-        DrawElementPathOutline(renderer, geometry, canvasFromDoc, selectionStrokePaint);
-      }
+    for (const auto& item : snapshot.paths) {
+      renderer.setTransform(item.canvasFromElement);
+      svg::PathShape shape;
+      shape.path = item.spline;
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, selectionStrokePaint.strokeParams);
     }
   }
 
   // Selection AABBs: one rectangle per element, plus a single combined
-  // envelope when there are multiple elements (matches the legacy
-  // `ComputeSelectionAabbScreenRects` output so multi-select chrome
-  // still shows "per-element + combined"). Drawn in document space with
-  // `canvasFromDoc` applied so they line up with the content bitmap
-  // the compositor produced for the same frame.
-  if (!selectionBoundsDoc.empty()) {
+  // envelope when there are multiple elements. Drawn in document space
+  // with `canvasFromDoc` applied so they line up with the content
+  // bitmap the compositor produced for the same frame.
+  if (!snapshot.aabbsDoc.empty()) {
     renderer.setPaint(selectionStrokePaint);
-    renderer.setTransform(canvasFromDoc);
-    for (const Box2d& aabb : selectionBoundsDoc) {
+    renderer.setTransform(snapshot.canvasFromDoc);
+    for (const Box2d& aabb : snapshot.aabbsDoc) {
       renderer.drawRect(aabb, selectionStrokePaint.strokeParams);
     }
-    if (selectionBoundsDoc.size() > 1) {
-      Box2d combined = selectionBoundsDoc.front();
-      for (std::size_t i = 1; i < selectionBoundsDoc.size(); ++i) {
-        combined.addBox(selectionBoundsDoc[i]);
+    if (snapshot.aabbsDoc.size() > 1) {
+      Box2d combined = snapshot.aabbsDoc.front();
+      for (std::size_t i = 1; i < snapshot.aabbsDoc.size(); ++i) {
+        combined.addBox(snapshot.aabbsDoc[i]);
       }
       renderer.drawRect(combined, selectionStrokePaint.strokeParams);
     }
   }
 
   // Marquee: translucent cyan fill + solid white outline. Two passes
-  // (fill then stroke) because `drawRect` uses the current paint for
-  // both, and we want different fill/stroke paints per the legacy
+  // (fill then stroke) — different fill/stroke paints per the legacy
   // ImGui styling.
-  if (marqueeRectDoc.has_value()) {
-    renderer.setTransform(canvasFromDoc);
+  if (snapshot.marqueeDoc.has_value()) {
+    renderer.setTransform(snapshot.canvasFromDoc);
     const svg::PaintParams marqueeFill = MakeMarqueeFillPaint();
     renderer.setPaint(marqueeFill);
-    renderer.drawRect(*marqueeRectDoc, marqueeFill.strokeParams);
+    renderer.drawRect(*snapshot.marqueeDoc, marqueeFill.strokeParams);
 
-    const svg::PaintParams marqueeStroke = MakeMarqueeStrokePaint(marqueeStrokeWidth);
+    const svg::PaintParams marqueeStroke = MakeMarqueeStrokePaint(snapshot.marqueeStrokeWidthWorld);
     renderer.setPaint(marqueeStroke);
-    renderer.drawRect(*marqueeRectDoc, marqueeStroke.strokeParams);
+    renderer.drawRect(*snapshot.marqueeDoc, marqueeStroke.strokeParams);
   }
+}
+
+void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
+                                              std::span<const svg::SVGElement> selection,
+                                              const std::optional<Box2d>& marqueeRectDoc,
+                                              const Transform2d& canvasFromDoc) {
+  ZoneScopedN("OverlayRenderer::drawChrome");
+  // Route the live path through capture + draw so M7's snapshot
+  // implementation is the single source of truth. Same output, same
+  // performance characteristics (the capture is straight-line registry
+  // reads + a small allocation).
+  const SelectionChromeSnapshot snapshot =
+      captureChromeSnapshot(selection, marqueeRectDoc, canvasFromDoc);
+  drawChromeFromSnapshot(renderer, snapshot);
 }
 
 }  // namespace donner::editor

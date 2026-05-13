@@ -27,8 +27,10 @@
 
 #include <optional>
 #include <span>
+#include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGElement.h"
 
@@ -39,6 +41,52 @@ class Renderer;
 namespace donner::editor {
 
 class EditorApp;
+
+/// Frozen view of everything `OverlayRenderer::drawChromeWithTransform`
+/// would normally read off the live registry: per-element path splines
+/// (in local space) + their canvas transforms, per-element AABBs in doc
+/// space, and the optional marquee rect.
+///
+/// Captured once via `OverlayRenderer::captureChromeSnapshot` while the
+/// registry is safe to read (worker is idle), then handed to
+/// `OverlayRenderer::drawChromeFromSnapshot` which is race-free —
+/// it touches only the snapshot, never the registry.
+///
+/// Design doc 0033 §M7. Lets the chrome rasterize run while the worker
+/// is mid-render, so the editor can paint selection chrome in a frame
+/// that the worker hasn't returned a result for yet.
+struct SelectionChromeSnapshot {
+  /// One entry per renderable geometry leaf in the selection (groups
+  /// are expanded into their geometry descendants, same as the live
+  /// path). Empty when nothing's selected.
+  struct PathItem {
+    /// Element-local path data — does not change with drag transforms.
+    Path spline;
+    /// `canvasFromElement` at capture time. Composes the element's
+    /// `elementFromWorld` with the snapshot's `canvasFromDoc`.
+    Transform2d canvasFromElement;
+  };
+  std::vector<PathItem> paths;
+
+  /// Per-element AABBs in document space (from
+  /// `SnapshotSelectionWorldBounds`). Drawn with `canvasFromDoc`
+  /// applied at compose time so they line up with the rendered
+  /// content for the same DOM frame.
+  std::vector<Box2d> aabbsDoc;
+
+  /// Optional marquee rectangle in document space.
+  std::optional<Box2d> marqueeDoc;
+
+  /// `canvasFromDoc` at capture time. The draw phase needs this for
+  /// drawing AABBs and the marquee (both live in doc space).
+  Transform2d canvasFromDoc;
+
+  /// World-space stroke widths derived from the snapshot's
+  /// `canvasFromDoc` scale, pre-computed so the draw phase doesn't
+  /// have to recompute anything that depends on registry state.
+  double selectionStrokeWidthWorld = 0.0;
+  double marqueeStrokeWidthWorld = 0.0;
+};
 
 class OverlayRenderer {
 public:
@@ -95,6 +143,30 @@ public:
   static void drawChromeWithTransform(svg::Renderer& renderer,
                                       std::span<const svg::SVGElement> selection,
                                       const Transform2d& canvasFromDoc);
+
+  /// Build a `SelectionChromeSnapshot` for the given selection +
+  /// marquee + canvas transform. Reads `computedSpline`,
+  /// `elementFromWorld`, and `SnapshotSelectionWorldBounds` for every
+  /// selected element — MUST be called when the worker is idle or
+  /// otherwise not mutating these components on the same registry.
+  ///
+  /// Design doc 0033 §M7. Returned snapshot is movable and self-
+  /// contained: it holds no registry pointers and survives any
+  /// subsequent registry mutation.
+  [[nodiscard]] static SelectionChromeSnapshot captureChromeSnapshot(
+      std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
+      const Transform2d& canvasFromDoc);
+
+  /// Race-free chrome rasterize: reads only the snapshot, never the
+  /// registry. Safe to call while the async-renderer worker is
+  /// mid-render.
+  ///
+  /// Produces byte-identical pixels to
+  /// `drawChromeWithTransform(selection, marqueeRectDoc, canvasFromDoc)`
+  /// given the same input snapshot — pinned by
+  /// `OverlayRendererTest.SnapshotProducesByteIdenticalPixels`.
+  static void drawChromeFromSnapshot(svg::Renderer& renderer,
+                                     const SelectionChromeSnapshot& snapshot);
 };
 
 }  // namespace donner::editor
