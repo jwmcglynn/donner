@@ -1,8 +1,10 @@
 #include "donner/editor/AsyncRenderer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -24,6 +26,132 @@
 
 namespace donner::editor {
 namespace {
+
+// Design doc 0033 §M5 — preemptive swap-in. When the worker finishes a
+// render, the editor's main loop must learn about the result on the
+// NEXT ImGui frame, not on the next mouse event. The mechanism is the
+// `setWakeCallback` hook, which the worker invokes after every
+// Busy→Done transition (`AsyncRenderer.cc` releases the mutex before
+// firing it). The editor wires this to `glfwPostEmptyEvent` so a
+// blocked `glfwWaitEvents` returns immediately.
+//
+// This test pins the invariant: post a render request, wait on a
+// future signaled by the wake closure, and assert the wake fired
+// before any `pollResult()` call. Without the wake (or if the worker
+// regresses to firing it inside the lock + before state==Done), the
+// future never completes and the test times out.
+TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="r" x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  std::promise<void> wakeFired;
+  std::atomic<int> wakeCount{0};
+  asyncRenderer.setWakeCallback([&] {
+    // First wake completes the promise; subsequent wakes (if any —
+    // they shouldn't happen for a single request) just bump the count.
+    const int prev = wakeCount.fetch_add(1, std::memory_order_acq_rel);
+    if (prev == 0) {
+      wakeFired.set_value();
+    }
+  });
+
+  RenderRequest request;
+  request.renderer = &renderer;
+  request.document = &document;
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+
+  // Block on the wake. Without the callback, this would never fire and
+  // the test would time out at 5s.
+  auto wakeFuture = wakeFired.get_future();
+  const auto status = wakeFuture.wait_for(std::chrono::seconds(5));
+  ASSERT_EQ(status, std::future_status::ready) << "wake callback never fired; M5 invariant broken.";
+
+  // Wake fires after the Done transition, so pollResult() must now
+  // return the result on the first call — no spinning needed.
+  std::optional<RenderResult> result = asyncRenderer.pollResult();
+  ASSERT_TRUE(result.has_value())
+      << "pollResult returned nothing after wake fired; state machine bug.";
+
+  // The wake is fired exactly once per Done transition.
+  EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 1);
+}
+
+// A second wake should fire for a second render request — the worker
+// loop is reusable; the callback is not single-shot.
+TEST(AsyncRendererTest, WakeCallbackFiresPerRequest) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  std::atomic<int> wakeCount{0};
+  std::mutex mu;
+  std::condition_variable cv;
+  asyncRenderer.setWakeCallback([&] {
+    wakeCount.fetch_add(1, std::memory_order_acq_rel);
+    cv.notify_all();
+  });
+
+  const auto waitForCount = [&](int target) {
+    std::unique_lock<std::mutex> lock(mu);
+    return cv.wait_for(lock, std::chrono::seconds(5),
+                       [&] { return wakeCount.load(std::memory_order_acquire) >= target; });
+  };
+
+  RenderRequest request;
+  request.renderer = &renderer;
+  request.document = &document;
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(waitForCount(1));
+  asyncRenderer.pollResult();  // Drain to Idle so the worker accepts a new request.
+
+  request.version = 2;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(waitForCount(2));
+  asyncRenderer.pollResult();
+
+  EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 2);
+}
+
+// `setWakeCallback` is optional — callers that don't set it must still
+// see the result via plain polling, with no regression in the legacy
+// pollResult-driven path.
+TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  // No setWakeCallback — the editor's old pollResult-on-each-frame
+  // path must continue to work.
+
+  RenderRequest request;
+  request.renderer = &renderer;
+  request.document = &document;
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ASSERT_TRUE(result.has_value());
+}
 
 TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
