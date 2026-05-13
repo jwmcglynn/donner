@@ -480,6 +480,23 @@ Captured during the design review with the operator (2026-05-12):
 
 ## Future Work
 
+- **M2C — Stop flattening bg/fg in `recomposeSplitBitmaps`.** Today the
+  compositor pre-composes every segment + non-drag layer into two
+  canvas-sized bg/fg bitmaps on every drag-target switch and uploads
+  those two textures to the editor. The cached layer/segment bitmaps
+  still exist (they're inputs to the recompose) but the editor never
+  sees them individually. User observation on
+  `74083723`: "we're re-rasterizing the fg/bg and losing the isolated
+  promoted layers when this happens — it looks like we're flattening
+  the fg/bg." The right architecture: editor's drag composite draws
+  N textures directly (segment 0, layer 0, …, drag layer at offset,
+  …, segment N), no flatten step. Eliminates a chunk of per-drag-
+  target-switch work, gets rid of the asymmetric editor-display
+  path, and unifies the on-screen blit with the diagnostic-panel
+  view (the panel already iterates the same in-order list). Touches
+  `CompositedPreview` (becomes a vector of tile entries),
+  `GlTextureCache` (per-tile texture cache), `RenderPanePresenter`
+  (iterates tiles), and the compositor (drops `recomposeSplitBitmaps`).
 - **Tile-based caching for very large documents.** Splash is small; once
   Donner takes on multi-MB documents (illustrator-class export), the
   per-layer cache budget will pressure RAM. Tile-based caching split

@@ -491,10 +491,18 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, layerPanelPaneY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layerPanelHeight), ImGuiCond_Always);
   ImGui::Begin("Layers", nullptr, paneFlags);
-  const auto layerRows = renderCoordinator_.asyncRenderer().compositorLayerInspectorRows();
-  const auto segmentRows = renderCoordinator_.asyncRenderer().compositorSegmentInspectorRows();
+  const auto compositeTiles = renderCoordinator_.asyncRenderer().compositorCompositeTiles();
+  const auto compositorState = renderCoordinator_.asyncRenderer().compositorState();
+  const auto workerCompositorEntity = renderCoordinator_.asyncRenderer().workerCompositorEntity();
+  const auto& viewport = interactionController_.viewport();
+  const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
+  const Vector2i documentCanvas = app_.hasDocument()
+                                      ? app_.document().document().canvasSize()
+                                      : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
-  layerInspectorPanel_.render(layerRows, segmentRows, fastPath);
+  layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
+                              viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
+                              documentCanvas, fastPath);
   ImGui::End();
 }
 

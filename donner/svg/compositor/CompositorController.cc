@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -160,8 +159,14 @@ CompositorController& CompositorController::operator=(CompositorController&&) no
 bool CompositorController::promoteEntity(Entity entity, InteractionHint interactionKind) {
   Registry& registry = document_->registry();
 
-  if (!registry.valid(entity)) {
+  const auto refuse = [&](PromoteRefusalReason reason) {
+    lastPromoteRefusalReason_ = reason;
+    lastPromoteRefusalEntity_ = entity;
     return false;
+  };
+
+  if (!registry.valid(entity)) {
+    return refuse(PromoteRefusalReason::InvalidEntity);
   }
 
   // Refuse promotion if an ancestor has a filter / mask / clip-path. Extracting
@@ -171,7 +176,7 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
   // (editor) falls back to the non-composited drag path which renders
   // correctly via the full tree walk.
   if (HasCompositingBreakingAncestor(registry, entity)) {
-    return false;
+    return refuse(PromoteRefusalReason::CompositingBreakingAncestor);
   }
 
   // Already promoted via the controller's `promoteEntity` path. Refresh the
@@ -189,15 +194,17 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
         activeHintIt->second.setInteractionKind(interactionKind);
       }
     }
+    lastPromoteRefusalReason_ = PromoteRefusalReason::None;
+    lastPromoteRefusalEntity_ = entt::null;
     return true;
   }
 
   if (activeHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
-    return false;
+    return refuse(PromoteRefusalReason::LayerLimit);
   }
 
   if (totalBitmapMemory() >= kMaxCompositorMemoryBytes) {
-    return false;
+    return refuse(PromoteRefusalReason::MemoryLimit);
   }
 
   // Refuse promotion when any descendant already has its own promoted
@@ -227,7 +234,7 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
       stack.pop_back();
       const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(descendant);
       if (assignment != nullptr && assignment->layerId != 0) {
-        return false;
+        return refuse(PromoteRefusalReason::DescendantPromoted);
       }
       if (const auto* descTree = registry.try_get<TreeComponent>(descendant)) {
         for (Entity grandchild = descTree->firstChild(); grandchild != entt::null;
@@ -260,13 +267,20 @@ bool CompositorController::promoteEntity(Entity entity, InteractionHint interact
     activeHints_.erase(entity);
     resolver_.resolve(registry, kMaxCompositorLayers);
     reconcileLayers(registry);
-    return false;
+    // The resolver refused the assignment — treat as "descendant
+    // promoted" since that's the only realistic cause of post-
+    // emplace resolver rejection (the explicit hint exists, but the
+    // resolver picked a different overlapping promote that owns the
+    // layer slot).
+    return refuse(PromoteRefusalReason::DescendantPromoted);
   }
 
   // Don't force a full cache invalidation — `resyncSegmentsToLayerSet`
   // preserves segments whose boundary identity survives the new layer
   // insertion, which is what keeps click-to-first-pixel fast on the
   // splash's first drag-target promote.
+  lastPromoteRefusalReason_ = PromoteRefusalReason::None;
+  lastPromoteRefusalEntity_ = entt::null;
   return true;
 }
 
@@ -374,6 +388,120 @@ void BuildThumbnail(const RendererBitmap& bitmap, Vector2i* outDims,
 }
 
 }  // namespace
+
+std::vector<CompositorController::CompositeTileSnapshot>
+CompositorController::snapshotCompositeTiles() const {
+  std::vector<CompositeTileSnapshot> tiles;
+
+  const auto pushBitmapTile = [&tiles](CompositeTileSnapshot::Kind kind, std::string id,
+                                       std::string label, const RendererBitmap& bitmap,
+                                       uint64_t generation, double lastRasterizeMs,
+                                       bool isDragTarget) {
+    CompositeTileSnapshot tile;
+    tile.kind = kind;
+    tile.id = std::move(id);
+    tile.label = std::move(label);
+    tile.generation = generation;
+    tile.lastRasterizeMs = lastRasterizeMs;
+    tile.isDragTarget = isDragTarget;
+    tile.hasValidBitmap = !bitmap.empty();
+    if (tile.hasValidBitmap) {
+      tile.bitmapDims = bitmap.dimensions;
+      BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
+    }
+    tiles.push_back(std::move(tile));
+  };
+
+  // Pseudo-generation for bg/fg: bumps every time the split-bitmaps
+  // cache is rebuilt against a different drag entity or canvas size,
+  // which is the only state the editor needs to invalidate its GL
+  // texture for these slots against. Mixes the entity id and the
+  // canvas size for a cheap-but-unique signature.
+  const uint64_t bgFgGeneration = static_cast<uint64_t>(splitStaticLayersEntity_) ^
+                                  (static_cast<uint64_t>(splitStaticLayersViewport_.x) << 16) ^
+                                  (static_cast<uint64_t>(splitStaticLayersViewport_.y) << 32);
+
+  // Always emit the full segments+layers paint-order breakdown — even
+  // when the editor's split-bitmap optimization is active. User
+  // feedback on commit `74083723`: "we just split the current segment
+  // into three layers and keep the other tiles surrounding it
+  // unmodified" — showing only `bg/drag/fg` collapses the source-of-
+  // truth structure and hides which sibling layers the drag target
+  // sits among. Highlight the drag target inline; append the composed
+  // bg/fg below as auxiliary views.
+  const size_t layerCount = layers_.size();
+  for (size_t i = 0; i <= layerCount; ++i) {
+    if (i < staticSegments_.size()) {
+      char label[32];
+      std::snprintf(label, sizeof(label), "segment %zu", i);
+      char id[32];
+      std::snprintf(id, sizeof(id), "seg:%zu", i);
+      const uint64_t segGen =
+          i < staticSegmentGeneration_.size() ? staticSegmentGeneration_[i] : 0u;
+      const double segMs =
+          i < staticSegmentLastRasterizeMs_.size() ? staticSegmentLastRasterizeMs_[i] : 0.0;
+      pushBitmapTile(CompositeTileSnapshot::Kind::Segment, id, label, staticSegments_[i], segGen,
+                     segMs, /*isDragTarget=*/false);
+    }
+    if (i < layerCount) {
+      const CompositorLayer& layer = layers_[i];
+      const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
+      char label[64];
+      if (isDragTarget) {
+        std::snprintf(label, sizeof(label), "layer #%u (drag)",
+                      static_cast<unsigned>(layer.entity()));
+      } else {
+        std::snprintf(label, sizeof(label), "layer #%u", static_cast<unsigned>(layer.entity()));
+      }
+      char id[48];
+      std::snprintf(id, sizeof(id), "layer:%u", static_cast<unsigned>(layer.entity()));
+      pushBitmapTile(CompositeTileSnapshot::Kind::Layer, id, label, layer.bitmap(),
+                     layer.generation(), layer.lastRasterizeMs(), isDragTarget);
+    }
+  }
+
+  // When the editor's split-bitmap optimization is active, append the
+  // composed `bg` / `fg` tiles as supplementary views. These aren't
+  // independent rasterized bitmaps — they're the pre-composed
+  // segments+non-drag-layers the editor uploads for the drag overlay,
+  // shown here so the operator sees the full pipeline.
+  if (hasSplitStaticLayers()) {
+    pushBitmapTile(CompositeTileSnapshot::Kind::Background, "bg", "background (composed)",
+                   backgroundBitmap_, bgFgGeneration, /*lastRasterizeMs=*/0.0,
+                   /*isDragTarget=*/false);
+    pushBitmapTile(CompositeTileSnapshot::Kind::Foreground, "fg", "foreground (composed)",
+                   foregroundBitmap_, bgFgGeneration, /*lastRasterizeMs=*/0.0,
+                   /*isDragTarget=*/false);
+  }
+  return tiles;
+}
+
+CompositorController::StateSnapshot CompositorController::snapshotState() const {
+  StateSnapshot out;
+  out.activeHintsCount = static_cast<uint32_t>(activeHints_.size());
+  out.layerCount = static_cast<uint32_t>(layers_.size());
+  out.splitPathActive = hasSplitStaticLayers();
+  out.splitStaticLayersEntity = splitStaticLayersEntity_;
+  out.canvasSize = staticSegmentsCanvas_;
+  out.lastPromoteRefusalReason = lastPromoteRefusalReason_;
+  out.lastPromoteRefusalEntity = lastPromoteRefusalEntity_;
+  return out;
+}
+
+CompositorController::SplitBitmapsSnapshot CompositorController::snapshotSplitBitmaps() const {
+  SplitBitmapsSnapshot out;
+  out.splitPathActive = hasSplitStaticLayers();
+  out.hasBackground = !backgroundBitmap_.empty();
+  if (out.hasBackground) {
+    out.backgroundDims = backgroundBitmap_.dimensions;
+  }
+  out.hasForeground = !foregroundBitmap_.empty();
+  if (out.hasForeground) {
+    out.foregroundDims = foregroundBitmap_.dimensions;
+  }
+  out.dragEntity = splitStaticLayersEntity_;
+  return out;
+}
 
 std::vector<CompositorController::SegmentInspectorRow>
 CompositorController::snapshotSegmentInspectorRows() const {
@@ -655,24 +783,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
-  // Slow-frame diagnostic: when a single renderFrame takes >1s, dump a
-  // state summary + per-layer rasterize reasons to stderr so we can
-  // reconstruct a faithful UI-level repro test. Data is collected
-  // throughout the function and only printed at the end (guarded by
-  // elapsed time) so normal fast frames pay near-zero overhead.
-  const auto slowFrameStart = std::chrono::steady_clock::now();
-  struct SlowFrameRasterReason {
-    Entity entity = entt::null;
-    bool isDirty = false;
-    bool hasValidBitmap = false;
-    bool rootDirtyTrigger = false;
-    size_t layerIndex = 0;
-  };
-  std::vector<SlowFrameRasterReason> slowFrameRasterLog;
-  size_t slowFrameSegmentDirtyCountAtStart = 0;
-  bool slowFrameRootDirtyAtStart = rootDirty_;
-  bool slowFrameNeedsFullRebuildAtStart = false;
-
   Registry& registry = document_->registry();
 
   // `mandatoryDetector_.reconcile()` is O(N) over all `RenderingInstanceComponent`
@@ -704,10 +814,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   const bool anyEntityDirty = !dirtyEntitySnapshot.empty();
   const bool needsFullRebuild = registry.ctx().contains<components::RenderTreeState>() &&
                                 registry.ctx().get<components::RenderTreeState>().needsFullRebuild;
-  slowFrameNeedsFullRebuildAtStart = needsFullRebuild;
-  for (bool d : staticSegmentDirty_) {
-    if (d) ++slowFrameSegmentDirtyCountAtStart;
-  }
   // `documentDirty` gets flipped to false further down if the fast-path
   // handles the dirty set surgically, so that the subsequent prepare /
   // detector / rasterize steps take the "nothing changed" branch.
@@ -1242,26 +1348,10 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // every mandatory filter layer.
   {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
-    size_t layerIndex = 0;
     for (auto& layer : layers_) {
-      const bool layerDirty = layer.isDirty();
-      const bool validBitmap = layer.hasValidBitmap();
-      if (layerDirty || !validBitmap || rootDirty_) {
-        // Capture the reason so the slow-frame log at the end of
-        // `renderFrame` can explain why each layer rasterized. Three
-        // possible triggers, listed in priority order: per-layer
-        // `isDirty`, missing bitmap, or a global `rootDirty_` flag
-        // (which re-rasterizes every layer).
-        slowFrameRasterLog.push_back({
-            .entity = layer.entity(),
-            .isDirty = layerDirty,
-            .hasValidBitmap = validBitmap,
-            .rootDirtyTrigger = rootDirty_ && !layerDirty && validBitmap,
-            .layerIndex = layerIndex,
-        });
+      if (layer.isDirty() || !layer.hasValidBitmap() || rootDirty_) {
         rasterizeLayer(layer, viewport);
       }
-      ++layerIndex;
     }
   }
 
@@ -1397,34 +1487,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           mismatch == 0,
           "Compositor dual-path pixel-identity assertion failed: composited output "
           "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
-    }
-  }
-
-  // Slow-frame diagnostic. When renderFrame exceeds the reporting
-  // threshold (1s), dump the state summary collected above to stderr so
-  // the editor user (or a test harness running live) can reconstruct a
-  // faithful repro. Kept behind a wall-clock check so the print cost
-  // doesn't bleed into fast frames.
-  const auto slowFrameElapsed =
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - slowFrameStart)
-          .count();
-  constexpr double kSlowFrameThresholdMs = 1000.0;
-  if (slowFrameElapsed >= kSlowFrameThresholdMs) {
-    const Vector2i canvasSize = document_->canvasSize();
-    std::fprintf(stderr,
-                 "[CompositorSlowFrame] renderFrame %.1f ms | canvas=%dx%d | layers=%zu | "
-                 "activeHints=%zu | segments=%zu (dirtyAtStart=%zu) | "
-                 "rootDirtyAtStart=%d needsFullRebuildAtStart=%d | rasterizeLayerCalls=%zu\n",
-                 slowFrameElapsed, canvasSize.x, canvasSize.y, layers_.size(), activeHints_.size(),
-                 staticSegments_.size(), slowFrameSegmentDirtyCountAtStart,
-                 slowFrameRootDirtyAtStart ? 1 : 0, slowFrameNeedsFullRebuildAtStart ? 1 : 0,
-                 slowFrameRasterLog.size());
-    for (const auto& reason : slowFrameRasterLog) {
-      std::fprintf(stderr,
-                   "[CompositorSlowFrame]   rasterizeLayer idx=%zu entity=%u dirty=%d "
-                   "validBitmap=%d rootDirtyOnly=%d\n",
-                   reason.layerIndex, static_cast<unsigned>(reason.entity), reason.isDirty ? 1 : 0,
-                   reason.hasValidBitmap ? 1 : 0, reason.rootDirtyTrigger ? 1 : 0);
     }
   }
 }

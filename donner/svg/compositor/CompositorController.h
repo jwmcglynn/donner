@@ -87,7 +87,21 @@ struct CompositorTile {
     const SVGDocument& oldDoc, const SVGDocument& newDoc);
 
 /// Maximum total memory budget for compositor layer bitmaps, in bytes.
-inline constexpr size_t kMaxCompositorMemoryBytes = 256 * 1024 * 1024;
+///
+/// Sized for design-tool workloads on Retina-class displays. The splash
+/// at typical zoom is 7 mandatory filter / mask / isolated-layer
+/// promotions plus the editor's drag target; each canvas-sized layer
+/// at DPR=2 is ~36 MB (4054×2327×4). The pre-M2 budget of 256 MiB was
+/// at the limit on the splash and refused new editor promotes once
+/// hit — visible to the user via `PromoteRefusalReason::MemoryLimit`
+/// in the layer-inspector panel, with the user-visible symptom being
+/// "drag uses slow path and view turns low-res after a while" (the
+/// canvas-shrink path is what knocks loose enough memory for the
+/// next promote to succeed). M3 scale-band caching will reduce
+/// per-layer memory by letting layers live at sub-canvas resolution;
+/// until then, the budget is sized so a typical splash-class
+/// document at typical zoom stays under it with headroom.
+inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 
 /**
  * Runtime feature gates for `CompositorController`.
@@ -409,6 +423,148 @@ public:
   /// per-frame rasterize cost on documents like the splash. Same
   /// invocation rules as `snapshotLayerInspectorRows`.
   [[nodiscard]] std::vector<SegmentInspectorRow> snapshotSegmentInspectorRows() const;
+
+  /// Compose-output bitmaps (the editor-facing split bitmaps that get
+  /// drawn into the canvas pane during drag). Diagnostic-only — the
+  /// editor reads the bg/promoted/fg trio directly via
+  /// `backgroundBitmap()` / `layerBitmapOf(...)` / `foregroundBitmap()`,
+  /// but the layer-inspector panel surfaces this snapshot so the
+  /// operator sees every bitmap that contributes to the final compose
+  /// at a glance, not just the per-promoted-entity caches.
+  struct SplitBitmapsSnapshot {
+    bool splitPathActive = false;
+    bool hasBackground = false;
+    Vector2i backgroundDims = Vector2i::Zero();
+    bool hasForeground = false;
+    Vector2i foregroundDims = Vector2i::Zero();
+    /// Entity whose drag layer the cached bg/fg split is keyed on, or
+    /// `entt::null` if the split path isn't active.
+    Entity dragEntity = entt::null;
+  };
+
+  /// Snapshot the editor-facing split bitmaps. Same invocation rules
+  /// as the per-layer / per-segment snapshots.
+  [[nodiscard]] SplitBitmapsSnapshot snapshotSplitBitmaps() const;
+
+  /// One row of the unified "everything composited together" view that
+  /// the layer-inspector panel renders in paint order — design doc 0033
+  /// §M1++. Mirrors what `composeLayers` actually draws so the operator
+  /// sees the same sequence of blits the renderer performs.
+  ///
+  /// Carries a downsampled thumbnail for every tile (background,
+  /// foreground, segment, layer) so the panel can render previews
+  /// inline instead of just dimensions.
+  struct CompositeTileSnapshot {
+    enum class Kind : uint8_t {
+      Background,
+      Foreground,
+      Segment,
+      Layer,
+    };
+
+    Kind kind = Kind::Layer;
+    /// Stable identifier for the editor's GL texture cache:
+    /// `"bg"`, `"fg"`, `"seg:{index}"`, `"layer:{entity}"`. Lets the
+    /// panel re-use uploaded textures across frames for unchanged
+    /// tiles.
+    std::string id;
+    /// Human-readable label rendered in the panel: `"background"`,
+    /// `"foreground"`, `"segment 0"`, `"layer #12"`.
+    std::string label;
+    /// Source bitmap dimensions in canvas pixels. `Vector2i::Zero()`
+    /// when the source bitmap is empty.
+    Vector2i bitmapDims = Vector2i::Zero();
+    /// Monotonic version counter for change detection. Layers / segments
+    /// expose real generations; bg/fg use a derived generation that
+    /// bumps when the split-bitmap cache is rebuilt.
+    uint64_t generation = 0;
+    /// Wall-clock duration of the most recent rasterize. Always 0 for
+    /// `Background` / `Foreground` (those are *composed*, not
+    /// rasterized, by `recomposeSplitBitmaps`).
+    double lastRasterizeMs = 0.0;
+    /// Whether the source bitmap has pixels.
+    bool hasValidBitmap = false;
+    /// Whether this tile is the active drag-target layer (highlighted
+    /// in the panel). Always false for non-Layer kinds.
+    bool isDragTarget = false;
+    /// Aspect-preserving downsample (max-side `kLayerThumbnailMaxSide`)
+    /// of the source bitmap. Empty when the source has no pixels.
+    Vector2i thumbnailDims = Vector2i::Zero();
+    std::vector<uint8_t> thumbnailPixels;
+  };
+
+  /// Build the unified composite-tile snapshot in paint order. The
+  /// sequence mirrors `composeLayers`:
+  ///   - When the split-bitmap cache is active (single editor-promoted
+  ///     entity): `Background`, `Layer` (drag target), `Foreground`.
+  ///     The bg/fg already subsume the static segments and non-drag
+  ///     layers below / above the drag entity.
+  ///   - Otherwise: `Segment 0`, `Layer 0`, `Segment 1`, `Layer 1`,
+  ///     …, `Segment N`. (Editor-facing bg/fg are inactive in this
+  ///     mode.)
+  [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles() const;
+
+  /// Compositor-wide state useful for diagnosing why the editor's
+  /// expected drag fast path didn't engage. Lets the operator confirm
+  /// at a glance:
+  ///   - Did the editor's `promoteEntity` for the selected element
+  ///     actually take? → `activeHintsCount == 1`.
+  ///   - Is the split-bitmap optimization active? → `splitPathActive`.
+  ///   - Which entity is the compositor treating as the drag target?
+  ///     → `splitStaticLayersEntity`. Compare against the editor's
+  ///     selection in the side-panel; a mismatch means the worker
+  ///     and editor disagree about what's being dragged.
+  ///   - Is the canvas size what the editor expects? → `canvasSize`.
+  ///     Drops here explain "the view got pixelated after drag" type
+  ///     symptoms.
+  /// Reason `promoteEntity` returned false on its most recent call.
+  /// Sticky — clears only on a subsequent successful `promoteEntity`.
+  /// Surfaced through `StateSnapshot::lastPromoteRefusalReason` so the
+  /// editor's diagnostic panel can show "the compositor refused this
+  /// promote because <reason>" without the operator having to read
+  /// source.
+  enum class PromoteRefusalReason : uint8_t {
+    None = 0,
+    /// Entity was destroyed / never existed in the registry.
+    InvalidEntity,
+    /// Ancestor has `filter` / `mask` / `clip-path`. Promoting would
+    /// lose the ancestor's compositing context.
+    CompositingBreakingAncestor,
+    /// Too many entities already promoted (`kMaxCompositorLayers`).
+    LayerLimit,
+    /// Total bitmap memory already at `kMaxCompositorMemoryBytes`.
+    MemoryLimit,
+    /// A descendant already has its own promoted layer (typically a
+    /// mandatorily-detected filter / mask / isolated-layer). Allowing
+    /// the parent promote would double-rasterize the descendant.
+    DescendantPromoted,
+  };
+
+  struct StateSnapshot {
+    /// Editor-driven explicit promotions (drag target + selection
+    /// prewarm). Mandatory-detector hints don't count toward this
+    /// number — they live in a separate map.
+    uint32_t activeHintsCount = 0;
+    /// Total layers currently in `layers_` (mandatory + explicit).
+    uint32_t layerCount = 0;
+    /// `hasSplitStaticLayers()` — the editor's drag-overlay fast
+    /// path is active when this is true.
+    bool splitPathActive = false;
+    /// Entity the compositor cached the bg/fg split for. `entt::null`
+    /// when split-path is inactive.
+    Entity splitStaticLayersEntity = entt::null;
+    /// Canvas size the compositor most recently rendered against.
+    Vector2i canvasSize = Vector2i::Zero();
+    /// Reason the most-recent `promoteEntity` call returned false, or
+    /// `None` when the most-recent call succeeded (or no call has
+    /// happened yet). Sticky on failure.
+    PromoteRefusalReason lastPromoteRefusalReason = PromoteRefusalReason::None;
+    /// Entity the failed `promoteEntity` was called with. `entt::null`
+    /// when `lastPromoteRefusalReason` is `None`.
+    Entity lastPromoteRefusalEntity = entt::null;
+  };
+
+  [[nodiscard]] StateSnapshot snapshotState() const;
 
   /**
    * Clear all layers and cached state.
@@ -733,6 +889,11 @@ private:
   bool mainRendererHasCachedFrame_ = false;
 
   FastPathCounters fastPathCounters_;
+
+  /// Most-recent promote refusal — sticky on failure, cleared on next
+  /// successful `promoteEntity`. Diagnostic only.
+  PromoteRefusalReason lastPromoteRefusalReason_ = PromoteRefusalReason::None;
+  Entity lastPromoteRefusalEntity_ = entt::null;
 };
 
 }  // namespace donner::svg::compositor

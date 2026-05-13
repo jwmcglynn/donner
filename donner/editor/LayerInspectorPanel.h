@@ -2,15 +2,20 @@
 /// @file
 ///
 /// Read-only diagnostic panel that exposes the live compositor's
-/// per-layer state (size, dirty flag, rasterize wall-clock, fallback
-/// reasons, downsampled thumbnail) plus the global fast-path counters.
-/// Lands as Milestone 1 of design doc 0033 — the observability surface
-/// every subsequent responsiveness milestone needs to know what's
-/// actually happening.
+/// composite state — every tile (background, foreground, segments,
+/// layers) the renderer blits to produce the final frame, displayed
+/// in paint order with a thumbnail per tile.
+///
+/// Design doc 0033 §M1++. The "comprehensive composite" view replaces
+/// the earlier separate per-layer / per-segment / split-bitmap tables.
 
 #include <cstdint>
 #include <span>
+#include <string>
 #include <unordered_map>
+
+#include "donner/base/EcsRegistry.h"
+#include "donner/base/Vector2.h"
 
 #ifdef __EMSCRIPTEN__
 #define GLFW_INCLUDE_ES3
@@ -19,15 +24,15 @@
 #include "glad/glad.h"
 #endif
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/svg/compositor/CompositorController.h"
 
 namespace donner::editor {
 
-/// Stateful — owns one GL texture per active compositor layer for the
-/// thumbnail column, and frees textures when their layer leaves the
-/// snapshot. Construct on the GL thread (textures are lazily created in
-/// `render`); destroy on the GL thread (the dtor calls `glDeleteTextures`).
+/// Stateful — owns one GL texture per active composite tile (keyed on
+/// `CompositeTileSnapshot::id`), refreshes via `glTexImage2D` only when
+/// the tile's `generation` advances, and frees textures when their
+/// tile leaves the snapshot. Construct on the GL thread; destroy on
+/// the GL thread (the dtor calls `glDeleteTextures`).
 class LayerInspectorPanel {
 public:
   LayerInspectorPanel() = default;
@@ -39,20 +44,32 @@ public:
   LayerInspectorPanel& operator=(LayerInspectorPanel&&) = delete;
 
   /// Render the panel into the current ImGui window. Must be called
-  /// inside a `ImGui::Begin(...) / End()` pair AND on the GL thread —
-  /// thumbnails are uploaded via `glTexImage2D` on first sight of a new
-  /// `(entity, generation)` pair.
+  /// inside an `ImGui::Begin(...) / End()` pair AND on the GL thread.
   ///
-  /// @param layerRows Latest snapshot from `AsyncRenderer::compositorLayerInspectorRows`.
-  ///   Empty span renders a "no compositor layers" placeholder.
-  /// @param segmentRows Latest snapshot from `AsyncRenderer::compositorSegmentInspectorRows`.
-  ///   Rendered as a secondary table below the layer table.
-  /// @param fastPath Latest fast-path counters from `AsyncRenderer::
-  ///   compositorFastPathCountersForTesting`. Rendered as a summary line.
-  void render(
-      std::span<const svg::compositor::CompositorController::LayerInspectorRow> layerRows,
-      std::span<const svg::compositor::CompositorController::SegmentInspectorRow> segmentRows,
-      const svg::compositor::CompositorController::FastPathCounters& fastPath);
+  /// @param tiles Unified paint-order tile list from
+  ///   `AsyncRenderer::compositorCompositeTiles`. Each entry produces
+  ///   one row with an inline thumbnail.
+  /// @param state Compositor-wide diagnostic state (active-hints
+  ///   count, split-path active flag, drag-target entity, canvas
+  ///   size). Rendered as a state header so the operator can spot
+  ///   mismatches between expected and actual compositor state.
+  /// @param workerCompositorEntity The worker's view of the
+  ///   currently-promoted entity.
+  /// @param viewportZoom Editor viewport's `zoom`.
+  /// @param viewportDpr Editor viewport's `devicePixelRatio`.
+  /// @param viewportDesiredCanvas What the viewport's
+  ///   `desiredCanvasSize()` currently returns.
+  /// @param documentCanvas What `SVGDocument::canvasSize()` currently
+  ///   returns — the committed canvas size the worker rendered at.
+  ///   Compare against `viewportDesiredCanvas` (commit pipeline) and
+  ///   `state.canvasSize` (compositor rasterize freshness).
+  /// @param fastPath Fast-path counters rendered as a summary line
+  ///   above the table.
+  void render(std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
+              const svg::compositor::CompositorController::StateSnapshot& state,
+              Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
+              const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
+              const svg::compositor::CompositorController::FastPathCounters& fastPath);
 
 private:
   struct ThumbnailTexture {
@@ -62,16 +79,15 @@ private:
     int height = 0;
   };
 
-  /// Upload (or refresh) the thumbnail texture for a single row. Returns
-  /// the GL texture name, or 0 if the row has no valid thumbnail.
-  GLuint uploadThumbnail(const svg::compositor::CompositorController::LayerInspectorRow& row);
+  /// Upload (or refresh) the thumbnail texture for one tile. Returns
+  /// the GL texture name (0 when the tile has no thumbnail).
+  GLuint uploadThumbnail(const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
 
-  /// Free textures for entities that aren't in the current snapshot —
-  /// keeps the cache size bounded as the user demotes/promotes layers.
-  void evictAbsentEntities(
-      std::span<const svg::compositor::CompositorController::LayerInspectorRow> rows);
+  /// Free textures for tiles absent from the current snapshot.
+  void evictAbsentTiles(
+      std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles);
 
-  std::unordered_map<Entity, ThumbnailTexture> textures_;
+  std::unordered_map<std::string, ThumbnailTexture> textures_;
 };
 
 }  // namespace donner::editor

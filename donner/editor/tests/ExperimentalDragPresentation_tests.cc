@@ -270,5 +270,53 @@ TEST(ExperimentalDragPresentationTest, ActiveDragPreventsTextureClearing) {
   EXPECT_EQ(state.cachedEntity, Entity(7));
 }
 
+// Regression for the prewarm-dispatch loop. When the selected entity
+// has a compositing-breaking ancestor, `promoteEntity` refuses, the
+// render produces no composited preview, `noteCachedTextures` never
+// runs, and `hasCachedTextures` stays false forever. The old
+// `shouldPrewarm` would therefore re-dispatch every frame, keeping
+// the worker continuously busy and blocking the editor's click
+// handler (which is gated on `!isBusy()`) from ever processing a
+// new selection. `notePrewarmAttempted` closes the loop by remembering
+// the `(entity, version, canvasSize)` combination the editor tried,
+// regardless of whether the render produced a composited preview.
+TEST(ExperimentalDragPresentationTest, NotePrewarmAttemptedSuppressesRedispatchEvenWithoutCache) {
+  ExperimentalDragPresentation state;
+  // Initial state: no cache, prewarm should fire.
+  ASSERT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+                                  /*dragActive=*/false));
+
+  // Worker rendered but produced no compositedPreview (entity refused
+  // by `HasCompositingBreakingAncestor`). Editor records the attempt
+  // even though `hasCachedTextures` stays false.
+  state.notePrewarmAttempted(Entity(7), /*version=*/3, Vector2i(100, 100));
+  EXPECT_FALSE(state.hasCachedTextures);
+
+  // Critical: subsequent `shouldPrewarm` for the same combination must
+  // return false. Without this guard, the dispatch loop runs forever.
+  EXPECT_FALSE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+                                   /*dragActive=*/false));
+}
+
+// A change in any of the three keys (entity, version, canvasSize) must
+// unblock the next prewarm — otherwise the editor wouldn't retry after
+// the user selects something different, makes an edit, or zooms.
+TEST(ExperimentalDragPresentationTest, NotePrewarmAttemptedAllowsRetryAfterStateChange) {
+  ExperimentalDragPresentation state;
+  state.notePrewarmAttempted(Entity(7), /*version=*/3, Vector2i(100, 100));
+  ASSERT_FALSE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+                                   /*dragActive=*/false));
+
+  // Different entity → retry.
+  EXPECT_TRUE(state.shouldPrewarm(Entity(8), /*currentVersion=*/3, Vector2i(100, 100),
+                                  /*dragActive=*/false));
+  // Bumped version → retry.
+  EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/4, Vector2i(100, 100),
+                                  /*dragActive=*/false));
+  // Canvas resized → retry.
+  EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(200, 100),
+                                  /*dragActive=*/false));
+}
+
 }  // namespace
 }  // namespace donner::editor
