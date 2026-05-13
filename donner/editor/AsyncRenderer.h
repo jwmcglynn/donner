@@ -129,6 +129,14 @@ struct RenderResult {
     /// rendered against the current DOM state, with the promoted entity
     /// hidden).
     Vector2d promotedTranslationDoc = Vector2d::Zero();
+    /// Canvas-space top-left of the promoted bitmap, in document-space
+    /// units (design doc 0033 §M2). Non-zero when the layer was
+    /// rasterized at intrinsic size — the bitmap covers only the
+    /// entity's bbox + filter halo, not the full canvas. The editor
+    /// blits the texture at `(promotedCanvasOffsetDoc + promoted
+    /// TranslationDoc) * pixelsPerDocUnit` with size equal to the
+    /// bitmap's intrinsic dimensions (not stretched to canvas).
+    Vector2d promotedCanvasOffsetDoc = Vector2d::Zero();
 
     [[nodiscard]] bool valid() const { return entity != entt::null && !promotedBitmap.empty(); }
   };

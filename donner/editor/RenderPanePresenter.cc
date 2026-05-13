@@ -22,7 +22,12 @@ constexpr float kFrameGraphHeight = 32.0f;
 
 Vector2d PromotedTextureScreenOffset(const GlTextureCache& textures,
                                      const ViewportState& viewport) {
-  return textures.promotedTranslationDoc() * viewport.pixelsPerDocUnit();
+  // Includes both the layer's intrinsic canvas position (non-zero after
+  // M2B's tight-bound rasterize) and the post-rasterize DOM drag delta.
+  // Both fields are reported in doc units; the screen-side conversion
+  // is the same `pixelsPerDocUnit` factor.
+  const Vector2d totalDoc = textures.promotedCanvasOffsetDoc() + textures.promotedTranslationDoc();
+  return totalDoc * viewport.pixelsPerDocUnit();
 }
 
 void RenderFrameGraph(const FrameHistory& history) {
@@ -186,11 +191,20 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
           imageOrigin, imageBottomRight);
     }
 
+    // Intrinsic-size blit (design doc 0033 §M2B): the promoted texture
+    // is sized to the entity's bbox + filter halo in canvas pixels.
+    // Convert to screen pixels via `1 / devicePixelRatio` (the canvas is
+    // rendered at DPR resolution, so canvas-pixel-to-screen-pixel is
+    // `1 / DPR`). For canvas-sized layers (the M2A path), the result
+    // matches the legacy "stretch across imageRect" behavior exactly.
+    const double dpr =
+        state.viewport.devicePixelRatio > 0.0 ? state.viewport.devicePixelRatio : 1.0;
+    const float promotedWidthScreen = static_cast<float>(state.textures.promotedWidth() / dpr);
+    const float promotedHeightScreen = static_cast<float>(state.textures.promotedHeight() / dpr);
     const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(promotedScreenOffset.x),
                                 imageOrigin.y + static_cast<float>(promotedScreenOffset.y));
-    const ImVec2 promotedBottomRight(
-        imageBottomRight.x + static_cast<float>(promotedScreenOffset.x),
-        imageBottomRight.y + static_cast<float>(promotedScreenOffset.y));
+    const ImVec2 promotedBottomRight(promotedOrigin.x + promotedWidthScreen,
+                                     promotedOrigin.y + promotedHeightScreen);
     paneDrawList->AddImage(
         static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.promotedTexture())),
         promotedOrigin, promotedBottomRight);

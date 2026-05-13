@@ -61,6 +61,12 @@ public:
   /// user has dragged since the bitmap was last stamped.
   [[nodiscard]] const Vector2d& promotedTranslationDoc() const { return promotedTranslationDoc_; }
 
+  /// Canvas-space top-left of the promoted bitmap (in document units).
+  /// Non-zero when the layer went through M2's tight-bound rasterize
+  /// path; the editor blits the promoted texture at `(canvasOffset +
+  /// translation)` with intrinsic dims instead of stretching to canvas.
+  [[nodiscard]] const Vector2d& promotedCanvasOffsetDoc() const { return promotedCanvasOffsetDoc_; }
+
 private:
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
                            int* outHeight);
@@ -84,6 +90,7 @@ private:
   int foregroundHeight_ = 0;
 
   Vector2d promotedTranslationDoc_ = Vector2d::Zero();
+  Vector2d promotedCanvasOffsetDoc_ = Vector2d::Zero();
 };
 
 }  // namespace donner::editor

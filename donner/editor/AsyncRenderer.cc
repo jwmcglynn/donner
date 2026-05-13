@@ -251,16 +251,23 @@ void AsyncRenderer::workerLoop() {
             viewBoxWidth > 0.0 ? static_cast<double>(canvasSize.x) / viewBoxWidth : 1.0;
         const double scaleY =
             viewBoxHeight > 0.0 ? static_cast<double>(canvasSize.y) / viewBoxHeight : 1.0;
-        const Vector2d composeTranslationCanvas = composeOffset.translation();
-        const Vector2d composeTranslationDoc(
-            scaleX != 0.0 ? composeTranslationCanvas.x / scaleX : 0.0,
-            scaleY != 0.0 ? composeTranslationCanvas.y / scaleY : 0.0);
+        const auto canvasToDoc = [&](const Vector2d& canvas) {
+          return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
+                          scaleY != 0.0 ? canvas.y / scaleY : 0.0);
+        };
+        const Vector2d composeTranslationDoc = canvasToDoc(composeOffset.translation());
+        // Layer's intrinsic canvas position, also expressed in doc units —
+        // non-zero whenever the layer went through the M2 tight-bound
+        // rasterize path (design doc 0033 §M2).
+        const Vector2d promotedCanvasOffsetDoc =
+            canvasToDoc(compositor_->layerCanvasOffsetOf(compositorEntity_));
         compositedPreview = RenderResult::CompositedPreview{
             .backgroundBitmap = compositor_->backgroundBitmap(),
             .promotedBitmap = compositor_->layerBitmapOf(compositorEntity_),
             .foregroundBitmap = compositor_->foregroundBitmap(),
             .entity = compositorEntity_,
             .promotedTranslationDoc = composeTranslationDoc,
+            .promotedCanvasOffsetDoc = promotedCanvasOffsetDoc,
         };
       }
 

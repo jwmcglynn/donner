@@ -102,6 +102,17 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   viewport.size = Vector2d(200, 100);
   viewport.devicePixelRatio = 1.0;
 
+  // Translate canvas coords into the promoted bitmap's local pixel
+  // space. Under M2B (design doc 0033) the promoted bitmap is
+  // intrinsic-sized — its pixel (0,0) corresponds to canvas
+  // `canvasOffset`, not canvas origin. For canvas-sized bitmaps the
+  // offset is Zero and the conversion is a no-op.
+  const auto canvasToBitmap = [&](int canvasX, int canvasY) {
+    const Vector2d offset = compositor.layerCanvasOffsetOf(entity);
+    return std::pair<int, int>{canvasX - static_cast<int>(offset.x),
+                               canvasY - static_cast<int>(offset.y)};
+  };
+
   // ── Phase 1: Pre-drag render ──────────────────────────────────────────
   compositor.renderFrame(viewport);
 
@@ -117,8 +128,8 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   {
     const auto& promoted = compositor.layerBitmapOf(entity);
     ASSERT_FALSE(promoted.empty());
-    EXPECT_THAT(getPixel(promoted, kOrigCenterX, kOrigCenterY), IsRed())
-        << "Pre-drag promoted: rect at DOM position";
+    const auto [bx, by] = canvasToBitmap(kOrigCenterX, kOrigCenterY);
+    EXPECT_THAT(getPixel(promoted, bx, by), IsRed()) << "Pre-drag promoted: rect at DOM position";
   }
 
   // ── Phase 2: During drag ──────────────────────────────────────────────
@@ -140,7 +151,8 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
     // The promoted bitmap is reused via the fast path — its content stays at
     // the pre-drag stamped position; `layerComposeOffset` carries the delta.
     const auto& promoted = compositor.layerBitmapOf(entity);
-    EXPECT_THAT(getPixel(promoted, kOrigCenterX, kOrigCenterY), IsRed())
+    const auto [bx, by] = canvasToBitmap(kOrigCenterX, kOrigCenterY);
+    EXPECT_THAT(getPixel(promoted, bx, by), IsRed())
         << "Drag promoted: bitmap retains stamped (pre-drag) content";
 
     const Transform2d composeOffset = compositor.layerComposeOffset(entity);
@@ -168,7 +180,8 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
         << "Settling flat: rect at new DOM position";
     EXPECT_THAT(getPixel(settlingFlat, kOrigCenterX, kOrigCenterY), IsWhite())
         << "Settling flat: original position is vacated";
-    EXPECT_THAT(getPixel(settlingPromoted, kOrigCenterX, kOrigCenterY), IsRed())
+    const auto [bx, by] = canvasToBitmap(kOrigCenterX, kOrigCenterY);
+    EXPECT_THAT(getPixel(settlingPromoted, bx, by), IsRed())
         << "Settling promoted: bitmap retains stamped content (reused, not re-rasterized)";
   }
 
@@ -191,8 +204,8 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 
   {
     const auto& promoted = compositor.layerBitmapOf(entity);
-    EXPECT_THAT(getPixel(promoted, kMovedCenterX, kMovedCenterY), IsRed())
-        << "Prewarm promoted: rect at DOM position";
+    const auto [bx, by] = canvasToBitmap(kMovedCenterX, kMovedCenterY);
+    EXPECT_THAT(getPixel(promoted, bx, by), IsRed()) << "Prewarm promoted: rect at DOM position";
   }
 }
 

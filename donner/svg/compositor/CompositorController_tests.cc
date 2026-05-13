@@ -646,6 +646,123 @@ TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot)
   }
 }
 
+TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanvasOffset) {
+  // Design doc 0033 §M2A: mandatory-detected filter layers rasterize
+  // into an offscreen sized to their tight canvas bounds (with 1px AA
+  // padding), not the full viewport. The MockRenderer's takeSnapshot
+  // returns a stub 1x1 bitmap regardless of viewport, so we can't
+  // inspect dimensions directly — instead pin that `canvasOffset` is
+  // non-zero (the rasterize went through the tight-bound path, which
+  // is the architectural invariant we care about). The real-renderer
+  // pixel correctness is covered by the `CompositorGolden_tests`.
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <rect width="200" height="100" fill="white"/>
+    <g id="target" filter="url(#f)">
+      <circle cx="40" cy="40" r="10" fill="red"/>
+    </g>
+  )svg",
+                                      Vector2i(200, 100));
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto* layer = compositor.findLayerForTest(target->entityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->hasValidBitmap());
+
+  // The circle is centered at (40, 40), so the tight bound's top-left
+  // should be in the upper-left quadrant of the canvas — well away
+  // from origin.
+  EXPECT_GT(layer->canvasOffset().x, 0.0)
+      << "Expected tight-bound rasterize; canvasOffset.x = " << layer->canvasOffset().x;
+  EXPECT_GT(layer->canvasOffset().y, 0.0)
+      << "Expected tight-bound rasterize; canvasOffset.y = " << layer->canvasOffset().y;
+}
+
+TEST_F(CompositorControllerTest, EditorPromotedLayerAlsoUsesIntrinsicSize) {
+  // Design doc 0033 §M2B: editor-promoted layers (drag target /
+  // selection prewarm) go through the same tight-bound rasterize as
+  // mandatory-detected layers. The editor reads the layer's
+  // `canvasOffset` via `CompositedPreview` and blits the texture at
+  // intrinsic dimensions instead of stretching to canvas.
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="50" y="30" width="20" height="20" fill="red"/>
+  )svg",
+                                      Vector2i(200, 100));
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  const auto* layer = compositor.findLayerForTest(entity);
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->hasValidBitmap());
+
+  // The rect spans canvas (50,30)..(70,50), so the tight-bound rasterize
+  // sets a non-zero canvasOffset somewhere in the upper-left quadrant.
+  EXPECT_GT(layer->canvasOffset().x, 0.0)
+      << "Editor-promoted layers must use intrinsic size; canvasOffset.x = "
+      << layer->canvasOffset().x;
+  EXPECT_GT(layer->canvasOffset().y, 0.0);
+
+  // `layerCanvasOffsetOf` is the editor's accessor for the same value
+  // and must agree with `findLayerForTest`.
+  EXPECT_EQ(compositor.layerCanvasOffsetOf(entity), layer->canvasOffset());
+}
+
+TEST_F(CompositorControllerTest, IntrinsicSizeLayerFastPathTranslationStillWorks) {
+  // The fast-path delta math is independent of bitmap size. Verify
+  // that a translation applied to a mandatory-filter parent group
+  // produces the expected `canvasFromBitmap` translation on top of
+  // the layer's stable canvasOffset.
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="20" height="20" fill="red"/>
+    </g>
+  )svg",
+                                      Vector2i(200, 100));
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  // Rasterize-time: canvasFromBitmap is identity, canvasOffset is the
+  // bitmap's intrinsic position.
+  const auto* layerBefore = compositor.findLayerForTest(target->entityHandle().entity());
+  ASSERT_NE(layerBefore, nullptr);
+  const Vector2d offsetAtRasterize = layerBefore->canvasOffset();
+
+  // Translate the group by (5, 10) in DOM space.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 10.0));
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  const auto* layerAfter = compositor.findLayerForTest(target->entityHandle().entity());
+  ASSERT_NE(layerAfter, nullptr);
+  EXPECT_EQ(layerAfter->canvasOffset(), offsetAtRasterize)
+      << "canvasOffset stays put — only canvasFromBitmap encodes the drag delta.";
+  const Transform2d xform = layerAfter->canvasFromBitmap();
+  EXPECT_TRUE(xform.isTranslation());
+  EXPECT_NEAR(xform.translation().x, 5.0, 1e-10);
+  EXPECT_NEAR(xform.translation().y, 10.0, 1e-10);
+}
+
 TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
   // Regression for the detector-ordering bug surfaced by design doc 0033
   // M1's layer inspector: `RenderingContext::invalidateRenderTree()`
