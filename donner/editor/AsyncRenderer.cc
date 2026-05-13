@@ -265,8 +265,16 @@ void AsyncRenderer::workerLoop() {
           // For the drag layer, `canvasFromBitmap` captures the post-
           // rasterize DOM drift (translation in canvas pixels). Convert
           // to doc units so the editor blit math composes with the live
-          // `pixelsPerDocUnit`.
-          if (ct.isDragTarget && ct.canvasFromBitmap.isTranslation()) {
+          // `pixelsPerDocUnit`. Extract the translation component
+          // unconditionally — even when `canvasFromBitmap` carries a
+          // scale or rotation component (post-canvas-resize transient
+          // before the fast path re-engages), the translation alone is
+          // what aligns the drag tile with the overlay chrome, which
+          // also reads the DOM transform directly. Dropping the
+          // translation behind an `isTranslation()` guard caused
+          // intermittent misalignment between drag tile and overlay
+          // (bug from M2C step 1).
+          if (ct.isDragTarget) {
             tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
           }
           tile.isDragTarget = ct.isDragTarget;
