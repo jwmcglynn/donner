@@ -278,10 +278,12 @@ TEST_F(CompositorControllerTest, SinglePromotedLayerBuildsSplitStaticLayers) {
   viewport.devicePixelRatio = 1.0;
   compositor.renderFrame(viewport);
 
+  // Post design-doc 0033 §M2C: `hasSplitStaticLayers` reports the
+  // editor-promoted single-drag-target state, no bg/fg flatten step
+  // exists. Assert the layer's bitmap is non-empty (the editor reads
+  // it directly via `snapshotTilesForUpload`).
   EXPECT_TRUE(compositor.hasSplitStaticLayers());
-  EXPECT_FALSE(compositor.backgroundBitmap().empty());
   EXPECT_FALSE(compositor.layerBitmapOf(entity).empty());
-  EXPECT_FALSE(compositor.foregroundBitmap().empty());
 }
 
 TEST_F(CompositorControllerTest, MultiplePromotedLayersDoNotBuildSplitStaticLayers) {

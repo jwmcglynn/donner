@@ -168,13 +168,9 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 
   svg::RendererBitmap settlingFlat;
   svg::RendererBitmap settlingPromoted;
-  svg::RendererBitmap settlingBg;
-  svg::RendererBitmap settlingFg;
   {
     settlingFlat = renderer.takeSnapshot();
     settlingPromoted = compositor.layerBitmapOf(entity);
-    settlingBg = compositor.backgroundBitmap();
-    settlingFg = compositor.foregroundBitmap();
 
     EXPECT_THAT(getPixel(settlingFlat, kMovedCenterX, kMovedCenterY), IsRed())
         << "Settling flat: rect at new DOM position";
@@ -477,10 +473,12 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   ExperimentalDragPresentation state;
 
   // Track bitmaps that would be "uploaded to GL" in the real main loop.
+  // Post-§M2C the editor uploads N tile textures (segments + layers) rather
+  // than a bg/promoted/fg trio; for this test we still capture the live
+  // promoted-layer bitmap directly off the compositor since that's what
+  // `snapshotTilesForUpload` would copy into the corresponding tile.
   svg::RendererBitmap uploadedFlat;
-  svg::RendererBitmap uploadedBg;
   svg::RendererBitmap uploadedPromoted;
-  svg::RendererBitmap uploadedFg;
   bool hasUploadedComposited = false;
 
   // Helper: synchronous render → produces compositor output + flat bitmap.
@@ -493,9 +491,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
 
     uploadedFlat = renderer.takeSnapshot();
     if (compositor.hasSplitStaticLayers()) {
-      uploadedBg = compositor.backgroundBitmap();
       uploadedPromoted = compositor.layerBitmapOf(currentEntity);
-      uploadedFg = compositor.foregroundBitmap();
       hasUploadedComposited = true;
     }
   };
@@ -509,9 +505,8 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
     if (useComposited && hasUploadedComposited && preview.has_value()) {
       // Composited path: the promoted texture is drawn at DOM position + screen offset.
       // The "screen offset" in document coordinates is preview->translation.
-      // We verify that composited layers are valid.
+      // We verify the promoted (drag-target) tile has cached pixels.
       EXPECT_FALSE(uploadedPromoted.empty()) << label << ": promoted bitmap should exist";
-      EXPECT_FALSE(uploadedBg.empty()) << label << ": background bitmap should exist";
     } else {
       // Flat path: the flat bitmap is used directly.
       ASSERT_FALSE(uploadedFlat.empty()) << label << ": flat bitmap must exist";
