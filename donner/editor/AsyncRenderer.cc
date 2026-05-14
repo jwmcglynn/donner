@@ -97,19 +97,38 @@ void AsyncRenderer::workerLoop() {
       ZoneScopedN("AsyncRenderer::workerIteration");
       std::optional<RenderResult::CompositedPreview> compositedPreview;
 
-      // Keep the compositor alive across drag → idle transitions. Recreate
-      // only when the underlying document or renderer changes (different
-      // editor session / backend). This preserves mandatory-filter / bucket
-      // layer bitmap caches and the pre-warmed bg/fg pair between the
-      // selection pre-warm and the first drag frame that follows.
-      // Identity check uses the underlying `SVGDocumentHandle` (a shared_ptr
-      // to the Registry), not the `SVGDocument` pointer — SVGDocument is a
-      // value facade and two facades wrapping the same handle are the same
-      // document.
-      const bool documentChanged =
-          !compositorDocument_.has_value() ||
-          compositorDocument_->handle().get() != request.document->handle().get();
-      if (!compositor_ || documentChanged || compositorRenderer_ != request.renderer) {
+      // Compositor lifecycle is split into two independent decisions:
+      //
+      //   1. Do we need a fresh `CompositorController` instance? Only
+      //      on first construction or when the renderer pointer changes
+      //      (e.g. backend swap). The renderer is owned by the worker
+      //      and constructed at the top of `workerLoop`, so in steady
+      //      state this is just the first-frame case.
+      //
+      //   2. Did the document space swap underneath us? `setDocument`
+      //      and `setDocumentMaybeStructural` both bump
+      //      `documentGeneration` and produce a fresh `Registry` (the
+      //      `SVGDocumentHandle` pointer changes). When that happens we
+      //      try the structural-remap path FIRST — it preserves cached
+      //      filter / bucket bitmaps, `canvasFromBitmap` stamps, and
+      //      the pre-warmed bg/fg pair — and only fall back to a
+      //      destructive `resetAllLayers(documentReplaced=true)` when
+      //      no remap is available or the remap itself fails an
+      //      invariant check.
+      //
+      // The previous implementation collapsed step 1 onto a pointer-
+      // identity check that fired on every `setDocumentMaybeStructural`
+      // (since the new doc carries a new `Registry` handle), making
+      // step 2's structural-remap branch unreachable on the
+      // drag-release writeback path. The user-visible symptom was a
+      // filter-group "snap back to original position" on drag release:
+      // the freshly-reconstructed compositor blitted its zero-offset
+      // bitmap of the pre-drag layer state while the editor's cached
+      // GL textures still showed the dragged element at its rasterize-
+      // time position. Pinned by
+      // `RnrReplayTest::FilterSnapbackReproPreservesCompositorAcrossWriteback`.
+      const bool needsFreshCompositor = !compositor_ || compositorRenderer_ != request.renderer;
+      if (needsFreshCompositor) {
         compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
                                                                               *request.renderer);
         compositor_->setSkipMainComposeDuringSplit(true);
@@ -121,32 +140,12 @@ void AsyncRenderer::workerLoop() {
         compositorReconstructCount_.fetch_add(1, std::memory_order_release);
       }
 
-      // Detect *document replacement* (ReplaceDocumentCommand / source
-      // reparse). The inner SVGDocument lives in `AsyncSVGDocument`'s
-      // optional storage, so its address is stable across replacement —
-      // pointer identity won't catch it. `documentGeneration` bumps only
-      // on replacement (NOT on every mutation), so comparing against
-      // the compositor's snapshot correctly distinguishes "entity space
-      // blown away" from "user dragged one element". Hitting this branch
-      // every frame (as would happen if we tracked `version` instead)
-      // would nuke activeHints_ on every drag, demote the drag layer,
-      // and crash in `~ScopedCompositorHint` when a subsequent rebuild
-      // leaves the registry in a transient state.
-      if (request.documentGeneration != compositorDocumentGeneration_) {
-        // A `setDocument` happened since our last tick. Two sub-cases:
-        //
-        //   1. The editor built a structural remap (`request.structural
-        //      Remap` non-empty) — the new document describes the same
-        //      tree shape, so we can preserve the compositor's cached
-        //      bitmaps + segments and just swap entity ids via
-        //      `remapAfterStructuralReplace`. If the remap fails an
-        //      invariant check, fall through to the full-reset path.
-        //
-        //   2. Otherwise (user edited source-pane to change the tree,
-        //      new file loaded, etc.): full reset — the old entity
-        //      space is gone and every cache is keyed on dead ids.
-        //      `resetAllLayers(documentReplaced=true)` defuses the
-        //      ScopedCompositorHint dtors so they don't SIGSEGV.
+      const bool documentSwapDetected =
+          !needsFreshCompositor &&
+          (request.documentGeneration != compositorDocumentGeneration_ ||
+           (compositorDocument_.has_value() &&
+            compositorDocument_->handle().get() != request.document->handle().get()));
+      if (documentSwapDetected) {
         bool remapped = false;
         if (!request.structuralRemap.empty()) {
           remapped = compositor_->remapAfterStructuralReplace(request.structuralRemap);
@@ -169,6 +168,7 @@ void AsyncRenderer::workerLoop() {
           compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
           compositorResetCount_.fetch_add(1, std::memory_order_release);
         }
+        compositorDocument_ = *request.document;
         compositorDocumentGeneration_ = request.documentGeneration;
       }
 
