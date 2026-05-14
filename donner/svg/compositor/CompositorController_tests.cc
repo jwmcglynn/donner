@@ -204,6 +204,46 @@ TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
+// Design doc 0033 §M9 + §M2C — pending-demote entries must NOT make
+// `hasSplitStaticLayers()` return false during the hysteresis window.
+// `skipMainCompose` gates on `hasSplitStaticLayers()`; if it returns
+// false, `composeLayers` runs every fast-path drag frame, doing 2N+1
+// canvas-scale bitmap blits per render. Operator observation on a
+// selection-change drag at high zoom: "fast path counter increments
+// but framerate stays low, scales worse with zoom".
+TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="red" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const Entity entityA = a->entityHandle().entity();
+  const Entity entityB = b->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entityA));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_TRUE(compositor.hasSplitStaticLayers())
+      << "Sanity: single live promote should engage split-static-layers.";
+
+  compositor.demoteEntity(entityA);
+  ASSERT_TRUE(compositor.promoteEntity(entityB));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  // The live drag-target is B; A is pending-demote. Without this fix,
+  // activeHints_.size() == 2 made hasSplitStaticLayers() return false
+  // for the whole hysteresis window, disabling `skipMainCompose`.
+  EXPECT_TRUE(compositor.hasSplitStaticLayers())
+      << "Pending-demote A must not mask the live promote B from "
+         "hasSplitStaticLayers() — would otherwise force composeLayers "
+         "to run every fast-path drag frame.";
+}
+
 // Design doc 0033 §M9 + §M2C — pending-demote entries must NOT keep
 // the live drag-target tile from being flagged `isDragTarget`. Before
 // this fix, the `activeHints_.size() == 1` check in `renderFrame`'s
