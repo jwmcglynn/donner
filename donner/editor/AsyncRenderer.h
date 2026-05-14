@@ -282,6 +282,21 @@ public:
     return compositorResetCount_.load(std::memory_order_acquire);
   }
 
+  /// Number of times the worker has reconstructed `compositor_` from scratch.
+  /// First construction counts as one. A second increment within a session
+  /// means an in-flight cached layer set (bitmaps, `canvasFromBitmap`
+  /// compose state, `bitmapEntityFromWorldTransform` stamps) was thrown
+  /// away — pinned to the filter-group "snap back to original position"
+  /// drag-release bug where the post-writeback source reparse swapped the
+  /// `SVGDocumentHandle` and forced a full compositor reconstruct even
+  /// though a valid structural remap was attached to the request.
+  ///
+  /// Safe to read from the UI thread; incremented under the internal mutex
+  /// on the worker.
+  [[nodiscard]] std::uint64_t compositorReconstructCountForTesting() const {
+    return compositorReconstructCount_.load(std::memory_order_acquire);
+  }
+
   /// Snapshot of the compositor's fast-path counters. Read-only — the worker
   /// writes them under the mutex when transitioning to Done. Returns zeros
   /// before the compositor is constructed (first render not yet requested).
@@ -414,6 +429,12 @@ private:
   /// tests to verify that drag-frame mutations (which bump `frameVersion_`) do
   /// NOT fire a reset — only a true `documentGeneration` change does.
   std::atomic<std::uint64_t> compositorResetCount_{0};
+
+  /// Counter of worker-side `compositor_ = make_unique<...>(...)` reconstructs.
+  /// Bumps once per session at first construction and is expected to STAY at
+  /// that one throughout a drag-release-and-reparse cycle: structural remaps
+  /// preserve the compositor across `SVGDocumentHandle` swaps.
+  std::atomic<std::uint64_t> compositorReconstructCount_{0};
 
   /// Design doc 0033 §M4 — cancellation token threaded into
   /// `CompositorController::renderFrame(viewport, token)`. The UI
