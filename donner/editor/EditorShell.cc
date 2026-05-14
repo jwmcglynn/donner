@@ -416,6 +416,15 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
           app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
       interactionController_.clearPendingClick();
+    } else {
+      // Worker is busy with a (likely-stale) prewarm render at the
+      // previous canvas size or zoom. Cancel it so the next idle frame
+      // can run the slow-path mouseDown immediately, rather than
+      // waiting up to seconds for the in-flight prewarm to finish at
+      // high zoom. The render in flight is dispensable — it was a
+      // selection prewarm, not a drag, and the click is about to
+      // supersede the selection state anyway.
+      renderCoordinator_.asyncRenderer().cancelInFlight();
     }
   }
 

@@ -852,12 +852,53 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
   return !cancelled;
 }
 
+bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token,
+                                       const std::function<void()>& onIntermediate) {
+  cancelToken_ = &token;
+  intermediateCallback_ = &onIntermediate;
+  renderFrame(viewport);
+  const bool cancelled = token.isCancelled();
+  cancelToken_ = nullptr;
+  intermediateCallback_ = nullptr;
+  return !cancelled;
+}
+
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   ZoneScopedN("Compositor::renderFrame");
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
 
   Registry& registry = document_->registry();
+
+  // Design doc 0034 progressive rendering: shoulder-tap the caller
+  // BEFORE any per-frame work begins, but ONLY on frames whose work
+  // will actually be expensive (post-canvas-resize: `needsFullRebuild`
+  // → multi-second `prepareDocumentForRendering` + canvas-sized
+  // segment + flat-baseline rasterize). Steady-state drag frames
+  // hit the fast path with sub-frame cost — emitting an intermediate
+  // there just adds overhead (snapshotTilesForUpload + buildPreview
+  // + lock + wake callback) without any user-visible win.
+  //
+  // At this emit point every cached state from the prior render is
+  // still in place:
+  //
+  //   - `layers_` carry intrinsic-sized bitmaps in doc units (M2A).
+  //     They display correctly at the new viewport scale via the
+  //     editor's per-tile `bitmapDimsDoc * pixelsPerDocUnit` blit.
+  //   - `staticSegments_` carry canvas-sized bitmaps at the PRIOR
+  //     canvas size. Editor stretches them; user sees them slightly
+  //     blurry until the canvas-sized refinement lands.
+  //   - The renderer surface holds the prior frame's flat baseline,
+  //     valid as the GL fallback texture.
+  if (intermediateCallback_ != nullptr && *intermediateCallback_ && !layers_.empty() &&
+      !isCancelled()) {
+    const bool intermediateWorthEmitting =
+        rootDirty_ || (registry.ctx().contains<components::RenderTreeState>() &&
+                       registry.ctx().get<components::RenderTreeState>().needsFullRebuild);
+    if (intermediateWorthEmitting) {
+      (*intermediateCallback_)();
+    }
+  }
 
   // Design doc 0033 §M9 — age the hysteresis queue and flush
   // expirations before the dirty-flag snapshot. An entity that
