@@ -65,7 +65,33 @@ std::optional<QuotedRange> findEnclosingQuotedValue(std::string_view source, std
     --pos;
     const char c = source[pos];
     if (c == '"' || c == '\'') {
-      // Candidate opening quote. Scan forward from pos+1 to find the matching close.
+      // Candidate quote. Must be an OPENING quote (preceded by `=` with
+      // optional whitespace) to count as the start of an attribute
+      // value. Without this check, a CLOSING quote of a prior
+      // attribute followed by an attribute insertion (e.g. inserting
+      // ` transform="..."` right before `/>`) would be mistaken as
+      // an opening quote, with the next `"` (the opening quote of the
+      // inserted value) treated as the matching close — falsely
+      // reporting `offset` as "inside an existing attribute value"
+      // and steering the classifier into the modification path
+      // instead of the insertion path.
+      bool isOpeningQuote = false;
+      std::size_t check = pos;
+      while (check > 0) {
+        --check;
+        const char prev = source[check];
+        if (prev == ' ' || prev == '\t' || prev == '\n' || prev == '\r') {
+          continue;
+        }
+        isOpeningQuote = (prev == '=');
+        break;
+      }
+      if (!isOpeningQuote) {
+        // Closing quote of a prior attribute (or stray `"` we can't
+        // interpret). `offset` is OUTSIDE any attribute value.
+        return std::nullopt;
+      }
+      // Confirmed opening quote. Scan forward from pos+1 to find the matching close.
       const char quote = c;
       std::size_t closePos = pos + 1;
       while (closePos < source.size() && source[closePos] != quote) {
