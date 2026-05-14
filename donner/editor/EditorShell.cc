@@ -529,7 +529,15 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   const auto workerCompositorEntity = renderCoordinator_.asyncRenderer().workerCompositorEntity();
   const auto& viewport = interactionController_.viewport();
   const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
-  const Vector2i documentCanvas = app_.hasDocument()
+  // `SVGDocument::canvasSize()` walks the registry (ComputedAbsoluteTransform /
+  // SizedElement / ViewBox) — racy against the worker's
+  // `prepareDocumentForRendering` which rebuilds those components in place.
+  // When the worker is busy we have to read the cached value the worker
+  // stamped at the end of its last completed render; reading live trips a
+  // SIGSEGV inside `LayoutSystem::calculateCanvasScaledDocumentSize` when
+  // the entt sparse-set page is mid-rebuild.
+  const bool workerBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const Vector2i documentCanvas = (!workerBusy && app_.hasDocument())
                                       ? app_.document().document().canvasSize()
                                       : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
