@@ -397,16 +397,22 @@ TEST(DragReleasePopBackTest, FlatFallbackShowsCorrectImageAfterSettling) {
   EXPECT_THAT(getPixel(settlingFlat, kOrigCenterX, kOrigCenterY), IsWhite())
       << "Flat fallback must NOT show element at original position";
 
-  // Simulate state machine: noteFullRenderLanded clears composited state,
-  // so the display falls to flat. Verify the flat bitmap is correct.
+  // Simulate state machine: noteFullRenderLanded no longer clears
+  // cached textures (the cache-clear here was the root cause of a
+  // mid-drag "snap back to start" regression — see fix notes on
+  // `ExperimentalDragPresentation::noteFullRenderLanded`). The
+  // settling state itself is still ended, but the cached entity
+  // survives so the editor keeps blitting the tiles at zero offset.
+  // Both the flat texture (asserted above) AND the cached tiles
+  // show the element at its new position, so the test's "no pop
+  // back" intent holds via the tile path now.
   ExperimentalDragPresentation state;
   state.noteCachedTextures(entity, 1, Vector2i(200, 100));
   state.beginSettling(SelectTool::ActiveDragPreview{entity, Vector2d(100, 0)}, 2);
   state.noteFullRenderLanded(/*landedVersion=*/2);
 
-  EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt))
-      << "After noteFullRenderLanded, display should use flat texture";
-  EXPECT_FALSE(state.hasCachedTextures);
+  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_FALSE(state.waitingForFullRender) << "Settling window closed at target version";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
