@@ -377,6 +377,44 @@ omnibus stability commit:
       deferred resolver pass runs and the layer is gone.
     - `M9FlushPendingDemotionsForTesting...` — the test-helper
       bypass works.
+    - `M9PendingDemoteDoesNotMaskLiveDragTarget` — pending-demote
+      entries don't drag the live drag-target tile's
+      `isDragTarget` flag down via the M2C `activeHints_.size() ==
+      1` check.
+    - `M9PendingDemoteKeepsHasSplitStaticLayersTrue` — pending-demote
+      entries don't disable `skipMainCompose`, which would force
+      `composeLayers` to do 2N+1 canvas-scale blits per fast-path
+      drag frame.
+
+  *Three M9-aware carve-outs landed as follow-on fixes after the
+  initial commit (each pinned by its own red→green test above):*
+  - `splitStaticLayersEntity_` setter (commit `a3c76ca3`) — count
+    only live (non-pending) hints so the live drag target keeps its
+    `isDragTarget` flag during the hysteresis window. Without this,
+    a selection-change drag had the worker emit
+    `dragTranslationDoc=(0,0)` for the new target → 5–7s of "only
+    the overlay tracks the cursor" before the demote expired.
+  - `hasSplitStaticLayers()` (commit `f744ca53`) — same carve-out;
+    `skipMainCompose` re-engages during the hysteresis window. Was
+    forcing the compositor to do 2N+1 canvas-scale `drawImage`
+    calls per fast-path drag frame — visible as "low framerate
+    that gets worse at high zoom".
+  - Worker tile-builder (`AsyncRenderer.cc`, commit `99ece57f`) —
+    extract `canvasFromBitmap.translation()` for every layer tile,
+    not just the active drag target. Pending-demote layer tiles
+    (bitmap content from before the drag, `canvasFromBitmap` =
+    Translate(d_total) compensating at compose) need their
+    translation propagated so the editor blit places them at the
+    post-drag position. Without this, previously-moved shapes
+    "popped back" to their rasterize-time canvas offset during the
+    hysteresis window, then "popped forward" again when the demote
+    actually fired and the segment re-rasterized.
+
+  Common pattern: every gate that used to be "is exactly one
+  entity actively promoted?" now needs a carve-out for pending-
+  demote entries. Worth a sweep if a fourth such gate ever fires
+  the same symptom shape — but the post-M9 sweep showed no other
+  load-bearing instances.
 
 - [ ] **Milestone 10: Operator perf validation.**
   Each prior milestone has a per-milestone perf gate in
