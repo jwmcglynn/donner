@@ -153,6 +153,128 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
   ASSERT_TRUE(result.has_value());
 }
 
+// Design doc 0033 §M9 + §M2C — pending-demote layers must carry their
+// `canvasFromBitmap` translation through to the editor blit. The
+// worker's tile-build code previously populated `dragTranslationDoc`
+// only when `isDragTarget == true`, so a pending-demote layer (whose
+// bitmap was rasterized at the entity's pre-drag transform and whose
+// canvasFromBitmap compensates with the residual drag delta) blitted
+// at its rasterize-time canvas offset — the operator saw previously-
+// moved shapes "pop back" to their pre-drag positions during the
+// hysteresis window, then pop forward again when the demote actually
+// fired and the segment re-rasterized. Fix: extract the translation
+// for every layer tile, not just the active drag target.
+TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTile) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="a" x="0" y="0" width="16" height="16" fill="red" />
+    <rect id="b" x="40" y="0" width="16" height="16" fill="blue" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto elemA = document.querySelector("#a");
+  auto elemB = document.querySelector("#b");
+  ASSERT_TRUE(elemA.has_value());
+  ASSERT_TRUE(elemB.has_value());
+  const Entity entityA = elemA->entityHandle().entity();
+  const Entity entityB = elemB->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() {
+    std::optional<RenderResult> result;
+    for (int i = 0; i < 400 && !result.has_value(); ++i) {
+      result = asyncRenderer.pollResult();
+      if (!result.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return result;
+  };
+
+  // 1. Pre-warm A — promote with Selection so A's layer rasterizes at
+  //    the entity's CURRENT (identity) transform. The fast path's
+  //    `canvasFromBitmap` update later replaces with a non-zero
+  //    translation; without a pre-rasterize the fast path's first
+  //    encounter would also be the first rasterize, which resets
+  //    `canvasFromBitmap` back to Identity.
+  {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = 1;
+    request.selectedEntity = entityA;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entityA,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  }
+  ASSERT_TRUE(waitForResult().has_value());
+
+  // 2. Drag A by (7, 11) document units. Fast path stamps
+  //    `canvasFromBitmap = Translate(7, 11)` on A's pre-warmed layer
+  //    without re-rasterizing.
+  elemA->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.0, 11.0)));
+  {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = 2;
+    request.selectedEntity = entityA;
+    request.dragPreview = RenderRequest::DragPreview{.entity = entityA};
+    asyncRenderer.requestRender(request);
+  }
+  auto resultA = waitForResult();
+  ASSERT_TRUE(resultA.has_value());
+
+  // 3. Now drag B — A is demoted (queued by M9) and B is promoted.
+  //    A's bitmap is still cached with its post-drag canvasFromBitmap.
+  elemB->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(2.0, 3.0)));
+  {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = 3;
+    request.selectedEntity = entityB;
+    request.dragPreview = RenderRequest::DragPreview{.entity = entityB};
+    asyncRenderer.requestRender(request);
+  }
+  auto resultB = waitForResult();
+  ASSERT_TRUE(resultB.has_value());
+  ASSERT_TRUE(resultB->compositedPreview.has_value());
+
+  // The pending-demote tile for A MUST carry a non-zero
+  // `dragTranslationDoc` reflecting the (7, 11) drag delta from step
+  // 1. Without this fix, the worker only sets `dragTranslationDoc`
+  // for `isDragTarget==true` tiles, so A's tile would have
+  // (0, 0) and the editor blit would place A at its pre-drag
+  // canvas offset.
+  bool sawAPending = false;
+  for (const auto& tile : resultB->compositedPreview->tiles) {
+    if (tile.kind != RenderResult::CompositedTile::Kind::Layer) {
+      continue;
+    }
+    if (tile.isDragTarget) {
+      continue;  // Live drag target is B; we want the pending-demote A.
+    }
+    if (tile.bitmap.empty()) {
+      continue;
+    }
+    sawAPending = true;
+    // (7, 11) document units; the worker converts canvas px → doc via
+    // canvasSize/viewBox. With canvasSize=64 and an unset viewBox the
+    // scale is 1, so doc units == canvas px.
+    EXPECT_NEAR(tile.dragTranslationDoc.x, 7.0, 1e-3)
+        << "Pending-demote A's tile must carry its post-drag translation; "
+           "the editor would otherwise blit A at its rasterize-time canvas "
+           "offset and the user sees A 'pop back' to pre-drag position.";
+    EXPECT_NEAR(tile.dragTranslationDoc.y, 11.0, 1e-3);
+  }
+  EXPECT_TRUE(sawAPending) << "M9 hysteresis must keep pending-demote A's layer tile in the "
+                              "result so the editor can keep blitting it while the demote ages.";
+}
+
 TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="under" x="0" y="0" width="16" height="16" fill="blue" />
