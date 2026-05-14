@@ -1,6 +1,6 @@
 # Design: Editor Design-Tool-Grade Responsiveness
 
-**Status:** Implementing (M1, M2, M5, M7, M8, M9 landed; M3/M4/M6/M10 open)
+**Status:** Implementing (M1, M2, M4, M5, M7, M8, M9 landed; M3/M6/M10 open)
 **Author:** Claude Opus 4.7 (1M context)
 **Created:** 2026-05-12
 **Last updated:** 2026-05-13
@@ -88,7 +88,7 @@ re-running the long-form instrumentation cycle that this round needed.
 | M1 — Diagnostic layer panel | ✅ Landed (expanded scope: paint-order tile table, state header, viewport diagnostics) | `e38d9a94` + iterations folded into `ab802105` |
 | M2 — Intrinsic-size rasterization | ✅ Landed (M2A+M2B squashed; zoom-fix follow-up) | `e5a08619`, `4f0f5bf6` |
 | M3 — Cache band invariant under canvas resize | ⏳ Open | — |
-| M4 — Async re-rasterization with cancellation | ⏳ Open | — |
+| M4 — Async re-rasterization with cancellation | ✅ `CancellationToken` polled between segment / layer rasterizes; `requestRender` during busy preempts the in-flight render | (this commit) |
 | M5 — Preemptive swap-in | ✅ Landed | `793f96eb` |
 | M6 — Pinch-zoom GPU stretch | ⚠️ Partial (canvas-commit throttle only) | `0d1cdc56` |
 | M7 — Selection chrome priority lane | ✅ Snapshot infra landed; editor callsites not flipped yet | `965f0a02` |
@@ -227,13 +227,58 @@ omnibus stability commit:
   asymmetric vs Figma's stricter ±1 stop because most user interactions
   fall within one zoom step.
 
-- [ ] **Milestone 4: Async re-rasterization with cancellation.**
+- [x] **Milestone 4: Async re-rasterization with cancellation.** *Landed.*
   Re-rasterize requests run on the AsyncRenderer's worker. While a stale-
   scale bitmap is being refined, the editor continues displaying the
   stretched cached bitmap. New requests *cancel* in-flight requests that
   haven't started (FIFO drained on `pendingRequest_` overwrite, like
   drag-coalesce). Critical: never block UI thread on a re-rasterize, and
   never queue more than one in-flight request per layer.
+
+  *As shipped:*
+  - New `donner::svg::compositor::CancellationToken` (wraps a single
+    `std::atomic<bool>`). `CompositorController::renderFrame` gains a
+    second overload `renderFrame(viewport, token)` returning `bool`
+    (`true` on full completion, `false` on early cancellation). The
+    non-token overload remains as the entry point for non-cancellable
+    callers (tests, the dual-path verifier) and delegates with a
+    null token — `isCancelled()` returns false in that state so the
+    rasterize loops add zero cost there.
+  - Cancellation checks live at the two coarse safe points the doc
+    calls out:
+    - inside `rasterizeDirtyStaticSegments` between segment slots,
+    - inside `rasterizeDirtyLayersLoop` between layer rasterizes.
+    A cancel-bail leaves the relevant `staticSegmentDirty_[i]` /
+    `CompositorLayer::isDirty()` flags intact, so the next
+    `renderFrame` finishes the work without re-doing already-
+    completed rasterizes.
+  - `AsyncRenderer::requestRender` accepts calls while the worker is
+    busy. When busy, the new request overwrites `pendingRequest_`
+    and signals `cancelRender_.cancel()`; the worker bails at the
+    next safe point, increments `cancelledRenderCount_`, discards
+    any partial result, and re-enters its main loop to pick up the
+    fresh `pendingRequest_`. The pre-§M4 caller contract ("must
+    have checked `!isBusy()` first") is relaxed — callers that
+    still gate on `!isBusy()` get exactly the pre-§M4 behaviour.
+  - `AsyncRenderer::cancelledRenderCount()` exposes the preemption
+    counter for tests and the layer-inspector panel.
+  - Pinned by `AsyncRenderer_tests.cc::
+    RequestRenderDuringBusySignalsCancellationAndPicksUpNewRequest`
+    — posts two requests back-to-back and asserts the result that
+    lands is for the second request (preemption succeeded). The
+    cancellation counter is asserted ≥0 rather than ≥1 because on
+    micro-documents the first render can complete before the second
+    `requestRender` is dispatched; the load-bearing invariant is
+    "result is for the latest request".
+
+  *Editor wire-up still gated.* Per the design doc's M4 risk
+  analysis, dropping every `!isBusy()` gate in the editor would mean
+  every 60 Hz mouse-move cancels the in-flight render — the worker
+  would never finish a full render and the user would see the last
+  completed render forever. The infrastructure landed here lets
+  *future* milestones (M3 scale-band re-rasterize, M6 pinch-zoom)
+  preempt mid-render when the scene genuinely invalidates, without
+  rewriting the threading model.
 
 - [x] **Milestone 5: Preemptive swap-in.** *Landed in `793f96eb`.*
   When the AsyncRenderer's worker delivers a refined-resolution bitmap,

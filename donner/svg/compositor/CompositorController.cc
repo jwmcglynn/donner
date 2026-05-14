@@ -841,6 +841,17 @@ void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
   markAllSegmentsDirty();
 }
 
+bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token) {
+  // §M4: stash the token where the rasterize loops can poll it via
+  // `isCancelled()`. The pointer is non-owning and only valid for the
+  // duration of this call.
+  cancelToken_ = &token;
+  renderFrame(viewport);
+  const bool cancelled = token.isCancelled();
+  cancelToken_ = nullptr;
+  return !cancelled;
+}
+
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   ZoneScopedN("Compositor::renderFrame");
   UTILS_RELEASE_ASSERT(document_ != nullptr);
@@ -1419,6 +1430,17 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
       if (layer.isDirty() || !layer.hasValidBitmap() || rootDirty_) {
+        // §M4: bail between layer rasterizes. The remaining dirty
+        // layers keep their `isDirty()` flag set, so the next
+        // `renderFrame` finishes them. Returns directly out of
+        // `renderFrame` rather than `break`-ing because subsequent
+        // steps (`resyncSegmentsToLayerSet`, `composeLayers`) would
+        // run against a partially-rasterized layer set and either
+        // produce a torn composite snapshot or trip the dual-path
+        // pixel-identity assertion.
+        if (isCancelled()) {
+          return;
+        }
         rasterizeLayer(layer, viewport);
       }
     }
@@ -1765,6 +1787,12 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   for (size_t i = 0; i <= layerCount; ++i) {
     if (!staticSegmentDirty_[i]) {
       continue;
+    }
+    // §M4: bail between segment rasterizes. Leaves `staticSegmentDirty_`
+    // intact for the slots we haven't reached yet so the next
+    // `renderFrame` resumes the work.
+    if (isCancelled()) {
+      return;
     }
     ZoneScopedN("Compositor::rasterizeSegment");
     const auto segmentRasterizeStart = std::chrono::steady_clock::now();

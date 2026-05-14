@@ -26,13 +26,24 @@ AsyncRenderer::~AsyncRenderer() {
 }
 
 void AsyncRenderer::requestRender(const RenderRequest& request) {
+  bool wasBusy = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    // Caller contract: must have checked !isBusy() first. If we're
-    // currently in Done state (a prior result the caller never picked
-    // up), we drop it — the new request supersedes it.
+    wasBusy = (state_ == State::Busy);
+    // The new request always wins the pending slot. If the worker was
+    // mid-render the cancel signal below makes it bail at the next safe
+    // point and the inner loop picks up `pendingRequest_` for the
+    // restart. If the worker was Done (a prior result the caller never
+    // drained), we drop that result — the new request supersedes it.
     pendingRequest_ = request;
     state_ = State::Busy;
+  }
+  if (wasBusy) {
+    // §M4: tell the in-flight render to bail. The worker's `renderFrame`
+    // polls `cancelRender_.isCancelled()` between rasterize loops and
+    // returns early; the worker iteration then restarts with the new
+    // `pendingRequest_` without committing the cancelled result.
+    cancelRender_.cancel();
   }
   busy_.store(true, std::memory_order_release);
   cv_.notify_one();
@@ -74,6 +85,11 @@ void AsyncRenderer::workerLoop() {
       }
       request = pendingRequest_;
     }
+    // §M4: every iteration starts with a fresh (non-cancelled) token.
+    // The UI thread sets cancel via `requestRender` ONLY when posting
+    // while busy, and we're idle here right before the render runs —
+    // so any cancel signal from a previous iteration is stale.
+    cancelRender_.reset();
 
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
@@ -208,6 +224,7 @@ void AsyncRenderer::workerLoop() {
       compositor_->setTightBoundedSegmentsEnabled(
           tightBoundedSegments_.load(std::memory_order_acquire));
       double workerMs = 0.0;
+      bool renderCompleted = true;
       {
         ZoneScopedN("Compositor::renderFrame");
         // Wall-clock the core backend render so the editor can plot it
@@ -217,9 +234,24 @@ void AsyncRenderer::workerLoop() {
         // the result handoff). Scoped here so Tracy's zone cost isn't
         // included either.
         const auto renderStart = std::chrono::steady_clock::now();
-        compositor_->renderFrame(viewport);
+        renderCompleted = compositor_->renderFrame(viewport, cancelRender_);
         const auto renderEnd = std::chrono::steady_clock::now();
         workerMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
+      }
+
+      // §M4: a cancelled render leaves the compositor's internal state
+      // partially-updated (some segments / layers re-rasterized, the
+      // rest still flagged dirty for the next pass). Don't commit a
+      // half-finished result_; instead, count the cancellation,
+      // discard any partial work we'd otherwise package up, and loop
+      // back so the worker picks up `pendingRequest_` for the
+      // restart. `state_` is still Busy (the UI thread set it that
+      // way when posting the new request); `cancelRender_.reset()` at
+      // the top of the loop clears the cancel signal so the restarted
+      // render runs to completion.
+      if (!renderCompleted) {
+        cancelledRenderCount_.fetch_add(1, std::memory_order_release);
+        continue;
       }
 
       // Expose the compositor's paint-order tile list to the editor (design
