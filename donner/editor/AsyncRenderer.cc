@@ -254,9 +254,25 @@ void AsyncRenderer::workerLoop() {
       // tripped the descendant-segment dirty cascade every drag frame
       // post-zoom — sustained > 1 s/frame on the splash.
       const bool entityChanged = compositorEntity_ != desiredEntity;
-      const bool kindChanged =
-          desiredEntity != entt::null && desiredKind != compositorInteractionKind_;
-      if (entityChanged || kindChanged) {
+      // Only re-promote when the entity changes or the user is starting
+      // a new drag on the currently-selected entity (Selection →
+      // ActiveDrag upgrade). Do NOT downgrade ActiveDrag → Selection
+      // on mouse-up: keep the compositor in ActiveDrag mode for the
+      // rest of the selection lifecycle so `composeLayers`'s
+      // `skipMainCompose` gate (`compositor.cc:2267`) stays engaged —
+      // it checks `hasActiveDrag` (walks `activeHints_` for an
+      // `ActiveDrag`-kind hint). Without this carve-out every mouse-up
+      // runs the full `composeLayers` (~370 ms at 3× canvas on the
+      // splash) before the next drag-start can engage the fast path —
+      // the operator-visible "drag-release ⇄ drag-again hitch" from
+      // design doc 0034. The kind downgrades naturally when the
+      // selection itself changes (entityChanged ⇒ demote + re-promote
+      // with whatever kind the new request says).
+      const bool kindUpgrade =
+          desiredEntity != entt::null &&
+          compositorInteractionKind_ == svg::compositor::InteractionHint::Selection &&
+          desiredKind == svg::compositor::InteractionHint::ActiveDrag;
+      if (entityChanged || kindUpgrade) {
         if (entityChanged && compositorEntity_ != entt::null) {
           compositor_->demoteEntity(compositorEntity_);
         }
