@@ -370,6 +370,7 @@ filegroup(
         "filter_elm_disappear-5.rnr",
         "filter_elm_disappear-6.rnr",
         "filter_elm_disappear-7.rnr",
+        "filter_snapback_repro.rnr",
         "testdata/filter_disappear_rnr3_after_mup2.png",
         "testdata/filter_disappear_single_drag_lgd_post.png",
     ],

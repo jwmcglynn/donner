@@ -118,6 +118,7 @@ void AsyncRenderer::workerLoop() {
         compositorEntity_ = entt::null;
         compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
         compositorDocumentGeneration_ = request.documentGeneration;
+        compositorReconstructCount_.fetch_add(1, std::memory_order_release);
       }
 
       // Detect *document replacement* (ReplaceDocumentCommand / source

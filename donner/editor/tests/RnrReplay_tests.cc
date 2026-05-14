@@ -19,6 +19,7 @@
 #include <thread>
 #include <vector>
 
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -26,6 +27,7 @@
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/TextPatch.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -201,14 +203,72 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
   return std::nullopt;
 }
 
+// Drain SelectTool's completed drag writeback, patch the SVG source
+// in place, and dispatch a `ReplaceDocumentCommand(preserveUndoOnReparse=true)`.
+// Mirrors `DocumentSyncController::applyPendingWritebacks` minus the
+// TextEditor widget: the in-memory source is the equivalent of
+// `textEditor.getText()`. Returns true if a writeback was applied —
+// caller should request a render to pick up the new docGeneration.
+bool DrainWritebackAndReparse(EditorApp& app, SelectTool& selectTool, std::string* source) {
+  auto completed = selectTool.consumeCompletedDragWriteback();
+  if (!completed.has_value()) {
+    return false;
+  }
+
+  std::vector<TextPatch> patches;
+  patches.reserve(1u + completed->extras.size());
+
+  const auto appendPatchForTarget = [&](const AttributeWritebackTarget& target,
+                                        const Transform2d& transform) {
+    const RcString serialized = toSVGTransformString(transform);
+    std::optional<TextPatch> patch;
+    if (std::string_view(serialized).empty()) {
+      patch = buildAttributeRemoveWriteback(*source, target, "transform");
+    } else {
+      patch = buildAttributeWriteback(*source, target, "transform", std::string_view(serialized));
+    }
+    if (patch.has_value()) {
+      patches.push_back(*std::move(patch));
+    }
+  };
+
+  appendPatchForTarget(completed->target, completed->transform);
+  for (const auto& extra : completed->extras) {
+    appendPatchForTarget(extra.target, extra.transform);
+  }
+  if (patches.empty()) {
+    return false;
+  }
+
+  applyPatches(*source, patches);
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(*source, /*preserveUndoOnReparse=*/true));
+  return true;
+}
+
 class RnrReplayTest : public ::testing::Test {
 protected:
+  bool stopAfterAllFrames_ = false;
+  // When true, the per-frame loop drains SelectTool's completed drag
+  // writeback after the input events are processed and dispatches a
+  // `ReplaceDocumentCommand` against an in-memory copy of the source
+  // text. Production fires this from `DocumentSyncController::apply
+  // PendingWritebacks` every frame; the legacy replay tests don't need
+  // it (they assert on pre-writeback bitmaps), so default-off keeps
+  // their behavior unchanged.
+  bool drainWritebacksEachFrame_ = false;
+  /// In-memory mirror of the source pane's text. The writeback drain
+  /// patches this in place and dispatches a ReplaceDocumentCommand
+  /// using its bytes, mimicking `DocumentSyncController` without
+  /// pulling in the TextEditor widget.
+  std::string liveSource_;
+
   struct ReplaySnapshot {
     svg::RendererBitmap bitmap;
     std::uint64_t frameIndex = 0;
     std::size_t mouseUpCount = 0;
     bool stoppedForBisection = false;
     std::filesystem::path diagnosticPath;
+    std::uint64_t compositorReconstructCount = 0;
   };
 
   void ReplayRecording(const std::filesystem::path& reproPath, ReplaySnapshot* out) {
@@ -220,6 +280,7 @@ protected:
     const std::filesystem::path svgPath = ResolveSvgPath(reproPath, replay->metadata.svgPath);
     const std::string svgSource = LoadFileOrEmpty(svgPath);
     ASSERT_FALSE(svgSource.empty()) << "SVG source missing: " << svgPath;
+    liveSource_ = svgSource;
 
     EditorApp app;
     ASSERT_TRUE(app.loadFromString(svgSource)) << "Failed to load SVG fixture: " << svgPath;
@@ -309,6 +370,10 @@ protected:
       }
       leftButtonHeld = nowHeld;
 
+      if (drainWritebacksEachFrame_) {
+        frameNeedsRender |= DrainWritebackAndReparse(app, selectTool, &liveSource_);
+      }
+
       frameNeedsRender |= app.flushFrame();
 
       if (frameNeedsRender) {
@@ -325,10 +390,13 @@ protected:
         out->stoppedForBisection = true;
         break;
       }
-      if (!bisectFrame.has_value() && out->mouseUpCount >= kTargetMouseUpCount) {
+      if (!bisectFrame.has_value() && stopAfterAllFrames_ == false &&
+          out->mouseUpCount >= kTargetMouseUpCount) {
         break;
       }
     }
+
+    out->compositorReconstructCount = asyncRenderer.compositorReconstructCountForTesting();
 
     if (out->stoppedForBisection) {
       out->diagnosticPath = DiagnosticOutputDir() /
@@ -359,6 +427,42 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
   params.maxMismatchedPixels = 500;
   tests::CompareBitmapToGolden(snapshot.bitmap, kGoldenPath, "rnr_replay_repro3_after_mup2",
                                params);
+}
+
+// Regression for the filter-group "snap back to original position"
+// drag-release bug from design doc 0033. The `.rnr` covers the
+// minimal repro: drag `Big_lightning_glow` on the splash, release,
+// then move the mouse. On the post-release frame the source-pane
+// reparse swaps the `SVGDocumentHandle`, which `AsyncRenderer`'s
+// per-iteration `documentChanged` check used to interpret as "throw
+// the compositor away" — even when a valid `structuralRemap` (size
+// 445 on this replay) accompanied the request. The full reconstruct
+// flushed every cached filter-group bitmap and `canvasFromBitmap`
+// stamp, the editor's cached GL textures then showed the dragged
+// element at its pre-drag rasterize-time position, and the drag
+// preview's translation had already dropped to zero on release →
+// the user saw a visible "snap" until the slow render settled.
+//
+// The fix routes a non-empty structural remap through
+// `CompositorController::remapAfterStructuralReplace` even when the
+// handle pointer changed, preserving the in-flight compositor state.
+// Assertion: `compositorReconstructCount == 1` (the initial
+// construction) for the entire session. A second reconstruct means
+// the post-drag handle swap fell through to the destructive path
+// again.
+TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
+  ReplaySnapshot snapshot;
+  stopAfterAllFrames_ = true;  // .rnr has exactly one mouse-up; play to EOF.
+  drainWritebacksEachFrame_ = true;
+  ReplayRecording("donner/editor/tests/filter_snapback_repro.rnr", &snapshot);
+
+  ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
+  EXPECT_EQ(snapshot.compositorReconstructCount, 1u)
+      << "Compositor was reconstructed " << snapshot.compositorReconstructCount
+      << " times — the post-drag-release source reparse must route through "
+         "remapAfterStructuralReplace, not a destructive `compositor_ = "
+         "make_unique<...>` rebuild that flushes the in-flight drag bitmap and "
+         "leaves the editor blitting cached textures at zero offset.";
 }
 
 }  // namespace
