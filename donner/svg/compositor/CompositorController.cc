@@ -590,11 +590,29 @@ bool CompositorController::hasSplitStaticLayers() const {
   // upload". Bucket layers stay static during a drag and don't
   // invalidate the split, so we check `activeHints_` (explicit
   // promotions) rather than `layers_.size()`.
-  if (activeHints_.size() != 1) {
+  //
+  // §M9 wrinkle: pending-demote entries linger in `activeHints_` for
+  // the hysteresis window. Counting them would mean a selection-
+  // change drag (demote old → promote new) makes this return false
+  // for ~30 renderFrames, disabling the `skipMainCompose`
+  // optimization and forcing `composeLayers` to do 2N+1 bitmap blits
+  // every fast-path drag frame at canvas scale — visible to the
+  // operator as "fast path counter bumps but framerate stays low,
+  // worse at higher zoom". Match `splitStaticLayersEntity_`'s
+  // carve-out: count only entries NOT pending demotion.
+  uint32_t liveHints = 0;
+  Entity liveCandidate = entt::null;
+  for (const auto& [hintEntity, hint] : activeHints_) {
+    if (pendingDemotions_.contains(hintEntity)) {
+      continue;
+    }
+    ++liveHints;
+    liveCandidate = hintEntity;
+  }
+  if (liveHints != 1) {
     return false;
   }
-  const Entity dragEntity = activeHints_.begin()->first;
-  const CompositorLayer* layer = findLayer(dragEntity);
+  const CompositorLayer* layer = findLayer(liveCandidate);
   return layer != nullptr && layer->hasValidBitmap();
 }
 
