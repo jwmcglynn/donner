@@ -1470,8 +1470,27 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // each tile's `isDragTarget` flag, which in turn drives the worker's
   // `dragTranslationDoc` extraction (`canvasFromBitmap` translation in
   // doc units).
-  if (activeHints_.size() == 1 && findLayer(activeHints_.begin()->first) != nullptr) {
-    splitStaticLayersEntity_ = activeHints_.begin()->first;
+  //
+  // §M9 wrinkle: pending-demotion entries stay in `activeHints_` for
+  // the hysteresis window, so a naive `activeHints_.size() == 1`
+  // check would fall to `entt::null` whenever the user is mid-switch
+  // between drag targets — dragTranslationDoc on the live tile would
+  // stay at zero for the whole window (~30 frames; on a slow-path
+  // worker at 4fps that's ~7s of "content stays put while overlay
+  // tracks the cursor"). Count only entries NOT in
+  // `pendingDemotions_` so the live drag target keeps its
+  // `isDragTarget` flag.
+  uint32_t liveHints = 0;
+  Entity liveDragCandidate = entt::null;
+  for (const auto& [hintEntity, hint] : activeHints_) {
+    if (pendingDemotions_.contains(hintEntity)) {
+      continue;
+    }
+    ++liveHints;
+    liveDragCandidate = hintEntity;
+  }
+  if (liveHints == 1 && findLayer(liveDragCandidate) != nullptr) {
+    splitStaticLayersEntity_ = liveDragCandidate;
     splitStaticLayersViewport_ = currentCanvasSize;
   } else {
     splitStaticLayersEntity_ = entt::null;
