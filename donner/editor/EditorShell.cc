@@ -591,7 +591,33 @@ void EditorShell::runFrame() {
     // state for the frame has been populated by
     // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
     // upstream of `runFrame`); nothing below has touched it yet.
-    reproRecorder_->snapshotFrame();
+    //
+    // The viewport snapshot is the OUTCOME of any previous frame's
+    // viewport mutation (pinch-zoom, keyboard zoom, pan). Capturing
+    // it every frame is what lets `RnrReplayTest`'s
+    // `ApplyRecordedViewport` reconstruct zoom changes during
+    // playback, even for gestures (macOS trackpad pinch via
+    // `PinchEventMonitor`) that bypass ImGui's input boundary and
+    // therefore aren't visible to the recorder as discrete events.
+    const ViewportState& vp = interactionController_.viewport();
+    repro::FrameContext frameContext;
+    frameContext.viewport = repro::ReproViewport{
+        .paneOriginX = vp.paneOrigin.x,
+        .paneOriginY = vp.paneOrigin.y,
+        .paneSizeW = vp.paneSize.x,
+        .paneSizeH = vp.paneSize.y,
+        .devicePixelRatio = vp.devicePixelRatio,
+        .zoom = vp.zoom,
+        .panDocX = vp.panDocPoint.x,
+        .panDocY = vp.panDocPoint.y,
+        .panScreenX = vp.panScreenPoint.x,
+        .panScreenY = vp.panScreenPoint.y,
+        .viewBoxX = vp.documentViewBox.topLeft.x,
+        .viewBoxY = vp.documentViewBox.topLeft.y,
+        .viewBoxW = vp.documentViewBox.size().x,
+        .viewBoxH = vp.documentViewBox.size().y,
+    };
+    reproRecorder_->snapshotFrame(frameContext);
   }
   interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
   updateWindowTitle();
