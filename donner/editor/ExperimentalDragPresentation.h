@@ -115,9 +115,29 @@ struct ExperimentalDragPresentation {
     chromeRefreshTargetVersion = 0;
   }
 
-  /// End settling once a fresh full render has landed.  Also clears cached texture state so the
-  /// display falls back to the just-uploaded flat texture instead of showing stale composited
-  /// layers.
+  /// End the settling phase once a fresh full render has landed.
+  ///
+  /// Pre-fix this also cleared `hasCachedTextures` / `cachedEntity` so
+  /// the display would fall back to the just-uploaded flat texture
+  /// after a non-composited render — but `settlingPreview` /
+  /// `beginSettling` only fire from tests in the current codebase, so
+  /// in production the only observable effect of clearing the cache
+  /// here is a "snap-back" on the rare edge case where the worker
+  /// produces a flat-only result during a drag (e.g. a brief window
+  /// during a drag-target switch where every layer happens to be in
+  /// a not-yet-rasterized state and `previewTiles` ends up empty).
+  /// When that fires mid-drag the editor's `useTiles` gate flips to
+  /// false, the flat-texture fallback shows pre-drag content (the
+  /// drag's `skipMainCompose` left it untouched), and the user sees
+  /// the shape jump to its start position until the next composited
+  /// render lands.
+  ///
+  /// The cache lifecycle is now strictly driven by
+  /// `clearSettlingIfSelectionChanged` (selection-clear) and by
+  /// `noteCachedTextures` (fresh upload). This function is reduced to
+  /// settling-state bookkeeping; the cache survives a no-composite
+  /// hiccup so the previously-uploaded tiles stay live until they're
+  /// either explicitly replaced or the selection clears.
   void noteFullRenderLanded(std::uint64_t landedVersion) {
     if (waitingForFullRender && landedVersion < settlingTargetVersion) {
       return;
@@ -128,8 +148,6 @@ struct ExperimentalDragPresentation {
     settlingTargetVersion = 0;
     waitingForChromeRefresh = false;
     chromeRefreshTargetVersion = 0;
-    hasCachedTextures = false;
-    cachedEntity = entt::null;
   }
 
   /// Returns the drag preview that should currently be displayed, if any.

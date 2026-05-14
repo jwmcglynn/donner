@@ -42,12 +42,27 @@ TEST(ExperimentalDragPresentationTest, MouseUpKeepsSettlingPreviewUntilFullRende
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 12.0);
 
+  // Below-target render leaves settlingPreview in place — the settling
+  // window hasn't closed yet, so the settling preview still drives the
+  // displayed translation.
   state.noteFullRenderLanded(/*landedVersion=*/3);
   EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
+  ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 12.0);
 
+  // Target render lands — settling window closes; the settling
+  // preview is cleared and `presentationPreview` falls back to the
+  // cached-entity path (translation=0). The cached textures
+  // themselves survive: `noteFullRenderLanded` no longer clears them,
+  // since clearing on a stray flat-only render mid-drag was the
+  // observed "snap back to start position" regression (see fix notes
+  // on `noteFullRenderLanded`).
   state.noteFullRenderLanded(/*landedVersion=*/4);
-  EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt));
-  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
+  ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_TRUE(state.presentationPreview(std::nullopt)->entity == Entity(7));
+  EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0)
+      << "Post-settle preview should fall to the zero-offset cached path.";
 }
 
 TEST(ExperimentalDragPresentationTest, SelectionChangeClearsSettlingState) {
@@ -62,8 +77,20 @@ TEST(ExperimentalDragPresentationTest, SelectionChangeClearsSettlingState) {
   state.noteFullRenderLanded(/*landedVersion=*/4);
 
   state.clearSettlingIfSelectionChanged(Entity(8), /*dragActive=*/false);
-  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
+  // Settling state itself is cleared (settling preview, waiting flag).
   EXPECT_FALSE(state.waitingForFullRender);
+  // The cached textures stay alive — covers the M2C drag-target-swap
+  // window where the editor keeps blitting the old entity's tiles
+  // (at zero offset, drawn against the old entity's current DOM
+  // transform) until the new entity's render lands. Pre-fix, the
+  // cache was cleared here and the editor fell back to the stale
+  // flat texture for one frame. See `presentationPreview`'s
+  // "Drag-target swap" branch.
+  EXPECT_TRUE(state.hasCachedTextures);
+  ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_TRUE(state.presentationPreview(std::nullopt)->entity == Entity(7));
+  EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0)
+      << "Post-settling cached path drops the settling translation.";
 }
 
 TEST(ExperimentalDragPresentationTest,
@@ -83,17 +110,43 @@ TEST(ExperimentalDragPresentationTest,
   EXPECT_TRUE(state.waitingForFullRender);
 }
 
-TEST(ExperimentalDragPresentationTest, FullRenderLandedClearsCachedTextures) {
+// Pre-fix `noteFullRenderLanded` cleared `hasCachedTextures`. In
+// production `beginSettling` is never called, so the only effect
+// was clearing the cache on every non-composited render — which
+// fired during transient drag-target-switch windows where the
+// worker's `previewTiles` happened to be empty, snapping the
+// editor's display to the pre-drag flat texture until the next
+// composited render landed. The fix: `noteFullRenderLanded` only
+// touches the settling-state fields; the cache lifecycle is driven
+// by `noteCachedTextures` (refresh) and `clearSettlingIfSelectionChanged`
+// (deselect).
+TEST(ExperimentalDragPresentationTest, FullRenderLandedDoesNotClearCachedTextures) {
   ExperimentalDragPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
   EXPECT_TRUE(state.hasCachedTextures);
   EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
 
   state.noteFullRenderLanded(/*landedVersion=*/3);
+  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(state.cachedEntity == Entity(7));
+  EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
+  ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_TRUE(state.presentationPreview(std::nullopt)->entity == Entity(7));
+}
+
+// Selection-clear is the ONE production path that drops the cached
+// textures; covers the "user deselected" UX where the editor should
+// switch back to the flat texture.
+TEST(ExperimentalDragPresentationTest, SelectionClearDropsCachedTextures) {
+  ExperimentalDragPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+  ASSERT_TRUE(state.hasCachedTextures);
+
+  state.clearSettlingIfSelectionChanged(/*selectedEntity=*/entt::null,
+                                        /*dragActive=*/false);
   EXPECT_FALSE(state.hasCachedTextures);
   EXPECT_TRUE(state.cachedEntity == entt::null);
   EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt));
-  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
 }
 
 TEST(ExperimentalDragPresentationTest, SettlingCompletionTriggersPrewarmOnNextSelection) {
@@ -106,7 +159,11 @@ TEST(ExperimentalDragPresentationTest, SettlingCompletionTriggersPrewarmOnNextSe
       },
       /*targetVersion=*/4);
 
-  // After settling completes, hasCachedTextures is cleared so shouldPrewarm returns true.
+  // `noteFullRenderLanded` no longer clears `hasCachedTextures` —
+  // `shouldPrewarm` is driven by the version mismatch instead
+  // (cachedVersion=3 vs currentVersion=4 after settling). That's the
+  // production-path signal anyway: a fresh render bumps the version,
+  // the cache lags, prewarm catches up.
   state.noteFullRenderLanded(/*landedVersion=*/4);
   EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/4, Vector2i(100, 100),
                                   /*dragActive=*/false));
