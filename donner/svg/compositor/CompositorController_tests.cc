@@ -204,6 +204,59 @@ TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
+// Design doc 0033 §M9 + §M2C — pending-demote entries must NOT keep
+// the live drag-target tile from being flagged `isDragTarget`. Before
+// this fix, the `activeHints_.size() == 1` check in `renderFrame`'s
+// `splitStaticLayersEntity_` setter saw `{old-pending-demote, new-
+// drag-target}.size() == 2` during the hysteresis window and fell to
+// `entt::null` — the worker's tile snapshot stopped emitting a
+// dragTranslationDoc for the live target, and the editor blitted the
+// content at the pre-drag position while the overlay (driven by the
+// live DOM) moved with the cursor. Symptom: ~5–7s of "content stays
+// put while overlay tracks the cursor" until the hysteresis expires.
+TEST_F(CompositorControllerTest, M9PendingDemoteDoesNotMaskLiveDragTarget) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="red" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const Entity entityA = a->entityHandle().entity();
+  const Entity entityB = b->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entityA));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  // Editor switches drag-target: demote A (queued by M9), promote B.
+  // activeHints_ now contains both A (pending) and B (live).
+  compositor.demoteEntity(entityA);
+  ASSERT_TRUE(compositor.promoteEntity(entityB));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  // The live drag-target tile (B) must be flagged `isDragTarget` so
+  // the worker's `dragTranslationDoc` extraction propagates B's
+  // `canvasFromBitmap` translation into the editor blit. Without
+  // this guard the post-M9 `activeHints_.size() == 1` check would
+  // count 2 hints and fall back to `entt::null` for the duration of
+  // the hysteresis window.
+  const auto tiles = compositor.snapshotTilesForUpload();
+  bool sawLiveDragTarget = false;
+  for (const auto& tile : tiles) {
+    if (tile.layerEntity == entityB) {
+      EXPECT_TRUE(tile.isDragTarget) << "live drag-target tile must be flagged isDragTarget";
+      sawLiveDragTarget = true;
+    } else if (tile.layerEntity == entityA) {
+      EXPECT_FALSE(tile.isDragTarget) << "pending-demote tile must NOT be flagged isDragTarget";
+    }
+  }
+  EXPECT_TRUE(sawLiveDragTarget);
+}
+
 TEST_F(CompositorControllerTest, M9FlushPendingDemotionsForTestingFiresImmediately) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" width="10" height="10" fill="red" />
