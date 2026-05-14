@@ -107,5 +107,49 @@ TEST_F(ChangeClassifierTest, DeleteCharacterFromAttributeValue) {
   EXPECT_EQ(result.command->attributeValue, "re");
 }
 
+// Drag-release writeback on an element with no existing `transform`
+// attribute inserts ` transform="..."` into the opening tag. The
+// classifier must recognize this as an attribute-INSERTION (vs
+// modification of an existing value) and emit a `SetAttributeCommand`,
+// avoiding the structural-fallback `ReplaceDocumentCommand` reparse
+// (~150–300 ms on `donner_splash.svg` even with structural-remap
+// preservation). Pins design doc 0034's "drag-release ⇄ drag-again
+// hitch" follow-on fix.
+TEST_F(ChangeClassifierTest, InsertNewAttributeIntoOpeningTagClassifies) {
+  // The simple SVG's <rect> has no `transform` attribute. Insert one
+  // just before the self-closing `/>`.
+  std::string newSource(kSimpleSvg);
+  const auto closingPos = newSource.find("\"/>");
+  ASSERT_NE(closingPos, std::string::npos);
+  newSource.insert(closingPos + 1, " transform=\"translate(5,7)\"");
+
+  auto result = classifyTextChange(document_, kSimpleSvg, newSource);
+  ASSERT_TRUE(result.command.has_value())
+      << "Attribute insertion must classify as SetAttribute, not structural";
+  EXPECT_EQ(result.command->kind, EditorCommand::Kind::SetAttribute);
+  EXPECT_EQ(result.command->attributeName, "transform");
+  EXPECT_EQ(result.command->attributeValue, "translate(5,7)");
+}
+
+// Same insertion shape, but the inserted leading space sits adjacent
+// to the existing closing quote of the prior attribute. The classifier
+// must walk past the boundary whitespace to find the new attribute
+// rather than mistaking the change for an edit inside the prior
+// quoted value.
+TEST_F(ChangeClassifierTest, InsertNewAttributeAfterExistingAttributeClassifies) {
+  // Insert ` transform="rotate(5)"` immediately after the `fill="red"`
+  // attribute (the new attribute sits between `fill="red"` and `/>`).
+  std::string newSource(kSimpleSvg);
+  const auto fillEnd = newSource.find("\"red\"") + 5;  // position past the closing "
+  newSource.insert(fillEnd, " transform=\"rotate(5)\"");
+
+  auto result = classifyTextChange(document_, kSimpleSvg, newSource);
+  ASSERT_TRUE(result.command.has_value())
+      << "Attribute insertion after existing attribute must classify as SetAttribute";
+  EXPECT_EQ(result.command->kind, EditorCommand::Kind::SetAttribute);
+  EXPECT_EQ(result.command->attributeName, "transform");
+  EXPECT_EQ(result.command->attributeValue, "rotate(5)");
+}
+
 }  // namespace
 }  // namespace donner::editor
