@@ -1017,7 +1017,38 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           break;
         }
       }
-      if (matchedLayer == nullptr || !matchedLayer->hasValidBitmap() ||
+      if (matchedLayer == nullptr) {
+        // `SVGElement::setAttribute("transform", ...)` marks every
+        // descendant of the writeback target dirty via
+        // `propagateWorldTransformDirtyToDescendants`. The
+        // descendants aren't themselves layer roots, but they ARE
+        // contained in the layer root's range — and that layer root
+        // is also in `dirtyEntitySnapshot` from the same setAttribute
+        // call. Skipping these contained descendants keeps the fast
+        // path engaged: the root's resolution carries the
+        // translation, and `propagateFastPathTranslationToSubtree`
+        // pushes it into descendant RICs. Without this skip, the
+        // post-mouse-up writeback's dirty cascade disqualifies the
+        // fast path and triggers a full prepare + canvas-sized
+        // compose every release — the operator's
+        // `drag → release → drag-again` hitch at high zoom (~560 ms
+        // on the splash). If the dirty entity isn't inside any
+        // promoted layer, it's a genuinely non-promoted mutation
+        // and the slow path needs to run.
+        bool containedInPromotedLayer = false;
+        for (auto& layer : layers_) {
+          if (layerContainsEntity(layer, e)) {
+            containedInPromotedLayer = true;
+            break;
+          }
+        }
+        if (containedInPromotedLayer) {
+          continue;
+        }
+        eligible = false;
+        break;
+      }
+      if (!matchedLayer->hasValidBitmap() ||
           !matchedLayer->bitmapEntityFromWorldTransform().has_value()) {
         eligible = false;
         break;
