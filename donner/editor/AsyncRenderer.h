@@ -175,6 +175,15 @@ struct RenderResult {
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
 
+  /// Design doc 0034 progressive rendering: a single `renderFrame`
+  /// request may emit TWO results — one `Intermediate` after the
+  /// drag-target's intrinsic-sized layer has been rasterized but
+  /// before the canvas-sized segments / flat baseline finish, then a
+  /// `Final` once the canvas-sized work completes. Callers that don't
+  /// opt in to progressive rendering see only `Final`.
+  enum class Stage : std::uint8_t { Intermediate, Final };
+
+  Stage stage = Stage::Final;
   svg::RendererBitmap bitmap;
   std::optional<CompositedPreview> compositedPreview;
   std::uint64_t version = 0;
@@ -183,7 +192,9 @@ struct RenderResult {
   /// the editor can plot backend render time alongside ImGui frame time
   /// on the frame graph. Zero means "no backend work recorded" (e.g. the
   /// request had a null renderer/document and fell through the early-out
-  /// branch).
+  /// branch). For an `Intermediate` result, this is the elapsed time
+  /// from the start of `renderFrame` to the intermediate callback —
+  /// roughly the cost of the drag-target layer rasterize.
   double workerMs = 0.0;
 };
 
@@ -217,6 +228,24 @@ public:
   /// gate on `!isBusy()` get the pre-§M4 behavior (one render at a
   /// time, no cancellation) since the worker is idle when they post.
   void requestRender(const RenderRequest& request);
+
+  /// Cancel an in-flight render WITHOUT posting a new one. The worker
+  /// bails at the next §M4 safe point and transitions back to idle
+  /// (no result stored, no auto-restart). No-op if the worker is
+  /// already idle.
+  ///
+  /// Use when the in-flight render is dispensable — typically a
+  /// selection prewarm that's about to be superseded by user input.
+  /// Without this API, the only way to interrupt a long render is
+  /// `requestRender(...)` which forces the worker to immediately
+  /// restart with the new request: useful when the new request IS
+  /// what we want to do, useless when the user's input first needs
+  /// the worker idle so a registry-touching slow path can run safely
+  /// (e.g. `EditorShell`'s deferred slow-path mouseDown, blocked on
+  /// `!isBusy()` while a multi-second post-pinch prewarm finishes).
+  ///
+  /// Safe to call from any thread.
+  void cancelInFlight();
 
   /// Design doc 0033 §M4 — count of renders that were cancelled
   /// mid-flight by a subsequent `requestRender`. Exposed for tests
@@ -380,10 +409,14 @@ private:
   std::condition_variable cv_;
 
   enum class State : std::uint8_t {
-    Idle,     ///< No work. Worker is blocked on `cv_`.
-    Busy,     ///< Render in progress on the worker.
-    Done,     ///< Render finished; bitmap available in `result_`.
-    Shutdown  ///< Destructor requested shutdown; worker exits.
+    Idle,        ///< No work. Worker is blocked on `cv_`.
+    Busy,        ///< Render in progress on the worker.
+    Cancelling,  ///< `cancelInFlight` was called; worker is bailing but hasn't
+                 ///< observed the cancel poll yet. `busy_` stays true so the
+                 ///< editor's `!isBusy()` gates keep gating registry reads.
+                 ///< Worker transitions to Idle once it observes the cancel.
+    Done,        ///< Render finished; bitmap available in `result_`.
+    Shutdown     ///< Destructor requested shutdown; worker exits.
   };
 
   State state_ = State::Idle;
@@ -391,6 +424,17 @@ private:
 
   RenderRequest pendingRequest_;
   RenderResult result_;
+  /// Design doc 0034 progressive rendering: staged intermediate result
+  /// produced mid-`renderFrame` by the compositor's intermediate
+  /// callback. Drained ahead of `result_` by `pollResult` so the UI
+  /// thread sees the partial preview (drag-target layer at the new
+  /// transform, scene baseline still stretched from the prior canvas
+  /// size) before the canvas-sized refinement lands as `result_`.
+  /// `hasIntermediateResult_` flips true under `mutex_` when the
+  /// worker stages an intermediate, and false when `pollResult` or
+  /// `cancelInFlight` drains/drops it.
+  RenderResult intermediateResult_;
+  bool hasIntermediateResult_ = false;
   /// Optional UI-thread wake-up hook, invoked by the worker when a
   /// render finishes. Set once at editor startup; owned by the
   /// installer. Held under `mutex_` so mutation vs. invocation races

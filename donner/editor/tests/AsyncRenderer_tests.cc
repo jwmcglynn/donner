@@ -181,15 +181,27 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  const auto waitForResult = [&]() {
-    std::optional<RenderResult> result;
-    for (int i = 0; i < 400 && !result.has_value(); ++i) {
-      result = asyncRenderer.pollResult();
-      if (!result.has_value()) {
+  // Progressive rendering (design doc 0034) may emit `Intermediate`
+  // results before `Final`. The pending-demote invariant this test
+  // asserts on — A's `canvasFromBitmap` translation carried into
+  // its tile after the demote takes hold — is materialized during
+  // the canvas-sized compose work that happens AFTER the
+  // intermediate fires, so we have to drain past intermediates to
+  // observe the final state.
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    std::optional<RenderResult> last;
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        last = std::move(result);
+        if (last->stage == RenderResult::Stage::Final) {
+          return last;
+        }
+      } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
     }
-    return result;
+    return last;
   };
 
   // 1. Pre-warm A — promote with Selection so A's layer rasterizes at
@@ -346,6 +358,105 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   // result regardless of timing"; the counter is a best-effort
   // observation that doesn't flake on scheduling jitter.
   EXPECT_GE(asyncRenderer.cancelledRenderCount(), 0u);
+}
+
+// Design doc 0033 — `cancelInFlight()` bails a long render that's no
+// longer wanted (a stale selection prewarm at high zoom, etc.) WITHOUT
+// queueing a new one. The worker either:
+//   - bails at the next §M4 safe point and parks (mid-render cancel),
+//     or
+//   - completes the render but discovers state has been flipped to
+//     Idle and drops the result on the floor instead of queueing it
+//     (post-render cancel).
+// Either way the worker reaches idle and the user-thread observes
+// `pollResult() == nullopt`. This is what unblocks `EditorShell`'s
+// deferred slow-path `onMouseDown` (gated on `!isBusy()`) when the
+// editor's stale post-pinch selection prewarm is still in flight.
+TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="0" y="0" width="64" height="64" fill="red"/>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  ASSERT_FALSE(asyncRenderer.isBusy());
+
+  RenderRequest request;
+  request.renderer = &renderer;
+  request.document = &document;
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.selectedEntity = target->entityHandle().entity();
+  asyncRenderer.requestRender(request);
+  EXPECT_TRUE(asyncRenderer.isBusy());
+
+  asyncRenderer.cancelInFlight();
+
+  // Spin-wait for the worker to settle. Whether the M4 cancel poll
+  // fired mid-render or the render completed and `result_` got
+  // dropped via the state-flip, the worker must end up parked.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (asyncRenderer.isBusy() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_FALSE(asyncRenderer.isBusy())
+      << "cancelInFlight failed to return the worker to idle within 5 s";
+
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value())
+      << "cancelInFlight must drop the render result rather than publishing it for "
+         "`pollResult` — otherwise the caller picks up stale pre-cancel state";
+}
+
+// Same contract, but assert that a follow-up `requestRender` after the
+// cancel runs through cleanly. The cancel must not leave the
+// AsyncRenderer in a state where the next request stalls or is treated
+// as a continuation of the cancelled one.
+TEST(AsyncRendererTest, CancelInFlightFollowedByRequestRenderRunsCleanly) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="0" y="0" width="64" height="64" fill="red"/>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request;
+  request.renderer = &renderer;
+  request.document = &document;
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.selectedEntity = target->entityHandle().entity();
+
+  asyncRenderer.requestRender(request);
+  asyncRenderer.cancelInFlight();
+
+  // Drain the cancelled state.
+  while (asyncRenderer.isBusy()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+
+  // Post a fresh request and verify it produces a result. If the
+  // cancel left the renderer in a stuck state, this would time out.
+  request.version = 2;
+  asyncRenderer.requestRender(request);
+  std::optional<RenderResult> result;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!result.has_value() && std::chrono::steady_clock::now() < deadline) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  ASSERT_TRUE(result.has_value()) << "requestRender after cancelInFlight stalled";
+  EXPECT_EQ(result->version, 2u);
 }
 
 TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {

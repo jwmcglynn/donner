@@ -49,8 +49,59 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
   cv_.notify_one();
 }
 
+void AsyncRenderer::cancelInFlight() {
+  bool signalCancel = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ == State::Busy) {
+      // Worker is mid-renderFrame. Transition to `Cancelling` (not
+      // `Idle`) — busy_ stays true so the editor's `!isBusy()`
+      // gates keep gating registry reads until the worker actually
+      // observes the cancel and bails. If we flipped to Idle here,
+      // there'd be a window where the editor thinks the worker is
+      // done but the worker is still mid-`prepareDocumentFor
+      // Rendering` / shadow-tree teardown, and the editor's
+      // sidebar's cached SVGElement reads would SIGSEGV in
+      // `parentElement` against a torn-down entity.
+      state_ = State::Cancelling;
+      signalCancel = true;
+    } else if (state_ == State::Done) {
+      // Worker raced to completion before we got here. The result
+      // is already in `result_` but the user-input event that
+      // triggered this cancel supersedes it. Drop the result and
+      // transition to Idle directly.
+      state_ = State::Idle;
+      result_ = RenderResult{};
+      busy_.store(false, std::memory_order_release);
+    }
+    // Either way: drop any staged-but-undrained intermediate result.
+    // An intermediate already drained by `pollResult` before this
+    // cancel has landed in editor / GL land already — that's by
+    // design; the editor's next request will replace the textures.
+    hasIntermediateResult_ = false;
+    intermediateResult_ = RenderResult{};
+  }
+  if (signalCancel) {
+    cancelRender_.cancel();
+    // Notify in case the worker was still in `cv_.wait` when we
+    // landed — its updated predicate also wakes on `Cancelling`.
+    cv_.notify_one();
+    // `busy_` stays true here. The worker thread is the only thing
+    // allowed to flip it false — once it actually observes the
+    // cancel and unwinds out of `renderFrame` (or, if it was still
+    // asleep at cv_.wait, drops back to Idle without doing work).
+  }
+}
+
 std::optional<RenderResult> AsyncRenderer::pollResult() {
   std::lock_guard<std::mutex> lock(mutex_);
+  // Design doc 0034 progressive rendering: drain a staged
+  // intermediate first. State stays `Busy` and `busy_` stays true —
+  // the worker is still chugging on the canvas-sized refinement.
+  if (hasIntermediateResult_) {
+    hasIntermediateResult_ = false;
+    return std::move(intermediateResult_);
+  }
   if (state_ != State::Done) {
     return std::nullopt;
   }
@@ -77,11 +128,22 @@ void AsyncRenderer::workerLoop() {
     RenderRequest request;
     {
       std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock, [this] { return state_ == State::Busy || state_ == State::Shutdown; });
+      cv_.wait(lock, [this] {
+        return state_ == State::Busy || state_ == State::Cancelling || state_ == State::Shutdown;
+      });
       if (state_ == State::Shutdown) {
         // `renderer` is destroyed here as the local unwinds, i.e. on
         // the worker thread — mirroring its construction.
         return;
+      }
+      if (state_ == State::Cancelling) {
+        // `cancelInFlight` raced with the worker before it could
+        // start renderFrame (worker was still in cv_.wait when the
+        // cancel landed). Transition to Idle, flip busy_, loop
+        // back to cv_.wait — no work to actually do.
+        state_ = State::Idle;
+        busy_.store(false, std::memory_order_release);
+        continue;
       }
       request = pendingRequest_;
     }
@@ -224,8 +286,139 @@ void AsyncRenderer::workerLoop() {
       // it marks all segments dirty so the flip takes effect this frame.
       compositor_->setTightBoundedSegmentsEnabled(
           tightBoundedSegments_.load(std::memory_order_acquire));
+
+      // Build a CompositedPreview from the compositor's current tile
+      // state. Used for both the intermediate stage (fresh drag-
+      // target layer + stale segments) AND the final stage (all
+      // tiles fresh). Returns nullopt when there's no active drag
+      // preview to compose or the compositor has no layers.
+      // Build a CompositedPreview from the compositor's current tile
+      // state. Used for both stages (design doc 0034):
+      //   * `Final` (skipNonDragTargetBitmaps=false): every tile
+      //     carries fresh pixels. Editor uploads each as a new GL
+      //     texture.
+      //   * `Intermediate` (skipNonDragTargetBitmaps=true): only the
+      //     drag-target layer carries pixels. Other tiles ship
+      //     metadata only (empty bitmap, but valid tile id +
+      //     position); the editor's `GlTextureCache::upload
+      //     Composited` keeps their previously-uploaded GL texture
+      //     alive via the tile-id match and blits at the metadata's
+      //     position. Lets the intermediate ship in ~ms instead of
+      //     hundreds of ms at high zoom (~60 MB per canvas-sized
+      //     segment × N segments to copy out of the compositor).
+      const auto buildCompositedPreview =
+          [&](bool skipNonDragTargetBitmaps) -> std::optional<RenderResult::CompositedPreview> {
+        if (!request.dragPreview.has_value() || compositorEntity_ == entt::null ||
+            compositor_->layerCount() == 0u) {
+          return std::nullopt;
+        }
+        const Box2d viewBox = request.document->svgElement().viewBox().value_or(Box2d::FromXYWH(
+            0, 0, static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)));
+        const double viewBoxWidth = viewBox.size().x;
+        const double viewBoxHeight = viewBox.size().y;
+        const double scaleX =
+            viewBoxWidth > 0.0 ? static_cast<double>(canvasSize.x) / viewBoxWidth : 1.0;
+        const double scaleY =
+            viewBoxHeight > 0.0 ? static_cast<double>(canvasSize.y) / viewBoxHeight : 1.0;
+        const auto canvasToDoc = [&](const Vector2d& canvas) {
+          return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
+                          scaleY != 0.0 ? canvas.y / scaleY : 0.0);
+        };
+        const auto compositorTiles = compositor_->snapshotTilesForUpload();
+        std::vector<RenderResult::CompositedTile> previewTiles;
+        previewTiles.reserve(compositorTiles.size());
+        for (const auto& ct : compositorTiles) {
+          if (ct.bitmap == nullptr || ct.bitmap->empty()) continue;
+          using OutKind = RenderResult::CompositedTile::Kind;
+          RenderResult::CompositedTile tile;
+          tile.kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
+          tile.id = std::to_string(ct.tileId);
+          tile.generation = ct.generation;
+          tile.canvasOffsetDoc = canvasToDoc(ct.canvasOffsetPx);
+          tile.bitmapDimsDoc = canvasToDoc(Vector2d(static_cast<double>(ct.bitmap->dimensions.x),
+                                                    static_cast<double>(ct.bitmap->dimensions.y)));
+          if (ct.layerEntity != entt::null) {
+            tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
+          }
+          tile.isDragTarget = ct.isDragTarget;
+          if (!skipNonDragTargetBitmaps || tile.isDragTarget) {
+            tile.bitmap = *ct.bitmap;
+          }
+          previewTiles.push_back(std::move(tile));
+        }
+        if (previewTiles.empty()) {
+          return std::nullopt;
+        }
+        return RenderResult::CompositedPreview{
+            .tiles = std::move(previewTiles),
+            .entity = compositorEntity_,
+        };
+      };
+
       double workerMs = 0.0;
       bool renderCompleted = true;
+      const auto renderStart = std::chrono::steady_clock::now();
+      // Design doc 0034 progressive rendering: the compositor fires
+      // this callback once after the drag-target layer rasterize +
+      // before canvas-sized segment work. Stage an intermediate
+      // result so the UI thread can upload the partial preview
+      // without waiting for the slow canvas-sized refinement below.
+      // Bitmap field gets a snapshot of the renderer's CURRENT
+      // surface contents — that's the PRIOR frame's flat baseline,
+      // since this frame's `driver.draw` hasn't run yet. Editor
+      // displays it stretched at the new viewport while the canvas-
+      // sized work catches up.
+      //
+      // Only meaningful when an ActiveDrag is in flight — the user
+      // is waiting for visible feedback from their click-and-drag.
+      // For Selection-kind prewarms (post-click, no drag yet, or
+      // pinch-zoom on a selected entity) the intermediate path
+      // misaligns: the intermediate's per-tile `canvasOffsetDoc`
+      // is computed against the NEW canvas-coordinate frame, but
+      // the cached GL textures are rasterized in the PRIOR canvas-
+      // coordinate frame. Without an ActiveDrag the user has no
+      // input latency to win and the misalignment shows as the
+      // scene jumping by the canvas-scale ratio until the final
+      // refinement lands. Skip the intermediate for Selection-kind.
+      const bool emitIntermediate =
+          request.dragPreview.has_value() &&
+          request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
+      const auto onIntermediate = [&]() {
+        const auto t = std::chrono::steady_clock::now();
+        const double partialMs = std::chrono::duration<double, std::milli>(t - renderStart).count();
+        // Design doc 0034: the intermediate result intentionally
+        // ships WITHOUT a fresh flat-baseline bitmap. Copying the
+        // renderer surface at high zoom (5228×3000 = 60 MB at 3×
+        // canvas) takes ~30–50 ms — significant on the critical
+        // path. Editor's prior-frame flat-baseline GL texture
+        // remains valid and gets stretched at the new viewport
+        // scale; the intermediate's compositedPreview tiles
+        // overlay the drag-target layer (intrinsic-sized in doc
+        // units; valid at any viewport scale) on top.
+        auto intermediatePreview = buildCompositedPreview(/*skipNonDragTargetBitmaps=*/true);
+        if (!intermediatePreview.has_value()) {
+          return;
+        }
+        std::function<void()> wake;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          // Don't stage if we've been cancelled or shut down between
+          // the callback firing and reaching this lock.
+          if (state_ != State::Busy) {
+            return;
+          }
+          intermediateResult_.stage = RenderResult::Stage::Intermediate;
+          intermediateResult_.bitmap = svg::RendererBitmap{};
+          intermediateResult_.compositedPreview = std::move(intermediatePreview);
+          intermediateResult_.version = request.version;
+          intermediateResult_.workerMs = partialMs;
+          hasIntermediateResult_ = true;
+          wake = wakeCallback_;
+        }
+        if (wake) {
+          wake();
+        }
+      };
       {
         ZoneScopedN("Compositor::renderFrame");
         // Wall-clock the core backend render so the editor can plot it
@@ -234,8 +427,11 @@ void AsyncRenderer::workerLoop() {
         // total worker iteration (which also pays for takeSnapshot and
         // the result handoff). Scoped here so Tracy's zone cost isn't
         // included either.
-        const auto renderStart = std::chrono::steady_clock::now();
-        renderCompleted = compositor_->renderFrame(viewport, cancelRender_);
+        if (emitIntermediate) {
+          renderCompleted = compositor_->renderFrame(viewport, cancelRender_, onIntermediate);
+        } else {
+          renderCompleted = compositor_->renderFrame(viewport, cancelRender_);
+        }
         const auto renderEnd = std::chrono::steady_clock::now();
         workerMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
       }
@@ -250,85 +446,34 @@ void AsyncRenderer::workerLoop() {
       // way when posting the new request); `cancelRender_.reset()` at
       // the top of the loop clears the cancel signal so the restarted
       // render runs to completion.
+      //
+      // Two-flavor cancel:
+      //   * `requestRender` while busy: state is still `Busy` here
+      //     (the new request overwrote `pendingRequest_` and the
+      //     loop restarts with the new args).
+      //   * `cancelInFlight`: state is `Cancelling`. There's no
+      //     pending request, so transition to `Idle` and flip
+      //     `busy_` false so the editor unblocks. (Doing this in the
+      //     worker — not in `cancelInFlight` itself — closes the
+      //     window where the editor thinks the worker is idle but
+      //     the worker is still mid-`prepareDocumentForRendering`.)
       if (!renderCompleted) {
         cancelledRenderCount_.fetch_add(1, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ == State::Cancelling) {
+          state_ = State::Idle;
+          busy_.store(false, std::memory_order_release);
+        }
         continue;
       }
 
-      // Expose the compositor's paint-order tile list to the editor (design
-      // doc 0033 §M2C). The editor blits each tile directly at its canvas
-      // offset, replacing the legacy bg/promoted/fg flatten step. Pre-warmed
-      // state (no active drag) also goes through this path so the editor
-      // can upload GL textures as soon as selection happens and the first
-      // drag frame is zero-cost.
-      if (request.dragPreview.has_value() && compositorEntity_ != entt::null &&
-          compositor_->layerCount() > 0u) {
-        const Vector2i canvasSize = request.document->canvasSize();
-        const Box2d viewBox = request.document->svgElement().viewBox().value_or(Box2d::FromXYWH(
-            0, 0, static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)));
-        const double viewBoxWidth = viewBox.size().x;
-        const double viewBoxHeight = viewBox.size().y;
-        const double scaleX =
-            viewBoxWidth > 0.0 ? static_cast<double>(canvasSize.x) / viewBoxWidth : 1.0;
-        const double scaleY =
-            viewBoxHeight > 0.0 ? static_cast<double>(canvasSize.y) / viewBoxHeight : 1.0;
-        const auto canvasToDoc = [&](const Vector2d& canvas) {
-          return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
-                          scaleY != 0.0 ? canvas.y / scaleY : 0.0);
-        };
-
-        const auto compositorTiles = compositor_->snapshotTilesForUpload();
-        std::vector<RenderResult::CompositedTile> previewTiles;
-        previewTiles.reserve(compositorTiles.size());
-        for (const auto& ct : compositorTiles) {
-          if (ct.bitmap == nullptr || ct.bitmap->empty()) {
-            continue;
-          }
-          using OutKind = RenderResult::CompositedTile::Kind;
-          RenderResult::CompositedTile tile;
-          tile.kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
-          // Reuse the compositor's stable `tileId` as the editor cache
-          // key. Segment ids are entity-pair encoded so they survive a
-          // segment split; layer ids carry the high bit + entity.
-          tile.id = std::to_string(ct.tileId);
-          tile.generation = ct.generation;
-          tile.canvasOffsetDoc = canvasToDoc(ct.canvasOffsetPx);
-          tile.bitmapDimsDoc = canvasToDoc(Vector2d(static_cast<double>(ct.bitmap->dimensions.x),
-                                                    static_cast<double>(ct.bitmap->dimensions.y)));
-          // Extract `canvasFromBitmap.translation()` for EVERY layer
-          // tile, not just the active drag target. For the live drag
-          // target this carries the per-frame drag delta the fast
-          // path stamps each renderFrame. For non-drag layer tiles
-          // it carries the residual delta from when they were last
-          // the drag target — critical for pending-demote layers
-          // (§M9 hysteresis): a layer whose hint is queued for
-          // demote keeps its bitmap content rasterized at the old
-          // (pre-drag) entity transform, with `canvasFromBitmap` =
-          // Translate(total drag delta) compensating at compose
-          // time. Without applying this translation, the editor
-          // blits the pending-demote layer at its rasterize-time
-          // canvas offset — the user sees previously-moved shapes
-          // "pop back" to their pre-drag positions during the
-          // hysteresis window, then pop forward again when the
-          // demote actually fires and the segment re-rasterizes.
-          //
-          // Segments are always Identity (canvas-aligned bitmaps with
-          // their own offset; no compose-time translation), so the
-          // segment branch is effectively a no-op.
-          if (ct.layerEntity != entt::null) {
-            tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
-          }
-          tile.isDragTarget = ct.isDragTarget;
-          tile.bitmap = *ct.bitmap;
-          previewTiles.push_back(std::move(tile));
-        }
-        if (!previewTiles.empty()) {
-          compositedPreview = RenderResult::CompositedPreview{
-              .tiles = std::move(previewTiles),
-              .entity = compositorEntity_,
-          };
-        }
-      }
+      // Build the final-stage CompositedPreview. Same helper as the
+      // intermediate above, but invoked AFTER `renderFrame` finishes
+      // its canvas-sized work — so segment tiles are now at the
+      // current canvas size rather than the prior frame's. Design
+      // doc 0033 §M2C explains the per-tile blit shape; design doc
+      // 0034 explains why we use the same builder for both stages.
+      compositedPreview = buildCompositedPreview(/*skipNonDragTargetBitmaps=*/false);
 
       // Selection chrome is no longer baked into the bitmap — main.cc
       // draws it via the ImGui draw list every frame so clicks don't
@@ -348,7 +493,8 @@ void AsyncRenderer::workerLoop() {
       std::function<void()> wake;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Only transition to Done if we weren't shut down mid-render.
+        // Only transition to Done if we weren't shut down or
+        // cancelled mid-render.
         if (state_ == State::Busy) {
           result_.bitmap = std::move(bitmap);
           result_.compositedPreview = std::move(compositedPreview);
@@ -367,6 +513,14 @@ void AsyncRenderer::workerLoop() {
           // outside the lock to keep the hook cheap and avoid any
           // chance of deadlock if the caller re-enters AsyncRenderer.
           wake = wakeCallback_;
+        } else if (state_ == State::Cancelling) {
+          // `cancelInFlight` raced with the worker's final lap —
+          // renderFrame finished naturally but the user-input event
+          // wants the result dropped. Drop it and transition to
+          // Idle so the worker's cv_.wait at the top of the loop
+          // doesn't deadlock.
+          state_ = State::Idle;
+          busy_.store(false, std::memory_order_release);
         }
       }
       if (wake) {
