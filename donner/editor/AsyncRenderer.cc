@@ -262,19 +262,27 @@ void AsyncRenderer::workerLoop() {
           tile.canvasOffsetDoc = canvasToDoc(ct.canvasOffsetPx);
           tile.bitmapDimsDoc = canvasToDoc(Vector2d(static_cast<double>(ct.bitmap->dimensions.x),
                                                     static_cast<double>(ct.bitmap->dimensions.y)));
-          // For the drag layer, `canvasFromBitmap` captures the post-
-          // rasterize DOM drift (translation in canvas pixels). Convert
-          // to doc units so the editor blit math composes with the live
-          // `pixelsPerDocUnit`. Extract the translation component
-          // unconditionally — even when `canvasFromBitmap` carries a
-          // scale or rotation component (post-canvas-resize transient
-          // before the fast path re-engages), the translation alone is
-          // what aligns the drag tile with the overlay chrome, which
-          // also reads the DOM transform directly. Dropping the
-          // translation behind an `isTranslation()` guard caused
-          // intermittent misalignment between drag tile and overlay
-          // (bug from M2C step 1).
-          if (ct.isDragTarget) {
+          // Extract `canvasFromBitmap.translation()` for EVERY layer
+          // tile, not just the active drag target. For the live drag
+          // target this carries the per-frame drag delta the fast
+          // path stamps each renderFrame. For non-drag layer tiles
+          // it carries the residual delta from when they were last
+          // the drag target — critical for pending-demote layers
+          // (§M9 hysteresis): a layer whose hint is queued for
+          // demote keeps its bitmap content rasterized at the old
+          // (pre-drag) entity transform, with `canvasFromBitmap` =
+          // Translate(total drag delta) compensating at compose
+          // time. Without applying this translation, the editor
+          // blits the pending-demote layer at its rasterize-time
+          // canvas offset — the user sees previously-moved shapes
+          // "pop back" to their pre-drag positions during the
+          // hysteresis window, then pop forward again when the
+          // demote actually fires and the segment re-rasterizes.
+          //
+          // Segments are always Identity (canvas-aligned bitmaps with
+          // their own offset; no compose-time translation), so the
+          // segment branch is effectively a no-op.
+          if (ct.layerEntity != entt::null) {
             tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
           }
           tile.isDragTarget = ct.isDragTarget;
