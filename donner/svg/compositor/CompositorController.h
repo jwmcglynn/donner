@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -82,6 +83,34 @@ struct CompositorTile {
   /// route the live pre-commit DOM delta through `canvasFromBitmap`
   /// on the GPU side.
   bool isDragTarget = false;
+};
+
+/// Design doc 0033 §M4 — cancellation handle for `CompositorController::
+/// renderFrame`. The token wraps a single `std::atomic<bool>`; the
+/// compositor's per-layer / per-segment rasterize loops poll
+/// `isCancelled()` at coarse safe points (between `rasterizeLayer` /
+/// `rasterizeStaticSegment` calls, not mid-rasterize, per design doc
+/// 0033 §R3 / §D4) and bail early when set.
+///
+/// Cancellation is best-effort: a partially-rasterized frame leaves
+/// the compositor's segment / layer dirty flags in their pre-rasterize
+/// state, so the next `renderFrame` finishes the work without
+/// duplicating it. The caller (worker) discards the (incomplete)
+/// `takeSnapshot` result on cancel and restarts with the latest
+/// `pendingRequest_`.
+class CancellationToken {
+public:
+  CancellationToken() = default;
+  /// Mark the token as cancelled. Safe to call from any thread.
+  void cancel() { cancelled_.store(true, std::memory_order_release); }
+  /// Clear the cancellation. The renderFrame caller calls this at the
+  /// top of each new render request so the token doesn't carry over.
+  void reset() { cancelled_.store(false, std::memory_order_release); }
+  /// Polled by the compositor at coarse safe points.
+  [[nodiscard]] bool isCancelled() const { return cancelled_.load(std::memory_order_acquire); }
+
+private:
+  std::atomic<bool> cancelled_{false};
 };
 
 /**
@@ -288,6 +317,17 @@ public:
    * @param viewport The viewport for the render pass.
    */
   void renderFrame(const RenderViewport& viewport);
+
+  /// Design doc 0033 §M4 — cancellable variant. The @p token is polled
+  /// at coarse safe points (between `rasterizeLayer` / segment
+  /// rasterize calls) and `renderFrame` returns early when set. The
+  /// compositor's internal dirty flags are left intact for the work
+  /// the early return skipped, so the next `renderFrame` picks up
+  /// without re-doing already-rasterized layers / segments.
+  ///
+  /// Returns true on full completion, false on early cancellation.
+  /// The non-token overload above delegates with a no-op token.
+  bool renderFrame(const RenderViewport& viewport, CancellationToken& token);
 
   /**
    * Returns the number of currently active layers (excluding the root layer).
@@ -896,6 +936,23 @@ private:
   /// bitmaps directly, so the main-renderer output would go unconsumed.
   /// See `setSkipMainComposeDuringSplit`.
   bool skipMainComposeDuringSplit_ = false;
+
+  /// Design doc 0033 §M4 — non-owning pointer to the active
+  /// `CancellationToken`, set by the `renderFrame(viewport, token)`
+  /// overload at entry and cleared at exit. The rasterize loops poll
+  /// `isCancelled()` (below) at coarse safe points and bail early if
+  /// set. `nullptr` outside the cancellable `renderFrame` window;
+  /// `isCancelled()` returns false in that state, so the non-token
+  /// overload's loops never short-circuit.
+  const CancellationToken* cancelToken_ = nullptr;
+
+  /// Cheap inline check used by the rasterize loops in `renderFrame`.
+  /// Returns false when there's no active token (the non-cancellable
+  /// `renderFrame` overload) so the cancellation paths add zero cost
+  /// to that hot path.
+  [[nodiscard]] bool isCancelled() const {
+    return cancelToken_ != nullptr && cancelToken_->isCancelled();
+  }
 
   /// True after `composeLayers` has completed a full (non-skipped)
   /// main-renderer compose. Used to gate the skip-compose fast path:

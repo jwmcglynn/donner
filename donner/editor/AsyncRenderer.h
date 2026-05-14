@@ -203,9 +203,29 @@ public:
   [[nodiscard]] bool isBusy() const { return busy_.load(std::memory_order_acquire); }
 
   /// Post a render request to the worker. Non-blocking. Transitions
-  /// the worker from idle → busy. Caller must have checked `!isBusy()`
-  /// first; calling while busy is a programmer error.
+  /// the worker from idle → busy, or — design doc 0033 §M4 — signals
+  /// cancellation of the in-flight render and overwrites the pending
+  /// request slot when the worker is already busy. The worker polls
+  /// the cancellation token at coarse safe points (between
+  /// `rasterizeLayer` / segment rasterize calls); on cancel it
+  /// discards the incomplete `takeSnapshot` result and restarts with
+  /// the new request.
+  ///
+  /// The pre-§M4 caller contract — "must have checked `!isBusy()`
+  /// first" — has been relaxed: callers MAY now call this while busy,
+  /// and the in-flight render will be cancelled. Callers that still
+  /// gate on `!isBusy()` get the pre-§M4 behavior (one render at a
+  /// time, no cancellation) since the worker is idle when they post.
   void requestRender(const RenderRequest& request);
+
+  /// Design doc 0033 §M4 — count of renders that were cancelled
+  /// mid-flight by a subsequent `requestRender`. Exposed for tests
+  /// to assert preemption is engaging (vs. the worker silently
+  /// queueing requests). Incremented under the internal mutex; safe
+  /// to read from any thread.
+  [[nodiscard]] std::uint64_t cancelledRenderCount() const {
+    return cancelledRenderCount_.load(std::memory_order_acquire);
+  }
 
   /// If a render has completed since the last call, returns the
   /// resulting bitmap and transitions the worker back to idle. Returns
@@ -394,6 +414,20 @@ private:
   /// tests to verify that drag-frame mutations (which bump `frameVersion_`) do
   /// NOT fire a reset — only a true `documentGeneration` change does.
   std::atomic<std::uint64_t> compositorResetCount_{0};
+
+  /// Design doc 0033 §M4 — cancellation token threaded into
+  /// `CompositorController::renderFrame(viewport, token)`. The UI
+  /// thread sets `cancelRender_` via `requestRender` when posting a
+  /// new request while the worker is busy; the worker polls the
+  /// token at coarse safe points and bails. Reset to non-cancelled
+  /// at the start of every worker iteration so a fresh request
+  /// doesn't inherit a stale cancel signal.
+  svg::compositor::CancellationToken cancelRender_;
+
+  /// Count of worker iterations that returned early due to
+  /// cancellation. Exposed via `cancelledRenderCount()` so tests can
+  /// pin the preemption behavior.
+  std::atomic<std::uint64_t> cancelledRenderCount_{0};
 
   /// Most recent snapshot of the compositor's fast-path counters, copied
   /// under `mutex_` when the worker finishes each render. UI-thread reads
