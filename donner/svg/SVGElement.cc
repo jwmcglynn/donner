@@ -12,6 +12,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -259,9 +260,8 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
     // Mark dirty flags based on the attribute type.
     if (actualName == "transform") {
-      markDirty(handle_, components::DirtyFlagsComponent::Transform |
-                             components::DirtyFlagsComponent::WorldTransform |
-                             components::DirtyFlagsComponent::RenderInstance);
+      components::LayoutSystem().invalidate(handle_);
+      markDirty(handle_, components::DirtyFlagsComponent::RenderInstance);
       propagateWorldTransformDirtyToDescendants(handle_);
     } else {
       // For CSS properties (fill, stroke, opacity, etc.) and element-specific attributes

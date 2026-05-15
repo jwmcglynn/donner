@@ -940,5 +940,270 @@ TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
          "leaves the editor blitting cached textures at zero offset.";
 }
 
+// Programmatic regression for the operator-visible "delete-element flash"
+// bug: after moving several shapes (drag-end writebacks → reparse), the
+// user clicks a different filter group (`Lightning_glow_dark`) and
+// presses Delete. The user reports that for a few frames the
+// previously-moved shapes appear at their pre-move positions and
+// neighboring filter groups render brighter, before settling back to
+// the correct state.
+//
+// This test drives the same pipeline programmatically without ImGui /
+// SelectTool: writebacks are simulated by running source-text patches
+// through `ReplaceDocumentCommand(preserveUndoOnReparse=true)` — the
+// production path the source-pane uses for any change the classifier
+// can't reduce to a single `SetAttribute`. The delete writeback's
+// element-remove patch is multi-byte and always falls through to
+// `ReplaceDocumentCommand`, matching what `DocumentSyncController`
+// dispatches in the editor.
+//
+// The test captures bitmaps at three checkpoints — after the moves,
+// immediately after the delete, and after the delete's reparse — and
+// compares the per-pixel difference between "after moves" and "after
+// delete" against an independently-rendered ground truth: the same
+// source with `Lightning_glow_dark` removed up-front via the SVG
+// parser. If the post-delete bitmap differs from the ground truth, the
+// previously-moved shapes are NOT where they should be.
+TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
+  // Load the splash directly — no .rnr, just programmatic mutations.
+  const std::filesystem::path splashPath("donner_splash.svg");
+  const std::string svgSource = LoadFileOrEmpty(splashPath);
+  ASSERT_FALSE(svgSource.empty()) << "SVG source missing: " << splashPath;
+  liveSource_ = svgSource;
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(svgSource));
+  auto documentViewBox = app.document().document().svgElement().viewBox();
+  ASSERT_TRUE(documentViewBox.has_value());
+
+  ViewportState viewport;
+  viewport.documentViewBox = *documentViewBox;
+  viewport.devicePixelRatio = 1.0;
+  viewport.paneOrigin = Vector2d::Zero();
+  viewport.paneSize = Vector2d(800.0, 460.0);
+  viewport.resetTo100Percent();
+
+  SelectTool selectTool;
+  AsyncRenderer asyncRenderer;
+  svg::Renderer renderer;
+  SyncCanvasSize(app, viewport);
+
+  // Initial render so the compositor is warm.
+  {
+    auto initial = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+    ASSERT_TRUE(initial.has_value());
+    ASSERT_FALSE(initial->bitmap.empty());
+  }
+
+  // For each "dragged" shape, simulate the drag-end writeback by
+  // patching the source text to insert a `transform="translate(...)"`
+  // attribute on the element's opening tag, then dispatch a
+  // `ReplaceDocumentCommand(preserveUndoOnReparse=true)` — the exact
+  // command shape the classifier emits when it falls through to the
+  // structural path (and what `DocumentSyncController` re-dispatches
+  // for any unclassifiable diff).
+  //
+  // Per-shape translation chosen large enough to be visible in any
+  // pixel-diff but small enough to keep the shape on-canvas. The
+  // values are arbitrary — they just need to be distinct so a
+  // "flash to pre-move" would show a clear delta against the
+  // ground-truth bitmap.
+  struct ShapeDrag {
+    std::string_view id;
+    int dx;
+    int dy;
+  };
+  const std::array<ShapeDrag, 2> drags = {
+      ShapeDrag{"Donner_line", 25, 35},
+      ShapeDrag{"Lightning_glow_bright", -30, 20},
+  };
+  for (const auto& drag : drags) {
+    const std::string openingTag = std::string("<g id=\"") + std::string(drag.id) + "\"";
+    const auto pos = liveSource_.find(openingTag);
+    ASSERT_NE(pos, std::string::npos) << "Could not find shape " << drag.id << " in source";
+    const auto endOfTag = pos + openingTag.size();
+    const std::string transformAttr =
+        " transform=\"translate(" + std::to_string(drag.dx) + "," + std::to_string(drag.dy) + ")\"";
+    liveSource_.insert(endOfTag, transformAttr);
+
+    app.applyMutation(
+        EditorCommand::ReplaceDocumentCommand(liveSource_, /*preserveUndoOnReparse=*/true));
+    ASSERT_TRUE(app.flushFrame());
+    auto result = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+    ASSERT_TRUE(result.has_value()) << "Render after drag of " << drag.id << " timed out";
+    ASSERT_FALSE(result->bitmap.empty());
+  }
+
+  // Capture the post-drags state. This is the bitmap the user sees
+  // right before pressing Delete.
+  auto stateAfterMoves = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+  ASSERT_TRUE(stateAfterMoves.has_value());
+  ASSERT_FALSE(stateAfterMoves->bitmap.empty());
+
+  // Find Lightning_glow_dark in the live DOM and select it (matches
+  // the user's "I clicked the lighting_glow_dark in my repro" step).
+  auto target = app.document().document().querySelector("#Lightning_glow_dark");
+  ASSERT_TRUE(target.has_value()) << "Lightning_glow_dark missing from live DOM";
+  auto removeTarget = captureAttributeWritebackTarget(*target);
+  ASSERT_TRUE(removeTarget.has_value());
+  app.setSelection(*target);
+  // One render with the selection active so the compositor's
+  // promote-on-selection path runs (the user's repro has the element
+  // selected at the moment Delete is pressed).
+  {
+    auto withSelection = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+    ASSERT_TRUE(withSelection.has_value());
+  }
+
+  // Press Delete: the editor's shortcut handler clears selection
+  // first, then enqueues the element-remove writeback and dispatches
+  // `DeleteElementCommand`. Mirror that order exactly.
+  app.setSelection(std::nullopt);
+  app.enqueueElementRemoveWriteback(
+      EditorApp::CompletedElementRemoveWriteback{.target = *removeTarget});
+  app.applyMutation(EditorCommand::DeleteElementCommand(*target));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto stateAfterDelete = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+  ASSERT_TRUE(stateAfterDelete.has_value()) << "Post-delete render timed out";
+  ASSERT_FALSE(stateAfterDelete->bitmap.empty());
+
+  // Pump enough renders to clear `processPendingDemotions`' 30-frame
+  // hysteresis (`kDemotionHysteresisFrames`). If the bug is the
+  // orphaned `Lightning_glow_dark` lingering in `activeHints_`
+  // through the hysteresis window, the bitmap should converge to
+  // ground truth once the deferred demote fires.
+  std::optional<RenderResult> stateAfterHysteresis;
+  for (int i = 0; i < 35; ++i) {
+    stateAfterHysteresis = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+    ASSERT_TRUE(stateAfterHysteresis.has_value());
+  }
+
+  // Drain the element-remove writeback to patch source text and
+  // dispatch `ReplaceDocumentCommand(preserveUndoOnReparse=true)` —
+  // exactly what `DocumentSyncController::applyPendingWritebacks`
+  // does for the post-delete source-pane sync.
+  auto removals = app.consumeElementRemoveWritebacks();
+  ASSERT_EQ(removals.size(), 1u);
+  auto patch = buildElementRemoveWriteback(liveSource_, removals[0].target);
+  ASSERT_TRUE(patch.has_value()) << "Failed to build element-remove patch";
+  applyPatches(liveSource_, {{*patch}});
+  app.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(liveSource_, /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto stateAfterReparse = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
+  ASSERT_TRUE(stateAfterReparse.has_value()) << "Post-reparse render timed out";
+  ASSERT_FALSE(stateAfterReparse->bitmap.empty());
+
+  // Independent ground truth: render the FINAL source (post-drag,
+  // post-delete) through a fresh `EditorApp` + `AsyncRenderer`. No
+  // compositor-state carryover, no drag/select/delete path. If
+  // anything in the carry-over pipeline is producing wrong pixels,
+  // this comparison surfaces it.
+  EditorApp groundTruthApp;
+  AsyncRenderer groundTruthAsync;
+  svg::Renderer groundTruthRenderer;
+  ASSERT_TRUE(groundTruthApp.loadFromString(liveSource_));
+  SyncCanvasSize(groundTruthApp, viewport);
+  SelectTool groundTruthSelectTool;
+  auto groundTruth = RequestRenderAndWait(groundTruthAsync, groundTruthRenderer, groundTruthApp,
+                                          groundTruthSelectTool);
+  ASSERT_TRUE(groundTruth.has_value());
+  ASSERT_FALSE(groundTruth->bitmap.empty());
+
+  // Dump all four bitmaps so the human investigator can inspect the
+  // delta when this trips.
+  const auto outDir = DiagnosticOutputDir();
+  const auto dump = [&](const svg::RendererBitmap& bmp, std::string_view label) {
+    const auto path = outDir / (std::string("delete_flash_") + std::string(label) + ".png");
+    svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.string().c_str(), bmp.pixels, bmp.dimensions.x, bmp.dimensions.y, bmp.rowBytes / 4u);
+  };
+  dump(stateAfterMoves->bitmap, "01_after_moves");
+  dump(stateAfterDelete->bitmap, "02_after_delete");
+  dump(stateAfterHysteresis->bitmap, "02b_after_hysteresis");
+  dump(stateAfterReparse->bitmap, "03_after_reparse");
+  dump(groundTruth->bitmap, "04_ground_truth");
+
+  // The post-delete and post-reparse bitmaps must match the ground
+  // truth (modulo the AA threshold). If they don't, something in
+  // the carry-over pipeline (compositor cache, GL upload, source
+  // sync) is producing wrong pixels.
+  tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 500;
+  tests::CompareBitmapToBitmap(stateAfterDelete->bitmap, groundTruth->bitmap,
+                               "delete_flash_post_delete_vs_ground_truth", params);
+  tests::CompareBitmapToBitmap(stateAfterHysteresis->bitmap, groundTruth->bitmap,
+                               "delete_flash_post_hysteresis_vs_ground_truth", params);
+  tests::CompareBitmapToBitmap(stateAfterReparse->bitmap, groundTruth->bitmap,
+                               "delete_flash_post_reparse_vs_ground_truth", params);
+}
+
+// Operator-recorded `.rnr` of the "filter shape jumps 2× on mouse
+// move after drag" bug from `filter_post_drag_jump.rnr`. Replays the
+// recording through the sync harness with writeback drain and
+// compares the final bitmap against a fresh-load ground-truth render
+// of the same end-state source.
+//
+// Regression coverage for the stale flat fallback after a preserved
+// structural-remap drag session. Investigation log:
+//   * resetAllLayers fallback (return false from
+//     remapAfterStructuralReplace when any parser-dirty entity is
+//     present) fixes this test but regresses
+//     `AsyncRendererE2ETest.DragEndWritebackTakesStructuralRemapPath`
+//     and `RnrReplayTest.DeleteElementDoesNotResetPreviouslyMovedShapes`,
+//     both of which require the preservation optimization.
+//   * Fine-grained `consumeDirtyFlags(parserDirtyEntities)` on the
+//     captured pre-prepare dirty set marked 8/8 layers dirty but did
+//     not refresh the flat bitmap because `composeLayers` was skipped
+//     after mouse-up by a sticky ActiveDrag hint.
+//
+// The `.rnr` + ground-truth pipeline writes diff PNGs under
+// `$TEST_UNDECLARED_OUTPUTS_DIR/filter_post_drag_jump_*.png` when it
+// regresses.
+TEST_F(RnrReplayTest, FilterPostDragJumpReplayMatchesGroundTruth) {
+  ReplaySnapshot snapshot;
+  stopAfterAllFrames_ = true;
+  drainWritebacksEachFrame_ = true;
+  ReplayRecording("donner/editor/tests/filter_post_drag_jump.rnr", &snapshot);
+
+  ASSERT_FALSE(snapshot.bitmap.empty());
+
+  EditorApp groundTruthApp;
+  AsyncRenderer groundTruthAsync;
+  svg::Renderer groundTruthRenderer;
+  ASSERT_TRUE(groundTruthApp.loadFromString(liveSource_));
+  groundTruthApp.document().document().setCanvasSize(snapshot.bitmap.dimensions.x,
+                                                     snapshot.bitmap.dimensions.y);
+  SelectTool groundTruthSelectTool;
+  auto groundTruth = RequestRenderAndWait(groundTruthAsync, groundTruthRenderer, groundTruthApp,
+                                          groundTruthSelectTool);
+  ASSERT_TRUE(groundTruth.has_value());
+
+  const auto outDir = DiagnosticOutputDir();
+  const auto dump = [&](const svg::RendererBitmap& bmp, std::string_view label) {
+    const auto path =
+        outDir / (std::string("filter_post_drag_jump_") + std::string(label) + ".png");
+    svg::RendererImageIO::writeRgbaPixelsToPngFile(
+        path.string().c_str(), bmp.pixels, bmp.dimensions.x, bmp.dimensions.y, bmp.rowBytes / 4u);
+  };
+  dump(snapshot.bitmap, "01_replay_final");
+  dump(groundTruth->bitmap, "02_ground_truth");
+
+  {
+    const auto path = outDir / "filter_post_drag_jump_final_source.svg";
+    std::ofstream out(path, std::ios::binary);
+    out.write(liveSource_.data(), static_cast<std::streamsize>(liveSource_.size()));
+  }
+
+  tests::BitmapGoldenCompareParams params;
+  params.threshold = 0.03f;
+  params.maxMismatchedPixels = 2000;
+  tests::CompareBitmapToBitmap(snapshot.bitmap, groundTruth->bitmap,
+                               "filter_post_drag_jump_replay_vs_ground_truth", params);
+}
+
 }  // namespace
 }  // namespace donner::editor

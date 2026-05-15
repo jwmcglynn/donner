@@ -394,6 +394,31 @@ TEST_F(SVGElementTests, TransformDirtyPropagatesWorldTransformToDescendants) {
   EXPECT_EQ(sibling->entityHandle().try_get<components::DirtyFlagsComponent>(), nullptr);
 }
 
+TEST_F(SVGElementTests, TransformAttributeInvalidatesDescendantAbsoluteTransformCache) {
+  auto doc = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <g id="parent">
+        <rect id="child" width="10" height="10" />
+      </g>
+    </svg>
+  )");
+
+  auto parent = doc.querySelector("#parent");
+  auto child = doc.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+
+  auto parentGraphics = parent->cast<SVGGraphicsElement>();
+  auto childGraphics = child->cast<SVGGraphicsElement>();
+  ASSERT_THAT(parentGraphics.elementFromWorld(), TransformEq(Transform2d()));
+  ASSERT_THAT(childGraphics.elementFromWorld(), TransformEq(Transform2d()));
+
+  parent->setAttribute("transform", "translate(10 20)");
+
+  EXPECT_THAT(parentGraphics.elementFromWorld(), TransformEq(Transform2d::Translate({10.0, 20.0})));
+  EXPECT_THAT(childGraphics.elementFromWorld(), TransformEq(Transform2d::Translate({10.0, 20.0})));
+}
+
 TEST_F(SVGElementTests, InheritedPresentationAttributePropagatesToDescendants) {
   auto doc = parseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">

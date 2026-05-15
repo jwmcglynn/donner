@@ -106,7 +106,6 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
 
   if (!pendingElementRemoveWritebacks_.empty()) {
     std::string source = textEditor.getText();
-    const std::string sourcePrePatch = source;
     bool changed = false;
     for (const auto& pendingRemove : pendingElementRemoveWritebacks_) {
       auto patch = buildElementRemoveWriteback(source, pendingRemove.target);
@@ -121,8 +120,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     pendingElementRemoveWritebacks_.clear();
     if (changed) {
       textEditor.setText(source, /*preserveScroll=*/true);
-      QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText_,
-                                  &lastWritebackSourceText_);
+      QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
     }
   }
 
@@ -131,7 +129,6 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   std::string source = textEditor.getText();
-  const std::string sourcePrePatch = source;
   std::vector<TextPatch> patches;
   patches.reserve(pendingTransformWritebacks_.size());
   for (const auto& writeback : pendingTransformWritebacks_) {
@@ -163,8 +160,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
 
   applyPatches(source, patches);
   textEditor.setText(source, /*preserveScroll=*/true);
-  QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText_,
-                              &lastWritebackSourceText_);
+  QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
 }
 
 TextEditor::ErrorMarkers DocumentSyncController::ParseErrorToMarkers(const ParseDiagnostic& diag) {

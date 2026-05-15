@@ -428,17 +428,13 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   }
 
-  // After-idle follow-up for the M8 fast-path click. These calls all
-  // read or rasterize against the live registry, so they must wait
-  // for the worker to land. Once it does, refresh the bounds cache
-  // for the now-stable drag-target, post a render request, and re-
-  // rasterize the overlay chrome at the new selection.
+  // After-idle follow-up for the M8 fast-path click. This reads the
+  // live registry, so it must wait for the worker to land. Keep the
+  // follow-up to cache refresh only: posting a render here would run
+  // before this same frame's drag move is applied, leaving the overlay
+  // one interaction step behind the composited pixels during re-drag.
   if (pendingClickFollowupAfterIdle_ && !renderCoordinator_.asyncRenderer().isBusy()) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
-    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          options_.experimentalMode, textures_);
-    renderCoordinator_.rasterizeOverlayForCurrentSelection(app_, interactionController_.viewport(),
-                                                           textures_, selectTool_.marqueeRect());
     pendingClickFollowupAfterIdle_ = false;
   }
 
@@ -449,6 +445,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                      renderCoordinator_.asyncRenderer().isBusy())) {
         selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true);
         lastPostedScreenPoint_ = currentScreen;
+        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
+        }
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {

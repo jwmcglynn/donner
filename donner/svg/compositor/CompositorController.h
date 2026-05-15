@@ -693,7 +693,7 @@ public:
   /// — on a 892×512 Skia backend with a few filter layers the skip saves
   /// ~100 ms per drag frame. The flat snapshot the editor uploads stays
   /// stale during drag but is only drawn after drag ends, by which point
-  /// the settle render (no split cache) has refreshed it.
+  /// the caller must disable the skip for a settle render that refreshes it.
   void setSkipMainComposeDuringSplit(bool skip) { skipMainComposeDuringSplit_ = skip; }
 
   /// Enumerate every cacheable unit (static segments + promoted layer

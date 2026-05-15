@@ -25,38 +25,22 @@ struct DispatchSourceTextChangeResult {
 /// Queue the editor-side sync for source text that was written by the
 /// editor itself (drag-end transform writeback, delete-element patch…).
 ///
-/// If structured editing is enabled and the change fits the incremental
-/// classifier (single attribute-value edit on a single element — the
-/// common case for drag-end transform writebacks), emits a
-/// `SetAttributeCommand` that updates the attribute on the live DOM
-/// element without destroying the entity space. Falls back to a full
-/// `ReplaceDocumentCommand` reparse when the change can't be classified
-/// (structural edits, multi-element writebacks).
-///
-/// Important asymmetry with `DispatchSourceTextChange`: self-generated
-/// writebacks fire AFTER the DOM has already been mutated incrementally
-/// during the drag. So in many cases the classifier-produced
-/// `SetAttributeCommand` is actually redundant (the DOM is already at
-/// the target state) — but it's still worth emitting because
-/// `SetAttributeCommand`'s apply path is idempotent and the mutation
-/// flush bumps `frameVersion`, keeping the render pipeline's version
-/// bookkeeping straight. What we CANNOT afford is falling through to
-/// `ReplaceDocumentCommand` on every drag release: that tears down the
-/// entity space (free + alloc a new `Registry` heap block), which the
-/// compositor observes as a structural replacement and spends multiple
-/// seconds rebuilding every cached layer bitmap + segment.
+/// Self-generated writebacks happen AFTER the DOM has already been
+/// mutated by the editor. Re-classifying the text patch back onto that
+/// live DOM would be redundant, and worse, it would leave every
+/// `XMLNode` source range at its pre-patch offsets. A later source edit
+/// or writeback can then map a changed byte offset onto the next
+/// sibling. Always queue a preserving reparse instead: the source ranges
+/// refresh, undo remains intact, and the compositor's structural-remap
+/// path keeps unchanged layer caches usable when the tree shape is
+/// stable.
 ///
 /// Updates both source baselines so subsequent user edits diff against
 /// the new text, and records the exact bytes so the text-change
 /// debouncer recognizes the self-initiated `setText()` echo and
 /// suppresses a duplicate dispatch.
 ///
-/// @param previousSourcePrePatch Source text BEFORE the patch the
-///   caller just applied — used as the "old" side of the classifier's
-///   diff. Pass the string `previousSourceText_` held before
-///   `applyPatches` updated `source`.
 void QueueSourceWritebackReparse(EditorApp& app, std::string_view newSource,
-                                 std::string_view previousSourcePrePatch,
                                  std::string* previousSourceText,
                                  std::optional<std::string>* lastWritebackSourceText);
 
