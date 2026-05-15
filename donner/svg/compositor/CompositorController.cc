@@ -122,6 +122,20 @@ bool IsDomDescendantOf(Registry& registry, Entity maybeDescendant, Entity root) 
   return false;
 }
 
+/// True if @p entity is currently reachable from @p rootEntity by walking
+/// TreeComponent parent links. The document root itself counts as
+/// reachable. A detached entity (e.g. after `SVGElement::remove()`)
+/// returns false: its `TreeComponent::parent_` is null and it's not
+/// the root, so the walker bails immediately. Used to detect orphan
+/// hints that the 30-frame demotion hysteresis would otherwise keep
+/// in `activeHints_` after the user deletes a promoted element.
+bool IsEntityInLiveTree(Registry& registry, Entity entity, Entity rootEntity) {
+  if (entity == rootEntity) {
+    return registry.valid(entity);
+  }
+  return IsDomDescendantOf(registry, entity, rootEntity);
+}
+
 ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   ImageResource img;
   img.width = bitmap.dimensions.x;
@@ -311,6 +325,36 @@ void CompositorController::demoteEntity(Entity entity) {
   if (!activeHints_.contains(entity)) {
     return;
   }
+
+  // Hysteresis only makes sense when the entity might come back —
+  // a `promoteEntity` within the window cancels the demote and reuses
+  // the cached bitmap. If the entity has been detached from the live
+  // tree (e.g. `SVGElement::remove()` from a Delete shortcut), there
+  // is nothing to swap back to; keeping the orphan in `activeHints_`
+  // for 30 frames makes the resolver emit a
+  // `ComputedLayerAssignmentComponent` for an entity whose
+  // `RenderingInstanceComponent` was wiped by `invalidate
+  // RenderTree`, so `reconcileLayers` preserves a phantom layer with
+  // a stale paint-order range. The next renderFrame's segment carve-
+  // out slices the canvas around that phantom range, leaving an
+  // empty gap where the orphan's now-deleted content used to be and
+  // shifting downstream segments by the gap width — the operator-
+  // visible "delete-flash" where previously-moved shapes appear at
+  // pre-move positions and neighboring filter groups composite
+  // brighter. Pinned by `DeleteElementDoesNotResetPreviouslyMoved
+  // Shapes`.
+  Registry& registry = document_->registry();
+  const Entity rootEntity = document_->svgElement().entityHandle().entity();
+  if (!IsEntityInLiveTree(registry, entity, rootEntity)) {
+    activeHints_.erase(entity);
+    pendingDemotions_.erase(entity);
+    if (splitStaticLayersEntity_ == entity) {
+      splitStaticLayersEntity_ = entt::null;
+      splitStaticLayersViewport_ = Vector2i::Zero();
+    }
+    return;
+  }
+
   pendingDemotions_[entity] = kDemotionHysteresisFrames;
 
   // The split bg / drag / fg cache is keyed on the editor's current

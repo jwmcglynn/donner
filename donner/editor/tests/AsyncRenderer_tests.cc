@@ -1,6 +1,7 @@
 #include "donner/editor/AsyncRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -1980,7 +1981,27 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   ASSERT_FALSE(postReplaceRequest.structuralRemap.empty())
       << "structural remap should be populated after preserve-undo ReplaceDocumentCommand";
   asyncRenderer.requestRender(postReplaceRequest);
-  ASSERT_TRUE(waitForResult().has_value());
+  auto postReplaceResult = waitForResult();
+  ASSERT_TRUE(postReplaceResult.has_value());
+
+  const svg::RendererBitmap& postReplaceBitmap = postReplaceResult->bitmap;
+  ASSERT_FALSE(postReplaceBitmap.empty()) << "post-replace flat bitmap must refresh";
+  const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
+    const size_t offset =
+        static_cast<size_t>(y) * postReplaceBitmap.rowBytes + static_cast<size_t>(x) * 4u;
+    return {postReplaceBitmap.pixels[offset + 0u], postReplaceBitmap.pixels[offset + 1u],
+            postReplaceBitmap.pixels[offset + 2u], postReplaceBitmap.pixels[offset + 3u]};
+  };
+  const auto movedOnlyPixel = pixelAt(150, 90);
+  const auto originalOnlyPixel = pixelAt(60, 90);
+  EXPECT_GT(static_cast<int>(movedOnlyPixel[0]), 200)
+      << "post-release flat fallback must show #target at its writeback transform";
+  EXPECT_LT(static_cast<int>(movedOnlyPixel[1]), 80);
+  EXPECT_LT(static_cast<int>(movedOnlyPixel[2]), 80);
+  EXPECT_GT(static_cast<int>(originalOnlyPixel[0]), 200)
+      << "post-release flat fallback should have the white background at the old position";
+  EXPECT_GT(static_cast<int>(originalOnlyPixel[1]), 200);
+  EXPECT_GT(static_cast<int>(originalOnlyPixel[2]), 200);
 
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
       << "drag-end writeback took the full-reset path instead of the structural remap path — "

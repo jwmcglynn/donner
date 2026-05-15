@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,6 +36,11 @@ constexpr std::string_view kTwoRectsSvg =
          <rect id="a" x="10" y="10" width="10" height="10"/>
          <rect id="b" x="40" y="10" width="10" height="10"/>
        </svg>)";
+
+constexpr std::string_view kAdjacentUnidentifiedLettersSvg =
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\">"
+    "<g id=\"letters\"><polygon points=\"10 10 30 10 30 30 10 30\"/>"
+    "<polygon points=\"50 10 70 10 70 30 50 30\"/></g></svg>";
 
 void RemoveSubstringOrAssert(std::string* source, std::string_view needle) {
   const std::size_t pos = source->find(needle);
@@ -110,12 +116,11 @@ std::string SourceSlice(std::string_view source, const SourceRange& range) {
 bool QueueDragWritebackReparse(EditorApp& app, std::string* source, std::string* previousSourceText,
                                std::optional<std::string>* lastWritebackSourceText,
                                const SelectTool::CompletedDragWriteback& writeback) {
-  const std::string prePatch = *source;
   if (!ApplyCompletedDragWriteback(source, writeback)) {
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
   return true;
 }
 
@@ -123,12 +128,11 @@ bool QueueTransformWritebackReparse(EditorApp& app, std::string* source,
                                     std::string* previousSourceText,
                                     std::optional<std::string>* lastWritebackSourceText,
                                     const EditorApp::CompletedTransformWriteback& writeback) {
-  const std::string prePatch = *source;
   if (!ApplyCompletedDragWriteback(source, writeback)) {
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
   return true;
 }
 
@@ -146,12 +150,11 @@ bool QueueElementRemoveWritebackReparse(EditorApp& app, std::string* source,
                                         std::string* previousSourceText,
                                         std::optional<std::string>* lastWritebackSourceText,
                                         const AttributeWritebackTarget& target) {
-  const std::string prePatch = *source;
   if (!ApplyElementRemoveWriteback(source, target)) {
     return false;
   }
 
-  QueueSourceWritebackReparse(app, *source, prePatch, previousSourceText, lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, *source, previousSourceText, lastWritebackSourceText);
   return true;
 }
 
@@ -159,6 +162,18 @@ svg::SVGElement GetElementByIdOrDie(svg::SVGDocument& document, std::string_view
   auto element = document.querySelector(selector);
   EXPECT_TRUE(element.has_value()) << "missing element: " << selector;
   return *element;
+}
+
+std::optional<svg::SVGElement> ElementChildAt(svg::SVGElement parent, std::size_t targetIndex) {
+  std::size_t currentIndex = 0;
+  for (auto child = parent.firstChild(); child.has_value(); child = child->nextSibling()) {
+    if (currentIndex == targetIndex) {
+      return child;
+    }
+    ++currentIndex;
+  }
+
+  return std::nullopt;
 }
 
 svg::SVGDocument ParseOrDie(std::string_view source) {
@@ -478,6 +493,66 @@ TEST(EditorSyncTest, DragWritebackReparseRefreshesNodeLocationAcrossRepeatedDrag
   EXPECT_GT(secondLocation->end.offset.value(), firstLocation->end.offset.value());
 }
 
+TEST(EditorSyncTest, StructuredSelfWritebackDoesNotRetargetRepeatedUnidentifiedSiblingDrag) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kAdjacentUnidentifiedLettersSvg));
+
+  std::string source(kAdjacentUnidentifiedLettersSvg);
+  std::string previousSourceText = source;
+  std::optional<std::string> lastWritebackSourceText;
+
+  const svg::SVGElement letters = GetElementByIdOrDie(app.document().document(), "#letters");
+  auto firstLetter = ElementChildAt(letters, 0);
+  auto secondLetter = ElementChildAt(letters, 1);
+  ASSERT_TRUE(firstLetter.has_value());
+  ASSERT_TRUE(secondLetter.has_value());
+
+  const auto firstTarget = captureAttributeWritebackTarget(*firstLetter);
+  const auto secondTarget = captureAttributeWritebackTarget(*secondLetter);
+  ASSERT_TRUE(firstTarget.has_value());
+  ASSERT_TRUE(secondTarget.has_value());
+  ASSERT_FALSE(firstTarget->elementId.has_value());
+  ASSERT_FALSE(secondTarget->elementId.has_value());
+
+  auto writeFirstLetterTransform = [&](double translateX) {
+    auto liveFirstLetter = resolveAttributeWritebackTarget(app.document().document(), *firstTarget);
+    ASSERT_TRUE(liveFirstLetter.has_value());
+
+    const Transform2d letterFromParent = Transform2d::Translate(translateX, 0.0);
+    app.applyMutation(EditorCommand::SetTransformCommand(*liveFirstLetter, letterFromParent));
+    ASSERT_TRUE(app.flushFrame());
+
+    ASSERT_TRUE(QueueTransformWritebackReparse(app, &source, &previousSourceText,
+                                               &lastWritebackSourceText,
+                                               EditorApp::CompletedTransformWriteback{
+                                                   .target = *firstTarget,
+                                                   .transform = letterFromParent,
+                                               }));
+    ASSERT_TRUE(
+        FlushQueuedWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText));
+    EXPECT_TRUE(app.document().lastFlushResult().preserveUndoOnReparse);
+  };
+
+  writeFirstLetterTransform(5.0);
+  writeFirstLetterTransform(10.0);
+
+  auto finalFirstLetter = resolveAttributeWritebackTarget(app.document().document(), *firstTarget);
+  auto finalSecondLetter =
+      resolveAttributeWritebackTarget(app.document().document(), *secondTarget);
+  ASSERT_TRUE(finalFirstLetter.has_value());
+  ASSERT_TRUE(finalSecondLetter.has_value());
+
+  const Transform2d firstLetterFromParent =
+      finalFirstLetter->cast<svg::SVGGraphicsElement>().transform();
+  const Transform2d secondLetterFromParent =
+      finalSecondLetter->cast<svg::SVGGraphicsElement>().transform();
+  EXPECT_DOUBLE_EQ(firstLetterFromParent.data[4], 10.0);
+  EXPECT_DOUBLE_EQ(firstLetterFromParent.data[5], 0.0);
+  EXPECT_TRUE(secondLetterFromParent.isIdentity());
+  EXPECT_FALSE(finalSecondLetter->getAttribute("transform").has_value());
+}
+
 TEST(EditorSyncTest, DeleteWritebackReparseRefreshesFollowingElementLocation) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
@@ -525,7 +600,6 @@ TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocume
   ASSERT_TRUE(app.loadFromString(kCircleSvg));
 
   std::string source(kCircleSvg);
-  const std::string sourcePrePatch = source;
   auto circle = app.document().document().querySelector("#c");
   ASSERT_TRUE(circle.has_value());
 
@@ -536,8 +610,7 @@ TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocume
 
   std::string previousSourceText(kCircleSvg);
   std::optional<std::string> lastWritebackSourceText;
-  QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText,
-                              &lastWritebackSourceText);
+  QueueSourceWritebackReparse(app, source, &previousSourceText, &lastWritebackSourceText);
 
   const auto dispatch =
       DispatchSourceTextChange(app, source, &previousSourceText, &lastWritebackSourceText);

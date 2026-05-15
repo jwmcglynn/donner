@@ -98,10 +98,9 @@ private:
   bool treeSelectionOriginatedInTree_ = false;
   /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
-  /// onMouseDown follow-up (bounds cache refresh, overlay rasterize,
-  /// render request). The follow-up fires on the next idle frame so
-  /// the chrome catches up to the new drag-target without blocking
-  /// the click acknowledgement.
+  /// onMouseDown cache refresh. The follow-up fires on the next idle
+  /// frame so re-drag hit testing catches up without posting a
+  /// pre-move render ahead of the drag update.
   bool pendingClickFollowupAfterIdle_ = false;
 
   ImFont* uiFontBold_ = nullptr;

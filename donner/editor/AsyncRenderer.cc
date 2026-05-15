@@ -193,7 +193,6 @@ void AsyncRenderer::workerLoop() {
       if (needsFreshCompositor) {
         compositor_ = std::make_unique<svg::compositor::CompositorController>(*request.document,
                                                                               *request.renderer);
-        compositor_->setSkipMainComposeDuringSplit(true);
         compositorDocument_ = *request.document;  // cheap: refcount bump on the Registry handle.
         compositorRenderer_ = request.renderer;
         compositorEntity_ = entt::null;
@@ -302,6 +301,17 @@ void AsyncRenderer::workerLoop() {
       // it marks all segments dirty so the flip takes effect this frame.
       compositor_->setTightBoundedSegmentsEnabled(
           tightBoundedSegments_.load(std::memory_order_acquire));
+
+      // Keep the compositor hint in ActiveDrag across mouse-up so the
+      // layer/segment caches survive quick release->drag-again cycles, but
+      // only skip the main-renderer compose while an actual drag request is
+      // in flight. Post-release and Selection-prewarm renders must refresh
+      // the flat fallback bitmap; otherwise `takeSnapshot()` returns the
+      // pre-drag baseline while the DOM and tile metadata have moved on.
+      const bool activeDragRequest =
+          request.dragPreview.has_value() &&
+          request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
+      compositor_->setSkipMainComposeDuringSplit(activeDragRequest);
 
       // Build a CompositedPreview from the compositor's current tile
       // state. Used for both the intermediate stage (fresh drag-
