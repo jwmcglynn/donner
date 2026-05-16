@@ -9,8 +9,10 @@
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -91,6 +93,96 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
   text.textChunks.emplace_back(*mutation.value);
   InvalidateTextGeometry(*targetHandle);
   return std::nullopt;
+}
+
+ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
+  if (tagName.name == "circle") {
+    return ElementType::Circle;
+  }
+  if (tagName.name == "ellipse") {
+    return ElementType::Ellipse;
+  }
+  if (tagName.name == "g") {
+    return ElementType::G;
+  }
+  if (tagName.name == "line") {
+    return ElementType::Line;
+  }
+  if (tagName.name == "path") {
+    return ElementType::Path;
+  }
+  if (tagName.name == "polygon") {
+    return ElementType::Polygon;
+  }
+  if (tagName.name == "polyline") {
+    return ElementType::Polyline;
+  }
+  if (tagName.name == "rect") {
+    return ElementType::Rect;
+  }
+
+  return ElementType::Unknown;
+}
+
+bool UsesNoTraverseChildren(ElementType type) {
+  switch (type) {
+    case ElementType::Circle:
+    case ElementType::Ellipse:
+    case ElementType::Line:
+    case ElementType::Path:
+    case ElementType::Polygon:
+    case ElementType::Polyline:
+    case ElementType::Rect: return true;
+
+    default: return false;
+  }
+}
+
+void EnsureProjectedElementComponents(EntityHandle handle,
+                                      const xml::XMLQualifiedNameRef& tagName) {
+  if (!handle.all_of<components::ElementTypeComponent>()) {
+    const ElementType type = ElementTypeForTag(tagName);
+    handle.emplace<components::ElementTypeComponent>(type);
+    handle.emplace<components::TransformComponent>();
+    if (UsesNoTraverseChildren(type)) {
+      handle.emplace<components::RenderingBehaviorComponent>(
+          components::RenderingBehavior::NoTraverseChildren);
+    }
+  }
+}
+
+SourceRange AttributeRange(std::string_view source, const xml::XMLNode& node,
+                           const xml::XMLQualifiedNameRef& name) {
+  return node.getAttributeLocation(source, name)
+      .value_or(node.getNodeLocation().value_or(
+          SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)}));
+}
+
+components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
+  Registry& registry = *handle.registry();
+  if (!registry.ctx().contains<components::RenderTreeState>()) {
+    registry.ctx().emplace<components::RenderTreeState>();
+  }
+  return registry.ctx().get<components::RenderTreeState>();
+}
+
+void MarkSubtreeReplaced(EntityHandle handle) {
+  components::RenderTreeState& renderState = GetRenderTreeState(handle);
+  renderState.needsFullRebuild = true;
+  renderState.needsFullStyleRecompute = true;
+
+  if (handle.all_of<components::ElementTypeComponent>()) {
+    handle.get_or_emplace<components::DirtyFlagsComponent>().mark(
+        components::DirtyFlagsComponent::All);
+  }
+
+  donner::components::ForAllChildrenRecursive(handle, [&](EntityHandle descendant) {
+    if (descendant.entity() != handle.entity() &&
+        descendant.all_of<components::ElementTypeComponent>()) {
+      descendant.get_or_emplace<components::DirtyFlagsComponent>().mark(
+          components::DirtyFlagsComponent::All);
+    }
+  });
 }
 
 }  // namespace
@@ -258,14 +350,52 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 
     case xml::XMLMutation::Kind::NodeValueChanged: UTILS_UNREACHABLE();
 
+    case xml::XMLMutation::Kind::SubtreeReplaced:
+      if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
+        return diagnostic;
+      }
+      MarkSubtreeReplaced(handle);
+      return std::nullopt;
+
     case xml::XMLMutation::Kind::NodeInserted:
     case xml::XMLMutation::Kind::NodeRemoved:
-    case xml::XMLMutation::Kind::SubtreeReplaced:
       return ParseDiagnostic::Error("XML mutation kind is not implemented by SVGDocument",
                                     MutationRange(source(), mutation));
   }
 
   UTILS_UNREACHABLE();
+}
+
+std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode& node) {
+  if (node.type() != xml::XMLNode::Type::Element) {
+    return std::nullopt;
+  }
+
+  const EntityHandle handle = node.entityHandle();
+  EnsureProjectedElementComponents(handle, node.tagName());
+
+  SVGElement element(handle);
+  for (const xml::XMLQualifiedNameRef& attributeName : node.attributes()) {
+    std::optional<RcString> value = node.getAttribute(attributeName);
+    if (!value.has_value()) {
+      continue;
+    }
+
+    if (std::optional<ParseDiagnostic> diagnostic =
+            element.setAttributeFromXMLMutation(attributeName, *value)) {
+      diagnostic->range = AttributeRange(source(), node, attributeName);
+      return diagnostic;
+    }
+  }
+
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child)) {
+      return diagnostic;
+    }
+  }
+
+  return std::nullopt;
 }
 
 }  // namespace donner::svg

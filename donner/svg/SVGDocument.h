@@ -215,6 +215,17 @@ private:
    */
   std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation);
 
+  /**
+   * Project an XML element subtree into SVG semantic components.
+   *
+   * Used after XML-owned element-subtree reparsing has already updated the DOM tree in place.
+   * Existing SVG entities keep their identity; newly cloned XML element nodes receive SVG
+   * components and attributes.
+   *
+   * @param node XML element subtree root.
+   */
+  std::optional<ParseDiagnostic> projectXMLSubtree(const xml::XMLNode& node);
+
   /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
 };
