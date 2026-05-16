@@ -214,5 +214,38 @@ TEST(DocumentSyncControllerStructuredTest, BatchedSiblingSourceEditsStayLocal) {
   EXPECT_EQ(circle->getAttribute("fill"), RcString("green"));
 }
 
+TEST(DocumentSyncControllerStructuredTest, ElementSubtreeSourceInsertStaysLocal) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="layer"><rect id="a" width="10" height="10"/></g></svg>)";
+  constexpr std::string_view kInserted = R"(<circle id="b" cx="5" cy="6" r="3" fill="blue"/>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  const std::size_t insertOffset = std::string_view(kSvg).find("</g>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+  textEditor.setCursorPosition(Coordinates(0, static_cast<int>(insertOffset)));
+  textEditor.insertText(kInserted);
+
+  std::string edited(kSvg);
+  edited.insert(insertOffset, kInserted);
+
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), edited);
+
+  auto inserted = app.document().document().querySelector("#b");
+  ASSERT_TRUE(inserted.has_value());
+  EXPECT_EQ(inserted->getAttribute("fill"), RcString("blue"));
+}
+
 }  // namespace
 }  // namespace donner::editor
