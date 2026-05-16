@@ -296,6 +296,19 @@ SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
 }
 
 void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore()) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle_);
+    if (xmlNode.has_value()) {
+      xml::ApplySourceEditResult result =
+          document.xmlDocument().setAttribute(*xmlNode, name, value);
+      for (const xml::XMLMutation& mutation : result.mutations) {
+        (void)document.applyXMLMutation(mutation);
+      }
+      return;
+    }
+  }
+
   (void)setAttributeFromXMLMutation(name, value);
 }
 
@@ -341,6 +354,22 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
 }
 
 void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore()) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle_);
+    if (xmlNode.has_value()) {
+      xml::ApplySourceEditResult result = document.xmlDocument().removeAttribute(*xmlNode, name);
+      for (const xml::XMLMutation& mutation : result.mutations) {
+        (void)document.applyXMLMutation(mutation);
+      }
+      return;
+    }
+  }
+
+  removeAttributeFromXMLMutation(name);
+}
+
+void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {

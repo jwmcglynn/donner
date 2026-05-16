@@ -305,6 +305,41 @@ TEST_F(XMLParserTests, SetAttributeUpdatesSourceThroughDocument) {
   EXPECT_THAT(rect.getAttribute("fill"), Eq(R"(Tom's & "q")"));
 }
 
+TEST_F(XMLParserTests, SetAttributeInsertsMissingSourceAttributeThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><rect /></svg>)";
+  constexpr std::string_view kInsertedSource = R"(fill="blue &amp; white")";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t insertionOffset = document.source().find("/");
+  ASSERT_NE(insertionOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.setAttribute(rect, "fill", "blue & white");
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = insertionOffset,
+                                       .removedLength = 0,
+                                       .insertedLength = kInsertedSource.size(),
+                                       .sourceVersion = 1,
+                                   }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue & white")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="blue &amp; white"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("blue & white"));
+}
+
 TEST_F(XMLParserTests, RemoveAttributeUpdatesSourceThroughDocument) {
   constexpr std::string_view kXml = R"(<svg><rect fill="red" stroke="blue"/></svg>)";
 

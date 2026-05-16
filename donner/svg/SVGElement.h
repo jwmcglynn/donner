@@ -424,6 +424,13 @@ protected:
                                                              std::string_view value);
 
   /**
+   * Remove an attribute from an XML mutation without writing back to XML source.
+   *
+   * @param name Name of the attribute to remove.
+   */
+  void removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name);
+
+  /**
    * Create a new Entity within the document ECS, and return a handle to it.
    *
    * @param document Containing document.

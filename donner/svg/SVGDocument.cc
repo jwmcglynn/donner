@@ -251,7 +251,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
       return std::nullopt;
 
     case xml::XMLMutation::Kind::AttributeRemoved:
-      element.removeAttribute(mutation.attributeName);
+      element.removeAttributeFromXMLMutation(mutation.attributeName);
       return std::nullopt;
 
     case xml::XMLMutation::Kind::SourceDiagnosticChanged: return std::nullopt;

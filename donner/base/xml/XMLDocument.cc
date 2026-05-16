@@ -48,6 +48,14 @@ bool IsXmlWhitespace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 }
 
+void AppendQualifiedName(std::string& out, const XMLQualifiedNameRef& name) {
+  if (!name.namespacePrefix.empty()) {
+    out.append(name.namespacePrefix);
+    out.push_back(':');
+  }
+  out.append(name.name);
+}
+
 bool ContainsOffset(const SourceRange& range, std::size_t offset) {
   if (!range.start.offset.has_value() || !range.end.offset.has_value()) {
     return false;
@@ -352,6 +360,40 @@ std::optional<AttributeValueEdit> GetAttributeValueEditForNode(const XMLDocument
   }
 
   return GetAttributeValueSpan(node, name, *attributeLocation, document.source());
+}
+
+std::optional<std::size_t> GetAttributeInsertionOffset(const XMLDocument& document,
+                                                       const XMLNode& node) {
+  std::optional<SourceRange> nodeLocation = node.getNodeLocation();
+  if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<std::size_t> tagEnd =
+      FindOpeningTagEnd(document.source(), *nodeLocation->start.offset);
+  if (!tagEnd.has_value() || *tagEnd == 0) {
+    return std::nullopt;
+  }
+
+  if (*tagEnd >= 2 && document.source()[*tagEnd - 2] == '/') {
+    return *tagEnd - 2;
+  }
+
+  return *tagEnd - 1;
+}
+
+std::string SerializeAttributeInsertion(std::string_view source, std::size_t insertionOffset,
+                                        const XMLQualifiedName& name,
+                                        std::string_view escapedValue) {
+  std::string result;
+  if (insertionOffset == 0 || !IsXmlWhitespace(source[insertionOffset - 1])) {
+    result.push_back(' ');
+  }
+  AppendQualifiedName(result, name);
+  result.append("=\"");
+  result.append(escapedValue);
+  result.push_back('"');
+  return result;
 }
 
 std::optional<SourceEditRange> GetAttributeRemovalRange(const XMLDocument& document,
@@ -745,8 +787,48 @@ ApplySourceEditResult XMLDocument::setAttribute(XMLNode node, const XMLQualified
   std::optional<AttributeValueEdit> edit = GetAttributeValueEditForNode(*this, node, ownedName);
   if (!edit.has_value()) {
     result.scope = ReparseScope::OpeningTag;
-    result.diagnostic = MakeEditDiagnostic(
-        "Only existing source-backed attribute writes are implemented", diagnosticRange);
+
+    if (node.hasAttribute(ownedName)) {
+      result.diagnostic =
+          MakeEditDiagnostic("Cannot update attribute without a source range", diagnosticRange);
+      return result;
+    }
+
+    std::optional<std::size_t> insertionOffset = GetAttributeInsertionOffset(*this, node);
+    if (!insertionOffset.has_value()) {
+      result.diagnostic = MakeEditDiagnostic(
+          "Cannot insert attribute without an opening tag source range", diagnosticRange);
+      return result;
+    }
+
+    std::optional<RcString> escapedValue = EscapeAttributeValue(value, '"');
+    if (!escapedValue.has_value()) {
+      result.diagnostic = MakeEditDiagnostic("Attribute value cannot be represented in XML source",
+                                             diagnosticRange);
+      return result;
+    }
+
+    const std::string insertion =
+        SerializeAttributeInsertion(source(), *insertionOffset, ownedName, *escapedValue);
+    std::optional<XMLSourceDelta> delta = store->replace(*insertionOffset, 0, insertion);
+    if (!delta.has_value()) {
+      result.diagnostic =
+          MakeEditDiagnostic("Invalid source replacement for attribute insertion", diagnosticRange);
+      return result;
+    }
+
+    result.applied = true;
+    result.sourceDeltas.push_back(*delta);
+
+    const RcString ownedValue(value);
+    node.setAttribute(ownedName, ownedValue);
+    result.mutations.push_back(XMLMutation{
+        .kind = XMLMutation::Kind::AttributeSet,
+        .node = node,
+        .attributeName = ownedName,
+        .value = ownedValue,
+        .scope = ReparseScope::OpeningTag,
+    });
     return result;
   }
 

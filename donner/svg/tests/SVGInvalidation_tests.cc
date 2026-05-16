@@ -292,6 +292,73 @@ TEST_F(SVGInvalidationTests, SourceEditOpeningTagRemovalClearsPresentationAttrib
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }
 
+TEST_F(SVGInvalidationTests, SetAttributeUpdatesSourceThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" fill="red" />
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  target->setAttribute("fill", "green");
+
+  std::optional<RcString> fill = target->getAttribute("fill");
+  ASSERT_TRUE(fill.has_value());
+  EXPECT_EQ(*fill, RcString("green"));
+  EXPECT_NE(doc.source().find(R"(fill="green")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
+}
+
+TEST_F(SVGInvalidationTests, SetAttributeInsertsSourceAttributeThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" />
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  target->setAttribute("data-label", "blue & white");
+
+  std::optional<RcString> dataLabel = target->getAttribute("data-label");
+  ASSERT_TRUE(dataLabel.has_value());
+  EXPECT_EQ(*dataLabel, RcString("blue & white"));
+  EXPECT_NE(doc.source().find(R"(data-label="blue &amp; white")"), std::string_view::npos);
+}
+
+TEST_F(SVGInvalidationTests, RemoveAttributeUpdatesSourceThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" fill="red" />
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  target->removeAttribute("fill");
+
+  EXPECT_FALSE(target->getAttribute("fill").has_value());
+  EXPECT_EQ(doc.source().find(R"(fill="red")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
+}
+
 TEST_F(SVGInvalidationTests, SourceEditInvalidPresentationAttributeKeepsLastValidStyle) {
   const std::string input = R"(
     <svg xmlns="http://www.w3.org/2000/svg">
