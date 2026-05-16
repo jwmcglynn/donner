@@ -20,6 +20,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/xml/XMLDocument.h"
 #include "donner/editor/CommandQueue.h"
 #include "donner/svg/SVGDocument.h"
 
@@ -89,6 +90,17 @@ public:
 
   /// Push a command onto the per-frame queue. UI thread only.
   void applyMutation(EditorCommand command) { queue_.push(std::move(command)); }
+
+  /**
+   * Apply an incremental source edit directly to the current document.
+   *
+   * Unlike \ref EditorCommand::Kind::ReplaceDocument, this preserves document identity and routes
+   * the edit through `donner/base/xml` so the XML source store owns both source bytes and emitted
+   * SVG mutations.
+   *
+   * @param intent Source edit request.
+   */
+  xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
 
   /// Direct access to the command queue. Tools push via `applyMutation`;
   /// this accessor exists for tests and for the main loop's `flushFrame`.

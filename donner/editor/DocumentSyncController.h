@@ -14,7 +14,7 @@ namespace donner::editor {
 
 class SelectTool;
 
-/// Owns source-pane debounce, parse-error markers, and pending canvas→text writebacks.
+/// Owns source-pane debounce, parse-error markers, and XML-owned source view mirroring.
 class DocumentSyncController {
 public:
   explicit DocumentSyncController(std::string initialSource);
@@ -31,9 +31,8 @@ private:
   std::string previousSourceText_;
   std::optional<std::string> lastWritebackSourceText_;
   /// Pending transform writebacks that haven't been reflected in the source
-  /// pane yet. Was a single `optional`; became a vector to support multi-
-  /// element drag (each dragged element produces its own writeback, and
-  /// they're all applied in the same source patch pass to avoid flashing).
+  /// pane yet. Source-backed documents route these through XML DOM mutation;
+  /// source-less fallbacks still use legacy text patches.
   std::vector<EditorApp::CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<EditorApp::CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
 

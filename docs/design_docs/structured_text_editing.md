@@ -750,7 +750,9 @@ the target architecture.
       source-pane mutation. `DocumentSyncController` forwards that intent to
       `XMLDocument::applySourceEdit`; it does not diff old/new full strings.
       The XML-side `XMLEditIntent` / `applySourceEdit` transaction exists;
-      editor forwarding remains.
+      `SourceSync` now routes a single contiguous text change to
+      `AsyncSVGDocument::applySourceEdit` when structured editing is enabled,
+      but `TextEditor` still needs to emit the original edit intent directly.
 - [ ] **Local scope selection.** `XMLDocument::applySourceEdit` maps the edit
       to a live source anchor and chooses the smallest safe reparse scope:
       - `AttributeValue`: edit stays inside one quoted value; reparse XML
@@ -797,7 +799,8 @@ the target architecture.
       `NodeValueChanged`, `NodeInserted`, `NodeRemoved`, `SubtreeReplaced`,
       and `SourceDiagnosticChanged`. Current implementation emits
       `AttributeSet`, `AttributeRemoved`, and `NodeValueChanged` for source
-      edits; DOM-originated XML mutation emission remains.
+      edits; DOM-originated attribute set/remove and node removal now emit
+      XML mutations. Insert/replace/diagnostic mutations remain.
 - [ ] **`SVGDocument` consumes XML mutations.** The SVG layer maps the
       mutated `XMLNode` identity to the existing `SVGElement`/entity and calls
       the existing attribute/value parsers with a fresh `SVGParserContext`.
@@ -832,19 +835,27 @@ the target architecture.
 
 - [ ] **Canvas tools call DOM APIs only.** Select drag, future path tools,
       delete, and create operations call `XMLNode` / `SVGElement` APIs. They
-      never build source replacements.
+      never build source replacements. Production transform/delete writeback
+      now routes source-backed documents through XML DOM mutation; legacy
+      `TextPatch` helpers remain for fallback/tests.
 - [ ] **`XMLNode::setAttribute` serializes through `SourceStore`.** If the
       attribute has source metadata, replace its value span preserving quote
       style and attribute order. If absent, insert a new serialized attribute
       using the element's local formatting policy. If the node has no source
       span, serialize the node or nearest source-less subtree when inserted.
+      `XMLDocument::setAttribute` implements source-backed replace/insert;
+      the lower-level `XMLNode` convenience setter remains a direct DOM setter.
 - [ ] **`XMLNode::remove` updates source and tree together.** Element delete
       removes the node span from `SourceStore`, invalidates anchors for the
       subtree, detaches the DOM node, and emits one `NodeRemoved` mutation.
+      `XMLDocument::removeNode` and source-backed `SVGElement::remove` cover
+      the first version; explicit subtree anchor invalidation still remains.
 - [ ] **Editor mirrors XML source deltas.** `DocumentSyncController` applies
       `XMLSourceDelta`s from the XML document to `TextEditor` with change
       suppression so source-pane echo does not become a user edit. This is a
-      view update, not a separate source-of-truth splice.
+      view update, not a separate source-of-truth splice. The current
+      implementation mirrors the XML-owned full source string with echo
+      suppression; precise delta application remains.
 - [ ] Tests:
       - drag inserts/replaces `transform` via XML DOM and source store;
       - delete removes the XML node span and selection remaps/clears;

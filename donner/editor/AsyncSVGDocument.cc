@@ -77,6 +77,29 @@ bool AsyncSVGDocument::flushFrame() {
   return true;
 }
 
+xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditIntent& intent) {
+  if (!document_.has_value()) {
+    xml::ApplySourceEditResult result;
+    result.diagnostic =
+        ParseDiagnostic::Error("Cannot apply source edit without a loaded document", intent.range);
+    lastParseError_ = result.diagnostic;
+    return result;
+  }
+
+  xml::ApplySourceEditResult result = document_->applySourceEdit(intent);
+  if (result.diagnostic.has_value()) {
+    lastParseError_ = result.diagnostic;
+  } else {
+    lastParseError_.reset();
+  }
+
+  if (result.applied || !result.mutations.empty()) {
+    frameVersion_.fetch_add(1, std::memory_order_release);
+  }
+
+  return result;
+}
+
 bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
   ParseWarningSink sink;
   auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink);

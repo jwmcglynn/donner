@@ -81,7 +81,7 @@ TEST_F(DocumentSyncControllerTest, UndoingDragWritebackBackToBaselineClearsDirty
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
-  ASSERT_TRUE(app_.flushFrame());
+  EXPECT_FALSE(app_.flushFrame());
   ASSERT_TRUE(app_.isDirty());
 
   app_.undo();
@@ -89,6 +89,7 @@ TEST_F(DocumentSyncControllerTest, UndoingDragWritebackBackToBaselineClearsDirty
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  EXPECT_FALSE(app_.flushFrame());
   EXPECT_FALSE(app_.isDirty());
 }
 
@@ -124,7 +125,7 @@ TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTra
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
-  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.flushFrame());
   ASSERT_TRUE(app.isDirty());
 
   app.undo();
@@ -132,6 +133,7 @@ TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTra
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+  EXPECT_FALSE(app.flushFrame());
   EXPECT_FALSE(app.isDirty());
 }
 
@@ -156,7 +158,7 @@ TEST_F(DocumentSyncControllerTest, UndoingDragOnNonCanonicalTransformRestoresCle
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
-  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.flushFrame());
   ASSERT_TRUE(app.isDirty());
 
   app.undo();
@@ -164,6 +166,7 @@ TEST_F(DocumentSyncControllerTest, UndoingDragOnNonCanonicalTransformRestoresCle
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+  EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(textEditor.getText(), std::string(kNonCanonicalTransformSvg));
   EXPECT_FALSE(app.isDirty());
 }

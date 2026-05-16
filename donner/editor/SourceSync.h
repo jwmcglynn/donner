@@ -14,7 +14,7 @@ namespace donner::editor {
 
 /// Outcome from dispatching a source-pane text change.
 struct DispatchSourceTextChangeResult {
-  /// True when a command was enqueued into `EditorApp`.
+  /// True when the change was applied to the live document or queued as an editor command.
   bool dispatchedMutation = false;
 
   /// True when the change matched the editor's most recent self-initiated
@@ -44,7 +44,7 @@ void QueueSourceWritebackReparse(EditorApp& app, std::string_view newSource,
                                  std::string* previousSourceText,
                                  std::optional<std::string>* lastWritebackSourceText);
 
-/// Route a source-pane text change through structured editing or full reparse.
+/// Route a source-pane text change through XML structured editing or full reparse.
 ///
 /// Self-initiated writebacks recorded via `QueueSourceWritebackReparse()` are
 /// filtered out here so the source-pane change signal does not enqueue a

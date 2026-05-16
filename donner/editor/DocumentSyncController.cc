@@ -11,6 +11,23 @@ namespace {
 constexpr float kTextChangeDebounceSeconds = 0.15f;
 constexpr int kNoErrorLine = -1;
 
+bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
+                                        std::string* previousSourceText,
+                                        std::optional<std::string>* lastWritebackSourceText) {
+  if (!app.hasDocument() || !app.document().document().hasSourceStore()) {
+    return false;
+  }
+
+  std::string source(app.document().document().source());
+  if (textEditor.getText() != source) {
+    textEditor.setText(source, /*preserveScroll=*/true);
+  }
+  *previousSourceText = source;
+  *lastWritebackSourceText = source;
+  app.syncDirtyFromSource(source);
+  return true;
+}
+
 }  // namespace
 
 DocumentSyncController::DocumentSyncController(std::string initialSource)
@@ -105,26 +122,62 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   if (!pendingElementRemoveWritebacks_.empty()) {
-    std::string source = textEditor.getText();
-    bool changed = false;
-    for (const auto& pendingRemove : pendingElementRemoveWritebacks_) {
-      auto patch = buildElementRemoveWriteback(source, pendingRemove.target);
-      if (!patch.has_value()) {
-        continue;
+    if (MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                           &lastWritebackSourceText_)) {
+      pendingElementRemoveWritebacks_.clear();
+    } else {
+      std::string source = textEditor.getText();
+      bool changed = false;
+      for (const auto& pendingRemove : pendingElementRemoveWritebacks_) {
+        auto patch = buildElementRemoveWriteback(source, pendingRemove.target);
+        if (!patch.has_value()) {
+          continue;
+        }
+
+        applyPatches(source, {{*patch}});
+        changed = true;
       }
 
-      applyPatches(source, {{*patch}});
-      changed = true;
-    }
-
-    pendingElementRemoveWritebacks_.clear();
-    if (changed) {
-      textEditor.setText(source, /*preserveScroll=*/true);
-      QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
+      pendingElementRemoveWritebacks_.clear();
+      if (changed) {
+        textEditor.setText(source, /*preserveScroll=*/true);
+        QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
+      }
     }
   }
 
   if (pendingTransformWritebacks_.empty()) {
+    return;
+  }
+
+  if (app.hasDocument() && app.document().document().hasSourceStore()) {
+    svg::SVGDocument& document = app.document().document();
+    for (const auto& writeback : pendingTransformWritebacks_) {
+      std::optional<svg::SVGElement> element =
+          resolveAttributeWritebackTarget(document, writeback.target);
+      if (!element.has_value()) {
+        continue;
+      }
+
+      if (writeback.restoreSourceTransformAttributeValue) {
+        if (writeback.sourceTransformAttributeValue.has_value()) {
+          element->setAttribute("transform", *writeback.sourceTransformAttributeValue);
+        } else {
+          element->removeAttribute("transform");
+        }
+      } else {
+        const RcString serialized = toSVGTransformString(writeback.transform);
+        if (std::string_view(serialized).empty()) {
+          element->removeAttribute("transform");
+        } else {
+          element->setAttribute("transform", serialized);
+        }
+      }
+    }
+
+    pendingTransformWritebacks_.clear();
+    (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                             &lastWritebackSourceText_);
     return;
   }
 
