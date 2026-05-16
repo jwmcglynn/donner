@@ -3,6 +3,7 @@
 #include <cassert>  // For assert
 #include <cstddef>
 #include <cstdlib>  // For std::size_t
+#include <string>
 #include <string_view>
 
 #include "donner/base/ChunkedString.h"
@@ -259,7 +260,9 @@ public:
         maxEntitySubstitutions_(options.maxEntitySubstitutions),
         maxElements_(options.maxElements),
         maxAttributesPerElement_(options.maxAttributesPerElement),
-        maxNestingDepth_(options.maxNestingDepth) {}
+        maxNestingDepth_(options.maxNestingDepth) {
+    document_.setSource(std::string(text));
+  }
 
   bool isWhitespace(char ch) const {
     // Whitespace is defined by multiple specs, but both match.
@@ -1128,6 +1131,8 @@ private:
    * Read raw text (PCDATA) until `<` or `\0`
    */
   std::optional<ParseDiagnostic> parseAndAppendData(XMLNode& node) {
+    const FileOffset startOffset = currentOffsetWithLineNumber(remaining_);
+
     // Expand all entities in the current text chunk
     auto maybeData = consumePCDataOnce();
     if (maybeData.hasError()) {
@@ -1141,6 +1146,8 @@ private:
 
       // Create new data node
       XMLNode data = XMLNode::CreateDataNode(document_, dataStrAllocated);
+      data.setSourceStartOffset(startOffset);
+      data.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
       node.appendChild(data);
 
       // Add data to parent node as well

@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <memory>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Utils.h"
 
@@ -9,6 +11,7 @@ namespace donner::xml {
 // Forward declarations
 class XMLDocument;
 class XMLNode;
+class XMLSourceStore;
 
 }  // namespace donner::xml
 
@@ -47,6 +50,9 @@ public:
 
   /// Root entity of the document.
   Entity rootEntity = entt::null;
+
+  /// Optional source store for parsed documents that own their source projection.
+  std::shared_ptr<XMLSourceStore> sourceStore;
 };
 
 }  // namespace donner::xml::components

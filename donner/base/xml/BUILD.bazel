@@ -21,12 +21,14 @@ donner_cc_library(
         "XMLEscape.cc",
         "XMLNode.cc",
         "XMLParser.cc",
+        "XMLSourceStore.cc",
     ],
     hdrs = [
         "XMLDocument.h",
         "XMLEscape.h",
         "XMLNode.h",
         "XMLParser.h",
+        "XMLSourceStore.h",
         "XMLTokenType.h",
         "XMLTokenizer.h",
     ],
@@ -61,6 +63,17 @@ donner_cc_test(
     deps = [
         ":xml",
         "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "xml_source_store_tests",
+    srcs = [
+        "tests/XMLSourceStore_tests.cc",
+    ],
+    deps = [
+        ":xml",
         "@com_google_gtest//:gtest_main",
     ],
 )

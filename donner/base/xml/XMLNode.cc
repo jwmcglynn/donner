@@ -9,11 +9,13 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/base/xml/components/XMLValueComponent.h"
 
 namespace donner::xml {
 
+using components::XMLDocumentContext;
 using components::XMLNamespaceContext;
 using donner::components::AttributesComponent;
 using donner::components::TreeComponent;
@@ -34,6 +36,8 @@ private:
 struct SourceOffsetComponent {
   std::optional<FileOffset> startOffset;
   std::optional<FileOffset> endOffset;
+  std::optional<SourceAnchorSpan> anchorSpan;
+  std::uint64_t anchorSourceVersion = 0;
 };
 
 /// Escape text content (Data nodes): escape `<`, `>`, and `&`, but not quotes since
@@ -71,6 +75,69 @@ bool HasElementChildren(const XMLNode& node) {
     }
   }
   return false;
+}
+
+XMLSourceStore* GetSourceStore(EntityHandle handle) {
+  return handle.registry()->ctx().get<XMLDocumentContext>().sourceStore.get();
+}
+
+void InvalidateAnchors(XMLSourceStore& sourceStore, SourceAnchorSpan span) {
+  sourceStore.invalidateAnchor(span.start);
+  sourceStore.invalidateAnchor(span.end);
+}
+
+void UpdateSourceAnchorSpan(EntityHandle handle, SourceOffsetComponent& offset) {
+  XMLSourceStore* sourceStore = GetSourceStore(handle);
+  if (sourceStore == nullptr || !offset.startOffset.has_value() || !offset.endOffset.has_value() ||
+      !offset.startOffset->offset.has_value() || !offset.endOffset->offset.has_value()) {
+    return;
+  }
+
+  if (offset.anchorSpan.has_value()) {
+    InvalidateAnchors(*sourceStore, *offset.anchorSpan);
+    offset.anchorSpan = std::nullopt;
+  }
+
+  const XMLNode::Type nodeType = handle.get<XMLNodeTypeComponent>().type();
+  const SourceAnchorBias startBias =
+      nodeType == XMLNode::Type::Data ? SourceAnchorBias::Before : SourceAnchorBias::After;
+  const SourceAnchorBias endBias =
+      nodeType == XMLNode::Type::Data ? SourceAnchorBias::After : SourceAnchorBias::Before;
+  offset.anchorSpan = sourceStore->createSpan(offset.startOffset->offset.value(),
+                                              offset.endOffset->offset.value(), startBias, endBias);
+  if (offset.anchorSpan.has_value()) {
+    offset.anchorSourceVersion = sourceStore->sourceVersion();
+  }
+}
+
+std::optional<FileOffset> ResolveStartOffset(const SourceOffsetComponent& offset,
+                                             XMLSourceStore* sourceStore) {
+  if (sourceStore != nullptr && offset.anchorSpan.has_value() &&
+      sourceStore->sourceVersion() != offset.anchorSourceVersion) {
+    std::optional<std::size_t> resolved = sourceStore->resolveAnchor(offset.anchorSpan->start);
+    if (!resolved.has_value()) {
+      return std::nullopt;
+    }
+
+    return FileOffset::Offset(*resolved);
+  }
+
+  return offset.startOffset;
+}
+
+std::optional<FileOffset> ResolveEndOffset(const SourceOffsetComponent& offset,
+                                           XMLSourceStore* sourceStore) {
+  if (sourceStore != nullptr && offset.anchorSpan.has_value() &&
+      sourceStore->sourceVersion() != offset.anchorSourceVersion) {
+    std::optional<std::size_t> resolved = sourceStore->resolveAnchor(offset.anchorSpan->end);
+    if (!resolved.has_value()) {
+      return std::nullopt;
+    }
+
+    return FileOffset::Offset(*resolved);
+  }
+
+  return offset.endOffset;
 }
 
 }  // namespace
@@ -178,8 +245,10 @@ std::optional<RcString> XMLNode::getAttribute(const XMLQualifiedNameRef& name) c
 
 std::optional<SourceRange> XMLNode::getNodeLocation() const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
-    if (offset->startOffset && offset->endOffset) {
-      return SourceRange{*offset->startOffset, *offset->endOffset};
+    std::optional<FileOffset> start = ResolveStartOffset(*offset, GetSourceStore(handle_));
+    std::optional<FileOffset> end = ResolveEndOffset(*offset, GetSourceStore(handle_));
+    if (start.has_value() && end.has_value()) {
+      return SourceRange{*start, *end};
     }
   }
 
@@ -189,9 +258,9 @@ std::optional<SourceRange> XMLNode::getNodeLocation() const {
 std::optional<SourceRange> XMLNode::getAttributeLocation(std::string_view xmlInput,
                                                          const XMLQualifiedNameRef& name) const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
-    if (offset->startOffset) {
-      if (auto maybeLocation =
-              XMLParser::GetAttributeLocation(xmlInput, offset->startOffset.value(), name)) {
+    std::optional<FileOffset> start = ResolveStartOffset(*offset, GetSourceStore(handle_));
+    if (start.has_value()) {
+      if (auto maybeLocation = XMLParser::GetAttributeLocation(xmlInput, start.value(), name)) {
         return maybeLocation;
       }
     }
@@ -275,26 +344,30 @@ void XMLNode::remove() {
 
 std::optional<FileOffset> XMLNode::sourceStartOffset() const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
-    return offset->startOffset;
+    return ResolveStartOffset(*offset, GetSourceStore(handle_));
   } else {
     return std::nullopt;
   }
 }
 
 void XMLNode::setSourceStartOffset(FileOffset offset) {
-  handle_.get_or_emplace<SourceOffsetComponent>().startOffset = offset;
+  auto& sourceOffset = handle_.get_or_emplace<SourceOffsetComponent>();
+  sourceOffset.startOffset = offset;
+  UpdateSourceAnchorSpan(handle_, sourceOffset);
 }
 
 std::optional<FileOffset> XMLNode::sourceEndOffset() const {
   if (const auto* offset = handle_.try_get<SourceOffsetComponent>()) {
-    return offset->endOffset;
+    return ResolveEndOffset(*offset, GetSourceStore(handle_));
   } else {
     return std::nullopt;
   }
 }
 
 void XMLNode::setSourceEndOffset(FileOffset offset) {
-  handle_.get_or_emplace<SourceOffsetComponent>().endOffset = offset;
+  auto& sourceOffset = handle_.get_or_emplace<SourceOffsetComponent>();
+  sourceOffset.endOffset = offset;
+  UpdateSourceAnchorSpan(handle_, sourceOffset);
 }
 
 RcString XMLNode::serializeToString(int indentLevel) const {
