@@ -570,6 +570,31 @@ TEST_F(XMLParserTests, RemoveNodeUpdatesSourceThroughDocument) {
   EXPECT_EQ(group.parentElement(), std::nullopt);
 }
 
+TEST_F(XMLParserTests, RemoveNodeInvalidatesRemovedSubtreeSourceLocations) {
+  constexpr std::string_view kXml = R"(<svg><g id="target"><rect id="child"/></g><circle/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode child = group.firstChild().value();
+
+  ASSERT_TRUE(group.getNodeLocation().has_value());
+  ASSERT_TRUE(child.getNodeLocation().has_value());
+
+  ApplySourceEditResult result = document.removeNode(group);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  EXPECT_EQ(group.parentElement(), std::nullopt);
+  EXPECT_EQ(group.getNodeLocation(), std::nullopt);
+  EXPECT_EQ(child.getNodeLocation(), std::nullopt);
+  EXPECT_EQ(group.sourceStartOffset(), std::nullopt);
+  EXPECT_EQ(group.sourceEndOffset(), std::nullopt);
+}
+
 TEST_F(XMLParserTests, ApplySourceEditElementSubtreeInsertsChildWithoutDocumentFallback) {
   constexpr std::string_view kXml =
       R"(<svg><g id="layer"><rect id="r"/></g><circle id="outside"/></svg>)";
