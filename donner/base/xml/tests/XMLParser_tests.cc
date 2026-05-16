@@ -617,6 +617,40 @@ TEST_F(XMLParserTests, ApplySourceEditElementSubtreeInsertsChildWithoutDocumentF
   EXPECT_EQ(document.nodeAtSourceOffset(insertOffset + 1), inserted);
 }
 
+TEST_F(XMLParserTests, ApplySourceEditElementSubtreePreservesMatchedChildIdentity) {
+  constexpr std::string_view kXml =
+      R"(<svg><g id="layer"><rect id="r"/></g><circle id="outside"/></svg>)";
+  constexpr std::string_view kInserted = R"(<circle id="c"/>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  const Entity rectEntity = rect.entityHandle().entity();
+
+  const std::size_t insertOffset = document.source().find("</g>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = kInserted,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  ASSERT_TRUE(group.firstChild().has_value());
+  XMLNode updatedRect = *group.firstChild();
+  EXPECT_EQ(updatedRect.tagName(), XMLQualifiedNameRef("rect"));
+  EXPECT_EQ(updatedRect.entityHandle().entity(), rectEntity);
+  EXPECT_THAT(updatedRect.getAttribute("id"), testing::Optional(RcString("r")));
+}
+
 TEST_F(XMLParserTests, ApplySourceEditOpeningTagRenamesAttribute) {
   constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
 
