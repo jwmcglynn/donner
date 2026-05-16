@@ -820,7 +820,7 @@ the target architecture.
       - [x] edit `fill` updates style and dirty flags without `ParseSVG`;
       - [x] delete `fill` clears the presentation attribute and dirty flags
         without `ParseSVG`;
-      - edit `d` updates path geometry and dirty flags without `ParseSVG`;
+      - [x] edit `d` updates path geometry and dirty flags without `ParseSVG`;
       - delete `values=` from `feColorMatrix` clears the vector component;
       - [x] invalid value records a diagnostic and preserves the last valid
         semantic value;

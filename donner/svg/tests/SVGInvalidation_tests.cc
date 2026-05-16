@@ -11,6 +11,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -343,6 +344,46 @@ TEST_F(SVGInvalidationTests, SourceEditInvalidPresentationAttributeKeepsLastVali
   EXPECT_THAT(
       target->getComputedStyle().fill.get(),
       testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
+}
+
+TEST_F(SVGInvalidationTests, SourceEditPathDataUpdatesGeometryAttribute) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <path id="target" d="M 0 0 L 10 10" />
+    </svg>
+  )";
+  const std::string originalPath = "M 0 0 L 10 10";
+  const std::string updatedPath = "M 1 2 L 3 4";
+  const std::size_t pathValueOffset = input.find(originalPath);
+  ASSERT_NE(pathValueOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(pathValueOffset),
+                FileOffset::Offset(pathValueOffset + originalPath.size())},
+      .replacement = updatedPath,
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
+
+  std::optional<RcString> d = target->getAttribute("d");
+  ASSERT_TRUE(d.has_value());
+  EXPECT_EQ(*d, RcString(updatedPath));
+
+  const auto* path = target->entityHandle().try_get<components::PathComponent>();
+  ASSERT_NE(path, nullptr);
+  EXPECT_EQ(path->d.getRequired(), RcString(updatedPath));
+  EXPECT_NE(doc.source().find(R"(d="M 1 2 L 3 4")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }
 
 // ---------------------------------------------------------------------------
