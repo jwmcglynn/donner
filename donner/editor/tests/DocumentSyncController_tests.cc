@@ -171,5 +171,48 @@ TEST_F(DocumentSyncControllerTest, UndoingDragOnNonCanonicalTransformRestoresCle
   EXPECT_FALSE(app.isDirty());
 }
 
+TEST(DocumentSyncControllerStructuredTest, BatchedSiblingSourceEditsStayLocal) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="a" fill="red"/><circle id="b" fill="red"/></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  std::string edited(kSvg);
+  const std::size_t firstRed = edited.find("red");
+  ASSERT_NE(firstRed, std::string::npos);
+  textEditor.setSelection(Coordinates(0, static_cast<int>(firstRed)),
+                          Coordinates(0, static_cast<int>(firstRed + 3)));
+  textEditor.insertText("blue");
+  edited.replace(firstRed, 3, "blue");
+
+  const std::size_t secondRed = edited.rfind("red");
+  ASSERT_NE(secondRed, std::string::npos);
+  textEditor.setSelection(Coordinates(0, static_cast<int>(secondRed)),
+                          Coordinates(0, static_cast<int>(secondRed + 3)));
+  textEditor.insertText("green");
+  edited.replace(secondRed, 3, "green");
+
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), edited);
+
+  auto rect = app.document().document().querySelector("#a");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->getAttribute("fill"), RcString("blue"));
+
+  auto circle = app.document().document().querySelector("#b");
+  ASSERT_TRUE(circle.has_value());
+  EXPECT_EQ(circle->getAttribute("fill"), RcString("green"));
+}
+
 }  // namespace
 }  // namespace donner::editor
