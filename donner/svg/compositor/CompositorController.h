@@ -648,14 +648,15 @@ public:
    * Rewire the compositor's entity-keyed state (`activeHints_`,
    * `mandatoryDetector_`, `complexityBucketer_`, `layers_`) from the
    * old document's entity space onto a new one, after a structurally
-   * identical `setDocument`. The cached bitmaps (segments, layer
-   * bitmaps, `backgroundBitmap_`, `foregroundBitmap_`) survive
-   * untouched — they're keyed on position-in-paint-order, not entity
-   * id. This is the fast alternative to `resetAllLayers(documentReplaced
-   * =true)` for the editor's drag-end writeback round-trip through
-   * `ReplaceDocumentCommand`: with a structurally equal reparse, the
-   * new document describes the same render tree with the identical
-   * visual result, and the compositor can simply swap ids.
+   * identical `setDocument`. Interaction-layer bitmaps are preserved
+   * only when the remapped layer still has a pixel-exact reuse
+   * transform and raster rectangle; otherwise the affected layer is
+   * marked dirty for the next `renderFrame()`. This is the fast alternative to
+   * `resetAllLayers(documentReplaced=true)` for the editor's drag-end
+   * writeback round-trip through `ReplaceDocumentCommand`: with a
+   * structurally equal reparse, the compositor can swap ids and
+   * surgically re-rasterize only caches whose pixels no longer match
+   * the settled DOM.
    *
    * @param remap Mapping from old entity id → new entity id. Every
    *   entity in `activeHints_` and in each `CompositorLayer`
@@ -832,6 +833,10 @@ private:
 
   SVGDocument* document_ = nullptr;
   RendererInterface* renderer_ = nullptr;
+  /// Most recent render viewport. Used to validate remapped layer caches
+  /// against the same raster geometry they were originally rendered with.
+  RenderViewport lastViewport_;
+  bool hasLastViewport_ = false;
   CompositorConfig config_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;

@@ -148,6 +148,103 @@ ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   return img;
 }
 
+struct LayerRasterGeometry {
+  RenderViewport viewport;
+  Transform2d surfaceFromCanvas;
+  Vector2d canvasOffset = Vector2d::Zero();
+  bool tight = false;
+};
+
+Vector2i BitmapDimensionsForViewport(const RenderViewport& viewport) {
+  return Vector2i(static_cast<int>(viewport.size.x * viewport.devicePixelRatio),
+                  static_cast<int>(viewport.size.y * viewport.devicePixelRatio));
+}
+
+LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Registry& registry,
+                                               Entity firstEntity, Entity lastEntity,
+                                               const RenderViewport& viewport) {
+  LayerRasterGeometry result;
+  result.viewport = viewport;
+
+  // Intrinsic-size rasterization (design doc 0033 §M2): size the
+  // offscreen to the layer's tight canvas bounds instead of the full
+  // viewport. Editor-promoted layers go through this path too;
+  // `CompositedPreview` carries the layer's `canvasOffset()` so the
+  // editor blits the texture at its intrinsic dimensions + position
+  // (see RenderPanePresenter). M2A scoped this to mandatory-detected
+  // layers; M2B drops the gate.
+  //
+  // `computeEntityRangeBounds` already accounts for filter expansion,
+  // stroke widths, isolated-layer accumulation, and clip rects — see
+  // `RendererDriver.h §computeEntityRangeBounds`. `nullopt` means "fall
+  // back to canvas-size"; never "empty".
+  std::optional<Box2d> tightBoundsCanvas;
+  {
+    ZoneScopedN("Compositor::computeLayerRasterGeometry::computeBounds");
+    RendererDriver boundsDriver(renderer);
+    tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(registry, firstEntity, lastEntity,
+                                                              viewport, Transform2d());
+  }
+
+  // Snap to integer pixels and pad for AA. The padding matters: filter
+  // primitives (gaussian blur in particular) produce a soft falloff
+  // outside the entity's geometric bbox. `computeEntityRangeBounds`
+  // returns the filter region (per spec, a hard clip), but the AA at
+  // its edge still has sub-pixel contributions that need a 1-2 px halo
+  // on either side to stay pixel-identical with the canvas-size
+  // rasterize. 2 px is the smallest value that survived
+  // `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly
+  // packed scene with two large gaussian blurs); 1 px left a ~0.001
+  // alpha tail clipped at the bitmap edge, producing maxDiff=1 in
+  // ~174 boundary pixels. Threshold against canvas area: if the tight
+  // rect covers most of the canvas, the intrinsic-size win is
+  // negligible and the bitmap-management overhead isn't worth it.
+  constexpr double kTightBoundsCoverageThreshold = 0.75;
+  constexpr double kEdgePaddingPx = 2.0;
+  Box2d tightBoundsSnapped;
+  const double canvasArea = viewport.size.x * viewport.size.y;
+  if (tightBoundsCanvas.has_value() && canvasArea > 0.0) {
+    const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
+    Box2d padded(tightBoundsCanvas->topLeft - padding, tightBoundsCanvas->bottomRight + padding);
+    const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
+                          std::floor(std::max(0.0, padded.topLeft.y)));
+    const Vector2d snapBR(std::ceil(std::min(viewport.size.x, padded.bottomRight.x)),
+                          std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
+    if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
+      tightBoundsSnapped = Box2d(snapTL, snapBR);
+      const double tightArea = tightBoundsSnapped.width() * tightBoundsSnapped.height();
+      if (tightArea < canvasArea * kTightBoundsCoverageThreshold) {
+        result.tight = true;
+      }
+    }
+  }
+
+  if (result.tight) {
+    result.viewport.size = tightBoundsSnapped.size();
+    result.surfaceFromCanvas = Transform2d::Translate(-tightBoundsSnapped.topLeft);
+    result.canvasOffset = tightBoundsSnapped.topLeft;
+  }
+
+  return result;
+}
+
+bool IsIntegerTranslation(const Transform2d& transform, Vector2d* roundedTranslation) {
+  if (!transform.isTranslation()) {
+    return false;
+  }
+
+  constexpr double kIntegerTolerance = 1e-6;
+  const Vector2d translation = transform.translation();
+  const Vector2d rounded(std::round(translation.x), std::round(translation.y));
+  if (!NearEquals(translation.x, rounded.x, kIntegerTolerance) ||
+      !NearEquals(translation.y, rounded.y, kIntegerTolerance)) {
+    return false;
+  }
+
+  *roundedTranslation = rounded;
+  return true;
+}
+
 }  // namespace
 
 CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
@@ -781,11 +878,12 @@ bool CompositorController::remapAfterStructuralReplace(
   }
   hintsScanned_ = true;
 
-  // Step 3: remap layer entity ids. Cached `bitmap_`, `composition
-  // Transform_`, `bitmapEntityFromWorldTransform_`, and
-  // `fallbackReasons_` are preserved — they were valid for the old
-  // entity at its paint-order slot and remain valid for the new entity
-  // at the same slot.
+  // Step 3: remap layer entity ids. Cached `bitmap_`, `canvasFromBitmap_`,
+  // `bitmapEntityFromWorldTransform_`, and `fallbackReasons_` survive
+  // initially because they are keyed on the paint-order slot. After
+  // reconcile refreshes assignments, the validation pass below dirties
+  // interaction layers whose preserved bitmap is no longer pixel-exact
+  // for the reparsed DOM.
   for (auto& layer : layers_) {
     const auto eIt = remap.find(layer.entity());
     const auto firstIt = remap.find(layer.firstEntity());
@@ -822,6 +920,59 @@ bool CompositorController::remapAfterStructuralReplace(
   };
   resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
   reconcileLayers(registry);
+
+  // The remap proves the tree shape survived, not that cached layer pixels
+  // are still a pixel-exact final render. Drag writeback commonly changes
+  // only a `transform` attribute: during the live drag, shifting a cached
+  // bitmap is fine for interactivity, but after the DOM has been reparsed the
+  // settled render must match a fresh vector raster. A non-integer
+  // translation, a non-translation delta, or a changed tight raster rectangle
+  // requires re-rasterizing just that layer. Limit this to interaction
+  // layers: mandatory / bucket layers do not carry the editor's live drag
+  // delta, and their cache validity is already governed by normal dirty
+  // flags. Their resolved metadata can shift during prepare even when their
+  // pixel cache is still reusable, so validating them here would throw away
+  // unrelated filter caches on every source writeback.
+  const RenderViewport viewport = hasLastViewport_ ? lastViewport_
+                                                   : RenderViewport{
+                                                         .size = Vector2d(document_->canvasSize()),
+                                                         .devicePixelRatio = 1.0,
+                                                     };
+  for (auto& layer : layers_) {
+    if (layer.isDirty() || !layer.hasValidBitmap()) {
+      continue;
+    }
+    if (!activeHints_.contains(layer.entity())) {
+      continue;
+    }
+
+    bool cacheStillValid = false;
+    if (layer.bitmapEntityFromWorldTransform().has_value() &&
+        registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
+      const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
+      const Transform2d delta =
+          layer.bitmapEntityFromWorldTransform()->inverse() * instance.worldFromEntityTransform;
+
+      Vector2d roundedTranslation;
+      if (IsIntegerTranslation(delta, &roundedTranslation)) {
+        const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+            *renderer_, registry, layer.firstEntity(), layer.lastEntity(), viewport);
+        const Vector2i expectedBitmapDims = BitmapDimensionsForViewport(geometry.viewport);
+        const Vector2d composedCanvasOffset = layer.canvasOffset() + roundedTranslation;
+        cacheStillValid = layer.bitmap().dimensions == expectedBitmapDims &&
+                          (!geometry.tight || composedCanvasOffset == geometry.canvasOffset);
+
+        if (cacheStillValid) {
+          layer.setCanvasFromBitmap(Transform2d::Translate(roundedTranslation));
+        }
+      }
+    }
+
+    if (!cacheStillValid) {
+      layer.markDirty();
+    }
+  }
+
   refreshLayerMetadata();
 
   return true;
@@ -911,6 +1062,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   ZoneScopedN("Compositor::renderFrame");
   UTILS_RELEASE_ASSERT(document_ != nullptr);
   UTILS_RELEASE_ASSERT(renderer_ != nullptr);
+
+  lastViewport_ = viewport;
+  hasLastViewport_ = true;
 
   Registry& registry = document_->registry();
 
@@ -1730,77 +1884,20 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   const auto rasterizeStart = std::chrono::steady_clock::now();
 
   Registry& registry = document_->registry();
-
-  // Intrinsic-size rasterization (design doc 0033 §M2): size the
-  // offscreen to the layer's tight canvas bounds instead of the full
-  // viewport. Editor-promoted layers go through this path too;
-  // `CompositedPreview` carries the layer's `canvasOffset()` so the
-  // editor blits the texture at its intrinsic dimensions + position
-  // (see RenderPanePresenter). M2A scoped this to mandatory-detected
-  // layers; M2B drops the gate.
-  //
-  // `computeEntityRangeBounds` already accounts for filter expansion,
-  // stroke widths, isolated-layer accumulation, and clip rects — see
-  // `RendererDriver.h §computeEntityRangeBounds`. `nullopt` means "fall
-  // back to canvas-size"; never "empty".
-  std::optional<Box2d> tightBoundsCanvas;
-  {
-    ZoneScopedN("Compositor::rasterizeLayer::computeBounds");
-    RendererDriver boundsDriver(*renderer_);
-    tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
-        registry, layer.firstEntity(), layer.lastEntity(), viewport, Transform2d());
-  }
-
-  // Snap to integer pixels and pad for AA. The padding matters: filter
-  // primitives (gaussian blur in particular) produce a soft falloff
-  // outside the entity's geometric bbox. `computeEntityRangeBounds`
-  // returns the filter region (per spec, a hard clip), but the AA at
-  // its edge still has sub-pixel contributions that need a 1-2 px halo
-  // on either side to stay pixel-identical with the canvas-size
-  // rasterize. 2 px is the smallest value that survived
-  // `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly
-  // packed scene with two large gaussian blurs); 1 px left a ~0.001
-  // alpha tail clipped at the bitmap edge, producing maxDiff=1 in
-  // ~174 boundary pixels. Threshold against canvas area: if the tight
-  // rect covers most of the canvas, the intrinsic-size win is
-  // negligible and the bitmap-management overhead isn't worth it.
-  constexpr double kTightBoundsCoverageThreshold = 0.75;
-  constexpr double kEdgePaddingPx = 2.0;
-  Box2d tightBoundsSnapped;
-  bool useTight = false;
-  const double canvasArea = viewport.size.x * viewport.size.y;
-  if (tightBoundsCanvas.has_value() && canvasArea > 0.0) {
-    const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
-    Box2d padded(tightBoundsCanvas->topLeft - padding, tightBoundsCanvas->bottomRight + padding);
-    const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
-                          std::floor(std::max(0.0, padded.topLeft.y)));
-    const Vector2d snapBR(std::ceil(std::min(viewport.size.x, padded.bottomRight.x)),
-                          std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
-    if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
-      tightBoundsSnapped = Box2d(snapTL, snapBR);
-      const double tightArea = tightBoundsSnapped.width() * tightBoundsSnapped.height();
-      if (tightArea < canvasArea * kTightBoundsCoverageThreshold) {
-        useTight = true;
-      }
-    }
-  }
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+      *renderer_, registry, layer.firstEntity(), layer.lastEntity(), viewport);
 
   auto offscreen = renderer_->createOffscreenInstance();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
   RendererDriver driver(*offscreen);
 
-  Vector2d resultingCanvasOffset = Vector2d::Zero();
-  if (useTight) {
+  if (geometry.tight) {
     ZoneScopedN("Compositor::rasterizeLayer::drawEntityRangeTight");
-    RenderViewport tightViewport;
-    tightViewport.size = tightBoundsSnapped.size();
-    tightViewport.devicePixelRatio = viewport.devicePixelRatio;
-    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), tightViewport,
-                           Transform2d::Translate(-tightBoundsSnapped.topLeft));
-    resultingCanvasOffset = tightBoundsSnapped.topLeft;
+    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), geometry.viewport,
+                           geometry.surfaceFromCanvas);
   } else {
-    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), viewport,
-                           Transform2d());
+    driver.drawEntityRange(registry, layer.firstEntity(), layer.lastEntity(), geometry.viewport,
+                           geometry.surfaceFromCanvas);
   }
 
   // Stamp the bitmap with the entity's current absolute transform so the
@@ -1817,7 +1914,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                           .worldFromEntityTransform;
   }
   layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
-  layer.setCanvasOffset(resultingCanvasOffset);
+  layer.setCanvasOffset(geometry.canvasOffset);
   const auto rasterizeEnd = std::chrono::steady_clock::now();
   const auto elapsedUs =
       std::chrono::duration_cast<std::chrono::microseconds>(rasterizeEnd - rasterizeStart).count();
