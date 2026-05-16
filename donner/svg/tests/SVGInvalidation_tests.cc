@@ -595,6 +595,36 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedChildProjectsToSVG)
   EXPECT_TRUE(renderState.needsFullStyleRecompute);
 }
 
+TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedTextProjectsTextContent) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="layer"><rect id="existing" width="10" height="10" /></g>
+    </svg>
+  )";
+  const std::string inserted = R"(<text id="label" x="1" y="2">hello</text>)";
+  const std::size_t insertOffset = input.find("</g>");
+  ASSERT_NE(insertOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = inserted,
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_FALSE(result.diagnostic.has_value()) << *result.diagnostic;
+
+  auto label = doc.querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  ASSERT_TRUE(label->isa<SVGTextElement>());
+  EXPECT_EQ(label->cast<SVGTextElement>().textContent(), RcString("hello"));
+  EXPECT_TRUE(hasDirtyFlags(*label, DirtyFlagsComponent::All));
+}
+
 // ---------------------------------------------------------------------------
 // appendChild
 // ---------------------------------------------------------------------------
