@@ -9,6 +9,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
@@ -426,6 +427,40 @@ TEST_F(SVGInvalidationTests, SourceEditFeColorMatrixValuesRemovalClearsParsedVal
   EXPECT_TRUE(colorMatrix->values.empty());
   EXPECT_EQ(doc.source().find(R"(values="0.5")"), std::string_view::npos);
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Filter));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::RenderInstance));
+}
+
+TEST_F(SVGInvalidationTests, SourceEditTextNodeUpdatesTextContent) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="target">hello</text>
+    </svg>
+  )";
+  const std::size_t textOffset = input.find("hello");
+  ASSERT_NE(textOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("hello"));
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(textOffset), FileOffset::Offset(textOffset + 5)},
+      .replacement = "world",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeValueChanged);
+
+  EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("world"));
+  EXPECT_NE(doc.source().find(">world<"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::TextGeometry));
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::RenderInstance));
 }
 
