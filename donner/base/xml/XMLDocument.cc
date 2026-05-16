@@ -4,11 +4,13 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
+#include "donner/base/xml/components/XMLValueComponent.h"
 
 namespace donner::xml {
 
@@ -40,6 +42,10 @@ struct OpeningTagEdit {
 struct TextNodeEdit {
   XMLNode node;
   bool elementTextContent = false;
+};
+
+struct ElementSubtreeEdit {
+  XMLNode node;
 };
 
 using AttributeMap = std::map<XMLQualifiedName, RcString>;
@@ -312,6 +318,45 @@ std::optional<TextNodeEdit> GetTextNodeEdit(const XMLDocument& document, SourceE
   };
 }
 
+std::optional<ElementSubtreeEdit> GetElementSubtreeEdit(const XMLDocument& document,
+                                                        SourceEditRange range) {
+  if (document.source().empty() || range.start > document.source().size()) {
+    return std::nullopt;
+  }
+
+  std::size_t lookupOffset = range.start;
+  if (lookupOffset == document.source().size()) {
+    if (lookupOffset == 0) {
+      return std::nullopt;
+    }
+    --lookupOffset;
+  }
+
+  std::optional<XMLNode> node = document.nodeAtSourceOffset(lookupOffset);
+  while (node.has_value()) {
+    if (node->type() == XMLNode::Type::Element) {
+      std::optional<SourceRange> nodeLocation = node->getNodeLocation();
+      if (nodeLocation.has_value() && nodeLocation->start.offset.has_value() &&
+          nodeLocation->end.offset.has_value()) {
+        std::optional<std::size_t> tagEnd =
+            FindOpeningTagEnd(document.source(), *nodeLocation->start.offset);
+        std::optional<std::size_t> closingTagStart =
+            FindClosingTagStart(document.source(), *nodeLocation->end.offset);
+        if (tagEnd.has_value() && closingTagStart.has_value() && range.start >= *tagEnd &&
+            range.end <= *closingTagStart) {
+          return ElementSubtreeEdit{
+              .node = *node,
+          };
+        }
+      }
+    }
+
+    node = node->parentElement();
+  }
+
+  return std::nullopt;
+}
+
 std::optional<SourceEditRange> GetTextNodeSourceRange(const XMLDocument& document,
                                                       const TextNodeEdit& edit) {
   std::optional<SourceRange> nodeLocation = edit.node.getNodeLocation();
@@ -465,6 +510,92 @@ ParseResult<XMLDocument> ParseTextNodeElement(std::string_view textSource) {
   return XMLParser::Parse(fragment);
 }
 
+void SetClonedSourceOffsets(XMLNode& node, const XMLNode& parsedNode,
+                            std::size_t sourceOffsetBase) {
+  std::optional<SourceRange> location = parsedNode.getNodeLocation();
+  if (!location.has_value() || !location->start.offset.has_value() ||
+      !location->end.offset.has_value()) {
+    return;
+  }
+
+  node.setSourceStartOffset(FileOffset::Offset(sourceOffsetBase + *location->start.offset));
+  node.setSourceEndOffset(FileOffset::Offset(sourceOffsetBase + *location->end.offset));
+}
+
+void CopyAttributes(const XMLNode& source, XMLNode& target) {
+  for (const XMLQualifiedNameRef& name : source.attributes()) {
+    std::optional<RcString> value = source.getAttribute(name);
+    if (value.has_value()) {
+      target.setAttribute(name, *value);
+    }
+  }
+}
+
+XMLNode CloneParsedNodeInto(XMLDocument& document, const XMLNode& parsedNode,
+                            std::size_t sourceOffsetBase) {
+  XMLNode clone = [&]() {
+    switch (parsedNode.type()) {
+      case XMLNode::Type::Element:
+        return XMLNode::CreateElementNode(document, parsedNode.tagName());
+      case XMLNode::Type::Data:
+        return XMLNode::CreateDataNode(document, parsedNode.value().value_or(RcString("")));
+      case XMLNode::Type::CData:
+        return XMLNode::CreateCDataNode(document, parsedNode.value().value_or(RcString("")));
+      case XMLNode::Type::Comment:
+        return XMLNode::CreateCommentNode(document, parsedNode.value().value_or(RcString("")));
+      case XMLNode::Type::DocType:
+        return XMLNode::CreateDocTypeNode(document, parsedNode.value().value_or(RcString("")));
+      case XMLNode::Type::ProcessingInstruction:
+        return XMLNode::CreateProcessingInstructionNode(document, parsedNode.tagName().name,
+                                                        parsedNode.value().value_or(RcString("")));
+      case XMLNode::Type::XMLDeclaration: return XMLNode::CreateXMLDeclarationNode(document);
+      case XMLNode::Type::Document: break;
+    }
+
+    UTILS_UNREACHABLE();
+  }();
+
+  if (parsedNode.type() == XMLNode::Type::Element ||
+      parsedNode.type() == XMLNode::Type::XMLDeclaration) {
+    CopyAttributes(parsedNode, clone);
+  }
+
+  for (std::optional<XMLNode> child = parsedNode.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    XMLNode clonedChild = CloneParsedNodeInto(document, *child, sourceOffsetBase);
+    clone.appendChild(clonedChild);
+  }
+
+  SetClonedSourceOffsets(clone, parsedNode, sourceOffsetBase);
+  return clone;
+}
+
+void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
+                                   const XMLNode& parsedTarget, std::size_t sourceOffsetBase) {
+  std::vector<XMLNode> oldChildren;
+  for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    oldChildren.push_back(*child);
+  }
+
+  for (const XMLNode& child : oldChildren) {
+    target.removeChild(child);
+  }
+
+  for (std::optional<XMLNode> child = parsedTarget.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    XMLNode clonedChild = CloneParsedNodeInto(document, *child, sourceOffsetBase);
+    target.appendChild(clonedChild);
+  }
+
+  std::optional<RcString> parsedValue = parsedTarget.value();
+  if (parsedValue.has_value()) {
+    target.setValue(*parsedValue);
+  } else if (target.entityHandle().all_of<components::XMLValueComponent>()) {
+    target.entityHandle().remove<components::XMLValueComponent>();
+  }
+}
+
 void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttributes,
                               const AttributeMap& reparsedAttributes,
                               ApplySourceEditResult& result) {
@@ -614,12 +745,15 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
   std::optional<AttributeValueEdit> attributeEdit = GetAttributeValueEdit(*this, *range);
   std::optional<OpeningTagEdit> openingTagEdit;
   std::optional<TextNodeEdit> textNodeEdit;
+  std::optional<ElementSubtreeEdit> elementSubtreeEdit;
   if (attributeEdit.has_value()) {
     result.scope = ReparseScope::AttributeValue;
   } else if ((openingTagEdit = GetOpeningTagEdit(*this, *range)).has_value()) {
     result.scope = ReparseScope::OpeningTag;
   } else if ((textNodeEdit = GetTextNodeEdit(*this, *range)).has_value()) {
     result.scope = ReparseScope::TextNode;
+  } else if ((elementSubtreeEdit = GetElementSubtreeEdit(*this, *range)).has_value()) {
+    result.scope = ReparseScope::ElementSubtree;
   } else {
     result.scope = ReparseScope::Document;
   }
@@ -727,8 +861,52 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
       return result;
     }
 
+    if (elementSubtreeEdit.has_value()) {
+      std::optional<SourceRange> updatedNodeLocation = elementSubtreeEdit->node.getNodeLocation();
+      if (!updatedNodeLocation.has_value() || !updatedNodeLocation->start.offset.has_value() ||
+          !updatedNodeLocation->end.offset.has_value()) {
+        result.diagnostic = MakeEditDiagnostic(
+            "Element subtree edit left the node source range unavailable", intent.range);
+        return result;
+      }
+
+      const std::size_t nodeStart = *updatedNodeLocation->start.offset;
+      const std::size_t nodeEnd = *updatedNodeLocation->end.offset;
+      ParseResult<XMLDocument> parsedSubtree =
+          XMLParser::Parse(source().substr(nodeStart, nodeEnd - nodeStart));
+      if (parsedSubtree.hasError()) {
+        result.diagnostic = std::move(parsedSubtree).error();
+        return result;
+      }
+
+      std::optional<XMLNode> parsedNode = parsedSubtree.result().root().firstChild();
+      if (!parsedNode.has_value() || parsedNode->type() != XMLNode::Type::Element ||
+          parsedNode->nextSibling().has_value()) {
+        result.diagnostic =
+            MakeEditDiagnostic("Element subtree edit did not produce one element", intent.range);
+        return result;
+      }
+
+      if (parsedNode->tagName() != elementSubtreeEdit->node.tagName()) {
+        result.diagnostic =
+            MakeEditDiagnostic("Element subtree edit renamed the target element", intent.range);
+        return result;
+      }
+
+      ReplaceChildrenFromParsedNode(*this, elementSubtreeEdit->node, *parsedNode, nodeStart);
+      result.mutations.push_back(XMLMutation{
+          .kind = XMLMutation::Kind::SubtreeReplaced,
+          .node = elementSubtreeEdit->node,
+          .attributeName = XMLQualifiedName(""),
+          .value = std::nullopt,
+          .scope = ReparseScope::ElementSubtree,
+      });
+      return result;
+    }
+
     result.diagnostic = MakeEditDiagnostic(
-        "Only attribute-value, opening-tag, and text-node source edits are implemented",
+        "Only attribute-value, opening-tag, text-node, and element-subtree source edits are "
+        "implemented",
         intent.range);
     return result;
   }
