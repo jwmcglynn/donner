@@ -822,6 +822,8 @@ the target architecture.
         without `ParseSVG`;
       - [x] edit `d` updates path geometry and dirty flags without `ParseSVG`;
       - [x] delete `values=` from `feColorMatrix` clears the vector component;
+      - [x] edit simple text content updates `TextComponent` and dirty flags
+        without `ParseSVG`;
       - [x] invalid value records a diagnostic and preserves the last valid
         semantic value;
       - [x] recovered valid value updates semantics and clears the diagnostic.

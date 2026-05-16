@@ -1,15 +1,20 @@
 #include "donner/svg/SVGDocument.h"
 
 #include "donner/base/element/ElementTraversalGenerators.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -27,6 +32,65 @@ SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutat
 
   return mutation.node.getNodeLocation().value_or(
       SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
+}
+
+void InvalidateTextGeometry(EntityHandle handle) {
+  Registry& registry = *handle.registry();
+  Entity current = handle.entity();
+  while (current != entt::null) {
+    if (registry.any_of<components::TextRootComponent>(current)) {
+      registry.remove<components::ComputedTextGeometryComponent>(current);
+      registry.get_or_emplace<components::DirtyFlagsComponent>(current).mark(
+          components::DirtyFlagsComponent::TextGeometry |
+          components::DirtyFlagsComponent::RenderInstance);
+      return;
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (tree == nullptr) {
+      return;
+    }
+
+    current = tree->parent();
+  }
+}
+
+std::optional<EntityHandle> TextElementHandleForNodeValueMutation(
+    const xml::XMLMutation& mutation) {
+  if (mutation.node.type() == xml::XMLNode::Type::Element) {
+    return mutation.node.entityHandle();
+  }
+
+  if (mutation.node.type() == xml::XMLNode::Type::Data ||
+      mutation.node.type() == xml::XMLNode::Type::CData) {
+    if (std::optional<xml::XMLNode> parent = mutation.node.parentElement()) {
+      return parent->entityHandle();
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
+                                                     const xml::XMLMutation& mutation) {
+  if (!mutation.value.has_value()) {
+    return ParseDiagnostic::Error("XML NodeValueChanged mutation is missing a value",
+                                  MutationRange(source, mutation));
+  }
+
+  std::optional<EntityHandle> targetHandle = TextElementHandleForNodeValueMutation(mutation);
+  if (!targetHandle.has_value() || !*targetHandle ||
+      !targetHandle->all_of<components::TextComponent>()) {
+    return ParseDiagnostic::Error("XML NodeValueChanged mutation target is not SVG text content",
+                                  MutationRange(source, mutation));
+  }
+
+  auto& text = targetHandle->get<components::TextComponent>();
+  text.text = *mutation.value;
+  text.textChunks.clear();
+  text.textChunks.emplace_back(*mutation.value);
+  InvalidateTextGeometry(*targetHandle);
+  return std::nullopt;
 }
 
 }  // namespace
@@ -160,6 +224,10 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
 }
 
 std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {
+  if (mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
+    return ApplyNodeValueChanged(source(), mutation);
+  }
+
   const EntityHandle handle = mutation.node.entityHandle();
   if (!handle || !handle.all_of<components::ElementTypeComponent>()) {
     return ParseDiagnostic::Error("XML mutation target is not an SVG element",
@@ -188,7 +256,8 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 
     case xml::XMLMutation::Kind::SourceDiagnosticChanged: return std::nullopt;
 
-    case xml::XMLMutation::Kind::NodeValueChanged:
+    case xml::XMLMutation::Kind::NodeValueChanged: UTILS_UNREACHABLE();
+
     case xml::XMLMutation::Kind::NodeInserted:
     case xml::XMLMutation::Kind::NodeRemoved:
     case xml::XMLMutation::Kind::SubtreeReplaced:

@@ -38,6 +38,7 @@ struct OpeningTagEdit {
 
 struct TextNodeEdit {
   XMLNode node;
+  bool elementTextContent = false;
 };
 
 using AttributeMap = std::map<XMLQualifiedName, RcString>;
@@ -75,6 +76,19 @@ std::optional<std::size_t> FindOpeningTagEnd(std::string_view source, std::size_
   }
 
   return std::nullopt;
+}
+
+std::optional<std::size_t> FindClosingTagStart(std::string_view source, std::size_t nodeEnd) {
+  if (nodeEnd == 0 || nodeEnd > source.size()) {
+    return std::nullopt;
+  }
+
+  const std::size_t closingTagStart = source.rfind("</", nodeEnd - 1);
+  if (closingTagStart == std::string_view::npos || closingTagStart >= nodeEnd) {
+    return std::nullopt;
+  }
+
+  return closingTagStart;
 }
 
 std::optional<SourceEditRange> ResolveEditRange(const SourceRange& range, std::string_view source) {
@@ -202,19 +216,82 @@ std::optional<TextNodeEdit> GetTextNodeEdit(const XMLDocument& document, SourceE
   }
 
   std::optional<XMLNode> node = document.nodeAtSourceOffset(range.start);
-  if (!node.has_value() || node->type() != XMLNode::Type::Data) {
+  if (!node.has_value()) {
     return std::nullopt;
+  }
+
+  if (node->type() == XMLNode::Type::Data) {
+    std::optional<SourceRange> nodeLocation = node->getNodeLocation();
+    if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
+        !nodeLocation->end.offset.has_value() || range.start < *nodeLocation->start.offset ||
+        range.end > *nodeLocation->end.offset) {
+      return std::nullopt;
+    }
+
+    return TextNodeEdit{
+        .node = *node,
+        .elementTextContent = false,
+    };
+  }
+
+  if (node->type() != XMLNode::Type::Element || !node->value().has_value()) {
+    return std::nullopt;
+  }
+
+  for (std::optional<XMLNode> child = node->firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Element) {
+      return std::nullopt;
+    }
   }
 
   std::optional<SourceRange> nodeLocation = node->getNodeLocation();
   if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
-      !nodeLocation->end.offset.has_value() || range.start < *nodeLocation->start.offset ||
-      range.end > *nodeLocation->end.offset) {
+      !nodeLocation->end.offset.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<std::size_t> tagEnd =
+      FindOpeningTagEnd(document.source(), *nodeLocation->start.offset);
+  std::optional<std::size_t> closingTagStart =
+      FindClosingTagStart(document.source(), *nodeLocation->end.offset);
+  if (!tagEnd.has_value() || !closingTagStart.has_value() || range.start < *tagEnd ||
+      range.end > *closingTagStart) {
     return std::nullopt;
   }
 
   return TextNodeEdit{
       .node = *node,
+      .elementTextContent = true,
+  };
+}
+
+std::optional<SourceEditRange> GetTextNodeSourceRange(const XMLDocument& document,
+                                                      const TextNodeEdit& edit) {
+  std::optional<SourceRange> nodeLocation = edit.node.getNodeLocation();
+  if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
+      !nodeLocation->end.offset.has_value()) {
+    return std::nullopt;
+  }
+
+  if (!edit.elementTextContent) {
+    return SourceEditRange{
+        .start = *nodeLocation->start.offset,
+        .end = *nodeLocation->end.offset,
+    };
+  }
+
+  std::optional<std::size_t> tagEnd =
+      FindOpeningTagEnd(document.source(), *nodeLocation->start.offset);
+  std::optional<std::size_t> closingTagStart =
+      FindClosingTagStart(document.source(), *nodeLocation->end.offset);
+  if (!tagEnd.has_value() || !closingTagStart.has_value() || *closingTagStart < *tagEnd) {
+    return std::nullopt;
+  }
+
+  return SourceEditRange{
+      .start = *tagEnd,
+      .end = *closingTagStart,
   };
 }
 
@@ -478,16 +555,16 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
     }
 
     if (textNodeEdit.has_value()) {
-      std::optional<SourceRange> updatedNodeLocation = textNodeEdit->node.getNodeLocation();
-      if (!updatedNodeLocation.has_value() || !updatedNodeLocation->start.offset.has_value() ||
-          !updatedNodeLocation->end.offset.has_value()) {
+      std::optional<SourceEditRange> updatedTextRange =
+          GetTextNodeSourceRange(*this, *textNodeEdit);
+      if (!updatedTextRange.has_value()) {
         result.diagnostic = MakeEditDiagnostic(
             "Text node edit left the node source range unavailable", intent.range);
         return result;
       }
 
-      const std::size_t textStart = *updatedNodeLocation->start.offset;
-      const std::size_t textEnd = *updatedNodeLocation->end.offset;
+      const std::size_t textStart = updatedTextRange->start;
+      const std::size_t textEnd = updatedTextRange->end;
       ParseResult<XMLDocument> parsedText =
           ParseTextNodeElement(source().substr(textStart, textEnd - textStart));
       if (parsedText.hasError()) {
@@ -512,8 +589,10 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
 
       const RcString parsedValue = parsedTextNode->value().value_or(RcString(""));
       textNodeEdit->node.setValue(parsedValue);
-      if (std::optional<XMLNode> parent = textNodeEdit->node.parentElement()) {
-        parent->setValue(parsedValue);
+      if (!textNodeEdit->elementTextContent) {
+        if (std::optional<XMLNode> parent = textNodeEdit->node.parentElement()) {
+          parent->setValue(parsedValue);
+        }
       }
       result.mutations.push_back(XMLMutation{
           .kind = XMLMutation::Kind::NodeValueChanged,
