@@ -91,6 +91,22 @@ std::optional<std::size_t> FindOpeningTagEnd(std::string_view source, std::size_
   return std::nullopt;
 }
 
+std::optional<std::size_t> FindDirtyOpeningTagEnd(std::string_view source, std::size_t tagStart,
+                                                  std::size_t nodeEnd) {
+  if (tagStart >= source.size() || source[tagStart] != '<' || nodeEnd <= tagStart) {
+    return std::nullopt;
+  }
+
+  const std::size_t scanEnd = nodeEnd < source.size() ? nodeEnd : source.size();
+  for (std::size_t pos = tagStart + 1; pos < scanEnd; ++pos) {
+    if (source[pos] == '>') {
+      return pos + 1;
+    }
+  }
+
+  return std::nullopt;
+}
+
 std::optional<std::size_t> FindClosingTagStart(std::string_view source, std::size_t nodeEnd) {
   if (nodeEnd == 0 || nodeEnd > source.size()) {
     return std::nullopt;
@@ -226,6 +242,9 @@ std::optional<OpeningTagEdit> GetOpeningTagEdit(const XMLDocument& document,
 
   const std::size_t tagStart = *nodeLocation->start.offset;
   std::optional<std::size_t> tagEnd = FindOpeningTagEnd(document.source(), tagStart);
+  if (!tagEnd.has_value() && nodeLocation->end.offset.has_value()) {
+    tagEnd = FindDirtyOpeningTagEnd(document.source(), tagStart, *nodeLocation->end.offset);
+  }
   if (!tagEnd.has_value() || range.start < tagStart || range.end > *tagEnd) {
     return std::nullopt;
   }
