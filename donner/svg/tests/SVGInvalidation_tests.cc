@@ -359,6 +359,32 @@ TEST_F(SVGInvalidationTests, RemoveAttributeUpdatesSourceThroughXMLDocument) {
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }
 
+TEST_F(SVGInvalidationTests, RemoveElementUpdatesSourceThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent"><rect id="target" width="10" height="10" /><circle id="sibling" /></g>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto parent = doc.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  target->remove();
+
+  EXPECT_EQ(doc.source().find(R"(<rect id="target")"), std::string_view::npos);
+  EXPECT_FALSE(doc.querySelector("#target").has_value());
+  ASSERT_TRUE(parent->firstChild().has_value());
+  EXPECT_THAT(parent->firstChild()->getAttribute("id"), testing::Optional(RcString("sibling")));
+  EXPECT_EQ(target->parentElement(), std::nullopt);
+  EXPECT_TRUE(hasDirtyFlags(*parent, DirtyFlagsComponent::All));
+}
+
 TEST_F(SVGInvalidationTests, SourceEditInvalidPresentationAttributeKeepsLastValidStyle) {
   const std::string input = R"(
     <svg xmlns="http://www.w3.org/2000/svg">

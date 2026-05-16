@@ -914,6 +914,60 @@ ApplySourceEditResult XMLDocument::removeAttribute(XMLNode node, const XMLQualif
   return result;
 }
 
+ApplySourceEditResult XMLDocument::removeNode(XMLNode node) {
+  ApplySourceEditResult result;
+  result.scope = ReparseScope::ElementSubtree;
+
+  const SourceRange diagnosticRange = MakeNodeDiagnosticRange(node);
+  if (!IsDocumentNode(*this, node)) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot remove a node from another document", diagnosticRange);
+    return result;
+  }
+
+  XMLSourceStore* store = sourceStore();
+  if (store == nullptr) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot remove source-backed node without source text", diagnosticRange);
+    return result;
+  }
+
+  if (node.type() == XMLNode::Type::Document) {
+    result.diagnostic = MakeEditDiagnostic("Cannot remove XML document root", diagnosticRange);
+    return result;
+  }
+
+  std::optional<SourceRange> nodeLocation = node.getNodeLocation();
+  std::optional<SourceEditRange> removalRange =
+      nodeLocation.has_value() ? ResolveEditRange(*nodeLocation, source()) : std::nullopt;
+  if (!removalRange.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot remove node without a source range", diagnosticRange);
+    return result;
+  }
+
+  std::optional<XMLSourceDelta> delta = store->replace(
+      removalRange->start, removalRange->end - removalRange->start, std::string_view());
+  if (!delta.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Invalid source replacement for node removal", diagnosticRange);
+    return result;
+  }
+
+  result.applied = true;
+  result.sourceDeltas.push_back(*delta);
+
+  node.remove();
+  result.mutations.push_back(XMLMutation{
+      .kind = XMLMutation::Kind::NodeRemoved,
+      .node = node,
+      .attributeName = XMLQualifiedName(""),
+      .value = std::nullopt,
+      .scope = ReparseScope::ElementSubtree,
+  });
+  return result;
+}
+
 void XMLDocument::setSource(std::string source) {
   registry_->ctx().get<XMLDocumentContext>().sourceStore =
       std::make_shared<XMLSourceStore>(std::move(source));

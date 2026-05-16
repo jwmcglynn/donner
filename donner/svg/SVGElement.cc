@@ -479,7 +479,24 @@ void SVGElement::removeChild(const SVGElement& child) {
 
 void SVGElement::remove() {
   // Mark parent dirty before removing from tree (after remove, parent link is gone).
-  if (auto parent = parentElement()) {
+  std::optional<SVGElement> parent = parentElement();
+
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore()) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle_);
+    if (xmlNode.has_value()) {
+      xml::ApplySourceEditResult result = document.xmlDocument().removeNode(*xmlNode);
+      if (result.applied) {
+        if (parent.has_value()) {
+          markNeedsFullRebuild(parent->handle_);
+          markDirty(parent->handle_, components::DirtyFlagsComponent::All);
+        }
+      }
+      return;
+    }
+  }
+
+  if (parent.has_value()) {
     markNeedsFullRebuild(parent->handle_);
     markDirty(parent->handle_, components::DirtyFlagsComponent::All);
   }

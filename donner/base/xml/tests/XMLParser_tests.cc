@@ -495,6 +495,43 @@ TEST_F(XMLParserTests, ApplySourceEditOpeningTagRemovesAttribute) {
   EXPECT_THAT(rect.getAttribute("stroke"), Eq("blue"));
 }
 
+TEST_F(XMLParserTests, RemoveNodeUpdatesSourceThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><g id="target"><rect/></g><circle/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  std::optional<SourceRange> groupLocation = group.getNodeLocation();
+  ASSERT_TRUE(groupLocation.has_value());
+  ASSERT_TRUE(groupLocation->start.offset.has_value());
+  ASSERT_TRUE(groupLocation->end.offset.has_value());
+
+  ApplySourceEditResult result = document.removeNode(group);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.sourceDeltas,
+              ElementsAre(XMLSourceDelta{
+                  .offset = *groupLocation->start.offset,
+                  .removedLength = *groupLocation->end.offset - *groupLocation->start.offset,
+                  .insertedLength = 0,
+                  .sourceVersion = 1,
+              }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[0].node, group);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><circle/></svg>)");
+  ASSERT_TRUE(svg.firstChild().has_value());
+  EXPECT_EQ(svg.firstChild()->tagName(), XMLQualifiedNameRef("circle"));
+  EXPECT_EQ(group.parentElement(), std::nullopt);
+}
+
 TEST_F(XMLParserTests, ApplySourceEditOpeningTagRenamesAttribute) {
   constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
 

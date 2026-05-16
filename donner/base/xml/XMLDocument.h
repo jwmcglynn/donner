@@ -219,6 +219,16 @@ public:
   ApplySourceEditResult removeAttribute(XMLNode node, const XMLQualifiedNameRef& name);
 
   /**
+   * Remove a source-backed XML node through this document.
+   *
+   * This applies the source removal through \ref XMLSourceStore, detaches \p node from the live XML
+   * tree, and emits an \ref XMLMutation::Kind::NodeRemoved mutation.
+   *
+   * @param node Node to remove.
+   */
+  ApplySourceEditResult removeNode(XMLNode node);
+
+  /**
    * Install owned source text for this document.
    *
    * @param source XML source text to own.
